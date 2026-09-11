@@ -413,11 +413,13 @@ func TestModelPickerView_ForwardsMeasuredViewportToNormalAndProfileFlows(t *test
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker
 	m.ModelPicker = screens.ModelPickerState{AvailableIDs: []string{"openai"}}
-	m.Width, m.Height = 100, 30
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
 	if out := m.View(); !strings.Contains(out, "Role:") {
 		t.Fatalf("roomy normal picker omitted guidance:\n%s", out)
 	}
-	m.Width, m.Height = 40, 12
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	m = updated.(Model)
 	if out := m.View(); strings.Contains(out, "Role:") {
 		t.Fatalf("constrained normal picker retained guidance:\n%s", out)
 	}
@@ -425,9 +427,40 @@ func TestModelPickerView_ForwardsMeasuredViewportToNormalAndProfileFlows(t *test
 	m.Screen = ScreenProfileCreate
 	m.ProfileCreateStep = 1
 	m.ModelPicker.ForProfile = true
-	m.Width, m.Height = 80, 14
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	m = updated.(Model)
 	if out := m.View(); strings.Contains(out, "Role:") {
 		t.Fatalf("profile frame was not reserved from the picker viewport:\n%s", out)
+	}
+}
+
+func TestModelPickerViewport_PersistsResizeBeforeProfileNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfileCreate
+	m.ProfileCreateStep = 1
+	m.ModelPicker = screens.ModelPickerState{
+		ForProfile:   true,
+		Mode:         screens.ModeProviderSelect,
+		AvailableIDs: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
+		Providers:    map[string]opencode.Provider{},
+		SDDModels:    map[string][]opencode.Model{},
+	}
+	for _, id := range m.ModelPicker.AvailableIDs {
+		m.ModelPicker.Providers[id] = opencode.Provider{ID: id, Name: id}
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 14})
+	state := updated.(Model)
+	if got, want := state.ModelPicker.Viewport, (screens.ModelPickerViewport{Width: 40, Height: 14, ReservedRows: 7}); got != want {
+		t.Fatalf("ModelPicker.Viewport = %+v, want %+v", got, want)
+	}
+
+	for range state.ModelPicker.AvailableIDs {
+		updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		state = updated.(Model)
+	}
+	if got, want := state.ModelPicker.ProviderScroll, len(state.ModelPicker.AvailableIDs)-state.ModelPicker.Viewport.ListCapacity(); got != want {
+		t.Fatalf("ProviderScroll = %d, want %d using persisted viewport", got, want)
 	}
 }
 

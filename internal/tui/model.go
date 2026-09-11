@@ -1013,11 +1013,24 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(updateCmd, advisoryCmd)
 }
 
+func (m *Model) syncModelPickerViewport() {
+	reservedRows := 0
+	if m.Screen == ScreenProfileCreate {
+		reservedRows = 7
+	}
+	m.ModelPicker.Viewport = screens.ModelPickerViewport{
+		Width:        m.Width,
+		Height:       m.Height,
+		ReservedRows: reservedRows,
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
+		m.syncModelPickerViewport()
 		m.clampAdvisoryScroll()
 		return m, nil
 	case TickMsg:
@@ -1484,8 +1497,6 @@ func (m Model) View() string {
 	case ScreenProfiles:
 		return screens.RenderProfiles(m.ProfileList, m.Cursor, m.ProfileDeleteErr)
 	case ScreenProfileCreate:
-		picker := m.ModelPicker
-		picker.Viewport = screens.ModelPickerViewport{Width: m.Width, Height: m.Height, ReservedRows: 7}
 		return screens.RenderProfileCreate(
 			m.ProfileCreateStep,
 			m.ProfileDraft,
@@ -1494,7 +1505,7 @@ func (m Model) View() string {
 			m.ProfileNameErr,
 			m.ProfileEditMode,
 			m.Selection.ModelAssignments,
-			picker,
+			m.ModelPicker,
 			m.Cursor,
 		)
 	case ScreenProfileDelete:
@@ -1551,9 +1562,7 @@ func (m Model) View() string {
 	case ScreenCommunityToolResult:
 		return screens.RenderCommunityToolResult(m.CommunityToolResults, m.CommunityToolErr)
 	case ScreenModelPicker:
-		picker := m.ModelPicker
-		picker.Viewport = screens.ModelPickerViewport{Width: m.Width, Height: m.Height}
-		return screens.RenderModelPicker(m.Selection.ModelAssignments, picker, m.Cursor)
+		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
 		return screens.RenderDependencyTree(m.DependencyPlan, m.Selection, m.Cursor)
 	case ScreenSkillPicker:
@@ -4168,6 +4177,7 @@ func (m *Model) setScreen(next Screen) {
 	}
 	m.PreviousScreen = m.Screen
 	m.Screen = next
+	m.syncModelPickerViewport()
 	m.Cursor = 0
 	// Safe default: start on "Keep current version" (index 2) so an accidental
 	// Enter press does not trigger an upgrade.
