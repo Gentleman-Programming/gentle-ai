@@ -5,6 +5,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -44,7 +45,7 @@ func TestRunSDDAttemptSettleIgnoresUnsafeRDDModeAuthority(t *testing.T) {
 	}
 }
 
-func TestUnsafeDisabledRARModeRefusesStatusAndValidationBeforeTheirReaders(t *testing.T) {
+func TestUnsafeDisabledRARModeKeepsStatusReadOnlyAndValidationRefused(t *testing.T) {
 	for _, command := range []struct {
 		name string
 		run  func([]string, io.Writer) error
@@ -67,7 +68,12 @@ func TestUnsafeDisabledRARModeRefusesStatusAndValidationBeforeTheirReaders(t *te
 			var output bytes.Buffer
 			err := command.run(command.args(repo), &output)
 			wantRepair := (&reviewModeUnsafePathError{Path: privateRARDir, Directory: true}).repairCommand()
-			if err == nil || !strings.Contains(err.Error(), wantRepair) || output.Len() != 0 {
+			if command.name == "sdd-status" {
+				var status sddstatus.Status
+				if err != nil || json.Unmarshal(output.Bytes(), &status) != nil || status.SchemaName != sddstatus.SchemaName || status.SchemaVersion != 2 || status.ReviewOffer != nil || strings.Contains(output.String(), wantRepair) {
+					t.Fatalf("read-only status fabricated review authority or repair: %v %s", err, output.String())
+				}
+			} else if err == nil || !strings.Contains(err.Error(), wantRepair) || output.Len() != 0 {
 				t.Fatalf("unsafe mode %s result: error=%v output=%q, want actionable refusal", command.name, err, output.String())
 			}
 			if after := snapshotRuntimeAuthorityFiles(t, privateRARDir); !reflect.DeepEqual(before, after) {

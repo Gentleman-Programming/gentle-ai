@@ -261,14 +261,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		// "empty or sha256"), which matches exactly the fresh pre-attempt
 		// ledger the consent flow grants against; a later widening grant
 		// chains the exact committed revision like every sibling mutation.
-		// The grant binds the caller-owned change-instance identity (#2540
-		// S5): the ledger digest-binds it into the record and replay projects
-		// the grant only for the same identity, so an archived name's reuse
-		// cannot resurrect it. Until S4b derives markers natively, the caller
-		// mints the opaque token and must reuse it for widening grants within
-		// this change's lifecycle.
+		// Check current identity at mutation/replay and return; external replacement
+		// may leave historical records, never usable detected-stale authority.
 		var grantStore sddstatus.RuntimeStore
-		if grantStore, err = store.ForInstance(*changeInstance); err != nil {
+		if grantStore, err = store.ForCurrentChangeInstance(*changeInstance); err != nil {
 			return fmt.Errorf("sdd-attempt grant: %w", err)
 		}
 		result, err = grantStore.Grant(ctx, sddstatus.GrantRootsRequest{

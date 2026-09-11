@@ -3,18 +3,17 @@ description: Continue the next SDD phase in the dependency chain
 agent: gentle-orchestrator
 ---
 
-Follow the SDD orchestrator workflow to continue the active change.
+Follow the SDD orchestrator workflow to continue the active change; this explicit command may prepare its change-local consent marker but grants no edit roots.
 
 HARD GATE:
 SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not launch the next phase in the same turn.
 
 WORKFLOW:
 
-1. If the `gentle-ai` binary is available, run `gentle-ai sdd-continue [change] --cwd <repo>` and treat its dispatcher/status output as authoritative — but only when the session artifact store is `openspec` or `hybrid`. When the session artifact store is `engram`, do NOT invoke the native dispatcher at all — it cannot see the change (it reads only `openspec/changes/`); resolve status entirely from Engram (`mem_search` + `mem_get_observation` on the change's topic keys) using the manual status schema in `~/.config/opencode/skills/_shared/sdd-status-contract.md` (the same schema used when the binary is unavailable). The dispatcher is authoritative only for `openspec`/`hybrid`. If unavailable, resolve the active change using the status contract. If `$ARGUMENTS` is missing and more than one active change exists, ask the user to choose and STOP. Do not guess.
+1. For every declared store, first inspect with native `sdd-status`. Before calling `gentle-ai sdd-continue [change] --cwd <repo>`, the host MUST confirm the current human scope covers the selected change-directory marker. Read-only or excluded-marker scope forbids this mutating call; native allowed roots do not grant human consent. Preparation grants no source roots or attempts. If native resolution fails, report it without a local dispatch fallback.
 2. Produce or consume structured status before acting: schemaName, planningHome/changeRoot, artifactPaths/contextFiles, task progress, dependency states, next recommended action, blocked reasons, and actionContext.
 3. Check which artifacts already exist for the active change (proposal, specs, design, tasks)
-4. Determine the next phase needed based on the dependency graph:
-   proposal → [specs ∥ design] → tasks → apply → verify → archive
+4. Follow native `nextRecommended`; do not reconstruct a dependency graph.
 5. Launch the appropriate sub-agent(s) for the next phase only if authoritative status says the dependency is ready. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase.
 6. Present the result and ask the user to proceed
 
@@ -36,4 +35,4 @@ Read the orchestrator instructions to coordinate this workflow. Do NOT execute p
 
 STATUS CONTRACT:
 
-Prefer `gentle-ai sdd-continue [change] --cwd <repo>` when available — but only when the session artifact store is `openspec` or `hybrid`; when the store is `engram`, do NOT invoke the binary and resolve status from Engram using the manual status schema. Otherwise read the installed shared status contract from this agent's skills directory and follow it. Use `~/.config/opencode/skills/_shared/sdd-status-contract.md` for OpenCode, `~/.config/kilo/skills/_shared/sdd-status-contract.md` for Kilo Code, `~/.qwen/skills/_shared/sdd-status-contract.md` for Qwen, or the equivalent configured skills directory for the current adapter. Do not use a workspace-relative `skills/_shared/...` path. Carry `actionContext` and allowed edit roots into any sub-agent launch. If status reports `workspace-planning` with no allowed edit roots, do not launch apply/verify/archive work that would infer repo-local ownership.
+Use native v2 for every store; never substitute continue for read-only status or selected child startup. Carry native `actionContext` intersected with the current narrower human scope into any executor. A missing marker is prepared only by expressly authorized continuation; a present marker is reused, never overwritten, and grant/replay must match its current identity.

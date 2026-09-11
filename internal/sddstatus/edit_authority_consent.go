@@ -12,6 +12,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/consentenvelope"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // Issue #2563 (S4b of #2540): the status layer owns the change-instance
@@ -39,20 +40,45 @@ const (
 // when none has been minted. It never mints: an ordinary status on a
 // change with no missing edit roots must leave zero filesystem footprint.
 func readChangeInstanceMarker(changeRoot string) (string, error) {
-	payload, err := os.ReadFile(filepath.Join(changeRoot, changeInstanceMarkerFile))
+	markerPath := filepath.Join(changeRoot, changeInstanceMarkerFile)
+	info, err := os.Lstat(markerPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect change-instance marker: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("change-instance marker must be a regular file") // refusal:by-design world-action: inspect and recover the change-local marker before continuation
+	}
+	payload, err := os.ReadFile(markerPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("read change-instance marker: %w", err)
 	}
-	return strings.TrimSpace(string(payload)), nil
+	marker := strings.TrimSpace(string(payload))
+	if !validChangeInstanceMarker(marker) {
+		return "", fmt.Errorf("persisted change-instance marker is malformed") // refusal:by-design world-action: replace the malformed change-local marker through an authorized recovery path
+	}
+	return marker, nil
 }
 
-// ensureChangeInstanceMarker returns the existing token or mints and persists
-// a fresh opaque one. Minting happens only when the consent envelope needs a
-// token to embed, so the marker exists exactly for changes that ever raised
-// the edit-authority question.
+func validChangeInstanceMarker(marker string) bool {
+	const prefix = "sdd-"
+	if !strings.HasPrefix(marker, prefix) || len(marker) != len(prefix)+32 {
+		return false
+	}
+	encoded := strings.TrimPrefix(marker, prefix)
+	decoded, err := hex.DecodeString(encoded)
+	return err == nil && hex.EncodeToString(decoded) == encoded
+}
+
+// Test seam for deterministic publication/readback failures; the shared publisher remains unchanged.
+var publishChangeInstanceMarker = reviewtransaction.PublishFileNoReplace
+
+// ensureChangeInstanceMarker reads the existing or no-replace publishes and reads back the winner.
 func ensureChangeInstanceMarker(changeRoot string) (string, error) {
 	existing, err := readChangeInstanceMarker(changeRoot)
 	if err != nil || existing != "" {
@@ -63,10 +89,112 @@ func ensureChangeInstanceMarker(changeRoot string) (string, error) {
 		return "", fmt.Errorf("mint change-instance identity: %w", err)
 	}
 	token := "sdd-" + hex.EncodeToString(seed)
-	if err := os.WriteFile(filepath.Join(changeRoot, changeInstanceMarkerFile), []byte(token+"\n"), 0o644); err != nil {
-		return "", fmt.Errorf("persist change-instance marker: %w", err)
+	markerPath := filepath.Join(changeRoot, changeInstanceMarkerFile)
+	temporary, err := os.CreateTemp(changeRoot, ".gentle-ai-instance-*")
+	if err != nil {
+		return "", fmt.Errorf("create change-instance marker publication: %w", err)
 	}
-	return token, nil
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.WriteString(token + "\n"); err != nil {
+		_ = temporary.Close()
+		return "", fmt.Errorf("write change-instance marker publication: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return "", fmt.Errorf("close change-instance marker publication: %w", err)
+	}
+	if err := publishChangeInstanceMarker(temporaryPath, markerPath); err != nil {
+		winner, readErr := readChangeInstanceMarker(changeRoot)
+		if errors.Is(err, os.ErrExist) && readErr == nil && winner != "" {
+			return winner, nil
+		}
+		return "", fmt.Errorf("publish change-instance marker: %w", err)
+	}
+	winner, err := readChangeInstanceMarker(changeRoot)
+	if err != nil {
+		return "", err
+	}
+	if winner == "" {
+		return "", fmt.Errorf("published change-instance marker is empty") // refusal:by-design world-action: inspect the change-local marker publication before retrying continuation
+	}
+	return winner, nil
+}
+
+// PrepareChangeInstanceConsent is the sole explicit-continuation marker mutation; it grants no roots.
+func PrepareChangeInstanceConsent(status Status) error {
+	if len(status.consentPreparationRoots) == 0 || status.ChangeRoot == nil {
+		return nil
+	}
+	changeRoot, err := filepath.EvalSymlinks(*status.ChangeRoot)
+	if err != nil {
+		return fmt.Errorf("resolve selected change directory: %w", err)
+	}
+	planning, err := filepath.EvalSymlinks(status.PlanningHome.Path)
+	if err != nil {
+		return fmt.Errorf("resolve selected planning directory: %w", err)
+	}
+	workspace, err := filepath.EvalSymlinks(status.ActionContext.WorkspaceRoot)
+	if err != nil {
+		return fmt.Errorf("resolve selected workspace: %w", err)
+	}
+	if planning != filepath.Join(workspace, "openspec") || status.ChangeName == nil || changeRoot != filepath.Join(planning, "changes", *status.ChangeName) {
+		return errors.New("selected change escaped its workspace planning directory") // refusal:by-design human-authority: select the canonical active change inside the authorized workspace
+	}
+	planningChanges := filepath.Join(planning, "changes")
+	relative, err := filepath.Rel(planningChanges, changeRoot)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("change root is outside the selected planning directory") // refusal:by-design human-authority: invoke continue only for the selected OpenSpec change directory
+	}
+	before, err := os.Stat(changeRoot)
+	if err != nil {
+		return fmt.Errorf("inspect change directory before marker preparation: %w", err)
+	}
+	if !before.IsDir() {
+		return fmt.Errorf("selected change root is not a directory") // refusal:by-design human-authority: select an active OpenSpec change directory before continuing
+	}
+	if _, err := ensureChangeInstanceMarker(changeRoot); err != nil {
+		return err
+	}
+	after, err := os.Stat(changeRoot)
+	if err != nil {
+		return fmt.Errorf("inspect change directory after marker preparation: %w", err)
+	}
+	if !os.SameFile(before, after) {
+		return fmt.Errorf("selected change directory changed during marker preparation") // refusal:by-design world-action: re-read status for the recreated change before preparing consent
+	}
+	return nil
+}
+
+// ForCurrentChangeInstance opts grants into bounded current-marker checks, not filesystem atomicity.
+func (store RuntimeStore) ForCurrentChangeInstance(instance string) (RuntimeStore, error) {
+	bound, err := store.ForInstance(instance)
+	if err != nil {
+		return RuntimeStore{}, err
+	}
+	bound.grantInstanceCheck = func() error { return ValidateCurrentChangeInstance(store.Workspace, store.Change, instance) }
+	return bound, bound.grantInstanceCheck()
+}
+
+// ValidateCurrentChangeInstance binds a grant to the current persisted marker without preparing one.
+func ValidateCurrentChangeInstance(cwd, change, instance string) error {
+	status, err := Resolve(ResolveOptions{CWD: cwd, ChangeName: change})
+	if err != nil {
+		return err
+	}
+	if status.ChangeRoot == nil {
+		return fmt.Errorf("selected change has no OpenSpec marker path") // refusal:by-design human-authority: select an active OpenSpec change before granting edit roots
+	}
+	current, err := readChangeInstanceMarker(*status.ChangeRoot)
+	if err != nil {
+		return err
+	}
+	if current == "" {
+		return fmt.Errorf("selected change has no prepared change-instance marker") // refusal:by-design human-authority: run the explicit authorized sdd-continue preparation first
+	}
+	if current != instance {
+		return fmt.Errorf("supplied change-instance marker does not match the current selected change") // refusal:by-design human-authority: rerun status and use the current change's consent invocation
+	}
+	return nil
 }
 
 // sddConsentGrantRequestID derives the grant invocation's request-id from the

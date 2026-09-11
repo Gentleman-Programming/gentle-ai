@@ -207,16 +207,20 @@ func (err *RuntimeRevisionConflictError) Error() string {
 
 func (err *RuntimeRevisionConflictError) Unwrap() error { return ErrRuntimeRevisionConflict }
 
-// RuntimePublicationError reports that HEAD was atomically replaced but its
-// directory durability could not be confirmed. The exact request is safe to
-// replay; replay reopens the immutable chain and repeats directory fsync.
+// RuntimePublicationError retains committed revision evidence after publication.
+// Durability failures permit exact replay; detected stale grants require fresh
+// status instead. Historical records remain immutable in either case.
 type RuntimePublicationError struct {
-	Revision  string
-	Committed bool
-	Cause     error
+	Revision   string
+	Committed  bool
+	Cause      error
+	staleGrant bool
 }
 
 func (err *RuntimePublicationError) Error() string {
+	if err.staleGrant {
+		return fmt.Sprintf("SDD historical grant %s is committed but not current authority; re-read status before granting: %v", err.Revision, err.Cause)
+	}
 	return fmt.Sprintf("SDD runtime ledger publication for %s requires exact replay: %v", err.Revision, err.Cause)
 }
 
@@ -659,7 +663,9 @@ type RuntimeStore struct {
 	// into GrantedRoots only when the record's identity equals this one. The
 	// zero value is the conservative containment: a store opened without an
 	// instance identity projects no granted roots at all.
-	instance string
+	instance           string
+	grantInstanceCheck func() error
+	grantMutation      bool
 }
 
 // ForInstance derives a store bound to one change-instance identity. The
@@ -1088,7 +1094,10 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if loadErr != nil {
 			return RuntimeStatus{}, loadErr
 		}
-		request = runtimeRescopeSuccessorRequest(replay.Status, request, true)
+		request, err = store.runtimeRescopeSuccessorRequest(ctx, replay.Status, request, true)
+		if err != nil {
+			return RuntimeStatus{}, err
+		}
 	}
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
 	legacyDigest := ""
@@ -1794,6 +1803,7 @@ func (store RuntimeStore) Grant(ctx context.Context, request GrantRootsRequest) 
 	}
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-grant-request/v1", request)
 	grantedAt := runtimeGrantClock()
+	store.grantMutation = true
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(runtimeReplay) (runtimeRecord, error) {
 		return runtimeRecord{Operation: runtimeOperationGrant, Grant: &runtimeGrantEvent{
 			Roots: request.Roots, Actor: request.Actor, Reason: request.Reason, GrantedAt: grantedAt,
@@ -2156,7 +2166,7 @@ func (store RuntimeStore) mutate(
 	expected, requestID, requestDigest string,
 	build func(runtimeReplay) (runtimeRecord, error),
 	legacyRequestDigest ...string,
-) (RuntimeStatus, error) {
+) (result RuntimeStatus, err error) {
 	if err := ctx.Err(); err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -2172,11 +2182,30 @@ func (store RuntimeStore) mutate(
 	}
 	defer lock.Release()
 
+	receiptRevision := ""
+	if store.grantMutation && store.grantInstanceCheck != nil {
+		if err := store.grantInstanceCheck(); err != nil {
+			return RuntimeStatus{}, err
+		}
+		// External replacement can leave immutable history; never return detected stale authority.
+		defer func() {
+			if err == nil {
+				if mismatch := store.grantInstanceCheck(); mismatch != nil {
+					if receiptRevision == "" {
+						receiptRevision = result.Revision
+					}
+					err = &RuntimePublicationError{Revision: receiptRevision, Committed: true, Cause: mismatch, staleGrant: true}
+					result = RuntimeStatus{}
+				}
+			}
+		}()
+	}
 	replay, err := store.load()
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
 	if receipt, ok := replay.Requests[requestID]; ok {
+		receiptRevision = receipt.Revision
 		if receipt.Digest != requestDigest &&
 			(len(legacyRequestDigest) != 1 || receipt.Digest != legacyRequestDigest[0]) {
 			return RuntimeStatus{}, ErrRuntimeRequestConflict

@@ -1313,10 +1313,14 @@ func TestOpenCodeSDDCommandsAreOrchestratorGuarded(t *testing.T) {
 			}
 		}
 
-		for _, required := range []string{
-			"SDD Session Preflight must already be complete",
-			"If missing, ask the exact orchestrator preflight prompt and STOP",
-		} {
+		requiredGuards := []string{"SDD Session Preflight must already be complete", "If missing, ask the exact orchestrator preflight prompt and STOP"}
+		if entry.Name() == "sdd-status.md" {
+			requiredGuards = []string{"command is read-only", "Inspection needs no execution preflight", "without executing any recommendation"}
+			if strings.Contains(content, "SDD Session Preflight must already be complete") {
+				t.Fatal("read-only status requires mutation preflight")
+			}
+		}
+		for _, required := range requiredGuards {
 			if !strings.Contains(content, required) {
 				t.Fatalf("%s missing orchestration guard wording %q", path, required)
 			}
@@ -1985,7 +1989,8 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"blockedReasons: []",
 		// #4372: the non-blocking diagnostics channel that keeps blockedReasons a pure gate.
 		"notes: []",
-		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
+		"If the binary is unavailable or invalid, report that native status is unresolved.",
+		"Do not fabricate native-shaped status",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("sdd-status-contract missing frozen SDD v2 field or token %q", want)
@@ -1993,6 +1998,7 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
+		"Manual fallback status MUST stay shape-compatible",
 		"runtimeStatus",
 		"correctionBudget",
 		"sdd-status/v1",
