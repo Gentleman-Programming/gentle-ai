@@ -16,6 +16,54 @@ func sharedResearchContract(t *testing.T, name string) string {
 	return content
 }
 
+func TestResearchCollectorAuthorityIsOutputOnly(t *testing.T) {
+	t.Parallel()
+
+	claude, err := assets.Read("claude/agents/sdd-research.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"tools: WebFetch, WebSearch",
+		"Do not read or mutate repository or Engram state.",
+		"The orchestrator validates and persists this envelope through the selected store route.",
+	} {
+		if !strings.Contains(claude, required) {
+			t.Errorf("Claude research collector missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"Write", "Edit", "mem_save"} {
+		if strings.Contains(claude, forbidden) {
+			t.Errorf("Claude research collector grants or requires %q", forbidden)
+		}
+	}
+}
+
+func TestResearchSkillLeavesPersistenceToTheOrchestrator(t *testing.T) {
+	t.Parallel()
+
+	skill, err := assets.Read("skills/sdd-research/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"output-only evidence collector",
+		"Do not read local artifacts or call persistence tools.",
+		"The orchestrator validates and persists the returned envelope through the selected store route.",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Errorf("research skill missing collector boundary %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"sdd-phase-common.md", "Persist `gentle-ai.sdd-research/v1`", "In hybrid mode, write identical bytes",
+	} {
+		if strings.Contains(skill, forbidden) {
+			t.Errorf("research skill retains child persistence duty %q", forbidden)
+		}
+	}
+}
+
 func TestResearchEvidenceContractIsCompleteAndFailClosed(t *testing.T) {
 	t.Parallel()
 
@@ -41,6 +89,15 @@ func TestSelectedResearchReadinessMatrixFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	content := sharedResearchContract(t, "persistence-contract.md")
+	for _, required := range []string{
+		"The orchestrator validates the returned collector envelope and persists it through the selected store route.",
+		"both writes MUST succeed for the operation to be complete",
+		"failed, missing, unequal, or divergent store",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("persistence-contract.md missing parent-side readiness clause %q", required)
+		}
+	}
 	tests := []struct {
 		name  string
 		state string

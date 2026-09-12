@@ -53,7 +53,7 @@ Token cost warning: hybrid consumes MORE tokens per operation. Use only when you
 
 ### Research reconciliation
 
-For selected research, readiness follows the selected artifact-store mode: `openspec` validates only OpenSpec; `engram` validates only Engram; `hybrid` writes and reads both stores with identical revision and bytes; `none` cannot make selected research ready.
+The orchestrator validates the returned collector envelope and persists it through the selected store route. For selected research, readiness follows the selected artifact-store mode: `openspec` validates only OpenSpec; `engram` validates only Engram; `hybrid` writes and reads both stores with identical revision and bytes; `none` cannot make selected research ready.
 
 For hybrid `gentle-ai.sdd-preproposal/v1`, retain pre-write intent and canonical desired content before any write. On one-sided failure, never derive content from either surviving store: use the retained values to write a new positive revision to both stores, then read and compare both before readiness. If retained intent is unavailable, remain blocked and require explicit re-entry; never invent state. A matching restart restores the request and evidence references.
 
@@ -104,13 +104,15 @@ Sub-agents launch with a fresh context and NO access to the orchestrator's instr
 
 Who reads, who writes:
 - Non-SDD (general task): orchestrator searches engram, passes summary in prompt; sub-agent saves discoveries via `mem_save`
-- SDD (phase with dependencies): sub-agent reads artifacts directly from backend; sub-agent saves its artifact
-- SDD (phase without dependencies, e.g. explore): nobody reads; sub-agent saves its artifact
+- SDD (artifact-producing phase with dependencies): sub-agent reads artifacts directly from backend; sub-agent saves its artifact
+- SDD (artifact-producing phase without dependencies, e.g. explore): nobody reads; sub-agent saves its artifact
+- SDD research collector: child reads no local artifacts or Engram state and saves nothing; it returns evidence for the orchestrator to validate and persist through the selected store route
 
 Why this split:
 - Orchestrator reads for non-SDD: it knows what context is relevant; sub-agents doing their own searches waste tokens on irrelevant results
 - Sub-agents read for SDD: SDD artifacts are large; inlining them in the orchestrator prompt would consume the entire context window
-- Sub-agents always write: they have the complete detail on what happened; nuance is lost by the time results flow back to the orchestrator
+- Artifact-producing SDD sub-agents write: they have the complete detail on what happened; nuance is lost by the time results flow back to the orchestrator
+- The output-only SDD research collector returns evidence without persistence so the orchestrator can apply the selected-store and hybrid-readiness gate
 
 ## Orchestrator Prompt Instructions for Sub-Agents
 
@@ -123,7 +125,7 @@ If you make important discoveries, decisions, or fix bugs, you MUST save them to
 Do NOT return without saving what you learned. This is how the team builds persistent knowledge across sessions.
 ```
 
-SDD (with dependencies):
+SDD (artifact-producing phase with dependencies):
 ```
 Artifact store mode: {engram|openspec|hybrid|none}
 Read these artifacts before starting (search returns truncated previews):
@@ -143,7 +145,7 @@ After completing your work, you MUST call:
 If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
 ```
 
-SDD (no dependencies):
+SDD (artifact-producing phase with no dependencies):
 ```
 Artifact store mode: {engram|openspec|hybrid|none}
 

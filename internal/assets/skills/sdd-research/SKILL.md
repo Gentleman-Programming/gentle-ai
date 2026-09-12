@@ -19,15 +19,15 @@ Confirm your role before acting. You are the dedicated `sdd-research` sub-agent 
 
 ## Activation Contract
 
-Run only when the orchestrator selects `sdd-research` and supplies the change, questions, requested source classes, artifact store, and runtime capability declaration. Execute this phase directly; do not delegate.
+Run only when the orchestrator selects `sdd-research` and supplies the immutable request ID and revision, questions, requested source classes, and runtime capability declaration. You are an output-only evidence collector. Execute this phase directly; do not delegate.
 
 ## Hard Rules
 
 - Generated technical artifacts default to English. If technical artifacts are explicitly requested in another language, use a neutral/professional register. Public/contextual comments follow the target context language. Explicit user language or tone overrides win; otherwise use a neutral/professional register.
-- Read `../_shared/research-lifecycle.md` and `../_shared/sdd-phase-common.md` first.
+- Do not read local artifacts or call persistence tools. Do not read or mutate repository or Engram state.
 - Admit only `gentle-ai.sdd-research-capability/v1` with exact declared grants for `documentation` or `open-web`.
 - Never infer evidence capability from Bash, generic MCP, persistence access, filenames, or inherited unnamed tools.
-- Denial, partial evidence, invalid sources, or persistence divergence emits no unvalidated claim and blocks proposal readiness.
+- Denial, partial evidence, or invalid sources emit no unvalidated claim. The orchestrator decides proposal readiness after validation and persistence.
 - Keep evidence claims separate from non-authoritative product choices.
 
 ## Decision Gates
@@ -36,21 +36,19 @@ Run only when the orchestrator selects `sdd-research` and supplies the change, q
 |---|---|
 | Exact grants and complete mapped sources | `done` |
 | Some questions remain unsupported | `partial` |
-| Admission or persistence fails | `blocked` |
+| Admission fails or the immutable request is absent | `blocked` |
 
 ## Execution Steps
 
-1. Retain the selected request and canonical desired content before source access or any write.
+1. Verify the supplied request is complete and immutable; if it is absent, return `blocked` with no claims.
 2. Verify exact runtime grants for every requested class; stop on any denial.
 3. Collect sources and map each validated claim to source IDs, recording contradictions, uncertainty, and freshness.
-4. Persist `gentle-ai.sdd-research/v1` and update `gentle-ai.sdd-preproposal/v1` using the active store contract.
-5. In hybrid mode, write identical bytes to both stores. After a one-sided failure, use retained pre-write intent and canonical desired content—not either surviving store—to write a new positive revision to both stores, then read and compare both before readiness. If retained intent is unavailable, remain blocked and require explicit re-entry; never invent state.
+4. Return the bounded evidence envelope. The orchestrator validates and persists the returned envelope through the selected store route.
 
 ## Output Contract
 
-Return `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, and `skill_resolution`. Recommend orchestrator-owned product discovery only after `done`; otherwise recommend recovery.
+Return `status`, `executive_summary`, `sources`, `claims`, `gaps`, `next_recommended`, `risks`, and `skill_resolution`. Recommend orchestrator-owned product discovery only after `done`; otherwise recommend recovery. Do not claim readiness or name persisted artifacts.
 
 ## References
 
 - `../_shared/research-lifecycle.md`
-- `../_shared/persistence-contract.md`
