@@ -171,6 +171,7 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestInjectOpenCodeMergesEngramToSettings verifies MCP setup and the labeled-string mem_save protocol.
 func TestInjectOpenCodeMergesEngramToSettings(t *testing.T) {
 	home := t.TempDir()
 
@@ -248,6 +249,7 @@ func TestInjectOpenCodeMergesEngramToSettings(t *testing.T) {
 	}
 }
 
+// TestInjectOpenCodeIsIdempotent verifies repeated injection leaves existing settings unchanged.
 func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
