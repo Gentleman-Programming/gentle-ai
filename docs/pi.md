@@ -104,23 +104,21 @@ Package-owned child files are never edited. Gentle AI creates a same-name overla
 
 Run these inside Pi after installing the package stack.
 
-| Command                          | What it does                                                                                                    |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `/gentle-ai:status`              | Shows package, SDD asset, OpenSpec, and model config status.                                                    |
-| `/gentleman:persona`             | Switches between `gentleman` and `neutral` personas.                                                            |
-| `/gentle-ai:persona`             | Compatibility alias for `/gentleman:persona`.                                                                   |
-| `/gentleman:models`              | Opens the Pi-native model assignment modal.                                                                     |
-| `/gentle-ai:models`              | Compatibility alias for `/gentleman:models`.                                                                    |
-| `/sdd-init`                      | Bootstraps or refreshes `openspec/config.yaml`.                                                                 |
-| `/gentle-ai:install-sdd`         | Reinstalls SDD assets without overwriting local files.                                                          |
-| `/gentle-ai:install-sdd --force` | Force-refreshes installed SDD assets. Use this when you explicitly want package assets to replace local copies. |
+| Command                       | What it does                                                                                                    |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `/gentle:status`              | Shows package, SDD asset, OpenSpec, and model config status.                                                    |
+| `/gentle:persona`             | Switches between `gentleman` and `neutral` personas.                                                            |
+| `/gentle:models`              | Opens the Pi-native model assignment modal.                                                                     |
+| `/gentle-sdd-init`            | Bootstraps or refreshes `openspec/config.yaml`.                                                                 |
+| `/gentle:install-sdd`         | Reinstalls SDD assets without overwriting local files.                                                          |
+| `/gentle:install-sdd --force` | Force-refreshes installed SDD assets. Use this when you explicitly want package assets to replace local copies. |
 
 ## Persona Selection
 
 Pi persona selection belongs to `gentle-pi`, not the Gentle AI installer.
 
 ```text
-/gentleman:persona
+/gentle:persona
 ```
 
 | Persona     | Behavior                                                                                                                   |
@@ -141,7 +139,7 @@ Run `/reload` or start a new Pi session after switching if the current session a
 Pi model assignment belongs to `gentle-pi`, not the Gentle AI installer.
 
 ```text
-/gentleman:models
+/gentle:models
 ```
 
 The modal discovers project, user, and built-in agents. SDD agents are shown first so you can tune the phases that matter most.
@@ -180,20 +178,20 @@ On normal Pi `session_start`, `gentle-pi` copies project-local assets without ov
 .pi/gentle-ai/support/strict-tdd-verify.md
 ```
 
-Use `/gentle-ai:install-sdd --force` only when you want to replace local SDD assets with the package version.
+Use `/gentle:install-sdd --force` only when you want to replace local SDD assets with the package version.
 
 If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks. That mode is useful for a clean or faster Pi session, but it also means `gentle-pi` startup work such as asset checks and skill-registry refreshes will not run automatically.
 
 ## Troubleshooting
 
-| Symptom                                                | Fix                                                                                                                                                                  |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gentle AI says Pi is missing                           | Install Pi first and make sure `pi` is on `PATH`.                                                                                                                    |
-| SDD agents are missing in Pi                           | Start Pi normally in the project so `gentle-pi` can run `session_start`, or run `/gentle-ai:install-sdd`. If you used `pi -ns`, startup hooks were skipped.          |
-| Persona did not change immediately                     | Run `/reload` or start a new Pi session.                                                                                                                             |
-| Model override should be removed                       | Open `/gentleman:models` and choose `Inherit active/default model`.                                                                                                  |
-| Memory tools or `/mcp` are missing                     | Re-run `gentle-ai install --agent pi` to refresh `.pi/agent/settings.json`, `.pi/npm/package.json`, and the `pi-engram init` wiring, then check `/gentle-ai:status`. |
-| `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned.                                                                                   |
+| Symptom                                                | Fix                                                                                                                                                               |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gentle AI says Pi is missing                           | Install Pi first and make sure `pi` is on `PATH`.                                                                                                                 |
+| SDD agents are missing in Pi                           | Start Pi normally in the project so `gentle-pi` can run `session_start`, or run `/gentle:install-sdd`. If you used `pi -ns`, startup hooks were skipped.          |
+| Persona did not change immediately                     | Run `/reload` or start a new Pi session.                                                                                                                          |
+| Model override should be removed                       | Open `/gentle:models` and choose `Inherit active/default model`.                                                                                                  |
+| Memory tools or `/mcp` are missing                     | Re-run `gentle-ai install --agent pi` to refresh `.pi/agent/settings.json`, `.pi/npm/package.json`, and the `pi-engram init` wiring, then check `/gentle:status`. |
+| `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned.                                                                                |
 
 ## Next Steps
 

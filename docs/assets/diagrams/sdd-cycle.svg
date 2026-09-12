@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 760" width="1240" height="760" role="img" aria-labelledby="sddTitle sddDesc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+  <title id="sddTitle">The SDD cycle</title>
+  <desc id="sddDesc">A vague request moves through three bands. Understand: Explore, then optional Research. Plan: Proposal, Spec, Design and Tasks, each writing a markdown file. Build: Apply writes code and tests, Verify checks the evidence against the spec, Archive merges the specs and closes the cycle.</desc>
+
+  <defs>
+    <radialGradient id="ambient" cx="12%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#F095C8" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#F095C8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1240" height="760" rx="24" fill="#1A1218"/>
+  <rect width="1240" height="760" rx="24" fill="url(#ambient)"/>
+
+  <!-- header -->
+  <text x="40" y="58" font-size="27" font-weight="700" fill="#F7ECF2">SDD &#8212; one change, one path</text>
+  <text x="41" y="88" font-size="14.5" fill="#A88E9B">A vague request becomes a visible sequence of steps, and every step leaves a file on disk.</text>
+  <rect x="906" y="38" width="294" height="34" rx="17" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="1053" y="60" font-size="12.5" text-anchor="middle" fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">once per project &#183; gentle-ai sdd init</text>
+
+  <!-- ============ BAND 01 : UNDERSTAND ============ -->
+  <rect x="40" y="130" width="1160" height="168" rx="20" fill="#221820" stroke="#392A33"/>
+  <text x="68" y="208" font-size="34" font-weight="700" fill="#F095C8" opacity="0.22">01</text>
+  <text x="68" y="234" font-size="13" font-weight="700" letter-spacing="2" fill="#D7A0B8">UNDERSTAND</text>
+  <line x1="200" y1="158" x2="200" y2="270" stroke="#392A33"/>
+
+  <rect x="224" y="164" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="242" y="196" font-size="17" font-weight="600" fill="#F7ECF2">Explore</text>
+  <text x="242" y="222" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">understanding</text>
+  <text x="242" y="244" font-size="11.5" fill="#9C8391">Reads the code it will touch</text>
+
+  <path d="M457 208 l7 6 -7 6" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="467" y="164" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540" stroke-dasharray="5 4"/>
+  <text x="485" y="196" font-size="17" font-weight="600" fill="#F7ECF2">Research</text>
+  <text x="672" y="185" font-size="10" text-anchor="end" letter-spacing="1" fill="#8A6E7C">OPTIONAL</text>
+  <text x="485" y="222" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">cited evidence</text>
+  <text x="485" y="244" font-size="11.5" fill="#9C8391">External sources, with links</text>
+
+  <path d="M120 304 L120 320" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round"/>
+  <path d="M114 315 L120 323 L126 315" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- ============ BAND 02 : PLAN ============ -->
+  <rect x="40" y="332" width="1160" height="168" rx="20" fill="#221820" stroke="#392A33"/>
+  <text x="68" y="410" font-size="34" font-weight="700" fill="#F095C8" opacity="0.22">02</text>
+  <text x="68" y="436" font-size="13" font-weight="700" letter-spacing="2" fill="#D7A0B8">PLAN</text>
+  <line x1="200" y1="360" x2="200" y2="472" stroke="#392A33"/>
+
+  <rect x="224" y="366" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="242" y="398" font-size="17" font-weight="600" fill="#F7ECF2">Proposal</text>
+  <text x="242" y="424" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">proposal.md</text>
+  <text x="242" y="446" font-size="11.5" fill="#9C8391">Intent, scope and approach</text>
+
+  <path d="M457 410 l7 6 -7 6" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="467" y="366" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="485" y="398" font-size="17" font-weight="600" fill="#F7ECF2">Spec</text>
+  <text x="485" y="424" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">spec.md</text>
+  <text x="485" y="446" font-size="11.5" fill="#9C8391">Requirements and scenarios</text>
+
+  <path d="M700 410 l7 6 -7 6" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="710" y="366" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="728" y="398" font-size="17" font-weight="600" fill="#F7ECF2">Design</text>
+  <text x="728" y="424" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">design.md</text>
+  <text x="728" y="446" font-size="11.5" fill="#9C8391">Architecture decisions</text>
+
+  <path d="M943 410 l7 6 -7 6" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="953" y="366" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="971" y="398" font-size="17" font-weight="600" fill="#F7ECF2">Tasks</text>
+  <text x="971" y="424" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">tasks.md</text>
+  <text x="971" y="446" font-size="11.5" fill="#9C8391">Ordered, checkable items</text>
+
+  <path d="M120 506 L120 522" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round"/>
+  <path d="M114 517 L120 525 L126 517" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- ============ BAND 03 : BUILD ============ -->
+  <rect x="40" y="534" width="1160" height="168" rx="20" fill="#221820" stroke="#392A33"/>
+  <text x="68" y="612" font-size="34" font-weight="700" fill="#F095C8" opacity="0.22">03</text>
+  <text x="68" y="638" font-size="13" font-weight="700" letter-spacing="2" fill="#D7A0B8">BUILD</text>
+  <line x1="200" y1="562" x2="200" y2="674" stroke="#392A33"/>
+
+  <rect x="224" y="568" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="242" y="600" font-size="17" font-weight="600" fill="#F7ECF2">Apply</text>
+  <text x="242" y="626" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">code + tests</text>
+  <text x="242" y="648" font-size="11.5" fill="#9C8391">Writes code. TDD when it fits.</text>
+
+  <path d="M457 612 l7 6 -7 6" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="467" y="568" width="223" height="100" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="485" y="600" font-size="17" font-weight="600" fill="#F7ECF2">Verify</text>
+  <text x="485" y="626" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">verification report</text>
+  <text x="485" y="648" font-size="11.5" fill="#9C8391">Independent check vs. spec</text>
+
+  <path d="M700 612 l7 6 -7 6" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="710" y="568" width="223" height="100" rx="14" fill="#2C1F27" stroke="#F095C8" stroke-opacity="0.55"/>
+  <text x="728" y="600" font-size="17" font-weight="600" fill="#F7ECF2">Archive</text>
+  <text x="728" y="626" font-size="12" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">changes/archive/</text>
+  <text x="728" y="648" font-size="11.5" fill="#9C8391">Merges specs, closes cycle</text>
+
+  <path d="M943 612 l7 6 -7 6" fill="none" stroke="#F095C8" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1064" y="606" font-size="13" font-weight="600" text-anchor="middle" fill="#F095C8">Change shipped</text>
+  <text x="1064" y="628" font-size="11.5" text-anchor="middle" fill="#9C8391">with its own paper trail</text>
+
+  <!-- footer -->
+  <line x1="40" y1="722" x2="1200" y2="722" stroke="#392A33"/>
+  <text x="620" y="746" font-size="12.5" text-anchor="middle" fill="#8A6E7C">The <tspan fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">gentle-ai</tspan> binary decides the next valid step &#8212; the model does not guess.</text>
+</svg>
