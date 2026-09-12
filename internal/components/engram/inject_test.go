@@ -109,6 +109,7 @@ func TestInjectClaudeRefusesCorruptUserRegistryWithoutMutation(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeWritesProtocolSection verifies Claude receives the shared Engram instructions.
 func TestInjectClaudeWritesProtocolSection(t *testing.T) {
 	home := t.TempDir()
 
@@ -139,6 +140,7 @@ func TestInjectClaudeWritesProtocolSection(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeIsIdempotent verifies repeated setup does not duplicate Claude's protocol section.
 func TestInjectClaudeIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 
