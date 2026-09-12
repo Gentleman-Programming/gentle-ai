@@ -39,6 +39,84 @@ func TestResearchCollectorAuthorityIsOutputOnly(t *testing.T) {
 	}
 }
 
+func TestRuntimeResearchExecutorsAreOutputOnly(t *testing.T) {
+	t.Parallel()
+
+	const outputOnlyBoundary = "must not retain intent, mutate repository state, save Engram state, select an artifact store, or persist research/preproposal."
+	const orchestratorHandoff = "The orchestrator validates and persists the returned envelope through the preflight-selected store route."
+
+	for _, path := range []string{
+		"cursor/agents/sdd-research.md",
+		"kiro/agents/sdd-research.md",
+		"kimi/agents/sdd-research.md",
+		"claude/commands/gentle-sdd-research.md",
+	} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			content, err := assets.Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range []string{"output-only evidence collector", outputOnlyBoundary, orchestratorHandoff} {
+				if !strings.Contains(content, required) {
+					t.Errorf("%s missing output-only boundary %q", path, required)
+				}
+			}
+			for _, stale := range []string{
+				"Persist intent before source access.",
+				"retain the selected request",
+				"persist a `blocked` outcome",
+				"shared research and persistence contracts",
+			} {
+				if strings.Contains(content, stale) {
+					t.Errorf("%s retains executor persistence instruction %q", path, stale)
+				}
+			}
+		})
+	}
+
+	for _, path := range []string{"cursor/agents/sdd-research.md", "kimi/agents/sdd-research.md"} {
+		content, err := assets.Read(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(content, "readonly: true") {
+			t.Errorf("%s is not structurally read-only", path)
+		}
+	}
+
+	kiro, err := assets.Read("kiro/agents/sdd-research.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`tools: ["@context7"]`, "documentation=[@context7]"} {
+		if !strings.Contains(kiro, required) {
+			t.Errorf("Kiro research executor missing narrow documentation capability %q", required)
+		}
+	}
+	for _, forbidden := range []string{"@builtin", "@engram"} {
+		if strings.Contains(kiro, forbidden) {
+			t.Errorf("Kiro research executor grants non-evidence capability %q", forbidden)
+		}
+	}
+
+	claudeCommand, err := assets.Read("claude/commands/gentle-sdd-research.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(claudeCommand, "The command actor is the orchestrator.") {
+		t.Error("Claude research command does not identify the command actor as the orchestrator")
+	}
+	if got := strings.Count(claudeCommand, "validates and persists the returned envelope through the preflight-selected store route."); got != 1 {
+		t.Errorf("Claude research command has %d validation/persistence handoffs, want 1", got)
+	}
+	if strings.Contains(claudeCommand, "After the collector returns, validate its envelope and persist it") {
+		t.Error("Claude research command duplicates the validation/persistence handoff")
+	}
+}
+
 func TestResearchSkillLeavesPersistenceToTheOrchestrator(t *testing.T) {
 	t.Parallel()
 
