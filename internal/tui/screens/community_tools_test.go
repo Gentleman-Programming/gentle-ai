@@ -17,6 +17,15 @@ func TestRenderCommunityToolsShowsCodeGraph(t *testing.T) {
 	}
 }
 
+func TestRenderCommunityToolsShowsOpenRecordUnchecked(t *testing.T) {
+	out := RenderCommunityTools(nil, 0, nil, false, nil)
+	for _, want := range []string{"[ ] openrecord", "View repo: https://github.com/franwerner/open-record"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderCommunityTools missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderCommunityToolsShowsStatusLoadingAndAgentState(t *testing.T) {
 	loading := RenderCommunityTools(nil, 0, nil, true, nil)
 	if !strings.Contains(loading, "Detecting installed tool and agent wiring") {

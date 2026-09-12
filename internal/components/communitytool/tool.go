@@ -100,6 +100,13 @@ var definitions = []Definition{
 		RepoURL:     "https://github.com/colbymchenry/codegraph",
 		Description: "Code graph indexing and MCP wiring for supported coding agents",
 	},
+	{
+		ID:          model.CommunityToolOpenRecord,
+		Name:        "openrecord",
+		CommandName: "openrecord",
+		RepoURL:     "https://github.com/franwerner/open-record",
+		Description: "Durable decision and spec records for the SDD flow, with qmd semantic search",
+	},
 }
 
 func Definitions() []Definition {

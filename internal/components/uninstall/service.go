@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/openrecord"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
@@ -1030,6 +1031,10 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				dirPath := filepath.Join(skillDir, skillID)
 				targets = append(targets, dirPath)
 				ops = append(ops, removeTree(dirPath))
+			}
+			for _, path := range openrecord.UninstallTargets(skillDir) {
+				targets = append(targets, path)
+				ops = append(ops, removeFile(path))
 			}
 			ops = append(ops, removeDirIfEmpty(skillDir))
 		}

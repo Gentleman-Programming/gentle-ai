@@ -1,5 +1,7 @@
 package update
 
+import "context"
+
 // UpdateStatus represents the outcome of a single tool version check.
 type UpdateStatus string
 
@@ -56,6 +58,12 @@ type ToolInfo struct {
 	// The function receives the user home directory and the value of LOCALAPPDATA
 	// (empty on non-Windows). May be nil when no fallback is needed.
 	FallbackPaths func(homeDir, localAppData string) []string
+
+	// PostUpgrade is an optional step the executor runs once, after this
+	// tool's upgrade succeeds. A nil field is the default and changes nothing
+	// about how a tool upgrades; a declared step never runs when the upgrade
+	// itself failed.
+	PostUpgrade func(ctx context.Context) error
 }
 
 // UpdateResult holds the result of checking a single tool for updates.

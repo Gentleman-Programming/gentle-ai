@@ -237,7 +237,8 @@ const (
 type CommunityToolID string
 
 const (
-	CommunityToolCodeGraph CommunityToolID = "codegraph"
+	CommunityToolCodeGraph  CommunityToolID = "codegraph"
+	CommunityToolOpenRecord CommunityToolID = "openrecord"
 )
 
 // Profile represents a named SDD orchestrator configuration with model assignments.

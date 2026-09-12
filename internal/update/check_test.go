@@ -982,6 +982,8 @@ func TestCheckAll(t *testing.T) {
 			release = githubRelease{TagName: "v1.5.0", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.5.0"}
 		case contains(path, "gentleman-guardian-angel"):
 			release = githubRelease{TagName: "v2.0.0", HTMLURL: "https://github.com/Gentleman-Programming/gentleman-guardian-angel/releases/tag/v2.0.0"}
+		case contains(path, "open-record"):
+			release = githubRelease{TagName: "v0.5.0", HTMLURL: "https://github.com/franwerner/open-record/releases/tag/v0.5.0"}
 		case contains(path, "sub-agent-statusline"):
 			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Joaquinvesapa/sub-agent-statusline/releases/tag/v0.4.0"}
 		case contains(path, "sdd-engram-plugin"):
@@ -1014,6 +1016,8 @@ func TestCheckAll(t *testing.T) {
 			return "/usr/local/bin/engram", nil
 		case "gga":
 			return "", fmt.Errorf("not found")
+		case "openrecord":
+			return "", fmt.Errorf("not found")
 		default:
 			return "", fmt.Errorf("not found")
 		}
@@ -1030,8 +1034,8 @@ func TestCheckAll(t *testing.T) {
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "1.5.0", profile)
 
-	if len(results) != 5 {
-		t.Fatalf("len(results) = %d, want 5", len(results))
+	if len(results) != 6 {
+		t.Fatalf("len(results) = %d, want 6", len(results))
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
@@ -1042,8 +1046,9 @@ func TestCheckAll(t *testing.T) {
 
 	// gga: not installed
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
-	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
-	assertResult(t, results[4], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
+	assertResult(t, results[3], "openrecord", NotInstalled, "", "0.5.0")
+	assertResult(t, results[4], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
+	assertResult(t, results[5], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
 }
 
 func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
@@ -1446,8 +1451,8 @@ func TestParseVersionFromOutput(t *testing.T) {
 
 // TestRegistryContents verifies the registry has all expected tools.
 func TestRegistryContents(t *testing.T) {
-	if len(Tools) != 5 {
-		t.Fatalf("len(Tools) = %d, want 5", len(Tools))
+	if len(Tools) != 6 {
+		t.Fatalf("len(Tools) = %d, want 6", len(Tools))
 	}
 
 	expected := map[string]struct {
@@ -1457,6 +1462,7 @@ func TestRegistryContents(t *testing.T) {
 		"gentle-ai":                    {owner: "Gentleman-Programming", repo: "gentle-ai"},
 		"engram":                       {owner: "Gentleman-Programming", repo: "engram"},
 		"gga":                          {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
+		"openrecord":                   {owner: "franwerner", repo: "open-record"},
 		"opencode-subagent-statusline": {owner: "Joaquinvesapa", repo: "sub-agent-statusline"},
 		"opencode-sdd-engram-manage":   {owner: "j0k3r-dev-rgl", repo: "sdd-engram-plugin"},
 	}
@@ -1489,7 +1495,19 @@ func TestRegistryContents(t *testing.T) {
 	if Tools[2].DetectCmd == nil {
 		t.Fatalf("gga DetectCmd should not be nil")
 	}
-	if Tools[3].NpmPackage == "" || Tools[4].NpmPackage == "" {
+	if Tools[3].DetectCmd == nil {
+		t.Fatalf("openrecord DetectCmd should not be nil")
+	}
+	if Tools[3].ReleaseTagPattern != `^v[0-9]+\.[0-9]+\.[0-9]+$` {
+		t.Fatalf("openrecord ReleaseTagPattern = %q, want binary v* channel pattern", Tools[3].ReleaseTagPattern)
+	}
+	if Tools[3].FallbackPaths == nil {
+		t.Fatalf("openrecord FallbackPaths should not be nil")
+	}
+	if Tools[3].PostUpgrade == nil {
+		t.Fatalf("openrecord PostUpgrade should not be nil")
+	}
+	if Tools[4].NpmPackage == "" || Tools[5].NpmPackage == "" {
 		t.Fatalf("OpenCode plugin tools should declare NpmPackage")
 	}
 }

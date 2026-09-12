@@ -84,7 +84,7 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertExactJSONKeys(t, document, []string{
-			"schemaName", "schemaVersion", "changeName", "artifactStore", "planningHome", "changeRoot",
+			"schemaName", "schemaVersion", "changeName", "artifactStore", "recordStore", "planningHome", "changeRoot",
 			"artifactPaths", "contextFiles", "artifacts", "taskProgress", "dependencies", "applyState",
 			"actionContext", "relationships", "remediationState", "nextRecommended", "blockedReasons",
 			// notes is #4372's deliberate additive extension: the non-blocking
@@ -95,6 +95,7 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		assertJSONNestedKeys(t, document, "contextFiles", []string{"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport"})
 		assertJSONNestedKeys(t, document, "artifacts", []string{"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport"})
 		assertJSONNestedKeys(t, document, "remediationState", []string{"required", "complete", "failedEvidenceRevision", "reason"})
+		assertJSONNestedKeys(t, document, "recordStore", []string{"declared", "resolved"})
 		for _, forbidden := range []string{"reviewGate", "reviewTransaction", "reVerify", "runtimeStatus", "reviewPolicy", "reviewLedger", "reviewReceipt", "reviewBundle", "reviewContext", "reviewState", "lineageId", "generation", "fixBatch", "correctionBudget"} {
 			if strings.Contains(string(payload), forbidden) {
 				t.Fatalf("v2 projection retained authority key %q: %s", forbidden, payload)

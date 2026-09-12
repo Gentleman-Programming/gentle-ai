@@ -46,6 +46,9 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - For the final OpenSpec `verify` work unit, persist the canonical passing `openspec/changes/{change}/verify-report.md` before settlement. Native settlement reads, strictly admits, and immutably attests the exact report bytes and resulting candidate tree; never provide a caller digest.
 - If Strict TDD is active, load `strict-tdd-verify.md` from this skill directory; if inactive, never load it.
 - Apply any `rules.verify` from `openspec/config.yaml`
+<--:openrecord-->
+- **record store**: when status reports `recordStore.resolved: openrecord`, read and follow `skills/_shared/openrecord-convention.md`. Run `openrecord validate` for structural shape and separately check that each record's prose still describes the system as actually built.
+<--:/openrecord-->
 - Return the Section D envelope from `../_shared/sdd-phase-common.md`.
 - Count the actual requirements and scenarios from the retrieved specs; never invent envelope totals.
 - Native status counts only `### Requirement:` / `### REQ-<n>:` and `#### Scenario:` headings. If the envelope totals differ from that count, status keeps `verify: ready` and names the mismatch in `blockedReasons`; fix the totals and re-verify instead of re-validating the same envelope.

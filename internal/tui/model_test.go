@@ -2230,6 +2230,48 @@ func TestCommunityToolsToggleSelectsCodeGraph(t *testing.T) {
 	}
 }
 
+func TestCommunityToolsToggleSelectsOpenRecord(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCommunityTools
+	// Each community tool occupies two rows (the row itself, then its repo
+	// line); openrecord is the second Definition, so its row is at index 2.
+	m.Cursor = 2
+
+	updated, _ := m.handleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	state := updated.(Model)
+
+	if !state.Selection.HasCommunityTool(model.CommunityToolOpenRecord) {
+		t.Fatalf("expected openrecord selected, got %v", state.Selection.CommunityTools)
+	}
+}
+
+func TestCommunityToolStatusDetectionCarriesOpenRecord(t *testing.T) {
+	originalStatus := openRecordStatusFn
+	t.Cleanup(func() { openRecordStatusFn = originalStatus })
+
+	var sawOpenRecord bool
+	openRecordStatusFn = func(homeDir string, detector communitytool.Detector, runner communitytool.Runner) communitytool.Status {
+		sawOpenRecord = true
+		return communitytool.Status{Tool: model.CommunityToolOpenRecord, CLI: communitytool.AvailabilityMissing}
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	msg := m.startCommunityToolStatusDetection()().(CommunityToolStatusLoadedMsg)
+
+	if !sawOpenRecord {
+		t.Fatal("status detection did not consult openRecordStatusFn")
+	}
+	var found bool
+	for _, status := range msg.Statuses {
+		if status.Tool == model.CommunityToolOpenRecord {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("status detection message did not carry an openrecord status: %+v", msg.Statuses)
+	}
+}
+
 func TestStandaloneCommunityToolsContinueWithoutSelectionNoOps(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenCommunityTools
