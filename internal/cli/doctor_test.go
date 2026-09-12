@@ -16,6 +16,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 // --- checkOneTool ---
@@ -611,8 +612,17 @@ func TestCheckInstalledAssetVersion_MatchingPass(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Seed a manifest at the running AppVersion so checkManagedAssets reports
+	// "aligned" (the per-signal "no manifest" → unknown shape is covered by
+	// TestCheckManagedAssets_ExitCodeUnknown).
+	if err := state.WriteManifestAtomic(homeDir, state.Manifest{
+		Schema:   state.ManifestSchema,
+		Producer: state.Producer{BinaryVersion: AppVersion, Commit: "test"},
+	}.WithBundleDigest()); err != nil {
+		t.Fatal(err)
+	}
 
-	got := checkInstalledAssetVersion(homeDir)
+	got := checkManagedAssets(homeDir, AppVersion)
 	if got.Status != CheckStatusPass {
 		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
 	}
@@ -629,12 +639,12 @@ func TestCheckInstalledAssetVersion_SkewWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := checkInstalledAssetVersion(homeDir)
+	got := checkManagedAssets(homeDir, AppVersion)
 	if got.Status != CheckStatusWarn {
-		t.Errorf("expected warn for version skew, got %s: %s", got.Status, got.Detail)
+		t.Errorf("expected warn for unknown (no manifest), got %s: %s", got.Status, got.Detail)
 	}
-	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "gentle-ai sync") {
-		t.Errorf("unexpected detail: %s", got.Detail)
+	if !strings.Contains(got.Detail, "classification: unknown") {
+		t.Errorf("expected detail to report unknown classification; got %q", got.Detail)
 	}
 }
 
@@ -975,6 +985,18 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Seed a managed-assets manifest so the doctor reports "aligned" rather
+	// than the "unknown" classification it now emits for legacy installs
+	// without a manifest. This test's intent is the RunDoctor rendering
+	// shape, not the legacy-migration path.
+	alignedProducer := state.Producer{BinaryVersion: "dev", Commit: "test"}
+	alignedManifest := state.Manifest{
+		Schema:   state.ManifestSchema,
+		Producer: alignedProducer,
+	}.WithBundleDigest()
+	if err := state.WriteManifestAtomic(homeDir, alignedManifest); err != nil {
+		t.Fatal(err)
+	}
 	configPath := writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
 
 	lookPathFn = func(name string) (string, error) {
@@ -1008,13 +1030,15 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
-  [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
+  [ok]  installed:asset_version        binary: dev
+  bundle: gentle-ai.managed-assets/v1 (producer=dev commit=test)
+  classification: aligned (bundle digest sha256:%s)
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
   [ok]  disk:space                     1024 MB free on %s filesystem
 
 Summary: 8 passed, 0 failed, 0 warnings
 Status:  healthy
-`, configPath, filepath.Join(homeDir, ".gentle-ai"))
+`, alignedManifest.Bundle.Digest, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -1023,6 +1047,15 @@ Status:  healthy
 	}
 }
 
+// TestRunDoctor_DanglingConfigSymlinkIsReadOnly asserts that when the user
+// has a legacy install (no managed-assets manifest) and a dangling config
+// symlink, the doctor still surfaces the dangling-path warning and the
+// inspect/gentle-ai doctor guidance, and does not modify the symlink,
+// state.json, the missing target, or create backup metadata — even though
+// RunDoctor returns ErrUnknownClassification because the missing manifest
+// triggers the "unknown" classification (#1884 contract). The read-only
+// guarantees below hold across the error return because the full check
+// matrix runs before doctorUnknownExitError is consulted.
 func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
 	origLookPath := lookPathFn
 	origAvail := availableBytesFn
@@ -1060,11 +1093,9 @@ func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
 	t.Setenv(engramHealthEnvVar, "https://engram.example.test")
 
 	var output bytes.Buffer
-	if err := RunDoctor(context.Background(), &output); err != nil {
-		t.Fatalf("RunDoctor returned error: %v", err)
-	}
-	if strings.Contains(output.String(), "gentle-ai sync") {
-		t.Fatalf("Doctor must not recommend sync for a dangling config symlink, got:\n%s", output.String())
+	err = RunDoctor(context.Background(), &output)
+	if !errors.Is(err, doctor.ErrUnknownClassification) {
+		t.Fatalf("RunDoctor error = %v, want ErrUnknownClassification", err)
 	}
 	for _, want := range []string{configDir, "inspect", "gentle-ai doctor"} {
 		if !strings.Contains(output.String(), want) {
@@ -1393,6 +1424,17 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Seed a managed-assets manifest so the doctor reports "aligned" rather
+	// than the "unknown" classification it now emits for legacy installs
+	// without a manifest. This test's intent is the per-agent rendering
+	// shape from #709, not the legacy-migration path.
+	alignedManifest := state.Manifest{
+		Schema:   state.ManifestSchema,
+		Producer: state.Producer{BinaryVersion: "dev", Commit: "test"},
+	}.WithBundleDigest()
+	if err := state.WriteManifestAtomic(homeDir, alignedManifest); err != nil {
+		t.Fatal(err)
+	}
 
 	// Resolve all binaries successfully except opencode, which is not in
 	// state.json anyway and must therefore never appear in the report.
@@ -1435,5 +1477,90 @@ func TestRenderDoctorReportDoesNotRenderRemedyMetadata(t *testing.T) {
 	want := "gentle-ai doctor — system health check\n=======================================\n\n  [xx]  disk:space                     cleanup needed\n       Remedy: Free disk space\n\nSummary: 0 passed, 1 failed, 0 warnings\nStatus:  unhealthy\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("rendered report mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestCheckManagedAssets_ReportsBothIdentities asserts the managed-assets
+// check renders the binary identity (state.json's InstalledBinaryVersion)
+// AND the bundle identity (manifest's producer + bundle digest) as separate
+// named fields, so a receiving support engineer can see both signals even
+// when they disagree.
+func TestCheckManagedAssets_ReportsBothIdentities(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prevVersion := AppVersion
+	prevCommit := ProducerCommit
+	t.Cleanup(func() {
+		AppVersion = prevVersion
+		ProducerCommit = prevCommit
+	})
+	AppVersion = "2.2.0-test"
+	ProducerCommit = "abc1234"
+
+	statePayload := fmt.Sprintf(`{"installed_binary_version":%q,"managed_asset_digest":"sha256:legacy-digest","installed_agents":["opencode"]}`, AppVersion)
+	if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(statePayload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := state.AppendJournal(homeDir, "intent", "test-run-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.AppendJournal(homeDir, "complete", "test-run-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	manifest := state.Manifest{
+		Schema:   state.ManifestSchema,
+		Producer: state.Producer{BinaryVersion: AppVersion, Commit: ProducerCommit},
+		Bundle:   state.BundleDigest{Algo: "sha256", Digest: "bundle-digest-marker"},
+	}.WithBundleDigest()
+	if err := state.WriteManifestAtomic(homeDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkManagedAssets(homeDir, AppVersion)
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %s, want pass; detail = %s", got.Status, got.Detail)
+	}
+
+	wantTokens := []string{
+		"binary: 2.2.0-test",
+		"bundle: gentle-ai.managed-assets/v1",
+		"commit=abc1234",
+		"classification: aligned",
+		"sha256:",
+	}
+	for _, want := range wantTokens {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("Detail missing %q; got %q", want, got.Detail)
+		}
+	}
+}
+
+// TestCheckManagedAssets_ExitCodeUnknown asserts that when no manifest
+// exists (legacy install), RunDoctor returns ErrUnknownClassification
+// so the CLI surfaces a non-zero exit code only on the failure-mode case.
+func TestCheckManagedAssets_ExitCodeUnknown(t *testing.T) {
+	homeDir := t.TempDir()
+
+	prevHome := osUserHomeDirDoctor
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	t.Cleanup(func() { osUserHomeDirDoctor = prevHome })
+
+	lookPathFn = func(string) (string, error) { return "", errors.New("intentional: doctor test skips tool checks") }
+	t.Cleanup(func() {
+		lookPathFn = func(string) (string, error) { return "", errors.New("not found") }
+	})
+
+	var buf bytes.Buffer
+	err := RunDoctor(context.Background(), &buf)
+
+	if !errors.Is(err, doctor.ErrUnknownClassification) {
+		t.Errorf("RunDoctor error = %v, want ErrUnknownClassification", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "unhealthy") && !strings.Contains(output, "managed assets") {
+		t.Errorf("output missing managed-assets evidence; got:\n%s", output)
 	}
 }

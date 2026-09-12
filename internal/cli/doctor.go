@@ -111,14 +111,29 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	}
 	checks = append(checks,
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
-		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
+		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkManagedAssets(homeDir, AppVersion) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
-	return nil
+	return doctorUnknownExitError(report)
+}
+
+// doctorUnknownExitError surfaces a non-zero CLI exit code only on the
+// "unknown" classification. Aligned / stale / mixed / user_modified return
+// nil; unknown returns doctor.ErrUnknownClassification.
+func doctorUnknownExitError(report DoctorReport) error {
+	for _, c := range report.Checks {
+		if c.Name != doctor.CheckInstalledAssetVersion {
+			continue
+		}
+		if !strings.Contains(c.Detail, "classification: unknown") {
+			return nil
+		}
+	}
+	return fmt.Errorf("managed assets classification is unknown: %w", doctor.ErrUnknownClassification)
 }
 
 // readDoctorInstalledAgents returns the agent IDs persisted in state.json.
@@ -719,28 +734,81 @@ func statusIcon(s CheckStatus) string {
 	}
 }
 
-func checkInstalledAssetVersion(homeDir string) CheckResult {
-	s, err := state.Read(homeDir)
-	if err != nil {
-		return CheckResult{
-			Status: CheckStatusPass,
-			Detail: "no state file found — asset version check skipped",
-		}
-	}
-	if s.InstalledBinaryVersion == "" {
-		return CheckResult{
-			Status: CheckStatusPass,
-			Detail: "no installed binary version recorded in state file — check skipped",
-		}
-	}
-	if s.InstalledBinaryVersion != AppVersion {
+// checkManagedAssets is the managed-bundle check. It reads the
+// gentle-ai.managed-assets/v1 manifest alongside state.json and reports the
+// binary-vs-bundle classification via doctor.Classify. Both identities
+// appear on separate lines in the Detail string so a support engineer can
+// see them independently even when they disagree.
+func checkManagedAssets(homeDir, binaryVersion string) CheckResult {
+	manifest, manifestErr := state.ReadManifest(homeDir)
+	if manifestErr != nil {
+		// Legacy install without a manifest classifies as "unknown".
 		return CheckResult{
 			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — run 'gentle-ai sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
+			Detail: fmt.Sprintf(
+				"binary: %s\n  bundle: %s (not present)\n  classification: unknown — run `gentle-ai sync` to migrate",
+				binaryVersion, state.ManifestSchema,
+			),
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "run `gentle-ai sync` to write the managed assets manifest"),
 		}
 	}
-	return CheckResult{
-		Status: CheckStatusPass,
-		Detail: fmt.Sprintf("installed assets match running binary version (%s)", AppVersion),
+	journal, _ := state.ReadJournal(homeDir)
+
+	classification := doctor.Classify(manifest, journal, binaryVersion)
+
+	switch classification.Kind {
+	case doctor.Aligned:
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: fmt.Sprintf(
+				"binary: %s\n  bundle: %s (producer=%s commit=%s)\n  classification: aligned (bundle digest sha256:%s)",
+				binaryVersion, manifest.Schema, manifest.Producer.BinaryVersion, manifest.Producer.Commit, manifest.Bundle.Digest,
+			),
+		}
+	case doctor.Mixed:
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: fmt.Sprintf(
+				"binary: %s\n  bundle: %s (producer=%s commit=%s)\n  classification: mixed (newer binary over managed assets produced by %s; sha256:%s)",
+				binaryVersion, manifest.Schema, manifest.Producer.BinaryVersion, manifest.Producer.Commit, manifest.Producer.BinaryVersion, manifest.Bundle.Digest,
+			),
+			Remedy: classification.Hint,
+		}
+	case doctor.Stale:
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: fmt.Sprintf(
+				"binary: %s\n  bundle: %s (producer=%s commit=%s)\n  classification: stale (managed assets behind running binary; sha256:%s)",
+				binaryVersion, manifest.Schema, manifest.Producer.BinaryVersion, manifest.Producer.Commit, manifest.Bundle.Digest,
+			),
+			Remedy: classification.Hint,
+		}
+	case doctor.UserModified:
+		return CheckResult{
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf(
+				"binary: %s\n  bundle: %s (producer=%s commit=%s)\n  classification: user_modified (one or more user-owned resources differ from desired; sha256:%s)",
+				binaryVersion, manifest.Schema, manifest.Producer.BinaryVersion, manifest.Producer.Commit, manifest.Bundle.Digest,
+			),
+		}
+	default:
+		// Unknown: interrupted run detected.
+		return CheckResult{
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf(
+				"binary: %s\n  bundle: %s (producer=%s commit=%s)\n  classification: unknown — %s",
+				binaryVersion, manifest.Schema, manifest.Producer.BinaryVersion, manifest.Producer.Commit, safeHintDescription(classification.Hint),
+			),
+			Remedy: classification.Hint,
+		}
 	}
+}
+
+// safeHintDescription returns the hint description or an empty fallback
+// when classification yielded an unexpected nil hint.
+func safeHintDescription(hint *doctor.Remedy) string {
+	if hint == nil {
+		return ""
+	}
+	return hint.Description
 }
