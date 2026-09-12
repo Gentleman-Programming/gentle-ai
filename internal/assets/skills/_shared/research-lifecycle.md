@@ -1,6 +1,6 @@
 # SDD Research Lifecycle Contract
 
-Research is optional until selected. Selection makes this fail-closed contract mandatory; research produces evidence, while the orchestrator owns product decisions and proposal admission.
+Research is optional until selected. Selection makes this fail-closed contract mandatory; the output-only research collector produces evidence, while the orchestrator validates and persists its returned envelope through the selected store route, owns product decisions, and admits proposals.
 
 ## Evidence artifact
 

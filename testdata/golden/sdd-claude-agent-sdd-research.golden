@@ -17,7 +17,7 @@ Do not read or mutate repository or Engram state. Do not load local skills, call
 
 Collect only source-backed claims mapped to source IDs. Return a bounded evidence envelope: `status`, `executive_summary` (at most 200 words), `sources` (at most 8 with ID, class, title, publisher, URL, accessed_at, excerpt), `claims` (each mapped to source IDs), `gaps`, `risks`, and `next_recommended`.
 
-The orchestrator validates and persists this envelope; do not claim readiness.
+The orchestrator validates and persists this envelope through the selected store route. Do not claim readiness.
 
 <!-- gentle-ai:agent-language-contract -->
 ## Artifact Language Contract
