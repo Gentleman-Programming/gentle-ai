@@ -104,6 +104,21 @@ type ReviewTargetStatusResult struct {
 	repositoryRoot    string
 	rddMode           reviewtransaction.RDDModeStatus
 	rddModeResolved   bool
+	// derivedCommittedRange is the executable base-diff status a selectorless
+	// STATUS derived from the remote default branch's unique merge-base when
+	// the fresh workspace candidate froze zero paths (issue #4412). Its
+	// presence turns the otherwise-unroutable base_ref collect into the
+	// committed-range START the working `--base-ref --committed-only` STATUS
+	// path already publishes; validateNextTransitionTargets validates the
+	// emitted execute against this exact derived status.
+	derivedCommittedRange *ReviewTargetStatusResult
+	// committedRangeBaseRef, when non-empty, is the base *commit* STATUS
+	// derived for a set derivedCommittedRange. reviewStartArguments prefers it
+	// over Projection.BaseTree for a base-diff projection so the emitted START
+	// discloses the exact merge-base commit STATUS resolved (never the tree
+	// object the derived snapshot froze), letting the caller see and override
+	// the offered scope.
+	committedRangeBaseRef string
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -785,6 +800,22 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(result.Projection.Paths) == 0 {
 			if result.NextTransition.Kind == reviewNextTransitionCollect && result.NextTransition.ReasonCode == "intended_untracked_selection_required" {
 				return result.validateIntendedUntrackedSelectionTransition()
+			}
+			// Issue #4412: when STATUS resolved the remote default branch's
+			// unique merge-base it offers the executable committed-range START
+			// the `--base-ref --committed-only` STATUS path already publishes,
+			// instead of the unroutable base_ref collect. Validating that
+			// execute against the exact derived base-diff status that produced
+			// it still refuses a hand-edited base-ref, target, evidence token,
+			// or committed-only flag.
+			if result.NextTransition.Kind == reviewNextTransitionExecute {
+				if result.derivedCommittedRange == nil {
+					// refusal:by-design world-action: only a provider code fix can render a committed-range execute without the derived base-diff status that proves its scope
+					return errors.New("fresh empty workspace target lacks a base-ref collection transition")
+				}
+				derived := *result.derivedCommittedRange
+				derived.NextTransition = result.NextTransition
+				return derived.validateStartNextTransition()
 			}
 			if result.NextTransition.Kind != reviewNextTransitionCollect || result.NextTransition.ReasonCode != "empty_candidate_base_ref_required" ||
 				result.NextTransition.Collect == nil || len(result.NextTransition.Collect.Inputs) != 1 {

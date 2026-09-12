@@ -238,6 +238,56 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 	return ancestors, nil
 }
 
+// ResolveCommittedRangeBase returns the single merge-base commit between HEAD
+// and the remote default branch, but only when that committed range is
+// unambiguous (issue #4412). STATUS derives the committed-range START a
+// selectorless empty workspace candidate needs from exactly this base, so an
+// ambiguous repository must fall back to today's base_ref collect rather than
+// silently pick a scope the caller never named.
+//
+// The base is deliberately the remote default branch (refs/remotes/origin/HEAD)
+// and never the local branch upstream: for a fully pushed branch `@{upstream}`
+// names the last pushed commit, whose range is empty, which is precisely the
+// state that produces the zero-path candidate this derivation serves. Every
+// other outcome -- no origin/HEAD, a criss-cross history, an empty range, or any
+// Git fault -- is returned as an error so the caller keeps the truthful
+// fallback.
+func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
+	refOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return "", err
+	}
+	ref := strings.TrimSpace(string(refOutput))
+	if ref == "" {
+		return "", fmt.Errorf("refs/remotes/origin/HEAD does not resolve to a remote branch") // refusal:by-design world-action: an absent remote default branch is not a decision a command can make unambiguous; the caller falls back to collecting a base_ref
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, ref)
+	if err != nil {
+		return "", err
+	}
+	merges := strings.Fields(string(bases))
+	if len(merges) != 1 {
+		return "", fmt.Errorf("remote default branch history has %d merge bases", len(merges)) // refusal:by-design world-action: a criss-cross history has no single base to derive, so the caller falls back to collecting a base_ref
+	}
+	base := merges[0]
+	if base == head {
+		return "", fmt.Errorf("HEAD is the remote default branch merge-base") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
+	}
+	countOutput, err := runGit(ctx, repo, nil, nil, "rev-list", "--count", base+".."+head)
+	if err != nil {
+		return "", err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(countOutput)))
+	if err != nil || count <= 0 {
+		return "", fmt.Errorf("committed range between the merge-base and HEAD is empty") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
+	}
+	return base, nil
+}
+
 // selectorlessCommittedBaseDiffMatchedPredecessor finds the lineage's frozen
 // candidate tree among ancestors, stopping at its frozen base tree.
 func selectorlessCommittedBaseDiffMatchedPredecessor(ancestors []selectorlessCommittedBaseDiffAncestor, state CompactState) string {
