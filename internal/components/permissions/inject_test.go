@@ -63,9 +63,19 @@ func remoteAction(t *testing.T, raw []byte, command string) string {
 }
 
 func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
-	// These are matcher inputs, not shell programs. bash.ts extracts command
+	// #4324 deny policy: absolute-path, backslash-escape, and shell resolution
+	// wrapper invocations of the remote shell utilities are denied by the
+	// overlay itself. Pattern-only rules are bypassable through these forms
+	// (the command token is not the bare utility name), so the deny entries
+	// enumerate them explicitly instead of relying on guidance alone.
+	for _, input := range []string{"/usr/bin/ssh example.invalid", "/bin/scp file example.invalid:file", "\\ssh example.invalid", "command ssh example.invalid", "exec rsync -a src dst"} {
+		if got := remoteAction(t, openCodeOverlayJSON, input); got != "deny" {
+			t.Errorf("bypass invocation %q not denied: %s", input, got)
+		}
+	}
+	// These remain matcher inputs, not shell programs. bash.ts extracts command
 	// nodes separately; no claim is made about parsing arbitrary shell syntax.
-	for _, input := range []string{"/usr/bin/ssh example.invalid", "env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
+	for _, input := range []string{"env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
 		if got := remoteAction(t, openCodeOverlayJSON, input); got != "allow" {
 			t.Errorf("unsupported matcher input %q unexpectedly intercepted: %s", input, got)
 		}
@@ -93,9 +103,12 @@ func TestRemoteCommandApprovalDefaults(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, command := range []string{"ssh", "ssh example.invalid", "scp", "scp file example.invalid:file", "sftp", "sftp example.invalid", "rsync", "rsync source destination"} {
-					want := "ask"
-					if seed == `{"permission":"deny"}` || seed == `{"permission":{"bash":"deny"}}` || strings.Contains(seed, `"*":"deny"`) || (strings.Contains(seed, `"deny"`) && strings.HasPrefix(command, "ssh")) {
-						want = "deny"
+					// #4324 deny policy: the overlay denies the remote shell
+					// utilities by default instead of asking per command; a human
+					// who wants them re-enables them explicitly in their own config.
+					want := "deny"
+					if seed == `{"permission":{"bash":"ask"}}` {
+						want = "ask" // Explicit personal scalar ask is not silently rewritten.
 					}
 					if strings.Contains(seed, `"ssh*":"allow"`) && strings.HasPrefix(command, "ssh") {
 						want = "allow" // Explicit personal allow is not silently rewritten.
@@ -670,6 +683,200 @@ func TestInjectOpenCodeSensitivePathsDenied(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// remoteShellTools are the utilities that execute commands on or copy data to
+// machines outside the authorized workspace (#4324).
+var remoteShellTools = []string{"ssh", "scp", "sftp", "rsync"}
+
+// remoteShellPathPrefixes are the canonical absolute install prefixes of the
+// remote shell utilities across the supported platforms: FHS Linux (/bin,
+// /usr/bin), custom installs (/usr/local/bin), Apple Silicon Homebrew
+// (/opt/homebrew/bin), and NixOS (/run/current-system/sw/bin). Bare-command
+// deny rules never match these because permission matchers anchor on the
+// literal start of the command string.
+var remoteShellPathPrefixes = []string{
+	"/bin/",
+	"/usr/bin/",
+	"/usr/local/bin/",
+	"/opt/homebrew/bin/",
+	"/run/current-system/sw/bin/",
+}
+
+// remoteShellEscapeForms returns every deny surface one tool needs beyond the
+// bare name: one entry per absolute install prefix, the root-level absolute
+// form (which OpenCode's matcher also reaches for backslash-escaped
+// invocations because it normalizes backslashes to forward slashes), and the
+// shell command-resolution wrappers `command` and `exec`.
+func remoteShellEscapeForms(tool, openCodeSuffix, claudeCodeSuffix string) (openCode []string, claudeCode []string) {
+	for _, prefix := range remoteShellPathPrefixes {
+		openCode = append(openCode, prefix+tool+openCodeSuffix)
+		claudeCode = append(claudeCode, "Bash("+prefix+tool+claudeCodeSuffix+")")
+	}
+	openCode = append(openCode, "/"+tool+openCodeSuffix, "command "+tool+openCodeSuffix, "exec "+tool+openCodeSuffix)
+	claudeCode = append(claudeCode, "Bash(\\"+tool+claudeCodeSuffix+")", "Bash(command "+tool+claudeCodeSuffix+")", "Bash(exec "+tool+claudeCodeSuffix+")")
+	return openCode, claudeCode
+}
+
+// TestInjectOpenCodeDeniesRemoteShellUtilities verifies that the remote shell
+// utilities used to reach machines outside the workspace (ssh, scp, sftp,
+// rsync) are denied in the OpenCode/Kilocode bash permission map in their
+// exact and wildcard forms — including absolute-path and wrapper invocations,
+// which OpenCode's full-command matcher treats as distinct patterns — and that
+// these deny entries coexist with the global bash allow (#4324).
+func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
+	remoteDenyRules := []string{
+		"ssh",
+		"ssh *",
+		"scp",
+		"scp *",
+		"sftp",
+		"sftp *",
+		"rsync",
+		"rsync *",
+	}
+	for _, tool := range remoteShellTools {
+		openCode, _ := remoteShellEscapeForms(tool, " *", ":*")
+		remoteDenyRules = append(remoteDenyRules, openCode...)
+	}
+
+	tests := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{"opencode", opencodeAdapter()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if _, err := Inject(home, tt.adapter); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			settingsPath := tt.adapter.SettingsPath(home)
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("read settings file %q: %v", settingsPath, err)
+			}
+
+			var settings map[string]any
+			if err := json.Unmarshal(content, &settings); err != nil {
+				t.Fatalf("unmarshal settings json: %v", err)
+			}
+
+			permNode, ok := settings["permission"].(map[string]any)
+			if !ok {
+				t.Fatalf("permission node missing or invalid: %#v", settings["permission"])
+			}
+
+			bashNode, ok := permNode["bash"].(map[string]any)
+			if !ok {
+				t.Fatalf("bash node missing or invalid: %#v", permNode["bash"])
+			}
+
+			for _, pattern := range remoteDenyRules {
+				t.Run(pattern, func(t *testing.T) {
+					val, exists := bashNode[pattern]
+					if !exists {
+						t.Errorf("bash deny map missing pattern %q; got: %v", pattern, bashNode)
+						return
+					}
+					if val != "deny" {
+						t.Errorf("pattern %q has value %q, want %q", pattern, val, "deny")
+					}
+				})
+			}
+
+			// The remote denials must coexist with the global bash allow.
+			if bashNode["*"] != "allow" {
+				t.Errorf("global bash allow rule \"*\" missing or changed after Inject; got: %v", bashNode["*"])
+			}
+		})
+	}
+}
+
+// TestInjectClaudeCodeDeniesRemoteShellUtilities verifies that the remote shell
+// utilities used to reach machines outside the workspace (ssh, scp, sftp,
+// rsync) are denied in the Claude Code deny list in their exact and wildcard
+// command forms, plus the absolute-path and wrapper prefix forms that bypass a
+// bare-command prefix rule (#4324).
+func TestInjectClaudeCodeDeniesRemoteShellUtilities(t *testing.T) {
+	remoteDenyRules := []string{
+		"Bash(ssh)",
+		"Bash(ssh:*)",
+		"Bash(scp)",
+		"Bash(scp:*)",
+		"Bash(sftp)",
+		"Bash(sftp:*)",
+		"Bash(rsync)",
+		"Bash(rsync:*)",
+	}
+	for _, tool := range remoteShellTools {
+		_, claudeCode := remoteShellEscapeForms(tool, " *", ":*")
+		remoteDenyRules = append(remoteDenyRules, claudeCode...)
+	}
+
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Pre-existing settings with a sibling key under permissions (not deny),
+	// mirroring the default-deny test: the remote denials must land even when
+	// a permissions block is already present.
+	existing := `{
+  "permissions": {
+    "defaultMode": "default"
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings file: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(content, &settings); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	perms, ok := settings["permissions"].(map[string]any)
+	if !ok {
+		t.Fatalf("permissions node missing")
+	}
+
+	denyList, ok := perms["deny"].([]any)
+	if !ok {
+		t.Fatalf("deny list missing")
+	}
+
+	denySet := make(map[string]bool, len(denyList))
+	for _, entry := range denyList {
+		if v, ok := entry.(string); ok {
+			denySet[v] = true
+		}
+	}
+
+	for _, rule := range remoteDenyRules {
+		if !denySet[rule] {
+			t.Errorf("remote shell deny rule %q was not present; got: %v", rule, denyList)
+		}
+	}
+
+	// The overlay wins for defaultMode because arrays replace but maps deep-merge.
+	mode, _ := perms["defaultMode"].(string)
+	if mode != "bypassPermissions" {
+		t.Errorf("expected defaultMode=bypassPermissions after overlay, got %q", mode)
 	}
 }
 
