@@ -171,8 +171,15 @@ func RenderUninstallComponents(selected []model.ComponentID, cursor int) string 
 	return b.String()
 }
 
-func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramScopeOption {
-	options := make([]UninstallEngramScopeOption, 0, 2)
+func UninstallEngramScopeOptions(projectScopeAvailable, includeNoCleanup bool) []UninstallEngramScopeOption {
+	options := make([]UninstallEngramScopeOption, 0, 3)
+	if includeNoCleanup {
+		options = append(options, UninstallEngramScopeOption{
+			Scope:       model.EngramUninstallScopeNone,
+			Label:       "No cleanup",
+			Description: "Keep all Engram data and configuration",
+		})
+	}
 	if projectScopeAvailable {
 		options = append(options, UninstallEngramScopeOption{
 			Scope:       model.EngramUninstallScopeProject,
@@ -188,7 +195,7 @@ func uninstallEngramScopeOptions(projectScopeAvailable bool) []UninstallEngramSc
 	return options
 }
 
-func RenderUninstallProfiles(available []string, selected []string, engramProjectScopeAvailable bool, selectedEngramScope model.EngramUninstallScope, cursor int) string {
+func RenderUninstallProfiles(available []string, selected []string, showEngramScope bool, includeNoCleanup bool, engramProjectScopeAvailable bool, selectedEngramScope model.EngramUninstallScope, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Uninstall Scope Selection"))
@@ -212,9 +219,9 @@ func RenderUninstallProfiles(available []string, selected []string, engramProjec
 		b.WriteString(renderCheckbox(profileName, checked, focused))
 	}
 
-	engramScopeOptions := uninstallEngramScopeOptions(engramProjectScopeAvailable)
+	engramScopeOptions := UninstallEngramScopeOptions(engramProjectScopeAvailable, includeNoCleanup)
 	engramScopeDisplayed := 0
-	if len(engramScopeOptions) > 1 {
+	if showEngramScope {
 		engramScopeDisplayed = len(engramScopeOptions)
 		if len(available) > 0 {
 			b.WriteString("\n")
@@ -315,11 +322,14 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Engram cleanup scope:"))
 		b.WriteString("\n")
-		scopeLabel := "Global"
-		detail := "  • Removes global Engram MCP/system prompt configuration"
+		scopeLabel := "No cleanup"
+		detail := "  • Keeps all Engram data and configuration"
 		if engramScope == model.EngramUninstallScopeProject && engramProjectScopeAvailable {
 			scopeLabel = "Project-only"
 			detail = "  • Deletes .engram/ in the current project only"
+		} else if engramScope == model.EngramUninstallScopeGlobal {
+			scopeLabel = "Global"
+			detail = "  • Removes global Engram MCP/system prompt configuration"
 		}
 		b.WriteString(styles.UnselectedStyle.Render("  • " + scopeLabel))
 		b.WriteString("\n")
@@ -330,24 +340,28 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 	b.WriteString("\n")
 
 	// Workspace-scoped assets warning
-	hasWorkspaceAssets := false
-	for _, comp := range components {
-		if comp == model.ComponentSDD || comp == model.ComponentSkills {
-			hasWorkspaceAssets = true
-			break
-		}
-	}
-	if (mode == model.UninstallModeFull || mode == model.UninstallModeFullRemove) || hasWorkspaceAssets {
+	hasEngramProjectAsset := engramScope == model.EngramUninstallScopeProject && engramProjectScopeAvailable
+	hasSDD := (mode == model.UninstallModeFull || mode == model.UninstallModeFullRemove) || hasSelectedComponent(components, model.ComponentSDD)
+	hasSkills := (mode == model.UninstallModeFull || mode == model.UninstallModeFullRemove) || hasSelectedComponent(components, model.ComponentSkills)
+
+	if hasSDD || hasSkills || hasEngramProjectAsset {
 		b.WriteString(styles.WarningStyle.Render("⚠ Workspace Assets Warning:"))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("  Removing SDD or Skills will delete workspace-scoped files like:"))
+		b.WriteString(styles.SubtextStyle.Render("  Removing managed components will delete workspace-scoped files like:"))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("  • .windsurf/workflows/ (SDD workflows)"))
+		if hasSDD {
+			b.WriteString(styles.SubtextStyle.Render("  • .windsurf/workflows/ (SDD workflows)"))
+			b.WriteString("\n")
+		}
+		if hasEngramProjectAsset {
+			b.WriteString(styles.SubtextStyle.Render("  • .engram/ (persistent memory context)"))
+			b.WriteString("\n")
+		}
+		if hasSkills {
+			b.WriteString(styles.SubtextStyle.Render("  • Skills directories"))
+			b.WriteString("\n")
+		}
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("  • .engram/ (persistent memory context)"))
-		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("  • Skills directories"))
-		b.WriteString("\n\n")
 		b.WriteString(styles.ErrorStyle.Render("  If you commit these deletions, ALL collaborators will lose this context!"))
 		b.WriteString("\n\n")
 	}
