@@ -3,6 +3,7 @@ package screens
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,177 @@ import (
 
 // makeTestState builds a minimal ModelPickerState with one provider and models
 // so that handleModelNav can reach the "enter" branch.
+func TestModelPickerViewport_AdaptiveAndLegacyCapacities(t *testing.T) {
+	legacy := ModelPickerViewport{}
+	if got := legacy.PhaseCapacity(); got != maxVisiblePhaseRows {
+		t.Fatalf("legacy phase capacity = %d, want %d", got, maxVisiblePhaseRows)
+	}
+	if got := legacy.ListCapacity(); got != maxVisibleItems {
+		t.Fatalf("legacy list capacity = %d, want %d", got, maxVisibleItems)
+	}
+
+	short := ModelPickerViewport{Width: 80, Height: 12}
+	if got := short.PhaseCapacity(); got >= maxVisiblePhaseRows || got < 1 {
+		t.Fatalf("short phase capacity = %d, want adaptive value in [1,%d)", got, maxVisiblePhaseRows)
+	}
+	tall := ModelPickerViewport{Width: 80, Height: 40}
+	if got := tall.ListCapacity(); got <= maxVisibleItems {
+		t.Fatalf("tall list capacity = %d, want > %d", got, maxVisibleItems)
+	}
+}
+
+func TestModelPickerViewport_RenderersKeepFocusedRowVisibleAfterResize(t *testing.T) {
+	viewport := ModelPickerViewport{Width: 80, Height: 12}
+
+	t.Run("provider", func(t *testing.T) {
+		state := ModelPickerState{
+			Mode:           ModeProviderSelect,
+			Viewport:       viewport,
+			ProviderCursor: 9,
+			ProviderScroll: 0,
+			AvailableIDs:   make([]string, 10),
+			Providers:      make(map[string]opencode.Provider),
+			SDDModels:      make(map[string][]opencode.Model),
+		}
+		for i := range state.AvailableIDs {
+			id := fmt.Sprintf("provider-%02d", i)
+			state.AvailableIDs[i] = id
+			state.Providers[id] = opencode.Provider{ID: id, Name: id}
+		}
+
+		if out := renderProviderSelect(state); !strings.Contains(out, "▸ provider-09") {
+			t.Fatalf("resized provider picker hid focused row:\n%s", out)
+		}
+	})
+
+	t.Run("model", func(t *testing.T) {
+		models := make([]opencode.Model, 10)
+		for i := range models {
+			models[i] = opencode.Model{ID: fmt.Sprintf("model-%02d", i), Name: fmt.Sprintf("model-%02d", i)}
+		}
+		state := ModelPickerState{
+			Mode:             ModeModelSelect,
+			Viewport:         viewport,
+			SelectedProvider: "test",
+			ModelCursor:      9,
+			ModelScroll:      0,
+			SDDModels:        map[string][]opencode.Model{"test": models},
+		}
+		focused := FilteredModelEntries(state)[state.ModelCursor].Name
+
+		if out := renderModelSelect(state); !strings.Contains(out, "▸ "+focused) {
+			t.Fatalf("resized model picker hid focused row %q:\n%s", focused, out)
+		}
+	})
+
+	t.Run("effort", func(t *testing.T) {
+		levels := make([]string, 10)
+		for i := range levels {
+			levels[i] = fmt.Sprintf("level-%02d", i)
+		}
+		state := ModelPickerState{
+			Mode:                      ModeEffortSelect,
+			Viewport:                  viewport,
+			EffortCursor:              9,
+			EffortScroll:              0,
+			SelectedModelEffortLevels: levels,
+		}
+		focused := effortOptionsFromLevels(levels)[state.EffortCursor]
+
+		if out := renderEffortSelect(state); !strings.Contains(out, "▸ "+focused) {
+			t.Fatalf("resized effort picker hid focused row %q:\n%s", focused, out)
+		}
+	})
+}
+
+func TestModelPickerViewport_NavigationAndRenderingShareCapacity(t *testing.T) {
+	state := ModelPickerState{
+		Mode:         ModeProviderSelect,
+		Viewport:     ModelPickerViewport{Width: 80, Height: 12},
+		AvailableIDs: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
+		Providers:    map[string]opencode.Provider{},
+		SDDModels:    map[string][]opencode.Model{},
+	}
+	for _, id := range state.AvailableIDs {
+		state.Providers[id] = opencode.Provider{ID: id, Name: id}
+	}
+	capacity := state.Viewport.ListCapacity()
+	for range state.AvailableIDs {
+		handleProviderNav("j", &state)
+	}
+	if state.ProviderScroll != len(state.AvailableIDs)-capacity {
+		t.Fatalf("provider scroll = %d, want %d for capacity %d", state.ProviderScroll, len(state.AvailableIDs)-capacity, capacity)
+	}
+	out := renderProviderSelect(state)
+	if strings.Count(out, "models)") != capacity {
+		t.Fatalf("rendered provider rows = %d, want %d:\n%s", strings.Count(out, "models)"), capacity, out)
+	}
+}
+
+func TestModelPickerViewport_ModelEffortAndPhaseUseSharedCapacities(t *testing.T) {
+	viewport := ModelPickerViewport{Width: 40, Height: 12}
+	models := make([]opencode.Model, 10)
+	levels := make([]string, 10)
+	for i := range models {
+		models[i] = opencode.Model{ID: fmt.Sprintf("model-%02d", i), Name: fmt.Sprintf("model-%02d", i)}
+		levels[i] = fmt.Sprintf("level-%02d", i)
+	}
+	modelState := ModelPickerState{Mode: ModeModelSelect, Viewport: viewport, SelectedProvider: "test", SDDModels: map[string][]opencode.Model{"test": models}}
+	for range models {
+		handleModelNav("j", &modelState, nil)
+	}
+	if got, want := modelState.ModelScroll, len(models)-viewport.ListCapacity(); got != want {
+		t.Fatalf("model scroll = %d, want %d", got, want)
+	}
+	if got := strings.Count(renderModelSelect(modelState), "model-"); got != viewport.ListCapacity() {
+		t.Fatalf("rendered model rows = %d, want %d", got, viewport.ListCapacity())
+	}
+
+	effortState := ModelPickerState{Mode: ModeEffortSelect, Viewport: viewport, SelectedModelEffortLevels: levels}
+	for range levels {
+		effortState, _ = handleEffortNav("j", effortState, nil)
+	}
+	if got, want := effortState.EffortScroll, len(effortOptionsFromLevels(levels))-viewport.ListCapacity(); got != want {
+		t.Fatalf("effort scroll = %d, want %d", got, want)
+	}
+	if got := strings.Count(renderEffortSelect(effortState), "level-"); got != viewport.ListCapacity() {
+		t.Fatalf("rendered effort rows = %d, want %d", got, viewport.ListCapacity())
+	}
+
+	phaseState := ModelPickerState{Viewport: viewport, AvailableIDs: []string{"test"}}
+	phaseRows := ModelPickerRowsForState(phaseState)
+	phaseOutput := RenderModelPicker(nil, phaseState, 0)
+	if !strings.Contains(phaseOutput, phaseRows[viewport.PhaseCapacity()-1]) || strings.Contains(phaseOutput, phaseRows[viewport.PhaseCapacity()]) {
+		t.Fatalf("phase rendering did not use capacity %d:\n%s", viewport.PhaseCapacity(), phaseOutput)
+	}
+}
+
+func TestModelPickerGuidance_UsesRoleAndSyntheticFallbacks(t *testing.T) {
+	if got := ModelPickerGuidance(ModelPickerRow{Kind: ModelPickerRowKindAgent, AgentID: "sdd-apply"}); !strings.Contains(got, "Applies") {
+		t.Fatalf("sdd-apply guidance = %q, want role guidance", got)
+	}
+	if got := ModelPickerGuidance(ModelPickerRow{Kind: ModelPickerRowKindSetAllSDD}); !strings.Contains(got, "all SDD") {
+		t.Fatalf("bulk guidance = %q, want synthetic guidance", got)
+	}
+	if got := ModelPickerGuidance(ModelPickerRow{Kind: ModelPickerRowKindSeparator}); !strings.Contains(got, "not selectable") {
+		t.Fatalf("separator guidance = %q, want non-selectable guidance", got)
+	}
+	if got := ModelPickerGuidance(ModelPickerRow{Kind: ModelPickerRowKindAgent, AgentID: "custom-agent"}); !strings.Contains(got, "custom") {
+		t.Fatalf("custom guidance = %q, want custom fallback", got)
+	}
+}
+
+func TestRenderPhaseList_HidesGuidanceWhenConstrained(t *testing.T) {
+	state := ModelPickerState{AvailableIDs: []string{"openai"}, Viewport: ModelPickerViewport{Width: 40, Height: 12}}
+	if out := RenderModelPicker(nil, state, 0); strings.Contains(out, "Role:") {
+		t.Fatalf("constrained picker rendered secondary guidance:\n%s", out)
+	}
+	state.Viewport = ModelPickerViewport{Width: 100, Height: 30}
+	if out := RenderModelPicker(nil, state, 0); !strings.Contains(out, "Role:") {
+		t.Fatalf("roomy picker omitted role guidance:\n%s", out)
+	}
+}
+
 func makeTestState(phaseIdx int) *ModelPickerState {
 	const providerID = "test-provider"
 	testModels := []opencode.Model{
