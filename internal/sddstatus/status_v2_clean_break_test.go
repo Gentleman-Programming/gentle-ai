@@ -1,16 +1,20 @@
 package sddstatus
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -99,6 +103,36 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 			if strings.Contains(string(payload), forbidden) {
 				t.Fatalf("v2 projection retained authority key %q: %s", forbidden, payload)
 			}
+		}
+	})
+
+	t.Run("v2 preserves seven dependencies, four instruction groups, and opaque consent", func(t *testing.T) {
+		change := "thin"
+		status := baseStatus(ArtifactStoreOpenSpec, "/repo", nil, &change, nil, "apply", nil)
+		instructions := renderPhaseInstructions(status)
+		status.PhaseInstructions = &instructions
+		consent := newEditAuthorityConsent(change, "/repo", []string{"/repo/internal"}, "sdd-opaque", "")
+		status.Consent = &consent
+
+		projected, err := ProjectStatusV2(status)
+		if err != nil {
+			t.Fatalf("ProjectStatusV2() error = %v", err)
+		}
+		payload, err := json.Marshal(projected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &document); err != nil {
+			t.Fatal(err)
+		}
+		assertJSONNestedKeys(t, document, "dependencies", []string{"proposal", "specs", "design", "tasks", "apply", "verify", "archive"})
+		assertJSONNestedKeys(t, document, "phaseInstructions", []string{"apply", "verify", "remediate", "archive"})
+		if !bytes.Contains(payload, []byte("sdd-opaque")) {
+			t.Fatalf("v2 projection lost the present opaque consent marker: %s", payload)
+		}
+		if _, ok := document["consent"]; !ok {
+			t.Fatalf("v2 projection omitted present consent: %s", payload)
 		}
 	})
 
@@ -392,4 +426,265 @@ func mustReadStatusGolden(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func TestConsentPreparationRefusesMalformedOrEscapedMarker(t *testing.T) {
+	for _, scenario := range []string{"empty", "partial", "escaped-change", "escaped-planning", "marker-symlink"} {
+		t.Run(scenario, func(t *testing.T) {
+			repo := initRuntimeLedgerRepo(t)
+			outside := t.TempDir()
+			root := seedReadyChange(t, repo, "consent-negative", "- [ ] Update `"+outside+"/main.go`\n")
+			marker := filepath.Join(root, changeInstanceMarkerFile)
+			switch scenario {
+			case "empty":
+				write(t, marker, "")
+			case "partial":
+				write(t, marker, "sdd-")
+			case "marker-symlink":
+				write(t, filepath.Join(outside, "marker"), "sdd-"+strings.Repeat("a", 32)+"\n")
+				if err := os.Symlink(filepath.Join(outside, "marker"), marker); err != nil {
+					t.Fatal(err)
+				}
+			case "escaped-change", "escaped-planning":
+				path := root
+				if scenario == "escaped-planning" {
+					path = filepath.Join(repo, "openspec")
+				}
+				moved := filepath.Join(outside, "moved")
+				if err := os.Rename(path, moved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(moved, path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := snapshotStatusReadTree(t, outside)
+			status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "consent-negative"})
+			if scenario == "empty" && err == nil {
+				t.Error("empty persisted marker was accepted by status")
+			}
+			if err == nil {
+				err = PrepareChangeInstanceConsent(status)
+			}
+			if err == nil && (status.ChangeRoot != nil || status.Consent != nil || status.ApplyState != ApplyBlocked) {
+				t.Fatal("unsafe preparation succeeded")
+			}
+			if after := snapshotStatusReadTree(t, outside); after != before {
+				t.Fatal("unsafe preparation wrote outside planning")
+			}
+		})
+	}
+}
+
+func TestConsentPreparationConcurrentWinnerAndReadOnlySnapshots(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	outside := t.TempDir()
+	root := seedReadyChange(t, repo, "winner", "- [ ] Update `"+outside+"/main.go`\n")
+	options := ResolveOptions{CWD: repo, ChangeName: "winner"}
+	before := snapshotStatusReadTree(t, repo)
+	status, err := Resolve(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Consent != nil {
+		t.Fatal("absent marker emitted consent")
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := Resolve(options); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snapshotStatusReadTree(t, repo) != before {
+		t.Fatal("absent-marker status changed artifacts or authority")
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); errs <- PrepareChangeInstanceConsent(status) }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker, err := readChangeInstanceMarker(root)
+	if err != nil || marker == "" {
+		t.Fatalf("winner %q: %v", marker, err)
+	}
+	afterPreparation := snapshotStatusReadTree(t, repo)
+	var unchangedEntries []string
+	for _, entry := range strings.Split(afterPreparation, "\n") {
+		if !strings.HasPrefix(entry, "file:openspec/changes/winner/"+changeInstanceMarkerFile+":") {
+			unchangedEntries = append(unchangedEntries, entry)
+		}
+	}
+	if strings.Join(unchangedEntries, "\n") != before {
+		t.Fatal("initial preparation changed more than its marker")
+	}
+	for i := 0; i < 3; i++ {
+		current, err := Resolve(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.Consent == nil || !strings.Contains(current.Consent.Choices[0].Invocation, marker) {
+			t.Fatal("consent did not bind persisted winner")
+		}
+		if current.ApplyState != ApplyBlocked || !reflect.DeepEqual(current.ActionContext.AllowedEditRoots, status.ActionContext.AllowedEditRoots) {
+			t.Fatal("preparation granted source roots")
+		}
+		if err := PrepareChangeInstanceConsent(current); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snapshotStatusReadTree(t, repo) != afterPreparation {
+		t.Fatal("present-marker status/reuse changed marker, artifacts or authority")
+	}
+	if afterPreparation == before {
+		t.Fatal("preparation did not persist winner")
+	}
+	store := mustRuntimeStore(t, repo, "winner")
+	ledger, err := store.Status()
+	if err != nil || ledger.Revision != "" || len(ledger.Attempts) != 0 || len(ledger.GrantedRoots) != 0 {
+		t.Fatalf("preparation changed authority: %#v %v", ledger, err)
+	}
+}
+
+func TestConsentPublicationFailuresEmitNoIdentity(t *testing.T) {
+	for _, scenario := range []string{"before-write-error", "publish-error", "missing-readback", "empty-readback", "partial-readback", "unreadable-readback", "replacement"} {
+		t.Run(scenario, func(t *testing.T) {
+			repo := initRuntimeLedgerRepo(t)
+			outside := t.TempDir()
+			root := seedReadyChange(t, repo, "publication", "- [ ] Update `"+outside+"/main.go`\n")
+			status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "publication"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := publishChangeInstanceMarker
+			t.Cleanup(func() { publishChangeInstanceMarker = original })
+			publishChangeInstanceMarker = func(source, destination string) error {
+				switch scenario {
+				case "before-write-error":
+					return errors.New("injected publication failure")
+				case "missing-readback":
+					return nil
+				case "publish-error":
+					if err := reviewtransaction.PublishFileNoReplace(source, destination); err != nil {
+						return err
+					}
+					return errors.New("injected uncertain publication")
+				case "empty-readback":
+					write(t, destination, "")
+				case "partial-readback":
+					write(t, destination, "sdd-")
+				case "unreadable-readback":
+					return os.Mkdir(destination, 0755)
+				case "replacement":
+					if err := os.Rename(root, root+"-old"); err != nil {
+						return err
+					}
+					if err := os.Mkdir(root, 0755); err != nil {
+						return err
+					}
+					write(t, destination, "sdd-"+strings.Repeat("b", 32)+"\n")
+				}
+				return nil
+			}
+			if err := PrepareChangeInstanceConsent(status); err == nil {
+				t.Fatal("uncertain publication accepted for consent")
+			}
+			if status.Consent != nil {
+				t.Fatal("failure emitted consent")
+			}
+		})
+	}
+}
+
+func TestStatusReviewLookupFailureIsAdvisory(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	seedReadyChange(t, repo, "advisory", "- [ ] Work\n")
+	status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "advisory", ReviewDisabledForWorkspace: func(string) (bool, error) { return false, errors.New("review configuration unavailable") }})
+	if err != nil || status.ApplyState != ApplyReady || status.ReviewOffer != nil {
+		t.Fatalf("inspection gated by review lookup: %#v %v", status, err)
+	}
+}
+
+func TestConsentPreparationUnwritableAndUnreadable(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		t.Run(fmt.Sprint(unreadable), func(t *testing.T) {
+			repo := initRuntimeLedgerRepo(t)
+			outside := t.TempDir()
+			root := seedReadyChange(t, repo, "permissions", "- [ ] Update `"+outside+"/main.go`\n")
+			status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "permissions"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			path, mode := root, os.FileMode(0500)
+			if unreadable {
+				path = filepath.Join(root, changeInstanceMarkerFile)
+				write(t, path, "sdd-"+strings.Repeat("a", 32)+"\n")
+				mode = 0
+			}
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(path, 0700) })
+			if err := PrepareChangeInstanceConsent(status); err == nil {
+				t.Fatal("inaccessible preparation succeeded")
+			}
+			if err := os.Chmod(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".gentle-ai-instance") && !unreadable {
+					t.Fatalf("unwritable entry published %s", entry.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestConsentPreparationEngramAndNullableDiscovery(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		t.Run(fmt.Sprint(selected), func(t *testing.T) {
+			repo := initRuntimeLedgerRepo(t)
+			write(t, filepath.Join(repo, "openspec", "config.yaml"), "sdd:\n  artifact_store: engram\n")
+			mkdir(t, filepath.Join(repo, ".engram"))
+			runRuntimeLedgerGit(t, repo, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+			var observations []engramObservation
+			options := ResolveOptions{CWD: repo, IncludeInstructions: true}
+			if selected {
+				options.ChangeName = "remote"
+				observations = engramPlanningRoute("remote", "propose")
+			}
+			restore := stubEngramExport(t, observations)
+			defer restore()
+			before := snapshotStatusReadTree(t, repo)
+			status, err := Resolve(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.ArtifactStore != ArtifactStoreEngram || status.Consent != nil || (selected && ptrValue(status.ChangeRoot) != "engram:sdd/remote") || (!selected && status.ChangeRoot != nil) {
+				t.Fatalf("invented filesystem authority: %#v", status)
+			}
+			if selected != (status.ChangeName != nil) {
+				t.Fatal("wrong nullable selection")
+			}
+			if err := PrepareChangeInstanceConsent(status); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ProjectStatusV2(status); err != nil {
+				t.Fatal(err)
+			}
+			if snapshotStatusReadTree(t, repo) != before {
+				t.Fatal("Engram preparation mutated filesystem")
+			}
+		})
+	}
 }

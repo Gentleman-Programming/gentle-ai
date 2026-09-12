@@ -48,14 +48,24 @@ func runtimeRescopeSuccessorIntendedUntracked(status RuntimeStatus) ([]string, b
 	return slices.Clone(predecessor.IntendedUntracked), true
 }
 
-func runtimeRescopeSuccessorRequest(status RuntimeStatus, request BeginAttemptRequest, inherit bool) BeginAttemptRequest {
+func (store RuntimeStore) runtimeRescopeSuccessorRequest(ctx context.Context, status RuntimeStatus, request BeginAttemptRequest, inherit bool) (BeginAttemptRequest, error) {
 	if !inherit {
-		return request
+		return request, nil
 	}
 	if intended, ok := runtimeRescopeSuccessorIntendedUntracked(status); ok {
 		request.IntendedUntracked = intended
+		if status.DecisionRequired || status.Complete {
+			return request, nil
+		}
+		// Only inherited history is reconciled; an explicit caller selection
+		// must still pass the ordinary fresh-candidate validation unchanged.
+		reconciled, err := runtimeReplayedIntendedUntracked(ctx, store.Repo, intended)
+		if err != nil {
+			return request, wrapRuntimeCandidateUnavailable("before launch", err)
+		}
+		request.IntendedUntracked = reconciled
 	}
-	return request
+	return request, nil
 }
 
 // runtimeBeginAdmission is the ONE evaluator of every precondition Begin must
@@ -205,7 +215,12 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 		status.BlockedExit = err.Error()
 		return status, nil
 	}
-	normalized = runtimeRescopeSuccessorRequest(status, normalized, inheritIntendedUntracked)
+	normalized, err = store.runtimeRescopeSuccessorRequest(ctx, status, normalized, inheritIntendedUntracked)
+	if err != nil {
+		blocked := store.compactMutationFailure(err, false, normalized)
+		status.BlockedReason, status.BlockedExit = blocked.Reason, blocked.Exit
+		return status, nil
+	}
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
 	}); terminal && result.State != CompactStateProceed {

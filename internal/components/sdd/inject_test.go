@@ -120,6 +120,98 @@ func mockNoPackageManager(t *testing.T) {
 	t.Helper()
 }
 
+func TestInjectMaterializesStatusContinuationContract(t *testing.T) {
+	registry, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range registry.SupportedAgents() {
+		t.Run(string(agent), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+			adapter := mustAdapter(t, agent)
+			result, err := Inject(home, adapter, model.SDDModeSingle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Run("reentry-preserves-written-bytes", func(t *testing.T) {
+				before := map[string][]byte{}
+				for _, path := range result.Files {
+					data, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					before[path] = data
+				}
+				if _, err := Inject(home, adapter, model.SDDModeSingle); err != nil {
+					t.Fatal(err)
+				}
+				for path, want := range before {
+					if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+						t.Fatalf("reentry changed %s: %v", path, err)
+					}
+				}
+			})
+			if agent == model.AgentPi {
+				entries, err := os.ReadDir(home)
+				if err != nil || len(entries) != 0 || result.Changed || len(result.Files) != 0 || adapter.SupportsSystemPrompt() {
+					t.Fatalf("Pi no-injection route wrote files: %+v, %v, %v", result, entries, err)
+				}
+				return // No Pi host-execution claim.
+			}
+			read := func(path string) string {
+				t.Helper()
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			promptPath := adapter.SystemPromptFile(home)
+			if agent == model.AgentKimi {
+				promptPath = filepath.Join(adapter.GlobalConfigDir(home), "sdd-orchestrator.md")
+			}
+			if AgentReceivesManagedOpenCodePlugins(agent) {
+				var settings struct {
+					Agent map[string]struct{ Prompt string } `json:"agent"`
+				}
+				if err := json.Unmarshal([]byte(read(adapter.SettingsPath(home))), &settings); err != nil {
+					t.Fatal(err)
+				}
+				assertStatusContinuationContract(t, settings.Agent["gentle-orchestrator"].Prompt)
+			} else if agent == model.AgentClaudeCode {
+				if !strings.Contains(read(promptPath), "~/.claude/skills/_shared/sdd-orchestrator-workflow.md") {
+					t.Fatal("materialized Claude bootstrap lost its lazy workflow reference")
+				}
+			} else {
+				assertStatusContinuationContract(t, read(promptPath))
+			}
+			if agent == model.AgentClaudeCode {
+				assertStatusContinuationContract(t, read(filepath.Join(adapter.SkillsDir(home), "_shared", "sdd-orchestrator-workflow.md")))
+			}
+			if adapter.SupportsSlashCommands() && adapter.CommandsDir(home) != "" {
+				name := "sdd-status.md"
+				if agent == model.AgentClaudeCode {
+					name = "gentle-sdd-status.md"
+				}
+				content := read(filepath.Join(adapter.CommandsDir(home), name))
+				for _, want := range []string{"every declared artifact store, including Engram", "native v2", "without executing any recommendation"} {
+					if !strings.Contains(content, want) {
+						t.Errorf("materialized status command missing %q", want)
+					}
+				}
+				if AgentReceivesManagedOpenCodePlugins(agent) {
+					content = read(filepath.Join(adapter.CommandsDir(home), "sdd-continue.md"))
+					if !strings.Contains(content, "Read-only or excluded-marker scope forbids this mutating call") {
+						t.Fatal("materialized continue command lost human-scope guard")
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestInjectFallbackSessionPreflight(t *testing.T) {
 	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentCursor, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentQwenCode, model.AgentHermes, model.AgentKimi, model.AgentKiroIDE, model.AgentCodex, model.AgentWindsurf} {
 		t.Run(string(agent), func(t *testing.T) {

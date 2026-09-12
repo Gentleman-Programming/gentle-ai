@@ -1161,6 +1161,30 @@ func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValu
 	}
 }
 
+func TestClaudeSDDStatusUsesNativeForEveryDeclaredStore(t *testing.T) {
+	content := MustRead("claude/commands/gentle-sdd-status.md")
+	for _, want := range []string{
+		"gentle-ai sdd-status [change] --cwd <repo> --json --instructions",
+		"every declared artifact store, including Engram", "native v2",
+		"Inspection needs no execution preflight", "without executing any recommendation",
+		"If the binary is unavailable", "non-authoritative", "Do not fabricate native-shaped status",
+		"artifactPaths", "actionContext", "blockedReasons",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Claude status missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"do NOT invoke the native dispatcher", "resolve status entirely from Engram",
+		"mem_search", "manual status schema", "SDD Session Preflight must already be complete",
+		"launch the corresponding planning phase", "Inspect the selected artifact store from session preflight",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("Claude status retains conflicting instruction %q", forbidden)
+		}
+	}
+}
+
 func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 	content := MustRead("claude/sdd-orchestrator-workflow.md")
 
@@ -1313,10 +1337,14 @@ func TestOpenCodeSDDCommandsAreOrchestratorGuarded(t *testing.T) {
 			}
 		}
 
-		for _, required := range []string{
-			"SDD Session Preflight must already be complete",
-			"If missing, ask the exact orchestrator preflight prompt and STOP",
-		} {
+		requiredGuards := []string{"SDD Session Preflight must already be complete", "If missing, ask the exact orchestrator preflight prompt and STOP"}
+		if entry.Name() == "sdd-status.md" {
+			requiredGuards = []string{"command is read-only", "Inspection needs no execution preflight", "without executing any recommendation"}
+			if strings.Contains(content, "SDD Session Preflight must already be complete") {
+				t.Fatal("read-only status requires mutation preflight")
+			}
+		}
+		for _, required := range requiredGuards {
 			if !strings.Contains(content, required) {
 				t.Fatalf("%s missing orchestration guard wording %q", path, required)
 			}
@@ -1985,7 +2013,8 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"blockedReasons: []",
 		// #4372: the non-blocking diagnostics channel that keeps blockedReasons a pure gate.
 		"notes: []",
-		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
+		"If the binary is unavailable or invalid, report that native status is unresolved.",
+		"Do not fabricate native-shaped status",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("sdd-status-contract missing frozen SDD v2 field or token %q", want)
@@ -1993,6 +2022,7 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
+		"Manual fallback status MUST stay shape-compatible",
 		"runtimeStatus",
 		"correctionBudget",
 		"sdd-status/v1",

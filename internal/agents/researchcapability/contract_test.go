@@ -127,6 +127,38 @@ func TestPiAdmissionRequiresExactGrants(t *testing.T) {
 	}
 }
 
+func TestEveryDeclaredClassRejectsIncompleteGrantSubsets(t *testing.T) {
+	t.Parallel()
+
+	// Exact declarations are pinned by TestForAgentDeclaresOnlyClaudeKiroAndPi.
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentPi} {
+		t.Run(string(agent), func(t *testing.T) {
+			capability, ok := ForAgent(agent)
+			if !ok || len(capability.Grants) == 0 {
+				t.Fatal("expected nonempty declared capability")
+			}
+			for class, grants := range capability.Grants {
+				for mask := 0; mask < 1<<len(grants); mask++ {
+					var observed []Grant
+					for i, grant := range grants {
+						if mask&(1<<i) != 0 {
+							observed = append(observed, grant)
+						}
+					}
+					got := Admit(Request{Schema: SchemaV1, AgentID: agent, Class: class, ObservedGrants: observed})
+					want := Result{}
+					if mask == (1<<len(grants))-1 {
+						want = Result{Allowed: true, VerifiedGrants: grants}
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("class %s subset %b: got %#v, want %#v", class, mask, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestCapabilitiesAndAdmissionReturnDefensiveCopies(t *testing.T) {
 	t.Parallel()
 

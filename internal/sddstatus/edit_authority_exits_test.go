@@ -121,6 +121,13 @@ func TestNonGitDirectoryOutsideAllowedRootsBlocksApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := PrepareChangeInstanceConsent(status); err != nil {
+		t.Fatal(err)
+	}
+	status, err = Resolve(ResolveOptions{CWD: planning, ChangeName: "external-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := realPath(t, external)
 	reasons := strings.Join(status.BlockedReasons, "\n")
 	if status.ApplyState != ApplyBlocked || !strings.Contains(reasons, "blocked(edit_authority_missing)") || !strings.Contains(reasons, want) {

@@ -172,7 +172,18 @@ func TestSDDEditAuthorityConsentGrantLoop(t *testing.T) {
 		"",
 	}, "\n"))
 
-	// Blocked status carries the envelope with the exact grant invocation.
+	// Only explicit continuation prepares the identity before read-only re-entry.
+	initial, initialPayload := consentStatus(t, environment, planning, change)
+	markerPath := filepath.Join(planning, "openspec", "changes", change, ".gentle-ai-instance")
+	if initial.Consent != nil || initial.ApplyState != "blocked" || len(initial.ActionContext.AllowedEditRoots) != 1 {
+		t.Fatalf("initial status granted authority: %s", initialPayload)
+	}
+	if _, err := os.Lstat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("status prepared marker: %v", err)
+	}
+	if stdout, stderr, err := runOrganicCommand(t, organicBinary, planning, environment, "sdd-continue", change, "--cwd", planning, "--json"); err != nil {
+		t.Fatalf("explicit continuation: %v\n%s\n%s", err, stdout, stderr)
+	}
 	blocked, blockedPayload := consentStatus(t, environment, planning, change)
 	if blocked.ApplyState != "blocked" ||
 		!strings.Contains(strings.Join(blocked.BlockedReasons, "\n"), "blocked(edit_authority_missing)") {
@@ -259,6 +270,17 @@ func TestSDDSameParentRepositoryConsentGrantLoop(t *testing.T) {
 		"",
 	}, "\n"))
 
+	initial, initialPayload := consentStatus(t, environment, planning, change)
+	markerPath := filepath.Join(planning, "openspec", "changes", change, ".gentle-ai-instance")
+	if initial.Consent != nil || initial.ApplyState != "blocked" || len(initial.ActionContext.AllowedEditRoots) != 1 {
+		t.Fatalf("initial status granted authority: %s", initialPayload)
+	}
+	if _, err := os.Lstat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("status prepared marker: %v", err)
+	}
+	if stdout, stderr, err := runOrganicCommand(t, organicBinary, planning, environment, "sdd-continue", change, "--cwd", planning, "--json"); err != nil {
+		t.Fatalf("explicit continuation: %v\n%s\n%s", err, stdout, stderr)
+	}
 	blocked, blockedPayload := consentStatus(t, environment, planning, change)
 	if blocked.ApplyState != "blocked" ||
 		!strings.Contains(strings.Join(blocked.BlockedReasons, "\n"), "blocked(edit_authority_missing)") {
@@ -308,5 +330,30 @@ func TestSDDSingleRepoStatusStaysByteIdenticalWithZeroConsentFootprint(t *testin
 	}
 	if _, err := os.Lstat(filepath.Join(planning, "openspec", "changes", change, ".gentle-ai-instance")); !os.IsNotExist(err) {
 		t.Fatalf("single-repo status minted an instance marker: %v", err)
+	}
+}
+
+func TestSDDPreparationInvocationRoundTripsSpacedChange(t *testing.T) {
+	t.Parallel()
+	for _, change := range []string{"phase one", "phase-two"} {
+		t.Run(change, func(t *testing.T) {
+			environment := consentShellEnvironment(t, t.TempDir())
+			workspace := t.TempDir()
+			planning := filepath.Join(workspace, "planning")
+			initConsentGitRepo(t, planning, true)
+			initConsentGitRepo(t, filepath.Join(workspace, "service"), false)
+			seedConsentChange(t, planning, change, "- [ ] Update `../service/main.go`\n")
+			initial, payload := consentStatus(t, environment, planning, change)
+			_, tail, found := strings.Cut(strings.Join(initial.BlockedReasons, "\n"), "`gentle-ai sdd-continue ")
+			arguments, _, closed := strings.Cut(tail, "`")
+			if !found || !closed || initial.Consent != nil {
+				t.Fatalf("missing preparation-only invocation: %s", payload)
+			}
+			runConsentInvocation(t, environment, planning, "gentle-ai sdd-continue "+arguments)
+			prepared, payload := consentStatus(t, environment, planning, change)
+			if prepared.Consent == nil || prepared.Consent.Change != change || prepared.ApplyState != "blocked" || len(prepared.ActionContext.AllowedEditRoots) != 1 {
+				t.Fatalf("emitted invocation lost selection or granted source authority: %s", payload)
+			}
+		})
 	}
 }

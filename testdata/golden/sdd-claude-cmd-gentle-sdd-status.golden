@@ -4,9 +4,7 @@ description: Show structured SDD status for an active change
 
 Show structured SDD status for an active change. This command is read-only: do not launch SDD executors and do not edit files.
 
-HARD GATE:
-
-SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not inspect status in the same turn.
+Inspection needs no execution preflight, review, delivery, or archive authorization. It grants no write authority.
 
 CONTEXT:
 
@@ -16,12 +14,9 @@ CONTEXT:
 
 TASK:
 
-1. If the `gentle-ai` binary is available, run `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` and treat its JSON as authoritative — but only when the session artifact store is `openspec` or `hybrid`. When the session artifact store is `engram`, do NOT invoke the native dispatcher at all — it cannot see the change (it reads only `openspec/changes/`); resolve status entirely from Engram (`mem_search` + `mem_get_observation` on the change's topic keys) using the manual status schema in `~/.claude/skills/_shared/sdd-status-contract.md` (the same schema used when the binary is unavailable). The dispatcher is authoritative only for `openspec`/`hybrid`. If unavailable, read `~/.claude/skills/_shared/sdd-status-contract.md` and follow it.
-2. Resolve the active change:
-   - If `$ARGUMENTS` is provided, validate that exact change in the selected artifact store.
-   - If omitted and exactly one active change exists, select it and say how it was selected.
-   - If omitted or ambiguous with multiple active changes, ask the user to choose and STOP. Do not guess.
-3. Inspect the selected artifact store from session preflight. Do not hardcode Engram.
+1. If the `gentle-ai` binary is available, run `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for every declared artifact store, including Engram. Consume native v2 unchanged as authoritative. If native resolution fails or is invalid, report it and stop; do not reconstruct status locally or call continue. If the binary is unavailable, read `~/.claude/skills/_shared/sdd-status-contract.md` for non-authoritative diagnostic guidance only. Do not fabricate native-shaped status, readiness, or mutation authority.
+2. Use the active selection returned by native status. If `$ARGUMENTS` is provided, require that exact identity; if native status requires selection, ask the user to choose and STOP. Do not guess or select from local artifact inspection.
+3. Inspect the declared artifact store and locators returned by native status. Do not hardcode Engram.
 4. Return structured status with:
    - Active change selection and schemaName.
    - planningHome, changeRoot, artifactPaths, and contextFiles.
@@ -36,5 +31,5 @@ READ-ONLY RULES:
 - Do not create, update, or delete artifacts.
 - Do not mark tasks complete.
 - Do not launch apply, verify, archive, or continue.
-- Do not infer routing from free text. Use `nextRecommended` and dependency states. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase.
+- Display `nextRecommended` and `blockedReasons` without executing any recommendation, including planning phases. Never run the preparation invocation just because status displays it. Do not infer routing from free text.
 - If status cannot be resolved safely, return `status: blocked` with the missing information.

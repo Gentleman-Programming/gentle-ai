@@ -67,6 +67,48 @@ func TestSelectedResearchReadinessMatrixFailsClosed(t *testing.T) {
 	}
 }
 
+// These assert shipped instructions only, not executed recovery, interviews,
+// once-only prompting, or persistence. Host runtime acceptance belongs to Pi.
+func TestConfirmedProposalHandoffDoesNotInterview(t *testing.T) {
+	t.Parallel()
+
+	lifecycle := sharedResearchContract(t, "research-lifecycle.md")
+	proposer, err := assets.Read("skills/sdd-propose/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ content, clause string }{
+		{lifecycle, "selected research is `done` or research is unselected"},
+		{lifecycle, "product decisions are `confirmed`, evidence references are valid, and the selected artifact-store state is ready"},
+		{lifecycle, "The proposal handoff carries the state revision, confirmed decisions, and optional evidence references."},
+		{proposer, "Confirmed pre-proposal handoff with state revision, confirmed decisions, and optional exploration/research references"},
+		{proposer, "The proposer MUST NOT interview, infer consent, or repair pending decisions; return `blocked` instead."},
+	} {
+		if !strings.Contains(test.content, test.clause) {
+			t.Errorf("shipped handoff contract missing %q", test.clause)
+		}
+	}
+}
+
+func TestAutomaticUnresolvedChoicesEmitOneGroupedPrompt(t *testing.T) {
+	t.Parallel()
+
+	content := sharedResearchContract(t, "research-lifecycle.md")
+	for _, clause := range []string{
+		"The orchestrator owns product discovery.",
+		"Automatic unresolved choices require one lossless grouped prompt with all context, options, consequences, allowed answers, and exact tokens",
+		"it MUST persist the pending state before prompting, then STOP without invoking `sdd-propose`.",
+		"The proposer receives a confirmed pre-proposal handoff and MUST NOT interview or infer consent.",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("shipped automatic-choice contract missing %q", clause)
+		}
+	}
+	if got := strings.Count(content, "<!-- research-lifecycle-gate:start -->"); got != 1 {
+		t.Errorf("managed gate count = %d, want exactly one", got)
+	}
+}
+
 func TestHybridRestartRequiresByteEqualStateWithoutStorePreference(t *testing.T) {
 	t.Parallel()
 

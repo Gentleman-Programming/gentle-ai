@@ -3,11 +3,9 @@ description: Show structured SDD status for an active change
 agent: gentle-orchestrator
 ---
 
-You are the `gentle-orchestrator`. This command is read-only. Do not launch SDD executors and do not edit files.
+You are the `gentle-orchestrator`. This command is read-only: it never prepares consent markers, launches SDD executors, or edits files.
 
-HARD GATE:
-
-SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not inspect status in the same turn.
+Inspection needs no execution preflight, review, delivery, or archive authorization. It grants no write authority.
 
 CONTEXT:
 
@@ -17,12 +15,12 @@ CONTEXT:
 
 TASK:
 
-1. If the `gentle-ai` binary is available, run `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` and treat its JSON as authoritative — but only when the session artifact store is `openspec` or `hybrid`. When the session artifact store is `engram`, do NOT invoke the native dispatcher at all — it cannot see the change (it reads only `openspec/changes/`); resolve status entirely from Engram (`mem_search` + `mem_get_observation` on the change's topic keys) using the manual status schema in `~/.config/opencode/skills/_shared/sdd-status-contract.md` (the same schema used when the binary is unavailable). The dispatcher is authoritative only for `openspec`/`hybrid`. If unavailable, read the installed shared status contract from this agent's skills directory and follow it. Use `~/.config/opencode/skills/_shared/sdd-status-contract.md` for OpenCode, `~/.config/kilo/skills/_shared/sdd-status-contract.md` for Kilo Code, `~/.qwen/skills/_shared/sdd-status-contract.md` for Qwen, or the equivalent configured skills directory for the current adapter. Do not use a workspace-relative `skills/_shared/...` path.
+1. Run `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for every declared artifact store, including Engram. Consume native v2 unchanged; if unavailable or invalid, report the failure without inventing native-shaped status or calling continue.
 2. Resolve the active change:
    - If `$ARGUMENTS` is provided, validate that exact change in the selected artifact store.
    - If omitted and exactly one active change exists, select it and say how it was selected.
    - If omitted or ambiguous with multiple active changes, ask the user to choose and STOP. Do not guess.
-3. Inspect the selected artifact store from session preflight. Do not hardcode Engram.
+3. Inspect the declared artifact store and locators returned by native status. Do not hardcode Engram.
 4. Return structured status with:
    - Active change selection and schemaName.
    - planningHome, changeRoot, artifactPaths, and contextFiles.
@@ -37,5 +35,5 @@ READ-ONLY RULES:
 - Do not create, update, or delete artifacts.
 - Do not mark tasks complete.
 - Do not launch apply, verify, archive, or continue.
-- Do not infer routing from free text. Use `nextRecommended` and dependency states. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase.
+- Display `nextRecommended` and `blockedReasons` without executing any recommendation, including planning phases. Never run the preparation invocation just because status displays it.
 - If status cannot be resolved safely, return `status: blocked` with the missing information.

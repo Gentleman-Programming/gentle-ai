@@ -212,11 +212,20 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	change := "cli-grant"
-	instance := "cli-grant-instance-token"
 	sibling, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedSDDStatusReadyChange(t, repo, change, "- [ ] 1.1 Update `"+filepath.Join(sibling, "main.go")+"`\n")
+	var continued bytes.Buffer
+	if err := RunSDDContinue([]string{change, "--cwd", repo, "--json"}, &continued); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(filepath.Join(repo, "openspec", "changes", change, ".gentle-ai-instance"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := strings.TrimSpace(string(marker))
 
 	grantArgs := []string{
 		"grant", "--cwd", repo, "--change", change, "--root", sibling, "--change-instance", instance,

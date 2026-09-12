@@ -285,7 +285,10 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		}
 		return compactAcquireResult(replay, begin, receipt.Revision), nil
 	}
-	begin = runtimeRescopeSuccessorRequest(replay.Status, begin, inheritIntendedUntracked)
+	begin, err = store.runtimeRescopeSuccessorRequest(ctx, replay.Status, begin, inheritIntendedUntracked)
+	if err != nil {
+		return store.compactMutationFailure(err, false, begin), nil
+	}
 
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,

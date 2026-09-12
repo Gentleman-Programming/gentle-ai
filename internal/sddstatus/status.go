@@ -202,6 +202,10 @@ type Status struct {
 	// terminal route. Always serialized as an array — `[]` when there is nothing
 	// to report — so a consumer never special-cases a missing or null field.
 	Notes []string `json:"notes"`
+	// consentPreparationRoots carries resolver facts for the existing explicit
+	// continuation command. It is deliberately internal: status reports why
+	// preparation is needed but never gains authority to perform it.
+	consentPreparationRoots []string
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
 	// RuntimeStatus so status can ask the one readiness predicate the same
 	// question compact acquire asks, and name the same continuation acquire
@@ -549,7 +553,8 @@ func resolveReviewDisabled(options ResolveOptions, workspaceRoot string) (bool, 
 	if options.ReviewDisabledForWorkspace == nil {
 		return options.ReviewDisabled, nil
 	}
-	return options.ReviewDisabledForWorkspace(workspaceRoot)
+	disabled, err := options.ReviewDisabledForWorkspace(workspaceRoot)
+	return disabled || err != nil, nil
 }
 
 func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
@@ -557,13 +562,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	reviewDisabled := options.ReviewDisabled
-	if options.ReviewDisabledForWorkspace != nil {
-		reviewDisabled, err = options.ReviewDisabledForWorkspace(workspaceRoot)
-		if err != nil {
-			return Status{}, err
-		}
-	}
+	reviewDisabled, _ := resolveReviewDisabled(options, workspaceRoot)
 	planningHome := filepath.Join(workspaceRoot, "openspec")
 	changesDir := filepath.Join(planningHome, "changes")
 	activeChanges, err := listActiveOpenSpecChanges(workspaceRoot)
@@ -666,22 +665,19 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
 	var consent *SDDIntegrationConsentResult
 	if len(unauthorizedRoots) != 0 {
-		// The envelope must name an invocation the agent executes verbatim,
-		// so the instance token is minted (once) and persisted here; a
-		// covering grant later projects through the same token and detection
-		// finds nothing, so no envelope and no mint happen on ordinary
-		// statuses.
 		if instance == "" {
-			if instance, err = ensureChangeInstanceMarker(changeRoot); err != nil {
-				return Status{}, err
+			blockedReasons.genuine = append(blockedReasons.genuine, fmt.Sprintf(
+				"Run `gentle-ai sdd-continue %s --cwd %s` with authorized change-directory writes to prepare the required marker; this grants no edit roots.",
+				pathquote.Quote(changeName), pathquote.Quote(workspaceRoot),
+			))
+		} else {
+			expectedRevision := ""
+			if runtimeStatus != nil {
+				expectedRevision = runtimeStatus.Revision
 			}
+			envelope := newEditAuthorityConsent(changeName, workspaceRoot, unauthorizedRoots, instance, expectedRevision)
+			consent = &envelope
 		}
-		expectedRevision := ""
-		if runtimeStatus != nil {
-			expectedRevision = runtimeStatus.Revision
-		}
-		envelope := newEditAuthorityConsent(changeName, workspaceRoot, unauthorizedRoots, instance, expectedRevision)
-		consent = &envelope
 	}
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
 	// Stale or incomplete evidence always re-enters independent SDD verification.
@@ -717,6 +713,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	status.ApplyState = applyState
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
+	status.consentPreparationRoots = append([]string{}, unauthorizedRoots...)
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	// Historical verification remains visible in verify instructions, but cannot
 	// block unfinished implementation before final verification is applicable.
