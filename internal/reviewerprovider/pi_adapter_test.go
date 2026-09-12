@@ -206,7 +206,9 @@ func TestPiAdapterHelperProcess(t *testing.T) {
 	}
 	if outputPath := piAdapterHelperOption(piAdapterHelperOutputPathArgument); outputPath != "" {
 		var output []byte
-		if mode == "environment" {
+		if mode == "arguments" {
+			output = []byte(strings.Join(os.Args, "\x00"))
+		} else if mode == "environment" {
 			output = []byte(strings.Join(os.Environ(), "\x00"))
 		} else {
 			var err error
@@ -232,6 +234,38 @@ func TestPiAdapterHelperProcess(t *testing.T) {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+func TestPiAdapterRoutingArguments(t *testing.T) {
+	for _, route := range []struct{ model, thinking string }{{"", ""}, {"provider/model", ""}, {"", "off"}, {"other/model", "max"}} {
+		t.Run(route.model+route.thinking, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "argv")
+			adapter := &PiAdapter{Model: route.model, Thinking: route.thinking,
+				LookPath: func(string) (string, error) { return "pi", nil },
+				commandContext: func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+					return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestPiAdapterHelperProcess$", "--", piAdapterHelperModeArgument + "arguments", piAdapterHelperOutputPathArgument + path}, args...)...)
+				},
+			}
+			if _, err := adapter.Review(t.Context(), NewInvocation([]byte("opaque"))); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Split(string(raw), "\x00")[5:]
+			want := []string{"--print", "--mode", "text", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve"}
+			if route.model != "" {
+				want = append(want, "--model", route.model)
+			}
+			if route.thinking != "" {
+				want = append(want, "--thinking", route.thinking)
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("child argv = %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func piAdapterHelperOption(prefix string) string {

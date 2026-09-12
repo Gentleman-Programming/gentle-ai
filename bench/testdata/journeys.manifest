@@ -24,6 +24,8 @@ j123-rejected-provider-validator-starts-fresh-high-risk-review
 j124-sdd-attempt-reset-after-selected-untracked-lands
 j125-claude-code-stop-hook-reminds-once-per-candidate
 j126-selected-untracked-terminal-status-resumes-without-flags
+j127-customizable-install-rdd-choice
+j128-historical-verification-does-not-block-apply
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
 j17-bare-repository
@@ -38,7 +40,9 @@ j40-sdd-attempt-reset-after-drift
 j4040-untracked-inventory-recovery-loop
 j41-kill-switch-versus-sdd-pre-verify
 j42-kill-switch-versus-sdd-archive
+j4395-telemetry-trigger-resolves-rdd-repository
 j44-sdd-historical-requirement-stale-pass
+j4435-selected-untracked-correction-continuation-is-selectorless
 j47-disabled-mode-archives-discovered-scope-changed-authority
 j49-status-without-cwd-honors-kill-switch
 j51-negotiated-status-correction-continuation

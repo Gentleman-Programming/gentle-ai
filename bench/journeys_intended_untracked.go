@@ -357,6 +357,147 @@ func selectUntrackedCaptureAndResumeTerminal(r *journeyRun) error {
 	return nil
 }
 
+const (
+	selectedUntrackedCorrectionTrackedPath    = "internal/selected_correction.go"
+	selectedUntrackedCorrectionUntrackedPath  = "docs/selected-correction.md"
+	selectedUntrackedCorrectionUnselectedPath = "local-only.txt"
+)
+
+func selectedUntrackedCorrectionCandidate(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedCorrectionTrackedPath), "package selected\n\nfunc Value() int { return 1 }\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "--", selectedUntrackedCorrectionTrackedPath); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedCorrectionUntrackedPath), "# Selected correction input\n"); err != nil {
+		return err
+	}
+	return sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedCorrectionUnselectedPath), "local-only untracked state\n")
+}
+
+func startSelectedUntrackedCorrection(r *journeyRun) error {
+	start, _, err := frozenLineageSelectedStatus(r, "", selectedUntrackedCorrectionUntrackedPath)
+	if err != nil || start.NextTransition.Kind != "execute" || start.NextTransition.Execute.Operation != "review.start" ||
+		start.NextTransition.Execute.Command == "" {
+		return fmt.Errorf("selected untracked correction START = %+v, %v", start.NextTransition, err)
+	}
+	relay, err := runPrintedTransition(r, start)
+	if err != nil {
+		return err
+	}
+	granted, err := resolveAtomicStartConsentAt(r, r.sandbox.Repo, start, relay)
+	if err != nil {
+		return err
+	}
+	if err := rememberLineage(r.sandbox, granted); err != nil || r.sandbox.Lineage == "" {
+		return fmt.Errorf("selected untracked correction granted START = lineage %q: %v", r.sandbox.Lineage, err)
+	}
+	status, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+	if err != nil || status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "reviewing" ||
+		status.TargetIdentity == "" || status.NextTransition.Kind != "collect" ||
+		status.NextTransition.ReasonCode != "reviewer_results_required" || len(status.NextTransition.Collect.Inputs) == 0 ||
+		len(status.paths()) != 2 || !slices.Contains(status.paths(), selectedUntrackedCorrectionTrackedPath) ||
+		!slices.Contains(status.paths(), selectedUntrackedCorrectionUntrackedPath) {
+		return fmt.Errorf("selected untracked correction reviewing STATUS = authority=%+v target=%q transition=%+v err=%v", status.Authority, status.TargetIdentity, status.NextTransition, err)
+	}
+	r.sandbox.Scratch["j4435-target"] = status.TargetIdentity
+	return nil
+}
+
+func captureSelectedUntrackedCorrectionFinding(r *journeyRun) error {
+	var terminal Observation
+	for capture := 0; capture < 8; capture++ {
+		status, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+		if err != nil {
+			return err
+		}
+		if status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "reviewing" ||
+			status.TargetIdentity != r.sandbox.Scratch["j4435-target"] || status.NextTransition.Kind != "collect" ||
+			status.NextTransition.ReasonCode != "reviewer_results_required" || len(status.NextTransition.Collect.Inputs) == 0 {
+			return fmt.Errorf("selected untracked correction reviewer STATUS = authority=%+v target=%q transition=%+v", status.Authority, status.TargetIdentity, status.NextTransition)
+		}
+		input := status.NextTransition.Collect.Inputs[0]
+		if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" || input.ArtifactSubject.SubjectHash == "" ||
+			status.argument("lineage") != r.sandbox.Lineage || status.argument("target") != r.sandbox.Scratch["j4435-target"] ||
+			status.argument("expected-revision") == "" || status.argument("lens") == "" || status.argument("order") == "" {
+			return fmt.Errorf("selected untracked correction reviewer binding = %+v", input)
+		}
+		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, status.paths())
+		if err != nil {
+			return err
+		}
+		if capture == 0 {
+			payload, err = json.Marshal(map[string]any{
+				"subject_hash": input.ArtifactSubject.SubjectHash,
+				"inspection":   map[string]any{"status": "completed", "paths": status.paths()},
+				"findings": []any{map[string]any{
+					"location": "internal/selected_correction.go:3", "severity": "CRITICAL", "claim": "selected candidate returns the wrong value",
+					"proof_refs":     []string{"internal/selected_correction.go:3 is introduced by the selected candidate"},
+					"evidence_class": "deterministic", "causal_disposition": "introduced",
+				}},
+				"evidence": []string{"the frozen selected candidate returns 1 instead of the required value"},
+			})
+			if err != nil {
+				return err
+			}
+		}
+		path, err := writeScratch(r.sandbox, fmt.Sprintf("j4435-reviewer-%d.json", capture), payload)
+		if err != nil {
+			return err
+		}
+		terminal = r.run([]string{
+			"review", "capture-result", "--cwd", r.sandbox.Repo,
+			"--lineage", status.argument("lineage"), "--target", status.argument("target"),
+			"--expected-revision", status.argument("expected-revision"), "--lens", status.argument("lens"),
+			"--order", status.argument("order"), "--input", path,
+		}, true)
+		if terminal.ExitCode != 0 {
+			return fmt.Errorf("capture selected untracked correction reviewer %d: %s", capture, firstLine(terminal.Stderr))
+		}
+		var closure lastEventClosure
+		if err := json.Unmarshal([]byte(strings.TrimSpace(terminal.Stdout)), &closure); err != nil {
+			return fmt.Errorf("decode selected untracked correction closure: %w", err)
+		}
+		if closure.State == "correction_required" {
+			if closure.LineageID != r.sandbox.Lineage || closure.StatusContinuation == nil || closure.StatusContinuation.Operation != "review.status" {
+				return fmt.Errorf("selected untracked correction closure = %+v", closure)
+			}
+			r.sandbox.Scratch["j4435-closure"] = terminal.Stdout
+			return nil
+		}
+	}
+	return fmt.Errorf("selected untracked correction reviewer captures did not reach correction_required: %s", terminal.Stdout)
+}
+
+func executeSelectorlessSelectedUntrackedCorrectionContinuation(r *journeyRun) error {
+	closure := Observation{Stdout: r.sandbox.Scratch["j4435-closure"]}
+	var result lastEventClosure
+	if err := json.Unmarshal([]byte(strings.TrimSpace(closure.Stdout)), &result); err != nil {
+		return fmt.Errorf("decode selected untracked correction continuation: %w", err)
+	}
+	if result.LineageID != r.sandbox.Lineage || result.StatusContinuation == nil || result.StatusContinuation.Operation != "review.status" {
+		return fmt.Errorf("selected untracked correction continuation = %+v", result)
+	}
+	for _, argument := range result.StatusContinuation.Arguments {
+		for _, forbidden := range []string{"--untracked-scope", "--expected-untracked-inventory", "--intended-untracked"} {
+			if strings.HasPrefix(argument.Token, forbidden+"=") || argument.Token == forbidden {
+				return fmt.Errorf("selected untracked correction continuation leaked selector %q", argument.Token)
+			}
+		}
+	}
+	status, continued, err := correctionStatusFromLastEventCapture(r, closure)
+	if err != nil || !continued {
+		return fmt.Errorf("execute selected untracked correction continuation: continued=%t err=%v", continued, err)
+	}
+	if status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "correction_required" ||
+		status.TargetIdentity != r.sandbox.Scratch["j4435-target"] || status.NextTransition.Kind != "collect" ||
+		status.NextTransition.ReasonCode != "correction_plan_required" {
+		return fmt.Errorf("selected untracked correction continuation STATUS = authority=%+v target=%q transition=%+v", status.Authority, status.TargetIdentity, status.NextTransition)
+	}
+	return nil
+}
+
 func intendedUntrackedJourneys() []Journey {
 	return []Journey{
 		{
@@ -368,6 +509,19 @@ func intendedUntrackedJourneys() []Journey {
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: mixed tracked and intended/unrelated untracked files", Fixture: mixedIntendedUntrackedCandidate},
 				{Name: "STATUS collects selection and printed START freezes only chosen paths", Requires: intendedUntrackedStatusCapability, Composite: selectIntendedUntrackedAndRunPrintedStart},
+			},
+		},
+		{
+			ID:     "j4435-selected-untracked-correction-continuation-is-selectorless",
+			Review: reviewOptedIn,
+			Title:  "#4435: selected untracked correction continuation omits selection selectors and preserves its frozen target",
+			Source: "#4435: the selected-untracked admission is frozen at START, so correction STATUS resumes only through its exact lineage",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: tracked and selected untracked correction candidate", Fixture: selectedUntrackedCorrectionCandidate},
+				{Name: "negotiate v2 selected-untracked START and grant its published consent invocation", Requires: frozenLineageStatusCapability, Composite: startSelectedUntrackedCorrection},
+				{Name: "capture a deterministic introduced CRITICAL finding through correction-required", Requires: captureResultCapability, Composite: captureSelectedUntrackedCorrectionFinding},
+				{Name: "execute the selectorless returned STATUS continuation and retain the frozen lineage and target", Requires: frozenLineageStatusCapability, Composite: executeSelectorlessSelectedUntrackedCorrectionContinuation},
 			},
 		},
 		{

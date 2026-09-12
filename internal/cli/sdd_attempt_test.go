@@ -101,6 +101,16 @@ func TestRunSDDAttemptRescopeCarriesHistoryForwardThroughTheCLI(t *testing.T) {
 	}
 }
 
+func TestRunSDDAttemptSupersedeRoutesDistinctSuccessor(t *testing.T) {
+	repo, change := initReviewCLIRepo(t), "cli-supersede"
+	started := runSDDAttemptStatus(t, []string{"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", "a-begin", "--work-unit", "verify-a", "--evidence-goal", "verify A", "--max-attempts", "2", "--max-changed-lines", "40"})
+	failed := runSDDAttemptStatus(t, []string{"finish", "--cwd", repo, "--change", change, "--expected-revision", started.Revision, "--request-id", "a-finish", "--outcome", "failed", "--evidence-revision", cliAttemptHash('a'), "--diagnosis", "distinct remediation", "--harness-disposition", "reused", "--cleanup-evidence", "unchanged", "--process-evidence", "none"})
+	superseded := runSDDAttemptStatus(t, []string{"supersede", "--cwd", repo, "--change", change, "--expected-revision", failed.Revision, "--request-id", "a-b", "--work-unit", "remediate-b", "--evidence-goal", "repair B", "--max-attempts", "3", "--max-changed-lines", "80", "--reason", "distinct remediation", "--actor", "maintainer"})
+	if superseded.LastSupersede == nil || superseded.Objective.WorkUnit != "remediate-b" || superseded.CumulativeAttempts != 1 {
+		t.Fatalf("CLI supersede = %#v", superseded)
+	}
+}
+
 func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	tests := []struct {
@@ -108,11 +118,11 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing operation", args: nil, want: "requires status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant"},
+		{name: "missing operation", args: nil, want: "requires status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant"},
 		// The no-args refusal already enumerates every valid operation; the
 		// unknown-operation refusal must do the same instead of naming only
 		// the bad value with no route to the valid set.
-		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant`},
+		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant`},
 		{name: "missing change", args: []string{"status", "--cwd", repo}, want: "--change"},
 		{name: "unknown flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--mystery"}, want: "flag provided but not defined"},
 		{name: "irrelevant flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
@@ -169,7 +179,7 @@ func sddAttemptOutcome(args []string) string {
 // all four). Mirrors the reviewIntegrationGatesInOrder /
 // reviewIntegrationGateNames pattern in review_operation_contract.go.
 func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T) {
-	want := []string{"status", "begin", "finish", "handoff", "reset", "rescope", "repair", "acquire", "settle", "grant"}
+	want := []string{"status", "begin", "finish", "handoff", "reset", "rescope", "supersede", "repair", "acquire", "settle", "grant"}
 	if got := sddAttemptOperationNames(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("sddAttemptOperationNames() = %v, want %v", got, want)
 	}
@@ -181,8 +191,8 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 	if validSDDAttemptOperation("begn") {
 		t.Fatal(`validSDDAttemptOperation("begn") = true, want false`)
 	}
-	if got := joinSDDAttemptOperations(); got != "status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant" {
-		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant")
+	if got := joinSDDAttemptOperations(); got != "status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant" {
+		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, handoff, reset, rescope, supersede, repair, acquire, settle, or grant")
 	}
 }
 
@@ -275,6 +285,7 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},
 		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor", "objective-relation"}, []string{"500 bytes", "128 bytes", "remediation (default)", "independent"}},
 		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor", "objective-relation", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"explicit limit", "cannot exceed current objective", "remediation (default)", "independent"}},
+		{"supersede", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor", "objective-relation", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"distinct terminal zero-drift", "above carried", "remediation (default)", "independent"}},
 		{"acquire", []string{"cwd", "change", "token", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"default 2", "default 200", "failed evidence correction"}},
 		{"repair", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"unreadable sha256", "500 bytes", "128 bytes"}},
 		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "remediates-evidence-revision", "remediation-evidence", "untracked-scope", "expected-untracked-inventory", "intended-untracked"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
@@ -597,11 +608,6 @@ func TestRunSDDAttemptSettleRemediationEvidenceDropsEvidenceRevisionRequirement(
 	if failed.State != "proceed" {
 		t.Fatalf("failed settle = %#v", failed)
 	}
-	acquired2, _ := runCompactSDDAttempt(t, []string{
-		"acquire", "--cwd", repo, "--change", change, "--request-id", "cli-rem-acquire-2",
-		"--work-unit", "verify", "--evidence-goal", "prove CLI remediation evidence",
-		"--max-attempts", "5", "--max-changed-lines", "800", "--remediates-evidence-revision", failedEvidence,
-	})
 	trackedFile := filepath.Join(repo, "tracked.txt")
 	existing, err := os.ReadFile(trackedFile)
 	if err != nil {
@@ -610,6 +616,17 @@ func TestRunSDDAttemptSettleRemediationEvidenceDropsEvidenceRevisionRequirement(
 	if err := os.WriteFile(trackedFile, append(existing, []byte("corrected\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	failedStatus := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	reset := runSDDAttemptStatus(t, []string{
+		"reset", "--cwd", repo, "--change", change, "--expected-revision", failedStatus.Revision,
+		"--request-id", "cli-rem-reset", "--reason", "maintainer records the corrected candidate", "--actor", "maintainer",
+	})
+	acquired2, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--expected-revision", reset.Revision,
+		"--request-id", "cli-rem-acquire-2", "--work-unit", "verify",
+		"--evidence-goal", "prove CLI remediation evidence", "--max-attempts", "5", "--max-changed-lines", "800",
+		"--remediates-evidence-revision", failedEvidence,
+	})
 	evidence := `{"schema":"gentle-ai.remediation-evidence/v1","failed_evidence_revision":"` + failedEvidence + `",` +
 		`"commands":[{"command":"go test ./...","exit_code":0,"result":"293 passed"}],` +
 		`"runtime_harness":{"status":"not_applicable","na_reason":"no runtime harness because this change is test-only"},` +

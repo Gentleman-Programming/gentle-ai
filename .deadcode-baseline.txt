@@ -71,6 +71,7 @@ internal/components/sdd/boundedreview.go	ReviewExecutionContractFor
 internal/components/sdd/inject.go	injectClaudeModelAssignments
 internal/components/sdd/inject.go	resolveClaudeModelAlias
 internal/components/sdd/read_assignments.go	ReadCurrentProfiles
+internal/components/telemetryruntime/managed.go	Reconcile
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv
@@ -237,6 +238,7 @@ internal/telemetry/recording_spawn.go	NewRecordingSpawner
 internal/telemetry/recording_spawn.go	RecordingSpawner.Calls
 internal/telemetry/recording_spawn.go	RecordingSpawner.Reset
 internal/telemetry/recording_spawn.go	RecordingSpawner.Spawn
+internal/telemetry/runtime_event.go	ParseRuntimeEvent
 internal/tui/model.go	setOSExecutableForTest
 internal/tui/model.go	setOSGetwdForTest
 internal/tui/model.go	setOSRemoveForTest

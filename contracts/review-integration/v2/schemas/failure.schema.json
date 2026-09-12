@@ -43,7 +43,7 @@
       "type": "object", "additionalProperties": false, "required": ["operation", "command"],
       "properties": {
         "operation": {"const": "sync"},
-        "command": {"type": "string", "minLength": 1, "pattern": "^gentle-ai sync(?: --agent \\S+)?$"},
+        "command": {"type": "string", "minLength": 1, "pattern": "^(?:[A-Za-z0-9/._+=@:,-]+|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:[^'\\r\\n]|'\\\\'')*') sync(?: --agent \\S+)?$"},
         "agent": {"type": "string", "minLength": 1},
         "stale_assets": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
       }

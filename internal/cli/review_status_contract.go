@@ -96,6 +96,7 @@ type ReviewTargetStatusResult struct {
 	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
 	Forecast          *ReviewForecast                              `json:"forecast,omitempty"`
 	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`
+	Escalation        *reviewtransaction.CompactEscalationEvidence `json:"escalation,omitempty"`
 	RepositoryContext *ReviewRepositoryContextReference            `json:"repository_context,omitempty"`
 	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
 	decision          reviewtransaction.TargetStatusDecision       `json:"-"`
@@ -227,6 +228,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
+	}
+	if native.Escalation != nil && schema == ReviewIntegrationStatusSchemaV7 {
+		result.Escalation = native.Escalation
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		return result
@@ -517,6 +521,14 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	default:
 		return errors.New("unsupported review status recovery disposition")
 	}
+	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 {
+		return errors.New("status escalation requires review status schema v7") // refusal:by-design world-action: only the provider can omit escalation from a pre-v7 envelope or publish the v7 identity that defines it
+	}
+	escalationRequired := result.Schema == ReviewIntegrationStatusSchemaV7 && result.Authority != nil &&
+		result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.State == reviewtransaction.StateEscalated
+	if escalationRequired != (result.Escalation != nil) {
+		return errors.New("status escalation must match escalated authority") // refusal:by-design world-action: only the provider can project canonical escalation evidence for a v7 compact authority
+	}
 	return nil
 }
 
@@ -715,6 +727,11 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition.Continuation != nil &&
 		!(result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "managed_assets_outdated") {
 		return errors.New("next_transition.continuation is valid only on a managed_assets_outdated stop") // refusal:by-design world-action: a producer that attaches this continuation to any other transition built a malformed envelope and requires a code fix, not an operator command
+	}
+	if continuation := result.NextTransition.Continuation; continuation != nil {
+		if err := validateManagedAssetsContinuation(continuation); err != nil {
+			return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
+		}
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 		if result.rddModeResolved && !result.rddMode.Enabled() {

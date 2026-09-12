@@ -22,6 +22,11 @@ const (
 	GrantWebFetch  Grant = "WebFetch"
 	GrantWebSearch Grant = "WebSearch"
 	GrantContext7  Grant = "@context7"
+
+	GrantPiFetchContent     Grant = "fetch_content"
+	GrantPiWebSearch        Grant = "web_search"
+	GrantPiSourceCheck      Grant = "source_check"
+	GrantPiGetSearchContent Grant = "get_search_content"
 )
 
 // Capability is one runtime's maximum declared evidence capability.
@@ -47,6 +52,13 @@ type Result struct {
 }
 
 var capabilities = map[model.AgentID]Capability{
+	model.AgentPi: {
+		Schema: SchemaV1,
+		Grants: map[Class][]Grant{
+			ClassDocumentation: {GrantPiFetchContent},
+			ClassOpenWeb:       {GrantPiWebSearch, GrantPiSourceCheck, GrantPiFetchContent, GrantPiGetSearchContent},
+		},
+	},
 	model.AgentClaudeCode: {
 		Schema: SchemaV1,
 		Grants: map[Class][]Grant{

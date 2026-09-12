@@ -62,17 +62,37 @@ func TestRejectedTargetedValidatorCaptureRoutesEscalatedRecovery(t *testing.T) {
 	}
 	runReviewCLIGit(t, repo, "add", "recovery.go")
 
-	var output bytes.Buffer
-	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1,
-		"--lineage", lineage, "--next-transition",
-	}, &output); err != nil {
-		t.Fatal(err)
-	}
-	var status ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, output.Bytes(), &status)
-	if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryEscalated ||
-		status.NextTransition == nil || status.NextTransition.ReasonCode != "recovery_authorization_required" {
-		t.Fatalf("escalated status = %#v", status)
+	for _, tt := range []struct {
+		name, contract, schema string
+		wantEscalation         bool
+	}{
+		{name: "v1", contract: ReviewIntegrationContractV1, schema: ReviewIntegrationStatusSchemaV2},
+		{name: "v2", contract: ReviewIntegrationContractV2, schema: ReviewIntegrationStatusSchemaV7, wantEscalation: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview([]string{
+				"status", "--cwd", repo, "--contract", tt.contract,
+				"--lineage", lineage, "--next-transition",
+			}, &output); err != nil {
+				t.Fatal(err)
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, output.Bytes(), &status)
+			if status.Schema != tt.schema || status.Action != reviewtransaction.TargetStatusActionRecover ||
+				status.ActionDisposition != reviewtransaction.RecoveryEscalated || status.NextTransition == nil ||
+				status.NextTransition.ReasonCode != "recovery_authorization_required" {
+				t.Fatalf("escalated status = %#v", status)
+			}
+			if err := status.Validate(); err != nil {
+				t.Fatalf("status validation error = %v", err)
+			}
+			if (status.Escalation != nil) != tt.wantEscalation {
+				t.Fatalf("status escalation = %#v, want present=%t", status.Escalation, tt.wantEscalation)
+			}
+			if tt.wantEscalation {
+				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), output.Bytes())
+			}
+		})
 	}
 }

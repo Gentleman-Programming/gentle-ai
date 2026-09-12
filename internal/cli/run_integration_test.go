@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
@@ -132,6 +133,45 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	}
 	if string(finalState) != string(originalState) {
 		t.Fatalf("state after failed install changed:\n got %s\nwant %s", finalState, originalState)
+	}
+}
+
+func TestRunInstallCodexKeepsOldRuntimeFailure(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(string) (string, error) { return "/usr/local/bin/engram", nil }
+	runCommand = func(string, ...string) error { return nil }
+	restoreRuntime := codex.SetRuntimeVersionCommandForTest("codex-cli 0.143.9", nil)
+	t.Cleanup(restoreRuntime)
+
+	profiles := []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"}
+	for _, name := range profiles {
+		path := filepath.Join(home, ".codex", name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("user-content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := RunInstall([]string{"--agent", "codex", "--component", "engram"}, macOSDetectionResult())
+	if err == nil || !strings.Contains(err.Error(), "Codex >=0.144.0") {
+		t.Fatalf("RunInstall() error = %v, want old Codex runtime failure", err)
+	}
+	for _, name := range profiles {
+		content, readErr := os.ReadFile(filepath.Join(home, ".codex", name))
+		if readErr != nil || string(content) != "user-content\n" {
+			t.Fatalf("old runtime modified %s: got=%q error=%v", name, content, readErr)
+		}
 	}
 }
 

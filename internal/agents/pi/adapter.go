@@ -18,16 +18,17 @@ import (
 )
 
 const (
-	piMCPAdapterPackage      = "npm:pi-mcp-adapter"
-	piMCPAdapterPackageSpec  = "npm:pi-mcp-adapter"
-	piMCPAdapterDependency   = "pi-mcp-adapter"
-	piMCPAdapterVersion      = "2.6.0"
-	piMCPAdapterVersionRange = "^2.6.0"
-	piAppendSystemFile       = "APPEND_SYSTEM.md"
-	piEngramMCPConfigFile    = "mcp.json"
-	piSettingsFile           = "settings.json"
-	piNPMDirectory           = "npm"
-	piNPMPackageFile         = "package.json"
+	piMCPAdapterPackage         = "npm:pi-mcp-adapter"
+	piMCPAdapterPackageSpec     = "npm:pi-mcp-adapter"
+	piGentleEngramPackageSource = "npm:gentle-engram"
+	piMCPAdapterDependency      = "pi-mcp-adapter"
+	piMCPAdapterVersion         = "2.6.0"
+	piMCPAdapterVersionRange    = "^2.6.0"
+	piAppendSystemFile          = "APPEND_SYSTEM.md"
+	piEngramMCPConfigFile       = "mcp.json"
+	piSettingsFile              = "settings.json"
+	piNPMDirectory              = "npm"
+	piNPMPackageFile            = "package.json"
 )
 
 var legacyPiSubagentPackageIdentities = map[string]struct{}{
@@ -46,6 +47,21 @@ const gentleAgentsGentlePiVersion = "2.5.0"
 var retiredPiPackageIdentities = map[string]struct{}{
 	"npm:@juicesharp/rpiv-todo": {},
 	"npm:pi-subagents-j0k3r":    {},
+}
+
+var managedPackageSources = []string{
+	"npm:gentle-pi",
+	piGentleEngramPackageSource,
+	piMCPAdapterPackage,
+	"npm:@juicesharp/rpiv-ask-user-question",
+	"npm:pi-web-access",
+	"npm:pi-btw",
+}
+
+// ManagedPackageSources returns every Pi package source installed by this
+// adapter. Callers receive a copy so package ownership remains adapter-owned.
+func ManagedPackageSources() []string {
+	return slices.Clone(managedPackageSources)
 }
 
 var piWalkDir = filepath.WalkDir
@@ -245,15 +261,14 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	return [][]string{
-		{"pi", "install", "npm:gentle-pi"},
-		{"pi", "install", "npm:gentle-engram"},
-		{"pi", "install", "npm:pi-mcp-adapter"},
-		a.engramInitCommand(),
-		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
-		{"pi", "install", "npm:pi-web-access"},
-		{"pi", "install", "npm:pi-btw"},
-	}, nil
+	commands := make([][]string, 0, len(managedPackageSources)+1)
+	for _, source := range ManagedPackageSources() {
+		commands = append(commands, []string{"pi", "install", source})
+		if source == piMCPAdapterPackage {
+			commands = append(commands, a.engramInitCommand())
+		}
+	}
+	return commands, nil
 }
 
 func (a *Adapter) engramInitCommand() []string {

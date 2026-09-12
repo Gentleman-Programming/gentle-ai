@@ -87,6 +87,9 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 			"schemaName", "schemaVersion", "changeName", "artifactStore", "planningHome", "changeRoot",
 			"artifactPaths", "contextFiles", "artifacts", "taskProgress", "dependencies", "applyState",
 			"actionContext", "relationships", "remediationState", "nextRecommended", "blockedReasons",
+			// notes is #4372's deliberate additive extension: the non-blocking
+			// diagnostics channel that keeps `blockedReasons` a pure gate.
+			"notes",
 		})
 		assertJSONNestedKeys(t, document, "artifactPaths", []string{"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport"})
 		assertJSONNestedKeys(t, document, "contextFiles", []string{"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport"})

@@ -83,6 +83,12 @@ type sddRuntimeStatus struct {
 		Change  string `json:"change"`
 		Lineage string `json:"lineage"`
 	} `json:"binding"`
+	LastReset *struct {
+		Revision           string `json:"revision"`
+		ResetCandidateTree string `json:"reset_candidate_tree"`
+		Reason             string `json:"reason"`
+		Actor              string `json:"actor"`
+	} `json:"last_reset"`
 	LastRescope *struct {
 		PreviousObjectiveID  string `json:"previous_objective_id"`
 		PreviousGeneration   int    `json:"previous_generation"`
@@ -196,6 +202,25 @@ func proveActiveAttempt(sandbox *Sandbox, ordinal int, evidenceRevision string) 
 			evidenceRevision, status.EvidenceRevision)
 	}
 	return nil
+}
+
+// proveActiveResetRemediationAttempt verifies the chain-bound failed evidence
+// after Reset. Reset deliberately clears the status-level evidence projection,
+// so the immutable failed attempt is the authoritative location for that fact.
+func proveActiveResetRemediationAttempt(sandbox *Sandbox, ordinal int, evidenceRevision string) error {
+	status, err := proveRuntime(sandbox)
+	if err != nil {
+		return err
+	}
+	if status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != ordinal || status.ActiveAttempt.Outcome != "running" {
+		return fmt.Errorf("fixture claims a running remediation ordinal %d but runtime reports active=%#v", ordinal, status.ActiveAttempt)
+	}
+	for _, attempt := range status.Attempts {
+		if attempt.Outcome == "failed" && attempt.EvidenceRevision == evidenceRevision {
+			return nil
+		}
+	}
+	return fmt.Errorf("fixture claims preserved failed evidence %q but runtime attempts are %#v", evidenceRevision, status.Attempts)
 }
 
 // ---------------------------------------------------------------------------
@@ -849,6 +874,60 @@ func sddBeginFailedUnmanagedVerification(r *journeyRun) error {
 	return nil
 }
 
+// sddUnmanagedUnchangedAcquireIsRejected proves #4415 at the public runtime
+// boundary: declaring failed evidence against the unchanged failed candidate is
+// refused before Begin, without minting a token or mutating the attempt chain.
+func sddUnmanagedUnchangedAcquireIsRejected(r *journeyRun) error {
+	before, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	observation := r.run(append([]string{
+		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange,
+		"--request-id", "bench-unmanaged-acquire-unchanged", "--remediates-evidence-revision", sddFailedEvidence,
+	}, sddUnmanagedObjective...), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse unchanged remediation acquire: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if result.State != "blocked" || result.Reason != "remediation_unsatisfiable" || result.Token != "" {
+		return fmt.Errorf("unchanged remediation acquire = %#v exit=%d, want blocked/remediation_unsatisfiable without token", result, observation.ExitCode)
+	}
+	after, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if after.Revision != before.Revision || after.ActiveAttempt != nil || len(after.Attempts) != len(before.Attempts) {
+		return fmt.Errorf("unchanged remediation acquire mutated runtime: before=%#v after=%#v", before, after)
+	}
+	return nil
+}
+
+// sddUnmanagedResetChangedCandidate records the terminal candidate drift before
+// it opens a successor correction attempt. Reset is a maintainer operation: its
+// current CAS revision, reason, and actor must become durable LastReset evidence.
+func sddUnmanagedResetChangedCandidate(r *journeyRun) error {
+	before, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	const reason = "the correction changed the terminal verification candidate"
+	const actor = "bench-maintainer"
+	r.run(sddAttemptArgs(r, "reset", before.Revision, "bench-unmanaged-reset-changed-candidate",
+		"--reason", reason, "--actor", actor), false)
+
+	after, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	if after.Revision == before.Revision || after.LastReset == nil ||
+		after.LastReset.Revision != after.Revision || after.LastReset.ResetCandidateTree == "" ||
+		after.LastReset.Reason != reason || after.LastReset.Actor != actor || after.NextAction != "begin" {
+		return fmt.Errorf("audited correction reset did not publish the changed candidate and audit context: before=%#v after=%#v", before, after)
+	}
+	return nil
+}
+
 func sddUnmanagedAcquireCorrection(r *journeyRun) error {
 	observation := r.run(append([]string{
 		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange,
@@ -895,14 +974,14 @@ func sddUnmanagedCorrectionRemainsBounded(r *journeyRun) error {
 	if err := sddUnmanagedSettle(r, "bench-unmanaged-unchanged", sddFailedEvidence, false); err != nil {
 		return err
 	}
-	return proveActiveAttempt(r.sandbox, 2, sddFailedEvidence)
+	return proveActiveResetRemediationAttempt(r.sandbox, 2, sddFailedEvidence)
 }
 
 func sddUnmanagedWrongEvidenceIsRejected(r *journeyRun) error {
 	if err := sddUnmanagedSettle(r, "bench-unmanaged-wrong-evidence", sddWrongEvidence, false); err != nil {
 		return err
 	}
-	return proveActiveAttempt(r.sandbox, 2, sddFailedEvidence)
+	return proveActiveResetRemediationAttempt(r.sandbox, 2, sddFailedEvidence)
 }
 
 func sddUnmanagedCorrectionCompletes(r *journeyRun) error {
@@ -1405,9 +1484,10 @@ func sddJourneys() []Journey {
 						}
 						return nil
 					})},
-				{Name: "acquire the one bounded correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedAcquireCorrection},
-				{Name: "unchanged candidate cannot satisfy correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedCorrectionRemainsBounded},
+				{Name: "unchanged candidate cannot acquire correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedUnchangedAcquireIsRejected},
 				{Name: "fixture: correction changes the candidate", Fixture: sddBoundedCorrection},
+				{Name: "audited reset records the changed correction candidate", Requires: sddAttemptResetCapability, Composite: sddUnmanagedResetChangedCandidate},
+				{Name: "acquire the one bounded correction after the audited reset", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedAcquireCorrection},
 				{Name: "wrong failed evidence cannot satisfy correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedWrongEvidenceIsRejected},
 				{Name: "settle the evidence-bound correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedCorrectionCompletes},
 				{Name: "replay cannot acquire another correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedReplayIsComplete},

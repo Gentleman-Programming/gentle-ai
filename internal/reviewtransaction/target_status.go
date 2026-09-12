@@ -80,25 +80,26 @@ type TargetStatusDecision struct {
 }
 
 type TargetStatusResult struct {
-	Applicability                      TargetApplicability    `json:"applicability"`
-	AuthorityVersion                   AuthorityVersion       `json:"authority_version,omitempty"`
-	LineageID                          string                 `json:"lineage_id,omitempty"`
-	State                              State                  `json:"state,omitempty"`
-	Generation                         int                    `json:"generation,omitempty"`
-	Revision                           string                 `json:"revision,omitempty"`
-	Action                             TargetStatusAction     `json:"action"`
-	ActionDisposition                  RecoveryDisposition    `json:"action_disposition,omitempty"`
-	Replayability                      Replayability          `json:"replayability"`
-	OriginalChangedLines               int                    `json:"original_changed_lines,omitempty"`
-	Tier                               RiskLevel              `json:"tier,omitempty"`
-	CorrectionBudget                   int                    `json:"correction_budget,omitempty"`
-	CorrectionBudgetPolicy             string                 `json:"correction_budget_policy,omitempty"`
-	SelectedLenses                     []string               `json:"selected_lenses,omitempty"`
-	TargetIdentity                     string                 `json:"target_identity"`
-	AuthorityTargetIdentity            string                 `json:"authority_target_identity,omitempty"`
-	Projection                         TargetProjectionStatus `json:"projection"`
-	CandidateLineageIDs                []string               `json:"candidate_lineage_ids"`
-	Decision                           TargetStatusDecision   `json:"-"`
+	Applicability                      TargetApplicability        `json:"applicability"`
+	AuthorityVersion                   AuthorityVersion           `json:"authority_version,omitempty"`
+	LineageID                          string                     `json:"lineage_id,omitempty"`
+	State                              State                      `json:"state,omitempty"`
+	Generation                         int                        `json:"generation,omitempty"`
+	Revision                           string                     `json:"revision,omitempty"`
+	Action                             TargetStatusAction         `json:"action"`
+	ActionDisposition                  RecoveryDisposition        `json:"action_disposition,omitempty"`
+	Replayability                      Replayability              `json:"replayability"`
+	OriginalChangedLines               int                        `json:"original_changed_lines,omitempty"`
+	Tier                               RiskLevel                  `json:"tier,omitempty"`
+	CorrectionBudget                   int                        `json:"correction_budget,omitempty"`
+	CorrectionBudgetPolicy             string                     `json:"correction_budget_policy,omitempty"`
+	SelectedLenses                     []string                   `json:"selected_lenses,omitempty"`
+	TargetIdentity                     string                     `json:"target_identity"`
+	AuthorityTargetIdentity            string                     `json:"authority_target_identity,omitempty"`
+	Projection                         TargetProjectionStatus     `json:"projection"`
+	CandidateLineageIDs                []string                   `json:"candidate_lineage_ids"`
+	Escalation                         *CompactEscalationEvidence `json:"escalation,omitempty"`
+	Decision                           TargetStatusDecision       `json:"-"`
 	authorityTargetKind                TargetKind
 	authorityProjection                Projection
 	selectorFreeAccountingOnlyRecovery bool
@@ -664,6 +665,9 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		result.OriginalChangedLines, result.Tier, result.CorrectionBudget, result.CorrectionBudgetPolicy = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget, state.CorrectionBudgetPolicy
 		result.SelectedLenses = append([]string{}, state.SelectedLenses...)
 		result.Projection = targetProjectionFromCompact(state, result.Projection)
+		if state.State == StateEscalated {
+			result.Escalation = state.EscalationEvidence()
+		}
 		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots && candidate.frozenReviewingDrifted {
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
@@ -674,7 +678,11 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 			result.selectorFreeAccountingOnlyRecovery = candidate.selectorFreeAccountingOnlyRecovery
 			return result
 		}
-		if state.State == StateEscalated || state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
+		if state.State == StateEscalated {
+			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+			return result
+		}
+		if state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
 		}

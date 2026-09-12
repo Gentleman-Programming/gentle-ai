@@ -56,6 +56,69 @@ func TestDetectFromInputsMarksFedoraSupported(t *testing.T) {
 	}
 }
 
+func TestDetectFromInputsMarksFedoraSilverblueSupported(t *testing.T) {
+	orig := isOSTreeBooted
+	isOSTreeBooted = func() bool { return true }
+	t.Cleanup(func() { isOSTreeBooted = orig })
+
+	osRelease := "NAME=\"Fedora Linux\"\nID=fedora\nVARIANT=\"Silverblue\"\nVARIANT_ID=silverblue\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("rpm-ostree"), nil)
+
+	if !result.System.Supported {
+		t.Fatalf("expected supported system for fedora silverblue")
+	}
+
+	if result.System.Profile.LinuxDistro != LinuxDistroFedora {
+		t.Fatalf("expected fedora distro, got %q", result.System.Profile.LinuxDistro)
+	}
+
+	if result.System.Profile.PackageManager != "rpm-ostree" {
+		t.Fatalf("expected rpm-ostree package manager, got %q", result.System.Profile.PackageManager)
+	}
+}
+
+func TestDetectOSTreeWithDnfAndRpmOstreeSelectsRpmOstree(t *testing.T) {
+	orig := isOSTreeBooted
+	isOSTreeBooted = func() bool { return true }
+	t.Cleanup(func() { isOSTreeBooted = orig })
+
+	osRelease := "NAME=\"Fedora Linux\"\nID=fedora\nVARIANT=\"Silverblue\"\nVARIANT_ID=silverblue\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("dnf", "rpm-ostree"), nil)
+
+	if result.System.Profile.PackageManager != "rpm-ostree" {
+		t.Fatalf("PackageManager = %q, want %q", result.System.Profile.PackageManager, "rpm-ostree")
+	}
+}
+
+func TestDetectMutableFedoraWithDnfAndRpmOstreeSelectsDnf(t *testing.T) {
+	orig := isOSTreeBooted
+	isOSTreeBooted = func() bool { return false }
+	t.Cleanup(func() { isOSTreeBooted = orig })
+
+	osRelease := "ID=fedora\nID_LIKE=\"rhel fedora\"\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("dnf", "rpm-ostree"), nil)
+
+	if result.System.Profile.PackageManager != "dnf" {
+		t.Fatalf("PackageManager = %q, want %q", result.System.Profile.PackageManager, "dnf")
+	}
+}
+
+func TestDetectMutableFedoraWithOnlyRpmOstreeIsUnsupported(t *testing.T) {
+	orig := isOSTreeBooted
+	isOSTreeBooted = func() bool { return false }
+	t.Cleanup(func() { isOSTreeBooted = orig })
+
+	osRelease := "ID=fedora\nID_LIKE=\"rhel fedora\"\n"
+	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("rpm-ostree"), nil)
+
+	if result.System.Supported {
+		t.Fatalf("expected mutable fedora with only rpm-ostree to be unsupported, got Supported = true")
+	}
+	if result.System.Profile.PackageManager != "" {
+		t.Fatalf("PackageManager = %q, want empty", result.System.Profile.PackageManager)
+	}
+}
+
 func TestDetectFromInputsMarksUbuntuSupported(t *testing.T) {
 	osRelease := "ID=ubuntu\nID_LIKE=debian\n"
 	result := detectFromInputs("linux", "amd64", "/bin/bash", osRelease, toolsOnPath("apt"), nil)
@@ -104,6 +167,7 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 		goos          string
 		osRelease     string
 		tools         map[string]ToolStatus
+		ostreeBooted  bool
 		wantOS        string
 		wantPM        string
 		wantDistro    string
@@ -167,6 +231,17 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantSupported: true,
 		},
 		{
+			name:          "fedora silverblue profile",
+			goos:          "linux",
+			osRelease:     "ID=fedora\nVARIANT_ID=silverblue\n",
+			tools:         toolsOnPath("rpm-ostree"),
+			ostreeBooted:  true,
+			wantOS:        "linux",
+			wantPM:        "rpm-ostree",
+			wantDistro:    LinuxDistroFedora,
+			wantSupported: true,
+		},
+		{
 			name:          "windows profile",
 			goos:          "windows",
 			wantOS:        "windows",
@@ -196,6 +271,10 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			orig := isOSTreeBooted
+			isOSTreeBooted = func() bool { return tc.ostreeBooted }
+			t.Cleanup(func() { isOSTreeBooted = orig })
+
 			profile := resolvePlatformProfile(tc.goos, tc.osRelease, tc.tools)
 			if profile.OS != tc.wantOS {
 				t.Fatalf("OS = %q, want %q", profile.OS, tc.wantOS)

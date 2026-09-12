@@ -91,6 +91,20 @@ func TestV2TransitionSchemasStayLocalSharedAndPackaged(t *testing.T) {
 	if got := reviewSchemaRef(t, closureProperties["acknowledgement"], "last-event acknowledgement"); got != reviewV2AcknowledgementRef {
 		t.Fatalf("last-event acknowledgement ref = %q, want %q", got, reviewV2AcknowledgementRef)
 	}
+	reviewerResults := reviewSchemaObject(t, closureProperties["reviewer_results"], "last-event reviewer results")
+	if reviewerResults["type"] != "array" || reviewerResults["minItems"] != float64(0) {
+		t.Fatalf("last-event reviewer_results = %#v, want an empty-capable canonical array", reviewerResults)
+	}
+	reviewerResultItems := reviewSchemaObject(t, reviewerResults["items"], "last-event reviewer result items")
+	if reviewerResultItems["additionalProperties"] != false || !reflect.DeepEqual(schemaStringArray(t, reviewerResultItems["required"]), []string{"lens", "findings", "evidence", "result_hash"}) {
+		t.Fatalf("last-event reviewer result item = %#v, want the strict canonical shape", reviewerResultItems)
+	}
+	reviewerResultProperties := reviewSchemaObject(t, reviewerResultItems["properties"], "last-event reviewer result properties")
+	findingItems := reviewSchemaObject(t, reviewSchemaObject(t, reviewerResultProperties["findings"], "last-event reviewer findings")["items"], "last-event reviewer finding items")
+	findingProperties := reviewSchemaObject(t, findingItems["properties"], "last-event reviewer finding properties")
+	if dispositions := schemaStringArray(t, reviewSchemaObject(t, findingProperties["causal_disposition"], "last-event causal disposition")["enum"]); !reflect.DeepEqual(dispositions, []string{"introduced", "behavior-activated", "worsened", "pre-existing", "base-only", "unknown"}) {
+		t.Fatalf("last-event causal dispositions = %v, want canonical wire spellings", dispositions)
+	}
 
 	for _, name := range []string{"start.schema.json", "start-v4.schema.json", "status-v5.schema.json"} {
 		defs := reviewSchemaObject(t, documents[name]["$defs"], name+" $defs")
@@ -173,6 +187,11 @@ func TestV2TransitionSchemasAcceptProviderPayloadsAndRejectDrift(t *testing.T) {
 	}
 	statusV7Schema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
 	validatePublishedReviewSchema(t, statusV7Schema, statusOutput.Bytes())
+	statusDocument := decodeJSONObjectCopy(t, statusOutput.Bytes())
+	statusDocument["escalation"] = map[string]any{"cause": "unresolved_severe_findings", "finding_ids": []any{}}
+	if err := statusV7Schema.Validate(statusDocument); err == nil {
+		t.Fatal("status-v7 schema accepted escalation on approved authority")
+	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
 	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.ReasonCode != "approved_acknowledgement_required" {

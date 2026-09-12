@@ -327,10 +327,10 @@ func TestSelectorlessCommittedCorrectionClosesOnTargetedValidation(t *testing.T)
 			}
 			request := status.ValidationRequest
 			previous := reviewProviderRoleHostAdapter
-			reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+			reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 				return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 					return providerTargetedValidationPayload(t, *request), nil
-				})
+				}), nil
 			}
 			t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 			var terminalOutput bytes.Buffer
@@ -389,10 +389,10 @@ func TestStagedCorrectionClosesOnTargetedValidation(t *testing.T) {
 	}
 	request := status.ValidationRequest
 	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, *request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	var terminalOutput bytes.Buffer

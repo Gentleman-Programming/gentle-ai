@@ -24,7 +24,8 @@ Native `gentle-ai.sdd-status/v2` is the sole status contract. A request for v1 o
 - When `sdd-attempt status` carries a `gentle-ai.sdd-integration.consent/v1` consent block, the ledger is ASKING, not reporting. Treat it as a Lossless Blocking Prompt: relay the complete envelope in order, preserve answer tokens and invocations, and never answer on their behalf. In a non-interactive runtime, emit the complete envelope and STOP. Attempts that never ran the work are not evidence about the candidate.
 - For every store, treat native status JSON as authoritative over prompt inference or manually reconstructed state.
 - When `blockedReasons` is non-empty, do not proceed to terminal, archive, or apply work. Return or report `blockedReasons` and stop unless `nextRecommended` is `verify`, in which case verification may run only to remediate or refresh evidence for the blockers. When `nextRecommended` is `resolve-blockers`, always report `blockedReasons` and stop. When `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase — missing planning artifacts are the expected output of those phases, not genuine blockers.
-- `nextRecommended` is a bounded machine token for routing, not human prose. Route only by `nextRecommended` and dependency states. Human-readable explanation belongs in `blockedReasons`.
+- `notes` is a separate, always-present array of informational diagnostics. A non-empty `notes` NEVER blocks anything: never withhold apply, sync, archive, or a terminal route because a note is present, and never read a note as a blocker. Report notes next to the route you report, so a human sees a future authority need before reaching it. `blockedReasons` stays reserved for genuine blockers, so the gate above reads `blockedReasons` alone.
+- `nextRecommended` is a bounded machine token for routing, not human prose. Route only by `nextRecommended` and dependency states. A genuine blocker's human-readable explanation belongs in `blockedReasons`; a non-blocking explanation belongs in `notes`.
 - If the binary is unavailable, fall back to this prompt contract and the manual status schema below. Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON even when values are reconstructed manually.
 
 ## Status Schema
@@ -101,11 +102,12 @@ phaseInstructions:
   archive: [<instruction strings>]
 nextRecommended: propose | spec | design | tasks | apply | verify | remediate | archive | sdd-new | select-change | resolve-blockers
 blockedReasons: []
+notes: []
 ```
 
 `reviewOffer` is optional and appears only after strict independent verification passes while review mode is enabled. It is a fresh mode-only offer with exactly `available` and `invocation`; it carries no lineage, receipt, binding, successor, gate, transaction, or previous review result. Disabled review mode is structural absence. Repeated status reads may present the same fresh offer and no offered, declined, burned, or historical authority changes archive readiness.
 
-`phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `consent` is structurally absent everywhere except an OpenSpec-backed native status that reports `blocked(edit_authority_missing)`; manual fallback MUST NOT reconstruct it. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other non-optional sections should be present in fallback output so consumers can parse native and manual status the same way.
+`phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `consent` is structurally absent everywhere except an OpenSpec-backed native status that reports `blocked(edit_authority_missing)`; manual fallback MUST NOT reconstruct it. Empty path fields MUST be arrays, not null. `blockedReasons` and `notes` are always arrays as well, both `[]` rather than null when empty. `changeName` and `changeRoot` are nullable; all other non-optional sections should be present in fallback output so consumers can parse native and manual status the same way.
 
 ## Apply State
 
@@ -139,6 +141,7 @@ A change whose tasks.md work units target paths outside `allowedEditRoots` never
 
 - Detection is conservative prose inspection: backticked path-like tokens inside markdown checkbox lines that resolve to a path outside the authorized roots. A different repository is named by its Git root; a same-repository target is narrowed to its containing edit root; a directory in no Git repository is named as itself. A backticked path immediately followed by `(read-only)` (case-insensitive) is a read-only input and not an edit target; the marker annotates only the path it follows, so an unmarked path on the same line still counts.
 - An OpenSpec-backed native status that reports `blocked(edit_authority_missing)` also carries the typed `gentle-ai.sdd-integration.consent/v1` envelope as the optional `consent` block: headline, reason, `value`, the missing roots as evidence, exactly two choices with answer tokens `granted` and `declined` (each with label, effect, and an exact invocation), and an off-path note.
+- A later work unit's own unauthorized root does NOT block the current work unit. It is reported as a `note(future_edit_roots)` entry in `notes` naming that future root, so the current unit's `applyState` stays `ready` and `blockedReasons` stays empty until that work unit is reached.
 - Answer flow: the orchestrator relays the COMPLETE envelope losslessly as a blocking prompt. Only on the human's explicit `granted` answer does the agent execute the envelope's named grant invocation, verbatim and exactly once, then re-enter through native status. The agent NEVER runs the grant unprompted and NEVER answers on the human's behalf.
 - Decline stays blocked: the agent runs the envelope's decline invocation, nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the reason names all three exits.
 
@@ -151,3 +154,4 @@ Every command that acts on a change MUST show status before launching an executo
 - Task progress and unchecked task list when tasks exist.
 - Next recommended action.
 - `blockedReasons` whenever it is non-empty, including a `verify` route that must refresh stale or post-remediation evidence, plus any edit-root blockers.
+- `notes` whenever it is non-empty, labeled as informational and explicitly not a blocker.

@@ -87,10 +87,19 @@ func TestReadOnlyMarkerIsTokenScoped(t *testing.T) {
 	if status.ApplyState != ApplyBlocked || !strings.Contains(reasons, "blocked(edit_authority_missing)") {
 		t.Fatalf("mixed line with an unmarked write target did not block: applyState = %q, blockedReasons = %v", status.ApplyState, status.BlockedReasons)
 	}
-	for _, root := range []string{realPath(t, serviceB), realPath(t, serviceC)} {
-		if !strings.Contains(reasons, root) {
-			t.Fatalf("blocked reason does not name the unmarked target root %s: %s", root, reasons)
-		}
+	if !strings.Contains(reasons, realPath(t, serviceC)) {
+		t.Fatalf("blocked reason does not name the unmarked write target root %s: %s", realPath(t, serviceC), reasons)
+	}
+	// service-b is named only by the later work unit, whose misplaced marker
+	// annotates nothing. That root is a real future authority need, so it must
+	// stay visible — on the informational notes channel, never as a blocker for
+	// the current unit (#4372).
+	if strings.Contains(reasons, realPath(t, serviceB)) {
+		t.Fatalf("a future work unit's root was reported as a current blocker: %s", reasons)
+	}
+	notes := strings.Join(status.Notes, "\n")
+	if !strings.Contains(notes, realPath(t, serviceB)) {
+		t.Fatalf("notes do not name the later work unit's unmarked root %s: %v", realPath(t, serviceB), status.Notes)
 	}
 }
 

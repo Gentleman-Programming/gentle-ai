@@ -19,7 +19,8 @@
     "eligibility": {"$ref": "status-v5.schema.json#/properties/eligibility"}, "forecast": {"$ref": "status-v5.schema.json#/properties/forecast"},
     "next_transition": {"$ref": "#/$defs/next_transition"}, "validation_request": {"$ref": "status-v5.schema.json#/properties/validation_request"},
     "repository_context": {"$ref": "status-v5.schema.json#/properties/repository_context"}, "disposition": {"$ref": "status-v5.schema.json#/properties/disposition"},
-    "eligible_untracked_inventory": {"$ref": "status-v5.schema.json#/$defs/sha256"}
+    "eligible_untracked_inventory": {"$ref": "status-v5.schema.json#/$defs/sha256"},
+    "escalation": {"$ref": "last-event-closure.schema.json#/properties/escalation"}
   },
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
@@ -93,6 +94,7 @@
   "allOf": [
     {"$ref": "status-v5.schema.json#/allOf/0"}, {"$ref": "status-v5.schema.json#/allOf/1"},
     {"$ref": "status-v5.schema.json#/allOf/2"}, {"$ref": "status-v5.schema.json#/allOf/3"},
-    {"$ref": "status-v5.schema.json#/allOf/4"}
+    {"$ref": "status-v5.schema.json#/allOf/4"},
+    {"if": {"properties": {"authority": {"properties": {"version": {"const": "compact-v2"}, "state": {"const": "escalated"}}, "required": ["version", "state"]}}, "required": ["authority"]}, "then": {"required": ["escalation"]}, "else": {"not": {"required": ["escalation"]}}}
   ]
 }

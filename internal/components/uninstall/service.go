@@ -15,6 +15,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
@@ -23,6 +24,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
@@ -39,13 +41,15 @@ type Snapshotter interface {
 }
 
 type Result struct {
-	Manifest               backup.Manifest
-	BackupPath             string
-	ChangedFiles           []string
-	RemovedFiles           []string
-	RemovedDirectories     []string
-	ManualActions          []string
-	AgentsRemovedFromState []model.AgentID
+	Manifest                         backup.Manifest
+	BackupPath                       string
+	ChangedFiles                     []string
+	RemovedFiles                     []string
+	RemovedDirectories               []string
+	RetainedPiResources              []string
+	OptionalPiPackageCleanupCommands []string
+	ManualActions                    []string
+	AgentsRemovedFromState           []model.AgentID
 	// FailedAgents lists the agents whose cleanup did not complete. They are
 	// deliberately left in state.json so the recorded state keeps matching the
 	// disk, and each one is named in ManualActions with the command that
@@ -510,6 +514,15 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 		}
 	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
+		adapter, _ := s.registry.Get(model.AgentOpenCode)
+		configDir := adapter.GlobalConfigDir(s.homeDir)
+		if err := telemetryruntime.CheckManaged(configDir); err != nil {
+			return plan{}, err
+		}
+		for _, op := range removeOwnedTelemetryRuntime(configDir) {
+			backupTargets[op.path] = struct{}{}
+			operationsByKey[operationKey(op)] = op
+		}
 		for _, path := range opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS) {
 			backupTargets[path] = struct{}{}
 			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
@@ -623,6 +636,11 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
+	if slices.Contains(agentsToRemove, model.AgentPi) {
+		result.RetainedPiResources = retainedPiResources(s.homeDir, s.workspaceDir)
+		result.OptionalPiPackageCleanupCommands = optionalPiPackageCleanupCommands()
+	}
+
 	result.FailedAgents = failedAgents(failures, agentsToRemove)
 	result.ManualActions = append(result.ManualActions, failureManualActions(failures, agentsToRemove, s.homeDir)...)
 
@@ -727,6 +745,42 @@ func firstOrEmpty(items []string) string {
 		return ""
 	}
 	return items[0]
+}
+
+// retainedPiResources returns existing Pi-owned runtime and configuration paths
+// that gentle-ai deliberately leaves intact because they can be shared with Pi,
+// gentle-pi packages, or user-managed configuration.
+func retainedPiResources(homeDir, workspaceDir string) []string {
+	paths := []string{
+		filepath.Join(homeDir, ".pi", "agent", "agents"),
+		filepath.Join(homeDir, ".pi", "agent", "chains"),
+		filepath.Join(homeDir, ".pi", "agent", "gentle-ai"),
+		filepath.Join(homeDir, ".pi", "agent", "subagents.json"),
+		filepath.Join(homeDir, ".pi", "gentle-ai"),
+	}
+	if workspaceDir != "" {
+		paths = append(paths, filepath.Join(workspaceDir, ".pi", "gentle-ai"))
+	}
+
+	retained := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, err := os.Lstat(path); err == nil || !os.IsNotExist(err) {
+			retained = append(retained, path)
+		}
+	}
+	return retained
+}
+
+// optionalPiPackageCleanupCommands mirrors the Pi adapter's canonical package
+// sources. Each command remains separate because Pi 0.85.1 supports
+// `pi remove <source>`, not a bulk remove form.
+func optionalPiPackageCleanupCommands() []string {
+	sources := pi.ManagedPackageSources()
+	commands := make([]string, 0, len(sources))
+	for _, source := range sources {
+		commands = append(commands, "pi remove "+source)
+	}
+	return commands
 }
 
 func manualActionForNonEmptyDirectory(path string) (string, bool) {
@@ -850,6 +904,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeDirIfEmpty(filepath.Dir(paths[0])))
 		}
 	case model.ComponentOpenCodeGentleLogo:
+		if adapter.Agent() != model.AgentOpenCode {
+			break
+		}
 		pluginPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
 		targets = append(targets, pluginPath)
 		ops = append(ops, removeFile(pluginPath), removeDirIfEmpty(filepath.Dir(pluginPath)))
@@ -1302,7 +1359,7 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 		return raw, false, nil
 	}
 	changed := false
-	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
+	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop"} {
 		entries, ok := hooksMap[hookKey].([]any)
 		if !ok {
 			continue
@@ -1323,7 +1380,7 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 			for _, hook := range hooks {
 				hookMap, ok := hook.(map[string]any)
 				cmd, _ := hookMap["command"].(string)
-				if ok && (strings.Contains(cmd, "gentle-ai skill-registry refresh") || strings.Contains(cmd, "gentle-ai review stop-hook")) {
+				if ok && (strings.Contains(cmd, "gentle-ai skill-registry refresh") || strings.Contains(cmd, "gentle-ai review stop-hook") || cmd == "gentle-ai telemetry runtime claude --json" || cmd == "gentle-ai telemetry runtime codex --json") {
 					changed = true
 					continue
 				}
@@ -1672,6 +1729,29 @@ func globalBackupTargets(homeDir string) []string {
 		gga.ConfigPath(homeDir),
 		gga.AgentsTemplatePath(homeDir),
 	}
+}
+
+// One transactional removal of the pair, projected as two file results for the
+// existing uninstall reporter. Validation happens at execution, not plan time.
+func removeOwnedTelemetryRuntime(configDir string) []operation {
+	var attempted bool
+	var removed []string
+	var err error
+	var operations []operation
+	for _, path := range telemetryruntime.ManagedPaths(configDir) {
+		operations = append(operations, operation{
+			typeID: opRemoveFile, path: path, agents: []model.AgentID{model.AgentOpenCode},
+			apply: func(path string) (bool, bool, error) {
+				if !attempted {
+					attempted = true
+					removed, err = telemetryruntime.RemoveManaged(configDir)
+				}
+				changed := slices.Contains(removed, path)
+				return changed, changed, err
+			},
+		})
+	}
+	return operations
 }
 
 func removeOwnedOpenCodeLauncher(path string) operation {

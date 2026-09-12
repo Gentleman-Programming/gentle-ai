@@ -250,10 +250,10 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return failedPayload, nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	if err := RunReviewCaptureValidation([]string{
@@ -327,10 +327,10 @@ func escalatedBaseDiffRecoveryFixture(t *testing.T, repo, lineage, baseRef strin
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return failedPayload, nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	if err := RunReviewCaptureValidation([]string{

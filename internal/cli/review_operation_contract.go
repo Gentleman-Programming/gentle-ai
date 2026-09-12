@@ -8,7 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -189,9 +193,12 @@ type ReviewIntegrationFailure struct {
 
 // ReviewManagedAssetsContinuation names the sync invocation that resolves a
 // managed_assets_outdated refusal without abandoning the frozen candidate.
-// Command is the exact, literally runnable command line, bound to the same
-// runtime agent the blocked operation was asked for; StaleAssets carries the
-// stale recorded digest when it is known.
+// Command is the literally runnable command line, bound to the same runtime
+// agent the blocked operation was asked for. When this process can identify its
+// executable, the token is anchored to that binary (#4434). The final bare
+// `gentle-ai` compatibility fallback is not an exact executable identity and
+// may resolve through PATH. StaleAssets carries the stale recorded digest when
+// it is known.
 type ReviewManagedAssetsContinuation struct {
 	Operation   string   `json:"operation"`
 	Command     string   `json:"command"`
@@ -199,16 +206,100 @@ type ReviewManagedAssetsContinuation struct {
 	StaleAssets []string `json:"stale_assets,omitempty"`
 }
 
+// managedAssetsContinuationCommandPattern is the executable-identity half of
+// the published managed_assets_continuation `command` contract (failure.schema
+// .json carries the same regex). The executable token is either the bare
+// `gentle-ai` fallback, an unquoted path, or one of the two shell quoting forms
+// the renderer picks per platform -- POSIX single quotes (the only form no
+// POSIX shell expands) or Windows double quotes (cmd.exe command syntax) --
+// followed by `sync` and an optional `--agent <id>`. Keeping the JSON schema
+// and this Go mirror in one shape is what lets Validate() enforce the same
+// contract the published schema does. The pattern governs structure; the safe
+// choice of form for a given path is managedAssetsExecutableToken's job.
+const managedAssetsContinuationCommandPattern = `^(?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'\\'')*') sync(?: --agent \S+)?$`
+
+// managedAssetsBareExecutablePattern is the conservative allowlist of path
+// characters that are safe unquoted in every shell that may run the
+// continuation. An allowlist rather than a blacklist: a character outside it
+// (whitespace, $, backtick, quotes, globs, separators) always forces quoting,
+// so safety never depends on enumerating the metacharacter set of every shell
+// in existence.
+const managedAssetsBareExecutableClass = `[A-Za-z0-9/._+=@:,-]+`
+
+var managedAssetsBareExecutable = regexp.MustCompile(`^` + managedAssetsBareExecutableClass + `$`)
+
+// reviewManagedAssetsExecutablePath resolves the binary that would diagnose a
+// managed-asset skew, so its continuation can be anchored to it. Var
+// indirection keeps the resolution stubbable in tests.
+var reviewManagedAssetsExecutablePath = os.Executable
+
+// reviewManagedAssetsGOOS selects the quoting form for a path that needs it:
+// the invoking binary knows the platform the continuation will run on. Var
+// indirection keeps it stubbable in tests.
+var reviewManagedAssetsGOOS = runtime.GOOS
+
+// managedAssetsExecutableToken renders one executable path as a command-line
+// token using one exact platform-specific encoding (#4434): POSIX platforms
+// quote with single quotes, which no POSIX shell expands ($ and backticks
+// expand even inside double quotes); Windows quotes with double quotes, the
+// command syntax cmd.exe accepts, because cmd.exe does not treat single
+// quotes as command syntax. A path over the safe bare class stays bare and
+// runs as printed in every shell. Caveat: PowerShell requires the call
+// operator for a leading quoted token (`& "C:\..." sync ...`), so the quoted
+// Windows form is the cmd.exe contract, not a paste-and-run PowerShell one;
+// machine relays that spawn the anchored executable directly, and bare
+// tokens, are unaffected.
+func managedAssetsExecutableToken(path string) string {
+	if managedAssetsBareExecutable.MatchString(path) {
+		return path
+	}
+	if reviewManagedAssetsGOOS == "windows" {
+		return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
+	}
+	// The standard POSIX idiom for an embedded single quote: close the quoted
+	// span, emit an escaped quote, reopen the span.
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// managedAssetsContinuationExecutable resolves the executable identity the
+// continuation is anchored to. os.Executable is authoritative when it returns
+// a safe single-line path; an absolute argv[0] is the bounded fallback for
+// hosts where that lookup fails. The final bare `gentle-ai` fallback retains legacy
+// recovery behavior but is intentionally not presented as an exact identity.
+func managedAssetsContinuationExecutable() string {
+	if path, err := reviewManagedAssetsExecutablePath(); err == nil && managedAssetsExecutableIdentity(path) {
+		return managedAssetsExecutableToken(path)
+	}
+	if len(os.Args) > 0 && managedAssetsArgvZeroIdentity(os.Args[0]) {
+		return managedAssetsExecutableToken(os.Args[0])
+	}
+	return "gentle-ai"
+}
+
+// managedAssetsExecutableIdentity accepts os.Executable's resolved identity
+// only when it is non-empty and single-line. In particular, a CR or LF must not
+// reach either quoting renderer, because continuation commands are always one line.
+func managedAssetsExecutableIdentity(path string) bool {
+	return path != "" && !strings.ContainsAny(path, "\r\n")
+}
+
+// managedAssetsArgvZeroIdentity is narrower than the os.Executable path: an
+// unqualified argv[0] may be a PATH command, not this process's exact identity.
+func managedAssetsArgvZeroIdentity(path string) bool {
+	return managedAssetsExecutableIdentity(path) && filepath.IsAbs(path)
+}
+
 // managedAssetsContinuation builds the one continuation a
-// managed_assets_outdated refusal can offer: the exact `gentle-ai sync`
-// invocation, bound to the runtime agent the blocked STATUS or START was
-// asked for. An empty agent (no runtime declared) produces the bare command
-// instead of guessing one.
+// managed_assets_outdated refusal can offer: the exact `sync` invocation,
+// anchored to the invoking executable (#4434) and bound to the runtime agent
+// the blocked STATUS or START was asked for. An empty agent (no runtime
+// declared) produces the command without one instead of guessing it.
 func managedAssetsContinuation(agent string, staleAssets []string) *ReviewManagedAssetsContinuation {
 	agent = strings.TrimSpace(agent)
-	command := "gentle-ai sync"
+	executable := managedAssetsContinuationExecutable()
+	command := executable + " sync"
 	if agent != "" {
-		command = fmt.Sprintf("gentle-ai sync --agent %s", agent)
+		command = executable + " sync --agent " + agent
 	}
 	continuation := &ReviewManagedAssetsContinuation{Operation: "sync", Command: command, Agent: agent}
 	if len(staleAssets) > 0 {
@@ -1344,10 +1435,39 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		return errors.New("managed_assets_outdated failures must carry exactly the sync continuation") // refusal:by-design world-action: a producer that pairs this code with no continuation, or attaches one to any other code, built a malformed envelope and requires a code fix, not an operator command
 	}
 	if continuation := failure.Continuation; continuation != nil {
-		if continuation.Operation != "sync" || strings.TrimSpace(continuation.Command) == "" ||
-			!strings.HasPrefix(continuation.Command, "gentle-ai sync") {
-			return errors.New("invalid negotiated review failure continuation") // refusal:by-design world-action: a continuation whose command does not start with `gentle-ai sync` was built wrong; only a code fix produces a valid one
+		if err := validateManagedAssetsContinuation(continuation); err != nil {
+			return errors.New("invalid negotiated review failure continuation") // refusal:by-design world-action: a continuation whose command is not an executable-anchored `sync` invocation was built wrong; only a code fix produces a valid one
 		}
+	}
+	return nil
+}
+
+// validManagedAssetsContinuationCommand reports whether one rendered
+// continuation command satisfies the published managed_assets_continuation
+// pattern: the bare `gentle-ai` fallback or an invoking-executable path --
+// quoted when it contains whitespace -- followed by `sync` and an optional
+// `--agent <id>` (#4434).
+func validManagedAssetsContinuationCommand(command string) bool {
+	if strings.ContainsAny(command, "\r\n") {
+		return false
+	}
+	matched, err := regexp.MatchString(managedAssetsContinuationCommandPattern, command)
+	return err == nil && matched
+}
+
+// validateManagedAssetsContinuation is the shared strict contract for the
+// managed-assets continuation emitted by FAILURE and STATUS. Its command and
+// structured agent must describe the same single sync invocation.
+func validateManagedAssetsContinuation(continuation *ReviewManagedAssetsContinuation) error {
+	if continuation == nil || continuation.Operation != "sync" || !validManagedAssetsContinuationCommand(continuation.Command) {
+		return errors.New("invalid managed-assets continuation command") // refusal:by-design world-action: a malformed provider continuation is a construction bug; only corrected producer code can emit a valid command
+	}
+	expectedSuffix := " sync"
+	if continuation.Agent != "" {
+		expectedSuffix += " --agent " + continuation.Agent
+	}
+	if !strings.HasSuffix(continuation.Command, expectedSuffix) {
+		return errors.New("managed-assets continuation command and agent differ") // refusal:by-design world-action: mismatched provider fields are a construction bug; only corrected producer code can bind the command to its agent
 	}
 	return nil
 }

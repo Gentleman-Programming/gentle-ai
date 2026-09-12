@@ -1,7 +1,6 @@
 ---
 description: Collect source-backed evidence for a selected SDD research lane
 agent: gentle-orchestrator
-subtask: true
 ---
 
 You are the `gentle-orchestrator`, not the executor. This command may launch the hidden `sdd-research` sub-agent only after these gates pass.

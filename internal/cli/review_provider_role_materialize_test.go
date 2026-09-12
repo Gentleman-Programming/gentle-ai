@@ -139,7 +139,7 @@ func overrideProviderRoleHostAdapter(t *testing.T, adapter reviewerprovider.Adap
 	t.Helper()
 	previous := reviewProviderRoleHostAdapter
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter { return adapter }
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) { return adapter, nil }
 }
 
 type controlledDeadlineContext struct {
@@ -220,9 +220,10 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *test
 	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--execute=true"), io.Discard); err == nil || !strings.Contains(err.Error(), "requires --agent") {
 		t.Fatalf("agent-free refuter execution refusal = %v", err)
 	}
-	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
+	execute := append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--execute=true")
+	assertRoutedPiCapture(t, repo, reviewerprovider.RoleRefuter, piRefuterRawResult(t, repo, store, record), execute)
 	var output bytes.Buffer
-	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--execute=true"), &output); err != nil {
+	if err := RunReview(execute, &output); err != nil {
 		t.Fatal(err)
 	}
 	var terminal reviewLastEventClosureResult
@@ -601,11 +602,11 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 
 	// Execution: the rendered vector spawns the Go-owned pi transport and the
 	// raw bytes close the bounded correction on their terminal capture.
-	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: providerTargetedValidationPayload(t, request)})
 	execute := []string{"capture-validation", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
 		execute = append(execute, argument.Token)
 	}
+	assertRoutedPiCapture(t, repo, reviewerprovider.RoleTargetedValidator, providerTargetedValidationPayload(t, request), execute)
 	var captured bytes.Buffer
 	if err := RunReview(execute, &captured); err != nil {
 		t.Fatal(err)

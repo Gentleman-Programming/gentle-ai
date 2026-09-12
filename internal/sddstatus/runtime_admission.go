@@ -24,17 +24,24 @@ type runtimeBeginAdmissionResult struct {
 // successor has no attempt of its own yet, so its predecessor's recorded
 // selection is the sole inventory-validated scope that can reproduce it.
 func runtimeRescopeSuccessorIntendedUntracked(status RuntimeStatus) ([]string, bool) {
-	if status.Objective == nil || status.ActiveAttempt != nil || status.LastRescope == nil ||
-		status.LastRescope.ObjectiveID != status.Objective.ID || runtimeObjectiveHasRecordedAttempt(status) ||
-		len(status.Attempts) == 0 {
+	if status.Objective == nil || status.ActiveAttempt != nil || runtimeObjectiveHasRecordedAttempt(status) || len(status.Attempts) == 0 {
 		return nil, false
 	}
-	if status.LastRescope.IntendedUntracked != nil {
-		return slices.Clone(*status.LastRescope.IntendedUntracked), true
+	objectiveID, predecessorID, predecessorGeneration := "", "", 0
+	var intended *[]string
+	if status.LastRescope != nil && status.LastRescope.ObjectiveID == status.Objective.ID {
+		objectiveID, predecessorID, predecessorGeneration, intended = status.LastRescope.ObjectiveID, status.LastRescope.PreviousObjectiveID, status.LastRescope.PreviousGeneration, status.LastRescope.IntendedUntracked
+	} else if status.LastSupersede != nil && status.LastSupersede.ObjectiveID == status.Objective.ID {
+		objectiveID, predecessorID, predecessorGeneration, intended = status.LastSupersede.ObjectiveID, status.LastSupersede.PreviousObjectiveID, status.LastSupersede.PreviousGeneration, status.LastSupersede.IntendedUntracked
+	}
+	if objectiveID != status.Objective.ID {
+		return nil, false
+	}
+	if intended != nil {
+		return slices.Clone(*intended), true
 	}
 	predecessor := status.Attempts[len(status.Attempts)-1]
-	if predecessor.ObjectiveID != status.LastRescope.PreviousObjectiveID ||
-		predecessor.ObjectiveGeneration != status.LastRescope.PreviousGeneration ||
+	if predecessor.ObjectiveID != predecessorID || predecessor.ObjectiveGeneration != predecessorGeneration ||
 		predecessor.Outcome == AttemptRunning {
 		return nil, false
 	}
@@ -100,7 +107,7 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		// Finish is the candidate provenance to chase.
 		generation = status.Objective.Generation
 		if runtimeObjectiveScopeChanged(status, request) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 		last := status.Attempts[len(status.Attempts)-1]
 		if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
@@ -119,10 +126,10 @@ func (store RuntimeStore) runtimeBeginAdmission(
 			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree, intended)
 		}
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 		if err == nil && !slices.Equal(request.IntendedUntracked, last.IntendedUntracked) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 	case status.Objective != nil && !advancing:
 		// A freshly opened objective (Rescope) with no attempt recorded
@@ -137,11 +144,11 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		// #2296 part 2's landmine) and wrongly refuse.
 		generation = status.Objective.Generation
 		if runtimeObjectiveScopeChanged(status, request) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)
 		if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
-			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status, request)
 		}
 	default:
 		snapshot, err = captureRuntimeCandidate(ctx, store.Repo, request.IntendedUntracked)

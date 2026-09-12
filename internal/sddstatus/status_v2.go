@@ -32,6 +32,7 @@ type StatusV2Projection struct {
 	PhaseInstructions *phaseInstructionsV2         `json:"phaseInstructions,omitempty"`
 	NextRecommended   string                       `json:"nextRecommended"`
 	BlockedReasons    []string                     `json:"blockedReasons"`
+	Notes             []string                     `json:"notes"`
 }
 
 type planningHomeV2 struct {
@@ -140,6 +141,7 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 		Archived:        status.Archived,
 		NextRecommended: status.NextRecommended,
 		BlockedReasons:  status.BlockedReasons,
+		Notes:           status.Notes,
 	}
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV2{

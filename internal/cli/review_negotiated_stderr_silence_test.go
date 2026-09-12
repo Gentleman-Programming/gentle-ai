@@ -242,7 +242,10 @@ func TestNegotiatedStartUndeclaredInteractiveKeepsConsentCeremony(t *testing.T) 
 	if !errors.Is(err, errReviewDeclinedForCandidate) {
 		t.Fatalf("interactive negotiated refusal = %v, want errReviewDeclinedForCandidate\n%s", err, output.String())
 	}
-	assertReviewConsentPrompt(t, console.String(), "scripts/deploy.sh")
+	prompt := assertReviewConsentPrompt(t, console.String(), "Review can help detect execution issues in these changes.")
+	if !bytes.Contains([]byte(prompt), []byte("Gentle AI can review this change before you call it done.")) {
+		t.Fatalf("interactive consent prompt lost its question: %q", prompt)
+	}
 }
 
 // TestNegotiatedStartUndeclaredAskedLatchProceedsSilently proves the machine

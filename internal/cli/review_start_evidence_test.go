@@ -36,8 +36,8 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 	if !reflect.DeepEqual(started.RiskEvidence, want) {
 		t.Fatalf("start risk_evidence = %#v, want %#v", started.RiskEvidence, want)
 	}
-	// Prompt parity: the phrases must be exactly what the interactive consent
-	// prompt would say for the same assessed candidate, from the same helper.
+	// Detailed evidence remains in risk_evidence; the prompt uses the same brief
+	// generic reason as the relay without exposing the evidence path.
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
@@ -58,10 +58,8 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 			started.RiskEvidence, reviewConsentEvidencePhrases(assessment.Reasons))
 	}
 	prompt := reviewConsentPrompt(assessment)
-	for _, phrase := range started.RiskEvidence {
-		if !strings.Contains(prompt, phrase) {
-			t.Fatalf("interactive consent prompt %q does not speak phrase %q", prompt, phrase)
-		}
+	if !strings.Contains(prompt, reviewConsentReason(assessment)) || strings.Contains(prompt, "service-token.ts") {
+		t.Fatalf("interactive consent prompt did not keep generic reason separate from evidence: %q", prompt)
 	}
 }
 
@@ -92,8 +90,8 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 	if !reflect.DeepEqual(started.RiskEvidence[1:], []string{want}) {
 		t.Fatalf("medium start risk_evidence = %#v, want the evidence phrase %q after the reason", started.RiskEvidence, want)
 	}
-	// Prompt parity: every phrase the START result carries must be spoken by
-	// the interactive consent prompt for the same assessed candidate.
+	// The prompt keeps the generic reason separate while the START result keeps
+	// the detailed evidence available to a relay.
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
@@ -110,10 +108,8 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := reviewConsentPrompt(assessment)
-	for _, phrase := range started.RiskEvidence {
-		if !strings.Contains(prompt, phrase) {
-			t.Fatalf("interactive consent prompt %q does not speak phrase %q", prompt, phrase)
-		}
+	if !strings.Contains(prompt, reviewConsentReason(assessment)) || strings.Contains(prompt, "view.go") {
+		t.Fatalf("interactive consent prompt did not keep generic reason separate from evidence: %q", prompt)
 	}
 }
 
@@ -134,12 +130,11 @@ func TestReviewConsentRiskEvidenceMediumNamesEvidencePath(t *testing.T) {
 		t.Fatalf("medium risk_evidence = %#v, want %#v", got, want)
 	}
 
-	// The interactive Why line speaks the same facts from the same helpers.
-	reason := reviewConsentReason(assessment)
-	for _, phrase := range want {
-		if !strings.Contains(reason, phrase) {
-			t.Fatalf("consent reason %q does not speak phrase %q", reason, phrase)
-		}
+	// The interactive Why line is intentionally generic; detailed evidence stays
+	// in risk_evidence for relays that need it.
+	if reason := reviewConsentReason(assessment); reason != "Review can help detect regressions in these changes." ||
+		strings.Contains(reason, "internal/counter/counter.go") {
+		t.Fatalf("consent reason did not stay generic and path-free: %q", reason)
 	}
 }
 
@@ -153,8 +148,8 @@ func TestReviewConsentRiskEvidenceMediumWithoutSpeakableReasonsStaysSingle(t *te
 	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
 		t.Fatalf("medium risk_evidence without speakable reasons = %#v, want %#v", got, want)
 	}
-	if reason := reviewConsentReason(assessment); reason != reviewConsentMediumReason {
-		t.Fatalf("consent reason without speakable reasons = %q, want %q", reason, reviewConsentMediumReason)
+	if reason := reviewConsentReason(assessment); reason != "Review can help detect regressions in these changes." {
+		t.Fatalf("consent reason without specific signals = %q", reason)
 	}
 }
 
@@ -171,6 +166,81 @@ func TestReviewConsentRiskEvidenceHighTierUnchanged(t *testing.T) {
 	want := []string{"service credentials in service-token.ts"}
 	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
 		t.Fatalf("high risk_evidence = %#v, want %#v", got, want)
+	}
+}
+
+func TestReviewConsentReasonUsesAuthoritativeRiskSignals(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		level   reviewtransaction.RiskLevel
+		reasons []reviewtransaction.RiskReason
+		english string
+		spanish string
+	}{
+		{
+			name: "security signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalSecurity, Path: "security.go"}},
+			english: "Review can help identify potential security issues.",
+			spanish: "La revisión puede ayudar a identificar posibles problemas de seguridad.",
+		},
+		{
+			name: "execution signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonShellSource, Signal: reviewtransaction.SignalShellProcess, Path: "scripts/deploy.sh"}},
+			english: "Review can help detect execution issues in these changes.",
+			spanish: "La revisión puede ayudar a detectar problemas de ejecución en estos cambios.",
+		},
+		{
+			name: "update signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalUpdate, Path: "update.go"}},
+			english: "Review can help detect update-related issues.",
+			spanish: "La revisión puede ayudar a detectar problemas relacionados con las actualizaciones.",
+		},
+		{
+			name: "security takes precedence", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{
+				{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalUpdate, Path: "update.go"},
+				{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalSecurity, Path: "security.go"},
+			},
+			english: "Review can help identify potential security issues.",
+			spanish: "La revisión puede ayudar a identificar posibles problemas de seguridad.",
+		},
+		{
+			name: "no specific signal", level: reviewtransaction.RiskMedium,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonExecutableChange, Path: "internal/app.go"}},
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
+		},
+		{
+			name: "unsupported signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.RiskSignal("unsupported"), Path: "unknown.go"}},
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
+		},
+		{
+			name:    "high without evidence is not security",
+			level:   reviewtransaction.RiskHigh,
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assessment := reviewtransaction.RiskAssessment{Level: tt.level, Reasons: tt.reasons}
+			for locale, got := range map[string]string{
+				"English": reviewConsentReason(assessment),
+				"Spanish": reviewConsentSpanishReason(assessment),
+			} {
+				want := tt.english
+				if locale == "Spanish" {
+					want = tt.spanish
+				}
+				if got != want {
+					t.Fatalf("%s reason = %q, want %q", locale, got, want)
+				}
+				if len(strings.Fields(got)) > 25 || strings.Contains(got, ".go") || strings.Contains(got, ".sh") {
+					t.Fatalf("%s reason is not concise generic copy: %q", locale, got)
+				}
+			}
+		})
 	}
 }
 

@@ -103,13 +103,146 @@ func TestCompactAcquireRemediationIntentSurvivesAuditedReset(t *testing.T) {
 	}
 }
 
+// TestCompactAcquireRemediationIntentFailsFastBeforeBeginOnUnchangedCandidate
+// proves #4415's early boundary: an unchanged candidate cannot spend a new
+// remediation attempt before the later passing-settle guard would refuse it.
+// The refusal leaves the ledger untouched. A direct acquire after terminal
+// candidate drift remains maintainer-gated without mutation; only an audited
+// reset of that changed candidate admits the exact failed-evidence correction.
+func TestCompactAcquireRemediationIntentFailsFastBeforeBeginOnUnchangedCandidate(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, failedEvidence, failed := seedFailedVerificationLedger(t, repo, "intent-unchanged-baseline", 2)
+	before := countRuntimeRecords(t, store.Dir)
+
+	blocked, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "unchanged-acquire", WorkUnit: "verify",
+			EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+		},
+		RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.State != CompactStateBlocked || blocked.Reason != CompactBlockRemediationUnsatisfiable || blocked.Token != "" {
+		t.Fatalf("unchanged remediation-intent acquire = %#v, want blocked/%s without token", blocked, CompactBlockRemediationUnsatisfiable)
+	}
+	if !strings.Contains(blocked.Exit, "correct the candidate and reissue this acquire") || blocked.Detail != blocked.Exit {
+		t.Fatalf("unchanged remediation-intent exit = %#v, want the corrected-candidate continuation", blocked)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Revision != failed.Revision || status.ActiveAttempt != nil || countRuntimeRecords(t, store.Dir) != before {
+		t.Fatalf("unchanged remediation-intent acquire mutated the ledger: status=%#v records=%d want=%d", status, countRuntimeRecords(t, store.Dir), before)
+	}
+
+	appendRuntimeLedgerFile(t, repo, "bounded correction changes the candidate\n")
+	directBefore, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directBeforeRecords := countRuntimeRecords(t, store.Dir)
+	direct, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "changed-acquire-without-reset", WorkUnit: "verify",
+			EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+		},
+		RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directAfter, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if direct.State != CompactStateBlocked || direct.Reason != CompactBlockMaintainerDecision || direct.Token != "" ||
+		directAfter.Revision != directBefore.Revision || directAfter.ActiveAttempt != nil || countRuntimeRecords(t, store.Dir) != directBeforeRecords {
+		t.Fatalf("direct changed-candidate remediation acquire = %#v status=%#v records=%d, want maintainer decision without mutation", direct, directAfter, countRuntimeRecords(t, store.Dir))
+	}
+
+	const resetReason = "maintainer records the changed correction candidate before retry"
+	const resetActor = "maintainer"
+	reset, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: directAfter.Revision, RequestID: "changed-candidate-reset",
+		Reason: resetReason, Actor: resetActor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset.LastReset == nil || reset.LastReset.Revision != reset.Revision ||
+		reset.LastReset.Reason != resetReason || reset.LastReset.Actor != resetActor {
+		t.Fatalf("changed-candidate reset omitted audit context: %#v", reset.LastReset)
+	}
+	changed, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			ExpectedRevision: reset.Revision, RequestID: "changed-acquire", WorkUnit: "verify",
+			EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
+		},
+		RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.State != CompactStateProceed || changed.Token == "" {
+		t.Fatalf("changed remediation-intent acquire = %#v, want proceed with token after reset %s", changed, reset.Revision)
+	}
+}
+
+// TestCompactAcquireRemediationIntentSurvivesAuditedRescope keeps the other
+// evidence-only positive control at acquire: a rescope that records the failed
+// candidate with its actor and reason still authorizes one unchanged retry.
+func TestCompactAcquireRemediationIntentSurvivesAuditedRescope(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, failedEvidence, failed := seedFailedVerificationLedger(t, repo, "intent-after-rescope", 2)
+	failedObjective := *failed.Objective
+	failedTree := failed.Attempts[len(failed.Attempts)-1].FinishCandidateTree
+
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "intent-rescope",
+		WorkUnit: "narrowed remediation", EvidenceGoal: "independent verification",
+		MaxAttempts: 2, MaxChangedLines: 10,
+		Reason: "maintainer authorized evidence-only retry", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rescoped.LastRescope == nil || rescoped.LastRescope.PreviousObjectiveID != failedObjective.ID ||
+		rescoped.LastRescope.PreviousGeneration != failedObjective.Generation || rescoped.LastRescope.RescopeCandidateTree != failedTree {
+		t.Fatalf("audited rescope lost failed-candidate provenance: %#v", rescoped.LastRescope)
+	}
+
+	correction, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "rescope-acquire", WorkUnit: "narrowed remediation",
+			EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 10,
+		},
+		RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if correction.State != CompactStateProceed || correction.Token == "" {
+		t.Fatalf("post-rescope chain-bound remediation-intent acquire = %#v, want proceed", correction)
+	}
+}
+
 // TestCompactAcquireRemediationIntentStillIssuesTokenForDirectCorrection holds
-// the direct path end to end, then proves the anti-laundering fail-fast: once
-// the failure's one correction settled, a later acquire declaring the same
-// evidence is refused before issuing a token.
+// the corrected-candidate path end to end, then proves the anti-laundering
+// fail-fast: once the failure's one correction settled, a later acquire
+// declaring the same evidence is refused before issuing a token.
 func TestCompactAcquireRemediationIntentStillIssuesTokenForDirectCorrection(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	store, failedEvidence, _ := seedFailedVerificationLedger(t, repo, "intent-direct-correction", 2)
+	store, failedEvidence, failed := seedFailedVerificationLedger(t, repo, "intent-direct-correction", 2)
+	appendRuntimeLedgerFile(t, repo, "direct correction changes the candidate\n")
+	if _, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "direct-reset-before-correction",
+		Reason: "maintainer records the changed correction candidate", Actor: "maintainer",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	correction, err := store.Acquire(context.Background(), CompactAcquireRequest{
 		BeginAttemptRequest: BeginAttemptRequest{

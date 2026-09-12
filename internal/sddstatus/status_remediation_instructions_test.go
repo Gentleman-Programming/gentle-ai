@@ -81,9 +81,9 @@ func TestStatusKeepsPrescribingChainBoundRemediationAfterReset(t *testing.T) {
 // TestStatusRendersResetRouteWhileRemediationNeedsADecision covers the wedge
 // every #1974 occurrence reported: failed evidence with an exhausted budget is
 // decision-required, so an immediate correction acquire would return
-// blocked/maintainer_decision. Status renders the audited reset route with
-// the exact current revision, and names the chain binding the post-reset
-// acquire must declare.
+// blocked/maintainer_decision. Status names the status-and-audited-reset route
+// with the current revision for terminal candidate drift, and names the chain
+// binding the post-reset acquire must declare.
 func TestStatusRendersResetRouteWhileRemediationNeedsADecision(t *testing.T) {
 	const change = "decision-required-advice"
 	repo := initRuntimeLedgerRepo(t)
@@ -96,8 +96,12 @@ func TestStatusRendersResetRouteWhileRemediationNeedsADecision(t *testing.T) {
 	if strings.Contains(joined, "bounded correction attempt: run") {
 		t.Fatalf("decision-required status still prescribes the blocked correction acquire:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Remediation follows ordinary SDD failed-evidence accounting.") || strings.Contains(joined, "sdd-attempt reset") {
-		t.Fatalf("decision-required status did not keep remediation authority-free:\n%s", joined)
+	if !strings.Contains(joined, "Remediation follows ordinary SDD failed-evidence accounting.") ||
+		!strings.Contains(joined, "gentle-ai sdd-attempt status") ||
+		!strings.Contains(joined, "gentle-ai sdd-attempt reset") ||
+		!strings.Contains(joined, "--expected-revision <the revision that status prints>") ||
+		!strings.Contains(joined, "rescope` only when its narrower-successor contract applies") {
+		t.Fatalf("decision-required status did not name the audited candidate-drift reset route:\n%s", joined)
 	}
 	if !strings.Contains(joined, "--remediates-evidence-revision "+failedEvidence) {
 		t.Fatalf("decision-required status does not name the chain binding for the post-reset acquire:\n%s", joined)
@@ -125,6 +129,10 @@ func TestStatusStillPrescribesSatisfiableUnmanagedRemediation(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--max-changed-lines 20 --remediates-evidence-revision "+failedEvidence) {
 		t.Fatalf("satisfiable acquire prescription does not declare the remediation intent:\n%s", joined)
+	}
+	if !strings.Contains(joined, "After a terminal candidate drift, run status and then the audited reset above") ||
+		!strings.Contains(joined, "rescope only when its narrower-successor contract applies") {
+		t.Fatalf("satisfiable status does not name the candidate-drift continuation:\n%s", joined)
 	}
 }
 

@@ -88,6 +88,8 @@ func RenderUninstallReport(result componentuninstall.Result) string {
 	// printed further down under manual cleanup.
 	if len(result.FailedAgents) > 0 {
 		_, _ = fmt.Fprintf(&b, "Managed uninstall partially complete: %s failed\n", strings.Join(agentLabels(result.FailedAgents), ", "))
+	} else if len(result.RetainedPiResources) > 0 {
+		_, _ = fmt.Fprintln(&b, "Managed uninstall finished; Pi resources retained for review")
 	} else {
 		_, _ = fmt.Fprintln(&b, "Managed uninstall complete")
 	}
@@ -104,6 +106,8 @@ func RenderUninstallReport(result componentuninstall.Result) string {
 	appendPathSection(&b, "Rewritten files", result.ChangedFiles)
 	appendPathSection(&b, "Deleted files", result.RemovedFiles)
 	appendPathSection(&b, "Deleted directories", result.RemovedDirectories)
+	appendPathSection(&b, "Retained Pi resources (not deleted)", result.RetainedPiResources)
+	appendOptionalPiPackageCleanup(&b, result.OptionalPiPackageCleanupCommands)
 	appendPathSection(&b, "Manual cleanup required", result.ManualActions)
 
 	return strings.TrimRight(b.String(), "\n")
@@ -163,6 +167,18 @@ func promptUninstallConfirm(flags UninstallFlags, stdout io.Writer, stdin io.Rea
 		return false, fmt.Errorf("no confirmation provided (use --yes to skip prompt)")
 	}
 	return strings.EqualFold(strings.TrimSpace(scanner.Text()), "yes"), nil
+}
+
+func appendOptionalPiPackageCleanup(b *strings.Builder, commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintln(b, "\nOptional Pi package cleanup:")
+	_, _ = fmt.Fprintln(b, "  Review shared or user-modified packages/resources before removing them:")
+	for _, command := range commands {
+		_, _ = fmt.Fprintf(b, "  - %s\n", command)
+	}
 }
 
 func appendPathSection(b *strings.Builder, title string, paths []string) {

@@ -42,6 +42,7 @@ func TestCanonicalCompositionAddsOnlyItsKnownSteps(t *testing.T) {
 			if agent.ID == model.AgentPi {
 				content = strings.Replace(content, testGenericFallbackOnlyNativeRoute, testPiClosedSingleSelectNativeRoute, 1)
 			}
+			content = replaceOpenCodeConsentV3QuestionRoute(content, agent.ID)
 			before := bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent.ID, path, content), agent.ID)
 			after := composeOrchestratorPrompt(agent.ID)
 			if after != before {
@@ -138,6 +139,111 @@ func TestPiClosedChoiceRouteFailsClosedWhenGenericSourceClauseIsNotUnique(t *tes
 			}()
 			replacePiClosedSingleSelectRoute(tt.content, model.AgentPi)
 		})
+	}
+}
+
+func TestOpenCodeConsentV3QuestionRouteUsesDisplayLabelsWithoutChangingProviderChoices(t *testing.T) {
+	prompt := composeOrchestratorPrompt(model.AgentOpenCode)
+	if strings.Contains(prompt, openCodeNativeQuestionSourceRoute) {
+		t.Fatal("OpenCode consent/v3 route retained the inherited native-question fallback")
+	}
+	if got := strings.Count(prompt, openCodeConsentV3QuestionRoute); got != 1 {
+		t.Fatalf("OpenCode composition contains %d consent/v3 question routes, want 1", got)
+	}
+
+	for _, want := range []string{
+		"Display labels and provider-owned answer tokens may differ; that difference alone never makes an otherwise complete closed single-select domain unrepresentable.",
+		"Before invocation, inspect the active classified `question` schema.",
+		"For a representable `gentle-ai.review-integration.consent/v3` envelope, invoke `question` exactly once with both `multiple: false` and `custom: false` only if the sole per-question object schema explicitly exposes both settings, both can be set to `false`, and neither field may be omitted.",
+		"Treat absent, unknown, or unhonored controls as unrepresentable. In that case, do not invoke `question`, accept free text, or use a chat-token fallback; surface one actionable compatibility limitation naming the missing closed-domain support and direct the user to a runtime/version that exposes and enforces both controls, then stop.",
+		"Preserve the original option order, labels, descriptions, and effects.",
+		"Map only a returned offered label or ordinal to exactly one provider-owned answer token and invoke only that exact provider-owned invocation once.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("OpenCode composed consent/v3 route missing %q", want)
+		}
+	}
+}
+
+func TestOpenCodePreservedPromptReplacesManagedConsentQuestionRoute(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings) error = %v", err)
+	}
+	seed := `{"agent":{"gentle-orchestrator":{"prompt":` + strconv.Quote(openCodeNativeQuestionSourceRoute) + `}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := Inject(home, adapter, model.SDDModeSingle, InjectOptions{PreserveOpenCodeOrchestratorPrompt: true}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	prompt := agentPrompt(t, readOpenCodeAgents(t, settingsPath), "gentle-orchestrator")
+	if strings.Contains(prompt, openCodeNativeQuestionSourceRoute) {
+		t.Fatal("preserved OpenCode prompt retained the generic native-question route")
+	}
+	if got := strings.Count(prompt, openCodeConsentV3QuestionRoute); got != 1 {
+		t.Fatalf("preserved OpenCode prompt contains %d consent/v3 question routes, want 1", got)
+	}
+	if !strings.Contains(prompt, "invoke `question` exactly once with both `multiple: false` and `custom: false`") {
+		t.Fatal("preserved OpenCode prompt omitted the explicit closed-domain question invocation")
+	}
+}
+
+func TestOpenCodeConsentV3QuestionRouteFailsClosedWhenSharedSourceClauseIsNotUnique(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{name: "absent", content: "- Native route: custom runtime route"},
+		{name: "duplicated", content: openCodeNativeQuestionSourceRoute + "\n" + openCodeNativeQuestionSourceRoute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				recovered := recover()
+				if recovered == nil || !strings.Contains(fmt.Sprint(recovered), "OpenCode native route source clause count") {
+					t.Fatalf("replaceOpenCodeConsentV3QuestionRoute() panic = %v, want source clause count failure", recovered)
+				}
+			}()
+			replaceOpenCodeConsentV3QuestionRoute(tt.content, model.AgentOpenCode)
+		})
+	}
+}
+
+func TestOpenCodeConsentV3QuestionRouteIsolatedToOpenCode(t *testing.T) {
+	sharedSource := assets.MustRead("opencode/sdd-orchestrator.md")
+	if got := strings.Count(sharedSource, openCodeNativeQuestionSourceRoute); got != 1 {
+		t.Fatalf("shared OpenCode/Kilocode source contains %d native route clauses, want 1", got)
+	}
+	if strings.Contains(sharedSource, openCodeConsentV3QuestionRoute) {
+		t.Fatal("shared OpenCode/Kilocode source contains the OpenCode-only consent/v3 route")
+	}
+
+	kilocode := composeOrchestratorPrompt(model.AgentKilocode)
+	if got := strings.Count(kilocode, openCodeNativeQuestionSourceRoute); got != 1 {
+		t.Fatalf("Kilocode composition contains %d shared native route clauses, want 1", got)
+	}
+	if strings.Contains(kilocode, openCodeConsentV3QuestionRoute) {
+		t.Fatal("Kilocode composition received the OpenCode consent/v3 route")
+	}
+
+	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentOpenCode {
+			continue
+		}
+		if strings.Contains(composeOrchestratorPrompt(agent.ID), openCodeConsentV3QuestionRoute) {
+			t.Fatalf("%s composition received the OpenCode consent/v3 route", agent.ID)
+		}
+	}
+
+	pi := composeOrchestratorPrompt(model.AgentPi)
+	if !strings.Contains(pi, testPiClosedSingleSelectNativeRoute) {
+		t.Fatal("Pi composition changed its native closed-choice route")
+	}
+	if strings.Contains(pi, "Display labels and provider-owned answer tokens may differ") {
+		t.Fatal("Pi composition received the OpenCode consent/v3 wording")
 	}
 }
 

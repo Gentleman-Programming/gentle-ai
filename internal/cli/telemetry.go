@@ -59,14 +59,18 @@ type TelemetryTriggerResult struct {
 // and preview never send anything themselves.
 func RunTelemetry(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai telemetry <status|enable|disable|preview|trigger> [--json]")
-		_, _ = fmt.Fprintln(stdout, "Anonymous, opt-out usage telemetry. status reports whether sending is enabled and why; enable/disable set the local opt-out; preview prints the exact payload that would be sent next, without sending it; trigger runs the same opportunistic check install/update/sync run internally (enrollment, install-once, the 24h heartbeat limit, and the failure backoff all apply) — hosts such as Gentle Pi that call gentle-ai only through review/sdd-attempt use this to still get a heartbeat. The first run only shows the notice and sends nothing; sending starts on the following trigger. Opt out permanently with `gentle-ai telemetry disable`, or for one run with DO_NOT_TRACK=1.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai telemetry <status|policy|enable|disable|preview|trigger|runtime> [--json]")
+		_, _ = fmt.Fprintln(stdout, "Anonymous, opt-out usage telemetry. status reports whether sending is enabled and why; policy reads effective collection permission without creating or repairing state; enable/disable set the local opt-out; preview prints the exact payload that would be sent next, without sending it; trigger runs the same opportunistic check install/update/sync run internally (enrollment, install-once, the 24h heartbeat limit, and the failure backoff all apply) — hosts such as Gentle Pi that call gentle-ai only through review/sdd-attempt use this to still get a heartbeat. The first run only shows the notice and sends nothing; sending starts on the following trigger. Opt out permanently with `gentle-ai telemetry disable`, or for one run with DO_NOT_TRACK=1.")
 		return nil
 	}
 
 	switch args[0] {
 	case "status", "enable", "disable":
 		return runTelemetryStateCommand(args[0], args[1:], stdout)
+	case "runtime":
+		return runTelemetryRuntime(args[1:], stdout)
+	case "policy":
+		return runTelemetryPolicy(args[1:], stdout)
 	case "preview":
 		return runTelemetryPreview(args[1:], stdout)
 	case "trigger":
@@ -74,9 +78,59 @@ func RunTelemetry(args []string, stdout io.Writer) error {
 	case "send":
 		return runTelemetrySend(args[1:], stdout)
 	default:
-		// refusal:by-design operator-knowledge: telemetry has exactly five subcommands and the usage line above already names every one of them
+		// refusal:by-design operator-knowledge: telemetry's public subcommands are listed in help and the usage line above already names every one of them
 		return fmt.Errorf("unknown telemetry command %q", args[0])
 	}
+}
+
+// TelemetryPolicyResult contains only bounded collection-policy metadata.
+// It is not a send decision: rate limits, backoff, and build identity are
+// checked by the sender, not by this read-only collection query.
+type TelemetryPolicyResult struct {
+	Schema    string           `json:"schema"`
+	Operation string           `json:"operation"`
+	Enabled   bool             `json:"enabled"`
+	Source    telemetry.Source `json:"source"`
+	Reason    string           `json:"reason"`
+}
+
+func runTelemetryPolicy(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("telemetry policy", flag.ContinueOnError)
+	flags.SetOutput(ioDiscard{})
+	emitJSON := flags.Bool("json", false, "emit read-only collection policy")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("telemetry policy takes no positional arguments; run 'gentle-ai telemetry policy' without positional arguments")
+	}
+	result := TelemetryPolicyResult{Schema: "gentle-ai.telemetry-policy/v1", Operation: "policy", Source: telemetry.SourceStateDisable, Reason: "state_unavailable"}
+	decision := telemetry.Decide(os.Getenv, telemetry.State{Enabled: true})
+	if !decision.Enabled {
+		result.Source, result.Reason = decision.Source, string(telemetry.DecisionDisabled)
+	} else {
+		home, err := osUserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve user home directory: %w", err)
+		}
+		persisted, err := telemetry.LoadPolicyState(home)
+		if err == nil {
+			decision = telemetry.Decide(os.Getenv, persisted)
+			switch {
+			case !decision.Enabled:
+				result.Source, result.Reason = decision.Source, string(telemetry.DecisionDisabled)
+			case !persisted.NoticeShown:
+				result.Reason = "enrollment_pending"
+			default:
+				result.Enabled, result.Source, result.Reason = true, decision.Source, "enabled"
+			}
+		}
+	}
+	if *emitJSON {
+		return encodeReviewJSON(stdout, result)
+	}
+	_, err := fmt.Fprintf(stdout, "telemetry policy: %s (source: %s, reason: %s)\n", enabledWord(result.Enabled), result.Source, result.Reason)
+	return err
 }
 
 func runTelemetryStateCommand(operation string, args []string, stdout io.Writer) error {

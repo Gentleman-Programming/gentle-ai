@@ -797,6 +797,94 @@ func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
 	}
 }
 
+func TestReviewStatusEscalationParityPreservesLegacyAuthority(t *testing.T) {
+	identity := "sha256:" + strings.Repeat("a", 64)
+	status := newReviewTargetStatusResultForContract(reviewtransaction.TargetStatusResult{
+		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionLegacy,
+		LineageID: "legacy-escalated", State: reviewtransaction.StateEscalated, Generation: 1, Revision: identity,
+		Action: reviewtransaction.TargetStatusActionStop, Replayability: reviewtransaction.ReplayabilityManualActionRequired, TargetIdentity: identity,
+	}, ReviewIntegrationContractV2)
+	status.Projection = ReviewTargetStatusProjection{
+		Schema: ReviewIntegrationProjectionSchema, Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+		BaseTree: strings.Repeat("a", 40), InitialReviewTree: strings.Repeat("b", 40), CurrentCandidateTree: strings.Repeat("c", 40),
+		PathsDigest: identity, IntendedUntrackedProof: identity, InitialSnapshotIdentity: identity, CurrentSnapshotIdentity: identity,
+		Paths: []string{}, IntendedUntracked: []string{},
+	}
+	payload, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), payload)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewStatusEscalationRequiresV7Schema(t *testing.T) {
+	identity := "sha256:" + strings.Repeat("a", 64)
+	native := reviewtransaction.TargetStatusResult{
+		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+		LineageID: "compact-escalated", State: reviewtransaction.StateEscalated, Generation: 1, Revision: identity,
+		Action: reviewtransaction.TargetStatusActionStop, Replayability: reviewtransaction.ReplayabilityManualActionRequired,
+		OriginalChangedLines: 1, Tier: reviewtransaction.RiskLow, TargetIdentity: identity,
+		Escalation: &reviewtransaction.CompactEscalationEvidence{Cause: "correction_budget_exceeded", FindingIDs: []string{"finding-1"}},
+	}
+	status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
+	status.Projection = ReviewTargetStatusProjection{
+		Schema: ReviewIntegrationProjectionSchema, Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+		BaseTree: strings.Repeat("a", 40), InitialReviewTree: strings.Repeat("b", 40), CurrentCandidateTree: strings.Repeat("c", 40),
+		PathsDigest: identity, IntendedUntrackedProof: identity, InitialSnapshotIdentity: identity, CurrentSnapshotIdentity: identity,
+		Paths: []string{}, IntendedUntracked: []string{},
+	}
+
+	payload, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), payload)
+
+	legacy := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV1)
+	legacy.Projection = status.Projection
+	if legacy.Escalation != nil {
+		t.Fatalf("v1 projection retained escalation: %#v", legacy.Escalation)
+	}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("v1 projection validation error = %v", err)
+	}
+
+	for _, tt := range []struct {
+		name, schema, contract, wantErr string
+		action                          reviewtransaction.TargetStatusAction
+		disposition                     reviewtransaction.RecoveryDisposition
+		escalation                      *reviewtransaction.CompactEscalationEvidence
+	}{
+		{name: "v2", schema: ReviewIntegrationStatusSchemaV2, contract: ReviewIntegrationContractV1, action: reviewtransaction.TargetStatusActionStop, escalation: native.Escalation, wantErr: "status escalation requires review status schema v7"},
+		{name: "v3", schema: ReviewIntegrationStatusSchemaV3, contract: ReviewIntegrationContractV2, action: reviewtransaction.TargetStatusActionStop, escalation: native.Escalation, wantErr: "status escalation requires review status schema v7"},
+		{name: "v4", schema: ReviewIntegrationStatusSchemaV4, contract: ReviewIntegrationContractV2, action: reviewtransaction.TargetStatusActionStop, escalation: native.Escalation, wantErr: "status escalation requires review status schema v7"},
+		{name: "v5", schema: ReviewIntegrationStatusSchemaV5, contract: ReviewIntegrationContractV2, action: reviewtransaction.TargetStatusActionStop, escalation: native.Escalation, wantErr: "status escalation requires review status schema v7"},
+		{name: "v6", schema: ReviewIntegrationStatusSchemaV6, contract: ReviewIntegrationContractV2, action: reviewtransaction.TargetStatusActionStop, escalation: native.Escalation, wantErr: "status escalation requires review status schema v7"},
+		{name: "v7 terminal", schema: ReviewIntegrationStatusSchemaV7, contract: ReviewIntegrationContractV2, action: reviewtransaction.TargetStatusActionStop, escalation: native.Escalation},
+		{name: "v7 terminal missing escalation", schema: ReviewIntegrationStatusSchemaV7, contract: ReviewIntegrationContractV2, action: reviewtransaction.TargetStatusActionStop, wantErr: "status escalation must match escalated authority"},
+		{name: "v7 recovery", schema: ReviewIntegrationStatusSchemaV7, contract: ReviewIntegrationContractV2, action: reviewtransaction.TargetStatusActionRecover, disposition: reviewtransaction.RecoveryEscalated, escalation: native.Escalation},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := status
+			got.Schema, got.Contract = tt.schema, tt.contract
+			got.Action, got.ActionDisposition, got.Escalation = tt.action, tt.disposition, tt.escalation
+			err := got.Validate()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Validate() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestNegotiatedStatusForecastStaysStructuralAndV1StaysFrozen(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)

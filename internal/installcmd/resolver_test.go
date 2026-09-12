@@ -180,6 +180,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "dnf", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "silverblue resolves rpm-ostree command",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"rpm-ostree", "install", "-y", "--apply-live", "somepkg"}},
+		},
+		{
 			name:    "windows resolves winget command",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			dep:     "somepkg",
@@ -563,6 +569,26 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			wantErr:     true,
 			errContains: "npm",
 		},
+		{
+			name:    "silverblue missing npm returns actionable remediation and degraded path",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree", Supported: true},
+			agent:   model.AgentClaudeCode,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			wantErr:     true,
+			errContains: "rpm-ostree install -y nodejs npm && systemctl reboot",
+		},
+		{
+			name:    "silverblue missing uv returns actionable remediation and degraded path",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree", Supported: true},
+			agent:   model.AgentKimi,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			wantErr:     true,
+			errContains: "rpm-ostree install -y uv && systemctl reboot",
+		},
 	}
 
 	for _, tt := range tests {
@@ -861,5 +887,35 @@ func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
 func TestPowerShellSingleQuotedValue(t *testing.T) {
 	if got, want := system.PowerShellSingleQuoted(`C:\Users\O'Brien\Temp`), `C:\Users\O''Brien\Temp`; got != want {
 		t.Fatalf("PowerShellSingleQuoted() = %q, want %q", got, want)
+	}
+}
+
+func TestUVInstallHint(t *testing.T) {
+	tests := []struct {
+		pm   string
+		want string
+	}{
+		{
+			pm:   "rpm-ostree",
+			want: "rpm-ostree install -y --apply-live uv (or see https://docs.astral.sh/uv/getting-started/installation/)",
+		},
+		{
+			pm:   "brew",
+			want: "brew install uv",
+		},
+		{
+			pm:   "unknown-pm",
+			want: "https://docs.astral.sh/uv/getting-started/installation/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pm, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "linux", PackageManager: tt.pm}
+			got := uvInstallHint(profile)
+			if got != tt.want {
+				t.Fatalf("uvInstallHint(%q) = %q, want %q", tt.pm, got, tt.want)
+			}
+		})
 	}
 }

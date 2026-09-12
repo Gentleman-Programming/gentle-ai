@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,14 +220,28 @@ func TestLastReviewerCaptureReturnsAdvisoriesBeforeBurn(t *testing.T) {
 
 	var terminal struct {
 		State            reviewtransaction.State               `json:"state"`
+		ReviewerResults  []reviewtransaction.LensResult        `json:"reviewer_results"`
 		AdvisoryFindings *reviewtransaction.AdvisoryFindingSet `json:"advisory_findings"`
 	}
 	if err := json.Unmarshal(terminalOutput.Bytes(), &terminal); err != nil {
 		t.Fatal(err)
 	}
-	if terminal.State != reviewtransaction.StateApproved || terminal.AdvisoryFindings == nil ||
-		len(terminal.AdvisoryFindings.Findings) != 1 || terminal.AdvisoryFindings.Findings[0].ID != "R3-W01" {
-		t.Fatalf("last capture advisories = %#v, want the admitted warning before burn", terminal)
+	if terminal.State != reviewtransaction.StateApproved || len(terminal.ReviewerResults) != len(started.SelectedLenses) {
+		t.Fatalf("last capture reviewer results = %#v, want every admitted selected lens before burn", terminal.ReviewerResults)
+	}
+	for order, result := range terminal.ReviewerResults {
+		if result.Lens != started.SelectedLenses[order] || len(result.Evidence) != 1 ||
+			result.Evidence[0] != "inspected the complete frozen candidate scope named by the capture binding" ||
+			!strings.HasPrefix(result.ResultHash, "sha256:") || len(result.ResultHash) != len("sha256:")+64 {
+			t.Fatalf("last capture reviewer result %d = %#v, want the canonical admitted result", order, result)
+		}
+	}
+	warning := terminal.ReviewerResults[len(terminal.ReviewerResults)-1].Findings
+	if len(warning) != 1 || !reflect.DeepEqual(warning[0], reviewtransaction.Finding{
+		ID: "R3-W01", Lens: "reliability", Location: "internal/auth/session.go:4", Severity: "WARNING",
+		Claim: "the token check could be easier to read", ProofRefs: []string{"the exact changed line was inspected"},
+	}) || terminal.AdvisoryFindings == nil || len(terminal.AdvisoryFindings.Findings) != 1 || terminal.AdvisoryFindings.Findings[0].ID != "R3-W01" {
+		t.Fatalf("last capture reviewer readback = %#v, want the admitted warning narrative and advisory before burn", terminal)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
@@ -252,15 +267,16 @@ func TestLastReviewerCaptureOpensBoundedCorrectionForSevereFinding(t *testing.T)
 	}}, &correctionOutput)
 
 	var correction struct {
-		Operation string                  `json:"operation"`
-		State     reviewtransaction.State `json:"state"`
-		Action    string                  `json:"action"`
+		Operation       string                  `json:"operation"`
+		State           reviewtransaction.State `json:"state"`
+		Action          string                  `json:"action"`
+		ReviewerResults json.RawMessage         `json:"reviewer_results"`
 	}
 	if err := json.Unmarshal(correctionOutput.Bytes(), &correction); err != nil {
 		t.Fatal(err)
 	}
 	if correction.Operation != "review/capture-result" || correction.State != reviewtransaction.StateCorrectionRequired ||
-		!strings.Contains(correction.Action, "bounded correction") {
+		len(correction.ReviewerResults) != 0 || !strings.Contains(correction.Action, "bounded correction") {
 		t.Fatalf("last capture correction result = %#v", correction)
 	}
 	record, err := store.Load()
@@ -392,10 +408,10 @@ func TestTargetedValidatorCaptureRequiresNoVerificationEvidenceAndLeavesNoStrand
 	}
 
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 
@@ -466,7 +482,8 @@ func TestCompiledTargetedValidatorCaptureClosesOnItsTerminalEvent(t *testing.T) 
 	var terminal reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateApproved ||
-		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil {
+		terminal.Action != reviewApprovedLastEventAcknowledgementAction || terminal.Acknowledgement == nil ||
+		terminal.ReviewerResults == nil || len(*terminal.ReviewerResults) != 1 {
 		t.Fatalf("compiled validator terminal closure = %#v", terminal)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, lineage)
@@ -485,10 +502,10 @@ func TestTargetedValidationCaptureClosesWithoutVerificationEvidence(t *testing.T
 		t.Fatal(err)
 	}
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 	var terminalOutput bytes.Buffer
@@ -520,10 +537,10 @@ func TestConcurrentAndReplayedTargetedValidatorCaptureHasOneCloser(t *testing.T)
 		t.Fatal(err)
 	}
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 	args := []string{
@@ -613,10 +630,10 @@ func TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize(t *testing
 	}
 
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return providerTargetedValidationPayload(t, request), nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 
@@ -836,10 +853,10 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		t.Fatal(err)
 	}
 	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return failedPayload, nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
 
@@ -856,16 +873,17 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		t.Fatalf("capture rejected targeted validator: %v\n%s", err, terminalOutput.String())
 	}
 	var terminal struct {
-		Operation string                  `json:"operation"`
-		State     reviewtransaction.State `json:"state"`
-		Action    string                  `json:"action"`
-		Evidence  json.RawMessage         `json:"targeted_validator_evidence"`
+		Operation       string                  `json:"operation"`
+		State           reviewtransaction.State `json:"state"`
+		Action          string                  `json:"action"`
+		Evidence        json.RawMessage         `json:"targeted_validator_evidence"`
+		ReviewerResults json.RawMessage         `json:"reviewer_results"`
 	}
 	if err := json.Unmarshal(terminalOutput.Bytes(), &terminal); err != nil {
 		t.Fatal(err)
 	}
 	if terminal.Operation != "review/capture-validation" || terminal.State != reviewtransaction.StateEscalated ||
-		!strings.Contains(terminal.Action, "rejected") || len(terminal.Evidence) == 0 {
+		len(terminal.ReviewerResults) != 0 || !strings.Contains(terminal.Action, "rejected") || len(terminal.Evidence) == 0 {
 		t.Fatalf("rejected validator terminal result = %#v", terminal)
 	}
 	after, err := store.Load()
@@ -1189,4 +1207,132 @@ func TestNegotiatedStatusReplaysPendingAcknowledgementDespiteUnreadableSiblingSt
 		t.Fatalf("selectorless STATUS = applicability=%q transition=%#v, want the pending acknowledgement", selectorless.Applicability, selectorless.NextTransition)
 	}
 	assertApprovedAcknowledgementTransition(t, selectorless.NextTransition.Execute, repo, started.LineageID, pending.TargetIdentity, pending.ExpectedRevision)
+}
+
+// TestRefuterCaptureInconclusiveRoutesToCorrectionRequiredWithoutEscalating
+// proves the fix for issue #4226: an inconclusive refuter verdict for a
+// severe inferential finding is treated as candidate-caused and routed into
+// bounded correction (StateCorrectionRequired), not an immediate terminal escalation.
+func TestRefuterCaptureInconclusiveRoutesToCorrectionRequiredWithoutEscalating(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, handle := piRefuterReview(t)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inconclusive, err := json.Marshal(facadeRefuterResult{
+		RequestHash: request.RequestHash,
+		Results: []facadeRefuterOutcome{{
+			FindingID: "R3-001", Outcome: reviewtransaction.OutcomeInconclusive, ProofRefs: []string{"could not observe wrapped state.Read error"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: inconclusive})
+
+	var output bytes.Buffer
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
+		t.Fatalf("capture refuter inconclusive: %v\n%s", err, output.String())
+	}
+
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("inconclusive refuter capture state = %q, want %q", terminal.State, reviewtransaction.StateCorrectionRequired)
+	}
+	if terminal.StatusContinuation == nil || terminal.StatusContinuation.Operation != "review.status" {
+		t.Fatalf("inconclusive refuter capture status_continuation = %#v", terminal.StatusContinuation)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("inconclusive refuter capture left authority = %#v, %v", after, err)
+	}
+	if len(after.State.FixFindingIDs) != 1 || after.State.FixFindingIDs[0] != "R3-001" {
+		t.Fatalf("inconclusive refuter capture FixFindingIDs = %v, want [R3-001]", after.State.FixFindingIDs)
+	}
+}
+
+// TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes
+// proves that when a lineage escalates (issue #4226), both the terminal
+// closure envelope and the STATUS envelope publish escalation with cause and finding_ids.
+func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPayload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: false, Evidence: []string{"acceptance test failed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"no regression observed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalAdapter := reviewProviderRoleHostAdapter
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
+		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+			return failedPayload, nil
+		}), nil
+	}
+	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+
+	var terminalOutput bytes.Buffer
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash,
+		"--agent", string(model.AgentPi),
+		"--execute=true",
+	}, &terminalOutput); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v\n%s", err, terminalOutput.String())
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, terminalOutput.Bytes(), &terminal)
+	if terminal.State != reviewtransaction.StateEscalated {
+		t.Fatalf("closure state = %q, want %q", terminal.State, reviewtransaction.StateEscalated)
+	}
+	if terminal.Escalation == nil || terminal.Escalation.Cause != "targeted_validator_rejected" || len(terminal.Escalation.FindingIDs) == 0 {
+		t.Fatalf("closure escalation = %#v, want cause targeted_validator_rejected", terminal.Escalation)
+	}
+	closureSchema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	closureDocument := decodeJSONObjectCopy(t, terminalOutput.Bytes())
+	delete(closureDocument, "targeted_validator_evidence")
+	delete(closureDocument, "escalation")
+	if err := closureSchema.Validate(closureDocument); err == nil {
+		t.Fatal("last-event closure schema accepted escalated state without escalation")
+	}
+
+	var statusOutput bytes.Buffer
+	if err := RunReviewStatus([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--contract", ReviewIntegrationContractV2,
+		"--next-transition",
+	}, &statusOutput); err != nil {
+		t.Fatalf("status query on escalated lineage: %v\n%s", err, statusOutput.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if status.Escalation == nil || status.Escalation.Cause != "targeted_validator_rejected" || !reflect.DeepEqual(status.Escalation.FindingIDs, terminal.Escalation.FindingIDs) {
+		t.Fatalf("STATUS escalation = %#v, want matching closure escalation %#v", status.Escalation, terminal.Escalation)
+	}
+	statusSchema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
+	validatePublishedReviewSchema(t, statusSchema, statusOutput.Bytes())
+	statusDocument := decodeJSONObjectCopy(t, statusOutput.Bytes())
+	delete(statusDocument, "escalation")
+	if err := statusSchema.Validate(statusDocument); err == nil {
+		t.Fatal("status-v7 schema accepted escalated authority without escalation")
+	}
 }

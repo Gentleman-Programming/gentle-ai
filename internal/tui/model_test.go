@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
@@ -808,11 +809,26 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
 	}
 
+	state.ReviewModeCwdFn = func() (string, error) { return "/isolated-repo", nil }
+	state.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
+		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Global: reviewtransaction.RDDModeUnset}, nil
+	}
+	state.ReviewModeSetGlobalFn = func(context.Context, string, bool) (reviewtransaction.RDDModeStatus, error) {
+		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Global: reviewtransaction.RDDModeOff}, nil
+	}
 	state.Cursor = 0
+	updated, load := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenInstallReviewMode || load == nil {
+		t.Fatalf("after dependency tree screen = %v, want loaded ScreenInstallReviewMode", state.Screen)
+	}
+	updated, _ = state.Update(load())
+	state = updated.(Model)
+	state.Cursor = 1 // RDD OFF
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
 	if state.Screen != ScreenReview {
-		t.Fatalf("after dependency tree screen = %v, want %v", state.Screen, ScreenReview)
+		t.Fatalf("after RDD choice screen = %v, want %v", state.Screen, ScreenReview)
 	}
 
 	var gotSelection model.Selection
@@ -886,6 +902,129 @@ func TestReviewToInstallingInitializesProgress(t *testing.T) {
 
 	if state.Progress.Current != 0 {
 		t.Fatalf("progress current = %d, want 0", state.Progress.Current)
+	}
+}
+
+func TestInstallReviewModeChoicePrecedesReviewAndPersistsOnlyAfterSuccess(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenDependencyTree
+	m.Cursor = 0
+	m.ReviewModeCwdFn = func() (string, error) { return "/repo", nil }
+	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
+		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Global: reviewtransaction.RDDModeUnset}, nil
+	}
+	setCalls := 0
+	m.ReviewModeSetGlobalFn = func(_ context.Context, repo string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
+		setCalls++
+		if repo != "/repo" || !enabled {
+			t.Fatalf("SetGlobalReviewMode(%q, %t), want /repo, true", repo, enabled)
+		}
+		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Global: reviewtransaction.RDDModeOn}, nil
+	}
+
+	updated, load := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenInstallReviewMode || load == nil {
+		t.Fatalf("after dependency confirmation = screen %v, command %v; want install review mode with loader", state.Screen, load != nil)
+	}
+	updated, _ = state.Update(load())
+	state = updated.(Model)
+	if state.Cursor != 1 {
+		t.Fatalf("fresh global RDD cursor = %d, want RDD OFF at 1", state.Cursor)
+	}
+	state.Cursor = 0 // RDD ON
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenReview || !state.InstallReviewModeChoiceSet || !state.InstallReviewModeEnabled {
+		t.Fatalf("after RDD ON = screen %v, choice set/enabled %t/%t; want review/true/true", state.Screen, state.InstallReviewModeChoiceSet, state.InstallReviewModeEnabled)
+	}
+	if !strings.Contains(state.View(), "RDD ON") {
+		t.Fatalf("review summary does not show selected RDD ON:\n%s", state.View())
+	}
+	if setCalls != 0 {
+		t.Fatalf("global mode changed before installation succeeded: %d calls", setCalls)
+	}
+
+	state.Cursor = 1 // Back
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenInstallReviewMode {
+		t.Fatalf("review Back screen = %v, want ScreenInstallReviewMode", state.Screen)
+	}
+	state.Cursor = 0 // Keep the selected RDD ON choice after revisiting the screen.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenReview || !state.InstallReviewModeEnabled {
+		t.Fatalf("revised confirmation = screen %v, enabled %t; want review/true", state.Screen, state.InstallReviewModeEnabled)
+	}
+
+	state.Screen = ScreenInstalling
+	state.pipelineRunning = true
+	updated, persist := state.Update(PipelineDoneMsg{Result: pipeline.ExecutionResult{Apply: pipeline.StageResult{Success: true}}})
+	state = updated.(Model)
+	if persist == nil || setCalls != 0 {
+		t.Fatalf("successful pipeline = persistence command %t, calls %d; want queued command and no synchronous mutation", persist != nil, setCalls)
+	}
+	updated, _ = state.Update(persist())
+	state = updated.(Model)
+	if setCalls != 1 || state.InstallReviewModePersistErr != nil {
+		t.Fatalf("persist result = calls %d, error %v; want one successful global update", setCalls, state.InstallReviewModePersistErr)
+	}
+}
+
+func TestInstallReviewModePersistenceFailureReportsActionableRecovery(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenInstalling
+	m.InstallReviewModePersisting = true
+	m.Execution = pipeline.ExecutionResult{Apply: pipeline.StageResult{Success: true}}
+
+	updated, _ := m.Update(InstallReviewModePersistedMsg{Err: errors.New("write global mode")})
+	state := updated.(Model)
+	if state.InstallReviewModePersisting || state.InstallReviewModePersistErr == nil {
+		t.Fatalf("persisting/error = %t/%v, want false/non-nil", state.InstallReviewModePersisting, state.InstallReviewModePersistErr)
+	}
+	if len(state.Execution.ManualActions) != 1 || !strings.Contains(state.Execution.ManualActions[0], "review mode enable --scope global") {
+		t.Fatalf("manual actions = %v, want actionable global-mode recovery", state.Execution.ManualActions)
+	}
+}
+
+func TestInstallReviewModeReadFailureDoesNotChooseOff(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenDependencyTree
+	m.Cursor = 0
+	m.ReviewModeCwdFn = func() (string, error) { return "/repo", nil }
+	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
+		return reviewtransaction.RDDModeStatus{}, errors.New("cannot read mode")
+	}
+
+	updated, load := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	updated, _ = state.Update(load())
+	state = updated.(Model)
+	if state.InstallReviewModeChoiceSet || state.InstallReviewModeEnabled {
+		t.Fatalf("unreadable status chose a mode: set/enabled = %t/%t", state.InstallReviewModeChoiceSet, state.InstallReviewModeEnabled)
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(Model).Screen; got != ScreenDependencyTree {
+		t.Fatalf("status-error Enter screen = %v, want ScreenDependencyTree", got)
+	}
+}
+
+func TestInstallReviewModeDoesNotPersistAfterFailedInstallation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenInstalling
+	m.pipelineRunning = true
+	m.InstallReviewModeChoiceSet = true
+	m.InstallReviewModeEnabled = false
+	m.ReviewModeSetGlobalFn = func(context.Context, string, bool) (reviewtransaction.RDDModeStatus, error) {
+		t.Fatal("failed installation must not persist RDD mode")
+		return reviewtransaction.RDDModeStatus{}, nil
+	}
+
+	updated, cmd := m.Update(PipelineDoneMsg{Result: pipeline.ExecutionResult{Err: errors.New("install failed")}})
+	state := updated.(Model)
+	if cmd != nil || state.InstallReviewModePersisting {
+		t.Fatalf("failed pipeline queued review-mode persistence: command %t, persisting %t", cmd != nil, state.InstallReviewModePersisting)
 	}
 }
 
@@ -1132,6 +1271,35 @@ func TestEscBlockedWhilePipelineRunning(t *testing.T) {
 
 	if state.Screen != ScreenInstalling {
 		t.Fatalf("screen = %v, want ScreenInstalling (esc should be blocked)", state.Screen)
+	}
+}
+
+func TestEscBlockedWhileInstallReviewModePersists(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{name: "succeeds"},
+		{name: "fails", err: errors.New("write global mode")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenInstalling
+			m.InstallReviewModePersisting = true
+
+			state := updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+			if state.Screen != ScreenInstalling {
+				t.Fatalf("screen = %v, want ScreenInstalling while RDD mode persists", state.Screen)
+			}
+
+			state = updateModel(state, InstallReviewModePersistedMsg{Err: testCase.err})
+			if state.InstallReviewModePersisting {
+				t.Fatal("persistence result was discarded after blocked esc")
+			}
+			if (state.InstallReviewModePersistErr != nil) != (testCase.err != nil) {
+				t.Fatalf("persist error = %v, want %v", state.InstallReviewModePersistErr, testCase.err)
+			}
+		})
 	}
 }
 
@@ -4503,9 +4671,8 @@ func TestCustomPresetStrictTDDWithClaudeFlow(t *testing.T) {
 }
 
 // TestCustomPresetStrictTDDContinueGoesToSkillPickerOrReview verifies that in the
-// custom preset, when on ScreenStrictTDD, pressing Enter on the "Enable" option
-// goes to ScreenSkillPicker (when Skills is selected) or ScreenReview (when not).
-// This verifies Gap 4 — already fixed, this is a regression guard.
+// custom preset, Strict TDD goes to ScreenSkillPicker when Skills is selected;
+// otherwise it loads the required RDD choice before reaching final review.
 func TestCustomPresetStrictTDDContinueGoesToSkillPickerOrReview(t *testing.T) {
 	// Case 1: Skills selected → should go to ScreenSkillPicker.
 	m := NewModel(system.DetectionResult{}, "dev")
@@ -4522,20 +4689,36 @@ func TestCustomPresetStrictTDDContinueGoesToSkillPickerOrReview(t *testing.T) {
 		t.Fatalf("case Skills selected: screen = %v, want ScreenSkillPicker after Enable in custom preset StrictTDD", state.Screen)
 	}
 
-	// Case 2: No Skills → should go to ScreenReview.
-	m2 := NewModel(system.DetectionResult{}, "dev")
+	// Case 2: No Skills → load RDD, explicitly choose OFF, then review.
+	m2 := installReviewModeTestModel(t, NewModel(system.DetectionResult{}, "dev"))
 	m2.Screen = ScreenStrictTDD
 	m2.Selection.Preset = model.PresetCustom
 	m2.Selection.Agents = []model.AgentID{model.AgentCursor}
 	m2.Selection.Components = []model.ComponentID{model.ComponentSDD} // no Skills
 	m2.Cursor = screens.StrictTDDOptionDisable
 
-	updated2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated2, load := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state2 := updated2.(Model)
-
-	if state2.Screen != ScreenReview {
-		t.Fatalf("case no Skills: screen = %v, want ScreenReview after Disable in custom preset StrictTDD", state2.Screen)
+	if state2.Screen != ScreenInstallReviewMode || load == nil {
+		t.Fatalf("case no Skills: screen/load = %v/%t, want loaded ScreenInstallReviewMode", state2.Screen, load != nil)
 	}
+	updated2, _ = state2.Update(load())
+	state2 = updated2.(Model)
+	state2.Cursor = 1 // RDD OFF
+	updated2, _ = state2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state2 = updated2.(Model)
+	if state2.Screen != ScreenReview {
+		t.Fatalf("case no Skills: screen = %v, want ScreenReview after an explicit RDD choice", state2.Screen)
+	}
+}
+
+func installReviewModeTestModel(t *testing.T, m Model) Model {
+	t.Helper()
+	m.ReviewModeCwdFn = func() (string, error) { return "/isolated-repo", nil }
+	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
+		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Global: reviewtransaction.RDDModeUnset}, nil
+	}
+	return m
 }
 
 // TestCustomPresetStrictTDDBackGoesToDependencyTree verifies that in the custom
@@ -8249,13 +8432,14 @@ func TestGoBackCustomModelPickerStartsDiscovery(t *testing.T) {
 }
 
 // TestStrictTDDForward verifies the StrictTDD Continue path for all flow variants.
-// Per design step 8: OpenCodePlugins guard fires first; custom goes to SkillPicker
-// or Review; non-custom advances via pickerNextScreen (→ DependencyTree).
+// OpenCodePlugins guard fires first; custom goes to SkillPicker or the loaded,
+// explicitly confirmed RDD choice before final review.
 func TestStrictTDDForward(t *testing.T) {
 	tests := []struct {
 		name       string
 		setup      func(t *testing.T) Model
 		wantScreen Screen
+		confirmRDD bool
 	}{
 		{
 			name: "non-custom StrictTDD Enable goes to DependencyTree",
@@ -8271,9 +8455,9 @@ func TestStrictTDDForward(t *testing.T) {
 			wantScreen: ScreenDependencyTree,
 		},
 		{
-			name: "custom no OpenCode no Skills StrictTDD Enable goes to Review",
+			name: "custom no OpenCode no Skills StrictTDD loads RDD before Review",
 			setup: func(t *testing.T) Model {
-				m := NewModel(system.DetectionResult{}, "dev")
+				m := installReviewModeTestModel(t, NewModel(system.DetectionResult{}, "dev"))
 				m.Screen = ScreenStrictTDD
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentCursor}
@@ -8282,6 +8466,7 @@ func TestStrictTDDForward(t *testing.T) {
 				return m
 			},
 			wantScreen: ScreenReview,
+			confirmRDD: true,
 		},
 		{
 			name: "custom no OpenCode has Skills StrictTDD Enable goes to SkillPicker",
@@ -8315,8 +8500,18 @@ func TestStrictTDDForward(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := tt.setup(t)
-			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			got := updated.(Model)
+			if tt.confirmRDD {
+				if got.Screen != ScreenInstallReviewMode || cmd == nil {
+					t.Fatalf("screen/load = %v/%t, want loaded ScreenInstallReviewMode", got.Screen, cmd != nil)
+				}
+				updated, _ = got.Update(cmd())
+				got = updated.(Model)
+				got.Cursor = 1 // Explicitly keep the default RDD OFF selection.
+				updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				got = updated.(Model)
+			}
 			if got.Screen != tt.wantScreen {
 				t.Fatalf("screen = %v, want %v", got.Screen, tt.wantScreen)
 			}

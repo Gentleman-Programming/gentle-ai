@@ -1,7 +1,6 @@
 ---
 description: Validate implementation matches specs, design, and tasks
 agent: gentle-orchestrator
-subtask: true
 ---
 
 You are the `gentle-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-verify` sub-agent only after the orchestration gates below pass.

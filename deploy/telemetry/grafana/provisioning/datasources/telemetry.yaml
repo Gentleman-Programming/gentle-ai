@@ -20,6 +20,9 @@ datasources:
     editable: false
     jsonData:
       path: /var/lib/gentle-telemetry/events.sqlite
+      # Readers wait up to 5 s for the collector's write transaction instead of
+      # failing with "database is locked" (SQLITE_BUSY) under ingest load.
+      pathOptions: "_pragma=query_only(1)&_pragma=busy_timeout(5000)"
       # Grafana's own process only needs read access to this file; see
       # docs/telemetry-collector.md#grafana-dashboards for how install.sh
       # grants it (group membership or a POSIX ACL) without ever adding

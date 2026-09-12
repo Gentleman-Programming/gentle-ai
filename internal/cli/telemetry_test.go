@@ -17,6 +17,96 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
 )
 
+func TestTelemetryPolicyReadOnly(t *testing.T) {
+	complete := `{"install_id":"existing","enabled":true,"notice_shown":true,"counters":{"syncs":7}}`
+	for _, tt := range []struct {
+		name, state, key, value, source, reason string
+		enabled                                 bool
+	}{
+		{"missing", "", "", "", "state", "state_unavailable", false},
+		{"enabled", complete, "", "", "default", "enabled", true},
+		{"disabled", `{"install_id":"existing","enabled":false,"notice_shown":true}`, "", "", "state", "disabled", false},
+		{"pending", `{"install_id":"existing","enabled":true,"notice_shown":false}`, "", "", "state", "enrollment_pending", false},
+		{"malformed", `{`, "", "", "state", "state_unavailable", false},
+		{"empty", `{}`, "", "", "state", "state_unavailable", false},
+		{"legacy enabled", `{"install_id":"existing","notice_shown":true}`, "", "", "state", "state_unavailable", false},
+		{"missing id", `{"enabled":true,"notice_shown":true}`, "", "", "state", "state_unavailable", false},
+		{"missing notice", `{"install_id":"existing","enabled":true}`, "", "", "state", "state_unavailable", false},
+		{"null enabled", `{"install_id":"existing","enabled":null,"notice_shown":true}`, "", "", "state", "state_unavailable", false},
+		{"dnt", complete, "DO_NOT_TRACK", "yes", "DO_NOT_TRACK", "disabled", false},
+		{"optout", complete, "GENTLE_AI_TELEMETRY", "0", "GENTLE_AI_TELEMETRY", "disabled", false},
+		{"ci", complete, "CI", "1", "CI", "disabled", false},
+		{"actions", complete, "GITHUB_ACTIONS", "true", "CI", "disabled", false},
+		{"false dnt", complete, "DO_NOT_TRACK", " FALSE ", "default", "enabled", true},
+		{"false ci", complete, "CI", "0", "default", "enabled", true},
+		{"false actions", complete, "GITHUB_ACTIONS", "false", "default", "enabled", true},
+		{"nonzero optout", complete, "GENTLE_AI_TELEMETRY", "false", "default", "enabled", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := telemetryTestHome(t)
+			enableTelemetryForTest(t)
+			if tt.key != "" {
+				t.Setenv(tt.key, tt.value)
+			}
+			path := telemetry.Path(home)
+			if tt.state != "" {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tt.state), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out bytes.Buffer
+			if err := RunTelemetry([]string{"policy", "--json"}, &out); err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 5 || got["schema"] != "gentle-ai.telemetry-policy/v1" || got["operation"] != "policy" || got["enabled"] != tt.enabled || got["source"] != tt.source || got["reason"] != tt.reason {
+				t.Fatalf("policy = %s", &out)
+			}
+			if tt.state == "" {
+				if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
+					t.Fatalf("state directory created: %v", err)
+				}
+			} else {
+				got, err := os.ReadFile(path)
+				if err != nil || string(got) != tt.state {
+					t.Fatalf("state changed: %q, %v", got, err)
+				}
+				entries, err := os.ReadDir(filepath.Dir(path))
+				if err != nil || len(entries) != 1 {
+					t.Fatalf("unexpected state artifacts: %v, %v", entries, err)
+				}
+			}
+		})
+	}
+}
+
+func TestTelemetryPolicyFlagsAndHelp(t *testing.T) {
+	home := telemetryTestHome(t)
+	for _, args := range [][]string{{"policy", "--cwd", "."}, {"policy", "extra"}, {"policy", "--json=invalid"}} {
+		var out bytes.Buffer
+		if err := RunTelemetry(args, &out); err == nil || out.Len() != 0 {
+			t.Fatalf("accepted %v: %s", args, &out)
+		}
+	}
+	var out bytes.Buffer
+	if err := RunTelemetry([]string{"help"}, &out); err != nil || !bytes.Contains(out.Bytes(), []byte("policy")) {
+		t.Fatalf("help: %s, %v", &out, err)
+	}
+	out.Reset()
+	if err := RunTelemetry([]string{"policy"}, &out); err != nil || !bytes.Contains(out.Bytes(), []byte("telemetry policy: disabled")) {
+		t.Fatalf("human output: %s, %v", &out, err)
+	}
+	if _, err := os.Stat(filepath.Dir(telemetry.Path(home))); !os.IsNotExist(err) {
+		t.Fatalf("state directory created: %v", err)
+	}
+}
+
 func TestTelemetryContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "telemetry", "v1", "schemas")
 	want := map[string]string{

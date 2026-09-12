@@ -86,6 +86,7 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 		content = appendOpenCodeBackgroundPolicy(content, policy)
 	}
 	content = replacePiClosedSingleSelectRoute(content, agent)
+	content = replaceOpenCodeConsentV3QuestionRoute(content, agent)
 	content = renderBoundedReviewAssetBodyFromContent(agent, path, content)
 	return bindRuntimeAgentIdentity(content, agent)
 }
@@ -209,6 +210,22 @@ func replacePiClosedSingleSelectRoute(content string, agent model.AgentID) strin
 		panic(fmt.Sprintf("sdd: Pi native route source clause count = %d, want 1", count))
 	}
 	return strings.Replace(content, genericFallbackOnlyNativeRoute, piClosedSingleSelectNativeRoute, 1)
+}
+
+const openCodeNativeQuestionSourceRoute = "- Native route: The classified native question UI is `question`. Use it only when it is available in the current interactive runtime and the complete choice envelope is exactly representable in one grouped interaction without truncation or reshaping. When the closed domain of a single-select envelope is representable as the classified native question UI, use it; otherwise fall through to the Fallback clause below."
+
+const openCodeConsentV3QuestionRoute = "- Native route: For `gentle-ai.review-integration.consent/v3`: Display labels and provider-owned answer tokens may differ; that difference alone never makes an otherwise complete closed single-select domain unrepresentable. Before invocation, inspect the active classified `question` schema. For a representable `gentle-ai.review-integration.consent/v3` envelope, invoke `question` exactly once with both `multiple: false` and `custom: false` only if the sole per-question object schema explicitly exposes both settings, both can be set to `false`, and neither field may be omitted. Treat absent, unknown, or unhonored controls as unrepresentable. In that case, do not invoke `question`, accept free text, or use a chat-token fallback; surface one actionable compatibility limitation naming the missing closed-domain support and direct the user to a runtime/version that exposes and enforces both controls, then stop. Preserve the original option order, labels, descriptions, and effects. Map only a returned offered label or ordinal to exactly one provider-owned answer token and invoke only that exact provider-owned invocation once. For non-consent envelopes only, the classified native question UI is `question`. Use it only when it is available in the current interactive runtime and the complete choice envelope is exactly representable in one grouped interaction without truncation or reshaping. When the closed domain of a single-select envelope is representable as the classified native question UI, use it; otherwise fall through to the Fallback clause below."
+
+// replaceOpenCodeConsentV3QuestionRoute adds the OpenCode-only consent-v3 route
+// without changing the shared source also consumed by Kilocode.
+func replaceOpenCodeConsentV3QuestionRoute(content string, agent model.AgentID) string {
+	if agent != model.AgentOpenCode {
+		return content
+	}
+	if count := strings.Count(content, openCodeNativeQuestionSourceRoute); count != 1 {
+		panic(fmt.Sprintf("sdd: OpenCode native route source clause count = %d, want 1", count))
+	}
+	return strings.Replace(content, openCodeNativeQuestionSourceRoute, openCodeConsentV3QuestionRoute, 1)
 }
 
 func composeOpenCodeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRenderOptions) (string, error) {

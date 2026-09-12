@@ -382,9 +382,12 @@ func detectUnauthorizedEditRootsForCurrentWorkUnit(tasksText, workspaceRoot stri
 }
 
 // futureEditRootsNote reports a later work unit's own unauthorized edit
-// targets without blocking the current work unit (#4103). It carries no
-// `blocked(...)` reason code, so it never flips applyState — it exists purely
-// so a human sees the future authority need before reaching that work unit.
+// targets without blocking the current work unit (#4103). It is an informational
+// diagnostic, so it travels on the non-blocking `notes` channel (#4372): it
+// carries no `blocked(...)` reason code, never flips applyState, and — since a
+// non-empty `blockedReasons` is a gate in every consumer contract — must never
+// reach that gated field. It exists purely so a human sees the future authority
+// need before reaching that work unit.
 func futureEditRootsNote(roots []string) string {
 	quoted := make([]string, 0, len(roots))
 	for _, root := range roots {
@@ -404,7 +407,7 @@ func futureEditRootsNote(roots []string) string {
 // It also returns the unauthorized edit roots so the caller can raise the typed
 // consent question naming exactly them (#2563, S4b of #2540). Detection is
 // scoped to the current work unit (#4103): a future work unit's own
-// unauthorized roots are reported through reasons as an informational note,
+// unauthorized roots are reported through the non-blocking notes channel (#4372),
 // never as a blocker.
 func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tasksText string, workspaceRoot string, allowedEditRoots []string) (ApplyState, []string) {
 	if applyState != ApplyReady {
@@ -412,7 +415,7 @@ func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tas
 	}
 	roots, futureRoots := detectUnauthorizedEditRootsForCurrentWorkUnit(tasksText, workspaceRoot, allowedEditRoots)
 	if len(futureRoots) != 0 {
-		reasons.genuine = append(reasons.genuine, futureEditRootsNote(futureRoots))
+		reasons.notes = append(reasons.notes, futureEditRootsNote(futureRoots))
 	}
 	if len(roots) == 0 {
 		return applyState, nil

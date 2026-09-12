@@ -220,6 +220,17 @@ func TestCompactSettlePreservesFailedEvidenceAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	appendRuntimeLedgerFile(t, repo, "bounded correction\n")
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: status.Revision, RequestID: "correction-reset",
+		Reason: "maintainer authorized the changed correction candidate", Actor: "maintainer",
+	}); err != nil {
+		t.Fatalf("reset for changed correction candidate: %v", err)
+	}
 	acquired, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{
 		RequestID: "correction-acquire", WorkUnit: "verify", EvidenceGoal: "independent verification",
 		MaxAttempts: 2, MaxChangedLines: 20,
@@ -227,7 +238,6 @@ func TestCompactSettlePreservesFailedEvidenceAndReplay(t *testing.T) {
 	if err != nil || acquired.State != CompactStateProceed {
 		t.Fatalf("correction acquire = %#v err=%v", acquired, err)
 	}
-	appendRuntimeLedgerFile(t, repo, "bounded correction\n")
 	failNextCompactStoreSync(t, store)
 	before := countRuntimeRecords(t, store.Dir)
 	request := CompactSettleRequest{
@@ -244,7 +254,7 @@ func TestCompactSettlePreservesFailedEvidenceAndReplay(t *testing.T) {
 	if result.State != CompactStateComplete || result.Reason != "" || result.Token != "" {
 		t.Fatalf("compact remediation result = %#v", result)
 	}
-	status, err := store.Status()
+	status, err = store.Status()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,6 +312,17 @@ func TestCompactSettleDerivesEvidenceRevisionFromRemediationEvidence(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
+	appendRuntimeLedgerFile(t, repo, "bounded correction\n")
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: status.Revision, RequestID: "correction-reset",
+		Reason: "maintainer authorized the changed correction candidate", Actor: "maintainer",
+	}); err != nil {
+		t.Fatalf("reset for changed correction candidate: %v", err)
+	}
 	acquired, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{
 		RequestID: "correction-acquire", WorkUnit: "verify", EvidenceGoal: "independent verification",
 		MaxAttempts: 2, MaxChangedLines: 20,
@@ -309,7 +330,6 @@ func TestCompactSettleDerivesEvidenceRevisionFromRemediationEvidence(t *testing.
 	if err != nil || acquired.State != CompactStateProceed {
 		t.Fatalf("correction acquire = %#v err=%v", acquired, err)
 	}
-	appendRuntimeLedgerFile(t, repo, "bounded correction\n")
 
 	evidence := remediationEvidenceFixture(failedEvidence)
 	wantRevision, err := DeriveRemediationEvidenceRevision(evidence, failedEvidence)
@@ -330,7 +350,7 @@ func TestCompactSettleDerivesEvidenceRevisionFromRemediationEvidence(t *testing.
 	if result.State != CompactStateComplete {
 		t.Fatalf("compact remediation-evidence result = %#v", result)
 	}
-	status, err := store.Status()
+	status, err = store.Status()
 	if err != nil {
 		t.Fatal(err)
 	}

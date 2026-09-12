@@ -17,6 +17,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
+		"fixtures/consent.fixture.json":           "110eb39e2326e9472368b77a2c2545d4856bdafe50bd0b3f714f6a137141482a",
 		"fixtures/start.fixture.json":             "3b963b221cd1560eb8872cbabbb5407096f593ced2f13eb9cb06eb61e4cca4d1",
 		// issue #2659: start-v2/status-v2 embed a freshly minted target_identity,
 		// and the purified identity domain legitimately changed that hash for
@@ -56,7 +57,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities.fixture.json": "8d5e1a8491db1a5a2f6329e8c1d5cd210dd175e0525ff4d51fa914351d2fcf08",
-		"fixtures/consent.fixture.json":      "203cc96d5c29ba0f27b5c4db04c2e88566e0a923d3a0cdb317f78d9065349075",
+		"fixtures/consent.fixture.json":      "66a3a9d7d3fe1b8956739616f333f8e38c2515bf8e0030e65f5213b415d48ad2",
 		// issue #3922 / #4199 / gentle-pi#543: the native-git reviewer_result
 		// collect input no longer inlines changed_path_manifest -- it is
 		// already committed to by artifact_subject.changed_path_manifest_sha256
@@ -86,7 +87,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// issue #2659: consent-v3 embeds a freshly minted target_identity;
 		// the purified identity domain legitimately changed that hash.
 		// Deliberate, not drift.
-		"fixtures/consent-v3.fixture.json":      "feb1dc7705f7da6490698ef48021bb7730de154ae23ec73d033d8d96fa996a21",
+		"fixtures/consent-v3.fixture.json":      "8479e6248535bc315e43a3cb9e1862d1bf37ff988ca36f959f5ed2733cbbbdfd",
 		"schemas/capabilities-v2.1.schema.json": "95d2b8b46e9be6e6fbc874fc763029cb7994951336c8974dc1694834d64bf06e",
 		// Cross-lane battery conformance fix: the schema pinned the choice
 		// invocations to `--agent claude-code`, but the live emitter omits the
@@ -201,8 +202,11 @@ func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing
 func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/gate-result.schema.json":        "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		"schemas/last-event-closure.schema.json": "9059651e39278f6932929392f4dacc3911d65fe3769171e2401b87df55da9030",
+		"schemas/gate-result.schema.json": "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
+		// issues #4226/#4453: last-event-closure documents terminal escalation
+		// and exposes complete admitted reviewer results before acknowledgement.
+		// Deliberate, not drift.
+		"schemas/last-event-closure.schema.json": "08a94def144d70c0c1e84b73a1a245cd36bc73dc1ade4aa733b42097b05593eb",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
@@ -246,7 +250,10 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 		// review.capture-unachievable --withdraw=true command), so a
 		// restarted orchestrator that lost the pre-stop collect offer can
 		// still recover the binding its withdraw needs. Deliberate, not drift.
-		"schemas/status-v7.schema.json":         "c165a2309adff3131dd1d19e93408ade5cf45b27f0076304e423ca604e1f436c",
+		//
+		// issue #4226: status/v7 documents the CompactEscalationEvidence contract
+		// on terminal escalation. Deliberate, not drift.
+		"schemas/status-v7.schema.json":         "277abd6aed05ff7358fc32374bf524c9c3d10d3760d42c68c4e8a235e2f86968",
 		"schemas/capabilities-v2.5.schema.json": "9fcdb1717a54bcd4f73d4dee1283d9ec2f27cccbb5d54804ee8b40a6ed2db553",
 	}
 	for name, expected := range want {
@@ -312,6 +319,17 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 	if err := failureSchema.Validate(unrelatedCode); err == nil {
 		t.Fatal("failure.schema.json accepted a continuation on an unrelated failure code")
 	}
+	for _, command := range []string{
+		"'/tmp/gentle\nai' sync --agent opencode",
+		"\"C:\\\\gentle\r-ai.exe\" sync --agent opencode",
+	} {
+		multilineCommand := decodeJSONObjectCopy(t, startOutput.Bytes())
+		multilineContinuation := multilineCommand["continuation"].(map[string]any)
+		multilineContinuation["command"] = command
+		if err := failureSchema.Validate(multilineCommand); err == nil {
+			t.Fatalf("failure.schema.json accepted multiline continuation command %q", command)
+		}
+	}
 
 	// --- status-v7.schema.json, exercised against the real STATUS stop transition ---
 	var stopOutput bytes.Buffer
@@ -351,6 +369,18 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 	unrelatedReason["next_transition"] = unrelatedTransition
 	if err := statusV7Schema.Validate(unrelatedReason); err == nil {
 		t.Fatal("status-v7.schema.json accepted a continuation attached to an unrelated stop reason code")
+	}
+	for _, command := range []string{
+		"'/tmp/gentle\nai' sync --agent opencode",
+		"\"C:\\\\gentle\r-ai.exe\" sync --agent opencode",
+	} {
+		multilineCommand := decodeJSONObjectCopy(t, stopOutput.Bytes())
+		multilineTransition := multilineCommand["next_transition"].(map[string]any)
+		multilineContinuation := multilineTransition["continuation"].(map[string]any)
+		multilineContinuation["command"] = command
+		if err := statusV7Schema.Validate(multilineCommand); err == nil {
+			t.Fatalf("status-v7.schema.json accepted multiline continuation command %q", command)
+		}
 	}
 }
 

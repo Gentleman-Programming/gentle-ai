@@ -11,6 +11,88 @@ import (
 	"testing"
 )
 
+// TestOpenCodeTelemetryRuntimePlugin uses a hermetic Node subprocess and a fake
+// native boundary. Fixture is published V1 (not V2):
+// https://unpkg.com/@opencode-ai/plugin@1.18.30/dist/index.d.ts
+// https://unpkg.com/@opencode-ai/sdk@1.18.30/dist/gen/types.gen.d.ts
+func TestOpenCodeTelemetryRuntimePlugin(t *testing.T) {
+	source, err := Read("opencode/plugins/telemetry-runtime.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No filesystem, retry timer, identity cache or native self-spawn may be
+	// introduced by the host adapter. Native no-disk behavior has HTTP tests.
+	for _, forbidden := range []string{"node:fs", "node:crypto", "sessionID", "info.id", "batch_id", "setTimeout(", "setInterval(", "MAX_ATTEMPTS", "new Map", `"flush"`, `"ingest"`} {
+		if strings.Contains(string(source), forbidden) {
+			t.Fatalf("runtime plugin contains %s", forbidden)
+		}
+	}
+	const harness = `import { strict as assert } from "node:assert"
+import childProcess from "node:child_process"
+import { syncBuiltinESMExports } from "node:module"
+const calls = []
+const held = []
+childProcess.execFile = (file, args, options, callback) => {
+  assert.equal(file,"gentle-ai")
+  assert.deepEqual(args,["telemetry","runtime","opencode","--json"])
+  assert.equal(options.timeout,4000); assert.equal(options.maxBuffer,1024)
+  const call = { args, body: "", killed:false }; calls.push(call)
+  held.push(callback)
+  return { stdin: { on() {}, end(body) { call.body = body || "" } }, kill() {call.killed=true} }
+}
+syncBuiltinESMExports()
+const { default: plugin } = await import("./plugin.mts")
+for (const key of ["DO_NOT_TRACK","GENTLE_AI_TELEMETRY","CI","GITHUB_ACTIONS"]) delete process.env[key]
+const hooks = await plugin({})
+const tick = async () => { await new Promise(resolve => setImmediate(resolve)) }
+const info = { role:"assistant", time:{created:1,completed:2}, providerID:"anthropic", modelID:"claude-opus-5", mode:"sdd-apply", path:{cwd:"PRIVATE_PATH"}, parts:["PRIVATE_PROMPT"], error:{name:"APIError",data:{statusCode:429,message:"PRIVATE_ERROR"}} }
+// No source identifiers are necessary or read, even locally.
+Object.defineProperty(info,"id",{get(){throw new Error("source id read")}})
+Object.defineProperty(info,"sessionID",{get(){throw new Error("session id read")}})
+const event = value => hooks.event({event:{type:"message.updated",properties:{info:value}}})
+await event({...info,role:"user"}); await event({...info,time:{created:1}}); await event({...info,summary:true})
+assert.equal(calls.length,0)
+for(const [key,value] of [["DO_NOT_TRACK"," yes "],["CI","true"],["GITHUB_ACTIONS","yes"],["GENTLE_AI_TELEMETRY","0"]]) {
+ process.env[key]=value;await event(info);delete process.env[key]
+}
+assert.equal(calls.length,0)
+// The native callback is deliberately held: it represents blocked HTTP. The
+// hook must resolve now, without waiting for the process or its network result.
+let returned=false
+void event(info).then(()=>{returned=true})
+await tick();assert.equal(returned,true);assert.equal(calls.length,1)
+assert(!calls[0].body.includes("PRIVATE"))
+const envelope=JSON.parse(calls[0].body)
+assert.deepEqual(Object.keys(envelope).sort(),["info","schema"])
+assert.equal(envelope.schema,"gentle-ai.telemetry-opencode/v1")
+assert.equal(envelope.info.agent,"sdd-apply")
+assert.equal(envelope.info.tokens,undefined)
+held.shift()(new Error("PRIVATE_NATIVE_ERROR"),"")
+await tick();await tick();assert.equal(calls.length,1) // failure never retries
+await event(info);assert.equal(calls.length,2) // a new event is a new attempt
+held.shift()(null,JSON.stringify({schema:"gentle-ai.telemetry-runtime-send/v1",decision:"discarded"}))
+await tick();assert.equal(calls.length,2) // discarded metrics stay discarded
+await event({...info,mode:"x".repeat(65)});assert.equal(calls.length,3)
+assert.equal(JSON.parse(calls[2].body).info.agent,undefined);held.shift()(null,"")
+await event({...info,mode:"bad\nagent"});assert.equal(calls.length,4)
+assert.equal(JSON.parse(calls[3].body).info.agent,undefined);held.shift()(null,"")
+// No backlog: saturation discards new events rather than scheduling work.
+for(let i=0;i<100;i++) await event(info)
+assert.equal(held.length,32);assert.equal(calls.length,36)
+for(const cb of held.splice(0))cb(new Error("timeout"),"")
+await tick();assert.equal(calls.length,36)
+await event({...info,modelID:"x".repeat(16385)});assert.equal(calls.length,36)
+await event(info);assert.equal(calls.length,37)
+await hooks.dispose();assert.equal(calls[36].killed,true)
+await event(info);await tick();assert.equal(calls.length,37)
+console.log("ok")
+`
+	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, "#!/bin/sh\nexit 99\n")
+	if output != "ok\n" || log != "" {
+		t.Fatal("unexpected plugin output or native process")
+	}
+}
+
 // retiredWorkRunCeremonyTokens enumerates the managed-WorkRun control-plane
 // vocabulary that organic routing retires. Prompt assets are the one place this
 // ceremony can outlive its Go source, because nothing compiles them — so every
@@ -602,10 +684,10 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 4 {
-		t.Fatalf("opencode plugins count = %d, want 4", len(pluginEntries))
+	if len(pluginEntries) != 5 {
+		t.Fatalf("opencode plugins count = %d, want 5", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"model-variants.ts": true, "opencode-review-transport.ts": true, "sdd-task-result-artifacts.ts": true, "skill-registry.ts": true}
+	wantPlugins := map[string]bool{"telemetry-runtime.ts": true, "model-variants.ts": true, "opencode-review-transport.ts": true, "sdd-task-result-artifacts.ts": true, "skill-registry.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
@@ -1901,6 +1983,8 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"archive: [<instruction strings>]",
 		"nextRecommended: propose | spec | design | tasks | apply | verify | remediate | archive | sdd-new | select-change | resolve-blockers",
 		"blockedReasons: []",
+		// #4372: the non-blocking diagnostics channel that keeps blockedReasons a pure gate.
+		"notes: []",
 		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
 	} {
 		if !strings.Contains(content, want) {

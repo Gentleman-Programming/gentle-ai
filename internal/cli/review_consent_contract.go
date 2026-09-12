@@ -69,13 +69,8 @@ type ReviewIntegrationConsentOffPath = consentenvelope.OffPath
 const reviewConsentActionRequired = "consent_required"
 
 const (
-	reviewConsentGrantedEffect = "Reviews this exact frozen candidate now; nothing is granted for later candidates, so each later medium- or high-risk candidate asks again."
-	// reviewConsentDeclinedEffect is the published v1 wording. Keep it exact for
-	// legacy consumers; v2 states the new candidate-decline delivery behavior.
-	reviewConsentDeclinedEffect = "Skips the review for this candidate only; nothing is persisted and the next candidate is asked again. " +
-		"This is not the kill switch."
-	reviewConsentDeclinedEffectV2 = "Skips the review for this exact candidate only; no review lineage or receipt is created, and ordinary delivery is unmanaged by candidate choice. " +
-		"The next candidate is asked again. This is not the kill switch."
+	reviewConsentGrantedEffect  = "Reviews only this change; later medium- or high-risk changes ask again, and delivery needs separate approval."
+	reviewConsentDeclinedEffect = "Skips only this change; no review record is created, and future reviews stay enabled."
 )
 
 type reviewConsentEnvelopeText struct {
@@ -85,17 +80,13 @@ type reviewConsentEnvelopeText struct {
 	declinedLabel, declinedEffect, offPathNote string
 }
 
-func reviewConsentEnvelopeTextFor(locale reviewConsentLocale, assessment reviewtransaction.RiskAssessment, contract string) reviewConsentEnvelopeText {
+func reviewConsentEnvelopeTextFor(locale reviewConsentLocale, assessment reviewtransaction.RiskAssessment, _ string) reviewConsentEnvelopeText {
 	if locale != reviewConsentLocaleSpanish {
-		declinedEffect := reviewConsentDeclinedEffect
-		if contract == ReviewIntegrationContractV2 {
-			declinedEffect = reviewConsentDeclinedEffectV2
-		}
 		return reviewConsentEnvelopeText{
 			headline: reviewConsentHeadline, reason: reviewConsentReason(assessment), value: reviewConsentValue,
 			evidence: reviewConsentRiskEvidence(assessment), grantedLabel: reviewConsentAnswerRunLabel,
 			grantedEffect: reviewConsentGrantedEffect, declinedLabel: reviewConsentAnswerNotNowLabel,
-			declinedEffect: declinedEffect, offPathNote: reviewConsentOffPathNote,
+			declinedEffect: reviewConsentDeclinedEffect, offPathNote: reviewConsentOffPathNote,
 		}
 	}
 	return reviewConsentEnvelopeText{
@@ -103,26 +94,25 @@ func reviewConsentEnvelopeTextFor(locale reviewConsentLocale, assessment reviewt
 		reason:         reviewConsentSpanishReason(assessment),
 		value:          "La revisión lleva un poco más de tiempo y hace que el resultado sea considerablemente más seguro.",
 		evidence:       reviewConsentSpanishRiskEvidence(assessment),
-		grantedLabel:   "Ejecutar la revisión ahora",
-		grantedEffect:  "Revisa ahora este candidato congelado exacto; no se otorga nada para candidatos posteriores, por lo que cada candidato posterior de riesgo medio o alto vuelve a pedir confirmación.",
-		declinedLabel:  "Ahora no, solo esta vez",
-		declinedEffect: "Omite la revisión solo para este candidato exacto; no se crea ninguna línea de revisión ni recibo, y la entrega ordinaria queda sin administrar por elección del candidato. El siguiente candidato vuelve a pedir confirmación. No es el interruptor de apagado.",
+		grantedLabel:   "Revisar este cambio",
+		grantedEffect:  "Revisa solo este cambio; los cambios posteriores de riesgo medio o alto vuelven a pedir confirmación y la entrega requiere otra aprobación.",
+		declinedLabel:  "Omitir esta vez",
+		declinedEffect: "Omite solo este cambio; no crea un registro de revisión y las revisiones futuras siguen activas.",
 		offPathNote:    "Para desactivar las revisiones de forma permanente, ejecuta '" + reviewConsentOffPathCommand + "'.",
 	}
 }
 
 func reviewConsentSpanishReason(assessment reviewtransaction.RiskAssessment) string {
-	evidence := reviewConsentSpanishEvidence(assessment.Reasons)
-	if assessment.Level != reviewtransaction.RiskHigh {
-		if evidence == "" {
-			return "este cambio no es documentación puramente pasiva, por lo que recibe una revisión consolidada."
-		}
-		return "este cambio no es documentación puramente pasiva, por lo que recibe una revisión consolidada. La revisión parte de " + evidence + "."
+	switch reviewConsentReasonCategoryFor(assessment.Reasons) {
+	case reviewConsentReasonSecurity:
+		return "La revisión puede ayudar a identificar posibles problemas de seguridad."
+	case reviewConsentReasonExecution:
+		return "La revisión puede ayudar a detectar problemas de ejecución en estos cambios."
+	case reviewConsentReasonUpdates:
+		return "La revisión puede ayudar a detectar problemas relacionados con las actualizaciones."
+	default:
+		return "La revisión puede ayudar a detectar regresiones en estos cambios."
 	}
-	if evidence == "" {
-		return "este cambio toca algo sensible, por lo que recibe una revisión más profunda."
-	}
-	return "este cambio recibe una revisión más profunda porque afecta a " + evidence + "."
 }
 
 func reviewConsentSpanishRiskEvidence(assessment reviewtransaction.RiskAssessment) []string {
@@ -133,20 +123,6 @@ func reviewConsentSpanishRiskEvidence(assessment reviewtransaction.RiskAssessmen
 		return append([]string{"este cambio no es documentación puramente pasiva, por lo que recibe una revisión consolidada."}, reviewConsentSpanishEvidencePhrases(assessment.Reasons)...)
 	default:
 		return nil
-	}
-}
-
-func reviewConsentSpanishEvidence(reasons []reviewtransaction.RiskReason) string {
-	phrases := reviewConsentSpanishEvidencePhrases(reasons)
-	switch len(phrases) {
-	case 0:
-		return ""
-	case 1:
-		return phrases[0]
-	case 2:
-		return phrases[0] + " y " + phrases[1]
-	default:
-		return fmt.Sprintf("%s, %s y %d más", phrases[0], phrases[1], len(phrases)-2)
 	}
 }
 
