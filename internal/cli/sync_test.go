@@ -855,6 +855,7 @@ func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T
 	adapters := resolveAdapters(selection.Agents)
 	want := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
 	unwanted := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	prompt := systemPromptFileFor(t, home, model.AgentPi)
 
 	paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters)
 	if !containsPath(paths, want) || containsPath(paths, unwanted) {
@@ -864,13 +865,41 @@ func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T
 	if err != nil {
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
-	if !containsPath(targets, want) || containsPath(targets, unwanted) {
-		t.Fatalf("sync backup targets = %v, want only workspace Pi config %q", targets, want)
+	if !containsPath(targets, want) || !containsPath(targets, prompt) || containsPath(targets, unwanted) {
+		t.Fatalf("sync backup targets = %v, want workspace Pi config %q and cleanup path %q", targets, want, prompt)
 	}
 
 	selection.Persona = model.PersonaCustom
 	if paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters); len(paths) != 0 {
 		t.Fatalf("custom sync persona paths = %v, want none", paths)
+	}
+}
+
+func TestSyncRoutingCleanupReportsPiPromptForNormalAndExplicitSync(t *testing.T) {
+	for _, components := range [][]model.ComponentID{nil, {model.ComponentPersona}} {
+		home := t.TempDir()
+		path := systemPromptFileFor(t, home, model.AgentPi)
+		mustWriteFile(t, path, []byte("user\n<!-- gentle-ai:agent-routing -->\nstale\n<!-- /gentle-ai:agent-routing -->\n"))
+		changed := runSyncInjectionSteps(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}, Components: components, Persona: model.PersonaNeutral})
+		if !containsPath(changed, path) || strings.Contains(readTextFile(t, path), "gentle-ai:agent-routing") {
+			t.Fatalf("sync components %v changed=%v prompt=%q", components, changed, path)
+		}
+	}
+}
+
+func TestRunSyncExplicitPiRetiresStaleRoutingAndReportsIt(t *testing.T) {
+	home := t.TempDir()
+	previous := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = previous })
+	path := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, path, []byte("user\n<!-- gentle-ai:agent-routing -->\nstale\n<!-- /gentle-ai:agent-routing -->\n"))
+	result, err := RunSync([]string{"--agent", "pi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPath(result.ChangedFiles, path) || strings.Contains(readTextFile(t, path), "gentle-ai:agent-routing") {
+		t.Fatalf("explicit sync changed=%v prompt=%q", result.ChangedFiles, path)
 	}
 }
 
@@ -5230,11 +5259,9 @@ func TestRunSyncWithSelectionPiRetiresStaleSystemPromptBlocks(t *testing.T) {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
-	// Routing guidance is scheduled per agent too, but the step is a no-op for
-	// Pi (issue #4063: gentle-pi owns the Pi system prompt), so nothing writes
-	// an agent-routing block back into the file. Only the leading and trailing
-	// user content must survive, byte-exact.
-	want := "user text before\n\nuser text after\n"
+	// Routing cleanup removes only paired markers; Pi still never receives a
+	// newly injected agent-routing block.
+	want := "user text before\n\n\n\n\n\nuser text after\n"
 	got := readTextFile(t, appendSystemPath)
 	if got != want {
 		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
@@ -5277,7 +5304,7 @@ func TestRunSyncWithSelectionPiRoutingGuidanceIsNotRewritten(t *testing.T) {
 	if strings.Contains(got, "gentle-ai:agent-routing") {
 		t.Fatalf("APPEND_SYSTEM.md still carries an agent-routing block: %q", got)
 	}
-	want := "user text before\n\nuser text after\n"
+	want := "user text before\n\n\n\nuser text after\n"
 	if got != want {
 		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
 	}
@@ -5306,8 +5333,8 @@ func TestRunSyncWithSelectionPiRetirementDoesNotTouchOtherAgents(t *testing.T) {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
 
-	if got := readTextFile(t, appendSystemPath); strings.Contains(got, "sdd-orchestrator") {
-		t.Fatalf("Pi APPEND_SYSTEM.md still carries a stale block: %q", got)
+	if _, err := os.Lstat(appendSystemPath); !os.IsNotExist(err) {
+		t.Fatalf("Pi APPEND_SYSTEM.md remains after owned-only cleanup: %v", err)
 	}
 	if got := readTextFile(t, claudePath); !strings.Contains(got, "KEEP-CLAUDE-SDD") {
 		t.Fatalf("Claude system prompt lost unrelated content: %q", got)

@@ -880,10 +880,19 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
 
-	// Pi (and any future agent without a managed system prompt) owns its own
-	// prompt delivery outside gentle-ai, so there is nothing to strip or
-	// inject here: skip the step entirely rather than writing routing
-	// guidance into a file gentle-ai does not own (issue #4063).
+	// Pi owns its prompt delivery, but old installs left only allowlisted
+	// Gentle AI sections in APPEND_SYSTEM.md. Retire those before skipping prompt
+	// injection so install and every sync path converge without recreating routing.
+	if adapter.Agent() == model.AgentPi {
+		result, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter)
+		if err != nil {
+			return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
+		}
+		if s.changedFiles != nil && result.Changed {
+			*s.changedFiles = append(*s.changedFiles, result.Files...)
+		}
+		return nil
+	}
 	if !adapter.SupportsSystemPrompt() {
 		return nil
 	}
@@ -1715,9 +1724,6 @@ func (s componentApplyStep) Run() error {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
 				}
-				if _, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter); err != nil {
-					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
-				}
 				continue
 			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
@@ -2220,6 +2226,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				paths[adapter.SystemPromptFile(homeDir)] = struct{}{}
+			}
+		}
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
