@@ -453,7 +453,7 @@ func TestExecutePlanRetiresStalePiSystemPromptBlocks(t *testing.T) {
 	}
 
 	got := string(mustReadServiceFile(t, promptPath))
-	want := "user text\n"
+	want := "user text\n\n\n"
 	if got != want {
 		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
 	}

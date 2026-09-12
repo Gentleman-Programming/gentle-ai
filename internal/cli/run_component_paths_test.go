@@ -784,6 +784,16 @@ func TestRemoteAuthorizationLeavesPiPackagePromptUntouched(t *testing.T) {
 	}
 }
 
+func TestInstallRoutingCleanupRetiresPiPrompt(t *testing.T) {
+	home := t.TempDir()
+	path := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, path, []byte("user\n<!-- gentle-ai:agent-routing -->\nstale\n<!-- /gentle-ai:agent-routing -->\n"))
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}}))
+	if got := readTextFile(t, path); strings.Contains(got, "gentle-ai:agent-routing") || !strings.Contains(got, "user") {
+		t.Fatalf("install Pi cleanup = %q", got)
+	}
+}
+
 func TestInstallRemoteAuthorizationIndependentOfComponents(t *testing.T) {
 	for _, persona := range []model.PersonaID{"", model.PersonaCustom} {
 		t.Run(string(persona), func(t *testing.T) {
@@ -996,12 +1006,10 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 }
 
-// TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt covers issue
-// #4063: Pi reports SupportsSystemPrompt()==false because gentle-pi owns its
-// system prompt, so the routing guidance step must leave Pi's
-// APPEND_SYSTEM.md untouched instead of writing an agent-routing block into a
-// file gentle-ai does not own.
-func TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt(t *testing.T) {
+// TestAgentRoutingGuidanceStepRetiresPiManagedBlocks covers issue #3508: Pi
+// owns APPEND_SYSTEM.md, so routing never injects a new block but does remove
+// the paired stale block an older gentle-ai release wrote.
+func TestAgentRoutingGuidanceStepRetiresPiManagedBlocks(t *testing.T) {
 	home := t.TempDir()
 	promptPath := systemPromptFileFor(t, home, model.AgentPi)
 	existing := "user text before\n" +
@@ -1024,8 +1032,8 @@ func TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt(t *testing.T) {
 	}
 
 	got := readTextFile(t, promptPath)
-	if got != existing {
-		t.Fatalf("agentRoutingGuidanceStep rewrote Pi's system prompt file, want a no-op:\ngot  = %q\nwant = %q", got, existing)
+	if strings.Contains(got, "gentle-ai:agent-routing") || !strings.Contains(got, "user text before") || !strings.Contains(got, "user text after") {
+		t.Fatalf("Pi routing cleanup = %q, want only user content", got)
 	}
 }
 
@@ -1061,9 +1069,8 @@ func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(
 }
 
 // TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt covers issue
-// #4063: Pi's APPEND_SYSTEM.md must never be listed as a routing guidance
-// target, because the step that would write it is now a no-op for Pi and
-// declaring the path would only add a backup target nothing ever writes.
+// #4063: routing injection does not own Pi's APPEND_SYSTEM.md; cleanup backup
+// coverage is asserted separately.
 func TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentPi, model.AgentClaudeCode})
@@ -1132,6 +1139,18 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 		if !containsPath(targets, path) {
 			t.Fatalf("backupTargets missing routing guidance path %q\ntargets = %v", path, targets)
 		}
+	}
+}
+
+func TestBackupTargetsIncludePiPromptForRoutingCleanup(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentPi}}
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := systemPromptFileFor(t, home, model.AgentPi); !containsPath(targets, want) {
+		t.Fatalf("backup targets = %v, missing Pi cleanup path %q", targets, want)
 	}
 }
 
