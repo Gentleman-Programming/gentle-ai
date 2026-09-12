@@ -1189,7 +1189,7 @@ func projectFromGitConfig(content string) string {
 	return ""
 }
 
-var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|state|archive-report)$`)
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(explore|pre-proposal|proposal|spec|design|tasks|apply-progress|verify-report|state|archive-report)$`)
 
 func collectEngramChanges(observations []engramObservation, project string) []string {
 	// An Engram-backed change has no directory to move, so nothing about the
