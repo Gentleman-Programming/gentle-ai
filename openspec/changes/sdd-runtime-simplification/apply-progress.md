@@ -382,3 +382,98 @@ Preservation: prior real CLI recreated-marker run/pass/exit0 rechecked against i
 Evidence `/tmp/sdd4484-r3-binding.rzn3nwmu/` records exact focused and final20 command outcomes, stage hashes, counts and process cleanup; no independent acceptance inferred.
 Budget: prior21 + current166 source/tests +13 progress =200/200 A+D. All eight exact unchecked task lines above remain unchanged in tasks.md.
 Rollback removes only this continuation's source/test/progress hunks, never history; parent owns independent verification/native validation/settlement. Two eventual size-exception PRs, no chain/Pi/delivery.
+
+## Task 1.5 adapter instructions — partial, scope decision required
+
+Consumed full native v2 status: OpenSpec, apply ready, 6 checked/9 pending, repo-local allowed root, no blockers/warnings.
+Same-attempt entry returned proceed; parent owns settlement and independent acceptance. Delivery remains existing PR #4505, exception-ok/size-exception, no chain.
+Changed only the three authorized instruction assets and three allowed test files; parent task addition is preserved. Task 1.5 remains unchecked.
+Native status now governs every declared store; inspection cannot prepare markers or launch recommendations. Explicit continuation retains human marker scope and native routing.
+Claude unavailable-binary guidance is diagnostic only. The lazy/shared guard explicitly gives read-only inspection precedence over phase preflight/init guards.
+
+### TDD Cycle Evidence / Work Unit Evidence
+| Stage | Actual command/result |
+|---|---|
+| Preservation | `go test ./internal/assets ./internal/components/sdd -count=1 -json`: exit 0; 2,420 test/subtest passes, 5 skips |
+| RED | Named three-test filter: exit 1; 35 failing test/subtest records. Initial Claude inline-bootstrap expectation was incorrect; preserved separately |
+| Corrected behavioral RED | Same filter after following the actual bootstrap-to-lazy reference: exit 1, before any shipped instruction edit; genuine bypass/ambiguity assertions retained |
+| GREEN | Same filter: exit 0, 36 passes |
+| TRIANGULATE | Same filter with fresh versus existing materialized-file reentry: exit 0, 52 passes |
+| REFACTOR | None needed; gofmt applied only to the three allowed test files |
+| Broader self-check | `go test ./internal/assets ./internal/components/sdd ./internal/cli ./internal/sddstatus -count=1`: exit 1; assets/CLI/status pass, components fail |
+
+Named filter: `^(TestClaudeSDDStatusUsesNativeForEveryDeclaredStore|TestRegisteredAgentsRenderStatusContinuationContract|TestInjectMaterializesStatusContinuationContract)$`.
+Primary failure: three existing renderer-invariant tests require retained wording; the Kilocode whole-settings SHA-256 pin also changes with the shared instruction text.
+Scope proposal: restore compatible wording inside allowed MD, then authorize only the baseline hash/comment in `internal/components/sdd/review_ledger_contract_test.go` after mechanical materialized-output inspection. That path was NOT edited.
+No full-suite, vet, or format-check command ran after this scope stop; no passing phase/acceptance is claimed and no failed command was blindly retried.
+Runtime boundary: real isolated filesystem injection for 15 registered adapters; rendered selection covers 16 IDs/12 templates. Pi is no-injection only, not host proof.
+Claude tests follow the thin bootstrap reference to lazy workflow; OpenCode/Kilocode inspect commands plus overlay; remaining prompt strategies inspect written files. Qwen frontmatter host interpretation remains unproven.
+All owned commands terminated with recorded real PIDs/exits. Frozen baseline, initial/corrected RED, GREEN and triangulation bytes/logs remain in the private evidence bundle; no opaque live token is persisted.
+Rollback removes only task 1.5 instruction/test/progress hunks; retain prior native fixes, task history, markers, grants and budgets. Writer model: gpt-6-astra; effort unavailable. Project skills paths-injected; phase skill fallback-path.
+
+### Task 1.5 stop — exact remaining unchecked task lines
+- [ ] **Start → end:** Start from PR #4505 commit `31601530b5650ed9db27b034128ed771cfc40393`, whose native behavior is accepted but whose Claude/shared instructions remain inconsistent; end with native status authoritative for every declared store, read-only inspection distinct from explicit authorized continuation, and rendered/installed-fixture regression coverage across registered adapter cohorts.
+- [ ] **Start → end:** Start from accepted current supported-action behavior; characterize supported status rendering and refusal-before-execution without preserving the exact-three defect; end with a baseline that remains valid after v2 expansion.
+- [ ] **Start → end:** Start with the baseline; end with failing cases for all emitted action tokens, seven dependencies, optional four instruction groups, nullable discovery, wrong identity, malformed/unknown action, misleading prose, and separate status/continue calls.
+- [ ] **Start → end:** Start from 2.2 RED; end with native v2 decode/rendering and `sddStatus` read-only, a narrow authorized `sddContinue` adapter call, and no live local readiness reconstruction, `resolve-via-engram`, prefixed-token inference, automatic fallback, or `instructions` alias.
+- [ ] **Start → end:** Start with closed native declaration/admission and the currently supported managed route; end with separate preservation cases for exact class grants, matching/one-sided/missing-intent recovery, strict stale/divergent refusal, confirmed proposal handoff that does not interview, and automatic unresolved choices emitted once as a lossless grouped prompt—without encoding a whole-phase tool denial as desired behavior.
+- [ ] **Start → end:** Start with failing cases for documentation/open-web exact selected grants, inactive/missing extension tools, separately authorized read/write/Engram persistence, narrowed OpenSpec path, wrong worktree, and denial persistence; also require missing-tool denial → corrected capability/artifact facts → continuation with the **same** bounded selected-store path/scope, never a broadened or replacement scope. End with existing launch data carrying selected classes/per-class grants and actual extension selection, with child-local inventory recheck.
+- [ ] **Start → end:** Start with RED tests requiring `remediate` to refuse if unsupported, carry `failedEvidenceRevision` unchanged when supported, acquire once, and settle pass/fail/interruption through existing compact JSON; end with narrow adapter methods and runner finalization using retained session/task history, not a second ledger.
+- [ ] **Start → end:** Start with a failing controlled boundary case using the built AI binary after its internal units pass independent verification, fixed Pi extension selection, and installed assets; end with a managed child that receives native v2 action/context, selected research/persistence tools, and typed remediation support, or fails safely before work when an asset/provisioning capability is deliberately absent.
+- [ ] **Start → end:** Start after all internal work units have independent acceptance and their RED/GREEN/TRIANGULATE/REFACTOR records and the 5.1 tuple passes; end with independently recorded full-suite results, diff/asset/record inspection, spec traceability, and a maintainer review package—never a delivery action.
+
+## Task 1.5 authorized ninth-path continuation — partial after full-suite failure
+
+Fresh native v2 status: OpenSpec, apply ready, repo-local authorized root, 6 checked/9 pending, no blockers/warnings. Same-attempt entry proceeded; original total400 cap remains.
+Human authorized `review_ledger_contract_test.go` hash/comment only. Compatible renderer sentinels were restored in allowed shared/lazy MD; invariant tests remain unchanged.
+Same-empty-home real Kilocode Inject probes passed: baseline97,880 bytes/SHA-256 `d2f4aad13b3930df018219bd91ea56ef8ddac3bc3978cd0374b1857e2a1c5944`; corrected98,680 bytes/SHA-256 `cab19425bb6db40eb916b1a74eab163e5fad630184796390aa40106453ec3947`.
+Mechanical comparison proves only `agent.gentle-orchestrator.prompt` changed by exact shared dispatcher-body substitution; all settings structure, models, tools and permissions match. Hash/comment updated only after that proof.
+
+### TDD Cycle Evidence / resumed self-checks
+| Stage | Actual result |
+|---|---|
+| Historical preservation/RED/GREEN/triangulation | Sealed prior evidence unchanged; no new defect RED or fabricated replay claim |
+| Materialization triangulation | Two identical-source probes, same fixed empty home and offline environment: both exit0; before/after settings bytes and diffs preserved |
+| Compatible wording/refactor and one diagnosed focused rerun | `go test ./internal/assets ./internal/components/sdd ./internal/cli ./internal/sddstatus -count=1`: exit0, PID1388379 |
+| Full module | `go test ./... -count=1`: exit1, PID1527427, 161.913s; 12 golden-test mismatches in `internal/components` |
+| Vet / gofmtcheck | NOT RUN after the new failure; no full-suite rerun or golden regeneration |
+
+Primary failure: `internal/testdata/golden/` snapshots still contain old Claude status/shared dispatcher instructions. Observed mismatches cover Claude, OpenCode multi, Cursor, Gemini, VSCode, Codex normal/lowcost/powerful, Windsurf SDD/combined, Kiro and Antigravity.
+These golden paths are outside the nine-path scope. Stop for a new scope/budget decision before regeneration; additional masked mismatches are not ruled out. Task1.5 remains unchecked; all nine exact unchecked lines in the preceding section remain unchanged.
+Historical duration clarification: prior focused PID559903 actually took153.383573s; the earlier148.96s notification was inaccurate prose, not a separate run. Old2,400-entry manifest and2,300 source hashes were mechanically verified on resume.
+A supplemental source-audit helper initially joined an absolute path incorrectly; bounded path readback corrected that helper-only assertion. It neither invalidated nor reran the preceding real materialization probes;570 production Go files compare identical.
+No host/provider execution is claimed:16 rendered IDs/12 templates,15 filesystem adapters, Pi no-injection only; Qwen frontmatter interpretation stays unproven. No bench writes/driven proof, review, reset, settlement or delivery.
+Rollback remains only task1.5's paired instruction/test/hash/task/progress hunks, preserving native fixes/history. Parent owns further authorization, independent acceptance and settlement. Writer: openai-codex/gpt-6-astra; effort unavailable.
+
+## Task 1.5 golden continuation — PARTIAL, path authorization mismatch
+
+Fresh full native v2 status consumed: OpenSpec/apply ready, repo-local root, no context warnings; six checked/nine pending. Authorized same-token entry returned proceed; no separate attempt or settlement.
+The isolated real generator changed exactly twelve requested basenames, but under `testdata/golden/`, NOT the authorized `internal/testdata/golden/`. Validation stopped before ANY copyback; live goldens/source/tests remain unchanged.
+Evidence: `/tmp/sdd4484-adapters-goldens-huifgsl6/`; all 2,300 entry files matched prior final hashes and every native entry-tree blob; both mechanical source copies were byte-checked before execution. Copied `run.py` is byte-identical to the sealed runner.
+| TDD Cycle Evidence | Actual result |
+|---|---|
+| Historical RED | Prior full failure remains bound to `sha256:25640ba738135ae196d5592a7002189b768718a29aebe2f83bf440997b0cbd00`; not reclassified |
+| Fresh named RED | Exact authorized twelve-case filter without update: exit 1, PID 1894957, twelve golden assertion failures |
+| Isolated generation | Same filter with `-update` in private source copy only: exit 0, PID 1895515; complete before/after hashes expose path mismatch |
+| GREEN / triangulation / refactor | NOT RUN: scope stop before copyback; no refactor |
+| Package/full/vet/format/diff checks | NOT RUN after scope stop; no full-module rerun |
+All four recorded command/supervisor PIDs are absent. No provider/host/Pi execution, bench proof, review, consent, delivery, or authority settlement is claimed.
+Task 1.5 stays unchecked; all nine exact unchecked lines in the preceding task1.5 remaining-task section remain unchanged in tasks.md. Parent must authorize actual paths before continuation and independently accept the final candidate; prior review ACK does not cover this correction.
+Boundary remains the SAME cohesive adapter correction in draft PR #4505, exception-ok/no chain; label application remains unproven. Rollback removes only this continuation's task forecast correction and appended progress, never history or budgets.
+
+## Task 1.5 golden migration — self-checks PASS, independent acceptance pending
+
+Parent corrected its pathname mapping: `goldenDir` resolves to repository `testdata/golden/`, not `internal/testdata/golden/`. The previous scope-stop report preserves that erroneous supplied mapping as history; no sealed record was rewritten. Same task/unit/PR #4505, no artificial split or new budget tranche.
+Fresh full status consumed: OpenSpec/apply ready, six checked/nine pending, repo-local root/no warnings; authorized same-token continuation returned proceed. Parent owns failed-evidence-bound settlement and independent acceptance.
+Evidence: `/tmp/sdd4484-adapters-goldens-pathfix-qf79i7qm/`; all 4,625 sealed manifest entries and 2,300 live resume hashes verified. Generator/RED were NOT rerun; preserved generated bytes were reused.
+Semantic proof: ten Markdown outputs equal exact baseline-to-current canonical guard substitution; Claude equals the current asset; OpenCode changes only `agent.gentle-orchestrator.prompt`, with every other JSON value equal. Complete fixture inventory has exactly twelve changes, no additions/missing files.
+Only the twelve validated leaves were mechanically copied back, byte-identical; all 2,288 other live files matched resume hashes before bookkeeping. A new private comparator adaptation initially shadowed a path variable; corrected before semantic validation/copyback, with no generator or test retry.
+| TDD Cycle Evidence / Work Unit Evidence | Actual result |
+|---|---|
+| RED | Preserved historical failed revision `sha256:25640ba738135ae196d5592a7002189b768718a29aebe2f83bf440997b0cbd00` and fresh prior twelve-case RED; neither reclassified |
+| GREEN | Exact twelve-case filter without update: exit 0, PID 1922738 |
+| TRIANGULATE | `go test ./internal/components -count=1`: exit 0, PID 1923350; `go test ./... -count=1`: single run exit 0, PID 1923943, 152.091249s |
+| Quality / REFACTOR | `go vet ./...`, `go run ./internal/gofmtcheck`, `git diff --check`: exit 0; no production refactor |
+| Boundary / rollback | Real generator and local Go fixture execution only; restore this task's twelve golden leaves and record hunks without reverting prior native fixes or authority/history |
+Task 1.5 is now checked after all required self-checks passed; the other eight exact unchecked lines in the earlier remaining-task section remain unchanged in tasks.md. This is NOT global SDD verify/archive readiness or independent acceptance.
+All recorded test/supervisor PIDs terminated. No host loading, Qwen interpretation, Pi execution, driven bench, review consent, settlement, commit, or delivery claim. Existing size-exception strategy does not prove the GitHub label was applied.

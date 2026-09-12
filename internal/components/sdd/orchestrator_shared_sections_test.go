@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -21,6 +22,71 @@ import (
 // move to one shared asset so the mechanism exists and so this set cannot drift
 // again. Each runtime keeps its own heading line, which is why codex may hold a
 // section at ## while the others hold it at ###.
+
+// Text contracts prove shipped instructions, not execution by any agent host.
+func assertStatusContinuationContract(t *testing.T, content string) {
+	t.Helper()
+	for _, want := range []string{
+		"gentle-ai sdd-status [change] --cwd <repo> --json --instructions",
+		"every declared artifact store, including Engram", "native v2",
+		"Inspection needs no execution preflight", "No recommendation is executed during inspection",
+		"Only explicit authorized continuation", "current human scope covers the selected change-directory marker",
+		"Read-only or excluded-marker scope forbids this mutating call",
+		"Preparation grants no source roots or attempts", "actionContext",
+		"nextRecommended", "blockedReasons", "non-authoritative",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("missing status/continuation contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"sdd-continue [change] --cwd <repo>` or", "manual status schema",
+		"do NOT invoke the native dispatcher", "resolve status entirely from Engram",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("conflicting status/continuation instruction %q", forbidden)
+		}
+	}
+}
+
+func TestRegisteredAgentsRenderStatusContinuationContract(t *testing.T) {
+	registry, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := registry.SupportedAgents()
+	if len(ids) != 16 {
+		t.Fatalf("registered cohort changed: %v", ids)
+	}
+	templates := map[string]bool{}
+	for _, agent := range ids {
+		templates[sddOrchestratorAsset(agent)] = true
+		t.Run(string(agent), func(t *testing.T) {
+			content := renderSDDOrchestratorAsset(agent)
+			if agent == model.AgentClaudeCode {
+				if !strings.Contains(content, "~/.claude/skills/_shared/sdd-orchestrator-workflow.md") {
+					t.Fatal("Claude bootstrap lost its lazy workflow reference")
+				}
+				lazy, err := renderClaudeSessionPreflight()
+				if err != nil {
+					t.Fatal(err)
+				}
+				content += lazy
+			}
+			assertStatusContinuationContract(t, content)
+		})
+	}
+	if len(templates) != 12 {
+		t.Fatalf("effective template coverage = %d, want 12", len(templates))
+	}
+	t.Run("claude-lazy-workflow", func(t *testing.T) {
+		content, err := renderClaudeSessionPreflight()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStatusContinuationContract(t, content)
+	})
+}
 
 var sharedOrchestratorSectionNames = []string{
 	"Native SDD Dispatcher Guard",

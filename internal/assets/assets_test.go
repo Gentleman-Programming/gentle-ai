@@ -1161,6 +1161,30 @@ func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValu
 	}
 }
 
+func TestClaudeSDDStatusUsesNativeForEveryDeclaredStore(t *testing.T) {
+	content := MustRead("claude/commands/gentle-sdd-status.md")
+	for _, want := range []string{
+		"gentle-ai sdd-status [change] --cwd <repo> --json --instructions",
+		"every declared artifact store, including Engram", "native v2",
+		"Inspection needs no execution preflight", "without executing any recommendation",
+		"If the binary is unavailable", "non-authoritative", "Do not fabricate native-shaped status",
+		"artifactPaths", "actionContext", "blockedReasons",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Claude status missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"do NOT invoke the native dispatcher", "resolve status entirely from Engram",
+		"mem_search", "manual status schema", "SDD Session Preflight must already be complete",
+		"launch the corresponding planning phase", "Inspect the selected artifact store from session preflight",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("Claude status retains conflicting instruction %q", forbidden)
+		}
+	}
+}
+
 func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 	content := MustRead("claude/sdd-orchestrator-workflow.md")
 
