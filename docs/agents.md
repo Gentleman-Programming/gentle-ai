@@ -13,7 +13,7 @@
 | Kilo Code       | `kilocode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/kilo`                    |
 | Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)              | No            | No             | `~/.gemini`                         |
 | Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.cursor`                         |
-| VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)               | No            | No             | `~/.copilot` + VS Code User profile |
+| VS Code Copilot | `vscode-copilot` | Yes          | Yes | Solo-agent                       | No            | No             | `~/.copilot` + VS Code User profile |
 | Codex           | `codex`          | Yes          | Yes | Native multi-agent (default; solo fallback) | No            | No             | `~/.codex`                          |
 | Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                       | No            | No             | `~/.codeium/windsurf`               |
 | Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control     | No            | No             | `~/.gemini/antigravity`             |
@@ -37,10 +37,10 @@ Most agents receive the **full SDD orchestrator** policy, plus skill files writt
 
 | Model                 | How It Works                                                                                                                                                                                       | Agents                                                                                                    |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
+| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, Kimi Code, Kiro IDE, Qwen Code, Pi |
 | **Full (delegate_task)** | The orchestrator uses Hermes's native `delegate_task` primitive to spawn ephemeral workers in fresh context windows. Workers receive only a self-contained mission; the parent receives only their final summary. Toolsets, MCP, and skills must be passed explicitly (not inherited by default). | Hermes |
 | **Native multi-agent** | The orchestrator delegates through the agent's native collaboration tools when configured and available, with inline execution as a graceful fallback. | Codex |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram™ provides cross-phase persistence.                                                                     | Windsurf, Antigravity, OpenClaw, Trae                                                                     |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram™ provides cross-phase persistence.                                                                     | Windsurf, Antigravity, VS Code Copilot, OpenClaw, Trae                                                                     |
 
 ### Cursor Native Subagents
 
@@ -138,7 +138,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ### VS Code Copilot
 
-- Uses the `runSubagent` tool with support for parallel execution
+- Solo-agent SDD execution (all phases run inline in the conversation)
 - Skills at `~/.copilot/skills/`
 - System prompt at `Code/User/prompts/gentle-ai.instructions.md`
 - MCP config at `Code/User/mcp.json`

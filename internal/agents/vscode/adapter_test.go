@@ -157,3 +157,39 @@ func TestMCPConfigPathUsesVSCodeUserProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilities(t *testing.T) {
+	a := NewAdapter()
+	home := "/tmp/home"
+
+	if !a.SupportsSkills() {
+		t.Fatal("SupportsSkills() = false, want true")
+	}
+	if !a.SupportsSystemPrompt() {
+		t.Fatal("SupportsSystemPrompt() = false, want true")
+	}
+	if !a.SupportsMCP() {
+		t.Fatal("SupportsMCP() = false, want true")
+	}
+	if a.SupportsSubAgents() {
+		t.Fatal("SupportsSubAgents() = true, want false (VS Code Copilot runs inline solo-agent)")
+	}
+	if a.SupportsSlashCommands() {
+		t.Fatal("SupportsSlashCommands() = true, want false")
+	}
+	if a.SupportsOutputStyles() {
+		t.Fatal("SupportsOutputStyles() = true, want false")
+	}
+	if got := a.SubAgentsDir(home); got != "" {
+		t.Fatalf("SubAgentsDir() = %q, want empty", got)
+	}
+	if got := a.EmbeddedSubAgentsDir(); got != "" {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want empty", got)
+	}
+	if got := a.CommandsDir(home); got != "" {
+		t.Fatalf("CommandsDir() = %q, want empty", got)
+	}
+	if got := a.OutputStyleDir(home); got != "" {
+		t.Fatalf("OutputStyleDir() = %q, want empty", got)
+	}
+}
