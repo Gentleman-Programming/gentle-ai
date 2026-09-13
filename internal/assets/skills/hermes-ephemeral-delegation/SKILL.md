@@ -14,7 +14,7 @@ Load this skill when you are acting as the parent orchestrator and the work ahea
 - Broad exploration (4+ files to understand, codebase mapping, approach comparison)
 - Multi-file implementation (touching 2+ non-trivial files)
 - Test or build execution
-- Fresh adversarial review (diffs, PR readiness, incident audit)
+- Fresh adversarial review (diffs, PR readiness for unreviewed or changed candidates, incident audit)
 - Multi-step debugging that would flood the parent context
 
 Do NOT load this skill if you are already inside a delegated child task — you are the executor, not the orchestrator.
