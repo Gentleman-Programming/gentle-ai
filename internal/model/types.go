@@ -111,6 +111,7 @@ const (
 type EngramUninstallScope string
 
 const (
+	EngramUninstallScopeNone    EngramUninstallScope = "none"
 	EngramUninstallScopeGlobal  EngramUninstallScope = "global"
 	EngramUninstallScopeProject EngramUninstallScope = "project"
 )
