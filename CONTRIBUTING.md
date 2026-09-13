@@ -104,6 +104,7 @@ For disclosure boundaries, required details, attribution rules, and reviewer exp
 ### Prerequisites
 
 - Go 1.25.10+
+- Node 24 (matches CI; `mise install` at the repo root is one option to provision it, but not required)
 - Docker (for E2E tests)
 - Git 2.38+
 
