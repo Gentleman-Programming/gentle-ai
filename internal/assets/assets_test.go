@@ -6,9 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/researchcapability"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestOpenCodeTelemetryRuntimePlugin uses a hermetic Node subprocess and a fake
@@ -942,6 +946,7 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
 	tests := []struct {
 		path        string
+		agent       model.AgentID
 		declaration string
 		toolLine    string
 		toolsExact  string
@@ -950,22 +955,47 @@ func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
 		required    []string
 	}{
 		{
-			path: "claude/agents/sdd-research.md", declaration: "Evidence grants: documentation=[WebFetch]; open-web=[WebSearch,WebFetch].",
-			toolLine: "tools:", toolsExact: "tools: WebFetch, WebSearch", evidence: []string{"WebFetch", "WebSearch"},
+			path: "claude/agents/sdd-research.md", agent: model.AgentClaudeCode,
+			declaration: "Evidence grants: documentation=[WebFetch]; open-web=[WebSearch,WebFetch].",
+			toolLine:    "tools:", toolsExact: "tools: WebFetch, WebSearch", evidence: []string{"WebFetch", "WebSearch"},
 			forbidden: []string{"Read", "Edit", "Write", "mcp__plugin_engram_engram__"},
 			required:  []string{"already-persisted intent", "Do not read or mutate repository or Engram state", "bounded evidence envelope", "The orchestrator validates and persists this envelope"},
 		},
 		{
-			path: "kiro/agents/sdd-research.md", declaration: "Evidence grants: documentation=[@context7]; open-web=[].",
-			toolLine: "tools:", evidence: []string{"@context7"},
+			path: "kiro/agents/sdd-research.md", agent: model.AgentKiroIDE,
+			declaration: "Evidence grants: documentation=[@context7]; open-web=[].",
+			toolLine:    "tools:", evidence: []string{"@context7"},
 		},
-		{path: "cursor/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
-		{path: "kimi/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
+		{path: "cursor/agents/sdd-research.md", agent: model.AgentCursor, declaration: "Evidence grants: documentation=[]; open-web=[]."},
+		{path: "kimi/agents/sdd-research.md", agent: model.AgentKimi, declaration: "Evidence grants: documentation=[]; open-web=[]."},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
 			content := MustRead(tt.path)
+			// #4088: the shipped declaration and tool surface are verified
+			// against the provider-owned authority, never restated by hand.
+			authorityDeclaration := researchcapability.Declaration(tt.agent)
+			if tt.declaration != authorityDeclaration {
+				t.Fatalf("%s declaration = %q, want authority %q", tt.path, tt.declaration, authorityDeclaration)
+			}
+			projection, projectionErr := researchcapability.MarkdownProjection(tt.agent, content)
+			if projectionErr != nil {
+				t.Fatalf("%s MarkdownProjection() error = %v", tt.path, projectionErr)
+			}
+			if verifyErr := researchcapability.VerifyProjection(projection); verifyErr != nil {
+				t.Fatalf("%s VerifyProjection() error = %v", tt.path, verifyErr)
+			}
+			var allowedTools []string
+			for _, decision := range researchcapability.EvidenceToolDecisions(tt.agent) {
+				if decision.Allowed {
+					allowedTools = append(allowedTools, decision.Tool)
+				}
+			}
+			if !reflect.DeepEqual(projection.AllowedTools, allowedTools) {
+				t.Fatalf("%s allowed tools = %v, want authority decisions %v", tt.path, projection.AllowedTools, allowedTools)
+			}
+
 			for _, required := range []string{
 				tt.declaration,
 				"Persistence tools are not evidence grants.",

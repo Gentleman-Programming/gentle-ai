@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/researchcapability"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
@@ -431,6 +432,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, err
 			}
 		}
+		// #4088: the canonical research capability authority validates the
+		// generated OpenCode research projections before any disk mutation.
+		// Kilocode keeps its own restored research permission path and is out
+		// of this parity boundary.
+		if adapter.Agent() == model.AgentOpenCode {
+			if err := verifyOpenCodeResearchProjection(preparedOverlay, "sdd-research"); err != nil {
+				return InjectionResult{}, err
+			}
+		}
 		for _, profile := range opts.Profiles {
 			if profile.Name == "" || profile.Name == "default" {
 				continue
@@ -441,6 +451,11 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 			if err := validateSessionPreflightOverlay(overlay, "sdd-orchestrator-"+profile.Name, false); err != nil {
 				return InjectionResult{}, err
+			}
+			if adapter.Agent() == model.AgentOpenCode {
+				if err := verifyOpenCodeResearchProjection(overlay, "sdd-research-"+profile.Name); err != nil {
+					return InjectionResult{}, err
+				}
 			}
 			profileOverlays[profile.Name] = overlay
 		}
@@ -795,6 +810,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			return InjectionResult{}, fmt.Errorf("read embedded agents dir: %w", err)
 		}
 
+		// Render every sub-agent payload first so a research projection
+		// mismatch can stop this section before the first write (#4088).
+		type subAgentWrite struct {
+			name    string
+			path    string
+			content string
+			// researchContent carries the rendered evidence content used to
+			// verify the research projection. It excludes the orthogonal
+			// CodeGraph tool grant, which is a separate capability and never
+			// an evidence identity.
+			researchContent string
+			verifyResearch  bool
+		}
+		writes := make([]subAgentWrite, 0, len(entries))
+
 		for _, entry := range entries {
 			if entry.IsDir() {
 				continue
@@ -835,20 +865,48 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 			contentStr = expandEngramToolNames(contentStr)
 
+			write := subAgentWrite{
+				name:            entry.Name(),
+				path:            filepath.Join(agentsDir, entry.Name()),
+				content:         contentStr,
+				researchContent: contentStr,
+				verifyResearch:  entry.Name() == "sdd-research.md",
+			}
+
 			if isMarkdownSubAgentPromptFile(entry.Name()) {
 				contentStr = injectCodeGraphToolGrantIntoPrompt(contentStr, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectCodeGraphGuidanceIntoPrompt(contentStr, opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectLanguageContractIntoPrompt(contentStr)
 				contentStr = agentguidance.InjectRemoteAuthorization(contentStr)
+				write.content = contentStr
 			}
-			outPath := filepath.Join(agentsDir, entry.Name())
-			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
+			writes = append(writes, write)
+		}
+
+		// Fail closed on research projection drift before writing any file in
+		// this section. Every shipped research asset declares exactly the
+		// canonical grants and tool surface of its runtime (#4088).
+		for _, write := range writes {
+			if !write.verifyResearch {
+				continue
+			}
+			projection, projectionErr := researchcapability.MarkdownProjection(adapter.Agent(), write.researchContent)
+			if projectionErr != nil {
+				return InjectionResult{}, fmt.Errorf("extract research projection for %s: %w", write.name, projectionErr)
+			}
+			if verifyErr := researchcapability.VerifyProjection(projection); verifyErr != nil {
+				return InjectionResult{}, fmt.Errorf("verify research projection for %s: %w", write.name, verifyErr)
+			}
+		}
+
+		for _, write := range writes {
+			writeResult, err := filemerge.WriteFileAtomic(write.path, []byte(write.content), 0o644)
 			if err != nil {
-				return InjectionResult{}, fmt.Errorf("write agent %s: %w", entry.Name(), err)
+				return InjectionResult{}, fmt.Errorf("write agent %s: %w", write.name, err)
 			}
 			changed = changed || writeResult.Changed
 			if writeResult.Changed {
-				files = append(files, outPath)
+				files = append(files, write.path)
 			}
 		}
 
@@ -1047,6 +1105,31 @@ func validateSessionPreflightOverlay(content []byte, key string, preserved bool)
 	}
 	if actual != sddSessionPreflightBlock() {
 		return fmt.Errorf("preserved session preflight is not canonical")
+	}
+	return nil
+}
+
+// verifyOpenCodeResearchProjection proves one generated OpenCode research
+// agent entry against the canonical research capability authority (#4088).
+// The entry is named explicitly so a missing or renamed research agent fails
+// closed instead of silently skipping verification.
+func verifyOpenCodeResearchProjection(overlayBytes []byte, agentName string) error {
+	var overlay struct {
+		Agent map[string]map[string]any `json:"agent"`
+	}
+	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
+		return fmt.Errorf("unmarshal OpenCode overlay for %q research projection: %w", agentName, err)
+	}
+	entry, ok := overlay.Agent[agentName]
+	if !ok {
+		return fmt.Errorf("OpenCode overlay is missing %q research agent", agentName)
+	}
+	projection, err := researchcapability.OpenCodeProjection(model.AgentOpenCode, entry)
+	if err != nil {
+		return fmt.Errorf("extract OpenCode %q research projection: %w", agentName, err)
+	}
+	if err := researchcapability.VerifyProjection(projection); err != nil {
+		return fmt.Errorf("verify OpenCode %q research projection: %w", agentName, err)
 	}
 	return nil
 }
