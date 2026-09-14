@@ -1,9 +1,11 @@
 package opencode
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
@@ -254,9 +256,106 @@ func configuredModels(provider map[string]any) map[string]Model {
 			Family:    stringValue(def["family"], ""),
 			ToolCall:  boolValue(def["tool_call"]) || boolValue(def["toolcall"]),
 			Reasoning: boolValue(def["reasoning"]),
+			Cost:      configuredCost(def),
+			Limit:     configuredLimit(def),
+			Variants:  configuredVariants(def),
 		}
 	}
 	return models
+}
+
+func configuredCost(def map[string]any) ModelCost {
+	costRaw, ok := def["cost"].(map[string]any)
+	if !ok {
+		return ModelCost{}
+	}
+	return ModelCost{
+		Input:  floatValue(costRaw["input"]),
+		Output: floatValue(costRaw["output"]),
+	}
+}
+
+func configuredLimit(def map[string]any) ModelLimit {
+	limitRaw, ok := def["limit"].(map[string]any)
+	if !ok {
+		return ModelLimit{}
+	}
+	contextLimit := intValue(limitRaw["context"])
+	if contextLimit == 0 {
+		contextLimit = intValue(limitRaw["input"])
+	}
+	return ModelLimit{
+		Context: contextLimit,
+		Output:  intValue(limitRaw["output"]),
+	}
+}
+
+func configuredVariants(def map[string]any) []string {
+	extract := func(raw any) []string {
+		if raw == nil {
+			return nil
+		}
+		var list []string
+		seen := make(map[string]bool)
+		add := func(s string) {
+			s = strings.TrimSpace(s)
+			if s != "" && !seen[s] {
+				seen[s] = true
+				list = append(list, s)
+			}
+		}
+
+		var collect func(v any)
+		collect = func(v any) {
+			if v == nil {
+				return
+			}
+			switch val := v.(type) {
+			case string:
+				add(val)
+			case []string:
+				for _, item := range val {
+					add(item)
+				}
+			case []any:
+				for _, item := range val {
+					collect(item)
+				}
+			case map[string]any:
+				if values, ok := val["values"]; ok {
+					if typeStr, okType := val["type"].(string); okType && typeStr != "" && typeStr != "effort" {
+						return
+					}
+					collect(values)
+					return
+				}
+				if id, ok := val["id"].(string); ok && strings.TrimSpace(id) != "" {
+					add(id)
+					return
+				}
+				if name, ok := val["name"].(string); ok && strings.TrimSpace(name) != "" {
+					add(name)
+					return
+				}
+				for key := range val {
+					add(key)
+				}
+			}
+		}
+
+		collect(raw)
+		return list
+	}
+
+	variants := extract(def["variants"])
+	if len(variants) == 0 {
+		variants = extract(def["reasoning_options"])
+	}
+	if len(variants) == 0 {
+		return nil
+	}
+	sortVariants(variants)
+	return variants
 }
 
 func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
@@ -348,4 +447,58 @@ func stringValue(value any, fallback string) string {
 func boolValue(value any) bool {
 	flag, _ := value.(bool)
 	return flag
+}
+
+func floatValue(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return f
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
+func intValue(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil {
+			return int(i)
+		}
+		f, _ := v.Float64()
+		return int(f)
+	case string:
+		s := strings.TrimSpace(v)
+		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return int(i)
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return int(f)
+		}
+		return 0
+	default:
+		return 0
+	}
 }

@@ -3,6 +3,7 @@ package opencode
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -391,5 +392,119 @@ func writeOpenCodeConfigFixture(t *testing.T, path string, managed bool) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config fixture: %v", err)
+	}
+}
+
+func TestConfiguredModelsExtractsCostLimitVariants(t *testing.T) {
+	providerDef := map[string]any{
+		"models": map[string]any{
+			"model-full": map[string]any{
+				"name":      "Full Model",
+				"tool_call": true,
+				"reasoning": true,
+				"cost": map[string]any{
+					"input":  0.15,
+					"output": 0.60,
+				},
+				"limit": map[string]any{
+					"context": 128000,
+					"output":  8192,
+				},
+				"variants": map[string]any{
+					"high":   map[string]any{},
+					"low":    map[string]any{},
+					"medium": map[string]any{},
+				},
+			},
+			"model-reasoning-options-slice": map[string]any{
+				"name":              "Slice Reasoning",
+				"tool_call":         true,
+				"reasoning_options": []any{"high", "low"},
+			},
+			"model-variants-slice": map[string]any{
+				"name":      "Slice Variants",
+				"tool_call": true,
+				"variants":  []any{"zeta", "alpha", "beta"},
+			},
+			"model-reasoning-options-object": map[string]any{
+				"name":      "OpenCode Schema Reasoning Options",
+				"tool_call": true,
+				"reasoning_options": []any{
+					map[string]any{"type": "budget", "values": []any{1024, 2048}},
+					map[string]any{"type": "effort", "values": []any{"high", "max"}},
+				},
+			},
+			"model-variants-object-array": map[string]any{
+				"name":      "Object Array Variants",
+				"tool_call": true,
+				"variants": []any{
+					map[string]any{"id": "high"},
+					map[string]any{"id": "low"},
+				},
+			},
+			"model-string-numbers-and-input-limit": map[string]any{
+				"name": "String Numbers and Input Limit",
+				"cost": map[string]any{
+					"input":  "0.20",
+					"output": "0.80",
+				},
+				"limit": map[string]any{
+					"input":  "64000",
+					"output": "4096",
+				},
+			},
+			"model-empty-extras": map[string]any{
+				"name": "Minimal Model",
+			},
+		},
+	}
+
+	models := configuredModels(providerDef)
+
+	full := models["model-full"]
+	if full.Cost.Input != 0.15 || full.Cost.Output != 0.60 {
+		t.Errorf("model-full Cost = %+v, want input:0.15 output:0.60", full.Cost)
+	}
+	if full.Limit.Context != 128000 || full.Limit.Output != 8192 {
+		t.Errorf("model-full Limit = %+v, want context:128000 output:8192", full.Limit)
+	}
+	if want := []string{"low", "medium", "high"}; !reflect.DeepEqual(full.Variants, want) {
+		t.Errorf("model-full Variants = %v, want %v", full.Variants, want)
+	}
+
+	sliceReasoning := models["model-reasoning-options-slice"]
+	if want := []string{"low", "high"}; !reflect.DeepEqual(sliceReasoning.Variants, want) {
+		t.Errorf("model-reasoning-options-slice Variants = %v, want %v", sliceReasoning.Variants, want)
+	}
+
+	sliceVariants := models["model-variants-slice"]
+	if want := []string{"alpha", "beta", "zeta"}; !reflect.DeepEqual(sliceVariants.Variants, want) {
+		t.Errorf("model-variants-slice Variants = %v, want %v", sliceVariants.Variants, want)
+	}
+
+	roObj := models["model-reasoning-options-object"]
+	if want := []string{"high", "max"}; !reflect.DeepEqual(roObj.Variants, want) {
+		t.Errorf("model-reasoning-options-object Variants = %v, want %v", roObj.Variants, want)
+	}
+
+	voArray := models["model-variants-object-array"]
+	if want := []string{"low", "high"}; !reflect.DeepEqual(voArray.Variants, want) {
+		t.Errorf("model-variants-object-array Variants = %v, want %v", voArray.Variants, want)
+	}
+
+	strNums := models["model-string-numbers-and-input-limit"]
+	if strNums.Cost.Input != 0.20 || strNums.Cost.Output != 0.80 {
+		t.Errorf("model-string-numbers-and-input-limit Cost = %+v, want input:0.20 output:0.80", strNums.Cost)
+	}
+	if strNums.Limit.Context != 64000 || strNums.Limit.Output != 4096 {
+		t.Errorf("model-string-numbers-and-input-limit Limit = %+v, want context:64000 output:4096", strNums.Limit)
+	}
+
+	empty := models["model-empty-extras"]
+	if empty.Cost.Input != 0 || empty.Cost.Output != 0 {
+		t.Errorf("model-empty-extras Cost = %+v, want zero values", empty.Cost)
+	}
+	if len(empty.Variants) != 0 {
+		t.Errorf("model-empty-extras Variants = %v, want empty", empty.Variants)
 	}
 }
