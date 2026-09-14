@@ -36,7 +36,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-root-config`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-root-config`
 - **slug**: `erp-mf-root-config`
 - **Términos de dominio**: shell, host, module federation, remotes, bootstrap, ruteo raíz
 - **Flujo de negocio**: arranque y composición de la app; casi nunca tiene locators de negocio.
@@ -45,7 +45,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-comun`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-comun`
 - **slug**: `erp-mf-comun`
 - **Términos de dominio**: compartido, común, tabla, grilla, modal, toast, paginador,
   datepicker, buscador, combo, directiva, pipe
@@ -56,7 +56,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-configuracion`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-configuracion`
 - **slug**: `erp-mf-configuracion`
 - **Términos de dominio**: configuración, parámetros de empresa, series, correlativos,
   impuestos, monedas, sucursales
@@ -67,7 +67,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-configuraciones`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-configuraciones`
 - **slug**: `erp-mf-configuraciones`
 - **Términos de dominio**: configuraciones, catálogos maestros, ajustes por módulo,
   listas de valores
@@ -78,7 +78,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-estilos`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-estilos`
 - **slug**: `erp-mf-estilos`
 - **Términos de dominio**: estilos, tema, tokens de diseño, SCSS, variables, CSS global
 - **Flujo de negocio**: capa visual; rara vez expone locators propios.
@@ -87,7 +87,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-header`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-header`
 - **slug**: `erp-mf-header`
 - **Términos de dominio**: header, barra superior, usuario logueado, selector de
   empresa/sucursal, notificaciones, cerrar sesión
@@ -97,7 +97,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-home`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-home`
 - **slug**: `erp-mf-home`
 - **Términos de dominio**: home, inicio, dashboard, accesos directos, widgets,
   tarjetas resumen
@@ -107,7 +107,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-logistica`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-logistica`
 - **slug**: `erp-mf-logistica`
 - **Términos de dominio**: logística, almacén, kardex, stock, inventario, ingreso,
   salida, transferencia, guía de remisión
@@ -117,7 +117,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-menu`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-menu`
 - **slug**: `erp-mf-menu`
 - **Términos de dominio**: menú lateral, navegación, árbol de módulos, permisos de
   menú, breadcrumb
@@ -127,7 +127,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-punto-venta`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-punto-venta`
 - **slug**: `erp-mf-punto-venta`
 - **Términos de dominio**: venta, punto de venta, POS, emisión, comprobante, boleta,
   factura, nota de venta, caja, cobro, medio de pago, cliente, anulación
@@ -139,7 +139,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-punto-venta-menu`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-punto-venta-menu`
 - **slug**: `erp-mf-punto-venta-menu`
 - **Términos de dominio**: carta, menú de productos del POS, categorías, precios,
   mesas, pedido rápido
@@ -149,7 +149,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-resources`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-resources`
 - **slug**: `erp-mf-resources`
 - **Términos de dominio**: recursos, assets, íconos, imágenes, i18n, traducciones
 - **Flujo de negocio**: activos estáticos; sin UI de negocio propia.
@@ -158,7 +158,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-seguridad`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-seguridad`
 - **slug**: `erp-mf-seguridad`
 - **Términos de dominio**: seguridad, login, usuarios, roles, permisos, cambio de
   contraseña, auditoría de acceso
@@ -169,7 +169,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ### `erp-mf-tiendalink`
 
-- **gitlab_path**: `unknown — resolver con search_projects`
+- **gitlab_path**: `SmartClic/erp-mf-tiendalink`
 - **slug**: `erp-mf-tiendalink`
 - **Términos de dominio**: tiendalink, tienda online, e-commerce, catálogo web,
   pedidos web, sincronización
