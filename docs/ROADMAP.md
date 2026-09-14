@@ -21,7 +21,7 @@
 | :--- | :--- | :---: | :---: | :--- |
 | **INC-01** | `axiom-identity-workspace-topology` | ✅ Archivado | Arquitectura / Core | Creación del binario `axiom`, esquema `axiom.yaml`, validación de topologías (monorepo-embedded, monorepo-decoupled, multirepo) y repositorio canónico de specs. |
 | **INC-02** | `structured-handoffs-lifecycle` | ✅ Archivado | Core SDD / Workflow | Esquema canónico `handoff.md`, motor Go `internal/handoff`, subcomandos CLI `axiom handoff show/create/validate` y espejo Engram. |
-| **INC-03** | `multi-role-sdd-fan-out` | 📋 Planificado | Core SDD / Roles | Declaración de roles en `Design`, división de `tasks.<rol>.md`, ejecución `Apply`/`Verify` por rol y barrera de sincronización en `Archive`. |
+| **INC-03** | `multi-role-sdd-fan-out` | ✅ Archivado | Core SDD / Roles | Concurrencia de roles en `Design`, `tasks.<rol>.md`, políticas de compuerta (`blocking`/`deferred`), barrera de sincronización y migración diferida de tareas acumulativas. |
 | **INC-04** | `axiom-local-web-dashboard` | 📋 Planificado | UI / Experiencia | Servidor HTTP local embebido en Go con dashboard web: tablero de incrementos, estado de roles, visor de handoffs y buzón de skills. |
 | **INC-05** | `autoskills-catalog-and-mining` | 📋 Planificado | Skills / Inteligencia | Catálogo de skills por tecnología detectada y minería heurística de código por repositorio con pantalla de aprobación humana previa. |
 | **INC-06** | `semantic-code-serena-codegraph` | 📋 Planificado | Semántica / Herramientas | Conector local con Serena MCP y CodeGraph para navegación y consultas semánticas de código en `Explore` y `Design`. |
@@ -48,3 +48,15 @@
   2. Subcomandos CLI `axiom handoff show`, `create` y `validate` en `cmd/axiom/main.go`.
   3. Batería completa de pruebas unitarias para `internal/handoff/` con cobertura exhaustiva de casos válidos y rechazo de errores.
   4. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 7/7 requerimientos, 13/13 escenarios BDD).
+
+### [INC-03] multi-role-sdd-fan-out (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-14-inc-03-multi-role-sdd-fan-out/`
+- **Especificación viva:** `openspec/specs/multi-role-fan-out/spec.md`
+- **Entregables clave:**
+  1. Paquete de dominio Go `internal/multirole/`: modelos de gobernanza (`GatePolicy`, `RoleAssignment`, `BarrierReport`), extractor de roles en `design.md` y evaluador de barrera de sincronización (*Fan-In*).
+  2. Mecanismo de compuertas diferenciadas: roles obligatorios (`blocking`) vs roles asíncronos/diferidos (`deferred`).
+  3. Motor de migración diferida de tareas pendientes (ej. E2E) hacia el backlog acumulativo continuo `openspec/changes/e2e-cumulative/tasks.md` con etiqueta de trazabilidad `[Ref: <cambio>]`.
+  4. Subcomandos CLI `axiom role list`, `axiom role status` y `axiom role barrier` (con bandera `--migrate-deferred`) en `cmd/axiom/main.go`.
+  5. Batería de 10 pruebas unitarias con 100% PASS en `internal/multirole/`.
+  6. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 8/8 requerimientos, 13/13 escenarios BDD).
+

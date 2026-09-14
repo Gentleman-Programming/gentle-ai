@@ -13,6 +13,20 @@ roles:
       - "go"
       - "bubbletea"
 
+  qa:
+    name: "Quality Assurance & Verification"
+    repositories:
+      - path: "."
+    tech:
+      - "go-test"
+
+  e2e:
+    name: "E2E & Automation Testing"
+    repositories:
+      - path: "."
+    tech:
+      - "automation"
+
 governance:
   language: "es"
   shared_memory: "engram"

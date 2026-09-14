@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
 )
 
@@ -31,6 +32,9 @@ COMANDOS:
   handoff show         Muestra el relevo activo de un cambio
   handoff create       Genera una plantilla canónica de relevo (handoff.md)
   handoff validate     Valida la consistencia semántica y transición de fases de un relevo
+  role list            Lista los roles asignados en el diseño y su política de compuerta
+  role status          Muestra el progreso de tareas y verificación de cada rol
+  role barrier         Evalúa la barrera de sincronización multi-rol antes de archivar o abrir PR
   version              Muestra la versión e información de compilación
   help                 Muestra esta ayuda
 
@@ -41,8 +45,9 @@ BANDERAS:
 Ejemplos:
   axiom workspace validate
   axiom handoff show --change inc-02-structured-handoffs-lifecycle
-  axiom handoff create --change mi-cambio --from spec --to design --from-role tech-lead --to-role architect
-  axiom handoff validate --change inc-02-structured-handoffs-lifecycle
+  axiom role list --change inc-03-multi-role-sdd-fan-out
+  axiom role status --change inc-03-multi-role-sdd-fan-out
+  axiom role barrier --change inc-03-multi-role-sdd-fan-out --migrate-deferred
 `
 	fmt.Print(help)
 }
@@ -99,6 +104,25 @@ func main() {
 			runHandoffValidate(os.Args[3:])
 		default:
 			fmt.Printf("Error: subcomando '%s' no reconocido para handoff. Usa 'axiom handoff [show|create|validate]'.\n", subCmd)
+			os.Exit(1)
+		}
+
+	case "role":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: subcomando de 'role' requerido. Opciones: list, status, barrier")
+			os.Exit(1)
+		}
+
+		subCmd := os.Args[2]
+		switch subCmd {
+		case "list":
+			runRoleList(os.Args[3:])
+		case "status":
+			runRoleStatus(os.Args[3:])
+		case "barrier":
+			runRoleBarrier(os.Args[3:])
+		default:
+			fmt.Printf("Error: subcomando '%s' no reconocido para role. Usa 'axiom role [list|status|barrier]'.\n", subCmd)
 			os.Exit(1)
 		}
 
@@ -313,6 +337,256 @@ func runHandoffValidate(args []string) {
 	fmt.Printf("  - Emisor: %s | Receptor: %s\n", h.Metadata.FromRole, h.Metadata.ToRole)
 	fmt.Printf("  - Archivo: %s\n", handoffPath)
 	os.Exit(0)
+}
+
+func runRoleList(args []string) {
+	fs := flag.NewFlagSet("role list", flag.ExitOnError)
+	changeFlag := fs.String("change", "", "Nombre del cambio")
+	pathFlag := fs.String("path", ".", "Ruta base del proyecto o repositorio")
+	if err := fs.Parse(args); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, changeName, changeDir, err := resolveChangeDir(*pathFlag, *changeFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	var wsConfig *workspace.WorkspaceConfig
+	cfgPath := filepath.Join(baseDir, "axiom.yaml")
+	if _, err := os.Stat(cfgPath); err == nil {
+		wsConfig, _ = workspace.LoadConfig(cfgPath)
+	}
+
+	designFile := filepath.Join(changeDir, "design.md")
+	roles, err := multirole.DetectRoles(designFile, wsConfig)
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudieron detectar los roles del cambio %q:\n  %v\n", changeName, err)
+		os.Exit(1)
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Printf("Axiom Roles Participantes: %s\n", changeName)
+	fmt.Println("================================================================================")
+	fmt.Printf("Total de roles asignados: %d\n\n", len(roles))
+
+	for i, r := range roles {
+		policyLabel := strings.ToUpper(string(r.GatePolicy))
+		fmt.Printf("  %d. Rol: %s [%s]\n", i+1, r.Role, policyLabel)
+		if r.Name != "" {
+			fmt.Printf("     Nombre descriptivo: %s\n", r.Name)
+		}
+		if len(r.Repositories) > 0 {
+			fmt.Printf("     Repositorios: %s\n", strings.Join(r.Repositories, ", "))
+		}
+		if len(r.Deliverables) > 0 {
+			fmt.Printf("     Entregables esperados: %s\n", strings.Join(r.Deliverables, ", "))
+		}
+		fmt.Println()
+	}
+	fmt.Println("================================================================================")
+	os.Exit(0)
+}
+
+func runRoleStatus(args []string) {
+	fs := flag.NewFlagSet("role status", flag.ExitOnError)
+	changeFlag := fs.String("change", "", "Nombre del cambio")
+	pathFlag := fs.String("path", ".", "Ruta base del proyecto o repositorio")
+	if err := fs.Parse(args); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, changeName, changeDir, err := resolveChangeDir(*pathFlag, *changeFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	var wsConfig *workspace.WorkspaceConfig
+	cfgPath := filepath.Join(baseDir, "axiom.yaml")
+	if _, err := os.Stat(cfgPath); err == nil {
+		wsConfig, _ = workspace.LoadConfig(cfgPath)
+	}
+
+	designFile := filepath.Join(changeDir, "design.md")
+	roles, err := multirole.DetectRoles(designFile, wsConfig)
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudieron detectar los roles del cambio %q:\n  %v\n", changeName, err)
+		os.Exit(1)
+	}
+
+	report, err := multirole.EvaluateBarrier(changeDir, changeName, roles)
+	if err != nil {
+		fmt.Printf("[ERROR] Error al evaluar el estado de los roles:\n  %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Printf("Axiom Estado de Roles: %s\n", changeName)
+	fmt.Println("================================================================================")
+
+	for i, r := range report.Roles {
+		policyLabel := strings.ToUpper(string(r.Assignment.GatePolicy))
+		fmt.Printf("  %d. Rol: %s [%s]\n", i+1, r.Assignment.Role, policyLabel)
+
+		if r.TasksFound {
+			fmt.Printf("     Tareas: %d/%d completadas (%.1f%%) — %d pendiente(s)\n",
+				r.Tasks.Completed, r.Tasks.Total, r.Tasks.Percent, r.Tasks.Pending)
+		} else {
+			fmt.Println("     Tareas: [NO ENCONTRADO / PENDIENTE]")
+		}
+
+		if r.VerifyDone {
+			fmt.Printf("     Verificación: [%s] [OK]\n", strings.ToUpper(r.Verdict))
+		} else if r.Verdict == "missing" {
+			fmt.Println("     Verificación: [PENDIENTE / NO EMITIDO]")
+		} else {
+			fmt.Printf("     Verificación: [%s] [FALLO]\n", strings.ToUpper(r.Verdict))
+		}
+		fmt.Println()
+	}
+
+	if len(report.Warnings) > 0 {
+		fmt.Println("Advertencias:")
+		for _, w := range report.Warnings {
+			fmt.Printf("  - [AVISO] %s\n", w)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println("================================================================================")
+	os.Exit(0)
+}
+
+func runRoleBarrier(args []string) {
+	fs := flag.NewFlagSet("role barrier", flag.ExitOnError)
+	changeFlag := fs.String("change", "", "Nombre del cambio")
+	pathFlag := fs.String("path", ".", "Ruta base del proyecto o repositorio")
+	migrateDeferredFlag := fs.Bool("migrate-deferred", false, "Vuelca las tareas diferidas pendientes al incremento acumulativo e2e-cumulative")
+	if err := fs.Parse(args); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, changeName, changeDir, err := resolveChangeDir(*pathFlag, *changeFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	var wsConfig *workspace.WorkspaceConfig
+	cfgPath := filepath.Join(baseDir, "axiom.yaml")
+	if _, err := os.Stat(cfgPath); err == nil {
+		wsConfig, _ = workspace.LoadConfig(cfgPath)
+	}
+
+	designFile := filepath.Join(changeDir, "design.md")
+	roles, err := multirole.DetectRoles(designFile, wsConfig)
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudieron detectar los roles del cambio %q:\n  %v\n", changeName, err)
+		os.Exit(1)
+	}
+
+	report, err := multirole.EvaluateBarrier(changeDir, changeName, roles)
+	if err != nil {
+		fmt.Printf("[ERROR] Error inesperado en el motor de barrera:\n  %v\n", err)
+		os.Exit(1)
+	}
+
+	if !report.Satisfied {
+		fmt.Printf("[ERROR] BARRIER BLOCKED: La barrera de sincronización no se cumple para %q\n\n", changeName)
+		fmt.Println("Motivos de bloqueo detectados:")
+		for i, b := range report.Blockers {
+			fmt.Printf("  %d. %s\n", i+1, b)
+		}
+		if len(report.Warnings) > 0 {
+			fmt.Println("\nAdvertencias adicionales:")
+			for _, w := range report.Warnings {
+				fmt.Printf("  - %s\n", w)
+			}
+		}
+		fmt.Println("\nResultado: BLOCKED (No autorizado para abrir PR ni mergear a main)")
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] BARRIER SATISFIED: Todos los roles obligatorios (blocking) han verificado con éxito para %q\n\n", changeName)
+	for _, r := range report.Roles {
+		if r.Assignment.GatePolicy == multirole.PolicyBlocking {
+			fmt.Printf("  - [PASS] %s: %d/%d tareas completadas (100%%) | Verificación: %s\n",
+				r.Assignment.Role, r.Tasks.Completed, r.Tasks.Total, strings.ToUpper(r.Verdict))
+		}
+	}
+
+	if len(report.Warnings) > 0 {
+		fmt.Println("\nAdvertencias de roles asíncronos / diferidos:")
+		for _, w := range report.Warnings {
+			fmt.Printf("  - %s\n", w)
+		}
+	}
+
+	if len(report.DeferredTasks) > 0 {
+		fmt.Printf("\nTareas diferidas capturadas con trazabilidad: %d tarea(s)\n", len(report.DeferredTasks))
+		for _, dt := range report.DeferredTasks {
+			fmt.Printf("  * [%s] %s\n", dt.Role, dt.TaskText)
+		}
+
+		if *migrateDeferredFlag {
+			cumulativeFile := filepath.Join(baseDir, "openspec", "changes", "e2e-cumulative", "tasks.md")
+			if err := multirole.MigrateDeferredTasks(cumulativeFile, report.DeferredTasks); err != nil {
+				fmt.Printf("\n[AVISO] No se pudieron migrar las tareas diferidas: %v\n", err)
+			} else {
+				fmt.Printf("\n[OK] %d tarea(s) diferida(s) migradas exitosamente al acumulativo:\n  Ruta: %s\n",
+					len(report.DeferredTasks), cumulativeFile)
+			}
+		} else {
+			fmt.Println("\n(Consejo: Usa --migrate-deferred para volcar estas tareas al backlog continuo de QA)")
+		}
+	}
+
+	fmt.Println("\nResultado: SATISFIED (Autorizado para despliegue en staging y PR a main)")
+	os.Exit(0)
+}
+
+func resolveChangeDir(baseDir, change string) (string, string, string, error) {
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", "", "", fmt.Errorf("ruta base inválida: %w", err)
+	}
+
+	changesDir := filepath.Join(absBase, "openspec", "changes")
+
+	if change != "" {
+		target := filepath.Join(changesDir, change)
+		if _, err := os.Stat(target); err != nil {
+			return "", "", "", fmt.Errorf("no existe el directorio del cambio %q en: %s", change, target)
+		}
+		return absBase, change, target, nil
+	}
+
+	entries, err := os.ReadDir(changesDir)
+	if err != nil {
+		return "", "", "", fmt.Errorf("no se pudo inspeccionar el directorio de cambios %q: %w", changesDir, err)
+	}
+
+	var foundDirs []string
+	for _, e := range entries {
+		if e.IsDir() && e.Name() != "archive" {
+			foundDirs = append(foundDirs, e.Name())
+		}
+	}
+
+	if len(foundDirs) == 0 {
+		return "", "", "", fmt.Errorf("no se encontró ningún cambio activo bajo %s", changesDir)
+	}
+	if len(foundDirs) > 1 {
+		return "", "", "", fmt.Errorf("se encontraron múltiples cambios activos (%s). Especifica el cambio con --change", strings.Join(foundDirs, ", "))
+	}
+
+	changeName := foundDirs[0]
+	return absBase, changeName, filepath.Join(changesDir, changeName), nil
 }
 
 func resolveHandoffFile(baseDir, change string) (string, error) {
