@@ -89,6 +89,11 @@ internal/reviewtransaction/candidate_decline.go	parseCandidateDeclineAuthorizati
 internal/reviewtransaction/gate.go	hashArtifactSource
 internal/reviewtransaction/gate.go	hashLedgerArtifactSource
 internal/reviewtransaction/gate.go	publicationRemoteConfigured
+internal/reviewtransaction/history_oracle.go	CheckHistory
+internal/reviewtransaction/history_oracle.go	HistoryEvent.preserves
+internal/reviewtransaction/history_oracle.go	canonicalSearchKey
+internal/reviewtransaction/history_oracle.go	historyModel.step
+internal/reviewtransaction/history_oracle.go	initialHistoryModel
 internal/reviewtransaction/incident.go	CanUseSeparateIncident
 internal/reviewtransaction/incident.go	validIncidentTarget
 internal/reviewtransaction/rar_authority_repository.go	OpenRARAuthorityRepository
