@@ -264,6 +264,97 @@ func TestParseSyncFlagsDryRun(t *testing.T) {
 	}
 }
 
+func TestRunSyncWorkspaceScopeRefreshesWithoutGlobalMutation(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	globalFiles := []struct {
+		path string
+		data []byte
+		mode os.FileMode
+	}{
+		{filepath.Join(home, ".claude", "CLAUDE.md"), []byte("global prompt\n"), 0o640},
+		{filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"custom":{"command":"custom"}}}`), 0o600},
+		{filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md"), []byte("global pi prompt\n"), 0o644},
+		{filepath.Join(home, ".openclaw", "openclaw.json"), []byte(`{"mcp":{"servers":{}}}`), 0o644},
+		{state.Path(home), []byte(`{"installedAgents":["claude-code","pi","openclaw"],"persona":"neutral"}`), 0o600},
+	}
+	for _, file := range globalFiles {
+		mustWriteFile(t, file.path, file.data)
+		if err := os.Chmod(file.path, file.mode); err != nil {
+			t.Fatalf("Chmod(%q) error = %v", file.path, err)
+		}
+	}
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	args := []string{"--scope", "workspace", "--agent", "claude-code,pi,openclaw", "--include-permissions", "--include-theme"}
+	wantComponents := []model.ComponentID{model.ComponentPersona, model.ComponentSDD, model.ComponentEngram, model.ComponentContext7, model.ComponentSkills}
+	dryResult, err := RunSync(append(args, "--dry-run"))
+	if err != nil {
+		t.Fatalf("RunSync(dry-run) error = %v", err)
+	}
+	if !reflect.DeepEqual(dryResult.Selection.Components, wantComponents) {
+		t.Fatalf("dry-run components = %v, want %v", dryResult.Selection.Components, wantComponents)
+	}
+
+	result, err := RunSync(args)
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", result.Selection.Components, wantComponents)
+	}
+	workspacePrompt := filepath.Join(workspace, ".claude", "CLAUDE.md")
+	if _, err := os.Stat(workspacePrompt); err != nil {
+		t.Fatalf("workspace prompt %q was not refreshed: %v", workspacePrompt, err)
+	}
+	if !containsPath(result.ChangedFiles, workspacePrompt) {
+		t.Fatalf("ChangedFiles = %v, want workspace prompt %q", result.ChangedFiles, workspacePrompt)
+	}
+	if _, err := os.Stat(persona.PiPersonaConfigPath(workspace)); err != nil {
+		t.Fatalf("workspace Pi persona config was not refreshed: %v", err)
+	}
+	for _, file := range globalFiles {
+		got, err := os.ReadFile(file.path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", file.path, err)
+		}
+		info, err := os.Stat(file.path)
+		if err != nil {
+			t.Fatalf("Stat(%q) error = %v", file.path, err)
+		}
+		if !bytes.Equal(got, file.data) || info.Mode().Perm() != file.mode {
+			t.Errorf("global file %q mutated: bytes=%q mode=%v, want bytes=%q mode=%v", file.path, got, info.Mode().Perm(), file.data, file.mode)
+		}
+	}
+
+	opencodeDry, err := RunSync([]string{"--scope", "workspace", "--agent", "opencode", "--dry-run"})
+	if err != nil {
+		t.Fatalf("RunSync(opencode dry-run) error = %v", err)
+	}
+	for _, step := range append(opencodeDry.Plan.Prepare, opencodeDry.Plan.Apply...) {
+		if step.ID() == "prepare:opencode-telemetry" || step.ID() == "sync:opencode:telemetry-runtime" {
+			t.Fatalf("workspace sync plan must not schedule OpenCode telemetry step %q", step.ID())
+		}
+	}
+	if _, err := RunSync([]string{"--scope", "workspace", "--agent", "opencode"}); err != nil {
+		t.Fatalf("RunSync(opencode) error = %v", err)
+	}
+	telemetryPath := filepath.Join(home, ".config", "opencode", "gentle-ai-telemetry.json")
+	if _, err := os.Stat(telemetryPath); !os.IsNotExist(err) {
+		t.Fatalf("global OpenCode telemetry file %q must not be created during workspace sync", telemetryPath)
+	}
+}
+
 func TestParseSyncFlagsSkillsCSV(t *testing.T) {
 	flags, err := ParseSyncFlags([]string{"--skills", "sdd-apply,go-testing"})
 	if err != nil {
