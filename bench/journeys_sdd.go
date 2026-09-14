@@ -104,6 +104,7 @@ type sddCompactAttemptResult struct {
 	State  string `json:"state"`
 	Reason string `json:"reason"`
 	Token  string `json:"token"`
+	Exit   string `json:"exit"`
 }
 
 // sddStatusV2 is the subset of `sdd-status --json` the SDD journeys read.

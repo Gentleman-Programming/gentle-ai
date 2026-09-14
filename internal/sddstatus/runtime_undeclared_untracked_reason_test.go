@@ -97,3 +97,52 @@ func TestSettlementInventoryReadFailureClassifiesCandidateUnavailable(t *testing
 		t.Fatalf("inventory read failure %v does not carry ErrRuntimeCandidateUnavailable", err)
 	}
 }
+
+func TestSettlementUntrackedSelectionRefusalGuidanceAvoidsReviewStatus(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "born.txt"), []byte("born\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleDigest := "sha256:" + strings.Repeat("0", 64)
+	selection := func(paths ...string) *[]string { return &paths }
+	store := RuntimeStore{Repo: repo}
+
+	for _, tc := range []struct {
+		name    string
+		active  RuntimeAttempt
+		request FinishAttemptRequest
+		want    []string
+	}{
+		{
+			name:    "stale inventory",
+			active:  RuntimeAttempt{EligibleUntrackedInventory: staleDigest},
+			request: FinishAttemptRequest{IntendedUntracked: selection("born.txt"), ExpectedUntrackedInventory: staleDigest},
+			want:    []string{"retry `gentle-ai sdd-attempt settle` with the same --request-id", digest},
+		},
+		{
+			name:    "ineligible path",
+			active:  RuntimeAttempt{EligibleUntrackedInventory: digest},
+			request: FinishAttemptRequest{IntendedUntracked: selection("missing.txt"), ExpectedUntrackedInventory: digest},
+			want:    []string{"retry `gentle-ai sdd-attempt settle` or rerun `gentle-ai sdd-attempt finish` with only eligible paths"},
+		},
+	} {
+		_, _, err := store.settlementUntrackedSelection(ctx, tc.active, tc.request)
+		if err == nil {
+			t.Fatalf("%s: expected refusal", tc.name)
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "gentle-ai review status --next-transition") {
+			t.Fatalf("%s: refusal routed through Review STATUS: %q", tc.name, msg)
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(msg, w) {
+				t.Fatalf("%s: refusal missing %q: %q", tc.name, w, msg)
+			}
+		}
+	}
+}
