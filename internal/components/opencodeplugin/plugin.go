@@ -46,6 +46,15 @@ var definitions = []Definition{
 		Repo:        "sdd-engram-plugin",
 		Description: "OpenCode TUI for SDD profiles and Engram memories",
 	},
+	{
+		ID:          model.OpenCodePluginBtwOpenCode,
+		Name:        "BTW Plugin",
+		PackageName: "pabloXDXDXD/btw-opencode",
+		RepoURL:     "https://github.com/pabloXDXDXD/btw-opencode",
+		Owner:       "pabloXDXDXD",
+		Repo:        "btw-opencode",
+		Description: "Parallel /btw questions without interrupting your main session",
+	},
 }
 
 const gentleLogoPluginFile = "gentle-logo.tsx"
