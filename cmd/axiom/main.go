@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/dashboard"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
@@ -35,6 +40,7 @@ COMANDOS:
   role list            Lista los roles asignados en el diseño y su política de compuerta
   role status          Muestra el progreso de tareas y verificación de cada rol
   role barrier         Evalúa la barrera de sincronización multi-rol antes de archivar o abrir PR
+  ui                   Inicia el servidor local y abre el dashboard web interactivo
   version              Muestra la versión e información de compilación
   help                 Muestra esta ayuda
 
@@ -44,6 +50,7 @@ BANDERAS:
 
 Ejemplos:
   axiom workspace validate
+  axiom ui --port 8080
   axiom handoff show --change inc-02-structured-handoffs-lifecycle
   axiom role list --change inc-03-multi-role-sdd-fan-out
   axiom role status --change inc-03-multi-role-sdd-fan-out
@@ -125,6 +132,9 @@ func main() {
 			fmt.Printf("Error: subcomando '%s' no reconocido para role. Usa 'axiom role [list|status|barrier]'.\n", subCmd)
 			os.Exit(1)
 		}
+
+	case "ui":
+		runUI(os.Args[2:])
 
 	default:
 		fmt.Printf("Error: comando '%s' no reconocido.\n\n", arg1)
@@ -629,3 +639,80 @@ func resolveHandoffFile(baseDir, change string) (string, error) {
 
 	return foundPaths[0], nil
 }
+
+func runUI(args []string) {
+	fs := flag.NewFlagSet("ui", flag.ExitOnError)
+	portFlag := fs.Int("port", 8080, "Puerto de escucha para el servidor web (default: 8080)")
+	noBrowserFlag := fs.Bool("no-browser", false, "No abrir automáticamente el navegador")
+	pathFlag := fs.String("path", ".", "Ruta base del espacio de trabajo")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error al resolver ruta base: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := dashboard.NewService(baseDir)
+	server := dashboard.NewServer(svc)
+
+	actualPort, err := server.ListenAndServe(*portFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudo iniciar el servidor web: %v\n", err)
+		os.Exit(1)
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
+
+	fmt.Println("================================================================================")
+	fmt.Println("             Axiom Enterprise — Dashboard Web Local (SDD)")
+	fmt.Println("================================================================================")
+	fmt.Printf("  Servidor HTTP activo en: %s\n", url)
+	fmt.Println("  Espacio de Trabajo:     ", baseDir)
+	if actualPort != *portFlag {
+		fmt.Printf("  (Aviso: Puerto %d ocupado, reasignado a %d)\n", *portFlag, actualPort)
+	}
+	fmt.Println("  Presiona Ctrl+C para detener el servidor.")
+	fmt.Println("================================================================================")
+
+	if !*noBrowserFlag {
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			if err := openBrowser(url); err != nil {
+				fmt.Printf("  (Aviso: No se pudo abrir el navegador automáticamente: %v)\n", err)
+			}
+		}()
+	}
+
+	// Esperar señal de parada
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+	<-stopChan
+
+	fmt.Println("\nDeteniendo el servidor web de Axiom...")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		fmt.Printf("Error durante el cierre del servidor: %v\n", err)
+	}
+	fmt.Println("Servidor detenido correctamente.")
+	os.Exit(0)
+}
+
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
+}
+

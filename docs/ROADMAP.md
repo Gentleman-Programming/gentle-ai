@@ -22,7 +22,7 @@
 | **INC-01** | `axiom-identity-workspace-topology` | ✅ Archivado | Arquitectura / Core | Creación del binario `axiom`, esquema `axiom.yaml`, validación de topologías (monorepo-embedded, monorepo-decoupled, multirepo) y repositorio canónico de specs. |
 | **INC-02** | `structured-handoffs-lifecycle` | ✅ Archivado | Core SDD / Workflow | Esquema canónico `handoff.md`, motor Go `internal/handoff`, subcomandos CLI `axiom handoff show/create/validate` y espejo Engram. |
 | **INC-03** | `multi-role-sdd-fan-out` | ✅ Archivado | Core SDD / Roles | Concurrencia de roles en `Design`, `tasks.<rol>.md`, políticas de compuerta (`blocking`/`deferred`), barrera de sincronización y migración diferida de tareas acumulativas. |
-| **INC-04** | `axiom-local-web-dashboard` | 📋 Planificado | UI / Experiencia | Servidor HTTP local embebido en Go con dashboard web: tablero de incrementos, estado de roles, visor de handoffs y buzón de skills. |
+| **INC-04** | `axiom-local-web-dashboard` | ✅ Archivado | UI / Experiencia | Servidor HTTP local embebido en Go con dashboard web: tablero de incrementos, estado de roles, visor de handoffs y buzón de skills. |
 | **INC-05** | `autoskills-catalog-and-mining` | 📋 Planificado | Skills / Inteligencia | Catálogo de skills por tecnología detectada y minería heurística de código por repositorio con pantalla de aprobación humana previa. |
 | **INC-06** | `semantic-code-serena-codegraph` | 📋 Planificado | Semántica / Herramientas | Conector local con Serena MCP y CodeGraph para navegación y consultas semánticas de código en `Explore` y `Design`. |
 | **INC-07** | `archive-living-documentation-engine` | 📋 Planificado | Documentación / SDD | `Archive` como mantenedor continuo de especificaciones existentes y generador incremental de documentación viva en proyectos no documentados. |
@@ -59,4 +59,15 @@
   4. Subcomandos CLI `axiom role list`, `axiom role status` y `axiom role barrier` (con bandera `--migrate-deferred`) en `cmd/axiom/main.go`.
   5. Batería de 10 pruebas unitarias con 100% PASS en `internal/multirole/`.
   6. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 8/8 requerimientos, 13/13 escenarios BDD).
+
+### [INC-04] axiom-local-web-dashboard (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-14-inc-04-axiom-local-web-dashboard/`
+- **Especificación viva:** `openspec/specs/local-web-dashboard/spec.md`
+- **Entregables clave:**
+  1. Paquete Go `internal/dashboard/`: servidor HTTP `net/http` con router REST JSON (`/api/workspace`, `/api/increments`, `/api/increments/{name}`, `/api/roles`, `/api/handoffs`, `/api/skills`), capa de servicio agregadora y fallback automático ante puertos ocupados.
+  2. Frontend SPA responsivo en `internal/dashboard/assets/` (`index.html`, `style.css`, `app.js`) embebido directamente en el binario Go mediante `//go:embed` con cero dependencias de NodeJS o NPM.
+  3. Subcomando CLI `axiom ui` con banderas `--port`, `--no-browser` y `--path`, apertura automática del navegador del sistema operativo y *graceful shutdown* con `Ctrl+C`.
+  4. Batería de 8 pruebas unitarias con 100% PASS en `internal/dashboard/`.
+  5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 8/8 requerimientos, 15/15 escenarios BDD).
+
 

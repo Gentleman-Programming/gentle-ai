@@ -1,0 +1,264 @@
+package dashboard
+
+import (
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestServiceWorkspace(t *testing.T) {
+	// Usamos la raíz del repositorio de Axiom (..)
+	svc := NewService("../..")
+	ws, err := svc.GetWorkspace()
+	if err != nil {
+		t.Fatalf("GetWorkspace falló: %v", err)
+	}
+
+	if ws.Name == "" {
+		t.Errorf("nombre de workspace vacío")
+	}
+	if ws.Topology == "" {
+		t.Errorf("topología de workspace vacía")
+	}
+	if len(ws.Roles) == 0 {
+		t.Errorf("se esperaban roles declarados en el workspace")
+	}
+}
+
+func TestServiceIncrements(t *testing.T) {
+	svc := NewService("../..")
+	list, err := svc.GetIncrements()
+	if err != nil {
+		t.Fatalf("GetIncrements falló: %v", err)
+	}
+
+	if len(list) == 0 {
+		t.Fatalf("se esperaba encontrar al menos un incremento")
+	}
+
+	hasArchived := false
+	hasActive := false
+	for _, inc := range list {
+		if inc.Type == "archived" {
+			hasArchived = true
+		}
+		if inc.Type == "active" {
+			hasActive = true
+		}
+	}
+
+	if !hasArchived {
+		t.Errorf("se esperaba encontrar incrementos archivados (ej. inc-01, inc-02, inc-03)")
+	}
+	if !hasActive {
+		t.Errorf("se esperaba encontrar al menos un incremento activo")
+	}
+}
+
+func TestServiceIncrementDetail(t *testing.T) {
+	svc := NewService("../..")
+
+	// 1. Probar con incremento existente (INC-03 archivado)
+	detail, err := svc.GetIncrementDetail("inc-03-multi-role-sdd-fan-out")
+	if err != nil {
+		t.Fatalf("GetIncrementDetail falló: %v", err)
+	}
+
+	if !detail.HasSpec {
+		t.Errorf("se esperaba que inc-03 tuviera spec.md")
+	}
+	if !detail.HasDesign {
+		t.Errorf("se esperaba que inc-03 tuviera design.md")
+	}
+
+	// 2. Probar con incremento inexistente
+	_, errNotFound := svc.GetIncrementDetail("cambio-completamente-inventado-999")
+	if errNotFound == nil {
+		t.Errorf("se esperaba error 404 para incremento inexistente")
+	}
+}
+
+func TestServiceRoleStatus(t *testing.T) {
+	svc := NewService("../..")
+	barrier, err := svc.GetRoleStatus("inc-03-multi-role-sdd-fan-out")
+	if err != nil {
+		t.Fatalf("GetRoleStatus falló para inc-03: %v", err)
+	}
+
+	if !barrier.Satisfied {
+		t.Errorf("se esperaba que la barrera de inc-03 estuviera SATISFIED")
+	}
+	if len(barrier.Roles) == 0 {
+		t.Errorf("se esperaban roles evaluados en inc-03")
+	}
+}
+
+func TestServiceSkills(t *testing.T) {
+	svc := NewService("../..")
+	skills, err := svc.GetSkills()
+	if err != nil {
+		t.Fatalf("GetSkills falló: %v", err)
+	}
+
+	if len(skills) == 0 {
+		t.Errorf("se esperaba encontrar skills en skills/ o internal/assets/skills/")
+	}
+}
+
+func TestHTTPEndpoints(t *testing.T) {
+	svc := NewService("../..")
+	server := NewServer(svc)
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	// 1. GET /api/workspace
+	respWs, err := http.Get(ts.URL + "/api/workspace")
+	if err != nil || respWs.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/workspace falló: status=%v, err=%v", respWs.StatusCode, err)
+	}
+	var wsDto WorkspaceDTO
+	if err := json.NewDecoder(respWs.Body).Decode(&wsDto); err != nil {
+		t.Fatalf("Error decodificando /api/workspace: %v", err)
+	}
+	_ = respWs.Body.Close()
+
+	// 2. GET /api/increments
+	respInc, err := http.Get(ts.URL + "/api/increments")
+	if err != nil || respInc.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/increments falló: status=%v, err=%v", respInc.StatusCode, err)
+	}
+	var incList []IncrementSummaryDTO
+	if err := json.NewDecoder(respInc.Body).Decode(&incList); err != nil {
+		t.Fatalf("Error decodificando /api/increments: %v", err)
+	}
+	_ = respInc.Body.Close()
+
+	// 3. GET /api/increments/{name} válido
+	respDetail, err := http.Get(ts.URL + "/api/increments/inc-03-multi-role-sdd-fan-out")
+	if err != nil || respDetail.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/increments/... falló: status=%v, err=%v", respDetail.StatusCode, err)
+	}
+	_ = respDetail.Body.Close()
+
+	// 4. GET /api/increments/{name} 404
+	resp404, err := http.Get(ts.URL + "/api/increments/no-existe")
+	if err != nil || resp404.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /api/increments/no-existe debería retornar 404: status=%v", resp404.StatusCode)
+	}
+	_ = resp404.Body.Close()
+
+	// 5. GET /api/skills
+	respSkills, err := http.Get(ts.URL + "/api/skills")
+	if err != nil || respSkills.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/skills falló: status=%v, err=%v", respSkills.StatusCode, err)
+	}
+	_ = respSkills.Body.Close()
+
+	// 6. GET / (servido de index.html embebido)
+	respRoot, err := http.Get(ts.URL + "/")
+	if err != nil || respRoot.StatusCode != http.StatusOK {
+		t.Fatalf("GET / falló: status=%v, err=%v", respRoot.StatusCode, err)
+	}
+	bodyRoot, _ := io.ReadAll(respRoot.Body)
+	_ = respRoot.Body.Close()
+	if !strings.Contains(string(bodyRoot), "Axiom Enterprise") {
+		t.Errorf("GET / no contiene 'Axiom Enterprise'")
+	}
+
+	// 7. GET /style.css y /app.js
+	respCSS, err := http.Get(ts.URL + "/style.css")
+	if err != nil || respCSS.StatusCode != http.StatusOK {
+		t.Errorf("GET /style.css falló: status=%v", respCSS.StatusCode)
+	}
+	_ = respCSS.Body.Close()
+
+	respJS, err := http.Get(ts.URL + "/app.js")
+	if err != nil || respJS.StatusCode != http.StatusOK {
+		t.Errorf("GET /app.js falló: status=%v", respJS.StatusCode)
+	}
+	_ = respJS.Body.Close()
+}
+
+func TestPortFallback(t *testing.T) {
+	// Ocupar puerto dinámico
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Error abriendo listener de prueba: %v", err)
+	}
+	defer l.Close()
+
+	occupiedPort := l.Addr().(*net.TCPAddr).Port
+
+	svc := NewService("../..")
+	server := NewServer(svc)
+
+	nextListener, chosenPort, err := server.findAvailablePort(occupiedPort)
+	if err != nil {
+		t.Fatalf("findAvailablePort falló: %v", err)
+	}
+	defer nextListener.Close()
+
+	if chosenPort == occupiedPort {
+		t.Errorf("chosenPort (%d) no debería ser igual al puerto ocupado (%d)", chosenPort, occupiedPort)
+	}
+	if chosenPort < occupiedPort {
+		t.Errorf("chosenPort (%d) debería ser mayor que el inicial (%d)", chosenPort, occupiedPort)
+	}
+}
+
+func TestServiceHandoff(t *testing.T) {
+	// Crear handoff temporal en directorio temporal
+	tmpDir := t.TempDir()
+	changeDir := filepath.Join(tmpDir, "openspec", "changes", "test-ho")
+	if err := os.MkdirAll(changeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `---
+change: test-ho
+from_phase: design
+to_phase: tasks
+from_role: core
+to_role: core
+timestamp: "2026-09-14T12:00:00Z"
+status: ready
+---
+
+## 1. Resumen Ejecutivo
+Resumen prueba.
+
+## 2. Artefactos Modificados y Creados
+- arch1
+
+## 3. Decisiones Técnicas y Acuerdos
+- dec1
+
+## 4. Riesgos, Bloqueos y Preguntas Abiertas
+- ninguna
+
+## 5. Instrucciones Directas para el Siguiente Rol
+Proceder con tasks.
+`
+	if err := os.WriteFile(filepath.Join(changeDir, "handoff.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(tmpDir)
+	ho, err := svc.GetHandoff("test-ho")
+	if err != nil {
+		t.Fatalf("GetHandoff falló: %v", err)
+	}
+
+	if ho.Metadata.Status != "ready" {
+		t.Errorf("status = %s, want ready", ho.Metadata.Status)
+	}
+	if ho.Sections.ExecutiveSummary != "Resumen prueba." {
+		t.Errorf("resumen = %q", ho.Sections.ExecutiveSummary)
+	}
+}

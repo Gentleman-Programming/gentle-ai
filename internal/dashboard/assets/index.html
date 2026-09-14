@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Axiom Enterprise — Dashboard de Ingeniería SDD</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="dark-theme">
+  <div class="app-layout">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo">▲</div>
+        <div class="brand-info">
+          <h1>Axiom Enterprise</h1>
+          <span class="subtext">Spec-Driven Development Platform</span>
+        </div>
+      </div>
+      <div class="workspace-pill" id="workspace-pill">
+        <span class="pill-dot"></span>
+        <span class="pill-title" id="ws-name">Cargando...</span>
+        <span class="pill-badge" id="ws-topology">--</span>
+      </div>
+      <div class="header-actions">
+        <button id="btn-refresh" class="btn btn-secondary" title="Actualizar datos">↻ Actualizar</button>
+      </div>
+    </header>
+
+    <!-- Main Navigation Tabs -->
+    <nav class="main-nav">
+      <button class="nav-tab active" data-tab="tab-increments">
+        <span class="tab-icon">📋</span> Tablero de Incrementos
+      </button>
+      <button class="nav-tab" data-tab="tab-roles">
+        <span class="tab-icon">👥</span> Monitor Multi-Rol & Barrera
+      </button>
+      <button class="nav-tab" data-tab="tab-handoffs">
+        <span class="tab-icon">🤝</span> Visor de Handoffs
+      </button>
+      <button class="nav-tab" data-tab="tab-topology">
+        <span class="tab-icon">🗺️</span> Topología & Salud
+      </button>
+      <button class="nav-tab" data-tab="tab-skills">
+        <span class="tab-icon">⚡</span> Catálogo de Skills
+      </button>
+    </nav>
+
+    <!-- Main Content Container -->
+    <main class="content-area">
+      <!-- TAB 1: INCREMENTOS -->
+      <section id="tab-increments" class="tab-panel active">
+        <div class="section-header">
+          <div>
+            <h2>Ciclo de Vida de Incrementos SDD</h2>
+            <p class="description">Seguimiento en tiempo real de cambios activos y especificaciones vivas archivadas.</p>
+          </div>
+          <div class="filter-group">
+            <button class="filter-btn active" data-filter="all">Todos</button>
+            <button class="filter-btn" data-filter="active">Activos</button>
+            <button class="filter-btn" data-filter="archived">Archivados</button>
+          </div>
+        </div>
+
+        <div class="increments-grid" id="increments-container">
+          <div class="loading-state">Cargando incrementos del workspace...</div>
+        </div>
+      </section>
+
+      <!-- TAB 2: MULTI-ROL & BARRERA -->
+      <section id="tab-roles" class="tab-panel">
+        <div class="section-header">
+          <div>
+            <h2>Monitor de Concurrencia Multi-Rol y Barrera Fan-In</h2>
+            <p class="description">Inspección de avance atomizado por rol y validación de compuertas obligatorias y diferidas.</p>
+          </div>
+          <div class="selector-box">
+            <label for="role-change-select">Cambio:</label>
+            <select id="role-change-select" class="form-select">
+              <option value="">Seleccionar cambio...</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="barrier-result-card" class="barrier-banner hidden">
+          <div class="barrier-status-icon" id="barrier-icon">✓</div>
+          <div class="barrier-details">
+            <h3 id="barrier-title">Estado de la Barrera</h3>
+            <p id="barrier-desc">Diagnóstico</p>
+          </div>
+        </div>
+
+        <div class="roles-grid" id="roles-container">
+          <p class="empty-state">Selecciona un cambio arriba para inspeccionar sus roles y tareas asignadas.</p>
+        </div>
+      </section>
+
+      <!-- TAB 3: HANDOFFS -->
+      <section id="tab-handoffs" class="tab-panel">
+        <div class="section-header">
+          <div>
+            <h2>Visor de Handoffs Estructurados</h2>
+            <p class="description">Documentos de relevo formal entre fases SDD y roles concurrentes.</p>
+          </div>
+          <div class="selector-box">
+            <label for="handoff-change-select">Cambio:</label>
+            <select id="handoff-change-select" class="form-select">
+              <option value="">Seleccionar cambio...</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="handoff-display" class="handoff-card hidden">
+          <div class="handoff-header">
+            <div class="handoff-flow">
+              <span class="phase-chip" id="ho-from-phase">--</span>
+              <span class="flow-arrow">➔</span>
+              <span class="phase-chip target" id="ho-to-phase">--</span>
+            </div>
+            <div class="handoff-meta-chips">
+              <span class="badge" id="ho-roles">--</span>
+              <span class="badge" id="ho-status">--</span>
+              <span class="badge timestamp" id="ho-time">--</span>
+            </div>
+          </div>
+          <div class="handoff-sections" id="ho-sections-container">
+            <!-- Secciones generadas dinámicamente -->
+          </div>
+        </div>
+        <div id="handoff-empty" class="empty-state">
+          Selecciona un cambio para ver su artefacto de relevo handoff.md.
+        </div>
+      </section>
+
+      <!-- TAB 4: TOPOLOGÍA & SALUD -->
+      <section id="tab-topology" class="tab-panel">
+        <div class="section-header">
+          <div>
+            <h2>Topología y Configuración de Repositorios</h2>
+            <p class="description">Estado de salud del espacio de trabajo según el contrato canónico axiom.yaml.</p>
+          </div>
+        </div>
+
+        <div class="topology-dashboard">
+          <div class="stat-cards-row">
+            <div class="stat-card">
+              <div class="stat-label">Espacio de Trabajo</div>
+              <div class="stat-value" id="top-ws-name">--</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Topología Declarada</div>
+              <div class="stat-value text-accent" id="top-ws-topology">--</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Repositorio Canónico Specs</div>
+              <div class="stat-value" id="top-ws-specs">--</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Diagnóstico de Salud</div>
+              <div class="stat-value text-success" id="top-ws-health">--</div>
+            </div>
+          </div>
+
+          <h3 class="subsection-title">Mapeo de Roles a Repositorios Locales (1 a N)</h3>
+          <div class="table-card">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID del Rol</th>
+                  <th>Nombre Descriptivo</th>
+                  <th>Política de Compuerta</th>
+                  <th>Tecnologías</th>
+                  <th>Rutas de Repositorios</th>
+                </tr>
+              </thead>
+              <tbody id="topology-roles-tbody">
+                <tr><td colspan="5" class="loading-state">Cargando roles...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: SKILLS -->
+      <section id="tab-skills" class="tab-panel">
+        <div class="section-header">
+          <div>
+            <h2>Catálogo de Skills Técnicas y de Flujo</h2>
+            <p class="description">Instrucciones y heurísticas curadas disponibles para agentes y desarrolladores.</p>
+          </div>
+        </div>
+
+        <div class="skills-grid" id="skills-container">
+          <div class="loading-state">Escaneando catálogo de skills...</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Modal Detalle Incremento -->
+    <div id="inc-modal" class="modal-backdrop hidden">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 id="modal-title">Detalle del Incremento</h3>
+          <button class="btn-close" id="btn-modal-close">✕</button>
+        </div>
+        <div class="modal-body" id="modal-content">
+          Cargando...
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>Axiom Enterprise SDD Runtime v0.4.0 • Idioma Oficial: Castellano</span>
+      <span class="footer-status">● Servidor HTTP Local Activo</span>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
