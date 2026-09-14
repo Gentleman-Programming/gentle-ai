@@ -92,6 +92,124 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 	}
 }
 
+// These tests prove the delivered instruction contract, not model compliance.
+// The existing injector tests separately read back this complete rendered block.
+func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		clauses []string
+	}{
+		{"authorized substantial work", []string{
+			"Explore the existing code and requirements first",
+			"For substantial authorized implementation, automatically create",
+			"without a task or storage permission prompt",
+			"Small, understood work creates no durable task artifacts",
+		}},
+		{"optional research without implicit SDD", []string{
+			"Recommend optional research only for a named uncertainty",
+			"If declined, continue within authorized scope only where safe without the missing evidence",
+			"disclose unresolved uncertainty and pause affected unsafe decisions",
+			"Neither research nor a proposal is mandatory",
+			"Do not recommend SDD merely to resolve ambiguity",
+		}},
+		{"durable feature identity", []string{
+			"odd/tasks/<feature-name>.md",
+			"odd/<feature-name>/tasks",
+			"current project",
+			"full current checklist and repository-relative file locator",
+			"stable task IDs, authorized scope, acceptance criteria, applicable checks, and next step",
+			"Reuse the same feature identity; never overwrite another feature",
+		}},
+		{"updates require proof", []string{
+			"automatically update affected TODOs",
+			"preserve valid completed and unrelated work",
+			"reopen invalidated items",
+			"Business scope changes still require user authorization",
+			"Check off only observed outcomes with applicable proof",
+			"failed, unavailable, skipped, or pending checks",
+			"Checkboxes grant no approval or receipt",
+		}},
+		{"advisory coherent task size", []string{
+			"Use about 400 authored changed lines per ODD task only as a planning heuristic, counting additions plus deletions",
+			"smallest coherent behavior with its tests and docs",
+			"not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger",
+			"naturally exceeds it, briefly explain why and continue without size-only rework loops",
+			"Never delete spaces, blank lines, or comments for cosmetic line savings",
+			"omit tests, minify, add gratuitous abstractions, or split artificially to fit the heuristic",
+			"Forward this same advisory-only instruction when delegating tasks to subagents",
+			"Existing PR size gates remain unchanged",
+		}},
+		{"recover the right feature", []string{
+			"mem_context",
+			"mem_search",
+			"mem_get_observation",
+			"read the actual task file",
+			"Do not infer active work from the newest global memory",
+			"Reconcile current requirements, code, and proof before resuming",
+		}},
+		{"partial persistence and conflict", []string{
+			"Read back both writes; they are not atomic",
+			"Engram is unavailable, preserve local progress and explicitly mark the mirror pending",
+			"do not claim success or block unrelated safe work",
+			"Preserve both versions on irreconcilable edits and ask only about the real conflict",
+		}},
+		{"selective independent challenge", []string{
+			"at most one scoped independent read-only assumption challenge",
+			"high-consequence unproven premise, even in a small security-critical change",
+			"Deterministic failures need fixes, not model debate",
+			"The native RDD refuter owns native review claims; never duplicate or bypass it",
+		}},
+		{"existing checks and ownership", []string{
+			"Preserve existing native risk selection and applicable functional verification",
+			"Run applicable functional checks per task, not an RDD cycle per TODO checkbox",
+			"native review at the applicable deliverable candidate boundary",
+			"existing risk, consent, and authority",
+			"Never skip an existing delivery gate",
+			"A task list or assumption challenge never enables RDD",
+			"Never enable receipt-driven development on the user's behalf",
+		}},
+		{"native risk before candidate consent", []string{
+			"When RDD is enabled, first use the existing native candidate risk assessment",
+			"gentle-ai review assess --cwd <repo> --json",
+			"Passive/low uses silent structural checks with no reviewer or consent ceremony",
+			"Medium/high relays the existing candidate consent",
+			"native review runs only on grant",
+			"a decline continues under ordinary policy",
+			"Do not substitute model judgment, task size, or defect severity for prospective candidate risk",
+			"never infer low risk from a failed assessment",
+			"When RDD is disabled, do not start or prompt for RDD; ordinary checks remain",
+		}},
+	}
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			guard := strings.Index(rendered, "First establish whether the requested outcome explicitly authorizes a change.")
+			organic := strings.Index(rendered, "### Organic Driven Development")
+			if guard < 0 || organic <= guard {
+				t.Fatal("ODD must follow the mutation-authorization guard")
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					for _, clause := range tt.clauses {
+						if !strings.Contains(rendered, clause) {
+							t.Errorf("missing organic instruction %q", clause)
+						}
+					}
+				})
+			}
+			if strings.Contains(rendered, "propose SDD only when durable proposal") {
+				t.Error("organic uncertainty still proactively recommends SDD")
+			}
+		})
+	}
+}
+
 func TestRenderRoutingKeepsSDDSelectionExplicit(t *testing.T) {
 	t.Parallel()
 
