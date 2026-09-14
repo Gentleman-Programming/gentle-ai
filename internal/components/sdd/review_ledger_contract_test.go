@@ -515,7 +515,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
 	// same shared session preflight body, so the hash moved. Deliberate, not drift.
-	const want = "8f388ae4197cfa0fbfdf1f82423a599ea43e43665659da11e0389b670d241bf4"
+	// #3470 adds explicit parallel apply scheduling policy to SDD orchestrators.
+	const want = "f970e613edcce62aad978a8e08551b6a7aaca2806be23c442b2d3c65f7e75189"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

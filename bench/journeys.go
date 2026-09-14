@@ -907,6 +907,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue4395Journeys()...)
 	journeys = append(journeys, issue3813Journeys()...)
 	journeys = append(journeys, issue3842Journeys()...)
+	journeys = append(journeys, issue3470Journeys()...)
 	journeys = append(journeys, handoffJourneys()...)
 	journeys = append(journeys, stopHookJourneys()...)
 	journeys = append(journeys, untrackedInventoryRecoveryLoopJourneys()...)

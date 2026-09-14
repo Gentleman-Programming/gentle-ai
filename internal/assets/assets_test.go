@@ -1439,6 +1439,27 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 	}
 }
 
+func TestSDDOrchestratorsParallelApplySchedulingPolicyParity(t *testing.T) {
+	required := []string{
+		"`parallel_apply: serialized | auto` (default `serialized`)",
+		"`serialized`: launches at most one ready item actor at a time while retaining item-level authority (`gentle-ai.sdd-items/v1`), acquire/settle contracts, and join barriers.",
+		"`auto`: permits concurrent item actors only when provider background-subagent launch capability is available, >=2 compatible items are ready, dependencies are satisfied, edit roots are pairwise disjoint, and each acquire returns `proceed`.",
+		"Overlapping, dependent, malformed, shared, unresolved, or unknown edit scopes are never auto-eligible and remain blocked or serialized.",
+		"Background-subagent availability alone never activates parallel apply.",
+		"cached at coordinator/session or change scope and is never persisted in the runtime ledger.",
+		"In automatic mode without an explicit policy, execution remains `serialized` silently without extra prompts.",
+		"In interactive mode without an explicit policy, the coordinator asks once when at least two items are actually eligible, then caches the choice for that change.",
+	}
+	for _, path := range append([]string{"skills/_shared/sdd-phase-common.md"}, sddOrchestratorAutomaticDefaultRuntimes...) {
+		content := MustRead(path)
+		for _, req := range required {
+			if !strings.Contains(content, req) {
+				t.Fatalf("%s missing parallel apply policy wording %q", path, req)
+			}
+		}
+	}
+}
+
 func TestDelegatedSDDProvidersForwardApplyVerifyContext(t *testing.T) {
 	tests := []struct {
 		name               string
