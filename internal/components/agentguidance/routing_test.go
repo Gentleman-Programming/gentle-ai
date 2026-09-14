@@ -183,6 +183,41 @@ func TestRenderRoutingMakesTheReviewKillSwitchDiscoverable(t *testing.T) {
 	}
 }
 
+// TestRenderRoutingMakesRemoteExecutionBoundaryDiscoverable guards the
+// behavioral boundary that keeps agents local (#4324): ambient authenticated
+// sessions such as SSH ControlMaster sockets let a local agent reach remote
+// infrastructure without any permission rule firing, so the boundary must be
+// projected into the unconditional routing block for every configured agent.
+func TestRenderRoutingMakesRemoteExecutionBoundaryDiscoverable(t *testing.T) {
+	t.Parallel()
+
+	all := catalog.AllAgents()
+	if len(all) != supportedAgentCount {
+		t.Fatalf("catalog.AllAgents() returned %d agents, want %d", len(all), supportedAgentCount)
+	}
+
+	for _, agent := range all {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+
+			for _, want := range []string{
+				"Remote execution boundary",
+				"SSH ControlMaster",
+				"unless the user explicitly requested that remote action",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) hides the remote execution boundary, missing %q:\n%s", agent.ID, want, rendered)
+				}
+			}
+		})
+	}
+}
+
 // TestRenderRoutingObeysTheUserOnReviewMode asserts the specific instructional
 // phrases, not merely the topic, so that prose drift which softens "run disable"
 // into a negotiation, or which lets an agent switch review back on unbidden,
