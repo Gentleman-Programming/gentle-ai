@@ -145,7 +145,7 @@ Every `[x]` in the Contributor Checklist is a public claim that `pr-check.yml` a
    - [ ] Fork workflow approval — 4 runs in `action_required` awaiting a maintainer
    ```
 
-2. **Numbers and file counts must match the API.** If you can't trust the API, recount locally: `git diff --stat <base>..<head>`.
+2. **Numbers and file counts must match the API.** If you can't trust the API, recount locally with merge-base scope, since three-dot preserves `<head>` as the compared side and avoids upstream-only drift: `git diff --stat <base>...<head>`.
 
 3. **Pre-existing failures must be named and methodology stated.** "Tests pass" is dishonest if four packages fail in the `git stash`-absent baseline. State them:
    ```markdown
