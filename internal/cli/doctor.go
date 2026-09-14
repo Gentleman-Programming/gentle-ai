@@ -45,18 +45,19 @@ var coreTools = []string{"gentle-ai", "gga", "engram"}
 // by the doctor so legacy or custom state files do not cause spurious
 // failures.
 var agentToolBinaries = map[string]string{
-	"claude-code":    "claude",
-	"opencode":       "opencode",
-	"codex":          "codex",
-	"pi":             "pi",
-	"gemini-cli":     "gemini",
-	"kilocode":       "kilo",
-	"kiro-ide":       "kiro",
-	"kimi":           "kimi",
-	"qwen-code":      "qwen",
-	"vscode-copilot": "code",
-	"openclaw":       "openclaw",
-	"hermes":         "hermes",
+	"claude-code":        "claude",
+	"opencode":           "opencode",
+	"codex":              "codex",
+	"pi":                 "pi",
+	"gemini-cli":         "gemini",
+	"kilocode":           "kilo",
+	"kiro-ide":           "kiro",
+	"kimi":               "kimi",
+	"qwen-code":          "qwen",
+	"vscode-copilot":     "code",
+	"github-copilot-cli": "copilot",
+	"openclaw":           "openclaw",
+	"hermes":             "hermes",
 }
 
 const (

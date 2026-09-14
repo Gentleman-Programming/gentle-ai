@@ -15,7 +15,7 @@ import (
 // supportedAgentCount guards the catalog itself: routing is unconditional for
 // every supported adapter, so a silently shrinking catalog must fail here
 // instead of quietly reducing coverage of the table-driven tests below.
-const supportedAgentCount = 16
+const supportedAgentCount = 17
 
 // retiredRemoteControlPlaneVocabulary is the wire and ceremony vocabulary the
 // organic routing projection must never carry. Rendering any of these would

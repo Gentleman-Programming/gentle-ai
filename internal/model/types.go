@@ -73,6 +73,8 @@ const (
 	AgentHermes        AgentID = "hermes"
 )
 
+const AgentGitHubCopilotCLI AgentID = "github-copilot-cli"
+
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.
 // All current agents receive the full SDD orchestrator, skill files, MCP config,
 // and system prompt injection. The tier is kept as metadata for display purposes.
