@@ -8,7 +8,7 @@
 
 | Agent           | ID               | Skills       | MCP | Delegation                       | Output Styles | Slash Commands | Config Path                         |
 | --------------- | ---------------- | ------------ | --- | -------------------------------- | ------------- | -------------- | ----------------------------------- |
-| Claude Code     | `claude-code`    | Yes          | Yes | Full (Task tool)                 | Yes           | No             | `~/.claude`                         |
+| Claude Code     | `claude-code`    | Yes          | Yes | Solo-agent (inline)              | Yes           | No             | `~/.claude`                         |
 | OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/opencode`                |
 | Kilo Code       | `kilocode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/kilo`                    |
 | Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)              | No            | No             | `~/.gemini`                         |
@@ -37,10 +37,10 @@ Most agents receive the **full SDD orchestrator** policy, plus skill files writt
 
 | Model                 | How It Works                                                                                                                                                                                       | Agents                                                                                                    |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
+| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
 | **Full (delegate_task)** | The orchestrator uses Hermes's native `delegate_task` primitive to spawn ephemeral workers in fresh context windows. Workers receive only a self-contained mission; the parent receives only their final summary. Toolsets, MCP, and skills must be passed explicitly (not inherited by default). | Hermes |
 | **Native multi-agent** | The orchestrator delegates through the agent's native collaboration tools when configured and available, with inline execution as a graceful fallback. | Codex |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram™ provides cross-phase persistence.                                                                     | Windsurf, Antigravity, OpenClaw, Trae                                                                     |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram™ provides cross-phase persistence.                                                                     | Claude Code, Windsurf, Antigravity, OpenClaw, Trae                                                        |
 
 ### Cursor Native Subagents
 
@@ -93,12 +93,12 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ### Claude Code
 
-- Sub-agents via the native Task tool with isolated context windows
+- **SDD topology: Solo-agent (inline).** Claude Code hooks do not expose authenticated caller provenance. The managed `PreToolUse(Agent)` SDD guard unconditionally denies every `sdd-*` agent dispatch. All SDD phases run inline in the orchestrator session. `sdd-*` agent files are not installed on this runtime.
 - Slash commands for SDD phases are namespaced `/gentle-sdd-*` (`/gentle-sdd-init`, `/gentle-sdd-new`, `/gentle-sdd-continue`, etc.) so no command shares a name with a delegate-only SDD skill
 - MCP servers configured as plugins in `~/.claude/mcp/`
 - Output styles in `~/.claude/output-styles/`
 - System prompt via markdown sections in `~/.claude/CLAUDE.md`
-- Managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry; `SessionStart` and `Stop` maintain the review reminder baseline. Claude hook commands do not expose authenticated caller provenance, so Gentle AI installs only a fail-closed `PreToolUse(Agent)` SDD guard: SDD phases must continue inline rather than claiming runtime-backed child authority. Uninstall also removes stale preflight producer hooks from earlier installations.
+- Managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry; `SessionStart` and `Stop` maintain the review reminder baseline. The `PreToolUse(Agent)` SDD guard is fail-closed: it denies every `sdd-*` dispatch unconditionally, enforcing inline execution. Uninstall also removes stale preflight producer hooks from earlier installations.
 
 ### OpenCode
 
