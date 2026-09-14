@@ -349,6 +349,9 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/rdd-defect-workflow/SKILL.md",
 		"skills/systemic-issue-triage/SKILL.md",
 		"skills/gentle-ai-bench/SKILL.md",
+
+		// QA locator hunting skills
+		"skills/qa-locator-hunting/references/erp-mf-catalog.md",
 	}
 
 	for _, path := range expectedFiles {
