@@ -291,9 +291,16 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 	model.AgentAntigravity: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
+	// Claude Code: FileSubAgents is false because the managed PreToolUse(Agent)
+	// SDD guard unconditionally denies every sdd-* dispatch — Claude Code hooks
+	// do not expose authenticated caller provenance, so parent-confirmed preflight
+	// cannot be transported to a child agent. SDD phases run inline in the
+	// orchestrator session (Solo-agent topology). If a future Claude Code release
+	// adds an authenticated dispatch interceptor, this flag and the associated
+	// orchestrator workflow topology note must be re-evaluated together.
 	model.AgentClaudeCode: {
 		OutputStyles: true, SlashCommands: true,
-		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
+		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentCodex: {
 		Skills: true, SystemPrompt: true, MCP: true,

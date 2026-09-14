@@ -63,6 +63,17 @@ Before executing any SDD command or meta-command, check whether `sdd-init` has r
 
 This ensures testing capabilities, Strict TDD mode, and project context are available to later phases.
 
+### Claude Code Execution Topology (MANDATORY)
+
+Claude Code hooks do not expose authenticated caller provenance. The managed `PreToolUse(Agent)` SDD guard unconditionally denies every `sdd-*` subagent dispatch. **SDD phases MUST run inline in the orchestrator session — never via `Agent` with a `sdd-*` `subagent_type`.** This is the sole supported topology on this runtime.
+
+Concretely:
+- Do NOT call `Agent` with `subagent_type: sdd-apply`, `sdd-explore`, or any other `sdd-*` type. The hook will deny it.
+- Execute every phase body inline, as if you are both the orchestrator and the executor in the same context window.
+- Use the native attempt authority commands (`gentle-ai sdd-attempt acquire/settle`) from this same session.
+- All rules in this document that say "launch the sub-agent" or "delegate to sdd-*" mean: execute that phase inline.
+- The `sdd-*` agent definition files in `~/.claude/agents/` are NOT installed on this runtime. Do not reference them as a dispatch target.
+
 ### Execution Mode
 
 This is collected by `SDD Session Preflight`. If missing, enforce the hard gate before any phase work. Cache the collected mode for the session:
