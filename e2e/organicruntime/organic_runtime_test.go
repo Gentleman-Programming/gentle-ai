@@ -2075,11 +2075,13 @@ func TestOrganicOptionalSDDDeclineAndAccept(t *testing.T) {
 		harness.writeFiles(map[string]string{
 			"docs/accepted.md": organicLines("accepted line", 8),
 		})
+		harness.git("add", "--", "docs/accepted.md")
 
 		started, _ := harness.startReview("organic-sdd-accepted")
 		if approved := harness.approveReview("organic-sdd-accepted", started); approved.State != organicStateApproved {
 			t.Fatalf("accepted route did not approve: %#v", approved)
 		}
+		harness.attestOrganicSDDFinalVerification(change, "organic-sdd-accepted")
 
 		status := harness.sddStatus(change)
 		if status.Dependencies.Archive == "blocked" {
@@ -2851,6 +2853,7 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 	if approved := harness.approveReview("organic-reenable-baseline", baselineStarted); approved.State != organicStateApproved {
 		t.Fatalf("the baseline reviewed flow did not approve: %#v", approved)
 	}
+	harness.attestOrganicSDDFinalVerification(change, "organic-reenable-baseline")
 	harness.assertInvalidatedUnmanagedGate(harness.gate("pre-commit"))
 	harness.git("commit", "-q", "-m", "docs: baseline reviewed delivery")
 
@@ -3461,9 +3464,9 @@ const organicSDDVerifyReport = "```yaml\n" +
 	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
 	"```\n"
 
-// seedOrganicSDDChange commits a complete OpenSpec change at its archive
-// decision: planning done, every task checked, and a parseable passing
-// verification report — so `sdd-status` routes on the review gate alone.
+// seedOrganicSDDChange commits the planning and implementation artifacts the
+// archive journeys need. Final verification stays out of this seed so the
+// terminal-burn journeys produce and attest it through the native runtime.
 func (harness *organicHarness) seedOrganicSDDChange(change string) {
 	harness.t.Helper()
 	root := "openspec/changes/" + change + "/"
@@ -3473,10 +3476,45 @@ func (harness *organicHarness) seedOrganicSDDChange(change string) {
 		root + "tasks.md":    "# tasks\n\n- [x] 1.1 write the prose\n",
 		root + "specs/prose/spec.md": "### Requirement: prose exists\n" +
 			"#### Scenario: prose is present\n\n- **WHEN** the reader opens the docs\n- **THEN** the prose is there\n",
-		root + "verify-report.md": organicSDDVerifyReport,
 	})
 	harness.git("add", "--", "openspec")
 	harness.git("commit", "-q", "-m", "test: seed the SDD change")
+}
+
+// attestOrganicSDDFinalVerification writes the canonical final report and
+// records the native verify work unit that attests its exact candidate bytes.
+func (harness *organicHarness) attestOrganicSDDFinalVerification(change, requestPrefix string) {
+	harness.t.Helper()
+	path := "openspec/changes/" + change + "/verify-report.md"
+	harness.writeFiles(map[string]string{path: organicSDDVerifyReport})
+	harness.git("add", "--", path)
+
+	var acquired struct {
+		State string `json:"state"`
+		Token string `json:"token"`
+	}
+	payload := harness.gentle(
+		"sdd-attempt", "acquire", "--cwd", harness.repo.worktree, "--change", change,
+		"--request-id", requestPrefix+"-verify-acquire", "--work-unit", "verify",
+		"--evidence-goal", "run final independent verification", "--max-attempts", "1", "--max-changed-lines", "20",
+	)
+	if err := json.Unmarshal(payload, &acquired); err != nil || acquired.State != "proceed" || acquired.Token == "" {
+		harness.t.Fatalf("acquire native final verification: result=%#v err=%v\n%s", acquired, err, payload)
+	}
+
+	var settled struct {
+		State string `json:"state"`
+	}
+	payload = harness.gentle(
+		"sdd-attempt", "settle", "--cwd", harness.repo.worktree, "--change", change,
+		"--token", acquired.Token, "--request-id", requestPrefix+"-verify-settle",
+		"--outcome", "passed", "--evidence-revision", "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		"--diagnosis", "the organic runtime completed final verification", "--harness-disposition", "reused",
+		"--cleanup-evidence", "workspace clean", "--process-evidence", "no stray processes",
+	)
+	if err := json.Unmarshal(payload, &settled); err != nil || settled.State != "complete" {
+		harness.t.Fatalf("settle native final verification: result=%#v err=%v\n%s", settled, err, payload)
+	}
 }
 
 // reviewModeGenerations lists the clone-local kill-switch compare-and-swap

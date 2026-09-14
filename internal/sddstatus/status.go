@@ -691,6 +691,12 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	if dependencies.Archive == DependencyReady && !nativeRuntimeAttestsCurrentVerifyReport(runtimeStatus, []byte(readText(firstPath(artifactPaths.VerifyReport)))) {
+		dependencies.Verify = DependencyReady
+		dependencies.Archive = DependencyBlocked
+		nextRecommended = string(PhaseVerify)
+		blockedReasons.genuine = appendMissingReason(blockedReasons.genuine, nativeFinalVerifyAttestationRequired)
+	}
 	if runtimeRemediationComplete {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
@@ -809,6 +815,24 @@ func appendMissingReason(reasons []string, reason string) []string {
 		return reasons
 	}
 	return append(reasons, reason)
+}
+
+const nativeFinalVerifyAttestationRequired = "archive requires a passing final verification attestation from canonical work unit \"verify\" or \"verify-attestation\"; rerun final verification through a canonical work unit"
+
+// nativeRuntimeAttestsCurrentVerifyReport keeps archive's native ledger gate on
+// the same canonical work-unit predicate that owns final-report capture. Without
+// a runtime ledger, ordinary artifact-only status remains authoritative.
+func nativeRuntimeAttestsCurrentVerifyReport(runtimeStatus *RuntimeStatus, report []byte) bool {
+	if runtimeStatus == nil {
+		return true
+	}
+	if !runtimeStatus.Complete || runtimeStatus.DecisionRequired || runtimeStatus.ActiveAttempt != nil || len(runtimeStatus.Attempts) == 0 {
+		return false
+	}
+	last := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
+	return last.Outcome == AttemptPassed && !last.ChangedLineBudgetExceeded &&
+		isFinalVerifyWorkUnit(last.WorkUnit) && last.AttestedVerifyReportDigest != "" &&
+		last.AttestedVerifyReportDigest == verifyReportDigest(report)
 }
 
 func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptTokens map[int]string, verify verifyResultEvaluation) bool {
@@ -982,6 +1006,12 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	if dependencies.Archive == DependencyReady && !nativeRuntimeAttestsCurrentVerifyReport(runtimeStatus, []byte(artifactsByType["verify-report"].Content)) {
+		dependencies.Verify = DependencyReady
+		dependencies.Archive = DependencyBlocked
+		nextRecommended = string(PhaseVerify)
+		blockedReasons.genuine = appendMissingReason(blockedReasons.genuine, nativeFinalVerifyAttestationRequired)
+	}
 	if runtimeRemediationComplete {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
