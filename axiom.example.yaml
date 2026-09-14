@@ -1,0 +1,68 @@
+# ==============================================================================
+# Plantilla de Configuración de Espacio de Trabajo Axiom
+# ==============================================================================
+# Este archivo define la identidad, topología y roles de desarrollo del proyecto.
+# Renombra o copia este archivo como 'axiom.yaml' en la carpeta maestra local.
+
+workspace:
+  # Nombre identificador del proyecto
+  name: "PlataformaEnterprise"
+
+  # Topología del espacio de trabajo. Opciones admitidas:
+  #   - monorepo-embedded: Código y especificaciones residen en el mismo repositorio Git.
+  #   - monorepo-decoupled: Monorrepo de código y repositorio de specs independiente en la carpeta maestra.
+  #   - multirepo: Múltiples repositorios de código y repositorio canónico de specs OBLIGATORIO.
+  topology: "multirepo"
+
+  # Ruta relativa al repositorio canónico de especificaciones dentro de la carpeta maestra.
+  # Para 'monorepo-embedded': usa "." o la subcarpeta interna (ej. "openspec" o "specs").
+  # Para 'monorepo-decoupled' y 'multirepo': debe ser el nombre de la carpeta del repo de specs.
+  specs_repository: "especificacion"
+
+  # Ruta raíz del workspace (por defecto: "." que corresponde a la carpeta maestra)
+  root: "."
+
+# ------------------------------------------------------------------------------
+# Definición de Roles de Implementación (de 1 a N roles)
+# ------------------------------------------------------------------------------
+roles:
+  frontend:
+    name: "Desarrollo Frontend Web"
+    repositories:
+      - path: "frontend-portal"
+      - path: "design-system"
+    tech:
+      - "react"
+      - "typescript"
+      - "tailwind"
+
+  backend:
+    name: "Desarrollo Core API y Servicios"
+    repositories:
+      - path: "backend-api"
+    tech:
+      - "go"
+      - "postgresql"
+      - "redis"
+
+  devops:
+    name: "Infraestructura y Plataforma"
+    repositories:
+      - path: "infraestructura"
+    tech:
+      - "terraform"
+      - "docker"
+      - "github-actions"
+
+# ------------------------------------------------------------------------------
+# Gobernanza Transversal del Proyecto
+# ------------------------------------------------------------------------------
+governance:
+  # Idioma oficial obligatorio para toda documentación, artefactos SDD y handoffs
+  language: "es"
+
+  # Motor de memoria compartida persistente
+  shared_memory: "engram"
+
+  # Conector para análisis semántico del código
+  semantic_analysis: "serena"

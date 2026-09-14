@@ -19,7 +19,7 @@
 
 | ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
 | :--- | :--- | :---: | :---: | :--- |
-| **INC-01** | `axiom-identity-workspace-topology` | ⏳ En progreso | Arquitectura / Core | Creación del binario `axiom`, esquema `axiom.yaml`, validación de topologías (monorepo-embedded, monorepo-decoupled, multirepo) y repositorio canónico de specs. |
+| **INC-01** | `axiom-identity-workspace-topology` | ✅ Archivado | Arquitectura / Core | Creación del binario `axiom`, esquema `axiom.yaml`, validación de topologías (monorepo-embedded, monorepo-decoupled, multirepo) y repositorio canónico de specs. |
 | **INC-02** | `structured-handoffs-lifecycle` | 📋 Planificado | Core SDD / Workflow | Esquema y artefacto `handoff.md`, comandos de transición formal entre fases y registro en Engram. |
 | **INC-03** | `multi-role-sdd-fan-out` | 📋 Planificado | Core SDD / Roles | Declaración de roles en `Design`, división de `tasks.<rol>.md`, ejecución `Apply`/`Verify` por rol y barrera de sincronización en `Archive`. |
 | **INC-04** | `axiom-local-web-dashboard` | 📋 Planificado | UI / Experiencia | Servidor HTTP local embebido en Go con dashboard web: tablero de incrementos, estado de roles, visor de handoffs y buzón de skills. |

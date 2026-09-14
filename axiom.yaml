@@ -1,0 +1,18 @@
+workspace:
+  name: "Axiom"
+  topology: "monorepo-embedded"
+  specs_repository: "openspec"
+  root: "."
+
+roles:
+  core:
+    name: "Axiom Core Engine"
+    repositories:
+      - path: "."
+    tech:
+      - "go"
+      - "bubbletea"
+
+governance:
+  language: "es"
+  shared_memory: "engram"
