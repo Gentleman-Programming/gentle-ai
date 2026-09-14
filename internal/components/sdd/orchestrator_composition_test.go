@@ -178,8 +178,8 @@ func assertOpenCodeConsentQuestionContract(t *testing.T, prompt string) {
 		"Never use chat text as consent, auto-select, or synthesize a continuation",
 		"retain the exact captured target binding and invoke only its exact provider-owned choice invocation once",
 		"If `question` is unavailable or the complete envelope cannot be represented, report that compatibility limitation and STOP without invoking any provider continuation",
-		"For non-consent envelopes only",
-		"- Fallback: For non-consent envelopes only, if a native UI is unavailable",
+		"For envelopes other than `gentle-ai.review-integration.consent/v3` (including `gentle-ai.sdd-integration.consent/v1`)",
+		"- Fallback: For envelopes other than `gentle-ai.review-integration.consent/v3` (including `gentle-ai.sdd-integration.consent/v1`), if a native UI is unavailable",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("OpenCode consent/v3 contract missing %q", want)
@@ -187,6 +187,7 @@ func assertOpenCodeConsentQuestionContract(t *testing.T, prompt string) {
 	}
 	for _, obsolete := range []string{
 		"- Fallback: If a native UI is unavailable",
+		"For non-consent envelopes only",
 		"neither field may be omitted",
 		"Treat absent, unknown, or unhonored controls as unrepresentable",
 		"direct the user to a runtime/version that exposes and enforces both controls",
@@ -194,6 +195,35 @@ func assertOpenCodeConsentQuestionContract(t *testing.T, prompt string) {
 		if strings.Contains(prompt, obsolete) {
 			t.Errorf("OpenCode consent/v3 contract retained obsolete hard block %q", obsolete)
 		}
+	}
+}
+
+func TestOpenCodeConsentV3ExceptionPreservesSDDEditAuthorityFallback(t *testing.T) {
+	source := assets.MustRead("opencode/sdd-orchestrator.md")
+	const scope = "For envelopes other than `gentle-ai.review-integration.consent/v3` (including `gentle-ai.sdd-integration.consent/v1`), "
+	wantFallback := strings.Replace(testOpenCodeFallbackClause, "- Fallback: If ", "- Fallback: "+scope+"if ", 1)
+	wantNative := strings.Replace(openCodeNativeQuestionSourceRoute, "- Native route: The ", scope+"the ", 1)
+	var editAuthorityRelay string
+	for _, line := range strings.Split(source, "\n") {
+		if strings.HasPrefix(line, "When native SDD status reports") {
+			editAuthorityRelay = line
+		}
+	}
+	if !strings.Contains(editAuthorityRelay, "gentle-ai.sdd-integration.consent/v1") {
+		t.Fatal("source omitted the SDD edit-authority consent contract")
+	}
+	for name, prompt := range map[string]string{
+		"fresh":     composeOrchestratorPrompt(model.AgentOpenCode),
+		"preserved": renderPreservedOpenCodeOrchestratorPrompt(source, model.AgentOpenCode),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(prompt, wantNative) || !strings.Contains(prompt, wantFallback) {
+				t.Error("review/v3 exception must preserve the generic native route and complete fallback for SDD consent/v1")
+			}
+			if !strings.Contains(prompt, editAuthorityRelay) {
+				t.Error("SDD edit-authority consent relay changed")
+			}
+		})
 	}
 }
 
