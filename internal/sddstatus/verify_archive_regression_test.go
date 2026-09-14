@@ -12,11 +12,9 @@ const (
 	regressionPassedEvidence = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
-// These cases preserve the #3123/#3174 regression contract: a persisted passing
-// report and runtime settlement permit archive even when the work-unit label is
-// accepted as arbitrary by public instructions; this test selects sdd-verify and
-// proves no magic label is required, with no magic attestation attached.
-func TestArbitrarySddVerifyWorkUnitPermitsArchiveAfterPassingReport(t *testing.T) {
+// An arbitrary label can record ordinary runtime work, but cannot attest the
+// canonical final verification report that archive requires.
+func TestArbitrarySddVerifyWorkUnitReroutesArchiveAfterPassingReport(t *testing.T) {
 	const change = "arbitrary-work-unit-direct"
 	repo := initRuntimeLedgerRepo(t)
 	changeRoot := seedReadyChange(t, repo, change, "- [x] 1.1 Work\n")
@@ -26,10 +24,10 @@ func TestArbitrarySddVerifyWorkUnitPermitsArchiveAfterPassingReport(t *testing.T
 	persistRegressionPassingReport(t, repo, changeRoot, regressionPassedEvidence)
 	settleRegressionAttempt(t, store, "direct-settle", attempt.Token, AttemptPassed, regressionPassedEvidence, "")
 
-	assertArbitraryWorkUnitArchiveRoute(t, repo, change, store)
+	assertArbitraryWorkUnitReroutesArchive(t, repo, change, store)
 }
 
-func TestArbitrarySddVerifyWorkUnitPermitsArchiveAfterResetRemediationAndFreshReport(t *testing.T) {
+func TestArbitrarySddVerifyWorkUnitReroutesArchiveAfterResetRemediationAndFreshReport(t *testing.T) {
 	const change = "arbitrary-work-unit-remediation"
 	repo := initRuntimeLedgerRepo(t)
 	changeRoot := seedReadyChange(t, repo, change, "- [x] 1.1 Work\n")
@@ -59,7 +57,24 @@ func TestArbitrarySddVerifyWorkUnitPermitsArchiveAfterResetRemediationAndFreshRe
 	persistRegressionPassingReport(t, repo, changeRoot, regressionPassedEvidence)
 	settleRegressionAttempt(t, store, "fresh-c-settle", final.Token, AttemptPassed, regressionPassedEvidence, "")
 
-	assertArbitraryWorkUnitArchiveRoute(t, repo, change, store)
+	assertArbitraryWorkUnitReroutesArchive(t, repo, change, store)
+}
+
+func TestCanonicalVerifyWorkUnitsPermitArchiveAfterPassingReport(t *testing.T) {
+	for _, workUnit := range []string{finalVerifyWorkUnit, finalVerifyAttestationWorkUnit} {
+		t.Run(workUnit, func(t *testing.T) {
+			change := "canonical-" + workUnit
+			repo := initRuntimeLedgerRepo(t)
+			changeRoot := seedReadyChange(t, repo, change, "- [x] 1.1 Work\n")
+			store := mustRuntimeStore(t, repo, change)
+
+			attempt := acquireRegressionAttempt(t, store, "canonical-acquire", workUnit, "record final verification", "", 2)
+			persistRegressionPassingReport(t, repo, changeRoot, regressionPassedEvidence)
+			settleRegressionAttempt(t, store, "canonical-settle", attempt.Token, AttemptPassed, regressionPassedEvidence, "")
+
+			assertCanonicalWorkUnitArchiveRoute(t, repo, change, store, workUnit)
+		})
+	}
 }
 
 func acquireRegressionAttempt(t *testing.T, store RuntimeStore, requestID, workUnit, goal, remediates string, maxAttempts int) CompactAttemptResult {
@@ -107,16 +122,9 @@ func persistRegressionPassingReport(t *testing.T, repo, changeRoot, evidence str
 	runRuntimeLedgerGit(t, repo, "commit", "-qm", "test: persist passing verification report")
 }
 
-func assertArbitraryWorkUnitArchiveRoute(t *testing.T, repo, change string, store RuntimeStore) {
+func assertArbitraryWorkUnitReroutesArchive(t *testing.T, repo, change string, store RuntimeStore) {
 	t.Helper()
-	runtime, err := store.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runtime.Attempts) == 0 {
-		t.Fatal("fixture recorded no attempts")
-	}
-	final := runtime.Attempts[len(runtime.Attempts)-1]
+	final := regressionFinalAttempt(t, store)
 	if final.WorkUnit != "sdd-verify" || final.Outcome != AttemptPassed || final.EvidenceRevision != regressionPassedEvidence {
 		t.Fatalf("final attempt = work unit:%q outcome:%q evidence:%q, want sdd-verify, passed, %q", final.WorkUnit, final.Outcome, final.EvidenceRevision, regressionPassedEvidence)
 	}
@@ -128,10 +136,35 @@ func assertArbitraryWorkUnitArchiveRoute(t *testing.T, repo, change string, stor
 	if err != nil {
 		t.Fatal(err)
 	}
+	if resolved.Dependencies.Verify != DependencyReady || resolved.Dependencies.Archive != DependencyBlocked || resolved.NextRecommended != "verify" {
+		t.Fatalf("arbitrary verification routing = verify:%q archive:%q next:%q blockers:%v", resolved.Dependencies.Verify, resolved.Dependencies.Archive, resolved.NextRecommended, resolved.BlockedReasons)
+	}
+}
+
+func assertCanonicalWorkUnitArchiveRoute(t *testing.T, repo, change string, store RuntimeStore, workUnit string) {
+	t.Helper()
+	final := regressionFinalAttempt(t, store)
+	if final.WorkUnit != workUnit || final.Outcome != AttemptPassed || final.EvidenceRevision != regressionPassedEvidence || final.AttestedVerifyReportDigest == "" {
+		t.Fatalf("final attempt = %#v, want canonical %q passing attestation for %q", final, workUnit, regressionPassedEvidence)
+	}
+
+	resolved, err := Resolve(ResolveOptions{CWD: repo, ChangeName: change, ReviewDisabled: true, IncludeInstructions: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resolved.Dependencies.Verify != DependencyAllDone || resolved.Dependencies.Archive != DependencyReady || resolved.NextRecommended != "archive" {
-		t.Fatalf("archive routing = verify:%q archive:%q next:%q blockers:%v", resolved.Dependencies.Verify, resolved.Dependencies.Archive, resolved.NextRecommended, resolved.BlockedReasons)
+		t.Fatalf("canonical verification routing = verify:%q archive:%q next:%q blockers:%v", resolved.Dependencies.Verify, resolved.Dependencies.Archive, resolved.NextRecommended, resolved.BlockedReasons)
 	}
-	if len(resolved.BlockedReasons) != 0 {
-		t.Fatalf("archive-ready reporter sequence carried blockers: %v", resolved.BlockedReasons)
+}
+
+func regressionFinalAttempt(t *testing.T, store RuntimeStore) RuntimeAttempt {
+	t.Helper()
+	runtime, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(runtime.Attempts) == 0 {
+		t.Fatal("fixture recorded no attempts")
+	}
+	return runtime.Attempts[len(runtime.Attempts)-1]
 }
