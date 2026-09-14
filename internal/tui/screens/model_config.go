@@ -13,6 +13,7 @@ func ModelConfigOptions() []string {
 		"Configure OpenCode models",
 		"Configure Kiro models",
 		"Configure Codex models",
+		"Configure Pi models",
 		"Back",
 	}
 }
