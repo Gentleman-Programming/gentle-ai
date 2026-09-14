@@ -3,6 +3,7 @@ package researchcapability
 import (
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -243,7 +244,13 @@ func TestMarkdownProjectionAcceptsShippedResearchAssets(t *testing.T) {
 					wantAllowed = append(wantAllowed, decision.Tool)
 				}
 			}
-			if !reflect.DeepEqual(projection.AllowedTools, wantAllowed) {
+			// Tool identity equality is a set invariant: extraction preserves
+			// file order while decisions follow binding order.
+			gotTools := append([]string(nil), projection.AllowedTools...)
+			sortedWant := append([]string(nil), wantAllowed...)
+			sort.Strings(gotTools)
+			sort.Strings(sortedWant)
+			if !reflect.DeepEqual(gotTools, sortedWant) {
 				t.Fatalf("allowed tools = %v, want authority decisions %v", projection.AllowedTools, wantAllowed)
 			}
 		})
@@ -302,6 +309,16 @@ func TestMarkdownProjectionRejectsTamperedAssets(t *testing.T) {
 			agent:   model.AgentCursor,
 			content: strings.Replace(cursor, "readonly: true", "tools: WebFetch\nreadonly: true", 1),
 		},
+		{
+			name:    "missing frontmatter",
+			agent:   model.AgentClaudeCode,
+			content: strings.Replace(claude, "---\nname: sdd-research", "name: sdd-research", 1),
+		},
+		{
+			name:    "unterminated frontmatter",
+			agent:   model.AgentClaudeCode,
+			content: strings.Replace(claude, "tools: WebFetch, WebSearch\n---", "tools: WebFetch, WebSearch", 1),
+		},
 	}
 
 	for _, test := range tests {
@@ -328,6 +345,26 @@ func TestMarkdownProjectionRejectsTamperedAssets(t *testing.T) {
 		}
 		if len(projection.AllowedTools) != 0 {
 			t.Fatalf("AllowedTools = %v, want empty for a line that is not a tools line", projection.AllowedTools)
+		}
+		if err := VerifyProjection(projection); err == nil {
+			t.Fatal("VerifyProjection() = nil, want refusal for a missing canonical tool surface")
+		}
+	})
+
+	// A `tools:` line in the body is not the tool surface the runtime loads.
+	// Frontmatter without the tool declaration must not be satisfied by body
+	// text that never reaches the installed agent configuration.
+	t.Run("body tools line is not the tool surface", func(t *testing.T) {
+		t.Parallel()
+
+		tampered := strings.Replace(claude, "tools: WebFetch, WebSearch\n", "", 1)
+		tampered = strings.Replace(tampered, "Do not read or mutate repository or Engram state.", "tools: WebFetch, WebSearch\nDo not read or mutate repository or Engram state.", 1)
+		projection, err := MarkdownProjection(model.AgentClaudeCode, tampered)
+		if err != nil {
+			t.Fatalf("MarkdownProjection() error = %v", err)
+		}
+		if len(projection.AllowedTools) != 0 {
+			t.Fatalf("AllowedTools = %v, want empty for a body line outside the frontmatter", projection.AllowedTools)
 		}
 		if err := VerifyProjection(projection); err == nil {
 			t.Fatal("VerifyProjection() = nil, want refusal for a missing canonical tool surface")

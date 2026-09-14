@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -992,7 +993,14 @@ func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
 					allowedTools = append(allowedTools, decision.Tool)
 				}
 			}
-			if !reflect.DeepEqual(projection.AllowedTools, allowedTools) {
+			// Tool identity equality is a set invariant: extraction preserves
+			// file order while decisions follow binding order; the serialized
+			// order is pinned separately by toolsExact below.
+			gotTools := append([]string(nil), projection.AllowedTools...)
+			sortedWant := append([]string(nil), allowedTools...)
+			sort.Strings(gotTools)
+			sort.Strings(sortedWant)
+			if !reflect.DeepEqual(gotTools, sortedWant) {
 				t.Fatalf("%s allowed tools = %v, want authority decisions %v", tt.path, projection.AllowedTools, allowedTools)
 			}
 

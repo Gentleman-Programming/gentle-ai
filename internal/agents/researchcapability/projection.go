@@ -399,14 +399,26 @@ func MarkdownProjection(agent model.AgentID, content string) (RuntimeProjection,
 	return projection, nil
 }
 
-// findToolsLine locates the single frontmatter tools line. The line must start
-// with `tools:` and a space or tab, so `exclude_tools:` and bare `tools:` do
-// not match; more than one match is ambiguous and refuses.
+// findToolsLine locates the single frontmatter tools line. Only the initial
+// frontmatter block is the tool surface the runtime loads: a `tools:` line in
+// the body is ignored rather than trusted, and a document without a closed
+// frontmatter block refuses. Within the block the line must start with
+// `tools:` and a space or tab, so `exclude_tools:` and bare `tools:` do not
+// match; more than one match is ambiguous and refuses.
 func findToolsLine(content string) (string, int, error) {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 || strings.TrimSuffix(lines[0], "\r") != "---" {
+		return "", 0, fmt.Errorf("missing markdown frontmatter")
+	}
 	count := 0
 	value := ""
-	for _, line := range strings.Split(content, "\n") {
+	closed := false
+	for _, line := range lines[1:] {
 		line = strings.TrimSuffix(line, "\r")
+		if line == "---" {
+			closed = true
+			break
+		}
 		if !strings.HasPrefix(line, "tools:") {
 			continue
 		}
@@ -416,6 +428,9 @@ func findToolsLine(content string) (string, int, error) {
 		}
 		count++
 		value = strings.TrimSpace(rest)
+	}
+	if !closed {
+		return "", 0, fmt.Errorf("unterminated markdown frontmatter")
 	}
 	if count > 1 {
 		return "", count, fmt.Errorf("found %d tools lines, want exactly one", count)
