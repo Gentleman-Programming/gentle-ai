@@ -177,6 +177,29 @@ func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutat
 	}
 }
 
+func TestOpenCodeReviewTransportRefusesUnboundFormalTaskWithExploreContinuation(t *testing.T) {
+	start := openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: "Review this candidate for reliability.",
+	}
+	request, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	err = runReviewOpenCodeTransport(nil, bytes.NewReader(request), &stdout)
+	if err == nil {
+		t.Fatal("unbound formal review Task was accepted")
+	}
+	for _, want := range []string{"no provider-issued review binding", "native `explore`", "non-authoritative advisory review"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("unbound formal review refusal = %q, want %q", err, want)
+		}
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unbound formal review launched a reviewer prompt: %q", stdout.String())
+	}
+}
+
 func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLaunch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires git worktrees and relay subprocesses")

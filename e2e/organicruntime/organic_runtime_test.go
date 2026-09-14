@@ -34,9 +34,12 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
@@ -946,7 +949,7 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 	if runErr != nil {
 		t.Fatalf("ordinary OpenCode provider session: %v\n%s", runErr, output)
 	}
-	if !issued || !seen || calls == 0 {
+	if !issued || !seen || calls != 1 {
 		t.Fatalf("ordinary OpenCode transport task=%t canonical=%t provider_requests=%d\n%s", issued, seen, calls, output)
 	}
 	connections, err := codexTracedConnectAddresses(traceBase)
@@ -1840,6 +1843,10 @@ var organicRoutingGuidanceRequiredFragments = []string{
 	"never create SDD artifacts",
 	"gentle-ai review mode enable|disable|status",
 	"disabled/unmanaged",
+	"Formal `review-*` actors may be dispatched only from an exact provider-issued native collection transition.",
+	"ordinary unbound manual read-only or advisory review through native `explore`",
+	"must not claim PASS, a receipt, approval, gate, or delivery authority",
+	"without creating a managed role or authority state",
 }
 
 // TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor proves the
@@ -4236,6 +4243,227 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 	}
 }
 
+// TestRealOpenCodeExecutesInstalledAdvisoryRouteWithoutMutation does not claim
+// that a fixture model autonomously chose a Task. The fixture deterministically
+// reads the native agent name from the installed routing clause, then the real
+// OpenCode runtime executes that route. RenderRouting's focused test owns the
+// routing rule itself. TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport is
+// the bound-RDD positive control: it loads the formal plugin, requires exactly
+// one provider request, and proves durable Go capture.
+func TestRealOpenCodeExecutesInstalledAdvisoryRouteWithoutMutation(t *testing.T) {
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned real-agent journeys")
+	}
+	requireOrganicExecutableVersion(t, "opencode", pinnedOpenCodeVersion)
+
+	const (
+		candidatePath     = "docs/advisory-candidate.md"
+		candidateBytes    = "bounded candidate bytes\n"
+		advisoryResult    = "Advisory observation: the supplied candidate satisfies the requested bounded criterion."
+		advisoryCompleted = "ORDINARY_ADVISORY_EXPLORE_COMPLETED"
+	)
+	for _, test := range []struct {
+		name      string
+		committed bool
+	}{{name: "staged uncommitted candidate"}, {name: "committed candidate", committed: true}} {
+		t.Run(test.name, func(t *testing.T) {
+			advisoryPrompt := strings.Join([]string{
+				"Review the supplied candidate as ordinary read-only advice.",
+				"Exact candidate evidence: " + candidatePath + " contains " + strconv.Quote(candidateBytes) + ".",
+				"Review focus: accidental scope expansion.",
+				"Acceptance criterion: only the supplied documentation bytes are in scope.",
+				"Output scope: observations only.",
+			}, "\n")
+			fixture := newOpenCodeFixtureServer(t, nil, advisoryPrompt)
+			defer fixture.Close()
+			fixture.readOnlySubagent = true
+			fixture.routingAdvisoryPrompt = advisoryPrompt
+			fixture.subagentCompletion = advisoryResult
+			fixture.completion = advisoryResult + "\n" + advisoryCompleted
+			fixture.requiredMainPromptFragments = []string{
+				"Formal `review-*` actors may be dispatched only from an exact provider-issued native collection transition.",
+				"route an ordinary unbound manual read-only or advisory review through native `explore`",
+			}
+
+			harness := newOrganicHarness(t)
+			harness.writeFiles(map[string]string{candidatePath: candidateBytes})
+			if test.committed {
+				harness.git("commit", "-q", "-m", "docs: commit advisory candidate")
+			}
+			recorded := time.Now().UTC()
+			if err := state.Write(harness.home, state.InstallState{RDDMode: string(reviewtransaction.RDDModeOff), RDDModeRecordedAt: &recorded}); err != nil {
+				t.Fatal(err)
+			}
+			assertOrganicAdvisoryModeOff(t, harness, recorded)
+			authorityPath := filepath.Join(harness.commonDir(), "gentle-ai")
+			if _, err := os.Stat(authorityPath); !os.IsNotExist(err) {
+				t.Fatalf("test started with review authority state (stat error %v)", err)
+			}
+
+			configDirectory := filepath.Join(harness.home, ".config", "opencode")
+			if err := os.MkdirAll(configDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(configDirectory, "opencode.json")
+			if err := os.WriteFile(configPath, []byte(organicAdvisoryOpenCodeConfig(t, fixture.URL)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := agentguidance.InjectRouting(harness.home, model.AgentOpenCode); err != nil {
+				t.Fatalf("install OpenCode routing guidance: %v", err)
+			}
+			beforeBytes, err := os.ReadFile(filepath.Join(harness.repo.worktree, filepath.FromSlash(candidatePath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeGit := harness.git("status", "--porcelain=v2", "--branch")
+			beforeHead := harness.git("rev-parse", "HEAD")
+
+			environment := append(harness.environment(),
+				"OPENCODE_CONFIG_DIR="+configDirectory, "OPENCODE_TEST_HOME="+filepath.Join(harness.home, "opencode"),
+				"OPENCODE_AUTH_CONTENT={}", "OPENCODE_DISABLE_PROJECT_CONFIG=1", "OPENCODE_DISABLE_AUTOUPDATE=1",
+				"OPENCODE_DISABLE_AUTOCOMPACT=1", "OPENCODE_DISABLE_CLAUDE_CODE=1", "OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
+				"OPENCODE_DISABLE_EXTERNAL_SKILLS=1", "OPENCODE_DISABLE_LSP_DOWNLOAD=1", "OPENCODE_DISABLE_MODELS_FETCH=1",
+				"OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=1", "OPENCODE_FAST_BOOT=1", "OPENCODE_PURE=1",
+			)
+			ctx, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
+			defer cancel()
+			command := organicCommandContext(ctx, "opencode", "run", "--pure", "--format", "json",
+				"--agent", "gentle-orchestrator", "--model", "fixture/fixture", "--dir", harness.repo.worktree,
+				"Provide an ordinary read-only advisory review of "+candidatePath+".")
+			command.Dir, command.Env = harness.repo.worktree, environment
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			err = command.Run()
+			if err != nil {
+				t.Fatalf("run ordinary OpenCode advisory review: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.Bytes(), stderr.Bytes())
+			}
+			output := stdout.Bytes()
+			fixture.assertComplete(t, true)
+			fixture.assertAdvisoryRoute(t, "explore", 1)
+			assistantText, err := organicOpenCodeAssistantText(output)
+			if err != nil {
+				t.Fatalf("ordinary advisory transcript: %v\nstdout:\n%s\nstderr:\n%s", err, output, stderr.Bytes())
+			}
+			if !bytes.Contains(assistantText, []byte(advisoryCompleted)) || !bytes.Contains(assistantText, []byte(advisoryResult)) {
+				t.Fatalf("ordinary advisory did not complete through explore:\nassistant text:\n%s\nstdout:\n%s\nstderr:\n%s", assistantText, output, stderr.Bytes())
+			}
+			for _, forbidden := range []string{"PASS", `"captured":true`, "receipt", "approved", "delivery authority"} {
+				if bytes.Contains(bytes.ToLower(assistantText), bytes.ToLower([]byte(forbidden))) {
+					t.Fatalf("ordinary advisory output claimed authority with %q:\n%s", forbidden, assistantText)
+				}
+			}
+			afterBytes, err := os.ReadFile(filepath.Join(harness.repo.worktree, filepath.FromSlash(candidatePath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(afterBytes, beforeBytes) || harness.git("status", "--porcelain=v2", "--branch") != beforeGit || harness.git("rev-parse", "HEAD") != beforeHead {
+				t.Fatal("ordinary advisory changed candidate bytes or Git state")
+			}
+			assertOrganicAdvisoryModeOff(t, harness, recorded)
+			if _, err := os.Stat(authorityPath); !os.IsNotExist(err) {
+				t.Fatalf("ordinary advisory created lineage, receipt, or authority state (stat error %v)", err)
+			}
+			installed, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, forbidden := range []string{"opencode-review-transport", "review-risk", "gentle-reviewer", "gentle-worker"} {
+				if bytes.Contains(installed, []byte(forbidden)) {
+					t.Fatalf("component-absent advisory routing installed formal transport or role %q", forbidden)
+				}
+			}
+		})
+	}
+}
+
+func assertOrganicAdvisoryModeOff(t *testing.T, harness *organicHarness, expectedRecordedAt time.Time) {
+	t.Helper()
+	persisted, err := state.Read(harness.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.RDDModeRecordedAt == nil || !persisted.RDDModeRecordedAt.Equal(expectedRecordedAt) {
+		t.Fatalf("persisted review mode timestamp = %v, want %v", persisted.RDDModeRecordedAt, expectedRecordedAt)
+	}
+	mode, err := reviewtransaction.ResolveRDDMode(t.Context(), harness.repo.worktree, reviewtransaction.RDDGlobalMode{Value: persisted.RDDMode, RecordedAt: *persisted.RDDModeRecordedAt})
+	if err != nil || mode.Effective != reviewtransaction.RDDModeOff || mode.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("effective review mode = %#v, %v; want disabled global mode", mode, err)
+	}
+}
+
+func TestOrganicOpenCodeAssistantText(t *testing.T) {
+	transcript := strings.Join([]string{
+		`{"type":"request","text":"PASS receipt approved delivery authority"}`,
+		`{"type":"tool_use","part":{"type":"tool","state":{"output":"{\"captured\":true}"}}}`,
+		`{"type":"step_start","part":{"type":"step-start","metadata":{"system":"receipt approved"}}}`,
+		`{"type":"text","part":{"type":"text","text":"bounded advisory observation"}}`,
+		`{"type":"text","part":{"type":"text","text":"second advisory observation"}}`,
+	}, "\n")
+	text, err := organicOpenCodeAssistantText([]byte(transcript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(text) != "bounded advisory observationsecond advisory observation" {
+		t.Fatalf("assistant text = %q, want assistant chunks in stream order", text)
+	}
+
+	for _, test := range []struct {
+		name       string
+		transcript string
+	}{
+		{name: "malformed transcript", transcript: `{"type":"text","part":`},
+		{name: "missing assistant output", transcript: `{"type":"tool_use","part":{"type":"tool"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := organicOpenCodeAssistantText([]byte(test.transcript)); err == nil {
+				t.Fatal("transcript unexpectedly accepted without assistant output")
+			}
+		})
+	}
+}
+
+func organicOpenCodeAssistantText(transcript []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(transcript))
+	var text bytes.Buffer
+	for {
+		var event struct {
+			Type string `json:"type"`
+			Part struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"part"`
+		}
+		if err := decoder.Decode(&event); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("decode OpenCode JSON transcript: %w", err)
+		}
+		if event.Type == "text" && event.Part.Type == "text" && event.Part.Text != "" {
+			text.WriteString(event.Part.Text)
+		}
+	}
+	if text.Len() == 0 {
+		return nil, errors.New("OpenCode JSON transcript contains no assistant text")
+	}
+	return text.Bytes(), nil
+}
+
+func TestOpenCodeAdvisoryRuntimeReadsNativeAgentFromRenderedContract(t *testing.T) {
+	rendered, err := agentguidance.RenderRouting(model.AgentOpenCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := openAIRequest{Messages: []openAIMessage{{Role: "system", Content: rendered}}}
+	if got := openCodeAdvisoryAgentFromRouting(input); got != "explore" {
+		t.Fatalf("native ordinary advisory agent = %q, want explore", got)
+	}
+	input.Messages[0].Content = "ordinary advisory guidance is absent"
+	if got := openCodeAdvisoryAgentFromRouting(input); got != "" {
+		t.Fatalf("missing routing contract selected agent %q", got)
+	}
+}
+
 func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
 	if os.Getenv(realAgentE2EEnvironment) != "1" {
 		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned real-agent journeys")
@@ -4464,6 +4692,10 @@ type openCodeFixtureServer struct {
 	actorCommand                     string
 	completion                       string
 	subagentCompletion               string
+	readOnlySubagent                 bool
+	requiredMainPromptFragments      []string
+	routingAdvisoryPrompt            string
+	selectedAdvisoryAgent            string
 	requireInstalledSDDApplyExecutor bool
 	sawInstalledSDDApplyExecutor     bool
 	executorNonce                    string
@@ -4520,6 +4752,10 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 		fixture.mu.Lock()
 		fixture.subagentStarts++
 		fixture.mu.Unlock()
+		if fixture.readOnlySubagent {
+			fixture.writeText(writer, fixture.subagentCompletion, "stop")
+			return
+		}
 		last := input.Messages[len(input.Messages)-1]
 		if last.Role == "tool" {
 			if fixture.requireInstalledSDDApplyExecutor && !fixture.captureInstalledSDDApplyExecutorBashResult(writer, messageText(last.Content)) {
@@ -4544,7 +4780,29 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 	fixture.mu.Lock()
 	fixture.mainCalls++
 	call := fixture.mainCalls
+	required := append([]string(nil), fixture.requiredMainPromptFragments...)
+	routingAdvisoryPrompt := fixture.routingAdvisoryPrompt
 	fixture.mu.Unlock()
+	for _, fragment := range required {
+		if !openCodeRequestContains(input, fragment) {
+			fixture.fail(writer, "installed orchestrator prompt omitted %q", fragment)
+			return
+		}
+	}
+	if call == 1 && routingAdvisoryPrompt != "" {
+		agent := openCodeAdvisoryAgentFromRouting(input)
+		if agent == "" {
+			fixture.fail(writer, "installed routing guidance exposes no native ordinary advisory agent")
+			return
+		}
+		fixture.mu.Lock()
+		fixture.selectedAdvisoryAgent = agent
+		fixture.mu.Unlock()
+		fixture.writeTool(writer, "advisory-route", "task", map[string]any{
+			"description": "Run the ordinary advisory review", "subagent_type": agent, "prompt": routingAdvisoryPrompt,
+		})
+		return
+	}
 	if call > len(fixture.script) {
 		if fixture.requireInstalledSDDApplyExecutor && !fixture.acceptInstalledSDDApplyExecutorRoundTrip(writer, input) {
 			return
@@ -4792,6 +5050,15 @@ func (fixture *openCodeFixtureServer) assertComplete(t *testing.T, wantSubagent 
 	}
 }
 
+func (fixture *openCodeFixtureServer) assertAdvisoryRoute(t *testing.T, wantAgent string, wantChildren int) {
+	t.Helper()
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.selectedAdvisoryAgent != wantAgent || fixture.subagentStarts != wantChildren {
+		t.Fatalf("advisory route agent=%q children=%d, want agent=%q children=%d", fixture.selectedAdvisoryAgent, fixture.subagentStarts, wantAgent, wantChildren)
+	}
+}
+
 func organicOpenCodeConfig(t *testing.T, serverURL string) string {
 	t.Helper()
 	config := map[string]any{
@@ -4819,6 +5086,53 @@ func organicOpenCodeConfig(t *testing.T, serverURL string) string {
 		t.Fatal(err)
 	}
 	return string(encoded)
+}
+
+func organicAdvisoryOpenCodeConfig(t *testing.T, serverURL string) string {
+	t.Helper()
+	config := map[string]any{
+		"model": "fixture/fixture", "small_model": "fixture/fixture",
+		"provider": map[string]any{"fixture": map[string]any{
+			"npm": "@ai-sdk/openai-compatible", "name": "Organic advisory fixture",
+			"options": map[string]any{"baseURL": serverURL + "/v1", "apiKey": "fixture"},
+			"models":  map[string]any{"fixture": map[string]any{"name": "Fixture"}},
+		}},
+		"agent": map[string]any{"gentle-orchestrator": map[string]any{
+			"description": "Installed Gentle AI orchestrator", "mode": "primary", "model": "fixture/fixture",
+			"permission": map[string]any{"task": "allow", "edit": "deny", "bash": "deny"},
+		}},
+		"plugin": []any{}, "compaction": map[string]any{"auto": false},
+	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+func openCodeRequestContains(input openAIRequest, fragment string) bool {
+	for _, message := range input.Messages {
+		if strings.Contains(messageText(message.Content), fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func openCodeAdvisoryAgentFromRouting(input openAIRequest) string {
+	const prefix = "route an ordinary unbound manual read-only or advisory review through native `"
+	for _, message := range input.Messages {
+		content := messageText(message.Content)
+		start := strings.Index(content, prefix)
+		if start < 0 {
+			continue
+		}
+		agent, _, found := strings.Cut(content[start+len(prefix):], "`")
+		if found {
+			return agent
+		}
+	}
+	return ""
 }
 
 func prepareOpenCodeConfig(t *testing.T) string {
