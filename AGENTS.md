@@ -26,3 +26,4 @@ Naming convention: `gentle-ai-*` skills are repo-specific workflow skills. Unpre
 | `issue-root-resolution` | When auditing backlog roots, proposing cluster fixes, or closing resolved/outdated issues. | [`skills/issue-root-resolution/SKILL.md`](skills/issue-root-resolution/SKILL.md) |
 | `systemic-issue-triage` | When triaging issues, bugs, backlogs, root causes, dead ends, or blocked users. | [`skills/systemic-issue-triage/SKILL.md`](skills/systemic-issue-triage/SKILL.md) |
 | `gentle-ai-bench` | When touching `bench/`, journeys, driven mode, the journey corpus, or bench axes. | [`skills/gentle-ai-bench/SKILL.md`](skills/gentle-ai-bench/SKILL.md) |
+| `design-minimality` | When evaluating the minimality ladder, planning minimal changes, or running a design-minimality pass. | [`skills/design-minimality/SKILL.md`](skills/design-minimality/SKILL.md) |

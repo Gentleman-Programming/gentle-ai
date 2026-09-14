@@ -668,7 +668,7 @@ test_cc_skills_minimal() {
 }
 
 test_cc_skills_full() {
-    log_test "Claude Code: skills injection (full-gentleman = 13 foundation skills)"
+    log_test "Claude Code: skills injection (full-gentleman = 14 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset full-gentleman --persona neutral 2>&1; then
@@ -676,9 +676,9 @@ test_cc_skills_full() {
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
         # #3554: skills alone no longer pulls sdd. Full preset's skill catalog
-        # is 13 foundation + judgment-day = 14 files; the 11 sdd-* phase
+        # is 14 foundation + judgment-day = 15 files; the 11 sdd-* phase
         # skills come only from the SDD component (not selected here).
-        assert_file_count "$skills_dir" "SKILL.md" 14 "Full preset (skills alone): 14 skill files"
+        assert_file_count "$skills_dir" "SKILL.md" 15 "Full preset (skills alone): 15 skill files"
         assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
 
         # Verify foundation skills exist
@@ -700,16 +700,16 @@ test_cc_skills_full() {
 }
 
 test_cc_skills_ecosystem() {
-    log_test "Claude Code: skills injection (ecosystem-only = 13 foundation skills)"
+    log_test "Claude Code: skills injection (ecosystem-only = 14 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset ecosystem-only --persona neutral 2>&1; then
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # #3554: skills alone no longer pulls sdd. 13 foundation + judgment-day
-        # = 14 files; the 11 sdd-* phase skills need the SDD component too.
-        assert_file_count "$skills_dir" "SKILL.md" 14 "Ecosystem preset (skills alone): 14 skill files"
+        # #3554: skills alone no longer pulls sdd. 14 foundation + judgment-day
+        # = 15 files; the 11 sdd-* phase skills need the SDD component too.
+        assert_file_count "$skills_dir" "SKILL.md" 15 "Ecosystem preset (skills alone): 15 skill files"
         # SDD skills NOT present (skills has no hard dependency on sdd)
         assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         # Foundation skills present
@@ -945,14 +945,14 @@ test_oc_skills_minimal() {
 }
 
 test_oc_skills_full() {
-    log_test "OpenCode: skills injection (full-gentleman = 13 foundation skills)"
+    log_test "OpenCode: skills injection (full-gentleman = 14 foundation skills)"
     cleanup_test_env
 
-    # #3554: skills alone no longer pulls sdd. 13 foundation + judgment-day = 14.
+    # #3554: skills alone no longer pulls sdd. 14 foundation + judgment-day = 15.
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 14 "Full preset (skills alone): 14 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 15 "Full preset (skills alone): 15 skill files"
         assert_file_not_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"

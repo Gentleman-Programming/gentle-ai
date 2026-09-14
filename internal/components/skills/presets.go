@@ -33,6 +33,7 @@ var foundationSkills = []model.SkillID{
 	model.SkillWorkUnitCommits,
 	model.SkillRDDDefectWorkflow,
 	model.SkillSystemicIssueTriage,
+	model.SkillDesignMinimality,
 }
 
 // SkillsForPreset returns which skills should be installed for a given preset.

@@ -12,6 +12,7 @@
             "*": "deny",
             "general": "allow",
             "explore": "allow",
+            "design-minimality": "allow",
             "sdd-init": "allow",
             "sdd-explore": "allow",
             "sdd-research": "allow",
@@ -50,6 +51,14 @@
       "hidden": true,
       "description": "Freeform exploration fallback agent",
       "prompt": "You are the explore fallback sub-agent aligned with gentle-pi guidance.\n- Independently inspect codebase files and execution paths in full without relying on unverified assumptions.\n- Read relevant code files completely before reaching conclusions.\n- Perform exploration, analysis, and discovery ONLY. Do not create, edit, or delete files.\n- Return concise, structured findings naming affected files, code paths, and clear recommendations.",
+      "permission": { "write": "deny", "edit": "deny", "bash": "deny", "task": "deny" }
+    },
+    "design-minimality": {
+      "__managed_by": "gentle-ai/sdd",
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Evaluate the minimality ladder and produce the minimal implementation plan",
+      "prompt": "You are the design-minimality sub-agent. Your job is to evaluate the minimality ladder over the exploration handoff before implementation:\n- Follow the minimality ladder: YAGNI -> codebase reuse -> stdlib -> platform feature -> dependency -> minimum new code.\n- Shorten the solution, never the understanding. Never remove validation, error handling, security, or accessibility.\n- Output the smallest viable plan, estimated authored-line footprint, and explicit deliberate deferrals.\n- Return the plan to be handed to the writer as its brief. Do not edit files or launch child agents.",
       "permission": { "write": "deny", "edit": "deny", "bash": "deny", "task": "deny" }
     },
     "sdd-init": {

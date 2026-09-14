@@ -515,7 +515,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
 	// same shared session preflight body, so the hash moved. Deliberate, not drift.
-	const want = "8f388ae4197cfa0fbfdf1f82423a599ea43e43665659da11e0389b670d241bf4"
+	// #3986 adds the design-minimality subagent to the OpenCode overlay assets.
+	// Kilocode inherits the subagent and permission allowlist entry.
+	const want = "6d77960d977531a4369a53e2429fb4b22080d0bae354cf2f7f457a15eaf79bb2"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

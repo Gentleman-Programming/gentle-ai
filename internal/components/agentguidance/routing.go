@@ -55,6 +55,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 		routing.DelegatedDirect.MappingMinUnderstandingFiles,
 		routing.DelegatedDirect.WriterMinNonTrivialFiles,
 	)
+	output.WriteString("  - **Design-minimality pass:** between exploration and implementation, run a design-minimality pass before composing the writer brief. Apply the minimality ladder (YAGNI -> reuse -> stdlib -> platform -> dependency -> minimum new code), estimate authored-line footprint, record deliberate deferrals, required tests, and boundary invariants, and pass the complete minimal plan and constraints as the writer brief.\n")
 	output.WriteString("- **Optional SDD:** propose SDD only when durable proposal, spec, design, and tasks would materially reduce substantial ambiguity. SDD is selected only by an explicit request or an accepted proposal.\n")
 	output.WriteString("- File count, changed lines, size, or perceived risk alone never selects SDD and never forces a heavier route.\n")
 	output.WriteString("- Automatic SDD pace is not mutation authorization; once implementation is explicitly authorized, it continues under the selected route.\n")
