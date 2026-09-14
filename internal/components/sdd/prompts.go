@@ -58,6 +58,57 @@ func SharedPromptPhases() []string {
 	return ProfilePhaseOrder()
 }
 
+// sharedPromptPhaseCapabilities derives the per-phase model capability map for
+// one run: global assignments first, then named profile assignments (profiles
+// win, mirroring resolveProfileAssignment precedence). WriteSharedPromptFiles
+// and the research projection verification consume this same map, so the bytes
+// written and the bytes verified cannot disagree.
+func sharedPromptPhaseCapabilities(assignments map[string]model.ModelAssignment, profiles []model.Profile) map[string]string {
+	phaseCapabilities := make(map[string]string)
+	for phase, assignment := range assignments {
+		phaseCapabilities[phase] = model.ModelCapability(assignment.ModelID)
+	}
+	for _, profile := range profiles {
+		for phase, assignment := range profile.PhaseAssignments {
+			if assignment.ModelID != "" {
+				phaseCapabilities[phase] = model.ModelCapability(assignment.ModelID)
+			}
+		}
+	}
+	return phaseCapabilities
+}
+
+// sharedPromptCapability resolves the effective render capability for one phase
+// with the same defaulting WriteSharedPromptFiles applies.
+func sharedPromptCapability(phaseCapabilities map[string]string, phase string) string {
+	if capability, ok := phaseCapabilities[phase]; ok && capability != "" {
+		return capability
+	}
+	return "capable"
+}
+
+// renderSharedPromptFile renders the exact bytes one shared prompt file will
+// carry, plus its canonical path. Both WriteSharedPromptFiles and the research
+// projection verification call this renderer with the same per-run capability
+// map, and inject writes the files whenever a named profile overlay can
+// reference them, so the bytes loaded at runtime and the bytes verified cannot
+// drift (#4088).
+func renderSharedPromptFile(homeDir, phase, capability, codeGraphGuidance string) (string, string, error) {
+	skillContent, err := readSkillContent(phase)
+	if err != nil {
+		return "", "", err
+	}
+	content := extractModelSection(skillContent, capability)
+	content = injectCodeGraphGuidanceIntoPrompt(content, codeGraphGuidance)
+	// OpenCode phases reference these shared files via {file:...}
+	// indirection, which the in-settings injection deliberately skips —
+	// the contract must land here or those executors would miss it.
+	content = injectLanguageContractIntoPrompt(content)
+	content = agentguidance.InjectRemoteAuthorization(content)
+	path := filepath.Join(SharedPromptDir(homeDir), phase+".md")
+	return path, content, nil
+}
+
 // WriteSharedPromptFiles writes the 10 SDD sub-agent prompt files to
 // {homeDir}/.config/opencode/prompts/sdd/. The content for each phase is extracted
 // from the embedded skill file, filtered to the section matching the phase's
@@ -72,7 +123,6 @@ func SharedPromptPhases() []string {
 // files already match (idempotent). Uses WriteFileAtomic so the operation is
 // safe to repeat.
 func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string, codeGraphGuidance ...string) (bool, error) {
-	promptDir := SharedPromptDir(homeDir)
 	anyChanged := false
 	guidance := ""
 	if len(codeGraphGuidance) > 0 {
@@ -80,32 +130,10 @@ func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string,
 	}
 
 	for _, phase := range subAgentPhaseOrder {
-		// Read the embedded skill content for this phase.
-		skillContent, err := readSkillContent(phase)
+		path, content, err := renderSharedPromptFile(homeDir, phase, sharedPromptCapability(phaseCapabilities, phase), guidance)
 		if err != nil {
 			return false, err
 		}
-
-		// Determine which section to extract based on model capability.
-		capability := "capable"
-		if phaseCapabilities != nil {
-			if cap, ok := phaseCapabilities[phase]; ok && cap != "" {
-				capability = cap
-			}
-		}
-
-		// Extract the section matching the capability (falls back to full content
-		// if no matching section marker is found — correct behavior for phases
-		// that don't yet have conditional sections).
-		content := extractModelSection(skillContent, capability)
-		content = injectCodeGraphGuidanceIntoPrompt(content, guidance)
-		// OpenCode phases reference these shared files via {file:...}
-		// indirection, which the in-settings injection deliberately skips —
-		// the contract must land here or those executors would miss it.
-		content = injectLanguageContractIntoPrompt(content)
-		content = agentguidance.InjectRemoteAuthorization(content)
-
-		path := filepath.Join(promptDir, phase+".md")
 		result, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 		if err != nil {
 			return false, err

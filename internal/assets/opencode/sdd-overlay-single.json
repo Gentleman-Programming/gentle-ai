@@ -78,7 +78,9 @@
         "bash": "deny",
         "webfetch": "deny",
         "websearch": "deny",
-        "task": "deny"
+        "task": "deny",
+        "write": "deny",
+        "edit": "deny"
       }
     },
     "sdd-propose": {

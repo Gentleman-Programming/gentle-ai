@@ -60,6 +60,32 @@ var adapterToolBindings = map[model.AgentID][]ToolBinding{
 	},
 }
 
+// openCodeResearchExecutorDenies are the tool identities every OpenCode
+// research projection must explicitly deny. OpenCode tools are default-open, so
+// an omitted decision is an implicit grant: bash would give shell access, task
+// delegation, and write/edit repository mutation. Verification refuses any
+// projection that does not deny all four (#4088).
+var openCodeResearchExecutorDenies = []string{"bash", "task", "write", "edit"}
+
+// knownResearchRuntimes is the closed domain of runtime identities the
+// authority recognizes as research runtimes. Declared capability is a separate
+// question: ForAgent keeps returning false for deny-only runtimes, but an agent
+// ID outside this domain is unknown rather than denied and must be refused
+// (#4088).
+var knownResearchRuntimes = map[model.AgentID]bool{
+	model.AgentClaudeCode: true,
+	model.AgentKiroIDE:    true,
+	model.AgentPi:         true,
+	model.AgentOpenCode:   true,
+	model.AgentKilocode:   true,
+	model.AgentCursor:     true,
+	model.AgentKimi:       true,
+}
+
+func isKnownResearchRuntime(agent model.AgentID) bool {
+	return knownResearchRuntimes[agent]
+}
+
 // AdapterToolBindings returns a defensive copy of one agent's ordered
 // grant-to-tool mapping. Agents without bindings have no evidence tool surface
 // and therefore deny every observed tool identity.
@@ -186,6 +212,20 @@ type RuntimeProjection struct {
 	Allowlist    bool
 	AllowedTools []string
 	DeniedTools  []string
+	// SharedPromptRef is the inner path of a {file:...} prompt reference when
+	// the projection prompt points at the shared research prompt file instead
+	// of carrying an inline declaration. The authority never resolves paths:
+	// the generator must prove the reference resolves to the canonical shared
+	// research prompt and supply MaterializedPrompt before verification.
+	SharedPromptRef string
+	// MaterializedPrompt carries the exact bytes the shared prompt reference
+	// will load, rendered by the same pipeline the write path uses. It is only
+	// valid together with SharedPromptRef.
+	MaterializedPrompt string
+	// DeniedExecutorTools lists the research executor posture tool identities
+	// the projection explicitly denies. OpenCode tools are default-open, so the
+	// posture requires explicit denies for bash, task, write, and edit.
+	DeniedExecutorTools []string
 }
 
 // VerifyProjection fails closed when a generated runtime research projection
@@ -193,9 +233,25 @@ type RuntimeProjection struct {
 // an error: it never produces claims or grants, so a mismatch can only stop
 // generation.
 func VerifyProjection(projection RuntimeProjection) error {
+	if !isKnownResearchRuntime(projection.Agent) {
+		return fmt.Errorf("agent %s: unknown research runtime", projection.Agent)
+	}
 	canonical, ok := ForAgent(projection.Agent)
 	if !ok {
 		canonical = Capability{}
+	}
+	if projection.SharedPromptRef != "" {
+		if projection.HasDeclaration {
+			return fmt.Errorf("agent %s: projection carries both a shared prompt reference and an inline declaration", projection.Agent)
+		}
+		if projection.MaterializedPrompt == "" {
+			return fmt.Errorf("agent %s: shared research prompt reference %q was not materialized for verification", projection.Agent, projection.SharedPromptRef)
+		}
+		if err := verifyMaterializedPrompt(projection.Agent, canonical, projection.MaterializedPrompt); err != nil {
+			return err
+		}
+	} else if projection.MaterializedPrompt != "" {
+		return fmt.Errorf("agent %s: materialized research prompt was provided without a shared prompt reference", projection.Agent)
 	}
 	if projection.HasDeclaration {
 		if err := verifyDeclaredClasses(projection, canonical); err != nil {
@@ -221,9 +277,60 @@ func VerifyProjection(projection RuntimeProjection) error {
 		if len(projection.DeniedTools) != 0 {
 			return fmt.Errorf("agent %s: allowlist projection carries denied tools %v, but allowlist formats have no deny channel", projection.Agent, projection.DeniedTools)
 		}
+		return verifyOpenCodeExecutorDenies(projection)
+	}
+	if err := verifyDeniedTools(projection, expected, allowed); err != nil {
+		return err
+	}
+	return verifyOpenCodeExecutorDenies(projection)
+}
+
+// verifyMaterializedPrompt fail-closes on the bytes a shared prompt reference
+// will load. Declaration-like content must parse under the strict grammar and
+// exact-match the canonical grants; no declaration is only acceptable when the
+// canonical capability declares no grants (#4088).
+func verifyMaterializedPrompt(agent model.AgentID, canonical Capability, content string) error {
+	if strings.Contains(content, declarationPrefix) {
+		declared, ok := ParseDeclaration(content)
+		if !ok {
+			return fmt.Errorf("agent %s: materialized shared research prompt carries a malformed evidence declaration", agent)
+		}
+		for class := range declared {
+			if class != ClassDocumentation && class != ClassOpenWeb {
+				return fmt.Errorf("agent %s: materialized shared research prompt declares unknown research class %q", agent, class)
+			}
+		}
+		for _, class := range []Class{ClassDocumentation, ClassOpenWeb} {
+			if !sameGrants(declared[class], canonical.Grants[class]) {
+				return fmt.Errorf("agent %s: materialized shared research prompt declares %s grants %v, want canonical grants %v", agent, class, declared[class], canonical.Grants[class])
+			}
+		}
 		return nil
 	}
-	return verifyDeniedTools(projection, expected, allowed)
+	if canonicalDeclaresGrants(canonical) {
+		return fmt.Errorf("agent %s: materialized shared research prompt carries no evidence declaration but the canonical capability declares grants", agent)
+	}
+	return nil
+}
+
+// verifyOpenCodeExecutorDenies proves the OpenCode research executor posture:
+// shell access, delegation, and repository mutation must all be explicitly
+// denied. OpenCode tools are default-open, so a missing decision would be an
+// implicit grant (#4088).
+func verifyOpenCodeExecutorDenies(projection RuntimeProjection) error {
+	if projection.Agent != model.AgentOpenCode {
+		return nil
+	}
+	denied := make(map[string]bool, len(projection.DeniedExecutorTools))
+	for _, tool := range projection.DeniedExecutorTools {
+		denied[tool] = true
+	}
+	for _, tool := range openCodeResearchExecutorDenies {
+		if !denied[tool] {
+			return fmt.Errorf("agent %s: default-open research projection must explicitly deny %q for the research executor posture", projection.Agent, tool)
+		}
+	}
+	return nil
 }
 
 func verifyDeclaredClasses(projection RuntimeProjection, canonical Capability) error {
@@ -487,9 +594,11 @@ func parseJSONToolArray(value string) ([]string, error) {
 
 // OpenCodeProjection extracts the research projection from one OpenCode agent
 // entry. The entry either carries an inline declaration or references the
-// shared research prompt file; every evidence binding must have an explicit
-// allow/deny decision in the permission map, because OpenCode tools are
-// default-open.
+// shared research prompt file. A reference is extracted structurally only:
+// VerifyProjection refuses it until the generator proves canonical resolution
+// and supplies the materialized bytes. Every evidence binding must have an
+// explicit allow/deny decision in the permission map, because OpenCode tools
+// are default-open.
 func OpenCodeProjection(agent model.AgentID, agentEntry map[string]any) (RuntimeProjection, error) {
 	if agentEntry == nil {
 		return RuntimeProjection{}, fmt.Errorf("agent %s: research agent entry is missing", agent)
@@ -509,7 +618,13 @@ func OpenCodeProjection(agent model.AgentID, agentEntry map[string]any) (Runtime
 		}
 		projection.Declared = declared
 		projection.HasDeclaration = true
-	} else if !isSharedResearchPromptRef(prompt) {
+	} else if ref, ok := parseSharedPromptRef(prompt); ok {
+		// A reference is only structurally valid here. The generator must prove
+		// it resolves to the canonical shared research prompt and materialize
+		// the exact bytes before verify time; a suffix match proves nothing
+		// about the bytes the runtime loads (#4088).
+		projection.SharedPromptRef = ref
+	} else {
 		return RuntimeProjection{}, fmt.Errorf("agent %s: research prompt is neither a valid evidence declaration nor the shared research prompt reference", agent)
 	}
 	permission, ok := agentEntry["permission"].(map[string]any)
@@ -531,18 +646,29 @@ func OpenCodeProjection(agent model.AgentID, agentEntry map[string]any) (Runtime
 			projection.DeniedTools = append(projection.DeniedTools, binding.Tool)
 		}
 	}
+	// Executor-posture decisions are recorded, not required, at extraction
+	// time: VerifyProjection owns the fail-closed posture check so a missing
+	// deny can never pass the boundary.
+	for _, tool := range openCodeResearchExecutorDenies {
+		if decision, ok := permission[tool].(string); ok && decision == "deny" {
+			projection.DeniedExecutorTools = append(projection.DeniedExecutorTools, tool)
+		}
+	}
 	return projection, nil
 }
 
-func isSharedResearchPromptRef(prompt string) bool {
+// parseSharedPromptRef extracts the inner path of a structurally valid
+// {file:...} prompt reference. It deliberately proves nothing about the target:
+// only the generator can resolve the reference against the settings directory
+// and the canonical shared research prompt path (#4088).
+func parseSharedPromptRef(prompt string) (string, bool) {
 	trimmed := strings.TrimSpace(prompt)
 	if !strings.HasPrefix(trimmed, "{file:") || !strings.HasSuffix(trimmed, "}") {
-		return false
+		return "", false
 	}
 	inner := strings.TrimSuffix(strings.TrimPrefix(trimmed, "{file:"), "}")
 	if inner == "" || strings.ContainsAny(inner, "{}") {
-		return false
+		return "", false
 	}
-	normalized := strings.ReplaceAll(inner, `\`, "/")
-	return strings.HasSuffix(normalized, "prompts/sdd/sdd-research.md")
+	return strings.ReplaceAll(inner, `\`, "/"), true
 }

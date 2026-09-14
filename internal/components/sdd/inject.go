@@ -379,6 +379,15 @@ func expandEngramToolNames(content string) string {
 	return engramToolPlaceholder.ReplaceAllString(content, "mcp__engram__$1, mcp__plugin_engram_engram__$1")
 }
 
+// renderSubAgentAssetContent renders one embedded sub-agent asset into the
+// bytes its runtime installs. It is a package-level seam so a test can simulate
+// a drifted research asset and prove the fail-closed verification refuses
+// before any directory or file is created (#4088); production always renders
+// through renderBoundedReviewAsset.
+var renderSubAgentAssetContent = func(agent model.AgentID, assetPath string) string {
+	return renderBoundedReviewAsset(agent, assetPath)
+}
+
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
@@ -415,6 +424,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if err != nil {
 		return InjectionResult{}, err
 	}
+	// Shared prompt capability map, computed once before verification so the
+	// research projection verification renders exactly the bytes
+	// WriteSharedPromptFiles will write for the same run (#4088).
+	sharedPromptCaps := sharedPromptPhaseCapabilities(opts.OpenCodeModelAssignments, opts.Profiles)
 	var preparedOverlay []byte
 	profileOverlays := make(map[string][]byte)
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) && settingsPath != "" {
@@ -437,7 +450,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		// Kilocode keeps its own restored research permission path and is out
 		// of this parity boundary.
 		if adapter.Agent() == model.AgentOpenCode {
-			if err := verifyOpenCodeResearchProjection(preparedOverlay, "sdd-research"); err != nil {
+			if err := verifyOpenCodeResearchProjection(preparedOverlay, "sdd-research", homeDir, settingsPath, sharedPromptCapability(sharedPromptCaps, "sdd-research"), opts.CodeGraphGuidanceMarkdown); err != nil {
 				return InjectionResult{}, err
 			}
 		}
@@ -453,7 +466,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, err
 			}
 			if adapter.Agent() == model.AgentOpenCode {
-				if err := verifyOpenCodeResearchProjection(overlay, "sdd-research-"+profile.Name); err != nil {
+				if err := verifyOpenCodeResearchProjection(overlay, "sdd-research-"+profile.Name, homeDir, settingsPath, sharedPromptCapability(sharedPromptCaps, "sdd-research"), opts.CodeGraphGuidanceMarkdown); err != nil {
 					return InjectionResult{}, err
 				}
 			}
@@ -619,23 +632,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// NOT contain model fields — otherwise the deep merge overwrites
 			// whatever the user already has in opencode.json.
 			overlayBytes := preparedOverlay
-			// For multi-mode, write shared prompt files before inlining references.
-			if sddMode == model.SDDModeMulti {
-				// Build phase → capability map from model assignments.
-				phaseCapabilities := make(map[string]string)
-				for phase, assignment := range opts.OpenCodeModelAssignments {
-					phaseCapabilities[phase] = model.ModelCapability(assignment.ModelID)
-				}
-				// Also include phase assignments from named profiles so their
-				// prompt files are written with the correct section.
-				for _, profile := range opts.Profiles {
-					for phase, assignment := range profile.PhaseAssignments {
-						if assignment.ModelID != "" {
-							phaseCapabilities[phase] = model.ModelCapability(assignment.ModelID)
-						}
-					}
-				}
-				promptsChanged, promptsErr := WriteSharedPromptFiles(homeDir, phaseCapabilities, opts.CodeGraphGuidanceMarkdown)
+			// Shared prompt files are written whenever something will reference
+			// them: the base overlay references them in multi mode, and every
+			// named profile overlay references them in any mode. The capability
+			// map was resolved once before research projection verification, so
+			// the verified bytes and the written bytes stay identical (#4088).
+			if sddMode == model.SDDModeMulti || hasNamedProfileOverlays(opts.Profiles) {
+				promptsChanged, promptsErr := WriteSharedPromptFiles(homeDir, sharedPromptCaps, opts.CodeGraphGuidanceMarkdown)
 				if promptsErr != nil {
 					return InjectionResult{}, fmt.Errorf("write shared SDD prompt files: %w", promptsErr)
 				}
@@ -800,9 +803,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	var agentsDir string
 	if adapter.SupportsSubAgents() {
 		agentsDir = adapter.SubAgentsDir(homeDir)
-		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-			return InjectionResult{}, fmt.Errorf("create agents dir: %w", err)
-		}
 
 		embeddedDir := adapter.EmbeddedSubAgentsDir()
 		entries, err := assets.FS.ReadDir(embeddedDir)
@@ -830,7 +830,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				continue
 			}
 			// Copy all files (not just .md) to support Kimi's YAML-based agents
-			contentStr := renderBoundedReviewAsset(adapter.Agent(), embeddedDir+"/"+entry.Name())
+			contentStr := renderSubAgentAssetContent(adapter.Agent(), embeddedDir+"/"+entry.Name())
 
 			// Resolve {{KIRO_MODEL}} placeholder for adapters that support it (e.g. Kiro).
 			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
@@ -897,6 +897,14 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			if verifyErr := researchcapability.VerifyProjection(projection); verifyErr != nil {
 				return InjectionResult{}, fmt.Errorf("verify research projection for %s: %w", write.name, verifyErr)
 			}
+		}
+
+		// The agents directory is created only now, after every research
+		// projection passed verification: rendering above reads embedded
+		// assets only, so a refused projection must not leave a directory or
+		// file behind (#4088).
+		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+			return InjectionResult{}, fmt.Errorf("create agents dir: %w", err)
 		}
 
 		for _, write := range writes {
@@ -1113,7 +1121,7 @@ func validateSessionPreflightOverlay(content []byte, key string, preserved bool)
 // agent entry against the canonical research capability authority (#4088).
 // The entry is named explicitly so a missing or renamed research agent fails
 // closed instead of silently skipping verification.
-func verifyOpenCodeResearchProjection(overlayBytes []byte, agentName string) error {
+func verifyOpenCodeResearchProjection(overlayBytes []byte, agentName, homeDir, settingsPath, capability, codeGraphGuidance string) error {
 	var overlay struct {
 		Agent map[string]map[string]any `json:"agent"`
 	}
@@ -1124,14 +1132,59 @@ func verifyOpenCodeResearchProjection(overlayBytes []byte, agentName string) err
 	if !ok {
 		return fmt.Errorf("OpenCode overlay is missing %q research agent", agentName)
 	}
+	return verifyOpenCodeResearchEntry(entry, agentName, homeDir, settingsPath, capability, codeGraphGuidance)
+}
+
+// verifyOpenCodeResearchEntry runs the full production boundary for one
+// generated OpenCode research entry: extraction, canonical resolution of a
+// {file:...} prompt reference, materialization of the exact shared prompt
+// bytes, and authority verification. A reference is never accepted because its
+// suffix looks right: it must resolve to EXACTLY the canonical shared research
+// prompt path (#4088).
+func verifyOpenCodeResearchEntry(entry map[string]any, agentName, homeDir, settingsPath, capability, codeGraphGuidance string) error {
 	projection, err := researchcapability.OpenCodeProjection(model.AgentOpenCode, entry)
 	if err != nil {
 		return fmt.Errorf("extract OpenCode %q research projection: %w", agentName, err)
+	}
+	if projection.SharedPromptRef != "" {
+		content, err := materializeSharedResearchPrompt(projection.SharedPromptRef, homeDir, settingsPath, capability, codeGraphGuidance)
+		if err != nil {
+			return fmt.Errorf("resolve OpenCode %q research prompt reference: %w", agentName, err)
+		}
+		projection.MaterializedPrompt = content
 	}
 	if err := researchcapability.VerifyProjection(projection); err != nil {
 		return fmt.Errorf("verify OpenCode %q research projection: %w", agentName, err)
 	}
 	return nil
+}
+
+// sharedResearchPromptRenderer renders the exact bytes a shared research
+// prompt reference will load. It is a package-level seam so a test can prove
+// the verification boundary refuses genuinely drifted bytes (#4088);
+// production renders through renderSharedPromptFile, the same renderer the
+// write path uses.
+var sharedResearchPromptRenderer = renderSharedPromptFile
+
+// materializeSharedResearchPrompt proves a research prompt reference resolves
+// to exactly the canonical shared research prompt path and returns the exact
+// bytes that path will carry, rendered by the same pipeline the write path
+// uses. Resolution is relative to the settings file's directory, matching how
+// SharedPromptFileRef emits references, or absolute when the reference carries
+// an absolute path (#4088).
+func materializeSharedResearchPrompt(ref, homeDir, settingsPath, capability, codeGraphGuidance string) (string, error) {
+	canonicalPath, content, err := sharedResearchPromptRenderer(homeDir, "sdd-research", capability, codeGraphGuidance)
+	if err != nil {
+		return "", err
+	}
+	resolved := filepath.FromSlash(strings.ReplaceAll(ref, `\`, "/"))
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(filepath.Dir(settingsPath), resolved)
+	}
+	if filepath.Clean(resolved) != filepath.Clean(canonicalPath) {
+		return "", fmt.Errorf("reference %q resolves to %q, want canonical shared research prompt %q", ref, filepath.Clean(resolved), filepath.Clean(canonicalPath))
+	}
+	return content, nil
 }
 
 func readPreservedOpenCodeOrchestratorPrompt(settingsPath string) (string, error) {

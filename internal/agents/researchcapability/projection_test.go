@@ -620,3 +620,233 @@ func TestAdapterToolBindingsAreDefensiveCopies(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyProjectionClosedRuntimeDomain proves the authority refuses agent
+// IDs outside the known research runtime domain while known deny-only runtimes
+// keep validating deny-only projections and canonical agents behave exactly as
+// before (#4088).
+func TestVerifyProjectionClosedRuntimeDomain(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unknown runtime id", func(t *testing.T) {
+		t.Parallel()
+
+		err := VerifyProjection(RuntimeProjection{Agent: model.AgentID("not-a-runtime")})
+		if err == nil {
+			t.Fatal("VerifyProjection() = nil, want refusal for an unknown research runtime")
+		}
+		if !strings.Contains(err.Error(), "not-a-runtime") {
+			t.Fatalf("VerifyProjection() error = %q, want the unknown agent named", err)
+		}
+	})
+
+	t.Run("known denied runtimes accept deny-only projections", func(t *testing.T) {
+		t.Parallel()
+
+		for _, agent := range []model.AgentID{model.AgentKilocode, model.AgentCursor, model.AgentKimi} {
+			agent := agent
+			projection := RuntimeProjection{Agent: agent}
+			for _, decision := range EvidenceToolDecisions(agent) {
+				if !decision.Allowed {
+					projection.DeniedTools = append(projection.DeniedTools, decision.Tool)
+				}
+			}
+			if err := VerifyProjection(projection); err != nil {
+				t.Fatalf("VerifyProjection(%q) error = %v, want a deny-only projection to validate", agent, err)
+			}
+		}
+	})
+
+	t.Run("canonical runtimes keep validating", func(t *testing.T) {
+		t.Parallel()
+
+		for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentPi} {
+			agent := agent
+			canonical, ok := ForAgent(agent)
+			if !ok {
+				t.Fatalf("ForAgent(%q) = false, want a declared capability", agent)
+			}
+			projection := RuntimeProjection{
+				Agent:          agent,
+				HasDeclaration: true,
+				Allowlist:      true,
+				Declared:       canonical.Grants,
+			}
+			for _, decision := range EvidenceToolDecisions(agent) {
+				if decision.Allowed {
+					projection.AllowedTools = append(projection.AllowedTools, decision.Tool)
+				}
+			}
+			if err := VerifyProjection(projection); err != nil {
+				t.Fatalf("VerifyProjection(%q) error = %v, want the canonical projection to validate", agent, err)
+			}
+		}
+	})
+}
+
+// TestOpenCodeProjectionRequiresExecutorPostureDenies proves the OpenCode
+// research executor posture cannot silently regress: a projection whose
+// permission map omits any of the bash/task/write/edit denies is refused at
+// verification time, because OpenCode tools are default-open (#4088).
+func TestOpenCodeProjectionRequiresExecutorPostureDenies(t *testing.T) {
+	t.Parallel()
+
+	baseEntry := func() map[string]any {
+		return map[string]any{
+			"prompt": "Evidence grants: documentation=[]; open-web=[].",
+			"permission": map[string]any{
+				"bash":      "deny",
+				"webfetch":  "deny",
+				"websearch": "deny",
+				"task":      "deny",
+				"write":     "deny",
+				"edit":      "deny",
+			},
+		}
+	}
+
+	t.Run("canonical posture validates", func(t *testing.T) {
+		t.Parallel()
+
+		projection, err := OpenCodeProjection(model.AgentOpenCode, baseEntry())
+		if err != nil {
+			t.Fatalf("OpenCodeProjection() error = %v", err)
+		}
+		if err := VerifyProjection(projection); err != nil {
+			t.Fatalf("VerifyProjection() error = %v, want the canonical posture to validate", err)
+		}
+	})
+
+	tests := []struct {
+		name   string
+		mutate func(permission map[string]any)
+	}{
+		{name: "bash deny omitted", mutate: func(permission map[string]any) { delete(permission, "bash") }},
+		{name: "task deny omitted", mutate: func(permission map[string]any) { delete(permission, "task") }},
+		{name: "write deny omitted", mutate: func(permission map[string]any) { delete(permission, "write") }},
+		{name: "edit deny omitted", mutate: func(permission map[string]any) { delete(permission, "edit") }},
+		{name: "bash explicitly allowed", mutate: func(permission map[string]any) { permission["bash"] = "allow" }},
+		{name: "task explicitly allowed", mutate: func(permission map[string]any) { permission["task"] = "allow" }},
+		{name: "edit explicitly allowed", mutate: func(permission map[string]any) { permission["edit"] = "allow" }},
+		{name: "write decision not a string", mutate: func(permission map[string]any) { permission["write"] = true }},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := baseEntry()
+			test.mutate(entry["permission"].(map[string]any))
+			projection, err := OpenCodeProjection(model.AgentOpenCode, entry)
+			if err != nil {
+				t.Fatalf("OpenCodeProjection() error = %v, want extraction to succeed", err)
+			}
+			err = VerifyProjection(projection)
+			if err == nil {
+				t.Fatal("VerifyProjection() = nil, want research executor posture refusal")
+			}
+			if !strings.Contains(err.Error(), string(model.AgentOpenCode)) || !strings.Contains(err.Error(), "research executor posture") {
+				t.Fatalf("VerifyProjection() error = %q, want agent and research executor posture reason", err)
+			}
+		})
+	}
+}
+
+// TestVerifyProjectionRequiresMaterializedSharedPrompt proves a {file:...}
+// research prompt reference is never accepted by structure alone: the generator
+// must materialize the exact bytes, and declaration-like bytes must parse
+// strictly and exact-match the canonical grants (#4088).
+func TestVerifyProjectionRequiresMaterializedSharedPrompt(t *testing.T) {
+	t.Parallel()
+
+	validDeclaration := "Evidence grants: documentation=[]; open-web=[]. Persistence tools are not evidence grants."
+	refProjection := func(materialized string) RuntimeProjection {
+		return RuntimeProjection{
+			Agent:               model.AgentOpenCode,
+			SharedPromptRef:     "./prompts/sdd/sdd-research.md",
+			MaterializedPrompt:  materialized,
+			DeniedTools:         []string{"webfetch", "websearch"},
+			DeniedExecutorTools: []string{"bash", "task", "write", "edit"},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		projection RuntimeProjection
+		wantReason string
+	}{
+		{
+			name:       "reference without materialized bytes",
+			projection: RuntimeProjection{Agent: model.AgentOpenCode, SharedPromptRef: "./prompts/sdd/sdd-research.md"},
+			wantReason: "not materialized",
+		},
+		{
+			name:       "materialized bytes without a reference",
+			projection: RuntimeProjection{Agent: model.AgentOpenCode, MaterializedPrompt: validDeclaration},
+			wantReason: "without a shared prompt reference",
+		},
+		{
+			name: "reference with an inline declaration",
+			projection: RuntimeProjection{
+				Agent:               model.AgentOpenCode,
+				SharedPromptRef:     "./prompts/sdd/sdd-research.md",
+				MaterializedPrompt:  validDeclaration,
+				HasDeclaration:      true,
+				Declared:            map[Class][]Grant{ClassDocumentation: {}, ClassOpenWeb: {}},
+				DeniedTools:         []string{"webfetch", "websearch"},
+				DeniedExecutorTools: []string{"bash", "task", "write", "edit"},
+			},
+			wantReason: "both a shared prompt reference and an inline declaration",
+		},
+		{
+			name:       "grant-claiming declaration",
+			projection: refProjection("Evidence grants: documentation=[WebFetch]; open-web=[]. "),
+			wantReason: "WebFetch",
+		},
+		{
+			name:       "malformed declaration",
+			projection: refProjection("Evidence grants: documentation=[WebFetch,]; open-web=[]. "),
+			wantReason: "malformed",
+		},
+		{
+			name:       "duplicated declaration",
+			projection: refProjection(validDeclaration + " " + validDeclaration),
+			wantReason: "malformed",
+		},
+		{
+			name:       "truncated declaration",
+			projection: refProjection("Evidence grants: documentation=[]"),
+			wantReason: "malformed",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := VerifyProjection(test.projection)
+			if err == nil {
+				t.Fatalf("VerifyProjection(%#v) = nil, want error", test.projection)
+			}
+			if !strings.Contains(err.Error(), test.wantReason) {
+				t.Fatalf("VerifyProjection() error = %q, want reason containing %q", err, test.wantReason)
+			}
+		})
+	}
+
+	t.Run("declaration-free materialized bytes validate", func(t *testing.T) {
+		t.Parallel()
+
+		if err := VerifyProjection(refProjection("You are the SDD research executor, not the orchestrator.")); err != nil {
+			t.Fatalf("VerifyProjection() error = %v, want declaration-free canonical prompt to validate", err)
+		}
+	})
+
+	t.Run("empty canonical declaration validates", func(t *testing.T) {
+		t.Parallel()
+
+		if err := VerifyProjection(refProjection(validDeclaration)); err != nil {
+			t.Fatalf("VerifyProjection() error = %v, want the empty canonical declaration to validate", err)
+		}
+	})
+}
