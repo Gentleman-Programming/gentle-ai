@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "engram": {
+      "command": "C:\\Users\\lujam\\AppData\\Local\\engram\\bin\\engram.exe",
+      "args": [
+        "mcp",
+        "--tools=agent",
+        "--project=axiom"
+      ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ]
+    }
+  }
+}

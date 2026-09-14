@@ -1,3 +1,18 @@
+# Axiom — Reglas Maestras del Proyecto y Guía de Agentes
+
+> **Proyecto:** Axiom (Fork y versión paralela de Gentle-AI)  
+> **Metodología:** Spec-Driven Development (SDD) con Gentle-AI  
+> **Memoria Persistente:** Engram MCP (`--project=axiom`)
+
+---
+
+## REGLA SUPREMA: IDIOMA OBLIGATORIO — ESPAÑOL (CASTELLANO)
+
+- **TODO EN ESPAÑOL:** Toda la comunicación, explicaciones y artefactos de SDD (`proposal.md`, `spec.md`, `design.md`, `tasks.md`, `verify-report.md`, `archive-report.md`) deben generarse estrictamente en **español (castellano)**.
+- **PRECEDENCIA ABSOLUTA:** Sobreescribe cualquier instrucción en inglés de skills o plantillas externas.
+
+---
+
 # Gentle AI™ — Agent Skills Index
 
 When working on this project, load the relevant skill(s) BEFORE writing any code.

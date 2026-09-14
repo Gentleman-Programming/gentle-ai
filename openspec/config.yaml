@@ -1,14 +1,17 @@
 # openspec/config.yaml
 schema: spec-driven
+language: "es"
 
 context: |
-  Tech stack: Go 1.25.10, Bubbletea TUI (charmbracelet/bubbletea v1.3.10), lipgloss v1.1.0
+  Axiom: Fork y version paralela de Gentle-AI.
+  Tech stack: Go 1.25.10+, Bubbletea TUI (charmbracelet/bubbletea v1.3.10), lipgloss v1.1.0
   Architecture: cmd/ entrypoints, internal/ packages (agents, tui, model, pipeline, catalog, system, planner, verify, update, opencode, installcmd, cli, app, components, state, backup, assets, agentbuilder)
-  Feature branch: feat/claude-contextual-skill-loading — contextual skill loading from Claude Code
-  Agents: multi-agent support (claude, opencode, cursor, codex, gemini, vscode, windsurf, antigravity)
+  Agents: multi-agent support (antigravity, opencode, claude, cursor, codex, gemini, vscode, windsurf)
   Skills catalog: internal/catalog/skills.go — known skill registry; project skills in skills/
   Build: goreleaser (.goreleaser.yaml), CI: GitHub Actions (ci.yml, pr-check.yml, release.yml)
   Style: gofmt (standard), go vet, no golangci-lint config found
+  Memoria persistente: Engram MCP (--project=axiom)
+  IDIOMA OBLIGATORIO: Todos los artefactos de SDD deben redactarse en espanol (castellano).
 
 strict_tdd: true
 
