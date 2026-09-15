@@ -15,22 +15,22 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 
 ## Índice rápido
 
-| Slug | En una línea |
-|---|---|
-| `erp-mf-root-config` | shell/host del microfrontend, remotes y rutas raíz |
-| `erp-mf-comun` | controles compartidos: tablas, grillas, modales, toasts, buscadores |
-| `erp-mf-configuracion` | parámetros de empresa: series, correlativos, impuestos, monedas, sucursales |
-| `erp-mf-configuraciones` | catálogos maestros y ajustes por módulo |
-| `erp-mf-estilos` | tema, tokens de diseño, SCSS, variables, CSS global |
-| `erp-mf-header` | barra superior global: usuario, empresa/sucursal, notificaciones |
-| `erp-mf-home` | dashboard de inicio tras el login |
-| `erp-mf-logistica` | almacén, kardex, stock, inventario, guía de remisión |
-| `erp-mf-menu` | navegación estructural entre módulos |
-| `erp-mf-punto-venta` | emisión y cobro de comprobantes en caja (POS) |
-| `erp-mf-punto-venta-menu` | carta/productos del punto de venta |
-| `erp-mf-resources` | activos estáticos, íconos, i18n |
-| `erp-mf-seguridad` | autenticación y autorización |
-| `erp-mf-tiendalink` | integración ERP ↔ tienda online |
+| Slug                      | En una línea                                                                |
+| ------------------------- | --------------------------------------------------------------------------- |
+| `erp-mf-root-config`      | shell/host del microfrontend, remotes y rutas raíz                          |
+| `erp-mf-comun`            | controles compartidos: tablas, grillas, modales, toasts, buscadores         |
+| `erp-mf-configuracion`    | parámetros de empresa: series, correlativos, impuestos, monedas, sucursales |
+| `erp-mf-configuraciones`  | catálogos maestros y ajustes por módulo                                     |
+| `erp-mf-estilos`          | tema, tokens de diseño, SCSS, variables, CSS global                         |
+| `erp-mf-header`           | barra superior global: usuario, empresa/sucursal, notificaciones            |
+| `erp-mf-home`             | dashboard de inicio tras el login                                           |
+| `erp-mf-logistica`        | almacén, kardex, stock, inventario, guía de remisión                        |
+| `erp-mf-menu`             | navegación estructural entre módulos                                        |
+| `erp-mf-punto-venta`      | emisión y cobro de comprobantes en caja (POS)                               |
+| `erp-mf-punto-venta-menu` | carta/productos del punto de venta                                          |
+| `erp-mf-resources`        | activos estáticos, íconos, i18n                                             |
+| `erp-mf-seguridad`        | autenticación y autorización                                                |
+| `erp-mf-tiendalink`       | integración ERP ↔ tienda online                                             |
 
 ## Filas
 
@@ -41,7 +41,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 - **Términos de dominio**: shell, host, module federation, remotes, bootstrap, ruteo raíz
 - **Flujo de negocio**: arranque y composición de la app; casi nunca tiene locators de negocio.
 - **No confundir con**: `erp-mf-menu` (navegación entre módulos ya arrancados).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-comun`
 
@@ -52,7 +52,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 - **Flujo de negocio**: controles reutilizados por todos los microfronts; primer lugar
   a mirar si el elemento aparece igual en varias pantallas.
 - **No confundir con**: `erp-mf-estilos` (tema visual, no controles funcionales).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-configuracion`
 
@@ -63,7 +63,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 - **Flujo de negocio**: ajustes transversales que condicionan la emisión y los catálogos.
 - **No confundir con**: `erp-mf-configuraciones` (catálogos maestros por módulo — si no
   está en uno, buscar en el otro).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-configuraciones`
 
@@ -74,7 +74,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 - **Flujo de negocio**: mantenimiento de maestros por módulo.
 - **No confundir con**: `erp-mf-configuracion` (parámetros transversales de empresa —
   ambigüedad conocida, si no está en uno, buscar en el otro).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-estilos`
 
@@ -83,7 +83,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 - **Términos de dominio**: estilos, tema, tokens de diseño, SCSS, variables, CSS global
 - **Flujo de negocio**: capa visual; rara vez expone locators propios.
 - **No confundir con**: `erp-mf-comun` (controles funcionales compartidos).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-header`
 
@@ -93,7 +93,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
   empresa/sucursal, notificaciones, cerrar sesión
 - **Flujo de negocio**: cabecera global presente en toda la app.
 - **No confundir con**: `erp-mf-menu` (navegación lateral, no cabecera).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-home`
 
@@ -103,7 +103,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
   tarjetas resumen
 - **Flujo de negocio**: pantalla de aterrizaje tras el login.
 - **No confundir con**: `erp-mf-menu` (navegación estructural, no la pantalla inicial).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-logistica`
 
@@ -113,7 +113,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
   salida, transferencia, guía de remisión
 - **Flujo de negocio**: movimiento y control de existencias entre almacenes.
 - **No confundir con**: `erp-mf-punto-venta` (emisión/cobro, no stock).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-menu`
 
@@ -123,7 +123,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
   menú, breadcrumb
 - **Flujo de negocio**: navegación estructural entre módulos.
 - **No confundir con**: `erp-mf-header` (cabecera, no navegación lateral).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-punto-venta`
 
@@ -135,7 +135,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
   y productos, cálculo de totales e impuestos, medio de pago, impresión y anulación.
 - **No confundir con**: `erp-mf-punto-venta-menu` (carta/productos del POS),
   `erp-mf-configuracion` (series y correlativos del comprobante).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-punto-venta-menu`
 
@@ -145,7 +145,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
   mesas, pedido rápido
 - **Flujo de negocio**: selección de productos/carta dentro del punto de venta.
 - **No confundir con**: `erp-mf-punto-venta` (emisión y cobro del comprobante).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-resources`
 
@@ -154,7 +154,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 - **Términos de dominio**: recursos, assets, íconos, imágenes, i18n, traducciones
 - **Flujo de negocio**: activos estáticos; sin UI de negocio propia.
 - **No confundir con**: `erp-mf-estilos` (tema y variables visuales, no assets).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-seguridad`
 
@@ -165,7 +165,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
 - **Flujo de negocio**: autenticación y autorización.
 - **No confundir con**: `erp-mf-header` (usuario logueado en la barra superior, no el
   flujo de login/roles).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ### `erp-mf-tiendalink`
 
@@ -175,7 +175,7 @@ en el mismo commit — no hay chequeo automático de paridad entre ellas:
   pedidos web, sincronización
 - **Flujo de negocio**: integración entre el ERP y la tienda online.
 - **No confundir con**: `erp-mf-punto-venta` (caja física, no tienda online).
-- **Verificado**: unverified
+- **Verificado**: 2026-09-14
 
 ## Ejemplo de desambiguación
 
