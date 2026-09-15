@@ -71,3 +71,15 @@ func TestNormalizeInstallFlagsAcceptsSupportedAgent(t *testing.T) {
 		t.Fatalf("Selection.Agents = %v, want [claude-code]", input.Selection.Agents)
 	}
 }
+
+func TestNormalizeInstallReviewModeRejectsInvalidValueWithInstallContinuation(t *testing.T) {
+	_, err := normalizeInstallReviewMode("invalid", true)
+	if err == nil {
+		t.Fatal("normalizeInstallReviewMode(\"invalid\", true) error = nil, want an error")
+	}
+
+	want := "unsupported review-mode \"invalid\" (valid: on, off); rerun `gentle-ai install --review-mode on` or `gentle-ai install --review-mode off`"
+	if err.Error() != want {
+		t.Fatalf("normalizeInstallReviewMode(\"invalid\", true) error = %q, want %q", err, want)
+	}
+}

@@ -41,6 +41,61 @@ func TestParseInstallFlagsSupportsCSVAndRepeated(t *testing.T) {
 	}
 }
 
+func TestParseInstallFlagsReviewMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    string
+		wantSet bool
+		wantErr bool
+	}{
+		{name: "omitted", args: []string{"--agent", "opencode"}},
+		{name: "on", args: []string{"--review-mode", "on"}, want: "on", wantSet: true},
+		{name: "off", args: []string{"--review-mode", "off"}, want: "off", wantSet: true},
+		{name: "missing value", args: []string{"--review-mode"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags, err := ParseInstallFlags(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseInstallFlags() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if flags.ReviewMode != tt.want || flags.ReviewModeSet != tt.wantSet {
+				t.Fatalf("review mode = %q (set %t), want %q (set %t)", flags.ReviewMode, flags.ReviewModeSet, tt.want, tt.wantSet)
+			}
+		})
+	}
+}
+
+func TestNormalizeInstallReviewMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		set     bool
+		want    string
+		wantErr bool
+	}{
+		{name: "omitted", want: ""},
+		{name: "on", value: "on", set: true, want: "enable"},
+		{name: "off", value: "off", set: true, want: "disable"},
+		{name: "empty explicit value", set: true, wantErr: true},
+		{name: "invalid", value: "invalid", set: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeInstallReviewMode(tt.value, tt.set)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeInstallReviewMode(%q, %t) error = %v, wantErr %v", tt.value, tt.set, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeInstallReviewMode(%q, %t) = %q, want %q", tt.value, tt.set, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestInstallChannelHelpMentionsNightly(t *testing.T) {
 	if !strings.Contains(installChannelHelp, "nightly") {
 		t.Fatalf("installChannelHelp = %q, want nightly mentioned", installChannelHelp)

@@ -26,6 +26,12 @@ func RenderDryRun(result InstallResult) string {
 	_, _ = fmt.Fprintf(b, "Platform decision: %s\n", formatPlatformDecision(result.Review.PlatformDecision))
 	_, _ = fmt.Fprintf(b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 	_, _ = fmt.Fprintf(b, "Apply steps: %d\n", len(result.Plan.Apply))
+	switch result.ReviewModeOperation {
+	case "enable":
+		_, _ = fmt.Fprintln(b, "Global Review Mode: on (would be persisted globally after a successful non-dry-run install)")
+	case "disable":
+		_, _ = fmt.Fprintln(b, "Global Review Mode: off (would be persisted globally after a successful non-dry-run install)")
+	}
 	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) {
 		_, _ = fmt.Fprintf(b, "OpenCode background intent: %s (policy effective: %s)\n", result.Background.Intent, result.Background.Effective)
 	}
