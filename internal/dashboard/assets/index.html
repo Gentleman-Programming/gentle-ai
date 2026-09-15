@@ -17,6 +17,13 @@
           <span class="subtext">Spec-Driven Development Platform</span>
         </div>
       </div>
+      <div class="project-selector-wrapper">
+        <label for="project-select" class="project-select-label">📁 Proyecto:</label>
+        <select id="project-select" class="project-select-dropdown">
+          <option value="">Cargando proyectos...</option>
+        </select>
+        <button id="btn-add-project" class="btn btn-sm btn-outline" title="Vincular otro proyecto al Hub">+ Añadir</button>
+      </div>
       <div class="workspace-pill" id="workspace-pill">
         <span class="pill-dot"></span>
         <span class="pill-title" id="ws-name">Cargando...</span>
@@ -26,6 +33,7 @@
         <button id="btn-refresh" class="btn btn-secondary" title="Actualizar datos">↻ Actualizar</button>
       </div>
     </header>
+
 
     <!-- Main Navigation Tabs -->
     <nav class="main-nav">
@@ -54,8 +62,24 @@
 
     <!-- Main Content Container -->
     <main class="content-area">
+      <!-- Zero-Config Welcome Banner (oculto si el proyecto está configurado) -->
+      <section id="zero-config-hero" class="zero-config-card" style="display: none;">
+        <div class="zero-config-icon">🚀</div>
+        <div class="zero-config-content">
+          <h3>Este repositorio aún no está gobernado con Axiom</h3>
+          <p id="zero-config-msg">No se encontró un archivo <code>axiom.yaml</code> en este proyecto. Puedes inicializarlo en un instante:</p>
+          <div class="detected-tech-box" id="zero-config-tech">
+            <span class="tech-badge">Detectando tecnología...</span>
+          </div>
+          <div class="zero-config-actions">
+            <button id="btn-init-project" class="btn btn-primary">⚡ Inicializar Proyecto con Axiom (1 Clic)</button>
+          </div>
+        </div>
+      </section>
+
       <!-- TAB 1: INCREMENTOS -->
       <section id="tab-increments" class="tab-panel active">
+
         <div class="section-header">
           <div>
             <h2>Ciclo de Vida de Incrementos SDD</h2>
@@ -345,6 +369,31 @@
         </div>
       </div>
     </div>
+
+    <!-- Modal Añadir Proyecto al Hub -->
+    <div id="modal-add-project" class="modal-backdrop hidden">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Vincular Proyecto a Axiom</h3>
+          <button class="btn-close" id="btn-close-add-project">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 1.5rem;">
+          <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Ruta absoluta de la carpeta en disco:</label>
+            <input type="text" id="input-project-path" class="form-select" style="width: 100%; box-sizing: border-box;" placeholder="C:\repos\mi-proyecto o /home/usuario/proyectos/...">
+          </div>
+          <div style="margin-bottom: 1.5rem;">
+            <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Nombre descriptivo (opcional):</label>
+            <input type="text" id="input-project-name" class="form-select" style="width: 100%; box-sizing: border-box;" placeholder="Ej. Ludeka, MiServicio...">
+          </div>
+          <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+            <button id="btn-cancel-add-project" class="btn btn-secondary">Cancelar</button>
+            <button id="btn-submit-add-project" class="btn btn-primary">Vincular y Abrir</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
 
     <!-- Footer -->
     <footer class="app-footer">

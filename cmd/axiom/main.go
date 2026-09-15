@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/dashboard"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
@@ -36,6 +37,11 @@ USO:
   axiom [banderas]
 
 COMANDOS:
+  init                 Inicializa un proyecto con axiom.yaml, andamiaje base y lo registra en el Hub
+  project list         Lista los proyectos registrados en el Hub global (~/.axiom/workspaces.json)
+  project switch       Conmuta el proyecto activo por defecto
+  project add          Registra un proyecto existente en el Hub
+  project remove       Desvincula un proyecto del catálogo global
   workspace validate   Valida la configuración de axiom.yaml y la topología de repositorios
   handoff show         Muestra el relevo activo de un cambio
   handoff create       Genera una plantilla canónica de relevo (handoff.md)
@@ -63,24 +69,29 @@ BANDERAS:
   --help, -h           Muestra esta ayuda
 
 Ejemplos:
+  axiom init --name "MiProyecto"
+  axiom project list
+  axiom project switch ludeka
+  axiom ui
   axiom workspace validate
-  axiom ui --port 8080
   axiom handoff show --change inc-02-structured-handoffs-lifecycle
-  axiom role list --change inc-03-multi-role-sdd-fan-out
-  axiom role status --change inc-03-multi-role-sdd-fan-out
-  axiom role barrier --change inc-03-multi-role-sdd-fan-out --migrate-deferred
+  axiom role barrier --change inc-03-multi-role-sdd-fan-out
   axiom skill scan
-  axiom skill list --inbox
-  axiom skill approve react-best-practices
-  axiom skill reject react-best-practices
 `
 	fmt.Print(help)
 }
 
 
+
 func printVersion() {
 	fmt.Printf("%s version %s (%s/%s) commit:%s\n", Platform, Version, runtime.GOOS, runtime.GOARCH, GitCommit)
 }
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
 
 func main() {
 	if len(os.Args) < 2 {
@@ -99,7 +110,32 @@ func main() {
 		printHelp()
 		os.Exit(0)
 
+	case "init":
+		runInit(os.Args[2:])
+
+	case "project":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: subcomando de 'project' requerido. Opciones: list, switch, add, remove")
+			os.Exit(1)
+		}
+
+		subCmd := os.Args[2]
+		switch subCmd {
+		case "list":
+			runProjectList(os.Args[3:])
+		case "switch":
+			runProjectSwitch(os.Args[3:])
+		case "add":
+			runProjectAdd(os.Args[3:])
+		case "remove":
+			runProjectRemove(os.Args[3:])
+		default:
+			fmt.Printf("Error: subcomando '%s' no reconocido para project. Usa 'axiom project [list|switch|add|remove]'.\n", subCmd)
+			os.Exit(1)
+		}
+
 	case "workspace":
+
 		if len(os.Args) < 3 {
 			fmt.Println("Error: subcomando de 'workspace' requerido. Opciones: validate")
 			os.Exit(1)
@@ -737,8 +773,23 @@ func runUI(args []string) {
 		os.Exit(1)
 	}
 
-	svc := dashboard.NewService(baseDir)
+	hubMgr, err := hub.NewManager("")
+	if err != nil {
+		fmt.Printf("  (Aviso: No se pudo cargar el registro del hub: %v)\n", err)
+	}
+
+	// Si se invocó con '.' por defecto y no hay axiom.yaml en '.', resolver el workspace activo del Hub
+	if *pathFlag == "." && hubMgr != nil {
+		if !fileExists(filepath.Join(baseDir, "axiom.yaml")) {
+			if active, err := hubMgr.GetActive(); err == nil && active != nil && fileExists(filepath.Join(active.Path, "axiom.yaml")) {
+				baseDir = active.Path
+			}
+		}
+	}
+
+	svc := dashboard.NewServiceWithHub(baseDir, hubMgr)
 	server := dashboard.NewServer(svc)
+
 
 	actualPort, err := server.ListenAndServe(*portFlag)
 	if err != nil {
@@ -1261,6 +1312,176 @@ func runArchiveColdStart(args []string) {
 	fmt.Println("  - Catálogo maestro INDEX.md actualizado automáticamente.")
 	fmt.Println()
 }
+
+func runInit(args []string) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	nameFlag := fs.String("name", "", "Nombre descriptivo del proyecto (por defecto: nombre del directorio)")
+	pathFlag := fs.String("path", ".", "Ruta del directorio a inicializar")
+	topologyFlag := fs.String("topology", "monorepo-embedded", "Topología del workspace (monorepo-embedded, multirepo)")
+	forceFlag := fs.Bool("force", false, "Sobreescribir axiom.yaml si ya existe")
+	_ = fs.Parse(args)
+
+	absPath, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] Ruta inválida: %v\n", err)
+		os.Exit(1)
+	}
+
+	hubMgr, err := hub.NewManager("")
+	if err != nil {
+		fmt.Printf("[AVISO] No se pudo conectar con el registro global del hub: %v\n", err)
+	}
+
+	det := hub.NewDetector()
+	ini := hub.NewInitializer(hubMgr, det)
+
+	res, err := ini.Init(hub.InitOptions{
+		Path:     absPath,
+		Name:     *nameFlag,
+		Topology: *topologyFlag,
+		Force:    *forceFlag,
+	})
+	if err != nil {
+		fmt.Printf("[ERROR] Fallo al inicializar el proyecto: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("================================================================================")
+	if res.AlreadyExisted {
+		fmt.Println("             Axiom — Proyecto Vinculado al Hub Global")
+	} else {
+		fmt.Println("             Axiom — Proyecto Inicializado Exitosamente")
+	}
+	fmt.Println("================================================================================")
+	fmt.Printf("  - Proyecto:            %s (ID: %s)\n", res.Record.Name, res.Record.ID)
+	fmt.Printf("  - Directorio:          %s\n", res.Record.Path)
+	fmt.Printf("  - Topología:           %s\n", res.Record.Topology)
+	fmt.Printf("  - Archivo Config:      %s\n", res.ConfigPath)
+	if res.AlreadyExisted {
+		fmt.Println("  - Estado:              Ya contenía axiom.yaml (registrado y marcado como activo)")
+	} else {
+		fmt.Println("  - Estructura creada:   openspec/specs/, openspec/changes/, .axiom/inbox/skills/")
+	}
+	if hubMgr != nil {
+		fmt.Printf("  - Registro global:     %s [ACTIVO]\n", hubMgr.GetConfigPath())
+	}
+	fmt.Println("================================================================================")
+	fmt.Println("¡Listo! Ejecuta 'axiom ui' para abrir el panel de control interactivo.")
+}
+
+func runProjectList(args []string) {
+	hubMgr, err := hub.NewManager("")
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudo cargar el gestor de Hub: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := hubMgr.Load()
+	if err != nil {
+		fmt.Printf("[ERROR] Error cargando catálogo de proyectos: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(cfg.Workspaces) == 0 {
+		fmt.Println("\nNo hay proyectos registrados en el Hub global de Axiom (~/.axiom/workspaces.json).")
+		fmt.Println("Usa 'axiom init' o 'axiom project add <ruta>' para incorporar proyectos.")
+		return
+	}
+
+	fmt.Printf("\nCatálogo Global de Proyectos de Axiom (%d registrados):\n", len(cfg.Workspaces))
+	fmt.Printf("%-18s %-20s %-8s %-20s %-14s %s\n", "ID", "NOMBRE", "ACTIVO", "TOPOLOGÍA", "ESTADO", "RUTA")
+	fmt.Println(strings.Repeat("-", 100))
+	for _, w := range cfg.Workspaces {
+		activeMark := ""
+		if w.ID == cfg.ActiveWorkspace || w.Path == cfg.ActiveWorkspace {
+			activeMark = "★ SÍ"
+		}
+		status := "CONFIGURADO"
+		if !fileExists(filepath.Join(w.Path, "axiom.yaml")) {
+			status = "SIN CONFIG"
+		}
+		fmt.Printf("%-18s %-20s %-8s %-20s %-14s %s\n", w.ID, w.Name, activeMark, w.Topology, status, w.Path)
+	}
+	fmt.Println()
+}
+
+func runProjectSwitch(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Error: debes especificar el ID, nombre o ruta del proyecto. Ej: 'axiom project switch ludeka'")
+		os.Exit(1)
+	}
+	target := args[0]
+
+	hubMgr, err := hub.NewManager("")
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudo cargar el gestor de Hub: %v\n", err)
+		os.Exit(1)
+	}
+
+	rec, err := hubMgr.SetActive(target)
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudo conmutar el proyecto: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Proyecto activo conmutado exitosamente:\n")
+	fmt.Printf("  - ID:     %s\n", rec.ID)
+	fmt.Printf("  - Nombre: %s\n", rec.Name)
+	fmt.Printf("  - Ruta:   %s\n", rec.Path)
+}
+
+func runProjectAdd(args []string) {
+	fs := flag.NewFlagSet("project add", flag.ExitOnError)
+	nameFlag := fs.String("name", "", "Nombre descriptivo del proyecto")
+	topologyFlag := fs.String("topology", "monorepo-embedded", "Topología del proyecto")
+	_ = fs.Parse(args)
+
+	if len(fs.Args()) == 0 {
+		fmt.Println("Error: debes especificar la ruta del directorio. Ej: 'axiom project add C:\\repos\\ludeka'")
+		os.Exit(1)
+	}
+	targetPath := fs.Args()[0]
+
+	hubMgr, err := hub.NewManager("")
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudo cargar el gestor de Hub: %v\n", err)
+		os.Exit(1)
+	}
+
+	rec, err := hubMgr.Register(targetPath, *nameFlag, *topologyFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] Error registrando proyecto: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Proyecto registrado en el Hub global:\n")
+	fmt.Printf("  - ID:        %s\n", rec.ID)
+	fmt.Printf("  - Nombre:    %s\n", rec.Name)
+	fmt.Printf("  - Ruta:      %s\n", rec.Path)
+	fmt.Printf("  - Topología: %s\n", rec.Topology)
+}
+
+func runProjectRemove(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Error: debes especificar el ID o ruta del proyecto a desvincular. Ej: 'axiom project remove ludeka'")
+		os.Exit(1)
+	}
+	target := args[0]
+
+	hubMgr, err := hub.NewManager("")
+	if err != nil {
+		fmt.Printf("[ERROR] No se pudo cargar el gestor de Hub: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := hubMgr.Unregister(target); err != nil {
+		fmt.Printf("[ERROR] Error al desvincular proyecto: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Proyecto '%s' desvinculado del Hub global (los archivos en disco no fueron alterados).\n", target)
+}
+
 
 
 

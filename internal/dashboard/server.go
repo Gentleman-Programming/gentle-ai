@@ -39,6 +39,10 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) registerRoutes() {
 	// 1. Endpoints de la API REST
+	s.mux.HandleFunc("/api/projects", s.handleProjects)
+	s.mux.HandleFunc("/api/projects/switch", s.handleProjectsSwitch)
+	s.mux.HandleFunc("/api/projects/add", s.handleProjectsAdd)
+	s.mux.HandleFunc("/api/projects/init", s.handleProjectsInit)
 	s.mux.HandleFunc("/api/workspace", s.handleWorkspace)
 	s.mux.HandleFunc("/api/increments", s.handleIncrements)
 	s.mux.HandleFunc("/api/increments/", s.handleIncrementDetail)
@@ -67,6 +71,7 @@ func (s *Server) registerRoutes() {
 		})
 	}
 }
+
 
 // ListenAndServe inicia el servidor buscando un puerto libre a partir del puerto sugerido.
 func (s *Server) ListenAndServe(initialPort int) (int, error) {
@@ -117,7 +122,7 @@ func (s *Server) findAvailablePort(startPort int) (net.Listener, int, error) {
 func (s *Server) withHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		if r.Method == "OPTIONS" {
@@ -129,7 +134,98 @@ func (s *Server) withHeaders(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	projects, err := s.service.GetProjects()
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, projects)
+}
+
+func (s *Server) handleProjectsSwitch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req ProjectSwitchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+
+	target := req.Path
+	if target == "" {
+		target = req.ID
+	}
+	if target == "" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Debes especificar 'id' o 'path'"})
+		return
+	}
+
+	// Si target no es un directorio físico directo, buscarlo en el Hub por ID o nombre
+	if !dirExists(target) && s.service.GetHubManager() != nil {
+		rec, err := s.service.GetHubManager().FindWorkspace(target)
+		if err == nil && rec != nil {
+			target = rec.Path
+		}
+	}
+
+	ws, err := s.service.SwitchWorkspace(target)
+	if err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, ws)
+}
+
+func (s *Server) handleProjectsAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req ProjectAddRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+
+	rec, err := s.service.AddProject(req)
+	if err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, rec)
+}
+
+func (s *Server) handleProjectsInit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req ProjectInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+
+	res, err := s.service.InitProject(req)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return

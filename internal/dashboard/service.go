@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
@@ -21,7 +23,10 @@ import (
 
 // Service provee la lógica de lectura y agregación del estado de Axiom.
 type Service struct {
+	mu               sync.RWMutex
 	rootPath         string
+	hubManager       *hub.Manager
+	hubDetector      *hub.Detector
 	autoskillManager *autoskill.Manager
 	semanticService  *semantic.Service
 	livingdocService *livingdoc.Service
@@ -32,23 +37,80 @@ func NewService(rootPath string) *Service {
 	if rootPath == "" {
 		rootPath = "."
 	}
+	absRoot, err := filepath.Abs(rootPath)
+	if err == nil {
+		rootPath = absRoot
+	}
+
+	hubMgr, _ := hub.NewManager("")
+	hubDet := hub.NewDetector()
+
+	s := &Service{
+		rootPath:         rootPath,
+		hubManager:       hubMgr,
+		hubDetector:      hubDet,
+		autoskillManager: autoskill.NewManager(rootPath, nil, nil, nil),
+		semanticService:  semantic.NewService(rootPath, nil, nil),
+		livingdocService: livingdoc.NewService(rootPath, nil, nil),
+	}
+
+	// Si el directorio tiene axiom.yaml y tenemos hubManager, auto-registrarlo
+	if hubMgr != nil && fileExists(filepath.Join(rootPath, "axiom.yaml")) {
+		_, _ = hubMgr.Register(rootPath, filepath.Base(rootPath), "monorepo-embedded")
+	}
+
+	return s
+}
+
+// NewServiceWithHub instancia el servicio inyectando explícitamente el gestor de Hub.
+func NewServiceWithHub(rootPath string, hubMgr *hub.Manager) *Service {
+	if rootPath == "" {
+		rootPath = "."
+	}
+	absRoot, err := filepath.Abs(rootPath)
+	if err == nil {
+		rootPath = absRoot
+	}
+
+	hubDet := hub.NewDetector()
 	return &Service{
 		rootPath:         rootPath,
+		hubManager:       hubMgr,
+		hubDetector:      hubDet,
 		autoskillManager: autoskill.NewManager(rootPath, nil, nil, nil),
 		semanticService:  semantic.NewService(rootPath, nil, nil),
 		livingdocService: livingdoc.NewService(rootPath, nil, nil),
 	}
 }
 
+func (s *Service) getRootPath() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rootPath
+}
+
 // GetWorkspace obtiene la información del espacio de trabajo y su estado de cumplimiento.
 func (s *Service) GetWorkspace() (*WorkspaceDTO, error) {
-	configPath := filepath.Join(s.rootPath, "axiom.yaml")
+	curPath := s.getRootPath()
+	configPath := filepath.Join(curPath, "axiom.yaml")
+
 	cfg, err := workspace.LoadConfig(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("error cargando axiom.yaml: %w", err)
+		// Proyecto sin axiom.yaml: proveer información descriptiva para el Zero-Config Welcome
+		detected, _ := s.hubDetector.Detect(curPath)
+		return &WorkspaceDTO{
+			Name:         filepath.Base(curPath),
+			Topology:     "unconfigured",
+			Root:         curPath,
+			Roles:        make(map[string]RoleMeta),
+			Compliant:    false,
+			Message:      "Este proyecto aún no cuenta con un archivo axiom.yaml configurado.",
+			IsConfigured: false,
+			DetectedTech: detected,
+		}, nil
 	}
 
-	valReport, valErr := workspace.Validate(workspace.DefaultFS(), cfg, s.rootPath)
+	valReport, valErr := workspace.Validate(workspace.DefaultFS(), cfg, curPath)
 	compliant := (valErr == nil && valReport != nil && valReport.Valid)
 	message := "Workspace conforme con la topología declarada"
 	if !compliant {
@@ -78,19 +140,22 @@ func (s *Service) GetWorkspace() (*WorkspaceDTO, error) {
 		Name:            cfg.Workspace.Name,
 		Topology:        string(cfg.Workspace.Topology),
 		SpecsRepository: cfg.Workspace.SpecsRepository,
-		Root:            s.rootPath,
+		Root:            curPath,
 		Roles:           rolesMap,
 		Compliant:       compliant,
 		Message:         message,
+		IsConfigured:    true,
 	}, nil
 }
+
 
 // GetIncrements escanea y lista los incrementos activos y archivados.
 func (s *Service) GetIncrements() ([]IncrementSummaryDTO, error) {
 	var list []IncrementSummaryDTO
+	root := s.getRootPath()
 
 	// 1. Escanear cambios activos en openspec/changes/
-	activeDir := filepath.Join(s.rootPath, "openspec", "changes")
+	activeDir := filepath.Join(root, "openspec", "changes")
 	if entries, err := os.ReadDir(activeDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() || e.Name() == "archive" || e.Name() == "e2e-cumulative" {
@@ -103,7 +168,7 @@ func (s *Service) GetIncrements() ([]IncrementSummaryDTO, error) {
 	}
 
 	// 2. Escanear cambios archivados en openspec/changes/archive/
-	archiveDir := filepath.Join(s.rootPath, "openspec", "changes", "archive")
+	archiveDir := filepath.Join(root, "openspec", "changes", "archive")
 	if entries, err := os.ReadDir(archiveDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() {
@@ -180,20 +245,22 @@ func (s *Service) inspectIncrement(path, name, kind string) IncrementSummaryDTO 
 
 // FindIncrementPath busca la ruta de un incremento por nombre o prefijo/sufijo.
 func (s *Service) FindIncrementPath(name string) (string, string, error) {
+	root := s.getRootPath()
+
 	// 1. Probar en activos
-	activePath := filepath.Join(s.rootPath, "openspec", "changes", name)
+	activePath := filepath.Join(root, "openspec", "changes", name)
 	if dirExists(activePath) {
 		return activePath, "active", nil
 	}
 
 	// 2. Probar en archivados exacto
-	archivePath := filepath.Join(s.rootPath, "openspec", "changes", "archive", name)
+	archivePath := filepath.Join(root, "openspec", "changes", "archive", name)
 	if dirExists(archivePath) {
 		return archivePath, "archived", nil
 	}
 
 	// 3. Probar en archivados buscando por sufijo (ej. 'inc-01' en '2026-09-14-inc-01-...')
-	archiveDir := filepath.Join(s.rootPath, "openspec", "changes", "archive")
+	archiveDir := filepath.Join(root, "openspec", "changes", "archive")
 	if entries, err := os.ReadDir(archiveDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() && (strings.Contains(e.Name(), name) || strings.HasSuffix(e.Name(), name)) {
@@ -212,6 +279,7 @@ func (s *Service) GetIncrementDetail(name string) (*IncrementDetailDTO, error) {
 		return nil, err
 	}
 
+	root := s.getRootPath()
 	summary := s.inspectIncrement(path, filepath.Base(path), kind)
 
 	dto := &IncrementDetailDTO{
@@ -244,13 +312,13 @@ func (s *Service) GetIncrementDetail(name string) (*IncrementDetailDTO, error) {
 	}
 
 	// Cargar barrera multi-rol si es posible
-	cfg, errCfg := workspace.LoadConfig(filepath.Join(s.rootPath, "axiom.yaml"))
+	cfg, errCfg := workspace.LoadConfig(filepath.Join(root, "axiom.yaml"))
 	if errCfg == nil && dto.HasDesign {
 		roles, errRoles := multirole.DetectRoles(filepath.Join(path, "design.md"), cfg)
 		if errRoles == nil {
-			barrier, errBarrier := multirole.EvaluateBarrier(path, name, roles)
-			if errBarrier == nil {
-				dto.BarrierReport = barrier
+			report, errReport := multirole.EvaluateBarrier(path, filepath.Base(path), roles)
+			if errReport == nil {
+				dto.BarrierReport = report
 			}
 		}
 	}
@@ -265,7 +333,8 @@ func (s *Service) GetRoleStatus(changeName string) (*multirole.BarrierReport, er
 		return nil, err
 	}
 
-	cfg, err := workspace.LoadConfig(filepath.Join(s.rootPath, "axiom.yaml"))
+	root := s.getRootPath()
+	cfg, err := workspace.LoadConfig(filepath.Join(root, "axiom.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("error cargando configuración de roles: %w", err)
 	}
@@ -277,6 +346,32 @@ func (s *Service) GetRoleStatus(changeName string) (*multirole.BarrierReport, er
 	}
 
 	return multirole.EvaluateBarrier(path, changeName, roles)
+}
+
+
+// GetRoles retorna los roles definidos en axiom.yaml.
+func (s *Service) GetRoles() (map[string]RoleMeta, error) {
+	root := s.getRootPath()
+	cfg, err := workspace.LoadConfig(filepath.Join(root, "axiom.yaml"))
+	if err != nil {
+		return nil, fmt.Errorf("error cargando axiom.yaml: %w", err)
+	}
+
+	rolesMap := make(map[string]RoleMeta)
+	for id, r := range cfg.Roles {
+		var repoPaths []string
+		for _, repo := range r.Repositories {
+			repoPaths = append(repoPaths, repo.Path)
+		}
+
+		rolesMap[id] = RoleMeta{
+			Name:         r.Name,
+			GatePolicy:   "blocking",
+			Repositories: repoPaths,
+			Tech:         r.Tech,
+		}
+	}
+	return rolesMap, nil
 }
 
 // GetHandoff obtiene el relevo estructurado handoff.md de un cambio.
@@ -302,9 +397,10 @@ func (s *Service) GetHandoff(changeName string) (*handoff.Handoff, error) {
 // GetSkills escanea y cataloga las skills locales del proyecto.
 func (s *Service) GetSkills() ([]SkillDTO, error) {
 	var skills []SkillDTO
+	root := s.getRootPath()
 
 	scanDir := func(base string) {
-		fullBase := filepath.Join(s.rootPath, base)
+		fullBase := filepath.Join(root, base)
 		entries, err := os.ReadDir(fullBase)
 		if err != nil {
 			return
@@ -316,7 +412,7 @@ func (s *Service) GetSkills() ([]SkillDTO, error) {
 			skillFile := filepath.Join(fullBase, e.Name(), "SKILL.md")
 			if fileExists(skillFile) {
 				desc, trigger := extractSkillMeta(skillFile)
-				relPath, _ := filepath.Rel(s.rootPath, skillFile)
+				relPath, _ := filepath.Rel(root, skillFile)
 				skills = append(skills, SkillDTO{
 					Name:        e.Name(),
 					Path:        filepath.ToSlash(relPath),
@@ -450,4 +546,115 @@ func (s *Service) GetLivingSpecDetail(domain string) (*livingdoc.LivingSpecEntry
 func (s *Service) SyncLivingDocs(ctx context.Context) (*livingdoc.SyncReport, error) {
 	return s.livingdocService.Sync(ctx)
 }
+
+// SwitchWorkspace conmuta en tiempo de ejecución el proyecto gestionado por el servicio.
+func (s *Service) SwitchWorkspace(targetPath string) (*WorkspaceDTO, error) {
+	absPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("ruta de workspace inválida: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("el directorio '%s' no existe en el sistema", absPath)
+	}
+
+	s.mu.Lock()
+	s.rootPath = absPath
+	s.autoskillManager = autoskill.NewManager(absPath, nil, nil, nil)
+	s.semanticService = semantic.NewService(absPath, nil, nil)
+	s.livingdocService = livingdoc.NewService(absPath, nil, nil)
+	s.mu.Unlock()
+
+	if s.hubManager != nil {
+		_, _ = s.hubManager.SetActive(absPath)
+	}
+
+	return s.GetWorkspace()
+}
+
+// GetProjects obtiene la lista de proyectos registrados en el Hub global y el activo.
+func (s *Service) GetProjects() (*ProjectListDTO, error) {
+	if s.hubManager == nil {
+		mgr, err := hub.NewManager("")
+		if err != nil {
+			return nil, err
+		}
+		s.hubManager = mgr
+	}
+
+	projects, err := s.hubManager.List()
+	if err != nil {
+		return nil, err
+	}
+
+	activeID := ""
+	activeRec, err := s.hubManager.GetActive()
+	if err == nil && activeRec != nil {
+		activeID = activeRec.ID
+	}
+
+	projInterfaces := make([]interface{}, len(projects))
+	for i, p := range projects {
+		projInterfaces[i] = p
+	}
+
+	return &ProjectListDTO{
+		ActiveWorkspace: activeID,
+		Projects:        projInterfaces,
+	}, nil
+}
+
+// AddProject registra un proyecto existente en el Hub.
+func (s *Service) AddProject(req ProjectAddRequest) (*hub.WorkspaceRecord, error) {
+	if s.hubManager == nil {
+		mgr, err := hub.NewManager("")
+		if err != nil {
+			return nil, err
+		}
+		s.hubManager = mgr
+	}
+
+	if req.Path == "" {
+		return nil, errors.New("debes especificar la ruta del proyecto ('path')")
+	}
+
+	return s.hubManager.Register(req.Path, req.Name, req.Topology)
+}
+
+// InitProject inicializa un proyecto con axiom.yaml y lo registra.
+func (s *Service) InitProject(req ProjectInitRequest) (*hub.InitResult, error) {
+	targetPath := req.Path
+	if targetPath == "" {
+		targetPath = s.getRootPath()
+	}
+
+	ini := hub.NewInitializer(s.hubManager, s.hubDetector)
+	res, err := ini.Init(hub.InitOptions{
+		Path:     targetPath,
+		Name:     req.Name,
+		Topology: req.Topology,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Conmutar automáticamente el workspace activo al inicializado
+	_, _ = s.SwitchWorkspace(targetPath)
+
+	return res, nil
+}
+
+// GetHubManager retorna el gestor de Hub asociado al servicio.
+func (s *Service) GetHubManager() *hub.Manager {
+	return s.hubManager
+}
+
+// SetHubManager asigna el gestor de Hub del servicio.
+func (s *Service) SetHubManager(m *hub.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hubManager = m
+}
+
 

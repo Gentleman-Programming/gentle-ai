@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -10,7 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
 )
+
 
 func TestServiceWorkspace(t *testing.T) {
 	// Usamos la raíz del repositorio de Axiom (..)
@@ -429,5 +433,115 @@ func TestArchiveEndpoints(t *testing.T) {
 		t.Fatalf("se esperaba 404 para dominio inexistente, se obtuvo %d", rrDetail404.Code)
 	}
 }
+
+func TestProjectsEndpoints(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "axiom-dashboard-projects-test-*")
+	if err != nil {
+		t.Fatalf("error creando tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	hubConfigPath := filepath.Join(tempDir, ".axiom", "workspaces.json")
+	hubMgr, err := hub.NewManager(hubConfigPath)
+	if err != nil {
+		t.Fatalf("error creando Hub Manager: %v", err)
+	}
+
+	// Proyecto 1 inicializado
+	proj1 := filepath.Join(tempDir, "proj1")
+	_ = os.MkdirAll(proj1, 0755)
+	_ = os.WriteFile(filepath.Join(proj1, "axiom.yaml"), []byte("workspace:\n  name: Proj1\n  topology: monorepo-embedded\n"), 0644)
+	_, _ = hubMgr.Register(proj1, "Proyecto 1", "monorepo-embedded")
+
+	svc := NewServiceWithHub(proj1, hubMgr)
+	server := NewServer(svc)
+	router := server.Router()
+
+	// 1. GET /api/projects
+	reqList := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	rrList := httptest.NewRecorder()
+	router.ServeHTTP(rrList, reqList)
+
+	if rrList.Code != http.StatusOK {
+		t.Fatalf("GET /api/projects falló con código %d: %s", rrList.Code, rrList.Body.String())
+	}
+	var projList ProjectListDTO
+	if err := json.Unmarshal(rrList.Body.Bytes(), &projList); err != nil {
+		t.Fatalf("JSON inválido en /api/projects: %v", err)
+	}
+	if len(projList.Projects) != 1 {
+		t.Errorf("esperado 1 proyecto en lista, obtenido %d", len(projList.Projects))
+	}
+
+	// 2. POST /api/projects/add (agregar proj2 sin axiom.yaml)
+	proj2 := filepath.Join(tempDir, "proj2")
+	_ = os.MkdirAll(proj2, 0755)
+	_ = os.WriteFile(filepath.Join(proj2, "go.mod"), []byte("module proj2\ngo 1.25\n"), 0644)
+
+	addBody, _ := json.Marshal(ProjectAddRequest{
+		Path: proj2,
+		Name: "Proyecto 2",
+	})
+	reqAdd := httptest.NewRequest(http.MethodPost, "/api/projects/add", bytes.NewReader(addBody))
+	rrAdd := httptest.NewRecorder()
+	router.ServeHTTP(rrAdd, reqAdd)
+
+	if rrAdd.Code != http.StatusOK {
+		t.Fatalf("POST /api/projects/add falló con código %d: %s", rrAdd.Code, rrAdd.Body.String())
+	}
+
+	// 3. POST /api/projects/switch (cambiar a proj2)
+	switchBody, _ := json.Marshal(ProjectSwitchRequest{
+		Path: proj2,
+	})
+	reqSwitch := httptest.NewRequest(http.MethodPost, "/api/projects/switch", bytes.NewReader(switchBody))
+	rrSwitch := httptest.NewRecorder()
+	router.ServeHTTP(rrSwitch, reqSwitch)
+
+	if rrSwitch.Code != http.StatusOK {
+		t.Fatalf("POST /api/projects/switch falló con código %d: %s", rrSwitch.Code, rrSwitch.Body.String())
+	}
+
+	// 4. GET /api/workspace en proj2 (debe retornar IsConfigured = false y Zero-Config)
+	reqWs := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	rrWs := httptest.NewRecorder()
+	router.ServeHTTP(rrWs, reqWs)
+
+	if rrWs.Code != http.StatusOK {
+		t.Fatalf("GET /api/workspace falló con código %d: %s", rrWs.Code, rrWs.Body.String())
+	}
+	var wsDTO WorkspaceDTO
+	if err := json.Unmarshal(rrWs.Body.Bytes(), &wsDTO); err != nil {
+		t.Fatalf("JSON inválido en /api/workspace: %v", err)
+	}
+	if wsDTO.IsConfigured {
+		t.Errorf("esperado IsConfigured=false para proyecto 2 antes de init")
+	}
+
+	// 5. POST /api/projects/init (inicializar proj2 con 1 clic)
+	initBody, _ := json.Marshal(ProjectInitRequest{
+		Path: proj2,
+		Name: "Proyecto 2",
+	})
+	reqInit := httptest.NewRequest(http.MethodPost, "/api/projects/init", bytes.NewReader(initBody))
+	rrInit := httptest.NewRecorder()
+	router.ServeHTTP(rrInit, reqInit)
+
+	if rrInit.Code != http.StatusOK {
+		t.Fatalf("POST /api/projects/init falló con código %d: %s", rrInit.Code, rrInit.Body.String())
+	}
+
+	// 6. Verificar que proj2 ahora sí está configurado
+	reqWsAfter := httptest.NewRequest(http.MethodGet, "/api/workspace", nil)
+	rrWsAfter := httptest.NewRecorder()
+	router.ServeHTTP(rrWsAfter, reqWsAfter)
+
+	var wsAfterDTO WorkspaceDTO
+	_ = json.Unmarshal(rrWsAfter.Body.Bytes(), &wsAfterDTO)
+	if !wsAfterDTO.IsConfigured {
+		t.Errorf("esperado IsConfigured=true tras ejecutar init")
+	}
+}
+
 
 

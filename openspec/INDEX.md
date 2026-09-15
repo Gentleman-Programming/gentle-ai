@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-15 07:09:46 UTC
-> **Total Dominios:** 35 | **Total Requerimientos:** 254 | **Total Escenarios BDD:** 412
+> **Última Sincronización:** 2026-09-15 12:48:04 UTC
+> **Total Dominios:** 36 | **Total Requerimientos:** 260 | **Total Escenarios BDD:** 422
 
 ---
 
@@ -17,6 +17,7 @@
 | `installer-picker-navigation` | Installer Picker Navigation Specification | 3 | 9 | [Ver Spec](specs/installer-picker-navigation/spec.md) |
 | `living-documentation` | Especificación Viva: Motor de Documentación Viva y Adopción Orgánica en Archive (INC-07) | 11 | 12 | [Ver Spec](specs/living-documentation/spec.md) |
 | `local-web-dashboard` | Especificación Viva: Servidor HTTP Local Embebido y Dashboard Web | 8 | 15 | [Ver Spec](specs/local-web-dashboard/spec.md) |
+| `multi-project-hub` | Especificación Viva: Hub Multi-Proyecto, Selector Dinámico en Dashboard Web y CLI axiom init (INC-08) | 6 | 10 | [Ver Spec](specs/multi-project-hub/spec.md) |
 | `multi-role-fan-out` | Especificación Viva: Despliegue Multi-Rol y Barrera de Sincronización en SDD | 8 | 13 | [Ver Spec](specs/multi-role-fan-out/spec.md) |
 | `organic-agent-trigger-rules` | Organic Agent Routing Projection | 12 | 17 | [Ver Spec](specs/organic-agent-trigger-rules/spec.md) |
 | `persona-behavior-contract` | persona-behavior-contract Specification | 15 | 30 | [Ver Spec](specs/persona-behavior-contract/spec.md) |
@@ -222,6 +223,29 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
   - *Escenario BDD:* Inicio del servidor en puerto por defecto con apertura de navegador
   - *Escenario BDD:* Detección y fallback ante puerto ocupado
   - *Escenario BDD:* Ejecución en modo headless con --no-browser
+
+### Dominio: `multi-project-hub` — Especificación Viva: Hub Multi-Proyecto, Selector Dinámico en Dashboard Web y CLI axiom init (INC-08)
+
+Definir formal y deterministamente los requerimientos funcionales, no funcionales y escenarios BDD para dotar a Axiom de una arquitectura multi-proyecto de nivel empresarial: registro global central de workspaces (`~/.axiom/workspaces.json`), comando CLI `axiom init` con auto-detección tecnológica, comandos CLI `axiom project`, y un Dashboard Web (`axiom ui`) transformado en Hub con selector dinámico de workspaces en tiempo real y pantalla de bienvenida para repositorios sin inicializar.
+
+**Archivo:** [`specs/multi-project-hub/spec.md`](specs/multi-project-hub/spec.md)
+
+- **[REQ-1.1]** Registro Global Centralizado de Workspaces
+  - *Escenario BDD:* Creación del archivo de registro en el primer uso
+  - *Escenario BDD:* Registro idempotente de un proyecto existente
+  - *Escenario BDD:* Desregistro de un proyecto
+- **[REQ-1.2]** Conmutación y Resolución de Proyecto Activo
+  - *Escenario BDD:* Conmutación de proyecto activo
+  - *Escenario BDD:* Fallback cuando la ruta configurada fue eliminada
+- **[REQ-2.1]** Detección Heurística de Tecnologías
+  - *Escenario BDD:* Detección automática en proyecto Go
+  - *Escenario BDD:* Detección automática en proyecto .NET / C#
+- **[REQ-2.2]** Generación de Andamiaje `axiom.yaml` y Registro Automático
+  - *Escenario BDD:* Inicialización exitosa de proyecto virgen
+- **[REQ-3.1]** Endpoints REST de Gestión Multi-Proyecto
+  - *Escenario BDD:* Conmutación en caliente de workspace en la UI
+- **[REQ-3.2]** Componente UI Selector de Proyectos y Pantalla de Bienvenida
+  - *Escenario BDD:* Navegación a proyecto no inicializado
 
 ### Dominio: `multi-role-fan-out` — Especificación Viva: Despliegue Multi-Rol y Barrera de Sincronización en SDD
 

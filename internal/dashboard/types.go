@@ -11,7 +11,10 @@ type WorkspaceDTO struct {
 	Roles           map[string]RoleMeta `json:"roles"`
 	Compliant       bool                `json:"compliant"`
 	Message         string              `json:"message"`
+	IsConfigured    bool                `json:"is_configured"`
+	DetectedTech    interface{}         `json:"detected_tech,omitempty"`
 }
+
 
 // RoleMeta describe un rol dentro del espacio de trabajo.
 type RoleMeta struct {
@@ -78,3 +81,30 @@ type SkillActionDTO struct {
 	Role    string `json:"role,omitempty"`
 	Offline bool   `json:"offline,omitempty"`
 }
+
+// ProjectListDTO encapsula la lista de proyectos registrados y el activo.
+type ProjectListDTO struct {
+	ActiveWorkspace string        `json:"active_workspace"`
+	Projects        []interface{} `json:"projects"`
+}
+
+// ProjectSwitchRequest representa la solicitud para conmutar el workspace activo.
+type ProjectSwitchRequest struct {
+	ID   string `json:"id,omitempty"`
+	Path string `json:"path,omitempty"`
+}
+
+// ProjectAddRequest representa la solicitud para registrar un proyecto en el Hub.
+type ProjectAddRequest struct {
+	Path     string `json:"path"`
+	Name     string `json:"name,omitempty"`
+	Topology string `json:"topology,omitempty"`
+}
+
+// ProjectInitRequest representa la solicitud para inicializar un proyecto.
+type ProjectInitRequest struct {
+	Path     string `json:"path,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Topology string `json:"topology,omitempty"`
+}
+

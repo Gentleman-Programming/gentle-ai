@@ -5,6 +5,20 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentFilter = 'all';
 
   // Elementos DOM
+  const projectSelect = document.getElementById('project-select');
+  const btnAddProject = document.getElementById('btn-add-project');
+  const modalAddProject = document.getElementById('modal-add-project');
+  const btnCloseAddProject = document.getElementById('btn-close-add-project');
+  const btnCancelAddProject = document.getElementById('btn-cancel-add-project');
+  const btnSubmitAddProject = document.getElementById('btn-submit-add-project');
+  const inputProjectPath = document.getElementById('input-project-path');
+  const inputProjectName = document.getElementById('input-project-name');
+
+  const zeroConfigHero = document.getElementById('zero-config-hero');
+  const zeroConfigMsg = document.getElementById('zero-config-msg');
+  const zeroConfigTech = document.getElementById('zero-config-tech');
+  const btnInitProject = document.getElementById('btn-init-project');
+
   const wsNameEl = document.getElementById('ws-name');
   const wsTopologyEl = document.getElementById('ws-topology');
   const incrementsContainer = document.getElementById('increments-container');
@@ -58,11 +72,106 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAllData();
   });
 
-  // Cerrar Modal
+  // Cerrar Modal Incremento
   btnModalClose.addEventListener('click', () => modal.classList.add('hidden'));
   modal.addEventListener('click', (e) => {
     if (e.target === modal) modal.classList.add('hidden');
   });
+
+  // Eventos Modal Añadir Proyecto
+  if (btnAddProject) {
+    btnAddProject.addEventListener('click', () => {
+      inputProjectPath.value = '';
+      inputProjectName.value = '';
+      modalAddProject.classList.remove('hidden');
+    });
+  }
+  if (btnCloseAddProject) {
+    btnCloseAddProject.addEventListener('click', () => modalAddProject.classList.add('hidden'));
+  }
+  if (btnCancelAddProject) {
+    btnCancelAddProject.addEventListener('click', () => modalAddProject.classList.add('hidden'));
+  }
+  if (btnSubmitAddProject) {
+    btnSubmitAddProject.addEventListener('click', async () => {
+      const pathVal = inputProjectPath.value.trim();
+      const nameVal = inputProjectName.value.trim();
+      if (!pathVal) {
+        alert('Debes ingresar la ruta del proyecto en disco.');
+        return;
+      }
+      try {
+        const res = await fetch('/api/projects/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: pathVal, name: nameVal })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Error vinculando proyecto');
+        }
+        modalAddProject.classList.add('hidden');
+        await fetch('/api/projects/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: pathVal })
+        });
+        await loadProjects();
+        await loadAllData();
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    });
+  }
+
+  // Evento Inicializar Proyecto (1 Clic)
+  if (btnInitProject) {
+    btnInitProject.addEventListener('click', async () => {
+      try {
+        btnInitProject.disabled = true;
+        btnInitProject.textContent = 'Inicializando...';
+        const res = await fetch('/api/projects/init', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: workspaceData ? workspaceData.root : '' })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Error inicializando proyecto');
+        }
+        await loadProjects();
+        await loadAllData();
+      } catch (e) {
+        alert('Error al inicializar proyecto: ' + e.message);
+      } finally {
+        btnInitProject.disabled = false;
+        btnInitProject.textContent = '⚡ Inicializar Proyecto con Axiom (1 Clic)';
+      }
+    });
+  }
+
+  // Selector de Proyectos (Switch en caliente)
+  if (projectSelect) {
+    projectSelect.addEventListener('change', async () => {
+      const selected = projectSelect.value;
+      if (!selected) return;
+      try {
+        const res = await fetch('/api/projects/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: selected })
+        });
+        if (res.ok) {
+          await loadAllData();
+        } else {
+          const err = await res.json();
+          alert('Error al conmutar proyecto: ' + (err.error || 'Desconocido'));
+        }
+      } catch (e) {
+        alert('Error de conexión al conmutar proyecto: ' + e.message);
+      }
+    });
+  }
 
   // Selectores de Cambios
   roleChangeSelect.addEventListener('change', () => {
@@ -84,7 +193,29 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Carga inicial
+  loadProjects();
   loadAllData();
+
+  async function loadProjects() {
+    if (!projectSelect) return;
+    try {
+      const res = await fetch('/api/projects');
+      if (!res.ok) return;
+      const data = await res.json();
+      projectSelect.innerHTML = '';
+      (data.projects || []).forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name + (p.is_configured ? '' : ' [No config]');
+        if (p.id === data.active_workspace || p.path === data.active_workspace) {
+          opt.selected = true;
+        }
+        projectSelect.appendChild(opt);
+      });
+    } catch (err) {
+      console.warn('No se pudo cargar la lista de proyectos:', err);
+    }
+  }
 
   async function loadAllData() {
     await Promise.all([
@@ -107,6 +238,31 @@ document.addEventListener('DOMContentLoaded', () => {
       wsNameEl.textContent = workspaceData.name || 'Workspace';
       wsTopologyEl.textContent = workspaceData.topology || 'monorepo';
 
+      // Tratamiento Zero-Config
+      if (zeroConfigHero) {
+        if (!workspaceData.is_configured) {
+          zeroConfigHero.style.display = 'flex';
+          zeroConfigMsg.innerHTML = `No se encontró un archivo <code>axiom.yaml</code> en <code>${workspaceData.root}</code>. Puedes inicializarlo en 1 clic con auto-detección de stack:`;
+          zeroConfigTech.innerHTML = '';
+          if (workspaceData.detected_tech) {
+            const dt = workspaceData.detected_tech;
+            const b1 = document.createElement('span');
+            b1.className = 'tech-badge';
+            b1.textContent = 'Tecnología: ' + (dt.primary_language || 'Genérico').toUpperCase();
+            zeroConfigTech.appendChild(b1);
+
+            (dt.frameworks || []).forEach(f => {
+              const b = document.createElement('span');
+              b.className = 'tech-badge';
+              b.textContent = f;
+              zeroConfigTech.appendChild(b);
+            });
+          }
+        } else {
+          zeroConfigHero.style.display = 'none';
+        }
+      }
+
       // Actualizar Tab de Topología
       document.getElementById('top-ws-name').textContent = workspaceData.name;
       document.getElementById('top-ws-topology').textContent = workspaceData.topology;
@@ -116,7 +272,7 @@ document.addEventListener('DOMContentLoaded', () => {
         healthEl.textContent = 'CONFORME';
         healthEl.className = 'stat-value text-success';
       } else {
-        healthEl.textContent = 'NO CONFORME';
+        healthEl.textContent = workspaceData.is_configured ? 'NO CONFORME' : 'SIN CONFIGURAR';
         healthEl.className = 'stat-value text-danger';
       }
 
@@ -138,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
           tbody.appendChild(tr);
         });
       }
+
     } catch (err) {
       console.error(err);
       wsNameEl.textContent = 'Error al conectar';
