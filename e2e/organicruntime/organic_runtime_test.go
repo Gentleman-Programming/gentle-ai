@@ -631,6 +631,22 @@ func (proxy *loopbackDenyingProxy) deniedRequests() int {
 	return proxy.requests
 }
 
+// loopbackDenyingProxyEnvironment routes every proxied protocol of a child
+// process through the loopback-denying proxy while loopback stays direct, so
+// an external request is refused instead of reaching the host network.
+func loopbackDenyingProxyEnvironment(proxy *loopbackDenyingProxy) []string {
+	return []string{
+		"HTTP_PROXY=" + proxy.URL,
+		"HTTPS_PROXY=" + proxy.URL,
+		"ALL_PROXY=" + proxy.URL,
+		"http_proxy=" + proxy.URL,
+		"https_proxy=" + proxy.URL,
+		"all_proxy=" + proxy.URL,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+		"no_proxy=127.0.0.1,localhost,::1",
+	}
+}
+
 func denyingProxyTargetIsExternal(request *http.Request) bool {
 	host := request.URL.Hostname()
 	if host == "" {
@@ -1169,6 +1185,8 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 		writeOpenCodeChatText(writer, "review task group complete")
 	}))
 	defer server.Close()
+	proxy := newLoopbackDenyingProxy(t)
+	defer proxy.Close()
 
 	configDirectory := t.TempDir()
 	pluginDirectory := filepath.Join(configDirectory, "plugins")
@@ -1203,13 +1221,21 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, binary, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the grouped Go-bound reviewer tasks")
+	command := organicCommandContext(ctx, binary, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the grouped Go-bound reviewer tasks")
 	command.Dir = harness.repo.worktree
 	command.Env = append(harness.environment(),
 		"OPENCODE_CONFIG_DIR="+configDirectory,
 		"OPENCODE_CONFIG_CONTENT="+string(config),
 		"PATH="+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		// OpenCode startup bootstraps @opencode-ai/plugin into every config
+		// directory through npm Arborist and refreshes models.dev before it
+		// issues the first model request. Against the fresh HOME, that egress can
+		// outlast the barrier, so the loopback proxy refuses it and the models.dev
+		// refresh is switched off. The transport plugin's import of
+		// @opencode-ai/plugin is type-only, so the refused install costs nothing.
+		"OPENCODE_DISABLE_MODELS_FETCH=1",
 	)
+	command.Env = append(command.Env, loopbackDenyingProxyEnvironment(proxy)...)
 	type runResult struct {
 		output []byte
 		err    error
@@ -1220,12 +1246,25 @@ func TestOpenCodeRuntimeRunsFourBoundReviewersConcurrently(t *testing.T) {
 		run <- runResult{output: output, err: err}
 	}()
 
+	// barrierState reads the reviewer-group counters under the lock so every
+	// failure before the barrier carries the same diagnostics.
+	barrierState := func() string {
+		lock.Lock()
+		defer lock.Unlock()
+		return fmt.Sprintf("tasksIssued=%t arrived=%d/%d arrivals=%v maxInFlight=%d settled=%d handlerFailure=%q deniedEgress=%d",
+			tasksIssued, arrived, len(wantLenses), arrivals, maxInFlight, settled, handlerFailure, proxy.deniedRequests())
+	}
 	select {
 	case <-allArrived:
 	case result := <-run:
-		t.Fatalf("OpenCode ended before every foreground reviewer reached the barrier: %v\n%s", result.err, result.output)
+		t.Fatalf("OpenCode ended before every foreground reviewer reached the barrier: %v\n%s\n%s", result.err, barrierState(), result.output)
 	case <-time.After(30 * time.Second):
-		t.Fatal("OpenCode did not schedule all four foreground reviewer requests")
+		// Zero arrivals at the deadline say only that the session had not
+		// reached the provider yet; they do not show 4R scheduling serialized.
+		// Cancel the subprocess so its output can be collected with the state.
+		cancel()
+		result := <-run
+		t.Fatalf("OpenCode did not reach the four-reviewer barrier within 30s; the stall may sit anywhere before it (startup, plugin bootstrap, transport, or scheduling): process=%v\n%s\n%s", result.err, barrierState(), result.output)
 	}
 	lock.Lock()
 	if maxInFlight != len(wantLenses) {
