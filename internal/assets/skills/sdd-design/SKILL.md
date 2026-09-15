@@ -69,7 +69,7 @@ If the design changes routing, shell commands, subprocesses, VCS/PR automation, 
 
 If the design touches UI components in SmartClic/erp-mf-* microfrontends, run the 2-level locator flow BEFORE proposing selectors:
 1. **Level 0 (always first)**: Reuse existing locators from the automation project's POM (`src/pages/**`) and Screenplay tasks/questions. Do NOT reinvent.
-2. **Level 1 (only if missing)**: Load the `qa-locator-hunting` skill and hunt in GitLab via MCP (map domain→`erp-mf-<dominio>`: comun/logistica/puntoventa/facturacion; confirm the exact project in the SmartClic group; search by visible text; extract the real selector from Angular `.html`/React `.tsx` templates; priority `data-testid`/`id`/`name`/`formControlName`/`aria-label` over CSS classes).
+2. **Level 1 (only if missing)**: Load the `qa-locator-hunting` skill and follow it — it owns domain→project resolution, the GitLab hunt via MCP, and the selector priority rules.
 3. **Honest fallback**: No GitLab access or not found → report "locator no encontrado" and ask for the microfront URL/path. NEVER invent selectors.
 
 ### Step 3: Write design.md
