@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/researchcapability"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
@@ -263,6 +264,18 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}
 }
 
+// hasNamedProfileOverlays reports whether any profile will generate a named
+// overlay. The empty and "default" names are handled by the base overlay path
+// and generate no prompt references of their own.
+func hasNamedProfileOverlays(profiles []model.Profile) bool {
+	for _, profile := range profiles {
+		if profile.Name != "" && profile.Name != "default" {
+			return true
+		}
+	}
+	return false
+}
+
 // GenerateProfileOverlay builds an OpenCode agent overlay JSON for the given
 // profile. The overlay contains 11 agent definitions:
 //   - sdd-orchestrator-{name}: primary mode, inlined orchestrator prompt (with suffixed
@@ -373,6 +386,16 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 			"description": phaseDescriptions[phase],
 			"prompt":      prompt,
 		}
+		if phase == "sdd-research" {
+			// The research permission is derived from the canonical research
+			// capability (#4088): evidence tool identities must never be
+			// hardcoded here. Today OpenCode is denied, so this matches the
+			// base overlay's {bash,webfetch,websearch,task,write,edit} deny
+			// set, and a future authority change updates both projections
+			// together. Kilocode profile overlays overwrite this value through
+			// restoreKilocodeManagedAgentToolsInOverlay.
+			entry["permission"] = profileResearchPermission()
+		}
 		// Issue #557: consult fallback when the profile did not set the phase,
 		// so generated *-{name} agents stay consistent with what the user sees
 		// in the gentle-ai TUI. Profile-level assignments still win.
@@ -425,6 +448,29 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 		return nil, fmt.Errorf("marshal profile overlay: %w", err)
 	}
 	return append(result, '\n'), nil
+}
+
+// profileResearchPermission derives the OpenCode research executor's
+// permission map from the canonical research capability authority (#4088).
+// The bash/task/write/edit boundaries belong to the executor posture (OpenCode
+// tools are default-open, so an omitted decision is an implicit grant); every
+// evidence identity comes from EvidenceToolDecisions so generation and
+// verification cannot drift.
+func profileResearchPermission() map[string]any {
+	permission := map[string]any{
+		"bash":  "deny",
+		"task":  "deny",
+		"write": "deny",
+		"edit":  "deny",
+	}
+	for _, decision := range researchcapability.EvidenceToolDecisions(model.AgentOpenCode) {
+		if decision.Allowed {
+			permission[decision.Tool] = "allow"
+		} else {
+			permission[decision.Tool] = "deny"
+		}
+	}
+	return permission
 }
 
 // resolveProfileAssignment returns the effective model assignment for a phase:

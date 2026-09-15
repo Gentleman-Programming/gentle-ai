@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/researchcapability"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -78,7 +79,17 @@ func TestOpenCodeReviewValidatorPermissionContract(t *testing.T) {
 func assertOpenCodeResearchCollectorBoundary(t *testing.T, research map[string]any) {
 	t.Helper()
 
-	permission, _ := research["permission"].(map[string]any)
+	permission, ok := research["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("research permission = %#v, want an explicit permission object", research["permission"])
+	}
+	// #4088: OpenCode tools are default-open, so every evidence binding identity
+	// must be explicitly denied. Absence is not a denial.
+	for _, binding := range researchcapability.AdapterToolBindings(model.AgentOpenCode) {
+		if got := permission[binding.Tool]; got != "deny" {
+			t.Fatalf("research permission %q = %v, want explicit deny", binding.Tool, got)
+		}
+	}
 	for _, persistenceTool := range []string{"write", "edit", "mem_save", "engram_mem_save"} {
 		if permission[persistenceTool] == "allow" {
 			t.Fatalf("research permission unexpectedly grants persistence tool %q", persistenceTool)

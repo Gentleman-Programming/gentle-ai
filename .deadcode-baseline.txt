@@ -28,6 +28,9 @@ internal/agents/pi/model_routing.go	selectPackageBin
 internal/agents/pi/model_routing.go	unsafeBinPath
 internal/agents/pi/model_routing.go	windowsDrivePath
 internal/agents/registry.go	Registry.CapabilityManifest
+internal/agents/researchcapability/contract.go	Admit
+internal/agents/researchcapability/projection.go	Declaration
+internal/agents/researchcapability/projection.go	joinDeclarationGrants
 internal/catalog/agents.go	IsMVPAgent
 internal/catalog/agents.go	MVPAgents
 internal/cli/doctor.go	checkToolBinaries
