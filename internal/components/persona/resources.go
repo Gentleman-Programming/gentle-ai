@@ -30,6 +30,7 @@ type ResourcePlan struct {
 }
 
 var managedOutputStyles = []OutputStyle{
+	{Name: "Axiom", File: "axiom.md", AssetPath: "claude/output-style-axiom.md"},
 	{Name: "Gentleman", File: "gentleman.md", AssetPath: "claude/output-style-gentleman.md"},
 	{Name: "Neutral", File: "neutral.md", AssetPath: "claude/output-style-neutral.md"},
 }
@@ -45,10 +46,12 @@ func canonicalPersona(persona model.PersonaID) model.PersonaID {
 func ResourcePlanFor(persona model.PersonaID) ResourcePlan {
 	persona = canonicalPersona(persona)
 	switch {
+	case persona == model.PersonaAxiom:
+		return ResourcePlan{outputStyle: &managedOutputStyles[0], retired: []string{managedOutputStyles[1].File, managedOutputStyles[2].File}}
 	case isGentlemanConversationPersona(persona):
-		return ResourcePlan{outputStyle: &managedOutputStyles[0]}
-	case persona == model.PersonaNeutral:
 		return ResourcePlan{outputStyle: &managedOutputStyles[1], retired: []string{managedOutputStyles[0].File}}
+	case persona == model.PersonaNeutral:
+		return ResourcePlan{outputStyle: &managedOutputStyles[2], retired: []string{managedOutputStyles[0].File, managedOutputStyles[1].File}}
 	default:
 		return ResourcePlan{}
 	}

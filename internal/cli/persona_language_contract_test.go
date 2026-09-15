@@ -23,7 +23,7 @@ func TestNormalizePersonaRemapsGentlemanNeutralArtifacts(t *testing.T) {
 }
 
 func TestNormalizePersonaDoesNotFlagCanonicalPersonas(t *testing.T) {
-	for _, value := range []string{"", "gentleman", "neutral", "custom"} {
+	for _, value := range []string{"", "axiom", "gentleman", "neutral", "custom"} {
 		_, remapped, err := normalizePersona(value)
 		if err != nil {
 			t.Fatalf("normalizePersona(%q) error = %v", value, err)
@@ -31,6 +31,19 @@ func TestNormalizePersonaDoesNotFlagCanonicalPersonas(t *testing.T) {
 		if remapped {
 			t.Fatalf("normalizePersona(%q) remapped = true, want false", value)
 		}
+	}
+}
+
+func TestNormalizePersonaDefaultsToAxiom(t *testing.T) {
+	got, remapped, err := normalizePersona("")
+	if err != nil {
+		t.Fatalf("normalizePersona(\"\") error = %v", err)
+	}
+	if got != model.PersonaAxiom {
+		t.Fatalf("normalizePersona(\"\") = %q, want %q", got, model.PersonaAxiom)
+	}
+	if remapped {
+		t.Fatal("normalizePersona(\"\") remapped = true, want false")
 	}
 }
 

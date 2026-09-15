@@ -148,6 +148,7 @@ const (
 type PersonaID string
 
 const (
+	PersonaAxiom     PersonaID = "axiom"
 	PersonaGentleman PersonaID = "gentleman"
 	// PersonaGentlemanNeutralArtifacts is a legacy alias accepted for backward
 	// compatibility. The CLI and sync normalization treat it as PersonaNeutral,

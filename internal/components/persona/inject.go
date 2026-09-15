@@ -335,6 +335,8 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		// across both persona and output-style instruction layers.
 		outputStyleContent := ""
 		switch {
+		case persona == model.PersonaAxiom:
+			outputStyleContent = assets.MustRead("kimi/output-style-axiom.md")
 		case isGentlemanConversationPersona(persona):
 			outputStyleContent = assets.MustRead("kimi/output-style-gentleman.md")
 		case persona == model.PersonaNeutral:
@@ -535,12 +537,34 @@ func residualChannel(adapter agents.Adapter) bool {
 func personaContent(agent model.AgentID, persona model.PersonaID, residualContentAvailable bool) string {
 	persona = canonicalPersona(persona)
 	switch persona {
+	case model.PersonaAxiom:
+		return axiomPersonaContent(agent, residualContentAvailable)
 	case model.PersonaNeutral:
 		return neutralPersonaContent(agent, residualContentAvailable)
 	case model.PersonaCustom:
 		return ""
 	default:
 		return gentlemanPersonaContent(agent)
+	}
+}
+
+func axiomPersonaContent(agent model.AgentID, residualContentAvailable bool) string {
+	if agent == model.AgentHermes {
+		return assets.MustRead("hermes/persona-axiom.md")
+	}
+	if residualContentAvailable {
+		switch agent {
+		case model.AgentClaudeCode:
+			return assets.MustRead("claude/persona-axiom.md")
+		}
+	}
+	switch agent {
+	case model.AgentOpenCode, model.AgentKilocode:
+		return assets.MustRead("opencode/persona-axiom.md")
+	case model.AgentKiroIDE:
+		return assets.MustRead("kiro/persona-axiom.md")
+	default:
+		return assets.MustRead("generic/persona-axiom.md")
 	}
 }
 

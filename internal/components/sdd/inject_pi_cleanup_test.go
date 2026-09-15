@@ -198,6 +198,9 @@ func TestRetirePiSystemPromptBlocksSafeguards(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, path); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("skipping symlink safeguard test on Windows without symlink privilege: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if _, err := RetirePiSystemPromptBlocks(home, adapter); err == nil {
@@ -218,6 +221,9 @@ func TestRetirePiSystemPromptBlocksSafeguards(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(parent, filepath.Join(linkedHome, ".pi", "agent")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("skipping symlink safeguard test on Windows without symlink privilege: %v", err)
+		}
 		t.Fatal(err)
 	}
 	linkedPath := filepath.Join(linkedHome, ".pi", "agent", "APPEND_SYSTEM.md")

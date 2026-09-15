@@ -296,3 +296,30 @@ Automated tests and golden fixtures MUST cover the residual persona section, the
 - GIVEN a golden fixture for a non-output-style adapter existed before this change
 - WHEN the same fixture is regenerated after this change
 - THEN its persona section content is unchanged
+
+---
+
+### Requirement: Axiom Persona Definition and Default Selection (REQ-10.1 & REQ-10.2)
+
+The system MUST support `axiom` as the canonical default persona (`model.PersonaAxiom = "axiom"`). The persona MUST prescribe senior architect guidance in Peninsular Spanish (castellano peninsular) with professional tuteo ("tienes", "haz", "revisa"), strictly prohibiting forced Rioplatense voseo ("che", "tenés", "podés", "hacé") and informal regionalisms. The TUI and CLI MUST present Axiom as the default selection.
+
+#### Scenario: Axiom persona is default and uses Peninsular Spanish
+
+- GIVEN the persona options are resolved
+- WHEN inspecting the default persona
+- THEN `axiom` is the default persona
+- AND its instructions enforce Peninsular Spanish without voseo or Rioplatense regionalisms
+
+---
+
+### Requirement: SDD Language Domain Contract for Axiom Projects (REQ-10.3 & REQ-10.4)
+
+In Axiom-governed projects and repositories with Spanish language rules declared, all SDD technical artifacts (`proposal.md`, `spec.md`, `design.md`, `tasks.md`, `verify-report.md`, `archive-report.md`) MUST be authored in Spanish (castellano peninsular). English is strictly preserved for source code identifiers and language keywords. Orchestrators MUST NOT enforce unconditional "default to English" rules for documentation when operating under Axiom governance.
+
+#### Scenario: SDD technical artifacts generated in Spanish in Axiom projects
+
+- GIVEN an SDD orchestration session runs in an Axiom-governed workspace
+- WHEN SDD artifacts are authored
+- THEN all proposals, specifications, designs, tasks, verification reports, and archive reports are written in Spanish
+- AND English is reserved exclusively for source code identifiers
+

@@ -69,6 +69,7 @@ func TestPersonaDescriptionsSeparateToneFromArtifactLanguage(t *testing.T) {
 // screen.
 func TestRenderPersonaShowsEveryManagedDescription(t *testing.T) {
 	for _, persona := range []model.PersonaID{
+		model.PersonaAxiom,
 		model.PersonaGentleman,
 		model.PersonaNeutral,
 	} {
@@ -80,13 +81,28 @@ func TestRenderPersonaShowsEveryManagedDescription(t *testing.T) {
 	}
 }
 
+func TestPersonaAxiomDescription(t *testing.T) {
+	desc, ok := personaDescriptions[model.PersonaAxiom]
+	if !ok {
+		t.Fatal("PersonaAxiom has no description")
+	}
+	if !strings.Contains(desc, "castellano peninsular") {
+		t.Fatalf("PersonaAxiom description %q must state castellano peninsular", desc)
+	}
+	if !strings.Contains(desc, "artefactos en español") {
+		t.Fatalf("PersonaAxiom description %q must state artefactos en español", desc)
+	}
+	if strings.Contains(strings.ToLower(desc), "voseo") {
+		t.Fatalf("PersonaAxiom description %q must not mention voseo", desc)
+	}
+}
+
 // TestReviewPersonaLabelKeepsThePersonaID guards the confirm-before-write
 // screen: the reader must be able to see the exact persona value that will be
-// written to state.json, not only its prose description. The two Gentleman
-// variants share a description apart from the alias suffix, so dropping the ID
-// would make them indistinguishable at the point of no return.
+// written to state.json, not only its prose description.
 func TestReviewPersonaLabelKeepsThePersonaID(t *testing.T) {
 	for _, persona := range []model.PersonaID{
+		model.PersonaAxiom,
 		model.PersonaGentleman,
 		model.PersonaGentlemanNeutralArtifacts,
 		model.PersonaNeutral,

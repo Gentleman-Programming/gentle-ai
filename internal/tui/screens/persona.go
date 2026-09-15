@@ -8,10 +8,11 @@ import (
 )
 
 func PersonaOptions() []model.PersonaID {
-	return []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral, model.PersonaCustom}
+	return []model.PersonaID{model.PersonaAxiom, model.PersonaGentleman, model.PersonaNeutral, model.PersonaCustom}
 }
 
 var personaDescriptions = map[model.PersonaID]string{
+	model.PersonaAxiom:     "Conversación en castellano peninsular; artefactos en español",
 	model.PersonaGentleman: "Voseo conversation; English technical artifacts",
 	// The legacy alias is remapped at normalization time and no longer offered
 	// in the picker; the entry stays so the review screen can label persisted

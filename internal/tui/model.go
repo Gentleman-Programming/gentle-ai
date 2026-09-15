@@ -875,14 +875,14 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		s = installState[0]
 	}
 	agents := preselectedAgents(detection, s)
-	components := componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
+	components := componentsForPreset(model.PresetFullGentleman, model.PersonaAxiom)
 	if isPiOnlyAgents(agents) {
 		components = piOnlyComponents()
 	}
 
 	selection := model.Selection{
 		Agents:                 agents,
-		Persona:                model.PersonaGentleman,
+		Persona:                model.PersonaAxiom,
 		Preset:                 model.PresetFullGentleman,
 		Components:             components,
 		ClaudeModelAssignments: installStateClaudeAssignments(s.ClaudeModelAssignments),

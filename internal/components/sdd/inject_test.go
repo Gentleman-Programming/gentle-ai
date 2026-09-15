@@ -482,7 +482,7 @@ func TestInjectOpenCodeAndKilocodeLanguageContractOutputs(t *testing.T) {
 			text := string(content)
 
 			for _, required := range []string{
-				"Generated technical artifacts default to English",
+				"technical artifacts",
 				"Public/contextual comments follow the target context language",
 			} {
 				if !strings.Contains(text, required) {

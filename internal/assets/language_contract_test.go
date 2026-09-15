@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -16,9 +17,13 @@ var sddArtifactLanguageContractRequired = []string{
 	"Explicit user language or tone overrides win; otherwise use a neutral/professional register",
 }
 
-var sddOrchestratorLanguageContractRequired = append([]string{
+var sddOrchestratorLanguageContractRequired = []string{
 	"The active persona controls direct user/orchestrator conversation only.",
-}, sddArtifactLanguageContractRequired...)
+	"In Axiom-governed projects or repositories with Spanish language rules declared",
+	"Spanish (castellano)",
+	"English is strictly preserved for source code identifiers",
+	"Public/contextual comments follow the target context language",
+}
 
 var sddLanguageSpecificFallbacks = []string{
 	"If Spanish technical artifacts are explicitly requested",
@@ -42,6 +47,13 @@ func TestManagedDirectReplyAssetsEnforceEnglishNoCodeSwitching(t *testing.T) {
 		path        string
 		combineWith string // "" when the asset alone still carries the contract
 	}{
+		{name: "claude axiom output style", path: "claude/output-style-axiom.md"},
+		{name: "claude axiom persona", path: "claude/persona-axiom.md", combineWith: "claude/output-style-axiom.md"},
+		{name: "generic axiom persona", path: "generic/persona-axiom.md"},
+		{name: "hermes axiom persona", path: "hermes/persona-axiom.md"},
+		{name: "kiro axiom persona", path: "kiro/persona-axiom.md"},
+		{name: "kimi axiom output style", path: "kimi/output-style-axiom.md"},
+		{name: "opencode axiom persona", path: "opencode/persona-axiom.md"},
 		{name: "claude gentleman output style", path: "claude/output-style-gentleman.md"},
 		{name: "claude neutral output style", path: "claude/output-style-neutral.md"},
 		// Claude and Kimi personas are residuals (Decision 1) — evaluate the
@@ -481,3 +493,45 @@ func TestNeutralChannelsExtendAntiDriftToToneAndDialect(t *testing.T) {
 		})
 	}
 }
+
+func TestPersonaAxiomAssetsContract(t *testing.T) {
+	paths := []string{
+		"generic/persona-axiom.md",
+		"claude/persona-axiom.md",
+		"claude/output-style-axiom.md",
+		"opencode/persona-axiom.md",
+		"kiro/persona-axiom.md",
+		"hermes/persona-axiom.md",
+		"kimi/output-style-axiom.md",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			if len(content) == 0 {
+				t.Fatalf("%s is empty", path)
+			}
+
+			// Prohibición absoluta de términos de voseo y regionalismos rioplatenses
+			for _, forbidden := range []string{"Rioplatense", "voseo", "tenés", "podés", "hacé"} {
+				if strings.Contains(content, forbidden) {
+					t.Fatalf("%s contains forbidden term %q", path, forbidden)
+				}
+			}
+			if regexp.MustCompile(`(?i)\bche\b`).MatchString(content) {
+				t.Fatalf("%s contains forbidden interjection 'che'", path)
+			}
+
+			// Para assets que definen lenguaje directo
+			if !strings.Contains(path, "claude/persona-axiom.md") {
+				if !strings.Contains(content, "Castellano de España (peninsular)") {
+					t.Fatalf("%s missing Peninsular Spanish directive", path)
+				}
+				if !strings.Contains(content, "Spanish (castellano peninsular)") {
+					t.Fatalf("%s missing Spanish artifact directive", path)
+				}
+			}
+		})
+	}
+}
+
