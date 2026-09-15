@@ -107,11 +107,23 @@ The cost of a fresh session is not the tokens — it is you, re-explaining the s
 
 ---
 
-### SDD — Give each change a clear path
+### ODD — The everyday workflow
+
+**Organic Driven Development (ODD)** is the recommended path for everyday work: explore the existing code, clarify real decisions, implement authorized changes, and run proportionate checks. Ask for an outcome, for example: "Add CSV export using the existing report filters." Small changes stay lightweight; substantial work keeps one recoverable feature document, not a mandatory phase pipeline.
+
+That document, `odd/tasks/<feature-name>.md`, combines intent, scope, checklist, evidence, next step, and concise rationale for meaningful accepted changes. Engram mirrors the full document under project-scoped `odd/<feature-name>/tasks`; accepted changes revise affected tasks while preserving valid completed work. TDD follows configured mode and runner, not the mere presence of tests. RDD is a separate, user-owned review choice.
+
+**Why not SDD every day?** Its proposal/spec/design/tasks artifacts and phase handoffs add coordination that ordinary work often does not need. Choose SDD explicitly when you want those formal artifacts; size, ambiguity, and risk alone do not select it. SDD remains supported, not deprecated.
+
+**[ODD details and recovery →](docs/usage.md#organic-driven-development-odd)**
+
+---
+
+### SDD — Formal phases when you choose them
 
 <img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle in three bands. Understand: Explore, then optional Research. Plan: Proposal, Spec, Design and Tasks, each writing its own markdown file. Build: Apply writes code and tests, Verify checks the evidence against the spec, Archive merges the specs and closes the cycle." />
 
-Every phase leaves a file on disk you can open, argue with, and correct — so the plan is reviewable before a single line of code exists. TDD (test-driven development) belongs in Apply when it fits, because that is the first point where there is a spec to test against. Verify then runs as its own step against that spec, not as a self-report from whatever wrote the code, so you can see what was actually checked.
+When you explicitly choose Spec-Driven Development, proposal, specification, design, and task artifacts make the plan reviewable before implementation. File-backed storage keeps them on disk; Engram-backed storage keeps them in memory. Apply follows the configured TDD mode, and Verify checks implementation evidence against the specification. TDD is also available in ODD; it does not require an SDD phase.
 
 **[Docs →](docs/intended-usage.md)**
 
@@ -210,7 +222,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 | **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
 | **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
 | **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 16 |
-| **[Routing](docs/trigger-rules.md)** | How the agent picks direct, delegated or SDD |
+| **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct/delegated work and explicitly selected SDD |
 | **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
 | **[Engram](docs/engram.md)** · **[Components](docs/components.md)** | Memory commands, skills, presets and personas |
 | **[Contributing](CONTRIBUTING.md)** · **[Codebase Guide](docs/CODEBASE-GUIDE.md)** | Extend or contribute |

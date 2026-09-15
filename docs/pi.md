@@ -2,7 +2,7 @@
 
 ← [Back to README](../README.md)
 
-Pi support installs the Gentleman harness as Pi packages, then lets Pi own its own persona, models, SDD agents, chains, and memory wiring.
+Pi support installs the Gentleman harness as Pi packages, then lets Pi own its persona, models, ODD guidance, optional SDD agents/chains, and memory wiring. Use [ODD](usage.md#organic-driven-development-odd) for everyday work; explicitly choose SDD when its formal phase artifacts are wanted.
 
 ## Quick Start
 
@@ -37,7 +37,7 @@ pi install npm:pi-btw
 
 | Package                                                  | What it adds                                                                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| [`gentle-pi`](https://www.npmjs.com/package/gentle-pi)   | Gentleman persona, SDD/OpenSpec workflow, strict TDD support, safety policy, skills, prompts, SDD agents, and SDD chains. |
+| [`gentle-pi`](https://www.npmjs.com/package/gentle-pi)   | Gentleman persona, ODD and optional SDD/OpenSpec, configured TDD support, safety policy, skills, prompts, SDD agents, and SDD chains. |
 | [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Pi integration for Engram session memory and MCP tools. It is not the Engram binary itself.                               |
 | `pi-mcp-adapter`                                         | Lets Pi expose MCP servers, including Engram, through Pi's MCP runtime.                                                   |
 | `pi-engram init`                                         | Initializes the Pi Engram MCP config shape owned by `gentle-engram`.                                                      |

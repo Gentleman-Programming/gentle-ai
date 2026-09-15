@@ -151,6 +151,10 @@ If something looks wrong after install, run `gentle-ai doctor` for a read-only h
 
 For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, and `pi-mcp-adapter`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, and `pi-btw`.
 
+## Start working with ODD
+
+Open your agent in the project and describe an outcome, for example: "Add CSV export using the existing report filters." [Organic Driven Development (ODD)](usage.md#organic-driven-development-odd) is the everyday flow: explore, implement authorized work, and check it. Substantial work keeps one recoverable feature document; small/read-only work avoids durable artifacts. No SDD command is required. Choose SDD explicitly only when you want its separate phase artifacts.
+
 ## Hardening recommendations for users
 
 Gentle AI pins versions and disables postinstall scripts on every npm install it generates. When you install the `permissions` component, a sensitive-paths deny list is applied to Claude Code and OpenCode blocking access to `~/.ssh/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.aws/credentials`, and other credential paths. See [Components](../docs/components.md) for the full list.
