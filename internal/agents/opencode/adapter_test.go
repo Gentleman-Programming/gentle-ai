@@ -13,6 +13,8 @@ import (
 
 func TestDetect(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "/tmp/home")
+	t.Setenv("USERPROFILE", "/tmp/home")
 	tests := []struct {
 		name            string
 		lookPathPath    string
@@ -233,5 +235,42 @@ func TestConfigPathIgnoresRelativeXDGConfigHome(t *testing.T) {
 	want := filepath.Join(home, ".config", "opencode")
 	if got := ConfigPath(home); got != want {
 		t.Fatalf("ConfigPath() = %q, want fallback %q", got, want)
+	}
+}
+
+// TestConfigPathUsesWorkspaceConventionWhenNotRealHome covers install --scope
+// workspace: componentInjectionDirScoped passes the workspace root (not the
+// user's real home directory) as homeDir. OpenCode never reads a workspace
+// .config/opencode tree -- its project-local convention is <workspace>/.opencode
+// (confirmed by its own installer output for other components, e.g. openspec's
+// .opencode/skills). Regression coverage for the workspace-scope skills/settings
+// bug: qa-* skills installed under .config/opencode were silently never loaded.
+func TestConfigPathUsesWorkspaceConventionWhenNotRealHome(t *testing.T) {
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	workspace := t.TempDir()
+	a := NewAdapter()
+	want := filepath.Join(workspace, ".opencode")
+
+	if got := ConfigPath(workspace); got != want {
+		t.Fatalf("ConfigPath(workspace) = %q, want %q", got, want)
+	}
+	if got := a.SkillsDir(workspace); got != filepath.Join(want, "skills") {
+		t.Fatalf("SkillsDir(workspace) = %q, want %q", got, filepath.Join(want, "skills"))
+	}
+	if got := a.SettingsPath(workspace); got != filepath.Join(want, "opencode.json") {
+		t.Fatalf("SettingsPath(workspace) = %q, want %q", got, filepath.Join(want, "opencode.json"))
+	}
+	if got := a.CommandsDir(workspace); got != filepath.Join(want, "commands") {
+		t.Fatalf("CommandsDir(workspace) = %q, want %q", got, filepath.Join(want, "commands"))
+	}
+
+	// The real home directory must still resolve to the global XDG-style path.
+	wantGlobal := filepath.Join(realHome, ".config", "opencode")
+	if got := ConfigPath(realHome); got != wantGlobal {
+		t.Fatalf("ConfigPath(realHome) = %q, want %q", got, wantGlobal)
 	}
 }

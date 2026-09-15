@@ -304,6 +304,8 @@ func TestDiscoverInstalled_WithDefaultRegistryAndRealFS(t *testing.T) {
 // ConfigRootsForBackup returns exactly the dirs created on disk.
 func TestConfigRootsForBackup_WithDefaultRegistryCoversCreatedDirs(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	// Create two agent config dirs.
 	dirs := []string{

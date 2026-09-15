@@ -48,6 +48,8 @@ func installWindowsCompatibilityCloseHook(t *testing.T, hook func(error)) {
 
 func TestRunSyncWithSelectionRefreshesCompatibilityAndOpenCodeAssetsOnWindows(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	closeCount := 0
 	installWindowsCompatibilityCloseHook(t, func(err error) {
 		if err != nil {
@@ -81,6 +83,8 @@ func TestRunSyncWithSelectionRefreshesCompatibilityAndOpenCodeAssetsOnWindows(t 
 
 func TestRunSyncWithSelectionClosesWindowsCompatibilityTransactionAfterSnapshotFailure(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	writeStale(t, filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md"))
 	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"), 0o755); err != nil {
 		t.Fatal(err)
