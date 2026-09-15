@@ -92,7 +92,8 @@ document.addEventListener('DOMContentLoaded', () => {
       loadIncrements(),
       loadSkills(),
       loadSkillsInbox(),
-      loadSemanticData()
+      loadSemanticData(),
+      loadLivingDocs()
     ]);
   }
 
@@ -789,6 +790,114 @@ document.addEventListener('DOMContentLoaded', () => {
         const q = searchInput ? searchInput.value.trim() : '';
         loadSemanticSymbols(q, currentSemanticKind);
       });
+    });
+  }
+
+  // 6. Cargar Especificaciones Vivas
+  let currentLivingDocDomain = null;
+
+  async function loadLivingDocs() {
+    const listContainer = document.getElementById('livingdoc-domains-list');
+    const metricDomains = document.getElementById('metric-living-domains');
+    const metricReqs = document.getElementById('metric-living-reqs');
+    const metricSync = document.getElementById('metric-living-sync');
+
+    if (!listContainer) return;
+
+    try {
+      const res = await fetch('/api/archive/specs');
+      if (!res.ok) throw new Error('Fallo al obtener catálogo de especificaciones vivas');
+      const catalog = await res.json();
+
+      const specs = catalog.specs || [];
+      if (metricDomains) metricDomains.textContent = specs.length;
+      if (metricReqs) metricReqs.textContent = catalog.total_requirements || 0;
+      if (metricSync && catalog.last_sync) {
+        metricSync.textContent = new Date(catalog.last_sync).toLocaleTimeString();
+      }
+
+      if (specs.length === 0) {
+        listContainer.innerHTML = '<p class="empty-state">No hay especificaciones vivas en openspec/specs/. Usa "Sincronizar" o el CLI para generarlas.</p>';
+        return;
+      }
+
+      listContainer.innerHTML = specs.map(d => `
+        <div class="livingdoc-domain-item ${d.domain === currentLivingDocDomain ? 'active' : ''}" data-domain="${escapeHtml(d.domain)}">
+          <div class="livingdoc-domain-header">
+            <span class="livingdoc-domain-title">${escapeHtml(d.title || d.domain)}</span>
+            <span class="badge" style="font-size: 0.7rem;">${d.total_scenarios || 0} BDD</span>
+          </div>
+          <div class="livingdoc-domain-reqs">
+            ${d.requirements ? d.requirements.length : 0} requisitos activos • ${escapeHtml(d.domain)}
+          </div>
+        </div>
+      `).join('');
+
+      listContainer.querySelectorAll('.livingdoc-domain-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const dom = item.getAttribute('data-domain');
+          listContainer.querySelectorAll('.livingdoc-domain-item').forEach(i => i.classList.remove('active'));
+          item.classList.add('active');
+          currentLivingDocDomain = dom;
+          loadLivingDocDetail(dom);
+        });
+      });
+
+      // Si no hay ninguno seleccionado, seleccionar el primero
+      if (!currentLivingDocDomain && specs.length > 0) {
+        currentLivingDocDomain = specs[0].domain;
+        const firstEl = listContainer.querySelector('.livingdoc-domain-item');
+        if (firstEl) firstEl.classList.add('active');
+        loadLivingDocDetail(specs[0].domain);
+      }
+    } catch (err) {
+      listContainer.innerHTML = `<div class="error-banner">Error cargando catálogo: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function loadLivingDocDetail(domain) {
+    const viewer = document.getElementById('livingdoc-viewer');
+    const titleEl = document.getElementById('livingdoc-detail-title');
+    const verEl = document.getElementById('livingdoc-detail-version');
+    if (!viewer) return;
+
+    viewer.innerHTML = 'Cargando especificación...';
+
+    try {
+      const res = await fetch(`/api/archive/specs/${encodeURIComponent(domain)}`);
+      if (!res.ok) throw new Error('Especificación viva no encontrada');
+      const data = await res.json();
+
+      if (titleEl) titleEl.textContent = data.entry ? (data.entry.title || data.entry.domain) : domain;
+      if (verEl && data.entry) {
+        verEl.textContent = `${data.entry.total_scenarios || 0} escenarios BDD`;
+        verEl.style.display = 'inline-block';
+      }
+      viewer.textContent = data.content || '// Especificación vacía';
+    } catch (err) {
+      viewer.innerHTML = `<div class="error-banner">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  const btnSyncLivingDoc = document.getElementById('btn-sync-livingdoc');
+  if (btnSyncLivingDoc) {
+    btnSyncLivingDoc.addEventListener('click', async () => {
+      btnSyncLivingDoc.disabled = true;
+      btnSyncLivingDoc.textContent = '⏳ Sincronizando...';
+      try {
+        const res = await fetch('/api/archive/sync', { method: 'POST' });
+        if (!res.ok) throw new Error('Error en sincronización');
+        await loadLivingDocs();
+        btnSyncLivingDoc.textContent = '✓ ¡Sincronizado!';
+        setTimeout(() => {
+          btnSyncLivingDoc.disabled = false;
+          btnSyncLivingDoc.textContent = '↻ Sincronizar Catálogo';
+        }, 2000);
+      } catch (err) {
+        alert('Fallo al sincronizar: ' + err.message);
+        btnSyncLivingDoc.disabled = false;
+        btnSyncLivingDoc.textContent = '↻ Sincronizar Catálogo';
+      }
     });
   }
 

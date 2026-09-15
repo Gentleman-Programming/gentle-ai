@@ -392,3 +392,42 @@ func TestSemanticEndpoints(t *testing.T) {
 	}
 }
 
+func TestArchiveEndpoints(t *testing.T) {
+	svc := NewService("../..")
+	server := NewServer(svc)
+	router := server.Router()
+
+	// 1. GET /api/archive/specs
+	reqSpecs := httptest.NewRequest(http.MethodGet, "/api/archive/specs", nil)
+	rrSpecs := httptest.NewRecorder()
+	router.ServeHTTP(rrSpecs, reqSpecs)
+
+	if rrSpecs.Code != http.StatusOK {
+		t.Fatalf("GET /api/archive/specs retornó %d: %s", rrSpecs.Code, rrSpecs.Body.String())
+	}
+
+	var catalog map[string]interface{}
+	if err := json.Unmarshal(rrSpecs.Body.Bytes(), &catalog); err != nil {
+		t.Fatalf("JSON inválido en /api/archive/specs: %v", err)
+	}
+
+	// 2. POST /api/archive/sync
+	reqSync := httptest.NewRequest(http.MethodPost, "/api/archive/sync", nil)
+	rrSync := httptest.NewRecorder()
+	router.ServeHTTP(rrSync, reqSync)
+
+	if rrSync.Code != http.StatusOK {
+		t.Fatalf("POST /api/archive/sync retornó %d: %s", rrSync.Code, rrSync.Body.String())
+	}
+
+	// 3. GET /api/archive/specs/non-existent-domain (debe retornar 404)
+	reqDetail404 := httptest.NewRequest(http.MethodGet, "/api/archive/specs/non-existent-domain", nil)
+	rrDetail404 := httptest.NewRecorder()
+	router.ServeHTTP(rrDetail404, reqDetail404)
+
+	if rrDetail404.Code != http.StatusNotFound {
+		t.Fatalf("se esperaba 404 para dominio inexistente, se obtuvo %d", rrDetail404.Code)
+	}
+}
+
+

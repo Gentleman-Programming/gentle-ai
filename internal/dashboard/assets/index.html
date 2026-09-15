@@ -47,6 +47,9 @@
       <button class="nav-tab" data-tab="tab-semantic">
         <span class="tab-icon">🧠</span> Semántica & Grafo
       </button>
+      <button class="nav-tab" data-tab="tab-livingdoc">
+        <span class="tab-icon">📚</span> Especificaciones Vivas
+      </button>
     </nav>
 
     <!-- Main Content Container -->
@@ -279,6 +282,52 @@
           <h3 class="subsection-title">📦 Grafo de Dependencias entre Paquetes</h3>
           <div id="semantic-dependencies-container" class="dependencies-container">
             <div class="loading-state">Calculando relaciones de importación...</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 7: ESPECIFICACIONES VIVAS (LIVING DOCS) -->
+      <section id="tab-livingdoc" class="tab-panel">
+        <div class="section-header">
+          <div>
+            <h2>Catálogo Central de Especificaciones Vivas</h2>
+            <p class="description">Especificaciones consolidadas en openspec/specs/ y regeneradas continuamente tras cada archivado.</p>
+          </div>
+          <div class="header-actions">
+            <button id="btn-sync-livingdoc" class="btn btn-primary">↻ Sincronizar Catálogo</button>
+          </div>
+        </div>
+
+        <div class="livingdoc-stats-grid" id="livingdoc-metrics">
+          <div class="metric-card">
+            <span class="metric-label">Dominios Activos</span>
+            <span class="metric-value" id="metric-living-domains">0</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Total Requisitos</span>
+            <span class="metric-value" id="metric-living-reqs">0</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Última Sincronización</span>
+            <span class="metric-value" id="metric-living-sync" style="font-size: 1rem;">--</span>
+          </div>
+        </div>
+
+        <div class="livingdoc-layout" style="margin-top: 1.5rem; display: grid; grid-template-columns: 320px 1fr; gap: 1.5rem;">
+          <div class="card">
+            <h3 class="subsection-title">📖 Dominios de Especificación</h3>
+            <div id="livingdoc-domains-list" class="livingdoc-list" style="margin-top: 1rem;">
+              <div class="loading-state">Cargando catálogo...</div>
+            </div>
+          </div>
+          <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+              <h3 class="subsection-title" id="livingdoc-detail-title">Visor de Especificación Viva</h3>
+              <span id="livingdoc-detail-version" class="badge" style="display:none;"></span>
+            </div>
+            <div id="livingdoc-viewer" class="livingdoc-viewer-box">
+              <p class="empty-state">Selecciona un dominio de la izquierda para visualizar su especificación viva consolidada.</p>
+            </div>
           </div>
         </div>
       </section>

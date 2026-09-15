@@ -52,6 +52,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/semantic/status", s.handleSemanticStatus)
 	s.mux.HandleFunc("/api/semantic/symbols", s.handleSemanticSymbols)
 	s.mux.HandleFunc("/api/semantic/dependencies", s.handleSemanticDependencies)
+	s.mux.HandleFunc("/api/archive/specs", s.handleArchiveSpecs)
+	s.mux.HandleFunc("/api/archive/specs/", s.handleArchiveSpecDetail)
+	s.mux.HandleFunc("/api/archive/sync", s.handleArchiveSync)
 
 	// 2. Servidor de Archivos Estáticos Embebidos
 	subFS, err := fs.Sub(AssetsFS, "assets")
@@ -349,6 +352,54 @@ func (s *Server) handleSemanticDependencies(w http.ResponseWriter, r *http.Reque
 		deps = make([]semantic.DependencyRelation, 0)
 	}
 	s.respondJSON(w, http.StatusOK, deps)
+}
+
+func (s *Server) handleArchiveSpecs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	catalog, err := s.service.GetLivingSpecs(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, catalog)
+}
+
+func (s *Server) handleArchiveSpecDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	domain := strings.TrimPrefix(r.URL.Path, "/api/archive/specs/")
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Dominio de especificación requerido"})
+		return
+	}
+	entry, content, err := s.service.GetLivingSpecDetail(domain)
+	if err != nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"entry":   entry,
+		"content": content,
+	})
+}
+
+func (s *Server) handleArchiveSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	report, err := s.service.SyncLivingDocs(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, report)
 }
 
 func (s *Server) respondJSON(w http.ResponseWriter, code int, data interface{}) {

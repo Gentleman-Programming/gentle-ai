@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/dashboard"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
@@ -49,6 +50,10 @@ COMANDOS:
   semantic status      Diagnostica los conectores semánticos (Serena, CodeGraph, AST) y salud del workspace
   semantic symbols     Consulta y filtra símbolos de código (struct, interface, func, method)
   semantic inspect     Inspecciona el grafo de dependencias entre paquetes del workspace
+  archive sync         Sincroniza y regenera el catálogo maestro openspec/INDEX.md desde openspec/specs/
+  archive list         Lista las especificaciones vivas consolidadas y sus versiones
+  archive show         Muestra el contenido Markdown de una especificación viva por dominio
+  archive coldstart    Sintetiza una especificación viva inicial a partir de un cambio archivado
   ui                   Inicia el servidor local y abre el dashboard web interactivo
   version              Muestra la versión e información de compilación
   help                 Muestra esta ayuda
@@ -184,6 +189,26 @@ func main() {
 			runSemanticInspect(os.Args[3:])
 		default:
 			fmt.Printf("Error: subcomando '%s' no reconocido para semantic. Usa 'axiom semantic [status|symbols|inspect]'.\n", subCmd)
+			os.Exit(1)
+		}
+
+	case "archive":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: subcomando de 'archive' requerido. Opciones: sync, list, show, coldstart")
+			os.Exit(1)
+		}
+		subCmd := os.Args[2]
+		switch subCmd {
+		case "sync":
+			runArchiveSync(os.Args[3:])
+		case "list":
+			runArchiveList(os.Args[3:])
+		case "show":
+			runArchiveShow(os.Args[3:])
+		case "coldstart":
+			runArchiveColdStart(os.Args[3:])
+		default:
+			fmt.Printf("Error: subcomando '%s' no reconocido para archive. Usa 'axiom archive [sync|list|show|coldstart]'.\n", subCmd)
 			os.Exit(1)
 		}
 
@@ -1109,5 +1134,133 @@ func boolToStatus(b bool) string {
 	}
 	return "NO DETECTADO"
 }
+
+func runArchiveSync(args []string) {
+	fs := flag.NewFlagSet("archive sync", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := livingdoc.NewService(baseDir, nil, nil)
+	report, err := svc.Sync(context.Background())
+	if err != nil {
+		fmt.Printf("[ERROR] Fallo al sincronizar especificaciones vivas: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] Sincronización de Especificaciones Vivas completada con éxito.\n")
+	fmt.Printf("  - Total de especificaciones consolidadas: %d\n", report.SpecsCount)
+	fmt.Printf("  - Total de requisitos activos: %d\n", report.RequirementsCount)
+	fmt.Printf("  - Total de escenarios BDD: %d\n", report.ScenariosCount)
+	fmt.Printf("  - Catálogo maestro regenerado: %s\n\n", report.IndexPath)
+}
+
+func runArchiveList(args []string) {
+	fs := flag.NewFlagSet("archive list", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := livingdoc.NewService(baseDir, nil, nil)
+	catalog, err := svc.GetCatalog(context.Background())
+	if err != nil {
+		fmt.Printf("[ERROR] Fallo al obtener catálogo de especificaciones vivas: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(catalog.Specs) == 0 {
+		fmt.Println("\nNo se encontraron especificaciones vivas en openspec/specs/.")
+		fmt.Println("Ejecuta 'axiom archive sync' o 'axiom archive coldstart' para generarlas.")
+		return
+	}
+
+	fmt.Printf("\nCatálogo Maestro de Especificaciones Vivas (%d dominios, %d requisitos totales):\n", len(catalog.Specs), catalog.TotalRequirements)
+	fmt.Printf("%-25s %-12s %-12s %s\n", "DOMINIO", "REQUISITOS", "ESCENARIOS", "TÍTULO")
+	fmt.Println(strings.Repeat("-", 75))
+	for _, d := range catalog.Specs {
+		fmt.Printf("%-25s %-12d %-12d %s\n", d.Domain, len(d.Requirements), d.TotalScenarios, d.Title)
+	}
+	fmt.Println()
+}
+
+func runArchiveShow(args []string) {
+	fs := flag.NewFlagSet("archive show", flag.ExitOnError)
+	domainFlag := fs.String("domain", "", "Dominio de la especificación viva (ej. living-documentation, multi-role-governance)")
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	domain := *domainFlag
+	if domain == "" && len(fs.Args()) > 0 {
+		domain = fs.Args()[0]
+	}
+
+	if domain == "" {
+		fmt.Println("[ERROR] Debes especificar un dominio con --domain <nombre> o como argumento posicional.")
+		os.Exit(1)
+	}
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := livingdoc.NewService(baseDir, nil, nil)
+	entry, content, err := svc.GetSpecDetail(domain)
+	if err != nil {
+		fmt.Printf("[ERROR] %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n=== ESPECIFICACIÓN VIVA: %s ===\n", entry.Title)
+	fmt.Printf("Dominio: %s | Requisitos Activos: %d | Escenarios: %d | Modificado: %s\n\n", entry.Domain, len(entry.Requirements), entry.TotalScenarios, entry.LastModified.Format("2006-01-02 15:04:05"))
+	fmt.Println(content)
+}
+
+func runArchiveColdStart(args []string) {
+	fs := flag.NewFlagSet("archive coldstart", flag.ExitOnError)
+	changeFlag := fs.String("change", "", "Nombre del cambio archivado a promover (ej. 2026-09-15-inc-01-workspace-topology-contracts)")
+	domainFlag := fs.String("domain", "", "Nombre del dominio de destino (opcional, inferido si está vacío)")
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	if *changeFlag == "" {
+		fmt.Println("[ERROR] La bandera --change <nombre> es obligatoria para ejecutar coldstart.")
+		os.Exit(1)
+	}
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := livingdoc.NewService(baseDir, nil, nil)
+	entry, err := svc.ColdStart(*changeFlag, *domainFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] Fallo en la síntesis de Adopción Orgánica (Cold Start): %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("[OK] Adopción Orgánica (Zero-Doc Cold Start) ejecutada exitosamente.")
+	fmt.Printf("  - Cambio fuente: %s\n", *changeFlag)
+	fmt.Printf("  - Dominio vivo: %s\n", entry.Domain)
+	fmt.Printf("  - Requisitos sintetizados: %d\n", len(entry.Requirements))
+	fmt.Printf("  - Escenarios BDD: %d\n", entry.TotalScenarios)
+	fmt.Printf("  - Especificación viva consolidada: %s\n", entry.FilePath)
+	fmt.Println("  - Catálogo maestro INDEX.md actualizado automáticamente.")
+	fmt.Println()
+}
+
 
 

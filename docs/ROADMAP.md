@@ -1,8 +1,8 @@
 # Roadmap de Incrementos — Axiom
 
 > **Visión y Arquitectura:** [AXIOM_ENTERPRISE_VISION.md](architecture/AXIOM_ENTERPRISE_VISION.md)  
-> **Estado General:** Fase 1 — Fundación de la Plataforma e Identidad  
-> **Última Actualización:** 2026-09-14
+> **Estado General:** Fase 1 — Fundación de la Plataforma e Identidad (100% Completada — 7/7 Incrementos Archivados)  
+> **Última Actualización:** 2026-09-15
 
 ---
 
@@ -25,7 +25,7 @@
 | **INC-04** | `axiom-local-web-dashboard` | ✅ Archivado | UI / Experiencia | Servidor HTTP local embebido en Go con dashboard web: tablero de incrementos, estado de roles, visor de handoffs y buzón de skills. |
 | **INC-05** | `autoskills-catalog-and-mining` | ✅ Archivado | Skills / Inteligencia | Catálogo de skills por tecnología detectada (midudev/autoskills) y minería heurística de código local con gobernanza Human-in-the-Loop. |
 | **INC-06** | `semantic-code-serena-codegraph` | ✅ Archivado | Semántica / Herramientas | Conector local con Serena MCP y CodeGraph para navegación y consultas semánticas de código en `Explore` y `Design`. |
-| **INC-07** | `archive-living-documentation-engine` | 📋 Planificado | Documentación / SDD | `Archive` como mantenedor continuo de especificaciones existentes y generador incremental de documentación viva en proyectos no documentados. |
+| **INC-07** | `archive-living-documentation-engine` | ✅ Archivado | Documentación / SDD | `Archive` como mantenedor continuo de especificaciones existentes y generador incremental de documentación viva en proyectos no documentados. |
 
 ---
 
@@ -91,6 +91,21 @@
   4. Subcomandos CLI `axiom semantic status`, `axiom semantic symbols [--query <filtro>] [--kind <tipo>]` y `axiom semantic inspect` en `cmd/axiom/main.go`.
   5. Baterías completas de pruebas unitarias en `internal/semantic/` (3 tests) e `internal/dashboard/` (10 tests) con 100% PASS.
   6. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 11/11 requerimientos, 14/14 escenarios BDD).
+
+### [INC-07] archive-living-documentation-engine (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-15-inc-07-archive-living-documentation-engine/`
+- **Especificación viva:** `openspec/specs/living-documentation/spec.md`
+- **Catálogo maestro:** `openspec/INDEX.md` (35 especificaciones vivas, 254 requerimientos canónicos, 412 escenarios BDD)
+- **Entregables clave:**
+  1. Paquete de dominio Go `internal/livingdoc/`: modelos de catálogo y sincronización (`types.go`), indexador sintáctico determinista de specs y generador de `INDEX.md` (`indexer.go`), motor de adopción orgánica *Zero-Doc Cold Start* (`synthesizer.go`) y capa de servicio del workspace (`service.go`).
+  2. Extensión del servidor y API REST de `internal/dashboard/` con rutas `/api/archive/specs`, `/api/archive/specs/{domain}` y `/api/archive/sync`.
+  3. Panel interactivo en el Dashboard Web SPA (`index.html`, `style.css`, `app.js`) con nueva pestaña "Especificaciones Vivas", métricas agregadas de dominios y requerimientos, selector de especificaciones, visor de Markdown y botón de sincronización reactiva con un clic.
+  4. Subcomandos CLI `axiom archive sync`, `axiom archive list`, `axiom archive show` y `axiom archive coldstart` en `cmd/axiom/main.go`.
+  5. Baterías completas de pruebas unitarias en `internal/livingdoc/` (3 tests) e `internal/dashboard/` (11 tests) con 100% PASS.
+  6. Generación del catálogo maestro inicial `openspec/INDEX.md` integrando los 7 incrementos fundacionales y especificaciones de dominio de la plataforma.
+  7. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 10/10 requerimientos, 13/13 escenarios BDD).
+  8. **HITO HISTÓRICO:** Culminación completa de la Fase 1 del Roadmap de Axiom (7 de 7 incrementos concluidos y archivados).
+
 
 
 

@@ -984,4 +984,72 @@ body {
   background: rgba(99, 102, 241, 0.08);
 }
 
+/* Living Documentation Styles */
+.livingdoc-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.livingdoc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 550px;
+  overflow-y: auto;
+}
+
+.livingdoc-domain-item {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.livingdoc-domain-item:hover {
+  border-color: var(--primary);
+  background: var(--bg-card-hover);
+}
+
+.livingdoc-domain-item.active {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.livingdoc-domain-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.livingdoc-domain-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.livingdoc-domain-reqs {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.livingdoc-viewer-box {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 1.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 600px;
+  overflow-y: auto;
+  color: #e2e8f0;
+}
+
+
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
@@ -23,6 +24,7 @@ type Service struct {
 	rootPath         string
 	autoskillManager *autoskill.Manager
 	semanticService  *semantic.Service
+	livingdocService *livingdoc.Service
 }
 
 // NewService crea una nueva instancia del servicio para el workspace dado.
@@ -34,6 +36,7 @@ func NewService(rootPath string) *Service {
 		rootPath:         rootPath,
 		autoskillManager: autoskill.NewManager(rootPath, nil, nil, nil),
 		semanticService:  semantic.NewService(rootPath, nil, nil),
+		livingdocService: livingdoc.NewService(rootPath, nil, nil),
 	}
 }
 
@@ -431,5 +434,20 @@ func (s *Service) FindSemanticSymbols(query semantic.SemanticQuery) ([]semantic.
 // InspectSemanticDependencies obtiene las relaciones de dependencia entre paquetes.
 func (s *Service) InspectSemanticDependencies(role string) ([]semantic.DependencyRelation, error) {
 	return s.semanticService.InspectDependencies(role)
+}
+
+// GetLivingSpecs obtiene el catálogo maestro de especificaciones vivas.
+func (s *Service) GetLivingSpecs(ctx context.Context) (*livingdoc.LivingCatalog, error) {
+	return s.livingdocService.GetCatalog(ctx)
+}
+
+// GetLivingSpecDetail obtiene el detalle y contenido de una especificación viva por dominio.
+func (s *Service) GetLivingSpecDetail(domain string) (*livingdoc.LivingSpecEntry, string, error) {
+	return s.livingdocService.GetSpecDetail(domain)
+}
+
+// SyncLivingDocs sincroniza y regenera el índice de especificaciones vivas.
+func (s *Service) SyncLivingDocs(ctx context.Context) (*livingdoc.SyncReport, error) {
+	return s.livingdocService.Sync(ctx)
 }
 
