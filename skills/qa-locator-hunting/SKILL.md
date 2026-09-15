@@ -44,18 +44,39 @@ NIVEL 0:
 
 ## NIVEL 1 — Cazar en GitLab vía MCP (solo si falta)
 
-### 1. Mapear dominio → proyecto `erp-mf-*`
+### 1. Resolver el proyecto `erp-mf-*` (catálogo primero)
 
-| Dominio del negocio | Proyecto GitLab candidato |
-|---|---|
-| `comun` / shared (layout, header, tabs, menús) | `erp-mf-comun` |
-| `logistica` (almacenes, kardex, stock) | `erp-mf-logistica` |
-| `puntoventa` (emisiones, caja) | `erp-mf-puntoventa` |
-| `facturacion` (boleta, factura, nota de venta) | `erp-mf-facturacion` |
+1. **Leé el catálogo primero**: `references/erp-mf-catalog.md`, junto a esta skill.
+   Buscá el vocabulario de la consulta en **Términos de dominio** y **Flujo de negocio**.
+   Es un atajo de direcciones, **no** una fuente de verdad.
+2. **Si hay una fila clara**: usá su `slug` como candidato y confirmalo en vivo con el MCP
+   de GitLab (`search_projects`) antes de leer archivos — el nombre real puede llevar
+   sufijos (`-web`, `-app`, `-frontend`).
+3. **Si no hay fila, hay dos o más filas plausibles, o `search_projects` no encuentra ese
+   slug (renombrado/404)**: resolvé desde cero con `search_projects` usando el término de
+   negocio. El catálogo nunca bloquea la caza.
+4. **Si no hay MCP de GitLab disponible**: el catálogo queda como pista de lectura; seguí
+   al NIVEL 2 o al fallback honesto. Nunca inventes el proyecto ni el selector.
 
-2. **Confirma el proyecto exacto** en el grupo SmartClic vía MCP de GitLab
-   (`gitlab_*` / listado de proyectos): el nombre real puede llevar sufijos
-   (`-web`, `-app`, `-frontend`); no asumas el nombre.
+**Reglas vinculantes del catálogo**
+
+- **D1 — GitLab en vivo siempre gana.** Ante cualquier conflicto entre el catálogo y
+  `search_projects`, el resultado en vivo es el autoritativo.
+- **D2 — El catálogo es pista, nunca compuerta.** Fila faltante, ambigua o slug 404 ⇒
+  fallback obligatorio a `search_projects`; nunca abortes la caza por el catálogo.
+- **D3 — El drift se reporta, nunca se absorbe en silencio.** Cuando GitLab contradiga una
+  fila, hacé **las dos cosas**:
+  1. **Nota en la respuesta** (obligatoria, aunque Engram falle), con este formato:
+     `Drift de catálogo: la fila `{slug}` dice `{valor_catalogo}`, GitLab en vivo dice
+     `{valor_vivo}`. Usé el valor en vivo (D1). Corregir la fila en el repo gentle-ai.`
+  2. **Registro durable en Engram** con `mem_save`, `topic_key`
+     `qa/erp-mf-catalog/drift/{slug}`, `type: "discovery"`, `scope: "personal"`,
+     `capture_prompt: false`, y el contenido **What/Why/Where/Learned** descrito en el
+     encabezado del catálogo.
+  No edites el catálogo vos mismo: la copia instalada vive fuera del repo y hay dos copias
+  que deben cambiar juntas. Reportá y registrá; la corrección la hace un mantenedor.
+- Las filas marcadas `Verificado: unverified` nunca fueron confirmadas en vivo: tratá su
+  slug como hipótesis y confirmalo siempre con `search_projects` cuando el MCP esté.
 
 ### 2. Localizar el componente
 
