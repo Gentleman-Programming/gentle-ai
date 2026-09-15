@@ -445,10 +445,14 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 12 {
-		t.Fatalf("opencode commands count = %d, want 12", len(commandEntries))
+	if len(commandEntries) != 17 {
+		t.Fatalf("opencode commands count = %d, want 17", len(commandEntries))
 	}
-	wantCommands := map[string]bool{"skill-creator.md": true, "skill-registry.md": true}
+	wantCommands := map[string]bool{
+		"skill-creator.md": true, "skill-registry.md": true,
+		"qa-supervisor.md": true, "qa-locator-hunting.md": true,
+		"qa-doc-access.md": true, "qa-doc-reference.md": true, "qa-evidence.md": true,
+	}
 	for _, entry := range commandEntries {
 		delete(wantCommands, entry.Name())
 	}
