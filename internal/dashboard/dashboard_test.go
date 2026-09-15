@@ -262,3 +262,82 @@ Proceder con tasks.
 		t.Errorf("resumen = %q", ho.Sections.ExecutiveSummary)
 	}
 }
+
+func TestSkillsInboxEndpoints(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Crear una propuesta en el buzón dentro de tmpDir
+	inboxFolder := filepath.Join(tmpDir, ".axiom", "skills", "inbox", "sample-skill")
+	if err := os.MkdirAll(inboxFolder, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(inboxFolder, "SKILL.md"), []byte("# Sample Skill\n\nContenido prueba"), 0644)
+	metaJSON := `{"name":"sample-skill","origin":"mined","verified":true}`
+	_ = os.WriteFile(filepath.Join(inboxFolder, "metadata.json"), []byte(metaJSON), 0644)
+
+	svc := NewService(tmpDir)
+	server := NewServer(svc)
+	router := server.Router()
+
+	// 1. GET /api/skills/inbox
+	reqGet := httptest.NewRequest(http.MethodGet, "/api/skills/inbox", nil)
+	rrGet := httptest.NewRecorder()
+	router.ServeHTTP(rrGet, reqGet)
+
+	if rrGet.Code != http.StatusOK {
+		t.Fatalf("GET /api/skills/inbox retornó %d", rrGet.Code)
+	}
+
+	var proposals []SkillProposalDTO
+	if err := json.NewDecoder(rrGet.Body).Decode(&proposals); err != nil {
+		t.Fatalf("error decodificando respuesta de inbox: %v", err)
+	}
+	if len(proposals) != 1 || proposals[0].Name != "sample-skill" {
+		t.Fatalf("esperada 1 propuesta con nombre 'sample-skill', obtenidas: %+v", proposals)
+	}
+
+	// 2. POST /api/skills/approve
+	approveBody := `{"name":"sample-skill"}`
+	reqApprove := httptest.NewRequest(http.MethodPost, "/api/skills/approve", strings.NewReader(approveBody))
+	rrApprove := httptest.NewRecorder()
+	router.ServeHTTP(rrApprove, reqApprove)
+
+	if rrApprove.Code != http.StatusOK {
+		t.Fatalf("POST /api/skills/approve retornó %d: %s", rrApprove.Code, rrApprove.Body.String())
+	}
+
+	// Verificar que se instaló en skills/
+	installedPath := filepath.Join(tmpDir, "skills", "sample-skill", "SKILL.md")
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		t.Errorf("la skill aprobada no existe en %s", installedPath)
+	}
+
+	// 3. Crear otra propuesta y probar POST /api/skills/reject
+	rejectFolder := filepath.Join(tmpDir, ".axiom", "skills", "inbox", "reject-skill")
+	_ = os.MkdirAll(rejectFolder, 0755)
+	_ = os.WriteFile(filepath.Join(rejectFolder, "SKILL.md"), []byte("# Reject"), 0644)
+
+	rejectBody := `{"name":"reject-skill"}`
+	reqReject := httptest.NewRequest(http.MethodPost, "/api/skills/reject", strings.NewReader(rejectBody))
+	rrReject := httptest.NewRecorder()
+	router.ServeHTTP(rrReject, reqReject)
+
+	if rrReject.Code != http.StatusOK {
+		t.Fatalf("POST /api/skills/reject retornó %d: %s", rrReject.Code, rrReject.Body.String())
+	}
+
+	if _, err := os.Stat(rejectFolder); !os.IsNotExist(err) {
+		t.Errorf("la propuesta rechazada todavía existe en el buzón")
+	}
+
+	// 4. POST /api/skills/scan
+	scanBody := `{"offline":true}`
+	reqScan := httptest.NewRequest(http.MethodPost, "/api/skills/scan", strings.NewReader(scanBody))
+	rrScan := httptest.NewRecorder()
+	router.ServeHTTP(rrScan, reqScan)
+
+	if rrScan.Code != http.StatusOK {
+		t.Fatalf("POST /api/skills/scan retornó %d: %s", rrScan.Code, rrScan.Body.String())
+	}
+}
+

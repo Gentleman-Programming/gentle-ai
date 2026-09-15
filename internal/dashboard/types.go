@@ -57,3 +57,24 @@ type SkillDTO struct {
 	Description string `json:"description"`
 	Trigger     string `json:"trigger,omitempty"`
 }
+
+// SkillProposalDTO representa una propuesta pendiente de aprobación en el buzón transitorio.
+type SkillProposalDTO struct {
+	Name          string            `json:"name"`
+	Origin        string            `json:"origin"`
+	Source        string            `json:"source"`
+	Verified      bool              `json:"verified"`
+	Role          string            `json:"role,omitempty"`
+	DetectedBy    string            `json:"detected_by"`
+	Justification string            `json:"justification"`
+	CreatedAt     string            `json:"created_at"`
+	SkillMD       string            `json:"skill_md"`
+	SHA256        map[string]string `json:"sha256,omitempty"`
+}
+
+// SkillActionDTO modela las solicitudes de escaneo, aprobación o rechazo de skills.
+type SkillActionDTO struct {
+	Name    string `json:"name,omitempty"`
+	Role    string `json:"role,omitempty"`
+	Offline bool   `json:"offline,omitempty"`
+}

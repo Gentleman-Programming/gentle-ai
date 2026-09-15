@@ -2,13 +2,16 @@ package dashboard
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
@@ -16,7 +19,8 @@ import (
 
 // Service provee la lógica de lectura y agregación del estado de Axiom.
 type Service struct {
-	rootPath string
+	rootPath         string
+	autoskillManager *autoskill.Manager
 }
 
 // NewService crea una nueva instancia del servicio para el workspace dado.
@@ -24,7 +28,10 @@ func NewService(rootPath string) *Service {
 	if rootPath == "" {
 		rootPath = "."
 	}
-	return &Service{rootPath: rootPath}
+	return &Service{
+		rootPath:         rootPath,
+		autoskillManager: autoskill.NewManager(rootPath, nil, nil, nil),
+	}
 }
 
 // GetWorkspace obtiene la información del espacio de trabajo y su estado de cumplimiento.
@@ -364,3 +371,47 @@ func readFileString(p string) (string, error) {
 	}
 	return string(b), nil
 }
+
+// GetSkillsInbox retorna las propuestas pendientes de revisión en el buzón transitorio.
+func (s *Service) GetSkillsInbox() ([]SkillProposalDTO, error) {
+	proposals, err := s.autoskillManager.ListInbox()
+	if err != nil {
+		return nil, err
+	}
+
+	var dtos []SkillProposalDTO
+	for _, p := range proposals {
+		dtos = append(dtos, SkillProposalDTO{
+			Name:          p.Metadata.Name,
+			Origin:        string(p.Metadata.Origin),
+			Source:        p.Metadata.Source,
+			Verified:      p.Metadata.Verified,
+			Role:          p.Metadata.Role,
+			DetectedBy:    p.Metadata.DetectedBy,
+			Justification: p.Metadata.Justification,
+			CreatedAt:     p.Metadata.CreatedAt.Format(time.RFC3339),
+			SkillMD:       p.SkillMD,
+			SHA256:        p.Metadata.SHA256,
+		})
+	}
+	if dtos == nil {
+		dtos = make([]SkillProposalDTO, 0)
+	}
+	return dtos, nil
+}
+
+// ScanSkills ejecuta el escaneo de tecnologías y minería heurística depositando candidatos en el buzón.
+func (s *Service) ScanSkills(ctx context.Context, role string, offline bool) (*autoskill.ScanReport, error) {
+	return s.autoskillManager.Scan(ctx, role, offline)
+}
+
+// ApproveSkill aprueba y promociona una skill del buzón a skills/.
+func (s *Service) ApproveSkill(name string) error {
+	return s.autoskillManager.Approve(name)
+}
+
+// RejectSkill descarta y purga una propuesta del buzón.
+func (s *Service) RejectSkill(name string) error {
+	return s.autoskillManager.Reject(name)
+}
+

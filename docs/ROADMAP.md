@@ -23,7 +23,7 @@
 | **INC-02** | `structured-handoffs-lifecycle` | ✅ Archivado | Core SDD / Workflow | Esquema canónico `handoff.md`, motor Go `internal/handoff`, subcomandos CLI `axiom handoff show/create/validate` y espejo Engram. |
 | **INC-03** | `multi-role-sdd-fan-out` | ✅ Archivado | Core SDD / Roles | Concurrencia de roles en `Design`, `tasks.<rol>.md`, políticas de compuerta (`blocking`/`deferred`), barrera de sincronización y migración diferida de tareas acumulativas. |
 | **INC-04** | `axiom-local-web-dashboard` | ✅ Archivado | UI / Experiencia | Servidor HTTP local embebido en Go con dashboard web: tablero de incrementos, estado de roles, visor de handoffs y buzón de skills. |
-| **INC-05** | `autoskills-catalog-and-mining` | 📋 Planificado | Skills / Inteligencia | Catálogo de skills por tecnología detectada y minería heurística de código por repositorio con pantalla de aprobación humana previa. |
+| **INC-05** | `autoskills-catalog-and-mining` | ✅ Archivado | Skills / Inteligencia | Catálogo de skills por tecnología detectada (midudev/autoskills) y minería heurística de código local con gobernanza Human-in-the-Loop. |
 | **INC-06** | `semantic-code-serena-codegraph` | 📋 Planificado | Semántica / Herramientas | Conector local con Serena MCP y CodeGraph para navegación y consultas semánticas de código en `Explore` y `Design`. |
 | **INC-07** | `archive-living-documentation-engine` | 📋 Planificado | Documentación / SDD | `Archive` como mantenedor continuo de especificaciones existentes y generador incremental de documentación viva en proyectos no documentados. |
 
@@ -67,7 +67,19 @@
   1. Paquete Go `internal/dashboard/`: servidor HTTP `net/http` con router REST JSON (`/api/workspace`, `/api/increments`, `/api/increments/{name}`, `/api/roles`, `/api/handoffs`, `/api/skills`), capa de servicio agregadora y fallback automático ante puertos ocupados.
   2. Frontend SPA responsivo en `internal/dashboard/assets/` (`index.html`, `style.css`, `app.js`) embebido directamente en el binario Go mediante `//go:embed` con cero dependencias de NodeJS o NPM.
   3. Subcomando CLI `axiom ui` con banderas `--port`, `--no-browser` y `--path`, apertura automática del navegador del sistema operativo y *graceful shutdown* con `Ctrl+C`.
-  4. Batería de 8 pruebas unitarias con 100% PASS en `internal/dashboard/`.
+  4. Batería de 9 pruebas unitarias con 100% PASS en `internal/dashboard/`.
   5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 8/8 requerimientos, 15/15 escenarios BDD).
+
+### [INC-05] autoskills-catalog-and-mining (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-14-inc-05-autoskills-catalog-and-mining/`
+- **Especificación viva:** `openspec/specs/autoskills/spec.md`
+- **Entregables clave:**
+  1. Paquete de dominio Go `internal/autoskill/`: catálogo de tecnologías (`SKILLS_MAP`), cliente HTTP nativo con verificación criptográfica **SHA-256** contra el registro oficial de `midudev/autoskills`, motor de detección multi-rol, analizador heurístico de código local (`table-driven-tests`, `internal-layering`, `idiomatic-error-wrapping`) y gestor de buzón transitorio (`.axiom/skills/inbox/`).
+  2. Extensión del servidor y API REST de `internal/dashboard/` con rutas `/api/skills/inbox`, `/api/skills/scan`, `/api/skills/approve` y `/api/skills/reject`.
+  3. Panel interactivo en el Dashboard Web SPA (`index.html`, `style.css`, `app.js`) con insignias visuales de procedencia (`midudev auditado` vs `minería local`), validación SHA-256, visor de directrices y botones de aprobación/rechazo en un clic.
+  4. Subcomandos CLI `axiom skill scan`, `axiom skill list [--inbox]`, `axiom skill approve <nombre>` y `axiom skill reject <nombre>` en `cmd/axiom/main.go`.
+  5. Baterías completas de pruebas unitarias en `internal/autoskill/` (5 tests) e `internal/dashboard/` (9 tests) con 100% PASS.
+  6. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 13/13 requerimientos, 17/17 escenarios BDD).
+
 
 

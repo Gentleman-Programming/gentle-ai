@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/dashboard"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
@@ -40,6 +41,10 @@ COMANDOS:
   role list            Lista los roles asignados en el diseño y su política de compuerta
   role status          Muestra el progreso de tareas y verificación de cada rol
   role barrier         Evalúa la barrera de sincronización multi-rol antes de archivar o abrir PR
+  skill scan           Detecta tecnologías y mina patrones locales, depositando candidatos en el buzón
+  skill list           Lista las skills activas o propuestas pendientes en el buzón transitorio (--inbox)
+  skill approve        Aprueba e instala formalmente una skill desde el buzón transitorio a skills/
+  skill reject         Descarta y purga una propuesta del buzón transitorio
   ui                   Inicia el servidor local y abre el dashboard web interactivo
   version              Muestra la versión e información de compilación
   help                 Muestra esta ayuda
@@ -55,9 +60,14 @@ Ejemplos:
   axiom role list --change inc-03-multi-role-sdd-fan-out
   axiom role status --change inc-03-multi-role-sdd-fan-out
   axiom role barrier --change inc-03-multi-role-sdd-fan-out --migrate-deferred
+  axiom skill scan
+  axiom skill list --inbox
+  axiom skill approve react-best-practices
+  axiom skill reject react-best-practices
 `
 	fmt.Print(help)
 }
+
 
 func printVersion() {
 	fmt.Printf("%s version %s (%s/%s) commit:%s\n", Platform, Version, runtime.GOOS, runtime.GOARCH, GitCommit)
@@ -133,8 +143,30 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "skill":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: subcomando de 'skill' requerido. Opciones: scan, list, approve, reject")
+			os.Exit(1)
+		}
+
+		subCmd := os.Args[2]
+		switch subCmd {
+		case "scan":
+			runSkillScan(os.Args[3:])
+		case "list":
+			runSkillList(os.Args[3:])
+		case "approve":
+			runSkillApprove(os.Args[3:])
+		case "reject":
+			runSkillReject(os.Args[3:])
+		default:
+			fmt.Printf("Error: subcomando '%s' no reconocido para skill. Usa 'axiom skill [scan|list|approve|reject]'.\n", subCmd)
+			os.Exit(1)
+		}
+
 	case "ui":
 		runUI(os.Args[2:])
+
 
 	default:
 		fmt.Printf("Error: comando '%s' no reconocido.\n\n", arg1)
@@ -715,4 +747,209 @@ func openBrowser(url string) error {
 	}
 	return cmd.Start()
 }
+
+func runSkillScan(args []string) {
+	fs := flag.NewFlagSet("skill scan", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta maestra del espacio de trabajo")
+	roleFlag := fs.String("role", "", "Filtrar escaneo por un rol específico")
+	offlineFlag := fs.Bool("offline", false, "Operar sin consultar la red, utilizando solo caché local y minería")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error obteniendo ruta absoluta: %v\n", err)
+		os.Exit(1)
+	}
+
+	manager := autoskill.NewManager(baseDir, nil, nil, nil)
+	fmt.Println("================================================================================")
+	fmt.Println("       Axiom — Escaneo de Autoskills & Minería Heurística de Repositorio")
+	fmt.Println("================================================================================")
+	fmt.Printf("  Espacio de Trabajo: %s\n", baseDir)
+	if *roleFlag != "" {
+		fmt.Printf("  Rol objetivo:       %s\n", *roleFlag)
+	}
+	modeStr := "Online (Registro midudev/autoskills & Minería)"
+	if *offlineFlag {
+		modeStr = "Offline (Caché & Minería)"
+	}
+	fmt.Printf("  Modo:               %s\n", modeStr)
+	fmt.Println("  Analizando dependencias, configuraciones y código fuente...")
+	fmt.Println("--------------------------------------------------------------------------------")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	report, err := manager.Scan(ctx, *roleFlag, *offlineFlag)
+	if err != nil {
+		fmt.Printf("\nError ejecutando escaneo: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("  Tecnologías Detectadas: %s\n", strings.Join(report.DetectedTechnologies, ", "))
+	fmt.Printf("  Nuevas Skills Propuestas: %d (%d de midudev auditado, %d de minería local)\n",
+		len(report.SkillsProposed), report.RegistrySkillsCount, report.MinedSkillsCount)
+	fmt.Printf("  Total en Buzón Transitorio: %d\n", report.TotalInInbox)
+
+	if len(report.SkillsProposed) > 0 {
+		fmt.Println("\nPropuestas añadidas al buzón (.axiom/skills/inbox/):")
+		for _, p := range report.SkillsProposed {
+			verifiedStr := "[SHA-256 VERIFICADO]"
+			if !p.Metadata.Verified {
+				verifiedStr = "[SIN VERIFICAR]"
+			}
+			fmt.Printf("  • %-30s | Origen: %-8s | %s | %s\n",
+				p.Metadata.Name, p.Metadata.Origin, verifiedStr, p.Metadata.Justification)
+		}
+		fmt.Println("\nPara revisar y aprobar una skill:")
+		fmt.Println("  axiom skill approve <nombre>")
+	} else {
+		fmt.Println("\nNo se detectaron nuevas directrices para añadir al buzón.")
+	}
+	fmt.Println("================================================================================")
+}
+
+func runSkillList(args []string) {
+	fs := flag.NewFlagSet("skill list", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta maestra del espacio de trabajo")
+	inboxFlag := fs.Bool("inbox", false, "Listar las propuestas pendientes en el buzón transitorio en lugar de las skills activas")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error obteniendo ruta absoluta: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *inboxFlag {
+		manager := autoskill.NewManager(baseDir, nil, nil, nil)
+		inbox, err := manager.ListInbox()
+		if err != nil {
+			fmt.Printf("Error leyendo buzón: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Println("            Axiom — Buzón de Propuestas Transitorias (.axiom/skills/inbox/)")
+		fmt.Println("================================================================================")
+		if len(inbox) == 0 {
+			fmt.Println("El buzón está vacío. Ejecuta 'axiom skill scan' para detectar directrices.")
+			fmt.Println("================================================================================")
+			return
+		}
+
+		fmt.Printf("%-28s %-10s %-20s %-12s %s\n", "NOMBRE", "ORIGEN", "INTEGRIDAD", "ROL", "JUSTIFICACIÓN")
+		fmt.Println("--------------------------------------------------------------------------------")
+		for _, p := range inbox {
+			ver := "OK (SHA-256)"
+			if !p.Metadata.Verified {
+				ver = "NO VERIFICADO"
+			}
+			role := p.Metadata.Role
+			if role == "" {
+				role = "core"
+			}
+			fmt.Printf("%-28s %-10s %-20s %-12s %s\n",
+				p.Metadata.Name, p.Metadata.Origin, ver, role, p.Metadata.Justification)
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println("Usa 'axiom skill approve <nombre>' para instalar en skills/ o 'axiom skill reject <nombre>' para descartar.")
+		fmt.Println("================================================================================")
+	} else {
+		svc := dashboard.NewService(baseDir)
+		skills, err := svc.GetSkills()
+		if err != nil {
+			fmt.Printf("Error listando skills: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Println("                  Axiom — Catálogo de Skills Activas (skills/)")
+		fmt.Println("================================================================================")
+		if len(skills) == 0 {
+			fmt.Println("No hay skills instaladas en skills/.")
+			fmt.Println("================================================================================")
+			return
+		}
+
+		fmt.Printf("%-32s %-30s %s\n", "NOMBRE", "RUTA", "DESCRIPCIÓN")
+		fmt.Println("--------------------------------------------------------------------------------")
+		for _, s := range skills {
+			desc := s.Description
+			if len(desc) > 40 {
+				desc = desc[:37] + "..."
+			}
+			fmt.Printf("%-32s %-30s %s\n", s.Name, s.Path, desc)
+		}
+		fmt.Println("================================================================================")
+	}
+}
+
+func runSkillApprove(args []string) {
+	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
+		fmt.Println("Uso: axiom skill approve <nombre-de-skill> [--path <directorio>]")
+		os.Exit(1)
+	}
+
+	skillName := args[0]
+	fs := flag.NewFlagSet("skill approve", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta maestra del espacio de trabajo")
+	if err := fs.Parse(args[1:]); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	manager := autoskill.NewManager(baseDir, nil, nil, nil)
+	if err := manager.Approve(skillName); err != nil {
+		fmt.Printf("Error al aprobar skill '%s': %v\n", skillName, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n✓ Éxito: Skill '%s' aprobada e instalada en skills/%s/SKILL.md\n", skillName, skillName)
+	fmt.Println("La directriz queda disponible de inmediato para todos los agentes y desarrolladores de Axiom.")
+}
+
+func runSkillReject(args []string) {
+	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
+		fmt.Println("Uso: axiom skill reject <nombre-de-skill> [--path <directorio>]")
+		os.Exit(1)
+	}
+
+	skillName := args[0]
+	fs := flag.NewFlagSet("skill reject", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta maestra del espacio de trabajo")
+	if err := fs.Parse(args[1:]); err != nil {
+		fmt.Printf("Error al analizar banderas: %v\n", err)
+		os.Exit(1)
+	}
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	manager := autoskill.NewManager(baseDir, nil, nil, nil)
+	if err := manager.Reject(skillName); err != nil {
+		fmt.Printf("Error al descartar propuesta '%s': %v\n", skillName, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n✓ Éxito: Propuesta '%s' descartada y purgada del buzón transitorio.\n\n", skillName)
+}
+
 

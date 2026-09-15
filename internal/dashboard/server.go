@@ -43,6 +43,10 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/roles", s.handleRoles)
 	s.mux.HandleFunc("/api/handoffs", s.handleHandoffs)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
+	s.mux.HandleFunc("/api/skills/inbox", s.handleSkillsInbox)
+	s.mux.HandleFunc("/api/skills/scan", s.handleSkillsScan)
+	s.mux.HandleFunc("/api/skills/approve", s.handleSkillsApprove)
+	s.mux.HandleFunc("/api/skills/reject", s.handleSkillsReject)
 
 	// 2. Servidor de Archivos Estáticos Embebidos
 	subFS, err := fs.Sub(AssetsFS, "assets")
@@ -213,6 +217,83 @@ func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
 	}
 	s.respondJSON(w, http.StatusOK, skills)
 }
+
+func (s *Server) handleSkillsInbox(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	proposals, err := s.service.GetSkillsInbox()
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, proposals)
+}
+
+func (s *Server) handleSkillsScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SkillActionDTO
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	report, err := s.service.ScanSkills(r.Context(), req.Role, req.Offline)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleSkillsApprove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SkillActionDTO
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "Campo 'name' es requerido en el cuerpo JSON", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.service.ApproveSkill(req.Name); err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, map[string]string{
+		"status":  "approved",
+		"message": fmt.Sprintf("Skill '%s' aprobada e instalada con éxito", req.Name),
+	})
+}
+
+func (s *Server) handleSkillsReject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SkillActionDTO
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "Campo 'name' es requerido en el cuerpo JSON", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.service.RejectSkill(req.Name); err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, map[string]string{
+		"status":  "rejected",
+		"message": fmt.Sprintf("Propuesta '%s' descartada del buzón", req.Name),
+	})
+}
+
 
 func (s *Server) respondJSON(w http.ResponseWriter, code int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

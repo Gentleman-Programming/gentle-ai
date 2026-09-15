@@ -90,7 +90,8 @@ document.addEventListener('DOMContentLoaded', () => {
     await Promise.all([
       loadWorkspace(),
       loadIncrements(),
-      loadSkills()
+      loadSkills(),
+      loadSkillsInbox()
     ]);
   }
 
@@ -423,6 +424,187 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // 6. Cargar Buzón de Autoskills (Human-in-the-Loop)
+  const inboxContainer = document.getElementById('inbox-container');
+  const inboxCountEl = document.getElementById('inbox-count');
+  const btnScanSkills = document.getElementById('btn-scan-skills');
+  const scanFeedback = document.getElementById('scan-feedback');
+
+  if (btnScanSkills) {
+    btnScanSkills.addEventListener('click', () => {
+      triggerScanSkills();
+    });
+  }
+
+  async function loadSkillsInbox() {
+    if (!inboxContainer) return;
+    try {
+      const res = await fetch('/api/skills/inbox');
+      if (!res.ok) throw new Error('Fallo al obtener buzón de skills');
+      const proposals = await res.json() || [];
+
+      if (inboxCountEl) {
+        inboxCountEl.textContent = `${proposals.length} pendiente${proposals.length === 1 ? '' : 's'}`;
+      }
+
+      inboxContainer.innerHTML = '';
+      if (proposals.length === 0) {
+        inboxContainer.innerHTML = '<p class="empty-state">No hay propuestas pendientes en el buzón transitorio. Pulsa "⚡ Escanear Tecnologías & Minar" para detectar directrices.</p>';
+        return;
+      }
+
+      proposals.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'inbox-card';
+
+        const originClass = p.origin === 'midudev' ? 'badge-origin-midudev' : 'badge-origin-mined';
+        const originLabel = p.origin === 'midudev' ? 'midudev (auditado)' : 'minería local';
+        const verifiedBadge = p.verified ? '<span class="badge-verified" title="Hash criptográfico verificado contra registro oficial">✓ SHA-256 Verificado</span>' : '';
+
+        card.innerHTML = `
+          <div>
+            <div class="card-header">
+              <div class="card-title">${escapeHtml(p.name)}</div>
+              <span class="badge ${originClass}">${originLabel}</span>
+            </div>
+            <div style="margin: 0.5rem 0; display: flex; gap: 0.5rem; align-items: center;">
+              ${verifiedBadge}
+              ${p.role ? `<span class="badge badge-tech">Rol: ${escapeHtml(p.role)}</span>` : ''}
+            </div>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0;">
+              ${escapeHtml(p.justification || 'Directriz recomendada')}
+            </p>
+          </div>
+          <div>
+            <div style="margin-bottom: 0.75rem;">
+              <button class="btn btn-secondary btn-preview-skill" style="width: 100%; font-size: 0.75rem;">
+                👁️ Ver contenido SKILL.md
+              </button>
+            </div>
+            <div class="inbox-actions">
+              <button class="btn-approve" data-name="${escapeHtml(p.name)}">✓ Aprobar & Instalar</button>
+              <button class="btn-reject" data-name="${escapeHtml(p.name)}">✕ Descartar</button>
+            </div>
+          </div>
+        `;
+
+        card.querySelector('.btn-preview-skill').addEventListener('click', () => {
+          showSkillPreview(p);
+        });
+
+        card.querySelector('.btn-approve').addEventListener('click', () => {
+          approveSkillProposal(p.name);
+        });
+
+        card.querySelector('.btn-reject').addEventListener('click', () => {
+          rejectSkillProposal(p.name);
+        });
+
+        inboxContainer.appendChild(card);
+      });
+    } catch (err) {
+      console.error(err);
+      if (inboxContainer) {
+        inboxContainer.innerHTML = '<p class="empty-state text-danger">Error consultando buzón transitorio.</p>';
+      }
+    }
+  }
+
+  async function triggerScanSkills() {
+    if (!btnScanSkills) return;
+    btnScanSkills.disabled = true;
+    btnScanSkills.textContent = '⏳ Escaneando & Minando...';
+    if (scanFeedback) {
+      scanFeedback.classList.remove('hidden');
+      scanFeedback.innerHTML = '🔍 Analizando stack tecnológico, dependencias y patrones idiomáticos del repositorio...';
+    }
+
+    try {
+      const res = await fetch('/api/skills/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ offline: false })
+      });
+
+      if (!res.ok) throw new Error('Error ejecutando escaneo de autoskills');
+      const report = await res.json();
+
+      if (scanFeedback) {
+        scanFeedback.innerHTML = `<strong>✓ Escaneo completado:</strong> Detectadas ${report.detected_technologies ? report.detected_technologies.join(', ') : 'tecnologías'}. ${report.skills_proposed ? report.skills_proposed.length : 0} nuevas propuestas añadidas al buzón (Total pendientes: ${report.total_in_inbox || 0}).`;
+      }
+
+      await Promise.all([loadSkillsInbox(), loadSkills()]);
+    } catch (err) {
+      console.error(err);
+      if (scanFeedback) {
+        scanFeedback.innerHTML = `<span class="text-danger">Error durante el escaneo: ${err.message}</span>`;
+      }
+    } finally {
+      btnScanSkills.disabled = false;
+      btnScanSkills.textContent = '⚡ Escanear Tecnologías & Minar';
+    }
+  }
+
+  async function approveSkillProposal(name) {
+    if (!confirm(`¿Deseas aprobar e instalar formalmente la skill '${name}' en skills/?`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/skills/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Fallo al aprobar skill');
+      }
+
+      await Promise.all([loadSkillsInbox(), loadSkills()]);
+    } catch (err) {
+      alert(`Error aprobando skill: ${err.message}`);
+    }
+  }
+
+  async function rejectSkillProposal(name) {
+    if (!confirm(`¿Deseas descartar la propuesta de skill '${name}' del buzón?`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/skills/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Fallo al descartar propuesta');
+      }
+
+      await loadSkillsInbox();
+    } catch (err) {
+      alert(`Error descartando propuesta: ${err.message}`);
+    }
+  }
+
+  function showSkillPreview(p) {
+    modalTitle.textContent = `Previsualización: ${p.name} (Origen: ${p.origin})`;
+    modalContent.innerHTML = `
+      <div style="margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-elevated); border-radius: 4px;">
+        <p><strong>Justificación:</strong> ${escapeHtml(p.justification)}</p>
+        <p><strong>Fuente:</strong> <code>${escapeHtml(p.source || 'n/a')}</code></p>
+        <p><strong>Integridad SHA-256:</strong> ${p.verified ? '<span class="text-success">Verificado con éxito</span>' : '<span class="text-danger">Sin verificación</span>'}</p>
+      </div>
+      <h4>Contenido SKILL.md:</h4>
+      <pre>${escapeHtml(p.skill_md || 'Sin contenido')}</pre>
+    `;
+    modal.classList.remove('hidden');
+  }
+
   function escapeHtml(str) {
     if (!str) return '';
     return str
@@ -433,3 +615,4 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/'/g, "&#039;");
   }
 });
+

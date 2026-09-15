@@ -185,13 +185,31 @@
       <section id="tab-skills" class="tab-panel">
         <div class="section-header">
           <div>
-            <h2>Catálogo de Skills Técnicas y de Flujo</h2>
-            <p class="description">Instrucciones y heurísticas curadas disponibles para agentes y desarrolladores.</p>
+            <h2>Catálogo de Skills & Buzón de Autoskills</h2>
+            <p class="description">Gobernanza Human-in-the-Loop con catálogo auditado de midudev/autoskills y minería heurística local.</p>
+          </div>
+          <div>
+            <button id="btn-scan-skills" class="btn btn-primary" title="Detectar tecnologías del stack y minar patrones locales">
+              ⚡ Escanear Tecnologías & Minar
+            </button>
           </div>
         </div>
 
+        <!-- Buzón de Propuestas (Human-in-the-Loop) -->
+        <div class="inbox-section">
+          <div class="inbox-header">
+            <h3>📥 Buzón de Propuestas Pendientes de Aprobación</h3>
+            <span class="inbox-count-badge" id="inbox-count">0 pendientes</span>
+          </div>
+          <div id="scan-feedback" class="scan-feedback hidden"></div>
+          <div class="inbox-grid" id="inbox-container">
+            <div class="loading-state">Consultando buzón de propuestas...</div>
+          </div>
+        </div>
+
+        <h3 class="subsection-title" style="margin-top: 2rem;">⚡ Skills Activas en Producción (skills/)</h3>
         <div class="skills-grid" id="skills-container">
-          <div class="loading-state">Escaneando catálogo de skills...</div>
+          <div class="loading-state">Escaneando catálogo de skills activas...</div>
         </div>
       </section>
     </main>
