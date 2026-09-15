@@ -194,30 +194,27 @@ func TestRuntimeLedgerLegacyChainWithoutGrantsReplaysUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	started, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: "", RequestID: "legacy-begin-1", WorkUnit: "legacy-scope",
-		EvidenceGoal: "prove grant-free chains replay unchanged", MaxAttempts: 2, MaxChangedLines: 100,
-	})
+	// An old record is authenticated by its original byte hash, but no attempt
+	// fields are projected or interpreted as current launch policy.
+	record := runtimeRecord{Schema: runtimeRecordSchema, Change: store.Change, Operation: "attempt/begin", RequestID: "legacy-begin-1", RequestDigest: runtimeTestHash('1'), Begin: json.RawMessage(`{"historical_attempt":true}`)}
+	revision, payload, err := runtimeRecordRevision(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
-		ExpectedRevision: started.Revision, RequestID: "legacy-finish-1", Outcome: AttemptInterrupted,
-		Diagnosis:          "interrupted with the workspace unchanged",
-		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
-		ProcessEvidence: "pre-launch process scan found no descendants",
-	})
-	if err != nil {
+	if err = store.ensureDirectories(); err != nil {
 		t.Fatal(err)
 	}
-	if finished.GrantedRoots != nil {
-		t.Fatalf("grant-free chain projected granted roots: %#v", finished.GrantedRoots)
+	if err = store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.publishHead(revision); err != nil {
+		t.Fatal(err)
 	}
 	status, err := store.Status()
 	if err != nil {
 		t.Fatalf("grant-free chain replay = %v, want unchanged success", err)
 	}
-	payload, err := json.Marshal(status)
+	payload, err = json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)
 	}

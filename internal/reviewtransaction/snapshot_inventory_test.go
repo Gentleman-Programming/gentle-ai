@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestSnapshotBuilderDiscoversTrackedAndUnignoredPathsInLinkedWorktree(t *testing.T) {
+func TestSnapshotBuilderBuildsAndValidatesIntendedUntrackedInLinkedWorktree(t *testing.T) {
 	requireSnapshotGit(t)
 	parent := t.TempDir()
 	repo := filepath.Join(parent, "main")
@@ -40,14 +40,6 @@ func TestSnapshotBuilderDiscoversTrackedAndUnignoredPathsInLinkedWorktree(t *tes
 		gitSnapshot(t, path, "init", "-q")
 	}
 
-	got, err := (SnapshotBuilder{Repo: linked}).DiscoverTrackedAndUnignoredPaths(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{".gitignore", "openspec/changes/thin", "tracked.txt", "untracked.txt", "vendor"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("DiscoverTrackedAndUnignoredPaths() = %v, want %v", got, want)
-	}
 	snapshot, err := (SnapshotBuilder{Repo: linked}).Build(context.Background(), Target{
 		Kind: TargetCurrentChanges, IntendedUntracked: []string{"untracked.txt"},
 	})

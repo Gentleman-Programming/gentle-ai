@@ -6,20 +6,10 @@ import (
 	"testing"
 )
 
-// Regression for #3538. Reporters saw `verify: ready`, `archive: blocked`,
-// `nextRecommended: verify` with an empty blockedReasons even though every
-// task was complete and a verify-report existed. Two paths produced that
-// silent tuple: a stale report whose totals disagree with the native heading
-// count (published only when Incomplete), and the post-remediation override
-// whose refresh instruction reached phaseInstructions only. This test pins
-// the stale-report shape: the persisted envelope was admitted against the
-// totals the caller supplied, yet native counting of the specs disagrees.
-func TestStaleVerifyReportNamesNativeTotalsInBlockedReasons(t *testing.T) {
+// #3538 historical count mismatches no longer gate archive or mutate reports.
+func TestStaleVerifyReportDoesNotGateArchive(t *testing.T) {
 	const spec = "### Requirement: Auth\n#### Scenario: Expected behavior\n"
 	report := testVerifyEnvelope("pass", 0, 0, "13/13", "46/46", 0, 0)
-	if admission := ValidateVerifyReportAdmission(report, SpecCounts{Requirements: 13, Scenarios: 46}); !admission.Valid {
-		t.Fatalf("admission with caller-supplied totals = %#v, want valid", admission)
-	}
 
 	for _, backend := range []string{"openspec", "engram"} {
 		t.Run(backend, func(t *testing.T) {
@@ -48,20 +38,14 @@ func TestStaleVerifyReportNamesNativeTotalsInBlockedReasons(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
-			if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
-				t.Fatalf("status = verify %q archive %q next %q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+			if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+				t.Fatalf("status = verify %q archive %q next %q, want ready/ready/archive", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 			}
 			if !status.TaskProgress.AllComplete {
 				t.Fatalf("TaskProgress = %#v, want all complete", status.TaskProgress)
 			}
-			joined := strings.Join(status.BlockedReasons, "\n")
-			for _, want := range []string{
-				"does not match actual requirement count 1",
-				"rerun SDD verification",
-			} {
-				if !strings.Contains(joined, want) {
-					t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
-				}
+			if len(status.BlockedReasons) != 0 {
+				t.Fatalf("historical report blocked archive: %v", status.BlockedReasons)
 			}
 		})
 	}

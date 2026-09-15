@@ -33,11 +33,6 @@ func IncrementSyncs(homeDir string) error {
 	return IncrementCounter(homeDir, func(c *Counters) { c.Syncs++ })
 }
 
-// IncrementSDDPhaseRuns records one successful `sdd-attempt finish|settle`.
-func IncrementSDDPhaseRuns(homeDir string) error {
-	return IncrementCounter(homeDir, func(c *Counters) { c.SDDPhaseRuns++ })
-}
-
 // IncrementReviewsApproved records one review reaching the approved
 // terminal state.
 func IncrementReviewsApproved(homeDir string) error {

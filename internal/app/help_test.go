@@ -11,7 +11,7 @@ func TestHelpContainsAllCommands(t *testing.T) {
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
 
-	commands := []string{"install", "uninstall", "sync", "sdd-status", "sdd-continue", "sdd-attempt", "sdd-verify-validate", "review start", "review capture-result", "review capture-correction-plan", "review capture-refuter", "review capture-validation", "review validate", "review status", "review repair", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
+	commands := []string{"install", "uninstall", "sync", "sdd-status", "sdd-continue", "sdd-attempt", "review start", "review capture-result", "review capture-correction-plan", "review capture-refuter", "review capture-validation", "review validate", "review status", "review repair", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
 	for _, cmd := range commands {
 		if !strings.Contains(output, cmd) {
 			t.Errorf("help output missing command %q", cmd)
@@ -130,5 +130,13 @@ func TestHelpCommandsHeadingIsAligned(t *testing.T) {
 	printHelp(&buf, "v1.2.3")
 	if !strings.Contains(buf.String(), "\nCOMMANDS\n  install") {
 		t.Fatalf("help output has inconsistent command indentation:\n%s", buf.String())
+	}
+}
+
+func TestHelpDoesNotAdvertiseRetiredVerifyValidator(t *testing.T) {
+	var output bytes.Buffer
+	printHelp(&output, "test")
+	if strings.Contains(output.String(), "sdd-verify-validate") {
+		t.Fatal("help advertises retired report admission")
 	}
 }

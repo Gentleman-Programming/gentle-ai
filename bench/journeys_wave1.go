@@ -1147,7 +1147,7 @@ func requireJ47DisabledV2ArchiveStatus(sandbox *Sandbox, observation Observation
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
 		return fmt.Errorf("decode disabled V2 status: %w", err)
 	}
-	if !status.TaskProgress.AllComplete || status.TaskProgress.Total == 0 || status.Dependencies.Verify != "all_done" ||
+	if !status.TaskProgress.AllComplete || status.TaskProgress.Total == 0 || status.Dependencies.Verify != "ready" ||
 		status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
 		return fmt.Errorf("disabled V2 status = tasks %d/%d complete=%v verify=%q archive=%q next=%q blocked=%v, want completed/all_done/ready/archive/no blockers",
 			status.TaskProgress.Completed, status.TaskProgress.Total, status.TaskProgress.AllComplete,

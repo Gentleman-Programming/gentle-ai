@@ -102,7 +102,4 @@ func TestNamedArchivedEngramChangeDoesNotRecommendArchive(t *testing.T) {
 		t.Fatalf("archived change routed to archive again: archive %q next %q", status.Dependencies.Archive, status.NextRecommended)
 	}
 	assertArchivedTerminal(t, status, "sdd/wave-one/archive-report")
-	if status.RemediationState.Required {
-		t.Fatalf("RemediationState = %#v, want no remediation on a closed change", status.RemediationState)
-	}
 }

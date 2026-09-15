@@ -242,10 +242,6 @@ OpenCode `background: true` launch acknowledgements and progress signals are non
 
 The gatekeeper runs in addition to the Review Workload Guard and the Mandatory Delegation Triggers; it never relaxes them and never auto-marks anything reviewed in engram.
 
-### Native Runtime Attempt Authority (MANDATORY)
-
-{{GENTLE_AI_SDD_SECTION:Native Runtime Attempt Authority (MANDATORY)}}
-
 ### Artifact Store Mode
 
 This is collected by `SDD Session Preflight`. If missing, enforce the hard gate before any phase work. Ask which artifact store they want for this change:

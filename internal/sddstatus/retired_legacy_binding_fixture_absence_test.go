@@ -51,7 +51,7 @@ func TestRetiredLegacyBindingConsumersAreAbsent(t *testing.T) {
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				t.Errorf("retired legacy binding consumer fixture %q is missing", consumer.fixture)
+				// Entire retired attempt consumers may now be absent (#4612).
 			} else {
 				t.Errorf("read retired legacy binding consumer fixture %q: %v", consumer.fixture, err)
 			}

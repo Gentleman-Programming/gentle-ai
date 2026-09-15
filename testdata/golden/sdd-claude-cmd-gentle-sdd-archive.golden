@@ -11,13 +11,13 @@ CONTEXT:
 - Artifact store mode: engram
 
 TASK:
-Archive the active SDD change. Read the verification report first to confirm the change is ready. Then:
+Archive the active SDD change. Read available diagnostics as history, not an archive certificate. Then:
 
 STATUS GATE:
-Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`. Continue only when verify-report exists, contains no CRITICAL issues, and tasks are complete. `reviewOffer` is optional and never an archive or delivery gate. Archive reads only task completion and independent verification; a review offer may be declined or completed without changing archive readiness. CRITICAL verification issues have no override. If unchecked tasks remain, send the change back to `sdd-apply` unless apply-progress/verify-report prove they are stale checkboxes and the orchestrator explicitly requests mechanical reconciliation. If status reports `workspace-planning`, STOP and explain that workspace archive is not supported in this slice. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
+Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Use refreshed native SDD status and preserve actual edit permissions. Completed implementation normally recommends archive; an explicit archive request may close unfinished work without a verification certificate. Missing, stale, malformed, or failed optional reports and unfinished tasks do not gate archive. Preserve their bytes and report unresolved work honestly. SDD never offers or launches RDD. If status reports `workspace-planning`, STOP and explain that workspace archive is not supported in this slice. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
 
 ENGRAM PERSISTENCE (artifact store mode: engram):
-CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
+CRITICAL: mem_search returns 300-char PREVIEWS, not full content. Call mem_get_observation(id) for every found artifact; missing reports do not gate archive.
 STEP A — SEARCH (get IDs only):
   mem_search(query: "sdd/{change-name}/proposal", project: "{project}") → save proposal_id
   mem_search(query: "sdd/{change-name}/spec", project: "{project}") → save spec_id
@@ -29,7 +29,7 @@ STEP B — RETRIEVE FULL CONTENT (mandatory):
   mem_get_observation(id: spec_id) → full spec
   mem_get_observation(id: design_id) → full design
   mem_get_observation(id: tasks_id) → full tasks
-  mem_get_observation(id: verify_id) → full verification report
+  if verify_id exists: mem_get_observation(id: verify_id) → full optional verification report
 Record all observation IDs in the archive report for traceability.
 Treat `verify-report` and `apply-progress` as intermediate snapshots: the archive report records the state at close per the skill's Final-State Authority section, and explicit final-state facts in your launch prompt outrank stale snapshot claims.
 

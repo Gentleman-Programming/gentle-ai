@@ -1,15 +1,13 @@
 ---
-description: Collect source-backed evidence for a selected SDD research lane
+description: Run optional source-backed research with available authorized tools
 ---
 
-The command actor is the orchestrator. Use the native `sdd-research` sub-agent. If unavailable, read `~/.claude/skills/sdd-research/SKILL.md` and execute it inline without delegating.
+The command actor is the orchestrator. Use the native `sdd-research` sub-agent.
 
-The collector is an output-only evidence collector. It may return a complete `blocked`, `partial`, or `done` record but must not retain intent, mutate repository state, save Engram state, select an artifact store, or persist research/preproposal. Do not let it read local artifacts or call persistence tools.
+Treat `$ARGUMENTS` as the research objective and use available conversation/exploration context. Research remains optional, including after selection. Missing initialization, preflight, request revisions or store metadata do not prohibit a useful investigation. Ask one focused question only for a real unresolved product decision and wait; never answer for the user.
 
-SDD Session Preflight and `sdd-init` must already be complete. Resolve the active change, selected research questions/classes, preflight-selected artifact store, and runtime capability declaration; if any is missing or ambiguous, ask and STOP.
+Forward the objective, intended outcome, constraints, current evidence and actual tool restrictions. The output-only evidence collector must not read local artifacts, mutate repository or Engram state, select a store, persist results or delegate. It uses only actually available and authorized external tools, prefers primary sources, attributes material claims, and separates verified facts, assumptions, contradictions, freshness limits and gaps. Adapt depth to uncertainty; do not force rounds or fabricate unavailable evidence.
 
-Launch research with `$ARGUMENTS`. Exact grants and source-backed claims are mandatory; denial, partial evidence, failed persistence, or hybrid mismatch blocks proposal readiness.
+The orchestrator handles any authorized persistence after the collector returns. No mandatory research artifact, readiness certificate or matching-store handshake is required. Preserve existing research and preproposal history. Partial findings or unavailable tools do not block independent authorized work; pause only decisions unsafe without missing evidence or unresolved user choices.
 
-The orchestrator validates and persists the returned envelope through the preflight-selected store route. Do this only after the collector returns.
-
-Return `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, and `skill_resolution`.
+Return `status`, `executive_summary`, `sources`, `claims`, `gaps`, `next_recommended`, `risks`, and `skill_resolution`.

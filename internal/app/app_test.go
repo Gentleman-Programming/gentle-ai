@@ -299,57 +299,17 @@ func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 }
 
-func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing.T) {
-	err := RunArgs([]string{"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "1", "--scenarios", "1"}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "read verify report") {
-		t.Fatalf("RunArgs(sdd-verify-validate) error = %v", err)
-	}
-}
-
-func TestRunArgsSDDVerifyValidateHelpIsInputFree(t *testing.T) {
-	var output bytes.Buffer
-	err := RunArgs([]string{
-		"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "-1", "--help", "--scenarios", "-1",
-	}, &output)
-	if err != nil {
-		t.Fatalf("RunArgs(sdd-verify-validate --help): %v", err)
-	}
-	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Independent test and build execution evidence is required", "maximum report size: 1048576 bytes (1 MiB)"} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("sdd-verify-validate help missing %q:\n%s", want, output.String())
-		}
-	}
-}
-
-func TestRunArgsSDDVerifyValidateHelpTokensCanBeInputValues(t *testing.T) {
-	for _, input := range []string{"--help", "-h"} {
-		t.Run(input, func(t *testing.T) {
-			var output bytes.Buffer
-			err := RunArgs([]string{"sdd-verify-validate", "--input", input, "--requirements", "1", "--scenarios", "1"}, &output)
-			if err == nil || !strings.Contains(err.Error(), "read verify report") || output.Len() != 0 {
-				t.Fatalf("RunArgs(input=%q) = output %q, err %v", input, output.String(), err)
-			}
-		})
-	}
-}
-
 func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
 	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
 
-	root := t.TempDir()
-	command := exec.Command("git", "init", "-q", root)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, output)
+	var output bytes.Buffer
+	err := RunArgs([]string{"sdd-attempt", "grant"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "sdd-attempt grant requires") || strings.Contains(err.Error(), "unsupported platform") {
+		t.Fatalf("grant was not dispatched before platform validation: %v", err)
 	}
-	var buf bytes.Buffer
-	if err := RunArgs([]string{"sdd-attempt", "status", "--cwd", root, "--change", "app-attempt"}, &buf); err != nil {
-		t.Fatalf("RunArgs(sdd-attempt) error = %v", err)
-	}
-	if !strings.Contains(buf.String(), `"schema": "gentle-ai.sdd-runtime-status/v1"`) || !strings.Contains(buf.String(), `"change": "app-attempt"`) {
-		t.Fatalf("sdd-attempt output missing native status:\n%s", buf.String())
-	}
+
 }
 
 func TestRunArgsSDDAttemptHelpBypassesPlatformAndRepositoryValidation(t *testing.T) {
@@ -362,7 +322,7 @@ func TestRunArgsSDDAttemptHelpBypassesPlatformAndRepositoryValidation(t *testing
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-attempt grant --help): %v", err)
 	}
-	for _, want := range []string{"Usage: gentle-ai sdd-attempt grant [flags]", "--root <path>...", "repeatable"} {
+	for _, want := range []string{"Usage: gentle-ai sdd-attempt grant [flags]", "-root value", "repeatable"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("sdd-attempt grant help missing %q:\n%s", want, output.String())
 		}
@@ -379,7 +339,7 @@ func TestRunArgsSDDAttemptParentHelpDoesNotSelectChangeValueAsOperation(t *testi
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-attempt --help --cwd /definitely/not/a/repository --change begin): %v", err)
 	}
-	if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt <") || strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt begin [flags]") {
+	if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt grant [flags]") || strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt begin [flags]") {
 		t.Fatalf("sdd-attempt parent help =\n%s", output.String())
 	}
 }

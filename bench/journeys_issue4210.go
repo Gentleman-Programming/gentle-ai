@@ -8,7 +8,7 @@ import (
 
 // issue4210Journeys recreates the historical report contradiction from #4210:
 // a legacy failed report exists before unfinished tasks, so apply must remain
-// actionable while final verification remains unavailable.
+// actionable while verification is optional and archive preserves unfinished tasks.
 func issue4210Journeys() []Journey {
 	return []Journey{{
 		ID:     "j128-historical-verification-does-not-block-apply",
@@ -53,10 +53,10 @@ func issue4210ApplyAssertion(command string) func(*Sandbox, Observation) error {
 		if err := json.Unmarshal([]byte(observation.Stdout), &status); err != nil {
 			return fmt.Errorf("parse %s JSON: %w", command, err)
 		}
-		if status.Dependencies.Apply != "ready" || status.Dependencies.Verify != "blocked" ||
-			status.Dependencies.Archive != "blocked" || status.NextRecommended != "apply" ||
+		if status.Dependencies.Apply != "ready" || status.Dependencies.Verify != "ready" ||
+			status.Dependencies.Archive != "ready" || status.NextRecommended != "apply" ||
 			status.TaskProgress.AllComplete || len(status.BlockedReasons) != 0 {
-			return fmt.Errorf("%s status = apply %q verify %q archive %q next %q complete %t blockers %v, want ready/blocked/blocked/apply/false/[]",
+			return fmt.Errorf("%s status = apply %q verify %q archive %q next %q complete %t blockers %v, want ready/ready/ready/apply/false/[]",
 				command, status.Dependencies.Apply, status.Dependencies.Verify, status.Dependencies.Archive,
 				status.NextRecommended, status.TaskProgress.AllComplete, status.BlockedReasons)
 		}

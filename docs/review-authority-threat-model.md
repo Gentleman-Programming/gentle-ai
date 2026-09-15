@@ -4,7 +4,7 @@
 
 The compact review store protects valid review authority from accidental corruption and concurrent writers. It does not claim to authenticate state against a malicious local actor with the same user and filesystem access: without an external trust anchor, that actor can rewrite the state, receipt, Git repository, or binary.
 
-Review authority governs review lifecycle continuation and recovery only. Receipts, candidate identity, gate/context results, and shadow output are review-context evidence; ordinary repository policy and SDD verification govern delivery and archive readiness.
+Review authority governs review lifecycle continuation and recovery only. Receipts, candidate identity, gate/context results, and shadow output are review-context evidence; ordinary repository policy governs delivery; SDD archive preserves actual state without a verification certificate.
 
 ## Scope
 

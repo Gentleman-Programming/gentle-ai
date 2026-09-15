@@ -3855,10 +3855,10 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		}
 	}
 
-	// post-apply leaves review to the parent after independent verification. It
+	// post-apply returns to SDD verification without offering review. It
 	// must not negotiate canonical STATUS or retain review authority itself.
 	for _, required := range []string{
-		"fresh `reviewOffer` block",
+		"SDD never offers or launches RDD",
 		"SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority",
 	} {
 		if !strings.Contains(postApply, required) {

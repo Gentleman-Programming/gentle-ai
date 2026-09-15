@@ -42,7 +42,6 @@ var orchestratorSectionDriftRatchet = []struct {
 	{"Language Domain Contract", 2},
 	{"Recovery Rule", 2},
 	{"SDD Workflow (Spec-Driven Development)", 2},
-	{"Native Runtime Attempt Authority (MANDATORY)", 1},
 	{"Native SDD Dispatcher Guard", 1},
 }
 

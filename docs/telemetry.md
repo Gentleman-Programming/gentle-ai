@@ -492,14 +492,15 @@ timeout, 3 second total timeout) after `install`, `update`, or `sync`
 finishes. It never blocks the triggering command and never changes its exit
 code or output.
 
-A review's outcome (approved, one bounded correction, or escalated) and a
-completed `sdd-attempt finish|settle` each increment their own local counter
+A review's outcome (approved, one bounded correction, or escalated) increments its local counter
 first, and only then opportunistically check whether a heartbeat is due —
 the same 24-hour limit and failure backoff apply, so this adds at most one
-send per day even for a host that finishes many reviews or SDD phases in a
+send per day even for a host that finishes many reviews in a
 row. This is what lets a host such as Gentle Pi, which drives gentle-ai only
 through `review ...` and `sdd-attempt ...` and never through
 `install`/`update`/`sync`, still send a heartbeat.
+
+Historical `sdd_phase_runs` counters remain readable, but retired attempt commands no longer increment them.
 
 ## Opting out
 
@@ -540,7 +541,7 @@ gentle-ai telemetry trigger [--json]
   kill switch all apply). A host that only ever drives gentle-ai through
   `review ...` or `sdd-attempt ...` — Gentle Pi, for example — can call this
   once per session to still get a heartbeat instead of never sending one.
-  Finishing a native review or an `sdd-attempt finish|settle` already
+  Finishing a native review already
   triggers this internally too, so `trigger` mainly matters for a host that
   never runs any of those either. It always exits 0 and never blocks on the
   network.

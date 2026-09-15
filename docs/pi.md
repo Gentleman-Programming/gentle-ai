@@ -61,29 +61,11 @@ Files updated by Gentle AI's Engram provisioning:
 
 `gentle-engram` owns the MCP schema itself. The installer runs `pi-engram init`, which initializes Pi's Engram MCP config under the Pi agent config directory instead of having Gentle AI hand-write that file.
 
-## SDD Research Capability
+## SDD Research Ownership
 
-Gentle AI declares Pi's canonical research capability under
-`gentle-ai.sdd-research-capability/v1`. Admission requires **all grants** for the
-requested class, with exact lowercase names:
+Gentle AI no longer provides the unused internal research-capability admission schema. Its shared SDD guidance treats research as optional and uses actual tool availability and authorization rather than a capability certificate.
 
-| Class | Required grants |
-| --- | --- |
-| `documentation` | `fetch_content` |
-| `open-web` | `web_search`, `source_check`, `fetch_content`, `get_search_content` |
-
-The observed grants must match the class exactly. Order does not matter; missing,
-renamed, duplicate, or unexpected grants deny admission. None of the four
-open-web grants is optional. Unknown classes or schemas also deny admission,
-returning no verified grants and no claims. Bash, generic MCP access, package
-installation, and inherited tools are not substitutes for observed grants.
-Admission verifies tool grants only; it does not create source-backed claims.
-
-Downstream [`gentle-pi`](https://github.com/Gentleman-Programming/gentle-pi) owns
-runtime tool observation, child tool projection, and research execution. This
-upstream declaration neither installs new tools nor proves that a live Pi child
-can use them. A separate downstream runtime probe is still required to establish
-live research evidence.
+Downstream [`gentle-pi`](https://github.com/Gentleman-Programming/gentle-pi) owns runtime tool observation, child tool projection and research execution. Gentle Pi's SDD policy alignment is a separate companion delivery; this upstream change neither updates that runtime nor installs or grants new tools. Live research evidence still requires an actually available, authorized tool and an observed source-backed result.
 
 ## Optional CodeGraph
 

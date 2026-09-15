@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,16 +8,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
-func sddReviewDisabledForWorkspace(workspaceRoot string) (bool, error) {
-	return reviewDrivenDevelopmentDisabled(context.Background(), workspaceRoot)
-}
-
 // RunSDDStatus is the CLI entry point for `gentle-ai sdd-status [change]`.
-//
-// The kill switch reaches SDD status here, at the one layer that owns the
-// single source of truth for both of its sources. A failed advisory-mode
-// lookup suppresses the review offer, not read-only SDD inspection. Review
-// mutations retain their own unsafe-authority refusals.
 func RunSDDStatus(args []string, stdout io.Writer) error {
 	parsed, err := sddstatus.ParseCommandArgs(args)
 	if err != nil {
@@ -26,10 +16,9 @@ func RunSDDStatus(args []string, stdout io.Writer) error {
 	}
 
 	status, err := sddstatus.Resolve(sddstatus.ResolveOptions{
-		CWD:                        parsed.CWD,
-		ChangeName:                 parsed.ChangeName,
-		IncludeInstructions:        parsed.IncludeInstructions,
-		ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
+		CWD:                 parsed.CWD,
+		ChangeName:          parsed.ChangeName,
+		IncludeInstructions: parsed.IncludeInstructions,
 	})
 	if err != nil {
 		return fmt.Errorf("resolve sdd status: %w", err)
@@ -57,10 +46,9 @@ func RunSDDContinue(args []string, stdout io.Writer) error {
 	}
 
 	status, err := sddstatus.Resolve(sddstatus.ResolveOptions{
-		CWD:                        parsed.CWD,
-		ChangeName:                 parsed.ChangeName,
-		IncludeInstructions:        true,
-		ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
+		CWD:                 parsed.CWD,
+		ChangeName:          parsed.ChangeName,
+		IncludeInstructions: true,
 	})
 	if err != nil {
 		return fmt.Errorf("resolve sdd status: %w", err)
@@ -69,10 +57,9 @@ func RunSDDContinue(args []string, stdout io.Writer) error {
 		return fmt.Errorf("prepare sdd continuation consent: %w", err)
 	}
 	status, err = sddstatus.Resolve(sddstatus.ResolveOptions{
-		CWD:                        parsed.CWD,
-		ChangeName:                 parsed.ChangeName,
-		IncludeInstructions:        true,
-		ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
+		CWD:                 parsed.CWD,
+		ChangeName:          parsed.ChangeName,
+		IncludeInstructions: true,
 	})
 	if err != nil {
 		return fmt.Errorf("resolve prepared sdd continuation status: %w", err)

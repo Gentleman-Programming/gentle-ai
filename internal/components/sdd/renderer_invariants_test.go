@@ -96,15 +96,6 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 		},
 	},
 	{
-		name:   "runtime attempt authority",
-		marker: "### Native Runtime Attempt Authority (MANDATORY)",
-		sentinels: []string{
-			"provider-owned Git-common-dir runtime ledger",
-			"sdd-attempt acquire",
-			"sdd-attempt settle",
-		},
-	},
-	{
 		name:   "delivery strategy",
 		marker: "### Delivery Strategy",
 		sentinels: []string{

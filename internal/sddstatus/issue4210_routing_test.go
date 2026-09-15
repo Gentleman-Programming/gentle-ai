@@ -7,12 +7,9 @@ import (
 )
 
 // #4210: verification evidence cannot block implementation that has not yet
-// reached its final verification gate. It remains required once tasks complete.
+// completed its tasks. Optional verification no longer gates archive either.
 func TestHistoricalVerificationEvidenceDoesNotBlockPendingApply(t *testing.T) {
 	partialFailure := testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 0)
-	if admission := ValidateVerifyReportAdmission(partialFailure, SpecCounts{Requirements: 1, Scenarios: 1}); !admission.Valid {
-		t.Fatalf("partial failed report admission = %#v, want valid", admission)
-	}
 
 	for _, tt := range []struct {
 		name   string
@@ -36,14 +33,14 @@ func TestHistoricalVerificationEvidenceDoesNotBlockPendingApply(t *testing.T) {
 			if len(status.BlockedReasons) != 0 {
 				t.Fatalf("pending implementation inherited final-verification blocker: %v", status.BlockedReasons)
 			}
-			if status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked {
-				t.Fatalf("dependencies = %#v, want verification and archive blocked until tasks complete", status.Dependencies)
+			if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyReady {
+				t.Fatalf("dependencies = %#v, want optional verification and archive ready without claiming task completion", status.Dependencies)
 			}
 		})
 	}
 }
 
-func TestHistoricalVerificationEvidenceStillBlocksFinalization(t *testing.T) {
+func TestHistoricalVerificationEvidenceDoesNotBlockArchive(t *testing.T) {
 	partialFailure := testVerifyEnvelope("fail", 1, 0, "0/1", "0/1", 1, 0)
 	for _, tt := range []struct {
 		name   string
@@ -61,30 +58,13 @@ func TestHistoricalVerificationEvidenceStillBlocksFinalization(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status.Dependencies.Apply != DependencyAllDone || status.Dependencies.Verify != DependencyReady || status.NextRecommended != string(PhaseVerify) {
-				t.Fatalf("routing = %#v next %q, want apply all_done, verify ready, next verify", status.Dependencies, status.NextRecommended)
+			if status.Dependencies.Apply != DependencyAllDone || status.Dependencies.Verify != DependencyReady || status.NextRecommended != string(PhaseArchive) {
+				t.Fatalf("routing = %#v next %q, want apply all_done, verify ready, next archive", status.Dependencies, status.NextRecommended)
 			}
-			if status.Dependencies.Archive != DependencyBlocked || len(status.BlockedReasons) == 0 {
-				t.Fatalf("finalization bypassed incomplete verification: archive %q reasons %v", status.Dependencies.Archive, status.BlockedReasons)
+			if status.Dependencies.Archive != DependencyReady || len(status.BlockedReasons) != 0 {
+				t.Fatalf("optional report blocked archive: archive %q reasons %v", status.Dependencies.Archive, status.BlockedReasons)
 			}
 		})
-	}
-}
-
-func TestCompleteVerificationFailureStillRequiresRemediation(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "failed", "- [x] 1.1 Implementation complete\n")
-	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("fail", 1, 0, "1/1", "1/1", 1, 0))
-
-	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "failed"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !status.RemediationState.Required || status.NextRecommended != string(PhaseRemediate) {
-		t.Fatalf("complete failure = remediation %#v next %q, want required/remediate", status.RemediationState, status.NextRecommended)
-	}
-	if status.Dependencies.Archive != DependencyBlocked || !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "remediation") {
-		t.Fatalf("complete failure bypassed remediation: archive %q reasons %v", status.Dependencies.Archive, status.BlockedReasons)
 	}
 }
 
@@ -105,8 +85,8 @@ func TestHistoricalVerificationEvidenceEngramParity(t *testing.T) {
 			wantNext        string
 			wantBlockReason bool
 		}{
-			{name: "pending tasks", content: "- [ ] 1.1 Finish implementation\n", wantApply: DependencyReady, wantVerify: DependencyBlocked, wantNext: string(PhaseApply)},
-			{name: "completed tasks", content: "- [x] 1.1 Implementation complete\n", wantApply: DependencyAllDone, wantVerify: DependencyReady, wantNext: string(PhaseVerify), wantBlockReason: true},
+			{name: "pending tasks", content: "- [ ] 1.1 Finish implementation\n", wantApply: DependencyReady, wantVerify: DependencyReady, wantNext: string(PhaseApply)},
+			{name: "completed tasks", content: "- [x] 1.1 Implementation complete\n", wantApply: DependencyAllDone, wantVerify: DependencyReady, wantNext: string(PhaseArchive)},
 		} {
 			t.Run(report.name+"/"+tasks.name, func(t *testing.T) {
 				root := t.TempDir()

@@ -29,28 +29,17 @@ Set `capture_prompt: false` when the Engram tool schema supports it; if an older
 | `apply-progress` | sdd-apply | Implementation progress (one per batch) |
 | `verify-report` | sdd-verify | Verification report |
 | `archive-report` | sdd-archive | Archive closure with lineage |
-| `state` | orchestrator | DAG state for recovery after compaction |
+| `state` | orchestrator | Optional recovery hint; actual artifacts remain authoritative |
 
 ### Research artifacts
 
-Use `sdd/{change-name}/research` for exact `gentle-ai.sdd-research/v1` bytes and `sdd/{change-name}/preproposal` for exact `gentle-ai.sdd-preproposal/v1` bytes. In hybrid mode, neither topic is authoritative alone: compare its revision and bytes with OpenSpec before proposal admission.
+Use `sdd/{change-name}/research` for optional source-backed notes when persistence is requested. Preserve historical research and preproposal observations. Their schema, revision or agreement with files is not proposal admission authority.
 
 
 
-### State Artifact
+### Optional State Hint
 
-```
-mem_save(
-  title: "sdd/{change-name}/state",
-  topic_key: "sdd/{change-name}/state",
-  type: "architecture",
-  project: "{project}",
-  capture_prompt: false,
-  content: "change: {change-name}\nphase: {last-phase}\nartifact_store: engram\nartifacts:\n  proposal: true\n  specs: true\n  design: false\n  tasks: false\ntasks_progress:\n  completed: []\n  pending: []\nlast_updated: {ISO date}"
-)
-```
-
-Recovery: `mem_search("sdd/{change-name}/state")` → `mem_get_observation(id)` → parse YAML → restore state.
+An existing `sdd/{change-name}/state` observation is an optional recovery hint, not a required YAML snapshot or a second authority. Recover using native status and its resolved artifact locators; retrieve full observations with `mem_get_observation`. Preserve historical snapshots, but verify their claims against actual artifacts. A state-only observation does not establish active work; the actual `archive-report` remains the closure marker.
 
 ## Recovery Protocol (2 steps)
 

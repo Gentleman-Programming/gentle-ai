@@ -42,7 +42,7 @@ Kiro runs with **native sub-agent delegation** via `~/.kiro/agents/`.
 The orchestrator stays in the steering file and coordinates phase execution, while each phase runs in its dedicated Kiro agent file:
 
 ```
-sdd-init → sdd-explore → sdd-propose → sdd-spec → sdd-design → sdd-tasks → sdd-apply → sdd-verify → sdd-archive (+ sdd-onboard)
+sdd-init → sdd-explore → sdd-propose → sdd-spec → sdd-design → sdd-tasks → sdd-apply → sdd-archive (sdd-verify is optional) (+ sdd-onboard)
 ```
 
 This follows the same SDD architecture used in gentle-ai: orchestrator coordinates, phase agents execute, Engram™ persists artifacts across phases.
@@ -70,7 +70,7 @@ Kiro has a built-in spec workflow that gentle-ai leverages. For medium and large
 |------|----------|
 | Small | Inline — no formal SDD phases |
 | Medium | Kiro native specs (`.kiro/specs/`) + Engram |
-| Large | Full SDD cycle: explore → propose → spec → design → tasks → apply → verify → archive |
+| Large | Full SDD cycle: explore → propose → spec → design → tasks → apply → archive (verify is optional) |
 
 ---
 

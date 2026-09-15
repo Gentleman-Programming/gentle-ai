@@ -164,7 +164,6 @@ internal/reviewtransaction/transaction.go	CanonicalLensResult
 internal/reviewtransaction/transaction.go	NewLineage
 internal/reviewtransaction/transaction.go	NewTransaction
 internal/reviewtransaction/transaction.go	Transaction.addFixFinding
-internal/reviewtransaction/tree_blob.go	RestoreTreeBlob
 internal/reviewtransaction/verification_contract.go	AggregateVerificationCost
 internal/reviewtransaction/verification_contract.go	BuildCorrectionImpactClosure
 internal/reviewtransaction/verification_contract.go	BuildVerificationPlan
@@ -214,19 +213,9 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
-internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
-internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
 internal/sddstatus/status.go	RenderNativePhasePrompt
 internal/sddstatus/status.go	blockerReasons.forRoute
 internal/sddstatus/status.go	dependencyForPhase
-internal/sddstatus/status.go	normalizeReportToken
-internal/sddstatus/status.go	reportField
-internal/sddstatus/status.go	reportIsClearlyPassing
-internal/sddstatus/status.go	reportLineHasBlocker
-internal/sddstatus/status.go	reportLineHasPassSignal
-internal/sddstatus/status.go	reportTextIsClearlyPassing
-internal/sddstatus/status.go	reportValueIsBenign
-internal/sddstatus/status.go	stripMarkdownSignal
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew

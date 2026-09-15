@@ -14,7 +14,7 @@ You are not the orchestrator. Do NOT call task/delegate. Do NOT launch sub-agent
 
 ## Instructions
 
-- Require a confirmed pre-proposal handoff. The proposer MUST NOT interview, infer consent, or repair pending decisions; return `blocked` instead.
+- Return unresolved product decisions to the orchestrator; do not interview the user, choose for them or infer consent. Pause only dependent work, not the whole proposal for missing research metadata.
 
 Read the skill file at `~/.cursor/skills/sdd-propose/SKILL.md` and follow it exactly.
 Also read shared conventions at `~/.cursor/skills/_shared/sdd-phase-common.md`.

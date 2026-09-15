@@ -17,7 +17,7 @@ Two ownership columns are recorded per the design's "Inventory records observed 
 | more than 1 | finding: `split-ownership` |
 | target not derivable from the design's Ownership boundaries table | finding: `undesignated-target` |
 
-Target owner is drawn from the design's closed set: `ReviewCore`, `AuthorityStore`, `CandidateResolver`, `ReviewAdapter`, `ReviewContext`, `SDD`. `ReviewContext` reports receipt and candidate-identity facts for review lifecycle only; ordinary repository policy owns delivery and SDD verification owns archive readiness. Target disposition reuses the design's control-reduction verbs: `KEEP`, `MERGE`, `DERIVE`, `DOWNGRADE`, `REMOVE`, `FAIL-CLOSED ONLY`.
+Target owner is drawn from the design's closed set: `ReviewCore`, `AuthorityStore`, `CandidateResolver`, `ReviewAdapter`, `ReviewContext`, `SDD`. `ReviewContext` reports receipt and candidate-identity facts for review lifecycle only; ordinary repository policy owns delivery and SDD archive records actual state without a verification certificate. Target disposition reuses the design's control-reduction verbs: `KEEP`, `MERGE`, `DERIVE`, `DOWNGRADE`, `REMOVE`, `FAIL-CLOSED ONLY`.
 
 **Row schema:** `ID | Surface | Kind | Current owner(s) | Target owner | Consumers | Evidence | Target disposition`
 
@@ -86,6 +86,8 @@ Unowned, split-ownership, and undesignated-target rows, left unresolved per the 
 - **CON-12 / out-of-repo host runtimes.** The actual execution of reviewer subprocesses inside the OpenCode, Pi, and Claude host applications is outside this repository. Only the in-repo dispatch surfaces (CON-09, CON-10, CON-11) were enumerated with evidence; the host-runtime behavior itself is recorded as `evidence: out-of-repo` and is not traced further in Wave 0.
 - **No dropped rows.** Every row above carries at least one `path:line@ece470da` or contract-directory evidence reference; none were dropped for lack of an anchor in this pass.
 
-## SDD attempt-ledger ownership (Decision 9)
+## Historical SDD attempt-ledger ownership (Decision 9)
 
 CON-08's target owner cell names `RuntimeObjective` unconditionally, per decision 9's maintainer-confirmed ratification (2026-08-02): the evidence condition (durable, cumulative, CAS-like properties in SDD's own store — `previous_revision` chaining, CAS `expected_revision`, `request_digest` replay identity) is already met, so the prior conditional "only if" wording no longer applies. `AuthorityStore` (native authority) does not own SDD's work-unit attempts.
+
+SDD simplification #4612 supersedes CON-08 and Decision 9: attempt/budget governance and its runtime objective are retired. The existing authenticated store remains only for scoped edit grants and read-only compatibility with old mixed history; no attempt state is projected or enforced. Historical evidence above records the earlier design, not current launch policy.

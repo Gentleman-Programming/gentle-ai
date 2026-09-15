@@ -964,7 +964,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 func renderClaudeSessionPreflight() (string, error) {
 	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
-	return projectSDDSessionPreflightWithTool(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
+	return projectSDDSessionPreflightWithTool(substituteSharedOrchestratorSections(content), "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
 }
 
 // Preparation is read-only. A template composer panic must not escape after a
@@ -1394,13 +1394,12 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 }
 
 func ensurePreservedOpenCodeResearchLifecycle(prompt string) string {
-	if strings.Contains(prompt, "<!-- gentle-ai:sdd-research-lifecycle -->") && strings.Contains(prompt, researchLifecycleContract()) {
-		return prompt
-	}
+	// Older generated prompts embedded this managed gate as one unmarked line.
+	// Replace that exact legacy shape without deleting unrelated user questions.
 	lines := strings.Split(prompt, "\n")
 	kept := lines[:0]
 	for _, line := range lines {
-		if strings.Contains(line, "Before the `sdd-propose` phase in interactive mode") || strings.Contains(line, "proposal question round") {
+		if strings.HasPrefix(line, "### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research`") {
 			continue
 		}
 		kept = append(kept, line)
