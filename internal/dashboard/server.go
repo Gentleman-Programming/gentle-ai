@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
 )
 
 // Server representa el servidor HTTP local para el dashboard web de Axiom.
@@ -47,6 +49,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/skills/scan", s.handleSkillsScan)
 	s.mux.HandleFunc("/api/skills/approve", s.handleSkillsApprove)
 	s.mux.HandleFunc("/api/skills/reject", s.handleSkillsReject)
+	s.mux.HandleFunc("/api/semantic/status", s.handleSemanticStatus)
+	s.mux.HandleFunc("/api/semantic/symbols", s.handleSemanticSymbols)
+	s.mux.HandleFunc("/api/semantic/dependencies", s.handleSemanticDependencies)
 
 	// 2. Servidor de Archivos Estáticos Embebidos
 	subFS, err := fs.Sub(AssetsFS, "assets")
@@ -294,6 +299,57 @@ func (s *Server) handleSkillsReject(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+
+func (s *Server) handleSemanticStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.service.GetSemanticStatus(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleSemanticSymbols(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	q := semantic.SemanticQuery{
+		Query: r.URL.Query().Get("query"),
+		Kind:  semantic.SymbolKind(r.URL.Query().Get("kind")),
+		Role:  r.URL.Query().Get("role"),
+	}
+	symbols, err := s.service.FindSemanticSymbols(q)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if symbols == nil {
+		symbols = make([]semantic.SymbolItem, 0)
+	}
+	s.respondJSON(w, http.StatusOK, symbols)
+}
+
+func (s *Server) handleSemanticDependencies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	role := r.URL.Query().Get("role")
+	deps, err := s.service.InspectSemanticDependencies(role)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if deps == nil {
+		deps = make([]semantic.DependencyRelation, 0)
+	}
+	s.respondJSON(w, http.StatusOK, deps)
+}
 
 func (s *Server) respondJSON(w http.ResponseWriter, code int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

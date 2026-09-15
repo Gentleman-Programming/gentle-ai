@@ -24,7 +24,7 @@
 | **INC-03** | `multi-role-sdd-fan-out` | ✅ Archivado | Core SDD / Roles | Concurrencia de roles en `Design`, `tasks.<rol>.md`, políticas de compuerta (`blocking`/`deferred`), barrera de sincronización y migración diferida de tareas acumulativas. |
 | **INC-04** | `axiom-local-web-dashboard` | ✅ Archivado | UI / Experiencia | Servidor HTTP local embebido en Go con dashboard web: tablero de incrementos, estado de roles, visor de handoffs y buzón de skills. |
 | **INC-05** | `autoskills-catalog-and-mining` | ✅ Archivado | Skills / Inteligencia | Catálogo de skills por tecnología detectada (midudev/autoskills) y minería heurística de código local con gobernanza Human-in-the-Loop. |
-| **INC-06** | `semantic-code-serena-codegraph` | 📋 Planificado | Semántica / Herramientas | Conector local con Serena MCP y CodeGraph para navegación y consultas semánticas de código en `Explore` y `Design`. |
+| **INC-06** | `semantic-code-serena-codegraph` | ✅ Archivado | Semántica / Herramientas | Conector local con Serena MCP y CodeGraph para navegación y consultas semánticas de código en `Explore` y `Design`. |
 | **INC-07** | `archive-living-documentation-engine` | 📋 Planificado | Documentación / SDD | `Archive` como mantenedor continuo de especificaciones existentes y generador incremental de documentación viva en proyectos no documentados. |
 
 ---
@@ -80,6 +80,18 @@
   4. Subcomandos CLI `axiom skill scan`, `axiom skill list [--inbox]`, `axiom skill approve <nombre>` y `axiom skill reject <nombre>` en `cmd/axiom/main.go`.
   5. Baterías completas de pruebas unitarias en `internal/autoskill/` (5 tests) e `internal/dashboard/` (9 tests) con 100% PASS.
   6. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 13/13 requerimientos, 17/17 escenarios BDD).
+
+### [INC-06] semantic-code-serena-codegraph (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-15-inc-06-semantic-code-serena-codegraph/`
+- **Especificación viva:** `openspec/specs/semantic-code/spec.md`
+- **Entregables clave:**
+  1. Paquete de dominio Go `internal/semantic/`: modelo canónico de símbolos (`types.go`), detector de conectores externos y agentes compatibles (`detector.go`), motor semántico nativo Go AST sin dependencias (`engine.go`) y servicio de alto nivel con fallback automático y deduplicación (`service.go`).
+  2. Extensión del servidor y API REST de `internal/dashboard/` con rutas `/api/semantic/status`, `/api/semantic/symbols` y `/api/semantic/dependencies`.
+  3. Panel interactivo en el Dashboard Web SPA (`index.html`, `style.css`, `app.js`) con nueva pestaña "Semántica & Grafo", tarjetas de estado del conector, detector de agentes MCP, buscador reactivo de símbolos con filtros por tipo (`struct`, `interface`, `func`, `method`) y visor de dependencias entre paquetes.
+  4. Subcomandos CLI `axiom semantic status`, `axiom semantic symbols [--query <filtro>] [--kind <tipo>]` y `axiom semantic inspect` en `cmd/axiom/main.go`.
+  5. Baterías completas de pruebas unitarias en `internal/semantic/` (3 tests) e `internal/dashboard/` (10 tests) con 100% PASS.
+  6. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 11/11 requerimientos, 14/14 escenarios BDD).
+
 
 
 

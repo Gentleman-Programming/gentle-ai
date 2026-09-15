@@ -91,7 +91,8 @@ document.addEventListener('DOMContentLoaded', () => {
       loadWorkspace(),
       loadIncrements(),
       loadSkills(),
-      loadSkillsInbox()
+      loadSkillsInbox(),
+      loadSemanticData()
     ]);
   }
 
@@ -603,6 +604,192 @@ document.addEventListener('DOMContentLoaded', () => {
       <pre>${escapeHtml(p.skill_md || 'Sin contenido')}</pre>
     `;
     modal.classList.remove('hidden');
+  }
+
+  // -------------------------------------------------------------
+  // 5. Semántica & Grafo de Código
+  // -------------------------------------------------------------
+  let currentSemanticKind = '';
+  let semanticSearchTimeout = null;
+
+  async function loadSemanticData() {
+    await Promise.all([
+      loadSemanticStatus(),
+      loadSemanticSymbols('', currentSemanticKind),
+      loadSemanticDependencies()
+    ]);
+  }
+
+  async function loadSemanticStatus() {
+    const container = document.getElementById('semantic-status-cards');
+    const agentsContainer = document.getElementById('semantic-agents-list');
+    if (!container) return;
+
+    try {
+      const res = await fetch('/api/semantic/status');
+      if (!res.ok) throw new Error('Fallo al obtener estado semántico');
+      const data = await res.json();
+
+      let connectorClass = 'badge-connector-ast';
+      let connectorLabel = 'AST Nativo Go (Autónomo)';
+      if (data.active_connector === 'serena') {
+        connectorClass = 'badge-connector-serena';
+        connectorLabel = 'Serena MCP (LSP/Tree-sitter)';
+      } else if (data.active_connector === 'codegraph') {
+        connectorClass = 'badge-connector-codegraph';
+        connectorLabel = 'CodeGraph Knowledge Graph';
+      }
+
+      container.innerHTML = `
+        <div class="stat-card">
+          <div class="stat-label">Conector Semántico Activo</div>
+          <div class="stat-value" style="margin-top: 0.35rem;">
+            <span class="badge-connector ${connectorClass}">${connectorLabel}</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Modo Configurado</div>
+          <div class="stat-value text-accent">${escapeHtml(data.configured_connector || 'auto')}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Símbolos Indexados</div>
+          <div class="stat-value text-success">${data.total_symbols || 0}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Paquetes Analizados</div>
+          <div class="stat-value text-accent">${data.total_packages || 0}</div>
+        </div>
+      `;
+
+      // Renderizar advertencias si las hay
+      if (data.warnings && data.warnings.length > 0) {
+        const warnDiv = document.createElement('div');
+        warnDiv.className = 'scan-feedback';
+        warnDiv.style.gridColumn = '1 / -1';
+        warnDiv.innerHTML = '<strong>Aviso de Configuración:</strong><br>' + data.warnings.map(w => '• ' + escapeHtml(w)).join('<br>');
+        container.appendChild(warnDiv);
+      }
+
+      // Renderizar Agentes
+      if (agentsContainer) {
+        if (!data.agents || data.agents.length === 0) {
+          agentsContainer.innerHTML = '<p class="empty-state">No se detectaron agentes con configuración MCP.</p>';
+        } else {
+          agentsContainer.innerHTML = data.agents.map(ag => `
+            <div class="agent-item">
+              <h4>
+                <span>${escapeHtml(ag.agent_name)}</span>
+                <span class="badge-verified" style="background: ${ag.configured ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)'}; color: ${ag.configured ? '#4ade80' : '#9ca3af'}; border-color: ${ag.configured ? 'rgba(34,197,94,0.3)' : 'rgba(107,114,128,0.3)'};">
+                  ${ag.configured ? 'CONFIGURADO' : 'NO DETECTADO'}
+                </span>
+              </h4>
+              <p><strong>Config:</strong> <code>${escapeHtml(ag.config_path)}</code></p>
+              <p style="margin-top: 0.25rem;">${escapeHtml(ag.details)}</p>
+            </div>
+          `).join('');
+        }
+      }
+    } catch (err) {
+      container.innerHTML = `<div class="error-banner">Error cargando estado semántico: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function loadSemanticSymbols(query, kind) {
+    const tbody = document.getElementById('semantic-symbols-body');
+    if (!tbody) return;
+
+    tbody.innerHTML = '<tr><td colspan="5" class="loading-state">Buscando símbolos en el workspace...</td></tr>';
+
+    try {
+      const params = new URLSearchParams();
+      if (query) params.append('query', query);
+      if (kind) params.append('kind', kind);
+
+      const res = await fetch(`/api/semantic/symbols?${params.toString()}`);
+      if (!res.ok) throw new Error('Fallo al consultar símbolos');
+      const symbols = await res.json();
+
+      if (!symbols || symbols.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No se encontraron símbolos que coincidan con los filtros.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = symbols.map(sym => {
+        let kindClass = 'badge-kind-type';
+        if (sym.kind === 'struct') kindClass = 'badge-kind-struct';
+        else if (sym.kind === 'interface') kindClass = 'badge-kind-interface';
+        else if (sym.kind === 'func') kindClass = 'badge-kind-func';
+        else if (sym.kind === 'method') kindClass = 'badge-kind-method';
+
+        return `
+          <tr>
+            <td><strong><code>${escapeHtml(sym.name)}</code></strong></td>
+            <td><span class="badge-kind ${kindClass}">${escapeHtml(sym.kind)}</span></td>
+            <td><code>${escapeHtml(sym.package)}</code></td>
+            <td><code style="color: var(--text-secondary); font-size: 0.8rem;">${escapeHtml(sym.signature || '-')}</code></td>
+            <td><span style="color: var(--text-muted); font-size: 0.8rem;">${escapeHtml(sym.file_path)}:${sym.line_number}</span></td>
+          </tr>
+        `;
+      }).join('');
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="5" class="error-banner">Error: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+
+  async function loadSemanticDependencies() {
+    const container = document.getElementById('semantic-dependencies-container');
+    if (!container) return;
+
+    try {
+      const res = await fetch('/api/semantic/dependencies');
+      if (!res.ok) throw new Error('Fallo al obtener dependencias');
+      const deps = await res.json();
+
+      if (!deps || deps.length === 0) {
+        container.innerHTML = '<p class="empty-state">No se registraron dependencias entre paquetes.</p>';
+        return;
+      }
+
+      container.innerHTML = deps.map(dep => `
+        <div class="dep-chip ${dep.is_internal ? 'internal' : ''}">
+          <strong><code>${escapeHtml(dep.source_package)}</code></strong>
+          <span style="color: var(--primary);">➔</span>
+          <code>${escapeHtml(dep.target_package)}</code>
+          ${dep.is_internal ? '<span class="badge-verified" style="font-size: 0.65rem;">INTERNO</span>' : ''}
+        </div>
+      `).join('');
+    } catch (err) {
+      container.innerHTML = `<div class="error-banner">Error calculando dependencias: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // Event Listeners Semántica
+  const btnRefreshSemantic = document.getElementById('btn-refresh-semantic');
+  if (btnRefreshSemantic) {
+    btnRefreshSemantic.addEventListener('click', () => loadSemanticData());
+  }
+
+  const searchInput = document.getElementById('semantic-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      clearTimeout(semanticSearchTimeout);
+      semanticSearchTimeout = setTimeout(() => {
+        loadSemanticSymbols(searchInput.value.trim(), currentSemanticKind);
+      }, 250);
+    });
+  }
+
+  const kindFiltersContainer = document.getElementById('semantic-kind-filters');
+  if (kindFiltersContainer) {
+    kindFiltersContainer.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        kindFiltersContainer.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentSemanticKind = btn.getAttribute('data-kind') || '';
+        const q = searchInput ? searchInput.value.trim() : '';
+        loadSemanticSymbols(q, currentSemanticKind);
+      });
+    });
   }
 
   function escapeHtml(str) {

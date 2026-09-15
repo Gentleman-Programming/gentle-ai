@@ -44,6 +44,9 @@
       <button class="nav-tab" data-tab="tab-skills">
         <span class="tab-icon">⚡</span> Catálogo de Skills
       </button>
+      <button class="nav-tab" data-tab="tab-semantic">
+        <span class="tab-icon">🧠</span> Semántica & Grafo
+      </button>
     </nav>
 
     <!-- Main Content Container -->
@@ -210,6 +213,73 @@
         <h3 class="subsection-title" style="margin-top: 2rem;">⚡ Skills Activas en Producción (skills/)</h3>
         <div class="skills-grid" id="skills-container">
           <div class="loading-state">Escaneando catálogo de skills activas...</div>
+        </div>
+      </section>
+
+      <!-- TAB 6: SEMÁNTICA & GRAFO DE CÓDIGO -->
+      <section id="tab-semantic" class="tab-panel">
+        <div class="section-header">
+          <div>
+            <h2>Comprensión Semántica & Grafo de Código</h2>
+            <p class="description">Diagnóstico de conectores Serena MCP / CodeGraph y catálogo estructurado de símbolos, tipos y dependencias del workspace.</p>
+          </div>
+          <div class="filter-group">
+            <button class="btn btn-secondary" id="btn-refresh-semantic">↻ Recargar Semántica</button>
+          </div>
+        </div>
+
+        <!-- Tarjetas de Estado del Conector -->
+        <div class="semantic-status-cards" id="semantic-status-cards">
+          <div class="loading-state">Evaluando entorno semántico y conectores...</div>
+        </div>
+
+        <!-- Agentes Compatibles -->
+        <div class="card" style="margin-top: 1.5rem;">
+          <h3 class="subsection-title">🤖 Estado de Agentes de Desarrollo y MCPs</h3>
+          <div id="semantic-agents-list" class="agents-list">
+            <div class="loading-state">Detectando configuraciones de agentes...</div>
+          </div>
+        </div>
+
+        <!-- Buscador de Símbolos -->
+        <div class="card" style="margin-top: 1.5rem;">
+          <div class="symbols-toolbar">
+            <div class="search-box">
+              <input type="text" id="semantic-search-input" placeholder="Buscar por struct, interface, función o signatura..." class="form-input">
+            </div>
+            <div class="kind-filters" id="semantic-kind-filters">
+              <button class="filter-btn active" data-kind="">Todos</button>
+              <button class="filter-btn" data-kind="struct">Structs</button>
+              <button class="filter-btn" data-kind="interface">Interfaces</button>
+              <button class="filter-btn" data-kind="func">Funciones</button>
+              <button class="filter-btn" data-kind="method">Métodos</button>
+            </div>
+          </div>
+
+          <div class="table-container" style="margin-top: 1rem;">
+            <table class="data-table" id="semantic-symbols-table">
+              <thead>
+                <tr>
+                  <th>Símbolo</th>
+                  <th>Tipo</th>
+                  <th>Paquete</th>
+                  <th>Signatura</th>
+                  <th>Ubicación</th>
+                </tr>
+              </thead>
+              <tbody id="semantic-symbols-body">
+                <tr><td colspan="5" class="loading-state">Cargando símbolos semánticos...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Dependencias entre Paquetes -->
+        <div class="card" style="margin-top: 1.5rem;">
+          <h3 class="subsection-title">📦 Grafo de Dependencias entre Paquetes</h3>
+          <div id="semantic-dependencies-container" class="dependencies-container">
+            <div class="loading-state">Calculando relaciones de importación...</div>
+          </div>
         </div>
       </section>
     </main>

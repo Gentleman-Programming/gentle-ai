@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/dashboard"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
 )
 
@@ -45,6 +46,9 @@ COMANDOS:
   skill list           Lista las skills activas o propuestas pendientes en el buzón transitorio (--inbox)
   skill approve        Aprueba e instala formalmente una skill desde el buzón transitorio a skills/
   skill reject         Descarta y purga una propuesta del buzón transitorio
+  semantic status      Diagnostica los conectores semánticos (Serena, CodeGraph, AST) y salud del workspace
+  semantic symbols     Consulta y filtra símbolos de código (struct, interface, func, method)
+  semantic inspect     Inspecciona el grafo de dependencias entre paquetes del workspace
   ui                   Inicia el servidor local y abre el dashboard web interactivo
   version              Muestra la versión e información de compilación
   help                 Muestra esta ayuda
@@ -161,6 +165,25 @@ func main() {
 			runSkillReject(os.Args[3:])
 		default:
 			fmt.Printf("Error: subcomando '%s' no reconocido para skill. Usa 'axiom skill [scan|list|approve|reject]'.\n", subCmd)
+			os.Exit(1)
+		}
+
+	case "semantic":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: subcomando de 'semantic' requerido. Opciones: status, symbols, inspect")
+			os.Exit(1)
+		}
+
+		subCmd := os.Args[2]
+		switch subCmd {
+		case "status":
+			runSemanticStatus(os.Args[3:])
+		case "symbols":
+			runSemanticSymbols(os.Args[3:])
+		case "inspect":
+			runSemanticInspect(os.Args[3:])
+		default:
+			fmt.Printf("Error: subcomando '%s' no reconocido para semantic. Usa 'axiom semantic [status|symbols|inspect]'.\n", subCmd)
 			os.Exit(1)
 		}
 
@@ -950,6 +973,141 @@ func runSkillReject(args []string) {
 	}
 
 	fmt.Printf("\n✓ Éxito: Propuesta '%s' descartada y purgada del buzón transitorio.\n\n", skillName)
+}
+
+func runSemanticStatus(args []string) {
+	fs := flag.NewFlagSet("semantic status", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := semantic.NewService(baseDir, nil, nil)
+	status, err := svc.GetStatus(context.Background())
+	if err != nil {
+		fmt.Printf("[ERROR] Error evaluando estado semántico: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\nAxiom Semantic Code Engine — Diagnóstico de Entorno\n")
+	fmt.Printf("===================================================\n")
+	fmt.Printf("  - Conector activo:      %s\n", strings.ToUpper(string(status.ActiveConnector)))
+	fmt.Printf("  - Conector configurado: %s\n", status.ConfiguredConnector)
+	fmt.Printf("  - Serena MCP:           %s\n", boolToStatus(status.SerenaAvailable))
+	fmt.Printf("  - CodeGraph CLI:        %s\n", boolToStatus(status.CodeGraphAvailable))
+	fmt.Printf("  - Motor Nativo Go AST:  LISTO [OK]\n")
+	fmt.Printf("  - Total paquetes:       %d\n", status.TotalPackages)
+	fmt.Printf("  - Total símbolos:       %d\n", status.TotalSymbols)
+
+	if len(status.Agents) > 0 {
+		fmt.Printf("\nAgentes de Desarrollo Verificados:\n")
+		for _, ag := range status.Agents {
+			statusBadge := "[NO DETECTADO]"
+			if ag.Configured {
+				statusBadge = "[CONFIGURADO]"
+			}
+			fmt.Printf("  * %-25s %-15s %s\n", ag.AgentName, statusBadge, ag.Details)
+		}
+	}
+
+	if len(status.Warnings) > 0 {
+		fmt.Printf("\nAdvertencias:\n")
+		for i, w := range status.Warnings {
+			fmt.Printf("  [%d] %s\n", i+1, w)
+		}
+	}
+	fmt.Println()
+}
+
+func runSemanticSymbols(args []string) {
+	fs := flag.NewFlagSet("semantic symbols", flag.ExitOnError)
+	queryFlag := fs.String("query", "", "Texto a buscar en el nombre o signatura del símbolo")
+	kindFlag := fs.String("kind", "", "Filtrar por tipo de símbolo: struct, interface, func, method")
+	roleFlag := fs.String("role", "", "Filtrar por rol del workspace")
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := semantic.NewService(baseDir, nil, nil)
+	symbols, err := svc.FindSymbols(semantic.SemanticQuery{
+		Query: *queryFlag,
+		Kind:  semantic.SymbolKind(*kindFlag),
+		Role:  *roleFlag,
+	})
+	if err != nil {
+		fmt.Printf("[ERROR] Error consultando símbolos: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(symbols) == 0 {
+		fmt.Println("\nNo se encontraron símbolos coincidentes.")
+		return
+	}
+
+	fmt.Printf("\nCatálogo de Símbolos Semánticos (%d encontrados):\n", len(symbols))
+	fmt.Printf("%-32s %-12s %-20s %s\n", "SÍMBOLO", "TIPO", "PAQUETE", "UBICACIÓN")
+	fmt.Println(strings.Repeat("-", 95))
+	for _, s := range symbols {
+		loc := fmt.Sprintf("%s:%d", s.FilePath, s.LineNumber)
+		fmt.Printf("%-32s %-12s %-20s %s\n", s.Name, s.Kind, s.Package, loc)
+		if s.Signature != "" && s.Kind != semantic.KindStruct && s.Kind != semantic.KindInterface {
+			fmt.Printf("   ↳ %s\n", s.Signature)
+		}
+	}
+	fmt.Println()
+}
+
+func runSemanticInspect(args []string) {
+	fs := flag.NewFlagSet("semantic inspect", flag.ExitOnError)
+	roleFlag := fs.String("role", "", "Filtrar por rol del workspace")
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := semantic.NewService(baseDir, nil, nil)
+	deps, err := svc.InspectDependencies(*roleFlag)
+	if err != nil {
+		fmt.Printf("[ERROR] Error analizando dependencias: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(deps) == 0 {
+		fmt.Println("\nNo se registraron dependencias de paquetes.")
+		return
+	}
+
+	fmt.Printf("\nGrafo de Dependencias entre Paquetes (%d relaciones):\n", len(deps))
+	fmt.Printf("%-25s %-5s %-45s %s\n", "ORIGEN", "", "DESTINO", "TIPO")
+	fmt.Println(strings.Repeat("-", 90))
+	for _, d := range deps {
+		typ := "EXTERNO / STD"
+		if d.IsInternal {
+			typ = "INTERNO (Axiom)"
+		}
+		fmt.Printf("%-25s ➔    %-45s %s\n", d.SourcePackage, d.TargetPackage, typ)
+	}
+	fmt.Println()
+}
+
+func boolToStatus(b bool) string {
+	if b {
+		return "DISPONIBLE [OK]"
+	}
+	return "NO DETECTADO"
 }
 
 

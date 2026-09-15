@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
 )
 
@@ -21,6 +22,7 @@ import (
 type Service struct {
 	rootPath         string
 	autoskillManager *autoskill.Manager
+	semanticService  *semantic.Service
 }
 
 // NewService crea una nueva instancia del servicio para el workspace dado.
@@ -31,6 +33,7 @@ func NewService(rootPath string) *Service {
 	return &Service{
 		rootPath:         rootPath,
 		autoskillManager: autoskill.NewManager(rootPath, nil, nil, nil),
+		semanticService:  semantic.NewService(rootPath, nil, nil),
 	}
 }
 
@@ -413,5 +416,20 @@ func (s *Service) ApproveSkill(name string) error {
 // RejectSkill descarta y purga una propuesta del buzón.
 func (s *Service) RejectSkill(name string) error {
 	return s.autoskillManager.Reject(name)
+}
+
+// GetSemanticStatus obtiene el diagnóstico del entorno semántico y métricas del workspace.
+func (s *Service) GetSemanticStatus(ctx context.Context) (*semantic.SemanticStatus, error) {
+	return s.semanticService.GetStatus(ctx)
+}
+
+// FindSemanticSymbols consulta y filtra los símbolos en el workspace.
+func (s *Service) FindSemanticSymbols(query semantic.SemanticQuery) ([]semantic.SymbolItem, error) {
+	return s.semanticService.FindSymbols(query)
+}
+
+// InspectSemanticDependencies obtiene las relaciones de dependencia entre paquetes.
+func (s *Service) InspectSemanticDependencies(role string) ([]semantic.DependencyRelation, error) {
+	return s.semanticService.InspectDependencies(role)
 }
 

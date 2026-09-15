@@ -341,3 +341,54 @@ func TestSkillsInboxEndpoints(t *testing.T) {
 	}
 }
 
+func TestSemanticEndpoints(t *testing.T) {
+	svc := NewService("../..")
+	server := NewServer(svc)
+	router := server.Router()
+
+	// 1. GET /api/semantic/status
+	reqStatus := httptest.NewRequest(http.MethodGet, "/api/semantic/status", nil)
+	rrStatus := httptest.NewRecorder()
+	router.ServeHTTP(rrStatus, reqStatus)
+
+	if rrStatus.Code != http.StatusOK {
+		t.Fatalf("GET /api/semantic/status retornó %d: %s", rrStatus.Code, rrStatus.Body.String())
+	}
+
+	var statusMap map[string]interface{}
+	if err := json.Unmarshal(rrStatus.Body.Bytes(), &statusMap); err != nil {
+		t.Fatalf("JSON inválido en /api/semantic/status: %v", err)
+	}
+	if _, ok := statusMap["active_connector"]; !ok {
+		t.Errorf("campo 'active_connector' faltante en respuesta")
+	}
+
+	// 2. GET /api/semantic/symbols
+	reqSymbols := httptest.NewRequest(http.MethodGet, "/api/semantic/symbols?query=Service", nil)
+	rrSymbols := httptest.NewRecorder()
+	router.ServeHTTP(rrSymbols, reqSymbols)
+
+	if rrSymbols.Code != http.StatusOK {
+		t.Fatalf("GET /api/semantic/symbols retornó %d: %s", rrSymbols.Code, rrSymbols.Body.String())
+	}
+
+	var symbols []map[string]interface{}
+	if err := json.Unmarshal(rrSymbols.Body.Bytes(), &symbols); err != nil {
+		t.Fatalf("JSON inválido en /api/semantic/symbols: %v", err)
+	}
+
+	// 3. GET /api/semantic/dependencies
+	reqDeps := httptest.NewRequest(http.MethodGet, "/api/semantic/dependencies", nil)
+	rrDeps := httptest.NewRecorder()
+	router.ServeHTTP(rrDeps, reqDeps)
+
+	if rrDeps.Code != http.StatusOK {
+		t.Fatalf("GET /api/semantic/dependencies retornó %d: %s", rrDeps.Code, rrDeps.Body.String())
+	}
+
+	var deps []map[string]interface{}
+	if err := json.Unmarshal(rrDeps.Body.Bytes(), &deps); err != nil {
+		t.Fatalf("JSON inválido en /api/semantic/dependencies: %v", err)
+	}
+}
+
