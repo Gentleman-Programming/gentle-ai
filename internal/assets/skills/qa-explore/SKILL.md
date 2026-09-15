@@ -27,16 +27,21 @@ Carga esta skill cuando debas explorar un cambio QA (automatización de tests, c
    - Revisa `tsconfig.json`/`jsconfig.json`/config del bundler para los path aliases reales del proyecto (Actors, Tasks, Interactions, Questions, Targets/Pages, Abilities), sea cual sea su nombre.
    - Si existen: inventaría Actors, Interactions, Questions, Targets, Tasks reutilizables por módulo, con ruta y alias real.
    - Si **no existen** (proyecto nuevo o sin este patrón todavía): repórtalo explícitamente como "sin estructura Screenplay+POM previa" — es una entrada válida y esperada para G3, no un vacío a rellenar con supuestos.
-4. **Caza de locators faltantes (obligatorio, antes de reportar)**: por cada Target que el
+4. **Fixtures y sesión/localStorage reutilizables (obligatorio, mismo nivel que el paso 3)**:
+   - Inventaría los fixtures existentes que apliquen al módulo/flujo (p. ej. `src/fixtures/**/*.fixture.ts`, o el path real que uses el proyecto) — con ruta y qué datos/estado prepara cada uno.
+   - Revisa `playwright.config.ts`: qué `projects` existen, cuál `storageState`/sesión reutiliza cada uno, y su cadena de `dependencies` (p. ej. un proyecto `setup` que corre `auth.setup.ts` y deja la sesión/localStorage lista para los demás). Determina si el cambio puede correr bajo un proyecto/`storageState` ya existente.
+   - Si existe un fixture o un `storageState` que ya cubre lo que necesita el caso: repórtalo como candidato de reuso explícito, igual que un Target o una Task.
+   - Si no existe nada reutilizable: repórtalo explícitamente como "sin fixture/storageState previo aplicable" — entrada válida para G3, no lo dejes implícito.
+5. **Caza de locators faltantes (obligatorio, antes de reportar)**: por cada Target que el
    cambio va a necesitar y que NO aparece ya resuelto en el POM del paso 3, invoca la skill
    `qa-locator-hunting` para ese elemento — no lo dejes como "vacío" para que lo resuelva
    `qa-spec` o `qa-apply` más tarde. El objetivo es que el spec y el diseño Screenplay+POM
    salgan exactos desde la primera pasada, sin locators pendientes de resolver durante la
    implementación. Si `qa-locator-hunting` agota sus 3 niveles y hace sus 3 preguntas de
    fallback sin obtener respuesta, repórtalo explícitamente como información pendiente en
-   la salida (paso 6) — nunca inventes el Target para no bloquear el reporte.
-5. **Impacto**: evalúa setup, prerrequisitos e impacto en otras pruebas.
-6. **Salida**: reporte de exploración con componentes, convenciones, candidatos de reuso, estado de la arquitectura Screenplay+POM (existente con convenciones detectadas, o inexistente), locators cazados en el paso 4 (o pendientes de respuesta humana) e impacto — en `qa/{change}/explore`.
+   la salida (paso 7) — nunca inventes el Target para no bloquear el reporte.
+6. **Impacto**: evalúa setup, prerrequisitos e impacto en otras pruebas.
+7. **Salida**: reporte de exploración con componentes, convenciones, candidatos de reuso, estado de la arquitectura Screenplay+POM (existente con convenciones detectadas, o inexistente), fixtures/storageState reutilizables del paso 4, locators cazados en el paso 5 (o pendientes de respuesta humana) e impacto — en `qa/{change}/explore`.
 
 ## Guardrails
 
@@ -45,6 +50,8 @@ Carga esta skill cuando debas explorar un cambio QA (automatización de tests, c
 - Si falta documentación, detén la exploración e informa el vacío (G1 STOP).
 - No reportes un Target como resuelto sin haber agotado los 3 niveles de `qa-locator-hunting`
   primero.
+- No reportes el caso como "sin fixtures/storageState" sin haber revisado `playwright.config.ts`
+  y la carpeta de fixtures real del proyecto primero.
 
 ## Comandos de referencia
 
