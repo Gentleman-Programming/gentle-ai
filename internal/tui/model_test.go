@@ -5564,7 +5564,7 @@ func TestComponentsForPreset_PersonaMatrix(t *testing.T) {
 			wantPersona:      true,
 			wantTheme:        false,
 			wantClaudeTheme:  true,
-			wantOpenCodeLogo: true,
+			wantOpenCodeLogo: false,
 		},
 		{
 			name:             "full-gentleman + custom excludes persona but keeps safe agent visuals",
@@ -5573,7 +5573,7 @@ func TestComponentsForPreset_PersonaMatrix(t *testing.T) {
 			wantPersona:      false,
 			wantTheme:        false,
 			wantClaudeTheme:  true,
-			wantOpenCodeLogo: true,
+			wantOpenCodeLogo: false,
 		},
 		{
 			name:        "minimal + gentleman includes persona",
@@ -5711,10 +5711,13 @@ func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
 			t.Fatalf("ComponentTheme must not be in full preset components; got: %v", state.Selection.Components)
 		}
 	}
-	for _, want := range []model.ComponentID{model.ComponentClaudeTheme, model.ComponentOpenCodeGentleLogo} {
+	for _, want := range []model.ComponentID{model.ComponentClaudeTheme} {
 		if !slices.Contains(state.Selection.Components, want) {
 			t.Fatalf("agent-specific visual should remain preset-owned after switching to PersonaCustom; missing %v in %v", want, state.Selection.Components)
 		}
+	}
+	if slices.Contains(state.Selection.Components, model.ComponentOpenCodeGentleLogo) {
+		t.Fatalf("ComponentOpenCodeGentleLogo should not be in preset components; got: %v", state.Selection.Components)
 	}
 }
 

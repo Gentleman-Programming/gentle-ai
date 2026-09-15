@@ -900,6 +900,19 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			targets = append(targets, path)
 			ops = append(ops, removeFile(path))
 		}
+		for _, legacyName := range []string{"gentleman.json", "gentleman-cute.json"} {
+			var legacyPath string
+			switch adapter.Agent() {
+			case model.AgentClaudeCode:
+				legacyPath = filepath.Join(adapter.GlobalConfigDir(homeDir), "themes", legacyName)
+			case model.AgentOpenCode:
+				legacyPath = filepath.Join(filepath.Dir(adapter.SettingsPath(homeDir)), "themes", legacyName)
+			}
+			if legacyPath != "" {
+				targets = append(targets, legacyPath)
+				ops = append(ops, removeFile(legacyPath))
+			}
+		}
 		if paths := theme.VisualThemePaths(homeDir, adapter); len(paths) > 0 {
 			ops = append(ops, removeDirIfEmpty(filepath.Dir(paths[0])))
 		}
@@ -910,6 +923,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		pluginPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
 		targets = append(targets, pluginPath)
 		ops = append(ops, removeFile(pluginPath), removeDirIfEmpty(filepath.Dir(pluginPath)))
+		tuiPath := filepath.Join(homeDir, ".config", "opencode", "tui.json")
+		targets = append(targets, tuiPath)
+		ops = append(ops, rewriteOpenCodeTUIPlugins(tuiPath, "gentle-logo"))
 	case model.ComponentSkills:
 		if !adapter.SupportsSkills() {
 			break
@@ -1410,6 +1426,64 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	return append(out, '\n'), true, nil
+}
+
+func rewriteOpenCodeTUIPlugins(path string, removePatterns ...string) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			raw, err := readManagedFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return false, false, nil
+				}
+				return false, false, fmt.Errorf("read tui.json %q: %w", path, err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(raw, &root); err != nil {
+				return false, false, nil
+			}
+			changed := false
+			for _, key := range []string{"plugin", "plugins"} {
+				pluginsRaw, ok := root[key].([]any)
+				if !ok {
+					continue
+				}
+				var kept []any
+				for _, item := range pluginsRaw {
+					s, ok := item.(string)
+					if !ok {
+						kept = append(kept, item)
+						continue
+					}
+					remove := false
+					for _, pat := range removePatterns {
+						if strings.Contains(s, pat) {
+							remove = true
+							break
+						}
+					}
+					if remove {
+						changed = true
+					} else {
+						kept = append(kept, item)
+					}
+				}
+				root[key] = kept
+			}
+			if !changed {
+				return false, false, nil
+			}
+			out, err := json.MarshalIndent(root, "", "  ")
+			if err != nil {
+				return false, false, err
+			}
+			out = append(out, '\n')
+			_, err = filemerge.WriteFileAtomic(path, out, 0o644)
+			return true, false, err
+		},
+	}
 }
 
 func rewriteTOMLFile(path string, mutate func(content string) (string, bool)) operation {

@@ -80,7 +80,7 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 //   - Settings:  macOS: ~/Library/Application Support/Kiro/User/
 //               Linux: ~/.config/kiro/user/ (respects XDG_CONFIG_HOME)
 //               Windows: %APPDATA%/kiro/User/
-// Steering content is written to ~/.kiro/steering/gentle-ai.md via StrategySteeringFile.
+// Steering content is written to ~/.kiro/steering/axiom.md via StrategySteeringFile.
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".kiro")
@@ -91,7 +91,7 @@ func (a *Adapter) SystemPromptDir(homeDir string) string {
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(a.SystemPromptDir(homeDir), "gentle-ai.md")
+	return filepath.Join(a.SystemPromptDir(homeDir), "axiom.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {

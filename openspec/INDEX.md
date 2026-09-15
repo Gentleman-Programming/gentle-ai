@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-15 17:01:34 UTC
-> **Total Dominios:** 36 | **Total Requerimientos:** 260 | **Total Escenarios BDD:** 422
+> **Última Sincronización:** 2026-09-15 21:16:38 UTC
+> **Total Dominios:** 37 | **Total Requerimientos:** 264 | **Total Escenarios BDD:** 429
 
 ---
 
@@ -45,6 +45,7 @@
 | `sdd-research` | sdd-research Specification | 3 | 8 | [Ver Spec](specs/sdd-research/spec.md) |
 | `semantic-code` | Especificación de Requerimientos: Conector Semántico de Código (Serena MCP & CodeGraph) (INC-06) | 11 | 14 | [Ver Spec](specs/semantic-code/spec.md) |
 | `structured-handoffs` | Especificación Viva: Handoffs Estructurados y Ciclo de Vida de Transición | 7 | 13 | [Ver Spec](specs/structured-handoffs/spec.md) |
+| `visual-decoupling` | Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom) | 4 | 7 | [Ver Spec](specs/visual-decoupling/spec.md) |
 | `workspace-topology` | Especificación Viva: Topología de Workspace y CLI de Axiom | 7 | 15 | [Ver Spec](specs/workspace-topology/spec.md) |
 
 ---
@@ -953,6 +954,24 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-2.3]** Subcomando axiom handoff validate
   - *Escenario BDD:* Validación exitosa de handoff
   - *Escenario BDD:* Validación fallida de handoff incompleto
+
+### Dominio: `visual-decoupling` — Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom)
+
+Definir de forma exhaustiva y verificable los requerimientos y escenarios de prueba para la desvinculación estética de Gentle AI, la supresión del logo en OpenCode, la no-intrusión en temas de usuario y la estandarización de nombres en adaptadores.
+
+**Archivo:** [`specs/visual-decoupling/spec.md`](specs/visual-decoupling/spec.md)
+
+- **[REQ-09.1]** Supresión de gentle-logo en presets de instalación
+  - *Escenario BDD:* Instalación estándar en OpenCode sin logo heredado
+  - *Escenario BDD:* Desinstalación o saneamiento de logo existente
+- **[REQ-09.2]** No forzado de temas en settings.json
+  - *Escenario BDD:* Preservación del tema existente del usuario
+- **[REQ-09.3]** Renombrado de archivos de temas opcionales
+  - *Escenario BDD:* Generación de temas opcionales Axiom
+- **[REQ-09.4]** Rutas de instrucciones con nomenclatura Axiom
+  - *Escenario BDD:* Archivo de instrucciones en VS Code Copilot
+  - *Escenario BDD:* Archivo de steering en Kiro IDE
+  - *Escenario BDD:* Directorio de modelos en Pi
 
 ### Dominio: `workspace-topology` — Especificación Viva: Topología de Workspace y CLI de Axiom
 

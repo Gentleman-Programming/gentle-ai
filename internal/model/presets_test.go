@@ -21,10 +21,11 @@ func TestComponentsForPresetFullGentlemanUsesInstallSafeVisualInventory(t *testi
 			if slices.Contains(got, ComponentTheme) {
 				t.Fatalf("ComponentsForPreset() includes generic ComponentTheme: %v", got)
 			}
-			for _, want := range []ComponentID{ComponentClaudeTheme, ComponentOpenCodeGentleLogo} {
-				if !slices.Contains(got, want) {
-					t.Errorf("ComponentsForPreset() missing safe visual component %q: %v", want, got)
-				}
+			if slices.Contains(got, ComponentOpenCodeGentleLogo) {
+				t.Fatalf("ComponentsForPreset() must not include ComponentOpenCodeGentleLogo: %v", got)
+			}
+			if !slices.Contains(got, ComponentClaudeTheme) {
+				t.Fatalf("ComponentsForPreset() missing ComponentClaudeTheme: %v", got)
 			}
 		})
 	}

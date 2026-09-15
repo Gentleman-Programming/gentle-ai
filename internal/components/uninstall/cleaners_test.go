@@ -278,7 +278,7 @@ func TestReadManagedFile_RejectsSymlink(t *testing.T) {
 	}
 	link := filepath.Join(dir, "link.json")
 	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("Symlink() error = %v", err)
+		t.Skipf("Symlink creation not permitted: %v", err)
 	}
 
 	_, err := readManagedFile(link)

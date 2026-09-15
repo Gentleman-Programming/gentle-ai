@@ -16,19 +16,32 @@ type ReviewRouting struct{ Model, Thinking string }
 // root must be the validated repository root, never the transport scratch directory.
 func ResolveReviewRouting(root, role string) (ReviewRouting, error) {
 	var route ReviewRouting
-	dir, set := os.LookupEnv("GENTLE_PI_CONFIG_HOME")
+	dir, set := os.LookupEnv("AXIOM_PI_CONFIG_HOME")
+	if !set {
+		dir, set = os.LookupEnv("GENTLE_PI_CONFIG_HOME")
+	}
 	if !set {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return route, fmt.Errorf("locate Pi routing home: %w", err)
 		}
-		dir = filepath.Join(home, ".pi", "gentle-ai")
+		dir = filepath.Join(home, ".pi", "axiom")
+		if _, err := os.Stat(filepath.Join(dir, "models.json")); os.IsNotExist(err) {
+			legacyDir := filepath.Join(home, ".pi", "gentle-ai")
+			if _, err := os.Stat(filepath.Join(legacyDir, "models.json")); err == nil {
+				dir = legacyDir
+			}
+		}
 	}
 	path := filepath.Join(dir, "models.json")
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		path = filepath.Join(root, ".pi", "gentle-ai", "models.json")
+		path = filepath.Join(root, ".pi", "axiom", "models.json")
 		data, err = os.ReadFile(path)
+		if os.IsNotExist(err) {
+			path = filepath.Join(root, ".pi", "gentle-ai", "models.json")
+			data, err = os.ReadFile(path)
+		}
 	}
 	if os.IsNotExist(err) {
 		return route, nil

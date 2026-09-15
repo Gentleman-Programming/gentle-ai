@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0e17" />
+      <stop offset="50%" stop-color="#111827" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#c084fc" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#818cf8" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="320" rx="16" fill="url(#bg)" stroke="#1e293b" stroke-width="2" />
+  <rect width="1200" height="320" rx="16" fill="url(#glow)" />
+
+  <!-- Subtle Grid Pattern -->
+  <g stroke="#334155" stroke-width="0.5" stroke-opacity="0.25">
+    <line x1="0" y1="80" x2="1200" y2="80" />
+    <line x1="0" y1="160" x2="1200" y2="160" />
+    <line x1="0" y1="240" x2="1200" y2="240" />
+    <line x1="200" y1="0" x2="200" y2="320" />
+    <line x1="400" y1="0" x2="400" y2="320" />
+    <line x1="600" y1="0" x2="600" y2="320" />
+    <line x1="800" y1="0" x2="800" y2="320" />
+    <line x1="1000" y1="0" x2="1000" y2="320" />
+  </g>
+
+  <!-- Geometric Symbol (The Axiom Monogram) -->
+  <g transform="translate(180, 160)">
+    <polygon points="0,-70 60,35 -60,35" fill="none" stroke="url(#accent)" stroke-width="6" stroke-linejoin="round" />
+    <circle cx="0" cy="0" r="18" fill="#38bdf8" fill-opacity="0.8" />
+    <line x1="0" y1="-70" x2="0" y2="35" stroke="#818cf8" stroke-width="2" stroke-dasharray="4,4" />
+  </g>
+
+  <!-- Typography -->
+  <text x="320" y="155" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="76" font-weight="900" fill="#f8fafc" letter-spacing="12">AXIOM</text>
+  <text x="325" y="200" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="500" fill="url(#accent)" letter-spacing="2">DETERMINISTIC SPEC-DRIVEN MULTI-AGENT ENGINEERING PLATFORM</text>
+  <text x="325" y="235" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#94a3b8" letter-spacing="1">Autonomous SDD Lifecycle · Multi-Project Hub · Cognitive Memory · Local Dashboard</text>
+
+  <!-- Decorative Border Accents -->
+  <line x1="40" y1="40" x2="90" y2="40" stroke="#38bdf8" stroke-width="3" stroke-linecap="round" />
+  <line x1="40" y1="40" x2="40" y2="90" stroke="#38bdf8" stroke-width="3" stroke-linecap="round" />
+  <line x1="1160" y1="280" x2="1110" y2="280" stroke="#818cf8" stroke-width="3" stroke-linecap="round" />
+  <line x1="1160" y1="280" x2="1160" y2="230" stroke="#818cf8" stroke-width="3" stroke-linecap="round" />
+</svg>

@@ -71,8 +71,8 @@ func TestSystemPromptFileUsesInstructionsExtension(t *testing.T) {
 		t.Fatalf("SystemPromptFile() should end with .md: %q", path)
 	}
 
-	if filepath.Base(path) != "gentle-ai.instructions.md" {
-		t.Fatalf("SystemPromptFile() = %q, want filename gentle-ai.instructions.md", path)
+	if filepath.Base(path) != "axiom.instructions.md" {
+		t.Fatalf("SystemPromptFile() = %q, want filename axiom.instructions.md", path)
 	}
 }
 

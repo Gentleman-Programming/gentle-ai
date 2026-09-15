@@ -77,3 +77,44 @@ func TestResolveReviewRoutingPrecedenceAndThinking(t *testing.T) {
 	write(filepath.Join(home, ".pi", "gentle-ai"), `{"review-validator":"home"}`)
 	check("home", "")
 }
+
+func TestResolveReviewRoutingAxiomPaths(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	_ = os.Unsetenv("AXIOM_PI_CONFIG_HOME")
+	_ = os.Unsetenv("GENTLE_PI_CONFIG_HOME")
+
+	write := func(dir, value string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "models.json"), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 1. Repo .pi/axiom
+	write(filepath.Join(repo, ".pi", "axiom"), `{"review-validator":"axiom-project"}`)
+	got, err := ResolveReviewRouting(repo, "review-validator")
+	if err != nil || got.Model != "axiom-project" {
+		t.Fatalf("ResolveReviewRouting(repo .pi/axiom) = %+v, %v", got, err)
+	}
+
+	// 2. Home .pi/axiom
+	write(filepath.Join(home, ".pi", "axiom"), `{"review-validator":"axiom-home"}`)
+	got, err = ResolveReviewRouting(t.TempDir(), "review-validator")
+	if err != nil || got.Model != "axiom-home" {
+		t.Fatalf("ResolveReviewRouting(home .pi/axiom) = %+v, %v", got, err)
+	}
+
+	// 3. AXIOM_PI_CONFIG_HOME override
+	custom := t.TempDir()
+	t.Setenv("AXIOM_PI_CONFIG_HOME", custom)
+	write(custom, `{"review-validator":"axiom-custom"}`)
+	got, err = ResolveReviewRouting(t.TempDir(), "review-validator")
+	if err != nil || got.Model != "axiom-custom" {
+		t.Fatalf("ResolveReviewRouting(AXIOM_PI_CONFIG_HOME) = %+v, %v", got, err)
+	}
+}

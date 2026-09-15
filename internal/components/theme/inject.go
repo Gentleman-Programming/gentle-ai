@@ -16,7 +16,6 @@ type InjectionResult struct {
 	Files   []string
 }
 
-var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman\"\n}\n")
 
 type claudeTheme struct {
 	Name      string            `json:"name"`
@@ -39,26 +38,26 @@ func palette(pairs ...string) map[string]string {
 	return colors
 }
 
-var gentlemanClaudeTheme = claudeTheme{
-	Name: "gentleman", Base: "dark",
+var axiomClaudeTheme = claudeTheme{
+	Name: "axiom", Base: "dark",
 	Overrides: palette(
 		"diffAdded", "#3F4A2D", "diffRemoved", "#5C3838", "diffAddedWord", "#76946A", "diffRemovedWord", "#C34043",
 		"chromeYellow", "#DCA561", "briefLabelYou", "#DCA561", "rainbow_yellow", "#DCA561", "yellow_FOR_SUBAGENTS_ONLY", "#DCA561",
 	),
 }
 
-var gentlemanCuteClaudeTheme = claudeTheme{
-	Name: "Gentleman Cute", Base: "dark",
+var axiomDarkClaudeTheme = claudeTheme{
+	Name: "Axiom Dark", Base: "dark",
 	Overrides: palette(
-		"claude", "#F095C8", "claudeShimmer", "#FFB1DD", "text", "#F6EFF3", "inactive", "#A78E9B", "subtle", "#76616B", "suggestion", "#FFB1DD",
-		"permission", "#F095C8", "promptBorder", "#F095C8", "planMode", "#A9C7EE", "autoAccept", "#FF81CC", "bashBorder", "#E0C27A",
+		"claude", "#6B8AFE", "claudeShimmer", "#8EA7FF", "text", "#F3F6F9", "inactive", "#7B849B", "subtle", "#4B556D", "suggestion", "#8EA7FF",
+		"permission", "#6B8AFE", "promptBorder", "#6B8AFE", "planMode", "#80D4FF", "autoAccept", "#6B8AFE", "bashBorder", "#E0C27A",
 		"remember", "#E0C27A", "success", "#B4E7C7", "merged", "#B4E7C7", "error", "#FF718F", "warning", "#F2B86D",
 		"diffAdded", "#1A2420", "diffRemoved", "#2D151F", "diffAddedWord", "#2D5A45", "diffRemovedWord", "#7A2948",
-		"userMessageBackground", "#241822", "userMessageBackgroundHover", "#342230", "selectionBg", "#563040", "memoryBackgroundColor", "#1A1218", "bashMessageBackgroundColor", "#151316",
+		"userMessageBackground", "#1E2230", "userMessageBackgroundHover", "#262C3E", "selectionBg", "#38415C", "memoryBackgroundColor", "#151824", "bashMessageBackgroundColor", "#12151E",
 	),
 }
 
-var gentlemanOpenCodeTheme = openCodeTheme{
+var axiomOpenCodeTheme = openCodeTheme{
 	Schema: openCodeThemeSchema,
 	Theme: palette(
 		"background", "none", "backgroundPanel", "#06080f", "backgroundElement", "#06080f", "text", "#F3F6F9", "textMuted", "#5C6170",
@@ -72,17 +71,17 @@ var gentlemanOpenCodeTheme = openCodeTheme{
 	),
 }
 
-var gentlemanCuteOpenCodeTheme = openCodeTheme{
+var axiomDarkOpenCodeTheme = openCodeTheme{
 	Schema: openCodeThemeSchema,
 	Theme: palette(
-		"background", "none", "backgroundPanel", "#1A1218", "backgroundElement", "#241822", "text", "#F6EFF3", "textMuted", "#A78E9B",
-		"primary", "#F095C8", "secondary", "#D7A0B8", "accent", "#F095C8", "error", "#FF718F", "warning", "#F2B86D", "success", "#B4E7C7", "info", "#D7A0B8",
-		"border", "#342230", "borderActive", "#FFB1DD", "borderSubtle", "#241822", "diffAdded", "#B4E7C7", "diffRemoved", "#FF718F", "diffContext", "#A78E9B",
-		"diffHunkHeader", "#D7A0B8", "diffHighlightAdded", "#B4E7C7", "diffHighlightRemoved", "#FF718F", "diffAddedBg", "#1A2420", "diffRemovedBg", "#261019", "diffContextBg", "#1A1218",
-		"diffLineNumber", "#76616B", "diffAddedLineNumberBg", "#1A2420", "diffRemovedLineNumberBg", "#261019", "markdownText", "#F6EFF3", "markdownHeading", "#E0C27A",
-		"markdownLink", "#F095C8", "markdownLinkText", "#F095C8", "markdownCode", "#E0C27A", "markdownBlockQuote", "#A78E9B", "markdownEmph", "#D7A0B8", "markdownStrong", "#E0C27A",
-		"markdownHorizontalRule", "#A78E9B", "markdownListItem", "#F095C8", "markdownListEnumeration", "#D7A0B8", "markdownImage", "#F095C8", "markdownImageText", "#F095C8", "markdownCodeBlock", "#F6EFF3",
-		"syntaxComment", "#A78E9B", "syntaxKeyword", "#F095C8", "syntaxFunction", "#A9C7EE", "syntaxVariable", "#F6EFF3", "syntaxString", "#B4E7C7", "syntaxNumber", "#F2B86D", "syntaxType", "#E0C27A", "syntaxOperator", "#C4DAF6", "syntaxPunctuation", "#A78E9B",
+		"background", "none", "backgroundPanel", "#0D1117", "backgroundElement", "#161B22", "text", "#F0F6FC", "textMuted", "#8B949E",
+		"primary", "#58A6FF", "secondary", "#79C0FF", "accent", "#58A6FF", "error", "#FF7B72", "warning", "#D29922", "success", "#3FB950", "info", "#58A6FF",
+		"border", "#30363D", "borderActive", "#58A6FF", "borderSubtle", "#21262D", "diffAdded", "#3FB950", "diffRemoved", "#FF7B72", "diffContext", "#8B949E",
+		"diffHunkHeader", "#79C0FF", "diffHighlightAdded", "#3FB950", "diffHighlightRemoved", "#FF7B72", "diffAddedBg", "#033A16", "diffRemovedBg", "#67060C", "diffContextBg", "#0D1117",
+		"diffLineNumber", "#6E7681", "diffAddedLineNumberBg", "#033A16", "diffRemovedLineNumberBg", "#67060C", "markdownText", "#F0F6FC", "markdownHeading", "#58A6FF",
+		"markdownLink", "#58A6FF", "markdownLinkText", "#58A6FF", "markdownCode", "#E3B341", "markdownBlockQuote", "#8B949E", "markdownEmph", "#79C0FF", "markdownStrong", "#E3B341",
+		"markdownHorizontalRule", "#30363D", "markdownListItem", "#58A6FF", "markdownListEnumeration", "#79C0FF", "markdownImage", "#58A6FF", "markdownImageText", "#58A6FF", "markdownCodeBlock", "#F0F6FC",
+		"syntaxComment", "#8B949E", "syntaxKeyword", "#FF7B72", "syntaxFunction", "#D2A8FF", "syntaxVariable", "#FFA657", "syntaxString", "#A5D6FF", "syntaxNumber", "#79C0FF", "syntaxType", "#FFA657", "syntaxOperator", "#FF7B72", "syntaxPunctuation", "#8B949E",
 	),
 }
 
@@ -92,12 +91,9 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		return InjectionResult{}, nil
 	}
 
-	writeResult, err := mergeJSONFile(settingsPath, themeOverlayJSON)
-	if err != nil {
-		return InjectionResult{}, err
-	}
-
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+	// Per REQ-09.2: Axiom is non-intrusive and preserves the developer's theme preferences.
+	// It does NOT inject "theme" into settings.json during sync or install.
+	return InjectionResult{Changed: false, Files: []string{settingsPath}}, nil
 }
 
 // InjectVisualThemes writes the managed visual theme assets without selecting one
@@ -111,9 +107,9 @@ func InjectVisualThemes(homeDir string, adapter agents.Adapter) (InjectionResult
 	var values []any
 	switch adapter.Agent() {
 	case model.AgentClaudeCode:
-		values = []any{gentlemanClaudeTheme, gentlemanCuteClaudeTheme}
+		values = []any{axiomClaudeTheme, axiomDarkClaudeTheme}
 	case model.AgentOpenCode:
-		values = []any{gentlemanOpenCodeTheme, gentlemanCuteOpenCodeTheme}
+		values = []any{axiomOpenCodeTheme, axiomDarkOpenCodeTheme}
 	}
 
 	result := InjectionResult{Files: make([]string, 0, len(paths))}
@@ -144,7 +140,7 @@ func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 	default:
 		return nil
 	}
-	return []string{filepath.Join(root, "gentleman.json"), filepath.Join(root, "gentleman-cute.json")}
+	return []string{filepath.Join(root, "axiom.json"), filepath.Join(root, "axiom-dark.json")}
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

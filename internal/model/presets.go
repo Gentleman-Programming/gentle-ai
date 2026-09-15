@@ -9,8 +9,9 @@ func VisualPolishComponents() []ComponentID {
 
 // installSafePresetVisualComponents returns only the agent-specific visual
 // components that presets can install without overwriting a generic theme.
+// ComponentOpenCodeGentleLogo is excluded to keep OpenCode home slots unpolluted.
 func installSafePresetVisualComponents() []ComponentID {
-	return []ComponentID{ComponentClaudeTheme, ComponentOpenCodeGentleLogo}
+	return []ComponentID{ComponentClaudeTheme}
 }
 
 // ComponentsForPreset returns the managed components implied by a preset/persona

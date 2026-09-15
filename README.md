@@ -3,72 +3,37 @@
 
 <div align="center">
 
-<img width="100%" alt="Gentle-AI neon rose banner" src="docs/assets/brand/gentle-ai-banner.png" />
+<img width="100%" alt="Axiom banner" src="docs/assets/brand/axiom-banner.svg" />
 
-<h1>Gentle-AI™</h1>
+<h1>Axiom</h1>
 
-<p><strong>The deterministic engineering environment for the AI agent you already use.</strong></p>
+<p><strong>Plataforma Determinista de Ingeniería de Software, Orquestación Multi-Agente y Spec-Driven Development (SDD).</strong></p>
 
 <p>
-<a href="https://github.com/Gentleman-Programming/gentle-ai/releases"><img src="https://img.shields.io/github/v/release/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Release"></a>
-<a href="https://github.com/Gentleman-Programming/gentle-ai/stargazers"><img src="https://img.shields.io/github/stars/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Stars"></a>
-<img src="https://img.shields.io/badge/agents-16-F095C8?style=for-the-badge&labelColor=1A1218" alt="16 agents">
-<img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform">
-<a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
+<img src="https://img.shields.io/badge/go-1.25+-38BDF8?style=for-the-badge&labelColor=0F172A" alt="Go 1.25+">
+<img src="https://img.shields.io/badge/agents-16-818CF8?style=for-the-badge&labelColor=0F172A" alt="16 agents">
+<img src="https://img.shields.io/badge/lifecycle-SDD%20%2B%20RDD-38BDF8?style=for-the-badge&labelColor=0F172A" alt="SDD + RDD">
+<img src="https://img.shields.io/badge/multi--project-Hub-C084FC?style=for-the-badge&labelColor=0F172A" alt="Multi-Project Hub">
+<a href="LICENSE"><img src="https://img.shields.io/badge/MIT-818CF8?style=for-the-badge&labelColor=0F172A" alt="License: MIT"></a>
 </p>
 
 <p>
-<a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
-<a href="docs/quickstart.md"><strong>Quickstart</strong></a> &bull;
-<a href="docs/intended-usage.md"><strong>Docs</strong></a> &bull;
-<a href="https://gentle-ai-wiki.gentlemanprogramming.com/"><strong>Wiki</strong></a>
-</p>
-
-<br/>
-
-<p>
-Your agent writes code, then forgets everything. It has no opinion about your project,
-and no way to prove what it did beyond asking you to read every line.
-<strong>Gentle-AI gives it memory, a workflow, and evidence.</strong>
+<a href="docs/quickstart.md"><strong>Guía Rápida</strong></a> &bull;
+<a href="docs/architecture.md"><strong>Arquitectura</strong></a> &bull;
+<a href="docs/agents.md"><strong>Agentes</strong></a> &bull;
+<a href="docs/intended-usage.md"><strong>Documentación</strong></a>
 </p>
 
 <br/>
 
-<!--
-  HERO SLOT — the only animation on this page. Features is all still: four
-  diagrams for the concepts, two captures as proof the thing runs. Motion is
-  spent once, here, right after the pitch lands.
-
-  Uncomment when docs/assets/features/hero-pi.gif exists. It is a real-time capture
-  of the complete Pi startup: banner, extensions, skills and startup output, never
-  trimmed. A stripped startup does not look like the real thing.
-
-<img width="100%" src="docs/assets/features/hero-pi.gif" alt="Gentle-AI starting up inside Pi" />
-
-<br/>
--->
-
-<sub><strong>If Gentle-AI made your agent worth trusting, a star helps other people find it.</strong></sub>
-
-<!--
-  sealed_token is a GitHub fine-grained token encrypted against Star History's
-  public key, so only the encrypted value is published here. It is required
-  because GitHub restricted the stargazers API to a repository's admins and
-  collaborators on 2026-06-30; without it the chart renders an error placeholder.
-  Regenerate it at https://www.star-history.com/?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left
--->
-
-<a href="https://www.star-history.com/?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Gentleman-Programming%2Fgentle-ai&type=date&theme=dark&legend=top-left&sealed_token=zwrd_DfwYZeJU7nhGYNtREEheKWYEslW_uzrqORlZ36v-JSMepdqGLkKExp1M-xbNq6t-ebVS5iM3WoPDO26tXbSGkjXC2Jo3kHQ3uNzlRkCrWoqRHkPVQXvosKciY109ObiwGV1z8aajyedcloppmekCGrvVKJb6KWxGLXW_mHcRAVIBZUOa4SzW75D" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left&sealed_token=zwrd_DfwYZeJU7nhGYNtREEheKWYEslW_uzrqORlZ36v-JSMepdqGLkKExp1M-xbNq6t-ebVS5iM3WoPDO26tXbSGkjXC2Jo3kHQ3uNzlRkCrWoqRHkPVQXvosKciY109ObiwGV1z8aajyedcloppmekCGrvVKJb6KWxGLXW_mHcRAVIBZUOa4SzW75D" />
-    <img width="620" alt="Star History Chart" src="https://api.star-history.com/chart?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left&sealed_token=zwrd_DfwYZeJU7nhGYNtREEheKWYEslW_uzrqORlZ36v-JSMepdqGLkKExp1M-xbNq6t-ebVS5iM3WoPDO26tXbSGkjXC2Jo3kHQ3uNzlRkCrWoqRHkPVQXvosKciY109ObiwGV1z8aajyedcloppmekCGrvVKJb6KWxGLXW_mHcRAVIBZUOa4SzW75D" />
-  </picture>
-</a>
+<p>
+Tus agentes de IA generan código, pero pierden contexto en cada sesión y carecen de un método determinista para validar lo que hacen.
+<strong>Axiom les dota de memoria cognitiva acumulativa, un ciclo de vida SDD riguroso, arquitectura multi-proyecto y evidencia auditable.</strong>
+</p>
 
 <br/>
 
-<sub><strong>WORKS WITH THE AGENT YOU ALREADY HAVE</strong></sub>
+<sub><strong>COMPATIBLE CON EL AGENTE QUE YA UTILIZAS</strong></sub>
 
 <strong><a href="docs/agents.md#pi">Pi</a></strong> ·
 <strong><a href="docs/agents.md#opencode">OpenCode</a></strong> ·
@@ -87,13 +52,13 @@ and no way to prove what it did beyond asking you to read every line.
 <strong><a href="docs/agents.md#openclaw">OpenClaw</a></strong> ·
 <strong><a href="docs/agents.md#trae">Trae</a></strong>
 
-<sub>16 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
+<sub>16 integraciones · configuración no-intrusiva · <a href="docs/agents.md">comparar capacidades →</a></sub>
 
 </div>
 
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+---
 
-## Features
+## Características y Capacidades
 
 ---
 
@@ -242,37 +207,22 @@ Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/ge
 
 <div align="right"><a href="#top">Back to top</a></div>
 
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
-
-## About the author
-
-Built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming): 15 years of enterprise architecture, a community of thousands of developers testing these tools daily, and one rule for AI-assisted work — **verifying beats generating**.
-
-Teams adopting AI and finding it isn't working — resistance, everyone prompting their own way, no shared quality bar — can reach out about **[engagements built on these same open-source tools →](docs/consulting.md)**.
-
-<div align="center">
-
-<a href="https://gentlemanprogramming.com/"><img src="https://img.shields.io/badge/Website-F095C8?style=for-the-badge&labelColor=1A1218&logo=googlechrome&logoColor=F095C8" alt="Website"></a>
-<a href="https://www.youtube.com/@GentlemanProgramming"><img src="https://img.shields.io/badge/YouTube-F095C8?style=for-the-badge&labelColor=1A1218&logo=youtube&logoColor=F095C8" alt="YouTube"></a>
-<a href="https://github.com/Gentleman-Programming"><img src="https://img.shields.io/badge/GitHub-D7A0B8?style=for-the-badge&labelColor=1A1218&logo=github&logoColor=D7A0B8" alt="GitHub"></a>
-<a href="mailto:gentleman@ohmybitz.com"><img src="https://img.shields.io/badge/Email-D7A0B8?style=for-the-badge&labelColor=1A1218&logo=maildotru&logoColor=D7A0B8" alt="Email"></a>
-
-</div>
-
 ---
 
-<div align="center">
+## Origen y Evolución
 
-<img src="docs/assets/brand/rose.png" width="56" alt="" />
+**Axiom** es una plataforma independiente de ingeniería aumentada nacida como evolución y bifurcación de *Gentle-AI*. Conserva la robustez del arnés determinista y la metodología de Spec-Driven Development (SDD), incorporando gobernanza multi-rol, catálogo de autoskills, motor de código semántico y un Hub centralizado multi-proyecto.
+
+<div align="center">
 
 <br/>
 
-<h3>Gentle-AI is crafted with Gentle-AI</h3>
+<h3>Axiom: Deterministic Multi-Agent Engineering</h3>
 
-<br/><br/>
+<br/>
 
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-F095C8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-38BDF8?style=for-the-badge&labelColor=0F172A" alt="License: MIT"></a>
 
 </div>
 
-> **Trademark notice:** The Gentle AI™ and Engram™ names and logos are trademarks of Alan Buscaglia. Both marks are used throughout this document; the symbol appears on the first prominent mention of each, and this notice covers the rest. The MIT License applies to the code; it does not permit implying endorsement or official affiliation. See [TRADEMARKS.md](TRADEMARKS.md).
+> **Nota de marca y atribución:** Axiom respeta los derechos y marcas originales de sus componentes base (Gentle AI™, Engram™). El código se distribuye bajo licencia de código abierto MIT. Véase [LICENSE](LICENSE).

@@ -80,7 +80,6 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 			model.ComponentPermission,
 			model.ComponentGGA,
 			model.ComponentClaudeTheme,
-			model.ComponentOpenCodeGentleLogo,
 			model.ComponentPersona,
 		},
 	}
@@ -136,7 +135,7 @@ func TestNormalizeInstallFlagsFullPresetCustomPersonaKeepsPresetPolish(t *testin
 		}
 	}
 
-	for _, want := range []model.ComponentID{model.ComponentClaudeTheme, model.ComponentOpenCodeGentleLogo} {
+	for _, want := range []model.ComponentID{model.ComponentClaudeTheme} {
 		found := false
 		for _, got := range input.Selection.Components {
 			if got == want {
@@ -146,6 +145,11 @@ func TestNormalizeInstallFlagsFullPresetCustomPersonaKeepsPresetPolish(t *testin
 		}
 		if !found {
 			t.Fatalf("components should include preset polish %q; got %#v", want, input.Selection.Components)
+		}
+	}
+	for _, got := range input.Selection.Components {
+		if got == model.ComponentOpenCodeGentleLogo {
+			t.Fatalf("components should not include %q; got %#v", model.ComponentOpenCodeGentleLogo, input.Selection.Components)
 		}
 	}
 }

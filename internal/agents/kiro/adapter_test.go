@@ -148,7 +148,7 @@ func TestAdapter_SystemPromptDir(t *testing.T) {
 func TestAdapter_SystemPromptFile(t *testing.T) {
 	adapter := NewAdapter()
 	homeDir := "/home/user"
-	expected := filepath.Join(homeDir, ".kiro", "steering", "gentle-ai.md")
+	expected := filepath.Join(homeDir, ".kiro", "steering", "axiom.md")
 
 	got := adapter.SystemPromptFile(homeDir)
 	if got != expected {
