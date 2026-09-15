@@ -15,14 +15,15 @@ Carga esta skill cuando debas explorar un cambio QA (automatización de tests, c
 
 ## Fuentes de verdad (MANDATORY)
 
-- **BookStack = fuente de la verdad**: consulta SIEMPRE la documentación oficial del módulo (PRD, criterios de aceptación, páginas del Agente QA) mediante `bookstack_bookstack_search` antes de suponer convenciones. Cita cada página usada (nombre + URL).
-- **Engram = memoria persistente**: recupera contexto previo con `mem_search` / `mem_context` (project: "{project}") antes de explorar. Nunca asumas que no existe trabajo anterior.
+- **Handoff de qa-supervisor = punto de partida, no BookStack desde cero**: `qa-supervisor` ya hizo la Regla Cero antes de delegarte esta tarea. Su handoff (en el mensaje de la tarea, y persistido en `mem_search`/`mem_get_observation` bajo `qa/{change}/supervisor-handoff`) trae el requerimiento interpretado y las páginas de BookStack ya citadas. Úsalo como base — no repitas esa misma búsqueda.
+- **BookStack = fuente de la verdad**: consulta `bookstack_bookstack_search` SOLO para ampliar lo que el handoff no cubre (detalle técnico de Screenplay+POM, fixtures, convenciones que la Regla Cero no necesitaba). Cita cada página nueva usada (nombre + URL).
+- **Engram = memoria persistente**: recupera el handoff con `mem_search`/`mem_get_observation` (`qa/{change}/supervisor-handoff`, project: "{project}") antes de explorar. Si no hay `{change}` o no aparece el handoff, trátalo como vacío y repórtalo — no inventes uno.
 - Si BookStack difiere del código actual, NO decidas tú: preséntalo como contradicción para el humano (G1/G4).
 
 ## Flujo de exploración (G2)
 
-1. **Contexto en memoria**: `mem_search` sobre el módulo/test solicitado para recuperar decisiones y exploraciones previas.
-2. **Documentación oficial**: `bookstack_bookstack_search` con términos del módulo/PRD; cita páginas usadas.
+1. **Contexto en memoria**: `mem_search`/`mem_get_observation` sobre `qa/{change}/supervisor-handoff` para recuperar el requerimiento interpretado y las citas de BookStack que ya hizo `qa-supervisor`, más cualquier decisión/exploración previa del mismo `{change}`.
+2. **Documentación oficial (solo lo que falte)**: si el handoff no cubre algo que necesitas para el análisis técnico (G2), amplía con `bookstack_bookstack_search`; cita las páginas nuevas usadas.
 3. **Tests similares y arquitectura Screenplay+POM**: localiza tests existentes del módulo, fixtures, helpers, config de Playwright y convenciones de nombres/ubicación. Determina explícitamente si el proyecto ya implementa Screenplay+POM y con qué convenciones propias (no asumas las de otro proyecto):
    - Revisa `tsconfig.json`/`jsconfig.json`/config del bundler para los path aliases reales del proyecto (Actors, Tasks, Interactions, Questions, Targets/Pages, Abilities), sea cual sea su nombre.
    - Si existen: inventaría Actors, Interactions, Questions, Targets, Tasks reutilizables por módulo, con ruta y alias real.
