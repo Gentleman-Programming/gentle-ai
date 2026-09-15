@@ -678,11 +678,23 @@ func (s *Service) MigrateIncompleteTasksToCumulative(changeName, role string) (i
 			continue
 		}
 		lines := strings.Split(string(data), "\n")
+		var modifiedLines []string
+		fileChanged := false
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "- [ ]") {
 				incompleteTasks = append(incompleteTasks, trimmed)
+				taskText := strings.TrimPrefix(trimmed, "- [ ]")
+				taskText = strings.TrimSpace(taskText)
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				modifiedLines = append(modifiedLines, fmt.Sprintf("%s- [x] ~~(migrada a acumulativo %s)~~ %s", indent, role, taskText))
+				fileChanged = true
+			} else {
+				modifiedLines = append(modifiedLines, line)
 			}
+		}
+		if fileChanged {
+			_ = os.WriteFile(tf, []byte(strings.Join(modifiedLines, "\n")), 0644)
 		}
 	}
 
