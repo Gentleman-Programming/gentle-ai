@@ -444,6 +444,69 @@ func TestRenderRoutingIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestRenderRoutingOpensWithTheODDProtocol pins Organic Driven Development
+// (ODD) as the orchestrator's predefined, mandatory default workflow: the
+// ordered protocol must render before topology selection, in step order, for
+// every supported agent, and the reference detail section must still follow
+// it rather than duplicate or replace it.
+func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
+	t.Parallel()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+
+			orderedSubstrings := []string{
+				"Organic Driven Development (ODD) is the predefined workflow of this orchestrator",
+				"### ODD protocol (MANDATORY, in this order, on every request)",
+				"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.",
+				"2. **Explore.**",
+				"3. **Resolve uncertainty.**",
+				"4. **Classify.**",
+				"5. **Track before the first write.**",
+				"6. **Implement task by task.**",
+				"7. **Close.**",
+				"**Direct inline:**",
+			}
+			previous := -1
+			for _, want := range orderedSubstrings {
+				at := strings.Index(rendered, want)
+				if at < 0 {
+					t.Fatalf("RenderRouting(%q) is missing %q:\n%s", agent.ID, want, rendered)
+				}
+				if at <= previous {
+					t.Fatalf("RenderRouting(%q) has %q out of order (at %d, previous %d):\n%s", agent.ID, want, at, previous, rendered)
+				}
+				previous = at
+			}
+
+			for _, want := range []string{
+				"two or more meaningful implementation steps",
+				"before the first source write",
+				"Tell the user in one line which feature document was created and how many tasks it holds",
+				"Never describe this workflow only when asked about it: run it.",
+				"SDD is a branch inside ODD",
+				"Resume an interrupted feature with `mem_context`",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) is missing ODD default-workflow clause %q:\n%s", agent.ID, want, rendered)
+				}
+			}
+
+			protocolHeading := strings.Index(rendered, "### ODD protocol")
+			detailHeading := strings.Index(rendered, "### Organic Driven Development")
+			if protocolHeading < 0 || detailHeading < 0 || protocolHeading >= detailHeading {
+				t.Fatalf("RenderRouting(%q) must render the ODD protocol heading before the detail section:\n%s", agent.ID, rendered)
+			}
+		})
+	}
+}
+
 func TestRenderRoutingRejectsUnregisteredAgent(t *testing.T) {
 	t.Parallel()
 

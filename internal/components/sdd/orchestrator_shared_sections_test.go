@@ -105,6 +105,11 @@ var sharedOrchestratorSectionNames = []string{
 	// Form)".
 	"Delegated Verification Gate (MANDATORY)",
 	"Delegated Verification Gate (Reduced Form)",
+	// ODD default workflow: every SDD orchestrator asset states, before any
+	// SDD instruction, that Organic Driven Development is this orchestrator's
+	// predefined workflow and SDD is a branch entered only by explicit
+	// selection.
+	"Organic Driven Development Is The Default Workflow (MANDATORY)",
 }
 
 // TestSharedOrchestratorSectionsHaveOneSource pins that each shared section
@@ -196,6 +201,52 @@ func TestDelegatedVerificationGateDeclinedReviewFallbackRenders(t *testing.T) {
 		}
 		if !strings.Contains(rendered, fallbackPhrase) {
 			t.Errorf("%s renders a Delegated Verification Gate section without the declined-review fallback phrase", agent)
+		}
+	}
+}
+
+// TestEveryRuntimeOrchestratorOpensWithODDDefault pins that Organic Driven
+// Development is stated as the default workflow before any SDD-specific
+// instruction in every runtime orchestrator asset. Every asset in this list
+// opens with a coordinator/role paragraph followed by "### Lossless Blocking
+// Prompts (MANDATORY)"; the ODD default-workflow shared section must render
+// before that first SDD-flavored subsection.
+func TestEveryRuntimeOrchestratorOpensWithODDDefault(t *testing.T) {
+	const sectionName = "Organic Driven Development Is The Default Workflow (MANDATORY)"
+
+	body := sharedOrchestratorSection(sectionName)
+	if strings.TrimSpace(body) == "" {
+		t.Fatalf("shared asset carries no body for %q", sectionName)
+	}
+	first := strings.SplitN(strings.TrimSpace(body), "\n", 2)[0]
+
+	for _, agent := range []model.AgentID{
+		model.AgentOpenCode, model.AgentCursor, model.AgentGeminiCLI, model.AgentQwenCode,
+		model.AgentHermes, model.AgentKimi, model.AgentWindsurf, model.AgentCodex,
+		model.AgentClaudeCode, model.AgentKiroIDE, model.AgentAntigravity, model.AgentVSCodeCopilot,
+	} {
+		rendered := renderSDDOrchestratorAsset(agent)
+
+		oddOffset := strings.Index(rendered, first)
+		if oddOffset < 0 {
+			t.Errorf("%s does not render the ODD default-workflow shared section", agent)
+			continue
+		}
+
+		var boundary string
+		switch {
+		case strings.Contains(rendered, "### Lossless Blocking Prompts"):
+			boundary = "### Lossless Blocking Prompts"
+		case strings.Contains(rendered, "### Language Domain Contract"):
+			boundary = "### Language Domain Contract"
+		default:
+			// No known SDD-flavored boundary subsection in this asset; presence
+			// of the shared section body is the complete, deterministic check.
+			continue
+		}
+		boundaryOffset := strings.Index(rendered, boundary)
+		if boundaryOffset < 0 || oddOffset >= boundaryOffset {
+			t.Errorf("%s must render the ODD default-workflow section before %q", agent, boundary)
 		}
 	}
 }

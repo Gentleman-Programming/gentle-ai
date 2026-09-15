@@ -70,3 +70,7 @@ This runtime has no subagent delegation mechanism, so there is no separate write
 
 The parent spot check — re-running one reported command before delivery — still applies. The receipt-driven development state does not change this table: native review remains the independent check on top of whatever verification ran here. That independent check only stands once the native review reaches a terminal outcome for this candidate: a decline of the consent envelope for this candidate (candidate-scoped; never the kill switch), receipt-driven development disabled for the clone after this status was read, or a START or STATUS refusal are all treated as not closed, and never excuse the agent from running the tier's verification commands above.
 <!-- sdd-orchestrator-section:Delegated Verification Gate (Reduced Form):end -->
+
+<!-- sdd-orchestrator-section:Organic Driven Development Is The Default Workflow (MANDATORY):start -->
+Organic Driven Development (ODD) is this orchestrator's predefined workflow for every request. Its ordered protocol is installed for this agent under `## Implementation Routing` (`### ODD protocol`) and runs first, on every request, without the user asking about workflow, planning, or task tracking. The SDD instructions in this section apply only after the user explicitly selects SDD or accepts an SDD proposal; they never replace, precede, or postpone the ODD protocol.
+<!-- sdd-orchestrator-section:Organic Driven Development Is The Default Workflow (MANDATORY):end -->

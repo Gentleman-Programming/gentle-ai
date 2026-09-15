@@ -515,7 +515,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
 	// same shared session preflight body, so the hash moved. Deliberate, not drift.
-	const want = "8f388ae4197cfa0fbfdf1f82423a599ea43e43665659da11e0389b670d241bf4"
+	// ODD default workflow: every runtime orchestrator asset now opens with the
+	// "Organic Driven Development Is The Default Workflow (MANDATORY)" shared
+	// section before any SDD-specific instruction. Kilo renders that section
+	// through the OpenCode orchestrator asset, so the baseline is rederived.
+	const want = "6de12ae601904bb3fd484db312590e8d68faaf058d5b4bebcad2d1972ef28c2e"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
