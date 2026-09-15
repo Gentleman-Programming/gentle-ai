@@ -32,6 +32,7 @@ type RoleConfig struct {
 	Name         string            `yaml:"name"`
 	Repositories []RepositoryEntry `yaml:"repositories"`
 	Tech         []string          `yaml:"tech,omitempty"`
+	GatePolicy   string            `yaml:"gate_policy,omitempty"` // blocking o advisory
 }
 
 // GovernanceConfig define configuraciones transversales del proyecto.
@@ -39,6 +40,7 @@ type GovernanceConfig struct {
 	Language         string `yaml:"language,omitempty"`
 	SharedMemory     string `yaml:"shared_memory,omitempty"`
 	SemanticAnalysis string `yaml:"semantic_analysis,omitempty"`
+	Context          string `yaml:"context,omitempty"`
 }
 
 // WorkspaceConfig es la raíz del archivo de configuración axiom.yaml.

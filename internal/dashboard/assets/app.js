@@ -78,11 +78,57 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === modal) modal.classList.add('hidden');
   });
 
+  // Elementos del Constructor de Roles Dinámico
+  const rolesBuilderContainer = document.getElementById('roles-builder-container');
+  const btnAddRoleRow = document.getElementById('btn-add-role-row');
+  const selectProjectTopology = document.getElementById('select-project-topology');
+
+  function addRoleRow(key = '', name = '', repos = '', nonBlocking = false) {
+    if (!rolesBuilderContainer) return;
+    const card = document.createElement('div');
+    card.className = 'role-builder-card';
+    card.style.cssText = 'background: rgba(15, 23, 42, 0.7); border: 1px solid #334155; border-radius: 6px; padding: 0.75rem; position: relative;';
+    card.innerHTML = `
+      <button type="button" class="btn-remove-role" style="position: absolute; right: 0.5rem; top: 0.5rem; background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1.1rem; line-height: 1;">✕</button>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; padding-right: 1.5rem;">
+        <div>
+          <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.2rem;">Identificador (ej. web, core):</label>
+          <input type="text" class="role-key-input form-select" value="${escapeHtml(key)}" placeholder="web" style="font-size: 0.85rem; padding: 0.25rem 0.5rem; width: 100%; box-sizing: border-box;">
+        </div>
+        <div>
+          <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.2rem;">Nombre legible:</label>
+          <input type="text" class="role-name-input form-select" value="${escapeHtml(name)}" placeholder="Frontend Web UI" style="font-size: 0.85rem; padding: 0.25rem 0.5rem; width: 100%; box-sizing: border-box;">
+        </div>
+      </div>
+      <div style="margin-bottom: 0.5rem;">
+        <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.2rem;">Rutas / Repositorios (separadas por coma):</label>
+        <input type="text" class="role-repos-input form-select" value="${escapeHtml(repos)}" placeholder="src/Ludeka.Web, ." style="font-size: 0.85rem; padding: 0.25rem 0.5rem; width: 100%; box-sizing: border-box;">
+      </div>
+      <label style="font-size: 0.8rem; display: flex; align-items: center; gap: 0.4rem; cursor: pointer; color: #cbd5e1; user-select: none;">
+        <input type="checkbox" class="role-nonblocking-input" ${nonBlocking ? 'checked' : ''}>
+        <span>No bloqueante al archivar (Advisory / Deuda diferida acumulativa)</span>
+      </label>
+    `;
+
+    card.querySelector('.btn-remove-role').addEventListener('click', () => {
+      card.remove();
+    });
+
+    rolesBuilderContainer.appendChild(card);
+  }
+
+  if (btnAddRoleRow) {
+    btnAddRoleRow.addEventListener('click', () => {
+      addRoleRow();
+    });
+  }
+
   // Eventos Modal Añadir Proyecto
   if (btnAddProject) {
     btnAddProject.addEventListener('click', () => {
       inputProjectPath.value = '';
       inputProjectName.value = '';
+      if (rolesBuilderContainer) rolesBuilderContainer.innerHTML = '';
       modalAddProject.classList.remove('hidden');
     });
   }
@@ -96,30 +142,62 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSubmitAddProject.addEventListener('click', async () => {
       const pathVal = inputProjectPath.value.trim();
       const nameVal = inputProjectName.value.trim();
+      const topologyVal = selectProjectTopology ? selectProjectTopology.value : 'monorepo-embedded';
+
       if (!pathVal) {
         alert('Debes ingresar la ruta del proyecto en disco.');
         return;
       }
+
+      // Extraer roles del constructor dinámico
+      const roles = [];
+      if (rolesBuilderContainer) {
+        rolesBuilderContainer.querySelectorAll('.role-builder-card').forEach(card => {
+          const key = card.querySelector('.role-key-input').value.trim();
+          const name = card.querySelector('.role-name-input').value.trim();
+          const reposStr = card.querySelector('.role-repos-input').value.trim();
+          const nonBlocking = card.querySelector('.role-nonblocking-input').checked;
+          const repositories = reposStr ? reposStr.split(',').map(s => s.trim()).filter(Boolean) : ['.'];
+
+          if (key || name) {
+            roles.push({
+              key: key || name.toLowerCase().replace(/\s+/g, '-'),
+              name: name || key,
+              repositories: repositories,
+              non_blocking: nonBlocking
+            });
+          }
+        });
+      }
+
+      btnSubmitAddProject.disabled = true;
+      btnSubmitAddProject.textContent = 'Procesando...';
+
       try {
-        const res = await fetch('/api/projects/add', {
+        const res = await fetch('/api/projects/init', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: pathVal, name: nameVal })
+          body: JSON.stringify({
+            path: pathVal,
+            name: nameVal,
+            topology: topologyVal,
+            roles: roles
+          })
         });
+
         if (!res.ok) {
           const err = await res.json();
-          throw new Error(err.error || 'Error vinculando proyecto');
+          throw new Error(err.error || 'Error inicializando proyecto');
         }
+
         modalAddProject.classList.add('hidden');
-        await fetch('/api/projects/switch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: pathVal })
-        });
         await loadProjects();
         await loadAllData();
       } catch (err) {
         alert('Error: ' + err.message);
+      } finally {
+        btnSubmitAddProject.disabled = false;
+        btnSubmitAddProject.textContent = 'Vincular e Inicializar';
       }
     });
   }

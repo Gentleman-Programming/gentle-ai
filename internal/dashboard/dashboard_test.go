@@ -543,5 +543,59 @@ func TestProjectsEndpoints(t *testing.T) {
 	}
 }
 
+func TestMigrateCumulativeEndpoint(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "axiom-cumulative-test-*")
+	if err != nil {
+		t.Fatalf("error creando tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Estructura de cambio con tareas incompletas
+	changeDir := filepath.Join(tempDir, "openspec", "changes", "feature-x")
+	_ = os.MkdirAll(changeDir, 0755)
+
+	tasksContent := `# Tareas
+- [x] Tarea completada 1
+- [ ] Tarea pendiente advisory 1
+- [ ] Tarea pendiente advisory 2
+`
+	_ = os.WriteFile(filepath.Join(changeDir, "tasks.docs.md"), []byte(tasksContent), 0644)
+
+	svc := NewService(tempDir)
+	server := NewServer(svc)
+	router := server.Router()
+
+	body, _ := json.Marshal(MigrateCumulativeRequest{
+		Change: "feature-x",
+		Role:   "docs",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/increments/migrate-cumulative", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /api/increments/migrate-cumulative retornó %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("error deserializando respuesta: %v", err)
+	}
+
+	if res["migrated"].(float64) != 2 {
+		t.Errorf("esperadas 2 tareas migradas, obtenido %v", res["migrated"])
+	}
+
+	// Verificar que se creó cumulative-docs/tasks.md
+	cumulativeFile := filepath.Join(tempDir, "openspec", "changes", "cumulative-docs", "tasks.md")
+	content, err := os.ReadFile(cumulativeFile)
+	if err != nil {
+		t.Fatalf("no se creó el archivo acumulativo: %v", err)
+	}
+	if !strings.Contains(string(content), "Tarea pendiente advisory 1") || !strings.Contains(string(content), "Tarea pendiente advisory 2") {
+		t.Errorf("contenido acumulativo incompleto: %s", string(content))
+	}
+}
+
 
 

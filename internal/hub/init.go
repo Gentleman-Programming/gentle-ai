@@ -49,6 +49,7 @@ func (ini *Initializer) Init(opts InitOptions) (*InitResult, error) {
 	configPath := filepath.Join(absPath, "axiom.yaml")
 	alreadyExisted := fileExists(configPath)
 	createdFiles := make([]string, 0)
+	var adoptedSkillsCount int
 
 	// 1. Si no existe axiom.yaml o se fuerza la recreación
 	if !alreadyExisted || opts.Force {
@@ -60,11 +61,40 @@ func (ini *Initializer) Init(opts InitOptions) (*InitResult, error) {
 			}
 		}
 
-		yamlContent := buildAxiomYaml(opts.Name, opts.Topology, tech)
+		// Determinar roles efectivos:
+		var effectiveRoles []RoleInput
+		if len(opts.Roles) > 0 {
+			effectiveRoles = opts.Roles
+		} else if len(tech.ConfiguredRoles) > 0 {
+			effectiveRoles = tech.ConfiguredRoles
+		} else {
+			// Regla de negocio: Si no se proveen ni detectan roles, rol único 'fullstack'
+			primaryTech := tech.Frameworks
+			if len(primaryTech) == 0 && tech.PrimaryLanguage != "" {
+				primaryTech = []string{tech.PrimaryLanguage}
+			}
+			effectiveRoles = []RoleInput{
+				{
+					Key:          "fullstack",
+					Name:         opts.Name + " Fullstack",
+					Repositories: []string{"."},
+					NonBlocking:  false,
+					Tech:         primaryTech,
+				},
+			}
+		}
+
+		specsRepo := "openspec"
+		if tech.SpecsRepository != "" {
+			specsRepo = tech.SpecsRepository
+		}
+
+		yamlContent := buildAxiomYamlWithRoles(opts.Name, opts.Topology, specsRepo, tech.DomainContext, effectiveRoles)
 		if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
 			return nil, fmt.Errorf("fallo al escribir %s: %w", configPath, err)
 		}
 		createdFiles = append(createdFiles, configPath)
+		adoptedSkillsCount = len(tech.AdoptedSkills)
 	}
 
 	// 2. Crear carpetas canónicas del arnés SDD
@@ -100,53 +130,106 @@ func (ini *Initializer) Init(opts InitOptions) (*InitResult, error) {
 	}
 
 	return &InitResult{
-		ConfigPath:     configPath,
-		Record:         record,
-		CreatedFiles:   createdFiles,
-		AlreadyExisted: alreadyExisted && !opts.Force,
+		ConfigPath:         configPath,
+		Record:             record,
+		CreatedFiles:       createdFiles,
+		AlreadyExisted:     alreadyExisted && !opts.Force,
+		AdoptedSkillsCount: adoptedSkillsCount,
 	}, nil
 }
 
 func buildAxiomYaml(name, topology string, tech *TechDetection) string {
-	coreTechList := ""
-	if roles, ok := tech.RecommendedRoles["core"]; ok && len(roles) > 0 {
-		for _, t := range roles {
-			coreTechList += fmt.Sprintf("      - %q\n", t)
-		}
+	var roles []RoleInput
+	if tech != nil && len(tech.ConfiguredRoles) > 0 {
+		roles = tech.ConfiguredRoles
 	} else {
-		coreTechList = fmt.Sprintf("      - %q\n", tech.PrimaryLanguage)
+		var techList []string
+		if tech != nil {
+			techList = tech.Frameworks
+			if len(techList) == 0 && tech.PrimaryLanguage != "" {
+				techList = []string{tech.PrimaryLanguage}
+			}
+		}
+		roles = []RoleInput{
+			{
+				Key:          "fullstack",
+				Name:         name + " Fullstack",
+				Repositories: []string{"."},
+				NonBlocking:  false,
+				Tech:         techList,
+			},
+		}
 	}
 
-	qaTechList := ""
-	if roles, ok := tech.RecommendedRoles["qa"]; ok && len(roles) > 0 {
-		for _, t := range roles {
-			qaTechList += fmt.Sprintf("      - %q\n", t)
+	specsRepo := "openspec"
+	domainContext := ""
+	if tech != nil {
+		if tech.SpecsRepository != "" {
+			specsRepo = tech.SpecsRepository
 		}
-	} else {
-		qaTechList = "      - \"verification\"\n"
+		domainContext = tech.DomainContext
 	}
 
-	return fmt.Sprintf(`workspace:
-  name: %q
-  topology: %q
-  specs_repository: "openspec"
-  root: "."
+	return buildAxiomYamlWithRoles(name, topology, specsRepo, domainContext, roles)
+}
 
-roles:
-  core:
-    name: %q
-    repositories:
-      - path: "."
-    tech:
-%s
-  qa:
-    name: "Quality Assurance & Verification"
-    repositories:
-      - path: "."
-    tech:
-%s
-governance:
-  language: "es"
-  shared_memory: "engram"
-`, name, topology, name+" Core Engine", strings.TrimRight(coreTechList, "\n"), strings.TrimRight(qaTechList, "\n"))
+func buildAxiomYamlWithRoles(name, topology, specsRepo, domainContext string, roles []RoleInput) string {
+	var sb strings.Builder
+	sb.WriteString("workspace:\n")
+	sb.WriteString(fmt.Sprintf("  name: %q\n", name))
+	sb.WriteString(fmt.Sprintf("  topology: %q\n", topology))
+	if specsRepo == "" {
+		specsRepo = "openspec"
+	}
+	sb.WriteString(fmt.Sprintf("  specs_repository: %q\n", specsRepo))
+	sb.WriteString("  root: \".\"\n\n")
+
+	sb.WriteString("roles:\n")
+	for _, r := range roles {
+		roleKey := strings.TrimSpace(r.Key)
+		if roleKey == "" {
+			roleKey = slugify(r.Name)
+		}
+		sb.WriteString(fmt.Sprintf("  %s:\n", roleKey))
+		roleName := strings.TrimSpace(r.Name)
+		if roleName == "" {
+			roleName = strings.Title(roleKey)
+		}
+		sb.WriteString(fmt.Sprintf("    name: %q\n", roleName))
+
+		gatePolicy := "blocking"
+		if r.NonBlocking {
+			gatePolicy = "advisory"
+		}
+		sb.WriteString(fmt.Sprintf("    gate_policy: %q\n", gatePolicy))
+
+		sb.WriteString("    repositories:\n")
+		repos := r.Repositories
+		if len(repos) == 0 {
+			repos = []string{"."}
+		}
+		for _, repoPath := range repos {
+			sb.WriteString(fmt.Sprintf("      - path: %q\n", filepath.ToSlash(strings.TrimSpace(repoPath))))
+		}
+
+		if len(r.Tech) > 0 {
+			sb.WriteString("    tech:\n")
+			for _, t := range r.Tech {
+				sb.WriteString(fmt.Sprintf("      - %q\n", strings.TrimSpace(t)))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("governance:\n")
+	sb.WriteString("  language: \"es\"\n")
+	sb.WriteString("  shared_memory: \"engram\"\n")
+	if strings.TrimSpace(domainContext) != "" {
+		sb.WriteString("  context: |\n")
+		for _, line := range strings.Split(domainContext, "\n") {
+			sb.WriteString(fmt.Sprintf("    %s\n", line))
+		}
+	}
+
+	return sb.String()
 }

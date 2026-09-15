@@ -248,3 +248,139 @@ func TestInitializer(t *testing.T) {
 		t.Errorf("esperado AlreadyExisted=true en segunda llamada")
 	}
 }
+
+func TestSmartAdoptionWithExistingSDDAndAgents(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "axiom-smart-adopt-test-*")
+	if err != nil {
+		t.Fatalf("error creando tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Crear estructura simulada tipo Ludeka
+	openSpecDir := filepath.Join(tempDir, "openspec")
+	_ = os.MkdirAll(filepath.Join(openSpecDir, "specs"), 0755)
+	_ = os.MkdirAll(filepath.Join(openSpecDir, "changes"), 0755)
+
+	configYamlContent := `schema: "1.0"
+context: "Glosario y reglas del juego Ludeka."
+projects:
+  - path: "src/Ludeka.Web"
+    stack: ".NET 10 Blazor Web App"
+  - path: "src/Ludeka.Core"
+    stack: ".NET 10 Class Library"
+  - path: "tests/Ludeka.UnitTests"
+    stack: ".NET 10 xUnit"
+`
+	_ = os.WriteFile(filepath.Join(openSpecDir, "config.yaml"), []byte(configYamlContent), 0644)
+
+	// Crear agentes y skills preexistentes
+	skillsDir := filepath.Join(tempDir, ".agents", "skills")
+	_ = os.MkdirAll(filepath.Join(skillsDir, "sdd-explore"), 0755)
+	_ = os.WriteFile(filepath.Join(skillsDir, "sdd-explore", "SKILL.md"), []byte("description: \"Fase de exploración inicial\"\n"), 0644)
+
+	_ = os.MkdirAll(filepath.Join(skillsDir, "fluentui-blazor"), 0755)
+	_ = os.WriteFile(filepath.Join(skillsDir, "fluentui-blazor", "SKILL.md"), []byte("description: \"Componentes Fluent UI Blazor\"\n"), 0644)
+
+	githubDir := filepath.Join(tempDir, ".github")
+	_ = os.MkdirAll(githubDir, 0755)
+	_ = os.WriteFile(filepath.Join(githubDir, "copilot-instructions.md"), []byte("# Copilot Rules\n"), 0644)
+
+	detector := NewDetector()
+	det, err := detector.Detect(tempDir)
+	if err != nil {
+		t.Fatalf("error en Detect: %v", err)
+	}
+
+	if !det.HasExistingSDD {
+		t.Errorf("esperado HasExistingSDD=true")
+	}
+	if det.SpecsRepository != "openspec" {
+		t.Errorf("esperado SpecsRepository='openspec', obtenido '%s'", det.SpecsRepository)
+	}
+	if !strings.Contains(det.DomainContext, "Ludeka") {
+		t.Errorf("esperado DomainContext conteniendo 'Ludeka', obtenido '%s'", det.DomainContext)
+	}
+	if len(det.Projects) != 3 {
+		t.Errorf("esperado 3 proyectos detectados, obtenidos %d", len(det.Projects))
+	}
+	if len(det.ConfiguredRoles) != 3 {
+		t.Errorf("esperado 3 roles inferidos (core, web, qa), obtenidos %d", len(det.ConfiguredRoles))
+	}
+	if len(det.AdoptedSkills) < 3 {
+		t.Errorf("esperado al menos 3 skills/agentes detectados, obtenidos %d", len(det.AdoptedSkills))
+	}
+
+	// Inicializar con adopción inteligente
+	ini := NewInitializer(nil, detector)
+	res, err := ini.Init(InitOptions{
+		Path: tempDir,
+		Name: "Ludeka Adopted",
+	})
+	if err != nil {
+		t.Fatalf("error en Init con adopción: %v", err)
+	}
+
+	yamlBytes, err := os.ReadFile(res.ConfigPath)
+	if err != nil {
+		t.Fatalf("error leyendo axiom.yaml generado: %v", err)
+	}
+	content := string(yamlBytes)
+
+	// Verificar asignación exacta de repositorios a roles
+	if !strings.Contains(content, "src/Ludeka.Web") {
+		t.Errorf("axiom.yaml debe contener la ruta 'src/Ludeka.Web': %s", content)
+	}
+	if !strings.Contains(content, "src/Ludeka.Core") {
+		t.Errorf("axiom.yaml debe contener la ruta 'src/Ludeka.Core': %s", content)
+	}
+	if !strings.Contains(content, "tests/Ludeka.UnitTests") {
+		t.Errorf("axiom.yaml debe contener la ruta 'tests/Ludeka.UnitTests': %s", content)
+	}
+	if !strings.Contains(content, "Glosario y reglas del juego Ludeka.") {
+		t.Errorf("axiom.yaml debe contener el contexto de gobernanza: %s", content)
+	}
+}
+
+func TestInteractiveRolesAndNonBlocking(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "axiom-interactive-roles-*")
+	if err != nil {
+		t.Fatalf("error creando tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	ini := NewInitializer(nil, nil)
+	res, err := ini.Init(InitOptions{
+		Path: tempDir,
+		Name: "Custom Roles Proj",
+		Roles: []RoleInput{
+			{
+				Key:          "backend",
+				Name:         "Backend Engine",
+				Repositories: []string{"server"},
+				NonBlocking:  false,
+				Tech:         []string{"go"},
+			},
+			{
+				Key:          "docs",
+				Name:         "Documentation",
+				Repositories: []string{"docs"},
+				NonBlocking:  true,
+				Tech:         []string{"markdown"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("error en Init con roles personalizados: %v", err)
+	}
+
+	yamlBytes, _ := os.ReadFile(res.ConfigPath)
+	content := string(yamlBytes)
+
+	if !strings.Contains(content, "backend:") || !strings.Contains(content, "gate_policy: \"blocking\"") {
+		t.Errorf("esperado rol 'backend' con gate_policy blocking: %s", content)
+	}
+	if !strings.Contains(content, "docs:") || !strings.Contains(content, "gate_policy: \"advisory\"") {
+		t.Errorf("esperado rol 'docs' con gate_policy advisory: %s", content)
+	}
+}
+

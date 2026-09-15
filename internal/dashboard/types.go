@@ -1,6 +1,9 @@
 package dashboard
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
+import (
+	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
+)
 
 // WorkspaceDTO representa el estado global y configuración del espacio de trabajo.
 type WorkspaceDTO struct {
@@ -103,8 +106,15 @@ type ProjectAddRequest struct {
 
 // ProjectInitRequest representa la solicitud para inicializar un proyecto.
 type ProjectInitRequest struct {
-	Path     string `json:"path,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Topology string `json:"topology,omitempty"`
+	Path     string          `json:"path,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	Topology string          `json:"topology,omitempty"`
+	Roles    []hub.RoleInput `json:"roles,omitempty"`
+}
+
+// MigrateCumulativeRequest representa la solicitud para transferir tareas pendientes de un rol no bloqueante.
+type MigrateCumulativeRequest struct {
+	Change string `json:"change"`
+	Role   string `json:"role"`
 }
 

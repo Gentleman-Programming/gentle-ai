@@ -370,25 +370,49 @@
       </div>
     </div>
 
-    <!-- Modal Añadir Proyecto al Hub -->
+    <!-- Modal Añadir / Inicializar Proyecto al Hub -->
     <div id="modal-add-project" class="modal-backdrop hidden">
-      <div class="modal-dialog">
+      <div class="modal-dialog" style="max-width: 620px;">
         <div class="modal-header">
-          <h3>Vincular Proyecto a Axiom</h3>
+          <h3>Vincular o Inicializar Proyecto en Axiom</h3>
           <button class="btn-close" id="btn-close-add-project">✕</button>
         </div>
-        <div class="modal-body" style="padding: 1.5rem;">
+        <div class="modal-body" style="padding: 1.5rem; max-height: 80vh; overflow-y: auto;">
           <div style="margin-bottom: 1rem;">
-            <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Ruta absoluta de la carpeta en disco:</label>
+            <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Ruta absoluta del proyecto en disco:</label>
             <input type="text" id="input-project-path" class="form-select" style="width: 100%; box-sizing: border-box;" placeholder="C:\repos\mi-proyecto o /home/usuario/proyectos/...">
           </div>
-          <div style="margin-bottom: 1.5rem;">
-            <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Nombre descriptivo (opcional):</label>
-            <input type="text" id="input-project-name" class="form-select" style="width: 100%; box-sizing: border-box;" placeholder="Ej. Ludeka, MiServicio...">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
+            <div>
+              <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Nombre descriptivo:</label>
+              <input type="text" id="input-project-name" class="form-select" style="width: 100%; box-sizing: border-box;" placeholder="Ej. Ludeka, MiServicio...">
+            </div>
+            <div>
+              <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Topología:</label>
+              <select id="select-project-topology" class="form-select" style="width: 100%; box-sizing: border-box;">
+                <option value="monorepo-embedded">Monorepo Embebido</option>
+                <option value="multirepo">Multirepo</option>
+              </select>
+            </div>
           </div>
+
+          <!-- Constructor Dinámico de Roles -->
+          <div style="border-top: 1px solid var(--border-color, #334155); padding-top: 1rem; margin-bottom: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <label style="font-weight: 600; font-size: 0.95rem;">Roles del Proyecto (Opcional):</label>
+              <button type="button" id="btn-add-role-row" class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.3rem 0.6rem;">+ Agregar Rol</button>
+            </div>
+            <p style="font-size: 0.8rem; color: #94a3b8; margin-top: 0; margin-bottom: 0.75rem;">
+              Si no configuras roles específicos, Axiom creará automáticamente un único rol <strong>fullstack</strong> que gobernará todo el repositorio.
+            </p>
+            <div id="roles-builder-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
+              <!-- Tarjetas de rol dinámicas inyectadas por JS -->
+            </div>
+          </div>
+
           <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
             <button id="btn-cancel-add-project" class="btn btn-secondary">Cancelar</button>
-            <button id="btn-submit-add-project" class="btn btn-primary">Vincular y Abrir</button>
+            <button id="btn-submit-add-project" class="btn btn-primary">Vincular e Inicializar</button>
           </div>
         </div>
       </div>

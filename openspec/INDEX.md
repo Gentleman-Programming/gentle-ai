@@ -1,7 +1,7 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-15 12:48:04 UTC
+> **Última Sincronización:** 2026-09-15 17:01:34 UTC
 > **Total Dominios:** 36 | **Total Requerimientos:** 260 | **Total Escenarios BDD:** 422
 
 ---

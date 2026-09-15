@@ -425,6 +425,7 @@ func (s *Service) GetSkills() ([]SkillDTO, error) {
 
 	scanDir("skills")
 	scanDir(filepath.Join("internal", "assets", "skills"))
+	scanDir(filepath.Join(".agents", "skills"))
 
 	return skills, nil
 }
@@ -634,6 +635,7 @@ func (s *Service) InitProject(req ProjectInitRequest) (*hub.InitResult, error) {
 		Path:     targetPath,
 		Name:     req.Name,
 		Topology: req.Topology,
+		Roles:    req.Roles,
 	})
 	if err != nil {
 		return nil, err
@@ -643,6 +645,88 @@ func (s *Service) InitProject(req ProjectInitRequest) (*hub.InitResult, error) {
 	_, _ = s.SwitchWorkspace(targetPath)
 
 	return res, nil
+}
+
+// MigrateIncompleteTasksToCumulative transfiere tareas pendientes de un rol no bloqueante a su incremento acumulativo correspondiente.
+func (s *Service) MigrateIncompleteTasksToCumulative(changeName, role string) (int, error) {
+	path, _, err := s.FindIncrementPath(changeName)
+	if err != nil {
+		return 0, err
+	}
+
+	root := s.getRootPath()
+	var tasksFiles []string
+
+	// Buscar tasks.<role>.md o tasks.md
+	roleTasksFile := filepath.Join(path, fmt.Sprintf("tasks.%s.md", role))
+	if fileExists(roleTasksFile) {
+		tasksFiles = append(tasksFiles, roleTasksFile)
+	}
+	generalTasksFile := filepath.Join(path, "tasks.md")
+	if fileExists(generalTasksFile) && len(tasksFiles) == 0 {
+		tasksFiles = append(tasksFiles, generalTasksFile)
+	}
+
+	if len(tasksFiles) == 0 {
+		return 0, nil
+	}
+
+	var incompleteTasks []string
+	for _, tf := range tasksFiles {
+		data, err := os.ReadFile(tf)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "- [ ]") {
+				incompleteTasks = append(incompleteTasks, trimmed)
+			}
+		}
+	}
+
+	if len(incompleteTasks) == 0 {
+		return 0, nil
+	}
+
+	// Directorio acumulativo para el rol
+	specsRepo := "openspec"
+	if cfg, err := workspace.LoadConfig(filepath.Join(root, "axiom.yaml")); err == nil && cfg.Workspace.SpecsRepository != "" {
+		specsRepo = cfg.Workspace.SpecsRepository
+	}
+
+	cumulativeDir := filepath.Join(root, specsRepo, "changes", fmt.Sprintf("cumulative-%s", role))
+	if err := os.MkdirAll(cumulativeDir, 0755); err != nil {
+		return 0, fmt.Errorf("error creando directorio de incremento acumulativo: %w", err)
+	}
+
+	cumulativeTasksPath := filepath.Join(cumulativeDir, "tasks.md")
+	var existingContent string
+	if fileExists(cumulativeTasksPath) {
+		if b, err := os.ReadFile(cumulativeTasksPath); err == nil {
+			existingContent = string(b)
+		}
+	} else {
+		existingContent = fmt.Sprintf("# Incremento Acumulativo de Deuda - Rol: %s\n\n> Tareas pendientes transferidas automáticamente desde incrementos archivados.\n\n", strings.ToUpper(role))
+	}
+
+	timestamp := time.Now().Format("2006-01-02")
+	var sb strings.Builder
+	sb.WriteString(existingContent)
+	if !strings.HasSuffix(existingContent, "\n\n") {
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString(fmt.Sprintf("### Transferidas desde %s (%s)\n", changeName, timestamp))
+	for _, t := range incompleteTasks {
+		sb.WriteString(fmt.Sprintf("%s\n", t))
+	}
+
+	if err := os.WriteFile(cumulativeTasksPath, []byte(sb.String()), 0644); err != nil {
+		return 0, fmt.Errorf("error guardando tareas acumulativas: %w", err)
+	}
+
+	return len(incompleteTasks), nil
 }
 
 // GetHubManager retorna el gestor de Hub asociado al servicio.

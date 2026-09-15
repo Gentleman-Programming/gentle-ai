@@ -45,6 +45,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/projects/init", s.handleProjectsInit)
 	s.mux.HandleFunc("/api/workspace", s.handleWorkspace)
 	s.mux.HandleFunc("/api/increments", s.handleIncrements)
+	s.mux.HandleFunc("/api/increments/migrate-cumulative", s.handleMigrateCumulative)
 	s.mux.HandleFunc("/api/increments/", s.handleIncrementDetail)
 	s.mux.HandleFunc("/api/roles", s.handleRoles)
 	s.mux.HandleFunc("/api/handoffs", s.handleHandoffs)
@@ -269,6 +270,34 @@ func (s *Server) handleIncrementDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondJSON(w, http.StatusOK, dto)
+}
+
+func (s *Server) handleMigrateCumulative(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req MigrateCumulativeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido"})
+		return
+	}
+	if strings.TrimSpace(req.Change) == "" || strings.TrimSpace(req.Role) == "" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Campos 'change' y 'role' son requeridos"})
+		return
+	}
+
+	count, err := s.service.MigrateIncompleteTasksToCumulative(req.Change, req.Role)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"migrated": count,
+		"change":   req.Change,
+		"role":     req.Role,
+	})
 }
 
 func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
