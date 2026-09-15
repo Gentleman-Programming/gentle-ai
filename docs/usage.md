@@ -16,6 +16,14 @@ ODD keeps the existing explore → implement → proportionate checks flow. For 
 - **Resume:** retrieve the full feature-specific Engram observation and actual task file, reconcile current code and evidence, then continue unfinished work. Read back both writes: they are not atomic. If Engram is unavailable, keep local progress and report the pending mirror; preserve conflicting versions rather than silently overwriting one.
 - **Uncertainty:** research is optional, and a concise proposal is useful only for a real decision. A high-consequence unproven assumption can receive one independent read-only challenge—even in a small security-critical change. Deterministic failures need fixes, not debate; native RDD claims stay with its own refuter.
 
+### Research depth without a new phase
+
+ODD research establishes the problem, intended outcome, constraints, and current evidence, then inspects relevant code. Depth adapts to uncertainty and consequence: no fixed questionnaire or mandatory rounds. Only real unresolved product decisions prompt a focused user question, one at a time with a stop/wait; delegated workers return gaps to the parent rather than assume choices.
+
+Questions needing external evidence use available authorized documentation/web tools, preferably primary sources. Findings attribute material claims to URLs or code locations and distinguish verified facts, assumptions, contradictions, freshness, and gaps. The concise handoff includes a recommendation, tradeoffs, open questions, and implementation implications. A proposal is needed only for a real decision; unavailable tools are disclosed, never invented, and only unsafe decisions dependent on missing evidence pause.
+
+When delegated, these instructions go to an existing fresh general exploration/research worker—not a new specialized agent or `sdd-research`. Research stays read-only and introduces no SDD request/grant schema, persistence gate, readiness state, or new runtime command.
+
 ```mermaid
 flowchart TD
     A[Request] --> B{Implementation authorized?}

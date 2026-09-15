@@ -114,6 +114,23 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Neither research nor a proposal is mandatory",
 			"Do not recommend SDD merely to resolve ambiguity",
 		}},
+		{"adaptive research and product questions", []string{
+			"Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code",
+			"Adapt depth to uncertainty and consequence, not a fixed questionnaire or mandatory rounds",
+			"The parent owns product decisions",
+			"ask one focused user question only for a real unresolved product decision, then stop and wait",
+			"Workers return gaps to the parent rather than assuming choices",
+			"forward these research instructions to a fresh general exploration/research worker through existing delegation",
+			"do not create a specialized agent or invoke sdd-research",
+		}},
+		{"external evidence and useful research handoff", []string{
+			"use available authorized documentation/web tools and prefer primary sources",
+			"Attribute material claims to source URLs or code locations",
+			"distinguish verified facts, assumptions, contradictions, freshness, and gaps",
+			"Return concise findings, recommendation, tradeoffs, open questions, and implementation implications",
+			"If tools are unavailable, disclose limitations without inventing access or evidence",
+			"pause only unsafe decisions dependent on missing evidence",
+		}},
 		{"durable feature identity", []string{
 			"odd/tasks/<feature-name>.md",
 			"odd/<feature-name>/tasks",
