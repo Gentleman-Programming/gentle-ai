@@ -1,10 +1,10 @@
 ---
 name: qa-locator-hunting
-description: "Caza locators de UI en microfronts erp-mf-*: POM, GitLab, DOM en vivo, nunca inventa. Trigger: necesitas un locator/selector."
+description: "Caza locators de UI en microfronts erp-mf-*: POM, DOM en vivo (Playwright MCP), GitLab, nunca inventa. Trigger: necesitas un locator/selector."
 license: Apache-2.0
 metadata:
   author: JhuniorBrayan123
-  version: "1.0"
+  version: "2.0"
 ---
 
 ## Activation Contract
@@ -13,7 +13,13 @@ Carga esta skill cuando necesites un locator/selector para un test E2E de Playwr
 sobre un microfront SmartClic/`erp-mf-*` (Punto de Venta, Facturación, Logística,
 Común/Shared) y el selector no esté disponible de forma inmediata en el proyecto de
 automatización. Su objetivo es **reutilizar** locators existentes y, solo si faltan,
-**cazarlos** en el código real del microfront — nunca inventarlos.
+**cazarlos** en el entorno real o el código del microfront — nunca inventarlos.
+
+`qa-explore` invoca esta skill automáticamente en cuanto detecta, durante el análisis
+previo (G2), un Target que el spec va a necesitar y que no existe todavía en el POM.
+Cazar el locator en ese momento — antes de `qa-spec` — es lo que permite que el spec y
+el diseño Screenplay+POM salgan exactos desde la primera pasada, sin locators
+pendientes de resolver durante la implementación.
 
 ## Rol
 
@@ -24,12 +30,16 @@ NIVEL 0:
 - **NIVEL 0 (siempre primero)**: reutilizar los locators que ya existen en el proyecto
   de automatización (POM `src/pages/**`, tareas/questions del patrón Screenplay).
   No reinventes selectores que ya están resueltos y verdes.
-- **NIVEL 1 (si falta en el POM)**: cazar el locator en GitLab vía MCP, leyendo el
-  template real del microfront, y devolver el selector auténtico del componente.
-- **NIVEL 2 (si GitLab no alcanza)**: inspeccionar el DOM en vivo de la app
-  corriendo (dev/staging) para encontrar el atributo real — útil cuando el
-  elemento se genera dinámicamente (loop, componente de librería UI, contenido
-  cargado por API) y no aparece tal cual en el template fuente.
+- **NIVEL 1 (si falta en el POM)**: inspeccionar el DOM en vivo del entorno real
+  (dev/staging) vía **MCP Playwright**, con credenciales/sesión del proyecto, navegando
+  la URL que el propio proyecto resuelve por entorno. Es la fuente más confiable: el
+  locator que devuelve es el que realmente renderiza la pantalla, incluidos elementos
+  generados en runtime (`*ngFor`/`.map()`, componentes de librería UI, contenido cargado
+  por API) que no siempre aparecen tal cual en el template fuente.
+- **NIVEL 2 (si Playwright no alcanza)**: cazar el locator/id en el código fuente del
+  microfront vía GitLab MCP, para el componente/comprobante específico que se necesita —
+  útil cuando no hay acceso al entorno en vivo o el elemento no es reproducible ahí
+  (feature flag apagado, dato de prueba no disponible, etc.).
 
 ## NIVEL 0 — Reutilizar el POM (obligatorio primero)
 
@@ -42,7 +52,32 @@ NIVEL 0:
    microfront (ver NIVEL 1) y documenta el cambio.
 5. Si no existe: pasa al NIVEL 1.
 
-## NIVEL 1 — Cazar en GitLab vía MCP (solo si falta)
+## NIVEL 1 — Inspeccionar el DOM en vivo vía Playwright MCP (primera opción de caza)
+
+1. Confirma con el humano el entorno (dev/staging — **nunca asumas producción** sin
+   confirmación explícita) y que hay credenciales/sesión válidas para llegar a la
+   pantalla del elemento. Si el proyecto ya resuelve la URL por entorno (config/env del
+   propio repo de automatización), úsala como está — no inventes ni adivines una URL.
+2. Con el MCP Playwright, navega hasta la pantalla real del flujo (mismo camino que
+   seguiría el test) usando esas credenciales.
+3. Localiza el elemento en el DOM renderizado — por texto visible (botón, label,
+   placeholder, título de columna) o por su posición en el flujo — y extrae su atributo
+   real. **Prioridad estricta**:
+
+   ```
+   data-testid  >  id  >  name  >  formControlName  >  aria-label  >  clases CSS
+   ```
+
+4. Prefiere atributos estables (testing hooks, atributos de formulario Angular,
+   `aria-label`) antes que clases CSS de estilos, que cambian con el diseño.
+5. Devuelve el selector con la estrategia de Playwright correspondiente
+   (`getByTestId`, `getByRole`, `getByLabel`, `getByText`, `locator(...)`).
+6. **No navegues ni extraigas más DOM del que hace falta para identificar ese elemento
+   puntual** — no es una skill de scraping general, es puntual para cazar un selector.
+7. Si no hay acceso al entorno (sin credenciales, sin MCP Playwright disponible, o el
+   elemento no es reproducible ahí): pasa al NIVEL 2.
+
+## NIVEL 2 — Cazar en el código fuente vía GitLab MCP (solo si Playwright no alcanza)
 
 ### 1. Resolver el proyecto `erp-mf-*` (catálogo primero)
 
@@ -56,7 +91,7 @@ NIVEL 0:
    slug (renombrado/404)**: resolvé desde cero con `search_projects` usando el término de
    negocio. El catálogo nunca bloquea la caza.
 4. **Si no hay MCP de GitLab disponible**: el catálogo queda como pista de lectura; seguí
-   al NIVEL 2 o al fallback honesto. Nunca inventes el proyecto ni el selector.
+   al fallback honesto. Nunca inventes el proyecto ni el selector.
 
 **Reglas vinculantes del catálogo**
 
@@ -80,56 +115,39 @@ NIVEL 0:
 
 ### 2. Localizar el componente
 
-3. Busca en el microfront por **texto visible** del elemento (botón, label, placeholder,
+5. Busca en el microfront por **texto visible** del elemento (botón, label, placeholder,
    título de columna) o por fragmentos del flujo (componente, ruta, feature flag).
-4. Navega al template real del componente:
+6. Navega al template real del componente:
    - Angular → archivo `.html` del componente (busca el `.ts` que lo referencia).
    - React → archivo `.tsx` donde se renderiza el elemento.
 
 ### 3. Extraer el selector auténtico
 
-5. Extrae el atributo del elemento en el template. **Prioridad estricta**:
-
-   ```
-   data-testid  >  id  >  name  >  formControlName  >  aria-label  >  clases CSS
-   ```
-
-6. Prefiere atributos estables (testing hooks, atributos de formulario Angular,
-   `aria-label`) antes que clases CSS de estilos, que cambian con el diseño.
-7. Devuelve el selector con la estrategia de Playwright correspondiente
+7. Extrae el atributo del elemento en el template, con la misma prioridad estricta del
+   NIVEL 1 (`data-testid > id > name > formControlName > aria-label > clases CSS`).
+8. Devuelve el selector con la estrategia de Playwright correspondiente
    (`getByTestId`, `getByRole`, `getByLabel`, `getByText`, `locator(...)`).
-
-## NIVEL 2 — Inspeccionar el DOM en vivo (solo si GitLab no alcanza)
-
-Se activa cuando el NIVEL 1 no encuentra el atributo en el template fuente (el
-elemento se genera en runtime — `*ngFor`/`.map()`, un componente de librería UI
-de terceros, contenido que llega por API) o cuando no hay acceso a GitLab pero
-sí a un entorno donde el ERP2 corre (dev/staging).
-
-1. Confirma con el humano la URL del entorno (nunca asumas producción) y que
-   tenés credenciales/sesión válidas para llegar a la pantalla del elemento.
-2. Navegá hasta la pantalla real del flujo (mismo camino que seguiría el test).
-3. Extraé el DOM de esa pantalla — con el Browser de Claude Code
-   (`read_page` para el árbol de accesibilidad con `ref_N`, o
-   `javascript_tool` para correr algo como
-   `document.querySelector('<contenedor aproximado>').outerHTML` y quedarte
-   solo con el fragmento relevante, nunca el documento completo) o, si el
-   agente lo corre por fuera de este entorno, un script Playwright que haga
-   `page.locator(...).evaluate(el => el.outerHTML)` sobre el contenedor.
-4. Del HTML extraído, aplicá la misma prioridad de atributos del NIVEL 1
-   (`data-testid > id > name > formControlName > aria-label > clases CSS`).
-5. **No navegues ni extraigas más DOM del que hace falta para identificar ese
-   elemento puntual** — no es una skill de scraping general, es puntual para
-   cazar un selector.
 
 ## Fallback honesto — NUNCA inventar
 
-- Sin acceso a GitLab (MCP no disponible o sin permisos) y sin acceso al
-  entorno para NIVEL 2: reporta `"locator no encontrado — sin acceso a
-  GitLab ni al entorno"`.
-- Locator no encontrado tras agotar los 3 niveles: reporta `"locator no
-  encontrado"` y **pide al humano la URL/path del microfront** (o un
-  screenshot del elemento).
+Si tras agotar los 3 niveles el locator sigue sin aparecer, **detente y hacé estas 3
+preguntas al humano** — no inventes, no adivines, no marques el Target como "pendiente"
+en el spec:
+
+1. **¿En qué microfront (`erp-mf-*`) y pantalla/ruta exacta vive el elemento?** — para
+   ubicar el proyecto si el catálogo no tiene la fila o GitLab no lo encuentra.
+2. **¿Cuál es el texto visible exacto del elemento (label del botón, columna,
+   placeholder) o podés mandar un screenshot?** — para cazar por texto visible cuando
+   no hay `data-testid` documentado.
+3. **¿Tenés acceso a un entorno donde el ERP2 corra en vivo (dev/staging) y
+   credenciales para llegar a esa pantalla?** — si el NIVEL 1 falló por falta de acceso,
+   esto lo desbloquea; si ya se agotó también, confirma que no hay otro entorno posible.
+
+- Sin acceso a Playwright/entorno en vivo NI a GitLab: reporta `"locator no
+  encontrado — sin acceso al entorno ni a GitLab"`.
+- Locator no encontrado tras agotar los 3 niveles y las 3 preguntas: reporta
+  `"locator no encontrado"` explícitamente en el reporte de `qa-explore`, como
+  información pendiente — nunca como un Target inventado.
 - **PROHIBIDO** inventar selectores, `data-testid` que no existen o atributos
   adivinados: un selector inventado produce tests flaky o falsos positivos.
 
@@ -138,6 +156,6 @@ sí a un entorno donde el ERP2 corre (dev/staging).
 - Orden estricto: NIVEL 0 → NIVEL 1 → NIVEL 2, nunca salteado.
 - Nunca inventes un locator ni un `data-testid`.
 - Nunca modifiques el microfront para "facilitar" el test (no es tu repo).
-- NIVEL 2 nunca navega a producción sin confirmación explícita del humano.
-- Si el elemento no se puede cazar con certeza tras los 3 niveles, detente y
-  pide evidencia.
+- NIVEL 1 nunca navega a producción sin confirmación explícita del humano.
+- Si el elemento no se puede cazar con certeza tras los 3 niveles, detente y hacé las
+  3 preguntas de fallback — no sigas a `qa-spec` con Targets sin resolver.

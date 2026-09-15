@@ -27,16 +27,27 @@ Carga esta skill cuando debas explorar un cambio QA (automatización de tests, c
    - Revisa `tsconfig.json`/`jsconfig.json`/config del bundler para los path aliases reales del proyecto (Actors, Tasks, Interactions, Questions, Targets/Pages, Abilities), sea cual sea su nombre.
    - Si existen: inventaría Actors, Interactions, Questions, Targets, Tasks reutilizables por módulo, con ruta y alias real.
    - Si **no existen** (proyecto nuevo o sin este patrón todavía): repórtalo explícitamente como "sin estructura Screenplay+POM previa" — es una entrada válida y esperada para G3, no un vacío a rellenar con supuestos.
-4. **Impacto**: evalúa setup, prerrequisitos e impacto en otras pruebas.
-5. **Salida**: reporte de exploración con componentes, convenciones, candidatos de reuso, estado de la arquitectura Screenplay+POM (existente con convenciones detectadas, o inexistente) e impacto — en `qa/{change}/explore`.
+4. **Caza de locators faltantes (obligatorio, antes de reportar)**: por cada Target que el
+   cambio va a necesitar y que NO aparece ya resuelto en el POM del paso 3, invoca la skill
+   `qa-locator-hunting` para ese elemento — no lo dejes como "vacío" para que lo resuelva
+   `qa-spec` o `qa-apply` más tarde. El objetivo es que el spec y el diseño Screenplay+POM
+   salgan exactos desde la primera pasada, sin locators pendientes de resolver durante la
+   implementación. Si `qa-locator-hunting` agota sus 3 niveles y hace sus 3 preguntas de
+   fallback sin obtener respuesta, repórtalo explícitamente como información pendiente en
+   la salida (paso 6) — nunca inventes el Target para no bloquear el reporte.
+5. **Impacto**: evalúa setup, prerrequisitos e impacto en otras pruebas.
+6. **Salida**: reporte de exploración con componentes, convenciones, candidatos de reuso, estado de la arquitectura Screenplay+POM (existente con convenciones detectadas, o inexistente), locators cazados en el paso 4 (o pendientes de respuesta humana) e impacto — en `qa/{change}/explore`.
 
 ## Guardrails
 
 - SOLO lees, buscas y reportas. No crees ni modifiques archivos de test.
 - No conviertas supuestos en reglas de negocio (G4).
 - Si falta documentación, detén la exploración e informa el vacío (G1 STOP).
+- No reportes un Target como resuelto sin haber agotado los 3 niveles de `qa-locator-hunting`
+  primero.
 
 ## Comandos de referencia
 
 - Búsqueda de docs: MCP BookStack (`bookstack_bookstack_search`).
 - Búsqueda de memoria: MCP Engram (`mem_search`, `mem_context`).
+- Caza de locators faltantes: skill `qa-locator-hunting`.
