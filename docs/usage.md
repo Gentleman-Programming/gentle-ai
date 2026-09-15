@@ -6,14 +6,15 @@
 
 ## Organic Driven Development (ODD)
 
-ODD keeps the existing explore → implement → proportionate checks flow. For substantial, authorized implementation, the agent automatically creates feature TODOs after exploration; you do not need to request task tracking or choose a storage mode. Small, understood work creates no durable task artifacts. Explanation, investigation, and proposal-only requests remain read-only.
+ODD keeps the existing explore → implement → proportionate checks flow. For substantial, authorized implementation, the agent automatically creates one feature document after exploration; you do not need to request task tracking or choose a storage mode. Small, understood work creates no durable task artifacts. Explanation, investigation, and proposal-only requests remain read-only.
 
-- **Progress:** `odd/tasks/<feature-name>.md` contains stable task IDs, scope, acceptance criteria, applicable checks, and the next step. Engram mirrors the full current checklist and file locator under `odd/<feature-name>/tasks` in the current project.
+- **One feature document:** `odd/tasks/<feature-name>.md` holds objective, problem, why, scope, constraints, an actionable checklist with stable IDs and acceptance criteria, verification evidence, progress, and next step. Keep concise rationale for meaningful accepted changes here, not a separate plan or exhaustive decision journal. Project-scoped Engram topic `odd/<feature-name>/tasks` mirrors the full current document and file locator.
 - **Task size:** about 400 authored changed lines (additions plus deletions) per task is only a planning heuristic, not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger. Keep the smallest coherent behavior with its tests and docs. If the correct, clear solution naturally exceeds it, briefly explain why and continue without size-only rework loops. Never delete spaces, blank lines, or comments for cosmetic savings, omit tests, minify, add gratuitous abstractions, or split artificially. Forward the same advisory-only instruction to delegated subagents. Existing repository policy and separate PR size gates remain unchanged.
-- **Changes:** the agent updates affected TODOs automatically, preserves valid completed and unrelated work, and reopens invalidated tasks. Checkoffs require observed outcomes and applicable proof; they are not approval or a review receipt. New business scope still needs your authorization.
+- **Changes:** accepted user, review, or verification changes update affected intent and tasks together, preserve valid completed and unrelated work, and add new tasks or reopen invalidated tasks with a reason. Findings alone do not authorize expansion or automatic acceptance; routine corrections stay with their tasks. Checkoffs require observed outcomes and applicable proof; they are not approval or a review receipt. New business scope still needs your authorization.
+- **TDD:** resolve on/off from existing project/session configuration or explicit user choice, retaining source and exact runner in the feature document when present; tests existing does not enable it. Forward mode/source/runner to every implementation worker and refresh on resume. Enabled means observed RED before implementation → GREEN → REFACTOR; disabled still runs ordinary functional checks. Unknown/conflicting mode or a missing runner needs only the clarification affecting the next action—never invented precedence, commands, or `sdd-init`.
 - **Checking:** run applicable functional checks per task; a TODO checkbox does not trigger an RDD cycle. Coordinate native review at the applicable deliverable candidate boundary using existing risk, consent, and authority. Never skip an existing delivery gate.
 - **RDD consent:** when enabled, native candidate risk assessment comes first: passive/low stays silent with structural checks, no reviewer, and no consent ceremony; medium/high presents existing candidate consent and runs the native review plan only on grant. Declining uses ordinary policy. Disabled RDD never starts or prompts; ordinary checks remain. This is prospective change risk, not defect severity or a model-selected threshold. Failed assessment never implies low risk; existing native continuations and authority still apply.
-- **Resume:** retrieve the full feature-specific Engram observation and actual task file, reconcile current code and evidence, then continue unfinished work. Read back both writes: they are not atomic. If Engram is unavailable, keep local progress and report the pending mirror; preserve conflicting versions rather than silently overwriting one.
+- **Resume:** before implementation or resume, the parent reads the full feature-specific Engram observation and actual task file, reconciles current code and evidence, and passes the locator and relevant context; the worker reads the document before edits. Read back both writes: they are not atomic. If Engram is unavailable, keep local progress and report the pending mirror; preserve conflicting versions rather than silently overwriting one.
 - **Uncertainty:** research is optional, and a concise proposal is useful only for a real decision. A high-consequence unproven assumption can receive one independent read-only challenge—even in a small security-critical change. Deterministic failures need fixes, not debate; native RDD claims stay with its own refuter.
 
 ### Research depth without a new phase
@@ -37,15 +38,16 @@ flowchart TD
     H -->|Yes| I[One independent assumption challenge]
     H -->|No| J{Substantial implementation?}
     I --> J
-    J -->|Yes| K[Automatic task file and Engram checklist]
-    J -->|No| L[Implement without durable task artifacts]
-    K --> M[Implement next task]
-    L --> N[Applicable proportionate checks]
-    M --> N
+    J -->|Yes| K[One feature document and full Engram mirror]
+    J -->|No| L[Small work without durable task artifacts]
+    K --> TT[Resolve configured TDD, source and runner]
+    L --> TT
+    TT --> M[Implement next authorized task]
+    M --> N[Applicable proportionate checks]
     N --> Q[Record truthful results]
     Q --> R{Tracked feature?}
     R -->|No| O{RDD user-enabled at deliverable boundary?}
-    R -->|Yes| T[Update tasks and mirror proven progress]
+    R -->|Yes| T[Update intent, tasks and full mirror]
     T --> U{Work remains or requirements changed?}
     U -->|Yes| V[Revise affected tasks within authorized scope]
     V --> M
@@ -62,7 +64,7 @@ flowchart TD
     AB --> Y
     Y --> S[Deliver]
     W[Resume interrupted feature] --> X[Read full memory and task file; reconcile evidence]
-    X --> M
+    X --> TT
 ```
 
 ODD adds shared agent guidance, not a new CLI, state engine, or mandatory planning phase. Existing risk-based functional checks and the user-owned RDD switch are unchanged; ODD never enables RDD. Explicitly selected SDD remains a separate workflow.
