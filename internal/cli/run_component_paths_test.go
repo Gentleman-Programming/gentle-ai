@@ -16,6 +16,38 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
+func TestComponentPathsGlobalOpenClawAndPiPersonaMatchBackup(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenClaw, model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentEngram, model.ComponentSDD, model.ComponentSkills},
+		Persona:    model.PersonaGentleman, Skills: []model.SkillID{model.SkillGoTesting},
+	}
+	adapters := resolveAdapters(selection.Agents)
+	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, component := range selection.Components {
+		paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, adapters, component)
+		for _, path := range paths {
+			if !strings.HasPrefix(path, home+string(filepath.Separator)) || !containsPath(targets, path) {
+				t.Errorf("%s verification path %q must be at home and backed up", component, path)
+			}
+		}
+	}
+	for _, path := range targets {
+		if strings.HasPrefix(path, workspace+string(filepath.Separator)) {
+			t.Errorf("backup escaped global scope: %s", path)
+		}
+	}
+	for _, relative := range []string{"AGENTS.md", "SOUL.md", ".openclaw/openclaw.json", ".openclaw/skills/go-testing/SKILL.md", ".pi/gentle-ai/persona.json"} {
+		if !containsPath(targets, filepath.Join(home, relative)) {
+			t.Errorf("backup missing %s", relative)
+		}
+	}
+}
+
 func TestComponentPathsSDDIncludesSystemPromptForPromptFileAdapters(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{
@@ -150,7 +182,7 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 	}
 }
 
-func TestComponentPersonaPiUsesResolvedScopePath(t *testing.T) {
+func TestComponentPathsPiPersonaUsesResolvedScopePath(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentPi})
@@ -160,8 +192,8 @@ func TestComponentPersonaPiUsesResolvedScopePath(t *testing.T) {
 	if !containsPath(global, filepath.Join(home, ".pi", "gentle-ai", "persona.json")) {
 		t.Fatalf("global Pi persona paths = %v, missing home-scoped config", global)
 	}
-	if !containsPath(global, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
-		t.Fatalf("global Pi persona paths = %v, missing active workspace config", global)
+	if containsPath(global, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("global Pi persona paths = %v, includes active workspace config", global)
 	}
 
 	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, model.ComponentPersona)
@@ -209,13 +241,6 @@ func TestInstallPiPersonaWritesManagedScopePaths(t *testing.T) {
 			want := filepath.Join(root, ".pi", "gentle-ai", "persona.json")
 			if _, err := os.Stat(want); err != nil {
 				t.Fatalf("Pi persona config %q was not written: %v", want, err)
-			}
-			if tt.scope == ScopeGlobal {
-				workspacePath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
-				if _, err := os.Stat(workspacePath); err != nil {
-					t.Fatalf("global Pi persona config %q was not seeded: %v", workspacePath, err)
-				}
-				return
 			}
 			unwanted := filepath.Join(other, ".pi", "gentle-ai", "persona.json")
 			if _, err := os.Stat(unwanted); !os.IsNotExist(err) {
@@ -313,7 +338,7 @@ func TestComponentPathsWithWorkspaceOpenClawSDDUsesWorkspaceScopedSkills(t *test
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenClaw})
 
-	paths := componentPathsWithWorkspace(home, workspace, model.Selection{}, adapters, model.ComponentSDD)
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentSDD)
 
 	for _, want := range []string{
 		filepath.Join(workspace, ".openclaw", "skills", "_shared", "sdd-phase-common.md"),
@@ -348,8 +373,7 @@ func TestComponentPathsOpenClawSkillsSkipsSDDPhaseSkills(t *testing.T) {
 		},
 	}
 
-	// OpenClaw always uses workspaceDir when set, independent of scope.
-	paths := componentPathsWithWorkspace(home, workspace, selection, adapters, model.ComponentSkills)
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, model.ComponentSkills)
 
 	want := filepath.Join(workspace, ".openclaw", "skills", "go-testing", "SKILL.md")
 	if !containsPath(paths, want) {

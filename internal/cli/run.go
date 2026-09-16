@@ -719,7 +719,6 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 	}
 
 	workspaceDir, _ := os.Getwd()
-	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, resolved.Agents)
 
 	return &installRuntime{
 		homeDir:      homeDir,
@@ -1261,8 +1260,8 @@ func (s rollbackRestoreStep) Rollback() error {
 //
 // homeDir is always included. workspaceDir is included too when set and
 // distinct from homeDir: componentInjectionDirScoped resolves most
-// component targets there under ScopeWorkspace, and OpenClaw resolves its
-// workspace independent of --scope entirely (resolveOpenClawWorkspaceDir).
+// component targets there under ScopeWorkspace, while project tools retain
+// their cwd independently of agent artifact scope.
 // Both values are exactly what backupTargets/syncBackupTargets used to
 // compute what this run actually snapshotted, so allowing rollback to
 // write within them is not wider than what this run could already do.
@@ -1735,7 +1734,7 @@ func (s componentApplyStep) Run() error {
 			}
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {
-				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+				_, err = engram.InjectWithPromptDir(s.homeDir, componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter), adapter)
 			} else {
 				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 				if s.scope == ScopeWorkspace {
@@ -1792,10 +1791,12 @@ func (s componentApplyStep) Run() error {
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 				CodexPhaseModelAssignments:  s.selection.CodexPhaseModelAssignments,
-				WorkspaceDir:                s.workspaceDir,
 				StrictTDD:                   s.selection.StrictTDD,
 				Profiles:                    s.selection.Profiles,
 				CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
+			}
+			if s.scope == ScopeWorkspace {
+				opts.WorkspaceDir = s.workspaceDir
 			}
 			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
 			if _, err := injectSDD(targetDir, adapter, s.selection.SDDMode, opts); err != nil {
@@ -2652,24 +2653,14 @@ func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapte
 // componentInjectionDirScoped returns the directory to inject component files for the given adapter,
 // taking the install scope into account. When scope is ScopeWorkspace, agent-scoped
 // components write to workspaceDir instead of the selected agent's global config root.
-// OpenClaw always uses workspaceDir when set, independent of scope.
 func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
-	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) != "" {
-		return workspaceDir
-	}
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
 }
 
 // piPersonaConfigRoots returns the roots whose Pi persona state is managed by
-// install. Global install keeps its global fallback and seeds the active
-// workspace so Pi sees the selected persona immediately; workspace install is
-// limited to the workspace root like every other scoped component.
+// install. Like every scoped component, global install writes only to home.
 func piPersonaConfigRoots(homeDir, workspaceDir string, scope InstallScope) []string {
-	roots := []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
-	if scope == ScopeGlobal && strings.TrimSpace(workspaceDir) != "" && filepath.Clean(workspaceDir) != filepath.Clean(homeDir) {
-		roots = append(roots, workspaceDir)
-	}
-	return roots
+	return []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
 }
 
 func piPersonaConfigPaths(homeDir, workspaceDir string, scope InstallScope) []string {
@@ -2706,44 +2697,6 @@ func communityToolIDsToStrings(tools []model.CommunityToolID) []string {
 		result = append(result, string(tool))
 	}
 	return result
-}
-
-type openClawWorkspaceConfig struct {
-	Agents struct {
-		Defaults struct {
-			Workspace string `json:"workspace"`
-		} `json:"defaults"`
-	} `json:"agents"`
-}
-
-func resolveOpenClawWorkspaceDir(homeDir, fallback string, agentIDs []model.AgentID) string {
-	if !containsAgent(agentIDs, model.AgentOpenClaw) {
-		return fallback
-	}
-
-	configPath := filepath.Join(homeDir, ".openclaw", "openclaw.json")
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		return fallback
-	}
-
-	var config openClawWorkspaceConfig
-	if err := json.Unmarshal(content, &config); err != nil {
-		return fallback
-	}
-
-	workspace := strings.TrimSpace(config.Agents.Defaults.Workspace)
-	if workspace == "" {
-		return fallback
-	}
-	if filepath.IsAbs(workspace) {
-		return filepath.Clean(workspace)
-	}
-	abs, err := filepath.Abs(workspace)
-	if err != nil {
-		return filepath.Clean(workspace)
-	}
-	return abs
 }
 
 func componentPathDir(homeDir, workspaceDir string, adapter agents.Adapter, component model.ComponentID) string {
