@@ -245,8 +245,18 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
 		add(theme.VisualThemePaths(homeDir, adapter)...)
+		claudeThemesDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "themes")
+		add(
+			filepath.Join(claudeThemesDir, "gentleman.json"),
+			filepath.Join(claudeThemesDir, "gentleman-cute.json"),
+		)
 	case model.AgentOpenCode:
 		add(theme.VisualThemePaths(homeDir, adapter)...)
+		opencodeThemesDir := filepath.Join(filepath.Dir(adapter.SettingsPath(homeDir)), "themes")
+		add(
+			filepath.Join(opencodeThemesDir, "gentleman.json"),
+			filepath.Join(opencodeThemesDir, "gentleman-cute.json"),
+		)
 		// The SDD plugin writer resolves the config directory through the
 		// adapter and owns the plugin list; the snapshot must match it (#3219).
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")

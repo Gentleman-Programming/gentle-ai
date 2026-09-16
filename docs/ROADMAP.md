@@ -1,8 +1,11 @@
 # Roadmap de Incrementos — Axiom
 
 > **Visión y Arquitectura:** [AXIOM_ENTERPRISE_VISION.md](architecture/AXIOM_ENTERPRISE_VISION.md)  
-> **Estado General:** Fase 1 — Fundación de la Plataforma e Identidad (100% Completada — 7/7 Incrementos Archivados)  
-> **Última Actualización:** 2026-09-15
+> **Estado General:**  
+> - **Fase 1: Fundación de la Plataforma e Identidad Base:** ✅ 100% Completada (7/7 Incrementos Archivados)  
+> - **Fase 2: Autonomía, Identidad, Multi-Proyecto y Orquestación SDD:** ✅ 100% Completada (8/8 Incrementos Archivados)  
+> **Total de Incrementos Archivados:** 15 de 15 (INC-01 a INC-15)  
+> **Última Actualización:** 2026-09-16
 
 ---
 
@@ -17,6 +20,8 @@
 
 ## Catálogo de Incrementos
 
+### Fase 1: Fundación de la Plataforma e Identidad Base
+
 | ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
 | :--- | :--- | :---: | :---: | :--- |
 | **INC-01** | `axiom-identity-workspace-topology` | ✅ Archivado | Arquitectura / Core | Creación del binario `axiom`, esquema `axiom.yaml`, validación de topologías (monorepo-embedded, monorepo-decoupled, multirepo) y repositorio canónico de specs. |
@@ -26,6 +31,19 @@
 | **INC-05** | `autoskills-catalog-and-mining` | ✅ Archivado | Skills / Inteligencia | Catálogo de skills por tecnología detectada (midudev/autoskills) y minería heurística de código local con gobernanza Human-in-the-Loop. |
 | **INC-06** | `semantic-code-serena-codegraph` | ✅ Archivado | Semántica / Herramientas | Conector local con Serena MCP y CodeGraph para navegación y consultas semánticas de código en `Explore` y `Design`. |
 | **INC-07** | `archive-living-documentation-engine` | ✅ Archivado | Documentación / SDD | `Archive` como mantenedor continuo de especificaciones existentes y generador incremental de documentación viva en proyectos no documentados. |
+
+### Fase 2: Autonomía, Identidad, Multi-Proyecto y Orquestación SDD
+
+| ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
+| :--- | :--- | :---: | :---: | :--- |
+| **INC-08** | `multi-project-hub-and-init` | ✅ Archivado | Hub / Multi-Proyecto | Registro central de workspaces (`~/.axiom/workspaces.json`), CLI `axiom init` con autodetección tecnológica, `axiom project` y selector de proyectos en Dashboard Web. |
+| **INC-09** | `visual-decoupling-opencode-cleanup` | ✅ Archivado | Identidad Visual | Retiro de `gentle-logo.tsx` en OpenCode, neutralización de inyección forzada de temas (`axiom.json`), y normalización de rutas limpias de agentes (`axiom.*`). |
+| **INC-10** | `axiom-persona-and-spanish-contract` | ✅ Archivado | Agentes / Identidad | Nueva Persona oficial `axiom` (arquitecto riguroso en castellano peninsular), eliminación de voseo y contrato estricto de artefactos SDD en español. |
+| **INC-11** | `orchestrator-slash-commands-and-markers` | ✅ Archivado | Orquestador / SDD | Renombrado a `axiom-orchestrator` en OpenCode, normalización de comandos slash `/sdd-*` en Claude Code, migración dual de marcadores `axiom:` y centinela `.axiom-instance`. |
+| **INC-12** | `unified-axiom-user-state-and-env` | ✅ Archivado | Core / Configuración | Unificación de estado bajo `~/.axiom/`, variables de entorno canónicas `AXIOM_*` y migración automática transparente desde `~/.gentle-ai/`. |
+| **INC-13** | `sdd-commands-axiom-cli-integration` | ✅ Archivado | CLI / Ciclo de Vida | Integración de comandos SDD (`axiom sdd status/continue/attempt/verify-validate/archive-compose`) y ciclo de revisión RDD nativamente en el binario `axiom`. |
+| **INC-14** | `axiom-tui-branding-and-cli-cutover` | ✅ Archivado | TUI & Ecosistema | Unificación de la TUI interactiva Bubbletea (`axiom tui`), comandos de aprovisionamiento (`install`, `sync`, `upgrade`, `doctor`, `backup`, `restore`) y pasarela gentle-ai. |
+| **INC-15** | `dashboard-interactive-sdd-orchestration` | ✅ Archivado | Web UI & Orquestación | Orquestación interactiva SDD en el Dashboard Web (`axiom ui`) con acciones en un clic (`continue`, `verify-validate`, `archive-compose`) y CLI canónico `axiom change create`. |
 
 ---
 
@@ -105,6 +123,89 @@
   6. Generación del catálogo maestro inicial `openspec/INDEX.md` integrando los 7 incrementos fundacionales y especificaciones de dominio de la plataforma.
   7. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 10/10 requerimientos, 13/13 escenarios BDD).
   8. **HITO HISTÓRICO:** Culminación completa de la Fase 1 del Roadmap de Axiom (7 de 7 incrementos concluidos y archivados).
+
+---
+
+### [INC-08] multi-project-hub-and-init (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-15-inc-08-multi-project-hub-and-init/`
+- **Especificación viva:** `openspec/specs/multi-project-hub/spec.md`
+- **Entregables clave:**
+  1. Paquete de dominio Go `internal/hub/`: gestor central `HubManager`, detector tecnológico `Detector` (Go, Node/TypeScript, .NET, Rust, Python), andamiaje y registro `~/.axiom/workspaces.json`.
+  2. Subcomandos CLI `axiom init` (con detección automática de stack y generación de `axiom.yaml`) y `axiom project [list|switch|add|remove]`.
+  3. Evolución del Dashboard Web (`axiom ui`) a Hub Multi-Proyecto: selector interactivo de proyectos en el Navbar, cambio en caliente y pantalla de bienvenida para carpetas sin inicializar (*Zero-Doc Welcome Screen*).
+  4. Baterías completas de pruebas unitarias en `internal/hub/` (6 tests) y `internal/dashboard/` (11 tests) con 100% PASS.
+  5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 6/6 requerimientos, 10/10 escenarios BDD).
+
+### [INC-09] visual-decoupling-opencode-cleanup (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-15-inc-09-visual-decoupling-opencode-cleanup/`
+- **Especificación viva:** `openspec/specs/visual-decoupling/spec.md`
+- **Entregables clave:**
+  1. Retiro completo del plugin de logo heredado (`gentle-logo.tsx`) en OpenCode y purga en instalador y desinstalador.
+  2. Neutralización de inyección de temas: eliminación de `"theme": "gentleman"` forzado en `settings.json` y renombrado de temas a `axiom.json` y `axiom-dark.json`.
+  3. Desacoplamiento de rutas de agentes: actualización a `axiom.instructions.md` (VS Code Copilot), `~/.kiro/steering/axiom.md` (Kiro) y `~/.pi/axiom/` (Pi).
+  4. Saneamiento de activos de marca en documentación y `README.md`.
+  5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 5/5 requerimientos, 8/8 escenarios BDD).
+
+### [INC-10] axiom-persona-and-spanish-contract (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-15-inc-10-axiom-persona-and-spanish-contract/`
+- **Especificación viva:** `openspec/specs/persona-spanish-contract/spec.md`
+- **Entregables clave:**
+  1. Incorporación de la Persona oficial `PersonaAxiom = "axiom"` en `internal/model/types.go` y activos de prompt para todos los agentes soportados.
+  2. Tono de identidad: Arquitecto de sistemas principal, riguroso, pedagógico, en **castellano peninsular de España** con tuteo profesional técnico (eliminando el voseo rioplatense forzado).
+  3. Adopción de `PersonaAxiom` como predeterminada en presets y menús interactivos de selección.
+  4. Reforma del contrato lingüístico de orquestadores (`sdd-orchestrator-sections.md`): todos los artefactos SDD se generan por defecto en español, preservando inglés únicamente para identificadores de código.
+  5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 6/6 requerimientos, 9/9 escenarios BDD).
+
+### [INC-11] orchestrator-slash-commands-and-markers (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-11-orchestrator-slash-commands-and-markers/`
+- **Especificación viva:** `openspec/specs/orchestrator-commands-markers/spec.md`
+- **Entregables clave:**
+  1. Renombrado del orquestador canónico en OpenCode a `axiom-orchestrator`, preservando alias retrocompatible de transición.
+  2. Normalización de comandos slash de Claude Code: retiro del prefijo heredado `gentle-sdd-` y despliegue canónico de 11 comandos `/sdd-*` (`/sdd-explore`, `/sdd-propose`, `/sdd-spec`, `/sdd-design`, `/sdd-tasks`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`, etc.).
+  3. Migración de marcadores de sección Markdown hacia `<!-- axiom: ... -->` con lectura tolerante y centinela de workspace `.axiom-instance`.
+  4. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 4/4 requerimientos, 5/5 escenarios BDD).
+
+### [INC-12] unified-axiom-user-state-and-env (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-12-unified-axiom-user-state-and-env/`
+- **Especificación viva:** `openspec/specs/axiom-user-state-and-env/spec.md`
+- **Entregables clave:**
+  1. Unificación de todo el estado de usuario bajo `~/.axiom/` (`state.json`, `workspaces.json`, backups y skills).
+  2. Soporte para variables de entorno canónicas `AXIOM_*` (`AXIOM_HOME`, `AXIOM_CONFIG_DIR`, `AXIOM_STATE_DIR`, `AXIOM_LOG_DIR`, `AXIOM_BACKUP_DIR`).
+  3. Motor de migración automática transparente y no destructiva de datos preexistentes desde `~/.gentle-ai/`.
+  4. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 3/3 requerimientos, 5/5 escenarios BDD).
+
+### [INC-13] sdd-commands-axiom-cli-integration (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-13-sdd-commands-axiom-cli-integration/`
+- **Especificación viva:** `openspec/specs/axiom-sdd-cli-integration/spec.md`
+- **Entregables clave:**
+  1. Integración de comandos SDD bajo `axiom`: `axiom sdd status`, `axiom sdd continue`, `axiom sdd attempt`, `axiom sdd verify-validate`, `axiom sdd archive-compose`, `axiom sdd task-result` y `axiom sdd preflight-hook`.
+  2. Integración del ciclo de revisión RDD: `axiom review mode`, `start`, `resume`, `step` y `validate`.
+  3. Soporte para alias planos directos (`axiom sdd-status`, `axiom sdd-continue`, etc.).
+  4. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 4/4 requerimientos, 5/5 escenarios BDD).
+
+### [INC-14] axiom-tui-branding-and-cli-cutover (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-14-axiom-tui-branding-and-cli-cutover/`
+- **Especificación viva:** `openspec/specs/axiom-tui-branding/spec.md`
+- **Entregables clave:**
+  1. Unificación de la TUI interactiva Bubbletea bajo `axiom tui` y arranque automático en terminales TTY interactivos (`axiom`).
+  2. Integración de los comandos de gestión del ecosistema en el binario `axiom`: `axiom install`, `axiom sync`, `axiom upgrade`, `axiom doctor`, `axiom backup`, `axiom restore`, `axiom uninstall`.
+  3. Renovación de banners y estilos visuales de la TUI con identidad limpia Axiom.
+  4. Pasarela transparente de fallback para comandos `gentle-ai` redirigiéndolos de forma segura a `axiom`.
+  5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 4/4 requerimientos, 9/9 escenarios BDD).
+
+### [INC-15] dashboard-interactive-sdd-orchestration (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-15-dashboard-interactive-sdd-orchestration/`
+- **Especificación viva:** `openspec/specs/dashboard-sdd-orchestration/spec.md`
+- **Entregables clave:**
+  1. Orquestación interactiva del ciclo de vida SDD desde el Dashboard Web local (`axiom ui`):
+     - Botón para avanzar fase (`sdd continue`) con refresco en tiempo real.
+     - Botón para validar reportes de verificación (`sdd verify-validate`).
+     - Botón para componer entregables de archivado formal (`sdd archive-compose`).
+     - Modal de creación visual de nuevos incrementos (`proposal.md` canónico en español) con validación sintáctica kebab-case.
+  2. Subcomando canónico en CLI: `axiom change create <nombre> [--intent "..."]`.
+  3. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 5/5 requerimientos, 8/8 escenarios BDD).
+  4. **HITO HISTÓRICO:** Culminación completa de la Fase 2 del Roadmap de Axiom (8 de 8 incrementos concluidos y archivados).
+
 
 
 
