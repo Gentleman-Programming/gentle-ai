@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-16 08:07:20 UTC
-> **Total Dominios:** 38 | **Total Requerimientos:** 270 | **Total Escenarios BDD:** 436
+> **Última Sincronización:** 2026-09-16 10:10:33 UTC
+> **Total Dominios:** 40 | **Total Requerimientos:** 277 | **Total Escenarios BDD:** 446
 
 ---
 
@@ -12,6 +12,8 @@
 | :--- | :--- | :---: | :---: | :--- |
 | `antigravity-support` | Antigravity support | 4 | 4 | [Ver Spec](specs/antigravity-support/spec.md) |
 | `autoskills` | Especificación de Requerimientos: Autoskills (midudev/autoskills) y Minería Heurística con Gobernanza Human-in-the-Loop | 13 | 17 | [Ver Spec](specs/autoskills/spec.md) |
+| `axiom-sdd-cli-integration` | Especificación de Requerimientos: Integración de Comandos SDD en la CLI axiom (INC-13) | 4 | 5 | [Ver Spec](specs/axiom-sdd-cli-integration/spec.md) |
+| `axiom-user-state-and-env` | Especificación de Requerimientos: Unificación de Estado en ~/.axiom y Variables AXIOM_* (INC-12) | 3 | 5 | [Ver Spec](specs/axiom-user-state-and-env/spec.md) |
 | `engram-protocol-injection` | Engram protocol injection Specification | 5 | 12 | [Ver Spec](specs/engram-protocol-injection/spec.md) |
 | `gga` | GGA Specification | 3 | 8 | [Ver Spec](specs/gga/spec.md) |
 | `installer-picker-navigation` | Installer Picker Navigation Specification | 3 | 9 | [Ver Spec](specs/installer-picker-navigation/spec.md) |
@@ -104,6 +106,37 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
   - *Escenario BDD:* Consulta de propuestas vía API REST
 - **[REQ-6.2]** Interfaz Web SPA para el Buzón de Skills
   - *Escenario BDD:* Aprobación visual de una skill desde la interfaz web
+
+### Dominio: `axiom-sdd-cli-integration` — Especificación de Requerimientos: Integración de Comandos SDD en la CLI axiom (INC-13)
+
+<!-- Especificación Viva generada a partir de '2026-09-16-inc-13-sdd-commands-axiom-cli-integration' -->
+
+**Archivo:** [`specs/axiom-sdd-cli-integration/spec.md`](specs/axiom-sdd-cli-integration/spec.md)
+
+- **[REQ-13.1]** Subcomando axiom sdd status
+  - *Escenario BDD:* Consulta de estado mediante axiom sdd status
+- **[REQ-13.2]** Subcomando axiom sdd continue
+  - *Escenario BDD:* Enrutamiento mediante axiom sdd continue
+- **[REQ-13.3]** Subcomando axiom sdd attempt
+  - *Escenario BDD:* Reserva y liquidación de presupuesto de ejecución
+- **[REQ-13.4]** Referencia exclusiva a la CLI axiom en prompts
+  - *Escenario BDD:* Verificación de sintaxis de comandos en sdd-orchestrator-sections.md
+  - *Escenario BDD:* Comandos slash de OpenCode apuntando a axiom
+
+### Dominio: `axiom-user-state-and-env` — Especificación de Requerimientos: Unificación de Estado en ~/.axiom y Variables AXIOM_* (INC-12)
+
+<!-- Especificación Viva generada a partir de '2026-09-16-inc-12-unified-axiom-user-state-and-env' -->
+
+**Archivo:** [`specs/axiom-user-state-and-env/spec.md`](specs/axiom-user-state-and-env/spec.md)
+
+- **[REQ-12.1]** Ubicación autoritativa de estado y launchers en ~/.axiom
+  - *Escenario BDD:* Creación de archivo de estado en ~/.axiom
+  - *Escenario BDD:* Ubicación de launchers en ~/.axiom/bin
+- **[REQ-12.2]** Migración defensiva desde ~/.gentle-ai
+  - *Escenario BDD:* Migración automática en el primer arranque
+- **[REQ-12.3]** Precedencia de variables AXIOM_* sobre GENTLE_AI_*
+  - *Escenario BDD:* Variable AXIOM_* toma precedencia
+  - *Escenario BDD:* Fallback a GENTLE_AI_* si AXIOM_* no está definido
 
 ### Dominio: `engram-protocol-injection` — Engram protocol injection Specification
 

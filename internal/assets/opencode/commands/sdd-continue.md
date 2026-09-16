@@ -10,7 +10,7 @@ SDD Session Preflight must already be complete for this session. It must include
 
 WORKFLOW:
 
-1. For every declared store, first inspect with native `sdd-status`. Before calling `gentle-ai sdd-continue [change] --cwd <repo>`, the host MUST confirm the current human scope covers the selected change-directory marker. Read-only or excluded-marker scope forbids this mutating call; native allowed roots do not grant human consent. Preparation grants no source roots or attempts. If native resolution fails, report it without a local dispatch fallback.
+1. For every declared store, first inspect with native `sdd-status`. Before calling `axiom sdd continue [change] --cwd <repo>`, the host MUST confirm the current human scope covers the selected change-directory marker. Read-only or excluded-marker scope forbids this mutating call; native allowed roots do not grant human consent. Preparation grants no source roots or attempts. If native resolution fails, report it without a local dispatch fallback.
 2. Produce or consume structured status before acting: schemaName, planningHome/changeRoot, artifactPaths/contextFiles, task progress, dependency states, next recommended action, blocked reasons, and actionContext.
 3. Check which artifacts already exist for the active change (proposal, specs, design, tasks)
 4. Follow native `nextRecommended`; do not reconstruct a dependency graph.

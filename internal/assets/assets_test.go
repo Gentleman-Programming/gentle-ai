@@ -1169,8 +1169,12 @@ func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValu
 
 func TestClaudeSDDStatusUsesNativeForEveryDeclaredStore(t *testing.T) {
 	content := MustRead("claude/commands/sdd-status.md")
+	hasStatusCmd := strings.Contains(content, "axiom sdd status [change] --cwd <repo> --json --instructions") ||
+		strings.Contains(content, "gentle-ai sdd-status [change] --cwd <repo> --json --instructions")
+	if !hasStatusCmd {
+		t.Errorf("Claude status missing status command invocation")
+	}
 	for _, want := range []string{
-		"gentle-ai sdd-status [change] --cwd <repo> --json --instructions",
 		"every declared artifact store, including Engram", "native v2",
 		"Inspection needs no execution preflight", "without executing any recommendation",
 		"If the binary is unavailable", "non-authoritative", "Do not fabricate native-shaped status",
@@ -2288,6 +2292,7 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 
 func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 	const causalFailureDisclosure = "On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure."
+	const causalFailureDisclosureAxiom = "On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Axiom or the native ledger caused the independent consumer command failure."
 
 	paths := []string{
 		"antigravity/sdd-orchestrator.md",
@@ -2305,8 +2310,6 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 	}
 	required := []string{
 		"Native Runtime Attempt Authority",
-		"gentle-ai sdd-attempt acquire",
-		"gentle-ai sdd-attempt settle",
 		"state: proceed",
 		"opaque `token`",
 		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
@@ -2318,7 +2321,6 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 		"--outcome interrupted", "omit `--evidence-revision`", "--remediates-evidence-revision <sha256>",
 		"status|begin|finish|reset",
 		"never automatic",
-		causalFailureDisclosure,
 	}
 	for _, path := range paths {
 		content := resolveSharedOrchestratorSections(MustRead(path))
@@ -2326,13 +2328,25 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
 		}
 		section := markdownSection(content, "### Native Runtime Attempt Authority")
+		hasAcquire := strings.Contains(section, "axiom sdd attempt acquire") || strings.Contains(section, "gentle-ai sdd-attempt acquire")
+		if !hasAcquire {
+			t.Fatalf("%s missing native runtime-attempt authority wording for acquire", path)
+		}
+		hasSettle := strings.Contains(section, "axiom sdd attempt settle") || strings.Contains(section, "gentle-ai sdd-attempt settle")
+		if !hasSettle {
+			t.Fatalf("%s missing native runtime-attempt authority wording for settle", path)
+		}
+		hasCausal := strings.Contains(section, causalFailureDisclosure) || strings.Contains(section, causalFailureDisclosureAxiom)
+		if !hasCausal {
+			t.Fatalf("%s missing native runtime-attempt authority causal failure disclosure", path)
+		}
 		for _, want := range required {
 			if !strings.Contains(section, want) {
 				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
 			}
 		}
 		if strings.Contains(section, "--successor-lineage") {
-			t.Fatalf("%s names --successor-lineage, which gentle-ai sdd-attempt settle does not define", path)
+			t.Fatalf("%s names --successor-lineage, which sdd-attempt settle does not define", path)
 		}
 		last := -1
 		for _, label := range []string{

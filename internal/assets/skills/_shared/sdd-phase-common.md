@@ -20,7 +20,7 @@ NOTE: the preferred path is (1) — exact skill paths selected by the orchestrat
 
 **`sdd-research` collector exception:** this output-only collector does not read local artifacts, repository state, or Engram state, and does not use artifact locators. It returns its evidence envelope to the orchestrator, which validates and persists it through the selected store route. Sections B and C do not apply to `sdd-research`; every other phase follows them unchanged.
 
-The orchestrator injects the artifact store and the locators native status already resolved (`artifactStore` and `artifactPaths` from `gentle-ai sdd-status --json --instructions`). Read what you are given.
+The orchestrator injects the artifact store and the locators native status already resolved (`artifactStore` and `artifactPaths` from `axiom sdd status --json --instructions`). Read what you are given.
 
 **Do NOT detect the artifact store, and do NOT branch on it.** The dispatcher resolved it from the store the workspace DECLARES. An agent that re-derives the store disagrees with the authority that launched it, which is exactly how a phase ends up reading a store the workspace never declared — or reading nothing at all and returning an empty result.
 
@@ -44,7 +44,7 @@ Every artifact-producing phase other than the output-only `sdd-research` collect
 
 Persist to the store the orchestrator reported, using that artifact's locator. As in section B, the store is told to you; do not detect it. The write mechanisms below differ because writing a file and saving an observation are genuinely different operations, not because the agent gets to choose between them.
 
-For `verify-report`, first build exact candidate bytes and run `gentle-ai sdd-verify-validate` with authoritative requirement/scenario counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist only the same admitted bytes, including a valid `fail`.
+For `verify-report`, first build exact candidate bytes and run `axiom sdd-verify-validate` with authoritative requirement/scenario counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist only the same admitted bytes, including a valid `fail`.
 
 ### Engram mode
 
@@ -88,7 +88,7 @@ Every phase MUST return a structured envelope to the orchestrator:
 - `risks`: risks discovered, or "None"
 - `skill_resolution`: how skills were loaded — `paths-injected` (received exact skill paths from orchestrator), `fallback-registry` (self-loaded paths from registry), `fallback-path` (loaded via SKILL: Load path), or `none` (no skills loaded)
 
-**Validating a delegated phase result.** A runtime whose host does not validate task results itself MUST run `gentle-ai sdd-task-result --phase <phase> --cwd <repo> --input <path|->` over the child's raw output before treating it as a result. It exits zero for a usable result and otherwise renders the typed terminal failure below, byte-identical to the one a validating host emits, because both read one definition. Never classify a task result by reading it yourself.
+**Validating a delegated phase result.** A runtime whose host does not validate task results itself MUST run `axiom sdd task-result --phase <phase> --cwd <repo> --input <path|->` over the child's raw output before treating it as a result. It exits zero for a usable result and otherwise renders the typed terminal failure below, byte-identical to the one a validating host emits, because both read one definition. Never classify a task result by reading it yourself.
 
 If terminal task-result validation reports `sdd_task_result_empty` or `sdd_task_result_malformed`, do not assume this envelope was delivered. Do not retry automatically or initiate another phase. The terminal value starts with `GENTLE_AI_SDD_FAILURE ` followed by a `gentle-ai.sdd-task-result-failure/v1` JSON handoff; preserve it unchanged, follow its `continuation` exactly once, and execute it only when supplied as a command. Never turn guidance into a guessed command: use only the coordinator's retained structured status for the selected change and artifact store; if unavailable, report the terminal failure and ask the user to select both. Do not infer either, run unscoped status discovery, retry, or launch another phase. Report the typed failure to the user and wait for an explicit decision. A later launch in the same session receives `sdd_task_dispatch_latched` instead: that launch never dispatched, so it names the phase it requested, the earlier phase and code that actually failed, and its `exit` -- start a new session to launch SDD phases again.
 

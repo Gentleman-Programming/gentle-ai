@@ -143,7 +143,7 @@ unrelated requirement byte-for-byte, and applies RENAMED before MODIFIED
 before REMOVED before ADDED so a rename is visible to a same-change MODIFIED:
 
 ```bash
-gentle-ai sdd-archive-compose \
+axiom sdd archive-compose \
   --canonical "openspec/specs/{domain}/spec.md" \
   --delta "openspec/changes/{change-name}/specs/{domain}/spec.md" \
   --output "openspec/specs/{domain}/spec.md.compose-tmp" \

@@ -15,7 +15,7 @@ CONTEXT:
 
 TASK:
 
-1. Run `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for every declared artifact store, including Engram. Consume native v2 unchanged; if unavailable or invalid, report the failure without inventing native-shaped status or calling continue.
+1. Run `axiom sdd status [change] --cwd <repo> --json --instructions` for every declared artifact store, including Engram. Consume native v2 unchanged; if unavailable or invalid, report the failure without inventing native-shaped status or calling continue.
 2. Resolve the active change:
    - If `$ARGUMENTS` is provided, validate that exact change in the selected artifact store.
    - If omitted and exactly one active change exists, select it and say how it was selected.

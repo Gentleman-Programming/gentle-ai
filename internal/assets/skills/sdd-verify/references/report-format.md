@@ -82,7 +82,7 @@ build_output_hash: sha256:{exact-output-digest}
 
 The YAML envelope MUST be the first non-empty content and contains every field exactly once. Counts come from the actual retrieved specs. Admission rejects malformed, unknown, missing, contradictory, or count-mismatched evidence. A canonical failure with blocker, critical, command-exit, or incomplete evidence is valid and persistable but not archive-ready. Human prose after the envelope never controls routing. Model/provider/profile/effort selection remains user-owned.
 
-Before persistence, hold the complete report as exact candidate bytes and run `gentle-ai sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>` before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and preserve the prior report; otherwise persist the same bytes, including a valid `fail`.
+Before persistence, hold the complete report as exact candidate bytes and run `axiom sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>` before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and preserve the prior report; otherwise persist the same bytes, including a valid `fail`.
 
 ## Review Context and Verification Availability
 

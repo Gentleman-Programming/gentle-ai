@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/dashboard"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
@@ -60,6 +62,12 @@ COMANDOS:
   archive list         Lista las especificaciones vivas consolidadas y sus versiones
   archive show         Muestra el contenido Markdown de una especificación viva por dominio
   archive coldstart    Sintetiza una especificación viva inicial a partir de un cambio archivado
+  sdd status           Consulta el estado de fases y artefactos de un cambio SDD (--json, --instructions)
+  sdd continue         Calcula y emite la siguiente acción autorizada del despachador SDD
+  sdd attempt          Gestiona el presupuesto y libro mayor de intentos de ejecución (acquire/settle)
+  sdd verify-validate  Valida un reporte de verificación contra las especificaciones activas
+  sdd archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas
+  review               Gestiona el ciclo de revisión formal RDD (start, resume, step, mode, validate)
   ui                   Inicia el servidor local y abre el dashboard web interactivo
   version              Muestra la versión e información de compilación
   help                 Muestra esta ayuda
@@ -70,6 +78,9 @@ BANDERAS:
 
 Ejemplos:
   axiom init --name "MiProyecto"
+  axiom sdd status mi-cambio --json
+  axiom sdd continue mi-cambio
+  axiom sdd attempt acquire --change mi-cambio ...
   axiom project list
   axiom project switch ludeka
   axiom ui
@@ -94,6 +105,7 @@ func fileExists(p string) bool {
 
 
 func main() {
+	cli.AppVersion = Version
 	if len(os.Args) < 2 {
 		printHelp()
 		os.Exit(0)
@@ -251,6 +263,37 @@ func main() {
 	case "ui":
 		runUI(os.Args[2:])
 
+	case "sdd":
+		os.Exit(runSDD(os.Args[2:], os.Stdout, os.Stderr))
+	case "sdd-status":
+		os.Exit(runSDD(append([]string{"status"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "sdd-continue":
+		os.Exit(runSDD(append([]string{"continue"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "sdd-attempt":
+		os.Exit(runSDD(append([]string{"attempt"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "sdd-verify-validate":
+		os.Exit(runSDD(append([]string{"verify-validate"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "sdd-archive-compose":
+		os.Exit(runSDD(append([]string{"archive-compose"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "sdd-task-result":
+		os.Exit(runSDD(append([]string{"task-result"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "sdd-preflight-hook":
+		os.Exit(runSDD(append([]string{"preflight-hook"}, os.Args[2:]...), os.Stdout, os.Stderr))
+
+	case "review":
+		os.Exit(runReview(os.Args[2:], os.Stdout, os.Stderr))
+	case "review-start":
+		os.Exit(runReview(append([]string{"start"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "review-resume":
+		os.Exit(runReview(append([]string{"resume"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "review-step":
+		os.Exit(runReview(append([]string{"step"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "review-bundle-export":
+		os.Exit(runReview(append([]string{"bundle-export"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "review-bundle-import":
+		os.Exit(runReview(append([]string{"bundle-import"}, os.Args[2:]...), os.Stdout, os.Stderr))
+	case "review-validate":
+		os.Exit(runReview(append([]string{"validate"}, os.Args[2:]...), os.Stdout, os.Stderr))
 
 	default:
 		fmt.Printf("Error: comando '%s' no reconocido.\n\n", arg1)
@@ -1482,6 +1525,118 @@ func runProjectRemove(args []string) {
 	fmt.Printf("[OK] Proyecto '%s' desvinculado del Hub global (los archivos en disco no fueron alterados).\n", target)
 }
 
+func runSDD(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(stdout, "Uso: axiom sdd <subcomando> [argumentos]")
+		fmt.Fprintln(stdout, "\nSubcomandos disponibles:")
+		fmt.Fprintln(stdout, "  status           Consulta el estado de fases y artefactos de un cambio SDD (--json, --instructions)")
+		fmt.Fprintln(stdout, "  continue         Calcula y emite la siguiente acción autorizada del despachador SDD")
+		fmt.Fprintln(stdout, "  attempt          Gestiona el presupuesto y libro mayor de intentos de ejecución (acquire/settle)")
+		fmt.Fprintln(stdout, "  verify-validate  Valida un reporte de verificación contra las especificaciones activas")
+		fmt.Fprintln(stdout, "  archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas")
+		fmt.Fprintln(stdout, "  task-result      Valida y extrae el resultado tipado de una fase delegada")
+		fmt.Fprintln(stdout, "  preflight-hook   Ejecuta el hook previo de verificación SDD")
+		if len(args) < 1 {
+			return 1
+		}
+		return 0
+	}
 
+	subCmd := args[0]
+	subArgs := args[1:]
+	var err error
 
+	switch subCmd {
+	case "status":
+		err = cli.RunSDDStatus(subArgs, stdout)
+	case "continue":
+		err = cli.RunSDDContinue(subArgs, stdout)
+	case "attempt":
+		err = cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(subArgs), stdout)
+	case "verify-validate":
+		err = cli.RunSDDVerifyValidate(subArgs, stdout)
+	case "archive-compose":
+		err = cli.RunSDDArchiveCompose(subArgs, stdout)
+	case "task-result":
+		err = cli.RunSDDTaskResult(subArgs, stdout)
+	case "preflight-hook":
+		err = cli.RunSDDPreflightHook(subArgs, stdout)
+	default:
+		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, verify-validate, archive-compose, task-result, preflight-hook\n", subCmd)
+		return 1
+	}
 
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runReview(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(stdout, "Uso: axiom review <subcomando> [argumentos]")
+		fmt.Fprintln(stdout, "\nSubcomandos disponibles:")
+		fmt.Fprintln(stdout, "  mode             Consulta o modifica el estado de RDD (enable, disable, status)")
+		fmt.Fprintln(stdout, "  start            Inicia formalmente una revisión sobre el candidato actual")
+		fmt.Fprintln(stdout, "  resume           Reanuda una transacción de revisión pendiente")
+		fmt.Fprintln(stdout, "  step             Avanza al siguiente paso de revisión")
+		fmt.Fprintln(stdout, "  bundle-export    Exporta un paquete de evidencia de revisión")
+		fmt.Fprintln(stdout, "  bundle-import    Importa un paquete de evidencia de revisión")
+		fmt.Fprintln(stdout, "  validate         Ejecuta validaciones no decisivas sobre el candidato")
+		return 0
+	}
+
+	if len(args) >= 1 && args[0] == "mode" {
+		if err := cli.RunReviewMode(args[1:], stdout); err != nil {
+			fmt.Fprintf(stderr, "Error: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(args) >= 1 {
+		switch args[0] {
+		case "start":
+			if err := cli.RunReviewStart(args[1:], stdout); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "resume":
+			if err := cli.RunReviewResume(args[1:], stdout); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "step":
+			if err := cli.RunReviewStep(args[1:], stdout); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "bundle-export":
+			if err := cli.RunReviewBundleExport(args[1:], stdout); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "bundle-import":
+			if err := cli.RunReviewBundleImport(args[1:], stdout); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "validate":
+			if err := cli.RunReviewValidateNonDeciding(args[1:], stdout); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		}
+	}
+	if err := cli.RunReview(args, stdout); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	return 0
+}
