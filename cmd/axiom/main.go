@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mattn/go-isatty"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/app"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/dashboard"
@@ -37,8 +39,9 @@ func printHelp() {
 USO:
   axiom <comando> [subcomando] [argumentos]
   axiom [banderas]
+  axiom                Inicia la TUI interactiva si se ejecuta en un terminal interactivo (TTY)
 
-COMANDOS:
+COMANDOS DE GOBERNANZA Y WORKSPACE:
   init                 Inicializa un proyecto con axiom.yaml, andamiaje base y lo registra en el Hub
   project list         Lista los proyectos registrados en el Hub global (~/.axiom/workspaces.json)
   project switch       Conmuta el proyecto activo por defecto
@@ -69,6 +72,16 @@ COMANDOS:
   sdd archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas
   review               Gestiona el ciclo de revisión formal RDD (start, resume, step, mode, validate)
   ui                   Inicia el servidor local y abre el dashboard web interactivo
+
+COMANDOS DE GESTIÓN DE AGENTES Y TUI:
+  tui                  Abre la interfaz gráfica interactiva de terminal (TUI) de Axiom
+  install              Instala agentes y configura el ecosistema en la máquina
+  sync                 Sincroniza y re-aplica configuraciones, skills y reglas en los agentes
+  upgrade              Actualiza herramientas y componentes gestionados del ecosistema
+  doctor               Ejecuta diagnósticos de salud del ecosistema y herramientas instaladas
+  backup               Lista y gestiona los respaldos de configuración
+  restore              Restaura un respaldo previo de configuración
+  uninstall            Desinstala componentes o plugins gestionados de agentes
   version              Muestra la versión e información de compilación
   help                 Muestra esta ayuda
 
@@ -77,22 +90,44 @@ BANDERAS:
   --help, -h           Muestra esta ayuda
 
 Ejemplos:
+  axiom
+  axiom tui
   axiom init --name "MiProyecto"
   axiom sdd status mi-cambio --json
   axiom sdd continue mi-cambio
-  axiom sdd attempt acquire --change mi-cambio ...
-  axiom project list
-  axiom project switch ludeka
+  axiom install claude-code
+  axiom sync
+  axiom doctor
   axiom ui
-  axiom workspace validate
-  axiom handoff show --change inc-02-structured-handoffs-lifecycle
-  axiom role barrier --change inc-03-multi-role-sdd-fan-out
-  axiom skill scan
 `
 	fmt.Print(help)
 }
 
+var isattyFn = isTerminal
 
+func isTerminal(fd uintptr) bool {
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+func runBackup(args []string, stdout io.Writer) {
+	manifests := app.ListBackups()
+	if len(manifests) == 0 {
+		fmt.Fprintln(stdout, "No hay respaldos registrados en ~/.axiom/backups/")
+		return
+	}
+	fmt.Fprintf(stdout, "Respaldos registrados (%d):\n", len(manifests))
+	for _, m := range manifests {
+		desc := m.Description
+		if desc == "" {
+			desc = "Sin descripción"
+		}
+		pin := ""
+		if m.Pinned {
+			pin = " [PIN]"
+		}
+		fmt.Fprintf(stdout, " - %s (%s)%s: %s\n", m.ID, m.CreatedAt.Format("2006-01-02 15:04:05"), pin, desc)
+	}
+}
 
 func printVersion() {
 	fmt.Printf("%s version %s (%s/%s) commit:%s\n", Platform, Version, runtime.GOOS, runtime.GOARCH, GitCommit)
@@ -103,10 +138,17 @@ func fileExists(p string) bool {
 	return err == nil && !info.IsDir()
 }
 
-
 func main() {
 	cli.AppVersion = Version
+	app.Version = Version
 	if len(os.Args) < 2 {
+		if isattyFn(os.Stdin.Fd()) && isattyFn(os.Stdout.Fd()) {
+			if err := app.RunArgs([]string{}, os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
 		printHelp()
 		os.Exit(0)
 	}
@@ -120,6 +162,24 @@ func main() {
 
 	case "--help", "-h", "help":
 		printHelp()
+		os.Exit(0)
+
+	case "tui":
+		if err := app.RunArgs([]string{}, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+
+	case "install", "sync", "upgrade", "update", "doctor", "restore", "uninstall":
+		if err := app.RunArgs(os.Args[1:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+
+	case "backup":
+		runBackup(os.Args[2:], os.Stdout)
 		os.Exit(0)
 
 	case "init":

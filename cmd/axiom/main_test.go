@@ -236,5 +236,58 @@ func TestCLIIntegrationSubprocessAndFlatAliases(t *testing.T) {
 		if !strings.Contains(outStr, "sdd status") || !strings.Contains(outStr, "sdd continue") || !strings.Contains(outStr, "review") {
 			t.Fatalf("axiom --help no documenta sdd o review:\n%s", outStr)
 		}
+		expectedCmds := []string{"tui", "install", "sync", "upgrade", "doctor", "backup", "restore", "uninstall"}
+		for _, cmdName := range expectedCmds {
+			if !strings.Contains(outStr, cmdName) {
+				t.Fatalf("axiom --help no documenta el comando de ecosistema %q:\n%s", cmdName, outStr)
+			}
+		}
+	})
+
+	t.Run("axiom backup lista respaldos", func(t *testing.T) {
+		cmd := exec.Command(binPath, "backup")
+		cmd.Dir = repoRoot
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("axiom backup falló: %v\nSalida: %s", err, string(out))
+		}
+		outStr := string(out)
+		if !strings.Contains(outStr, "Respaldos registrados") && !strings.Contains(outStr, "No hay respaldos") {
+			t.Fatalf("salida inesperada para axiom backup:\n%s", outStr)
+		}
+	})
+
+	t.Run("axiom install --help", func(t *testing.T) {
+		cmd := exec.Command(binPath, "install", "--help")
+		cmd.Dir = repoRoot
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("axiom install --help falló: %v\nSalida: %s", err, string(out))
+		}
+		if !strings.Contains(string(out), "install [flags]") {
+			t.Fatalf("salida no contiene 'install [flags]':\n%s", string(out))
+		}
+	})
+
+	t.Run("axiom sync --help", func(t *testing.T) {
+		cmd := exec.Command(binPath, "sync", "--help")
+		cmd.Dir = repoRoot
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("axiom sync --help falló: %v\nSalida: %s", err, string(out))
+		}
+		if !strings.Contains(string(out), "sync [flags]") {
+			t.Fatalf("salida no contiene 'sync [flags]':\n%s", string(out))
+		}
 	})
 }
+
+func TestRunBackup_Output(t *testing.T) {
+	var buf bytes.Buffer
+	runBackup(nil, &buf)
+	out := buf.String()
+	if !strings.Contains(out, "Respaldos registrados") && !strings.Contains(out, "No hay respaldos") {
+		t.Fatalf("runBackup salida inesperada: %s", out)
+	}
+}
+

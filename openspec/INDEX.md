@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-16 10:10:33 UTC
-> **Total Dominios:** 40 | **Total Requerimientos:** 277 | **Total Escenarios BDD:** 446
+> **Última Sincronización:** 2026-09-16 11:44:06 UTC
+> **Total Dominios:** 41 | **Total Requerimientos:** 281 | **Total Escenarios BDD:** 455
 
 ---
 
@@ -13,6 +13,7 @@
 | `antigravity-support` | Antigravity support | 4 | 4 | [Ver Spec](specs/antigravity-support/spec.md) |
 | `autoskills` | Especificación de Requerimientos: Autoskills (midudev/autoskills) y Minería Heurística con Gobernanza Human-in-the-Loop | 13 | 17 | [Ver Spec](specs/autoskills/spec.md) |
 | `axiom-sdd-cli-integration` | Especificación de Requerimientos: Integración de Comandos SDD en la CLI axiom (INC-13) | 4 | 5 | [Ver Spec](specs/axiom-sdd-cli-integration/spec.md) |
+| `axiom-tui-branding` | Especificación de Requerimientos: Unificación de TUI Bubbletea, Comandos de Ecosistema en CLI axiom y Pasarela de gentle-ai (INC-14) | 4 | 9 | [Ver Spec](specs/axiom-tui-branding/spec.md) |
 | `axiom-user-state-and-env` | Especificación de Requerimientos: Unificación de Estado en ~/.axiom y Variables AXIOM_* (INC-12) | 3 | 5 | [Ver Spec](specs/axiom-user-state-and-env/spec.md) |
 | `engram-protocol-injection` | Engram protocol injection Specification | 5 | 12 | [Ver Spec](specs/engram-protocol-injection/spec.md) |
 | `gga` | GGA Specification | 3 | 8 | [Ver Spec](specs/gga/spec.md) |
@@ -122,6 +123,26 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-13.4]** Referencia exclusiva a la CLI axiom en prompts
   - *Escenario BDD:* Verificación de sintaxis de comandos en sdd-orchestrator-sections.md
   - *Escenario BDD:* Comandos slash de OpenCode apuntando a axiom
+
+### Dominio: `axiom-tui-branding` — Especificación de Requerimientos: Unificación de TUI Bubbletea, Comandos de Ecosistema en CLI axiom y Pasarela de gentle-ai (INC-14)
+
+<!-- Especificación Viva generada a partir de '2026-09-16-inc-14-axiom-tui-branding-and-cli-cutover' -->
+
+**Archivo:** [`specs/axiom-tui-branding/spec.md`](specs/axiom-tui-branding/spec.md)
+
+- **[REQ-14.1]** Logotipo ASCII y Lema de Axiom en TUI
+  - *Escenario BDD:* Renderizado del logotipo tipográfico de Axiom
+  - *Escenario BDD:* Lema institucional de Axiom en pantalla de bienvenida
+- **[REQ-14.2]** Lanzamiento de TUI interactiva por defecto y subcomando axiom tui
+  - *Escenario BDD:* Ejecución de axiom sin argumentos en sesión interactiva TTY
+  - *Escenario BDD:* Ejecución de axiom sin argumentos en entorno no interactivo (CI o tubería)
+  - *Escenario BDD:* Lanzamiento explícito mediante axiom tui
+- **[REQ-14.3]** Subcomandos de gestión de herramientas y agentes en CLI axiom
+  - *Escenario BDD:* Ayuda de install desde axiom
+  - *Escenario BDD:* Sincronización de agentes mediante axiom sync
+  - *Escenario BDD:* Diagnóstico del ecosistema mediante axiom doctor
+- **[REQ-14.4]** Pasarela de compatibilidad y deprecación de gentle-ai
+  - *Escenario BDD:* Advertencia informativa de deprecación al invocar gentle-ai
 
 ### Dominio: `axiom-user-state-and-env` — Especificación de Requerimientos: Unificación de Estado en ~/.axiom y Variables AXIOM_* (INC-12)
 
