@@ -48,14 +48,16 @@ When native SDD status reports `blocked(edit_authority_missing)`, its structured
 
 **QA-automation self-check (MANDATORY — run before applying anything else below).** Before routing any request, check whether it matches one of these QA-automation intents. A match ALWAYS selects the QA route in the same row — never SDD, never generic `explore`/`general`, regardless of file count, risk, or whether `/sdd-new` was invoked; the intent itself is the trigger. Match by underlying intent, not literal wording — these are examples, not an exhaustive keyword list.
 
+Any route that creates or modifies test code MUST start at `qa-supervisor` — never call `qa-explore`/`qa-spec`/`qa-apply` directly for these intents. `qa-supervisor` is the mandatory entry point: it runs Regla Cero (BookStack first), verifies G1-G6, and only then delegates onward itself. Skipping straight to `qa-explore` bypasses the Regla Cero and the human plan-approval gate entirely.
+
 | Intent | Example signal | Route |
 |---|---|---|
-| Nuevo caso de automatización | "crear/automatizar un caso", "caso E2E", "haceme el QA de X" | `qa-explore` → `qa-spec` → approval → `qa-apply` → `qa-verify` |
-| Test roto por cambio de flujo | "este test ya no pasa", "el flujo cambió y rompió el test" | `qa-explore` (diagnóstico) → `qa-spec` → approval → `qa-apply` → `qa-verify` |
-| Impacto de un cambio de flujo | "qué tests toca este cambio", "qué se rompe si cambio X" | `qa-explore` (análisis de impacto) |
-| Test flaky / falla en CI | "este test falla a veces", "por qué falla en CI" | `qa-explore` (triage: bug real / cambio de negocio / entorno) |
-| Refactor Screenplay/POM | "este test no sigue el patrón", "refactoriza a Screenplay" | `qa-explore` → `qa-spec` → approval → `qa-apply` |
-| Consulta de cobertura | "¿ya tenemos test de X?", "qué cubre esto" | `qa-doc-access` / `qa-doc-reference` — NUNCA crea nada nuevo |
+| Nuevo caso de automatización | "crear/automatizar un caso", "caso E2E", "haceme el QA de X" | `qa-supervisor` (Regla Cero + Gate 1) → delega a `qa-explore` → `qa-spec` → approval → `qa-apply` → `qa-verify` |
+| Test roto por cambio de flujo | "este test ya no pasa", "el flujo cambió y rompió el test" | `qa-supervisor` (Regla Cero + Gate 1) → delega a `qa-explore` (diagnóstico) → `qa-spec` → approval → `qa-apply` → `qa-verify` |
+| Impacto de un cambio de flujo | "qué tests toca este cambio", "qué se rompe si cambio X" | `qa-explore` (análisis de impacto, solo lectura — no pasa por `qa-supervisor`) |
+| Test flaky / falla en CI | "este test falla a veces", "por qué falla en CI" | `qa-explore` (triage: bug real / cambio de negocio / entorno, solo lectura — no pasa por `qa-supervisor`) |
+| Refactor Screenplay/POM | "este test no sigue el patrón", "refactoriza a Screenplay" | `qa-supervisor` (Regla Cero + Gate 1) → delega a `qa-explore` → `qa-spec` → approval → `qa-apply` |
+| Consulta de cobertura | "¿ya tenemos test de X?", "qué cubre esto" | `qa-doc-access` / `qa-doc-reference` — NUNCA crea nada nuevo, no pasa por `qa-supervisor` |
 
 These rules select execution topology, not the implementation method. Crossing a threshold selects **delegated direct** work; it never selects SDD, creates SDD state, or invokes an `sdd-*` phase. Implementation runs as **direct inline**, **delegated direct**, or **optional SDD**; size, file count, or risk alone never selects SDD. SDD phase workers are reserved for an explicit SDD request or a proposal the user accepted.
 
