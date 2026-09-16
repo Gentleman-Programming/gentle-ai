@@ -29,7 +29,7 @@ $GITHUB_OWNER = "Gentleman-Programming"
 $GITHUB_REPO = "gentle-ai"
 $BINARY_NAME = "gentle-ai"
 $WINDOWS_DISTRIBUTION_HOLD = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
-$STABLE_SOURCE_COMMAND = "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest"
+$STABLE_SOURCE_COMMAND = ".\install.ps1 -Method go -Channel stable"
 
 function Write-Info    { param([string]$Message) Write-Host "[info]    $Message" -ForegroundColor Blue }
 function Write-Success { param([string]$Message) Write-Host "[ok]      $Message" -ForegroundColor Green }
@@ -90,17 +90,26 @@ function Install-ViaGo {
     param([string]$Channel = "stable")
 
     Write-Step "Installing via go install"
-    $version = if ($Channel -eq "beta") { "main" } else { "latest" }
-    # /v3 is part of the module path, not decoration: Go refuses to resolve a
-    # module whose tags are v3.x unless the import path carries the major
-    # version suffix.
-    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v3/cmd/$BINARY_NAME@$version"
+    $api = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO"
+    if ($Channel -eq "beta") {
+        $version = (Invoke-RestMethod -Uri "$api/commits/main").sha
+        if ($version -isnot [string] -or $version -cnotmatch '\A[0-9a-fA-F]{40}\z') {
+            Stop-WithError "Could not resolve main to a full commit SHA."
+        }
+    } else {
+        $version = (Invoke-RestMethod -Uri "$api/releases/latest").tag_name
+        if ($version -isnot [string] -or $version -cnotmatch '\Av[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z') {
+            Stop-WithError "Could not resolve the latest release tag."
+        }
+    }
+    $module = Get-GoModule -Version $version
+    $goPackage = "$module/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"
 
     if ($Channel -eq "beta") {
-        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai/v3"
-        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai/v3"
-        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai/v3"
+        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern $module
+        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern $module
+        Add-GoEnvPattern -Name "GONOPROXY" -Pattern $module
     }
 
     & go install $goPackage
@@ -118,6 +127,41 @@ function Install-ViaGo {
         Write-Warn "Add it to your PATH environment variable."
     }
     Write-Success "Installed $BINARY_NAME from source via go install"
+}
+
+function Get-GoModule {
+    param([string]$Version)
+
+    $saved = @{}
+    foreach ($name in @("GOTOOLCHAIN", "GOWORK", "GOFLAGS")) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/$GITHUB_OWNER/$GITHUB_REPO/$Version/go.mod" -OutFile $tempFile
+        # Parse metadata without switching toolchains or loading a workspace.
+        $env:GOTOOLCHAIN = "local"
+        $env:GOWORK = "off"
+        $env:GOFLAGS = ""
+        $metadata = & go mod edit -json $tempFile
+        if ($LASTEXITCODE -ne 0) {
+            Stop-WithError "Could not parse the selected version's go.mod."
+        }
+        $module = ($metadata | ConvertFrom-Json).Module.Path
+        if ($module -isnot [string] -or $module -cnotmatch '\Agithub\.com/gentleman-programming/gentle-ai(?:/v(?:[2-9]|[1-9][0-9]+))?\z') {
+            Stop-WithError "The selected version declares an unexpected Go module."
+        }
+    } finally {
+        foreach ($name in $saved.Keys) {
+            if ($null -eq $saved[$name]) {
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            } else {
+                [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process")
+            }
+        }
+        Remove-Item -LiteralPath $tempFile -Force
+    }
+    return $module
 }
 
 function Add-GoEnvPattern {
