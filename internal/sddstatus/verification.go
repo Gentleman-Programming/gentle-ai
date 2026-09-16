@@ -274,20 +274,24 @@ func validVerifyReportVerdict(verdict string) bool {
 }
 
 func parseLeadingEnvelope(text string) ([]string, int, string) {
+	return parseLeadingEnvelopeLabeled(text, "gentle-ai.verify-result/v1", "verify result")
+}
+
+func parseLeadingEnvelopeLabeled(text, schema, label string) ([]string, int, string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
 		return nil, -1, "YAML front matter is unsupported; the first non-empty content must be a fenced yaml envelope"
 	}
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "```yaml" {
-		return nil, -1, "missing valid gentle-ai.verify-result/v1 envelope: the first non-empty content must be fenced yaml"
+		return nil, -1, "missing valid " + schema + " envelope: the first non-empty content must be fenced yaml"
 	}
 	for index := 1; index < len(lines); index++ {
 		if strings.TrimSpace(lines[index]) == "```" {
 			return lines, index, ""
 		}
 	}
-	return nil, -1, "unterminated verify result envelope"
+	return nil, -1, "unterminated " + label + " envelope"
 }
 
 func parseScalarFields(lines []string, allowed map[string]bool, label string) (map[string]string, string) {
