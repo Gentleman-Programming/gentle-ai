@@ -4,8 +4,10 @@
 > **Estado General:**  
 > - **Fase 1: Fundación de la Plataforma e Identidad Base:** ✅ 100% Completada (7/7 Incrementos Archivados)  
 > - **Fase 2: Autonomía, Identidad, Multi-Proyecto y Orquestación SDD:** ✅ 100% Completada (8/8 Incrementos Archivados)  
-> - **Fase 3: Experiencia de Usuario, Localización y Ecosistema:** ⏳ En progreso (1 Incremento Archivado)  
-> **Total de Incrementos Archivados:** 16 de 16 (INC-01 a INC-16)  
+> - **Fase 3: Experiencia de Usuario, Localización y Ecosistema:** ✅ 100% Completada (2/2 Incrementos Archivados)  
+> - **Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3:** 📋 Planificada (2 Incrementos Planificados)  
+> **Total de Incrementos Archivados:** 17 de 17 (INC-01 a INC-17)  
+> **Total de Incrementos Planificados:** 2 (INC-18 y INC-19)  
 > **Última Actualización:** 2026-09-16
 
 ---
@@ -51,6 +53,17 @@
 | ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
 | :--- | :--- | :---: | :---: | :--- |
 | **INC-16** | `tui-spanish-localization` | ✅ Archivado | TUI & Experiencia | Localización completa al castellano peninsular de menús y pantallas de la TUI, y desacoplamiento de feeds de avisos externos. |
+| **INC-17** | `bidirectional-tui-ui-parity` | ✅ Archivado | TUI, Web UI & Ecosistema | Paridad bidireccional de funcionalidades: panel de ecosistema (doctor, sync, upgrade, backups, modelos) en Web UI y gobernanza SDD (proyectos, incrementos, roles, handoffs, living docs) en TUI. |
+
+### Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3
+
+> [!NOTE]
+> **Repositorio de Referencia Upstream (v3):** El código fuente de la versión más reciente de Gentle-AI (v3.0.2+) se encuentra disponible localmente en `c:/repos/gentle-ai` para consultas de código, diffs y análisis de Git.
+
+| ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
+| :--- | :--- | :---: | :---: | :--- |
+| **INC-18** | `rdd-decoupling-and-v3-stability-fixes` | 📋 Planificado | Core SDD / Estabilidad | Desacoplamiento de RDD del motor de estados SDD y absorción de parches de estabilidad upstream (rutas JSON Windows, aislamiento CWD, saneamiento de presets de skills y Engram session recovery). |
+| **INC-19** | `sdd-engine-simplification-and-odd-workflow` | 📋 Planificado | Motor SDD & ODD / Experiencia | Poda de burocracia en motor SDD (eliminación de attempts/budget consent preservando verificación formal) e introducción del flujo ODD (Organic Driven Development) en español bajo la Persona Axiom. |
 
 
 ---
@@ -224,9 +237,50 @@
   4. Batería completa de pruebas unitarias en `internal/tui/...` adaptadas y verificadas al 100% PASS.
   5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 4/4 requerimientos, 9/9 escenarios BDD).
 
+### [INC-17] bidirectional-tui-ui-parity (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-17-bidirectional-tui-ui-parity/`
+- **Especificación viva:** `openspec/specs/tui-ui-parity/spec.md`
+- **Entregables clave:**
+  1. Paridad TUI ➔ Web UI:
+     - Nuevo panel y pestaña `⚙️ Ecosistema & Herramientas` en el Dashboard Web (`axiom ui`).
+     - Diagnóstico de salud del sistema (`axiom doctor`) con indicadores visuales y recomendaciones.
+     - Sincronización de configuraciones (`sync`) y actualización de herramientas (`upgrade`) con consola interactiva en tiempo real.
+     - Gestión visual de respaldos en disco (`~/.axiom/backups/`) con listado cronológico, creación y restauración interactiva.
+     - Inspección de asignaciones de modelos de IA y niveles de esfuerzo de razonamiento.
+  2. Paridad Web UI ➔ TUI:
+     - Submenú `📁 Proyectos y Gobernanza SDD ➔` en el menú principal (`welcome.go`) y pantalla dedicada `ScreenGovernance`.
+     - Gestión multi-proyecto del Hub global (`ScreenHubProjects`) con conmutación en caliente, vinculación e inicialización (`axiom init`).
+     - Tablero interactivo de ciclo de vida SDD (`ScreenSDDIncrements`) con progreso de tareas y avance de fase (`continue`).
+     - Monitor multi-rol y evaluación de barrera Fan-In (`ScreenMultiRole`) con compuertas `blocking` vs `deferred`.
+     - Visor estructurado de relevos formales (`ScreenHandoffs`) con metadatos y secciones en castellano.
+     - Explorador de especificaciones vivas (`ScreenLivingDoc`) con atajo `s` para sincronización en caliente.
+  4. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 10/10 requerimientos, 11/11 escenarios BDD).
 
+---
 
+### [INC-18] rdd-decoupling-and-v3-stability-fixes (📋 Planificado)
+- **Responsabilidad:** Core SDD / Estabilidad & Plataforma
+- **Alcance planificado:**
+  1. **Desacoplamiento total de RDD (*Review-Driven Development*):**
+     - Retiro de `reviewOffer` y binding acoplado en las proyecciones de estado (`sdd status`).
+     - Desacoplamiento de las transiciones de fase SDD respecto a la presencia o resultado de revisiones RDD. RDD permanece como herramienta independiente y opt-in gobernada por el usuario.
+  2. **Absorción de correcciones críticas de upstream v3:**
+     - Fix de rutas en Windows: decodificación JSON adecuada en `sdd status` para evitar fallos por backslashes escapados (`1a2f6775`).
+     - Aislamiento de directorios: cálculo de artefactos inyectados independiente del CWD del proceso (`8c078527`).
+     - Saneamiento de catálogo de skills: separación limpia entre skills internas de desarrollo del repositorio y el preset predeterminado para usuarios (`11f6c000`).
+     - Estabilidad en memoria persistente: tratamiento de `ambiguous_project` y robustez en el handshake de inicio de sesión de Engram MCP (`59e6705f`, `90992285`).
+- **Decisión de producto sobre RTK:**
+  - Descartada la integración de RTK (`rtk-ai/rtk`) debido a que su instalación inyecta *hooks* forzados en los agentes (`PreToolUse`, `rtk rewrite`) que interceptan todas las ejecuciones de terminal, y carece de soporte oficial para Windows en upstream.
 
-
-
+### [INC-19] sdd-engine-simplification-and-odd-workflow (📋 Planificado)
+- **Responsabilidad:** Motor SDD & ODD / Experiencia & Arquitectura
+- **Alcance planificado:**
+  1. **Poda y simplificación del motor SDD (`internal/sddstatus`):**
+     - Eliminación de la sobrecarga burocrática de *attempts* contados, presupuestos de tokens, contratos de admisión de investigación y cadenas complejas de remediación.
+     - **Preservación del rigor de Axiom:** Mantenimiento de la compuerta de verificación formal (`verify-report.md`, validación de suites de pruebas antes de archivar e integración viva con el Dashboard Web `axiom ui` y la TUI).
+  2. **Introducción de ODD (*Organic Driven Development*) en Axiom:**
+     - Flujo ágil y directo para tareas cotidianas que no requieren las 7 fases completas de SDD: gestión centrada en un único documento vivo de tarea `odd/tasks/<feature>.md` con sincronización en Engram MCP (`odd/<feature>/tasks`).
+     - Redacción de directrices, prompts del orquestador y plantillas íntegramente en castellano peninsular bajo la Persona oficial `axiom`.
+     - Subcomandos canónicos en la CLI: `axiom odd create <nombre>`, `axiom odd status`.
+     - Integración reactiva en el Dashboard Web local (`axiom ui`) y en la TUI interactiva (`axiom tui`), permitiendo alternar con fluidez entre modo ágil (ODD) y modo formal de ingeniería (SDD).
 

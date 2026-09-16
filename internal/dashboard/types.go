@@ -170,4 +170,60 @@ type CreateHandoffResponse struct {
 	Message  string `json:"message"`
 }
 
+// DoctorCheck representa el resultado de un chequeo individual de salud del sistema.
+type DoctorCheck struct {
+	Name           string `json:"name"`
+	Category       string `json:"category"` // "agent", "tool", "environment"
+	Status         string `json:"status"`   // "ok", "warning", "error"
+	Details        string `json:"details"`
+	Recommendation string `json:"recommendation,omitempty"`
+}
+
+// DoctorReport agrupa los diagnósticos de salud del ecosistema Axiom.
+type DoctorReport struct {
+	Timestamp string        `json:"timestamp"`
+	Healthy   bool          `json:"healthy"`
+	Checks    []DoctorCheck `json:"checks"`
+}
+
+// BackupItem describe un snapshot o respaldo gestionado en ~/.axiom/backups/.
+type BackupItem struct {
+	Name        string   `json:"name"`
+	Created     string   `json:"created"`
+	Description string   `json:"description"`
+	Pinned      bool     `json:"pinned"`
+	Files       []string `json:"files,omitempty"`
+	SizeBytes   int64    `json:"size_bytes,omitempty"`
+}
+
+// BackupActionRequest define la solicitud para crear o restaurar un respaldo.
+type BackupActionRequest struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// EcosystemActionResponse reporta el resultado de operaciones como Sync o Upgrade.
+type EcosystemActionResponse struct {
+	Success bool     `json:"success"`
+	Action  string   `json:"action"`
+	Message string   `json:"message"`
+	Output  []string `json:"output,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// ModelConfigItem describe la configuración o asignación de un modelo de IA.
+type ModelConfigItem struct {
+	Agent       string `json:"agent"`
+	Role        string `json:"role"`
+	Model       string `json:"model"`
+	Reasoning   string `json:"reasoning,omitempty"`
+	Environment string `json:"environment,omitempty"`
+}
+
+// ModelAssignmentsDTO agrupa la configuración de modelos de IA y la persona activa.
+type ModelAssignmentsDTO struct {
+	ActivePersona string            `json:"active_persona"`
+	Assignments   []ModelConfigItem `json:"assignments"`
+}
+
 

@@ -58,6 +58,9 @@
       <button class="nav-tab" data-tab="tab-livingdoc">
         <span class="tab-icon">📚</span> Especificaciones Vivas
       </button>
+      <button class="nav-tab" data-tab="tab-ecosystem">
+        <span class="tab-icon">⚙️</span> Ecosistema & Herramientas
+      </button>
     </nav>
 
     <!-- Main Content Container -->
@@ -354,6 +357,107 @@
             <div id="livingdoc-viewer" class="livingdoc-viewer-box">
               <p class="empty-state">Selecciona un dominio de la izquierda para visualizar su especificación viva consolidada.</p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 8: ECOSISTEMA & HERRAMIENTAS -->
+      <section id="tab-ecosystem" class="tab-panel">
+        <div class="section-header">
+          <div>
+            <h2>Salud del Ecosistema, Herramientas y Respaldos</h2>
+            <p class="description">Diagnóstico integral (Axiom Doctor), sincronización de agentes, actualización de herramientas y snapshots de respaldos.</p>
+          </div>
+          <div class="filter-group">
+            <button class="btn btn-secondary" id="btn-refresh-ecosystem">↻ Actualizar Ecosistema</button>
+          </div>
+        </div>
+
+        <!-- Acciones Rápidas de Mantenimiento -->
+        <div class="card" style="margin-top: 1rem;">
+          <h3 class="subsection-title">⚡ Operaciones del Ecosistema</h3>
+          <div style="display: flex; gap: 1rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap;">
+            <button id="btn-eco-sync" class="btn btn-primary" title="Sincronizar configuraciones y reglas de agentes">🔄 Sincronizar Configuraciones</button>
+            <button id="btn-eco-upgrade" class="btn btn-secondary" title="Comprobar y actualizar herramientas">★ Actualizar Herramientas</button>
+            <button id="btn-eco-create-backup" class="btn btn-outline" title="Crear un nuevo snapshot de respaldo">+ Crear Respaldo Ahora</button>
+          </div>
+          <div id="eco-action-output" class="console-box hidden" style="margin-top: 1rem;">
+            <div class="console-header">
+              <span id="eco-action-title">Consola de Operaciones</span>
+              <button class="btn-sm btn-outline" id="btn-clear-console">Limpiar</button>
+            </div>
+            <pre id="eco-console-content"></pre>
+          </div>
+        </div>
+
+        <!-- Diagnóstico del Sistema (Axiom Doctor) -->
+        <div class="card" style="margin-top: 1.5rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 class="subsection-title">🩺 Diagnóstico de Salud (Axiom Doctor)</h3>
+            <span id="eco-doctor-badge" class="badge">Verificando...</span>
+          </div>
+          <div class="table-container" style="margin-top: 1rem;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Componente</th>
+                  <th>Categoría</th>
+                  <th>Estado</th>
+                  <th>Detalles</th>
+                  <th>Recomendación</th>
+                </tr>
+              </thead>
+              <tbody id="eco-doctor-tbody">
+                <tr><td colspan="5" class="loading-state">Cargando diagnóstico del sistema...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Gestión de Respaldos (Backups) -->
+        <div class="card" style="margin-top: 1.5rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 class="subsection-title">💾 Historial de Respaldos (~/.axiom/backups/)</h3>
+            <span id="eco-backups-count" class="badge">0 respaldos</span>
+          </div>
+          <div class="table-container" style="margin-top: 1rem;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Identificador</th>
+                  <th>Fecha de Creación</th>
+                  <th>Descripción</th>
+                  <th>Archivos</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="eco-backups-tbody">
+                <tr><td colspan="5" class="loading-state">Consultando respaldos en el sistema...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Modelos de IA Asignados -->
+        <div class="card" style="margin-top: 1.5rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 class="subsection-title">🤖 Modelos de IA y Persona Activa</h3>
+            <span id="eco-persona-badge" class="badge">Persona: Axiom</span>
+          </div>
+          <div class="table-container" style="margin-top: 1rem;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Agente</th>
+                  <th>Rol SDD</th>
+                  <th>Modelo Asignado</th>
+                  <th>Esfuerzo de Razonamiento</th>
+                </tr>
+              </thead>
+              <tbody id="eco-models-tbody">
+                <tr><td colspan="4" class="loading-state">Consultando asignación de modelos...</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </section>

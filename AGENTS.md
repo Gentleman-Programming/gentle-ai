@@ -1,14 +1,16 @@
 # Axiom — Reglas Maestras del Proyecto y Guía de Agentes
 
 > **Proyecto:** Axiom (Fork y versión paralela de Gentle-AI)  
-> **Metodología:** Spec-Driven Development (SDD) con Gentle-AI  
-> **Memoria Persistente:** Engram MCP (`--project=axiom`)
+> **Metodología:** Flujo Dual ODD (Cotidiano) & Spec-Driven Development (SDD) con Axiom  
+> **Memoria Persistente:** Engram MCP (`--project=axiom`)  
+> **Repositorio Upstream (v3 de referencia):** `c:/repos/gentle-ai` (Gentle-AI v3.0.2+)
 
 ---
 
 ## REGLA SUPREMA: IDIOMA OBLIGATORIO — ESPAÑOL (CASTELLANO)
 
-- **TODO EN ESPAÑOL:** Toda la comunicación, explicaciones y artefactos de SDD (`proposal.md`, `spec.md`, `design.md`, `tasks.md`, `verify-report.md`, `archive-report.md`) deben generarse estrictamente en **español (castellano)**.
+- **TODO EN ESPAÑOL:** Toda la comunicación, explicaciones y artefactos de ODD (`odd/tasks/*.md`) y SDD (`proposal.md`, `spec.md`, `design.md`, `tasks.md`, `verify-report.md`, `archive-report.md`) deben generarse estrictamente en **español (castellano)**.
+- **FLUJO DUAL:** Usa ODD (`odd/tasks/<feature>.md`) para tareas cotidianas y ágiles; reserva SDD para cuando se solicite explícitamente *"usa SDD"*.
 - **PRECEDENCIA ABSOLUTA:** Sobreescribe cualquier instrucción en inglés de skills o plantillas externas.
 
 ---

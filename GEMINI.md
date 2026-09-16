@@ -14,26 +14,29 @@
 
 ---
 
-## 1. Filosofía de Desarrollo: Spec-Driven Development (SDD) con Gentle-AI
+## 1. Filosofía de Desarrollo: Flujo Dual ODD (Cotidiano) y SDD (Formal)
 
-Este proyecto se desarrolla sobre sí mismo utilizando la metodología **Spec-Driven Development (SDD)** de Gentle-AI.
+Axiom incorpora las mejores prácticas del flujo de trabajo moderno, ofreciendo dos vías complementarias según el alcance de la tarea:
 
-**REGLA DE ORO:** Nunca implementar directamente en código cambios arquitectónicos o funcionalidades mayores sin pasar por las fases del ciclo SDD:
+### A. ODD (Organic Driven Development) — Vía Cotidiana y Ágil
+Para el trabajo habitual, refactorizaciones y funcionalidades directas sin sobrecarga burocrática de fases:
+1. **Documento Único de Tarea:** Se crea y mantiene un único archivo vivo `odd/tasks/<nombre-feature>.md` y su réplica sincronizada en Engram MCP bajo el tópico `odd/<nombre-feature>/tasks`.
+2. **Ciclo Ágil:** `Exploración proporcional ➔ Implementación autorizada ➔ Comprobación funcional / TDD`.
+3. **Control y Evidencia:** El archivo de tarea registra objetivos, restricciones, lista de tareas accionables con IDs estables, progreso y comandos de prueba ejecutados.
 
+### B. SDD (Spec-Driven Development) — Vía Formal de Arquitectura
+Reservado para grandes incrementos del sistema, cambios estructurales profundos o cuando el usuario pida explícitamente *"usa SDD"*:
 ```
 [ sdd-explore ] ➔ [ sdd-propose ] ➔ [ sdd-spec ] ➔ [ sdd-design ] ➔ [ sdd-tasks ] ➔ [ sdd-apply ] ➔ [ sdd-verify ] ➔ [ sdd-archive ]
 ```
-
-### Principios de la Máquina de Estados de SDD
-1. **File-System como Fuente de la Verdad:** El estado de las fases reside en `openspec/` y `.openspec/`. No confiar en la memoria volátil del chat.
-2. **Lossless Blocking Prompts:** Antes de pasar de `sdd-propose` a `sdd-spec` o de `sdd-design` a `sdd-apply`, presentar la propuesta o diseño al usuario en español y esperar aprobación explícita.
-3. **Delegación con Subagentes:** Usar la primitiva de delegación de la plataforma para exploraciones profundas, investigación externa y verificaciones independientes (`invoke_subagent` en Antigravity).
-4. **Presupuestos y CAS (Compare-And-Swap):** En `sdd-apply`, implementar exclusivamente contra los requerimientos acordados en la especificación y tareas definidas.
-5. **Comandos Nativos de Gentle-AI:** Utilizar los comandos de verificación y composición provistos por la CLI de Gentle-AI:
-   - `gentle-ai sdd-status [change]`
-   - `gentle-ai sdd-continue [change]`
-   - `gentle-ai sdd-verify-validate`
-   - `gentle-ai sdd-archive-compose`
+1. **File-System como Fuente de la Verdad:** El estado de las fases reside en `openspec/` y `.openspec/`.
+2. **Lossless Blocking Prompts:** Antes de pasar de propuesta a especificación o de diseño a implementación, presentar las decisiones al usuario en español y esperar confirmación.
+3. **Comandos Canónicos de Axiom:** Utilizar los comandos integrados en la CLI `axiom`:
+   - `axiom sdd status [cambio]`
+   - `axiom sdd continue [cambio]`
+   - `axiom sdd archive-compose [cambio]`
+   - O bien gestionar el ciclo interactivamente desde el Dashboard Web local: `axiom ui`.
+4. **Verificación Formal Obligatoria:** A diferencia de upstream, en Axiom la verificación con tests automatizados y reporte formal (`verify-report.md`) es un pilar innegociable antes del archivado.
 
 ---
 
@@ -57,3 +60,5 @@ El proyecto cuenta con el servidor MCP de **Engram** conectado bajo el espacio d
   - `go test ./...` para pruebas unitarias.
   - `go vet ./...` para validación estática.
   - `gofmt` para formateo estándar de Go.
+- **Repositorio de Referencia Upstream (v3):**
+  - Código fuente local de la última versión de Gentle-AI (v3.0.2+): `c:/repos/gentle-ai` disponible para consultas de código, diffs y análisis de Git.

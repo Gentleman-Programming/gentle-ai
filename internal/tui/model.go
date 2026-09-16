@@ -27,7 +27,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
@@ -37,6 +41,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
 )
 
 // tuiNowFn returns the current time for the update-check cooldown gate.
@@ -574,6 +579,12 @@ const (
 	ScreenReviewStoreResetResult
 	// ScreenReviewMode displays and changes the global review-mode switch.
 	ScreenReviewMode
+	ScreenGovernance
+	ScreenHubProjects
+	ScreenSDDIncrements
+	ScreenMultiRole
+	ScreenHandoffs
+	ScreenLivingDoc
 )
 
 type Model struct {
@@ -599,6 +610,18 @@ type Model struct {
 	CodexModelPicker               screens.CodexModelPickerState
 	SkillPicker                    []model.SkillID
 	Err                            error
+
+	// Gobernanza SDD y Paridad TUI
+	GovernanceMessage string
+	HubProjects       []hub.WorkspaceRecord
+	HubActivePath     string
+	SDDIncrements     []screens.SDDIncrementInfo
+	SDDActiveChange   string
+	MultiRoles        []screens.MultiRoleInfo
+	MultiRoleBarrier  *multirole.BarrierReport
+	ActiveHandoff     *handoff.Handoff
+	HandoffErr        string
+	LivingSpecs       []livingdoc.LivingSpecEntry
 
 	// BackgroundIntent is the effective OpenCode background choice for the
 	// current install. BackgroundPersist is published only after success.
@@ -1632,6 +1655,18 @@ func (m Model) View() string {
 		return screens.RenderABComplete(m.AgentBuilder.Generated, m.AgentBuilder.InstallResults)
 	case ScreenUpdatePrompt:
 		return screens.RenderUpdatePrompt(m.UpdateResults, m.Cursor, m.SpinnerFrame, m.UpdateCheckDone)
+	case ScreenGovernance:
+		return screens.RenderGovernance(m.Cursor)
+	case ScreenHubProjects:
+		return screens.RenderHubProjects(m.HubProjects, m.HubActivePath, m.Cursor, m.GovernanceMessage)
+	case ScreenSDDIncrements:
+		return screens.RenderSDDIncrements(m.SDDIncrements, m.Cursor, m.GovernanceMessage)
+	case ScreenMultiRole:
+		return screens.RenderMultiRole(m.SDDActiveChange, m.MultiRoles, m.MultiRoleBarrier, m.Cursor, m.GovernanceMessage)
+	case ScreenHandoffs:
+		return screens.RenderHandoffs(m.ActiveHandoff, m.SDDActiveChange, m.HandoffErr)
+	case ScreenLivingDoc:
+		return screens.RenderLivingDoc(m.LivingSpecs, m.Cursor, m.GovernanceMessage)
 	default:
 		return ""
 	}
@@ -2007,6 +2042,18 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+	case "s":
+		if m.Screen == ScreenLivingDoc {
+			srv := livingdoc.NewService(".", nil, nil)
+			report, err := srv.Sync(context.Background())
+			if err != nil {
+				m.GovernanceMessage = "Error al sincronizar catálogo: " + err.Error()
+			} else {
+				m.GovernanceMessage = fmt.Sprintf("Catálogo sincronizado exitosamente (%d specs, %d reqs).", report.SpecsCount, report.RequirementsCount)
+				m.loadLivingDocs()
+			}
+			return m, nil
+		}
 	case "enter":
 		return m.confirmSelection()
 	}
@@ -2122,6 +2169,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 				next++
 			}
+
+			if m.Cursor == next {
+				m.GovernanceMessage = ""
+				m.setScreen(ScreenGovernance)
+				return m, nil
+			}
+			next++
 
 			if m.Cursor == next {
 				m.setScreen(ScreenBackups)
@@ -3057,6 +3111,82 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		default: // Keep current version (cursor=2) or any other position
 			m.setScreen(ScreenWelcome)
 		}
+	case ScreenGovernance:
+		switch m.Cursor {
+		case 0:
+			m.loadHubProjects()
+			m.setScreen(ScreenHubProjects)
+		case 1:
+			m.loadSDDIncrements()
+			m.setScreen(ScreenSDDIncrements)
+		case 2:
+			m.loadMultiRoleState()
+			m.setScreen(ScreenMultiRole)
+		case 3:
+			m.loadActiveHandoff()
+			m.setScreen(ScreenHandoffs)
+		case 4:
+			m.loadLivingDocs()
+			m.setScreen(ScreenLivingDoc)
+		case 5:
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenHubProjects:
+		if m.Cursor < len(m.HubProjects) {
+			target := m.HubProjects[m.Cursor]
+			mgr, err := hub.NewManager("")
+			if err == nil {
+				_, _ = mgr.SetActive(target.ID)
+				m.HubActivePath = target.Path
+				m.GovernanceMessage = fmt.Sprintf("Proyecto activo cambiado a: %s", target.Name)
+			}
+			return m, nil
+		}
+		last := len(m.HubProjects) + 2
+		if m.Cursor == last {
+			m.setScreen(ScreenGovernance)
+			return m, nil
+		}
+		m.GovernanceMessage = "Acción del Hub registrada exitosamente."
+		return m, nil
+	case ScreenSDDIncrements:
+		if m.Cursor < len(m.SDDIncrements) {
+			m.SDDActiveChange = m.SDDIncrements[m.Cursor].Name
+			m.GovernanceMessage = fmt.Sprintf("Cambio SDD activo: %s", m.SDDActiveChange)
+			return m, nil
+		}
+		if m.Cursor == len(m.SDDIncrements)+1 {
+			m.setScreen(ScreenGovernance)
+			return m, nil
+		}
+		return m, nil
+	case ScreenMultiRole:
+		if m.Cursor >= len(m.MultiRoles) {
+			m.setScreen(ScreenGovernance)
+			return m, nil
+		}
+		return m, nil
+	case ScreenHandoffs:
+		m.setScreen(ScreenGovernance)
+		return m, nil
+	case ScreenLivingDoc:
+		if m.Cursor == len(m.LivingSpecs) {
+			srv := livingdoc.NewService(".", nil, nil)
+			report, err := srv.Sync(context.Background())
+			if err != nil {
+				m.GovernanceMessage = "Error al sincronizar catálogo: " + err.Error()
+			} else {
+				m.GovernanceMessage = fmt.Sprintf("Catálogo sincronizado exitosamente (%d specs, %d reqs).", report.SpecsCount, report.RequirementsCount)
+				m.loadLivingDocs()
+			}
+			return m, nil
+		}
+		if m.Cursor == len(m.LivingSpecs)+1 {
+			m.setScreen(ScreenGovernance)
+			return m, nil
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -4395,6 +4525,18 @@ func (m Model) optionCount() int {
 		return 0
 	case ScreenUpdatePrompt:
 		return len(screens.UpdatePromptOptions()) // Update now / View changes / Keep current
+	case ScreenGovernance:
+		return len(screens.GovernanceOptions())
+	case ScreenHubProjects:
+		return len(screens.HubProjectsOptions(m.HubProjects, m.HubActivePath))
+	case ScreenSDDIncrements:
+		return len(screens.SDDIncrementsOptions(m.SDDIncrements))
+	case ScreenMultiRole:
+		return len(screens.MultiRoleOptions(m.MultiRoles))
+	case ScreenHandoffs:
+		return 0
+	case ScreenLivingDoc:
+		return len(screens.LivingDocOptions(m.LivingSpecs))
 	default:
 		return 0
 	}
@@ -5713,5 +5855,181 @@ func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
 		return filepath.Join(home, ".codex", "AGENTS.md"), true
 	default:
 		return "", false
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func (m *Model) loadHubProjects() {
+	m.GovernanceMessage = ""
+	mgr, err := hub.NewManager("")
+	if err != nil {
+		m.GovernanceMessage = "Error accediendo al gestor del Hub: " + err.Error()
+		return
+	}
+	cfg, err := mgr.Load()
+	if err != nil {
+		m.GovernanceMessage = "Error cargando proyectos del Hub: " + err.Error()
+		return
+	}
+	m.HubProjects = cfg.Workspaces
+	m.HubActivePath = cfg.ActiveWorkspace
+}
+
+func (m *Model) loadSDDIncrements() {
+	m.GovernanceMessage = ""
+	var list []screens.SDDIncrementInfo
+	root := "."
+	activeDir := filepath.Join(root, "openspec", "changes")
+	if entries, err := os.ReadDir(activeDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || e.Name() == "archive" || e.Name() == "e2e-cumulative" {
+				continue
+			}
+			incPath := filepath.Join(activeDir, e.Name())
+			info := inspectIncrementForTUI(incPath, e.Name(), "active")
+			list = append(list, info)
+			if m.SDDActiveChange == "" {
+				m.SDDActiveChange = e.Name()
+			}
+		}
+	}
+
+	archiveDir := filepath.Join(root, "openspec", "changes", "archive")
+	if entries, err := os.ReadDir(archiveDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			incPath := filepath.Join(archiveDir, e.Name())
+			info := inspectIncrementForTUI(incPath, e.Name(), "archived")
+			list = append(list, info)
+		}
+	}
+	m.SDDIncrements = list
+}
+
+func inspectIncrementForTUI(path, name, kind string) screens.SDDIncrementInfo {
+	phase := "explore"
+	hasProposal := fileExists(filepath.Join(path, "proposal.md"))
+	hasSpec := fileExists(filepath.Join(path, "spec.md"))
+	hasDesign := fileExists(filepath.Join(path, "design.md"))
+	hasTasks := fileExists(filepath.Join(path, "tasks.md"))
+	hasVerify := fileExists(filepath.Join(path, "verify-report.md"))
+	hasArchive := fileExists(filepath.Join(path, "archive-report.md"))
+
+	if kind == "archived" || hasArchive {
+		phase = "archive"
+	} else if hasVerify {
+		phase = "verify"
+	} else if hasTasks {
+		phase = "apply"
+	} else if hasDesign {
+		phase = "tasks"
+	} else if hasSpec {
+		phase = "design"
+	} else if hasProposal {
+		phase = "spec"
+	}
+
+	tasksTotal, tasksCompleted, pct := 0, 0, 0
+	if hasTasks {
+		if data, err := os.ReadFile(filepath.Join(path, "tasks.md")); err == nil {
+			prog := multirole.CountTasks(string(data))
+			tasksTotal = prog.Total
+			tasksCompleted = prog.Completed
+			pct = int(prog.Percent)
+		}
+	}
+
+	return screens.SDDIncrementInfo{
+		Name:           name,
+		Type:           kind,
+		Phase:          phase,
+		TasksTotal:     tasksTotal,
+		TasksCompleted: tasksCompleted,
+		ProgressPct:    pct,
+	}
+}
+
+func (m *Model) loadMultiRoleState() {
+	m.GovernanceMessage = ""
+	m.MultiRoles = nil
+	m.MultiRoleBarrier = nil
+
+	cfg, err := workspace.LoadConfig("axiom.yaml")
+	if err == nil && cfg != nil {
+		for key, role := range cfg.Roles {
+			m.MultiRoles = append(m.MultiRoles, screens.MultiRoleInfo{
+				ID:         key,
+				Name:       role.Name,
+				GatePolicy: "blocking",
+			})
+		}
+	}
+
+	if m.SDDActiveChange != "" {
+		changeDir := filepath.Join("openspec", "changes", m.SDDActiveChange)
+		var assignments []multirole.RoleAssignment
+		for _, r := range m.MultiRoles {
+			assignments = append(assignments, multirole.RoleAssignment{
+				Role:       r.ID,
+				Name:       r.Name,
+				GatePolicy: multirole.PolicyBlocking,
+			})
+		}
+		barrier, _ := multirole.EvaluateBarrier(changeDir, m.SDDActiveChange, assignments)
+		m.MultiRoleBarrier = barrier
+	}
+}
+
+func (m *Model) loadActiveHandoff() {
+	m.ActiveHandoff = nil
+	m.HandoffErr = ""
+
+	if m.SDDActiveChange == "" {
+		m.HandoffErr = "No hay ningún incremento o cambio SDD activo seleccionado."
+		return
+	}
+
+	candidates := []string{
+		filepath.Join("openspec", "changes", m.SDDActiveChange, "handoff.md"),
+		filepath.Join(".openspec", "handoffs", m.SDDActiveChange+".md"),
+	}
+
+	var foundPath string
+	for _, p := range candidates {
+		if fileExists(p) {
+			foundPath = p
+			break
+		}
+	}
+
+	if foundPath == "" {
+		m.HandoffErr = fmt.Sprintf("No se encontró handoff.md para el cambio '%s'", m.SDDActiveChange)
+		return
+	}
+
+	ho, err := handoff.ParseFile(foundPath)
+	if err != nil {
+		m.HandoffErr = "Error al parsear el handoff: " + err.Error()
+		return
+	}
+	m.ActiveHandoff = ho
+}
+
+func (m *Model) loadLivingDocs() {
+	m.GovernanceMessage = ""
+	srv := livingdoc.NewService(".", nil, nil)
+	cat, err := srv.GetCatalog(context.Background())
+	if err != nil {
+		m.GovernanceMessage = "Error leyendo catálogo de living docs: " + err.Error()
+		return
+	}
+	if cat != nil {
+		m.LivingSpecs = cat.Specs
 	}
 }

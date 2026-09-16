@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const panelId = tab.getAttribute('data-tab');
       const targetPanel = document.getElementById(panelId);
       if (targetPanel) targetPanel.classList.add('active');
+      if (panelId === 'tab-ecosystem') loadEcosystem();
     });
   });
 
@@ -573,7 +574,8 @@ document.addEventListener('DOMContentLoaded', () => {
       loadSkills(),
       loadSkillsInbox(),
       loadSemanticData(),
-      loadLivingDocs()
+      loadLivingDocs(),
+      loadEcosystem()
     ]);
   }
 
@@ -1422,6 +1424,241 @@ document.addEventListener('DOMContentLoaded', () => {
         btnSyncLivingDoc.textContent = '↻ Sincronizar Catálogo';
       }
     });
+  }
+
+  // ==========================================
+  // ECOSISTEMA & HERRAMIENTAS (INC-17)
+  // ==========================================
+  const btnRefreshEcosystem = document.getElementById('btn-refresh-ecosystem');
+  const btnEcoSync = document.getElementById('btn-eco-sync');
+  const btnEcoUpgrade = document.getElementById('btn-eco-upgrade');
+  const btnEcoCreateBackup = document.getElementById('btn-eco-create-backup');
+  const ecoActionOutput = document.getElementById('eco-action-output');
+  const ecoActionTitle = document.getElementById('eco-action-title');
+  const ecoConsoleContent = document.getElementById('eco-console-content');
+  const btnClearConsoleEco = document.getElementById('btn-clear-console');
+
+  const ecoDoctorBadge = document.getElementById('eco-doctor-badge');
+  const ecoDoctorTbody = document.getElementById('eco-doctor-tbody');
+  const ecoBackupsCount = document.getElementById('eco-backups-count');
+  const ecoBackupsTbody = document.getElementById('eco-backups-tbody');
+  const ecoPersonaBadge = document.getElementById('eco-persona-badge');
+  const ecoModelsTbody = document.getElementById('eco-models-tbody');
+
+  if (btnRefreshEcosystem) {
+    btnRefreshEcosystem.addEventListener('click', () => loadEcosystem());
+  }
+
+  if (btnClearConsoleEco) {
+    btnClearConsoleEco.addEventListener('click', () => {
+      ecoActionOutput.classList.add('hidden');
+      ecoConsoleContent.textContent = '';
+    });
+  }
+
+  if (btnEcoSync) {
+    btnEcoSync.addEventListener('click', async () => {
+      btnEcoSync.disabled = true;
+      btnEcoSync.textContent = '⏳ Sincronizando...';
+      showConsoleOutput('Sincronizando Configuraciones', 'Ejecutando axiom sync...');
+      try {
+        const res = await fetch('/api/ecosystem/sync', { method: 'POST' });
+        const data = await res.json();
+        showConsoleOutput('Resultado de Sincronización', (data.output || []).join('\n') || data.message);
+        btnEcoSync.textContent = data.success ? '✓ Sincronizado' : '✕ Error';
+        setTimeout(() => {
+          btnEcoSync.disabled = false;
+          btnEcoSync.textContent = '🔄 Sincronizar Configuraciones';
+        }, 2500);
+      } catch (err) {
+        showConsoleOutput('Error en Sincronización', err.message);
+        btnEcoSync.disabled = false;
+        btnEcoSync.textContent = '🔄 Sincronizar Configuraciones';
+      }
+    });
+  }
+
+  if (btnEcoUpgrade) {
+    btnEcoUpgrade.addEventListener('click', async () => {
+      btnEcoUpgrade.disabled = true;
+      btnEcoUpgrade.textContent = '⏳ Actualizando...';
+      showConsoleOutput('Actualizando Herramientas', 'Ejecutando comprobación y actualización...');
+      try {
+        const res = await fetch('/api/ecosystem/upgrade', { method: 'POST' });
+        const data = await res.json();
+        showConsoleOutput('Resultado de Actualización', (data.output || []).join('\n') || data.message);
+        btnEcoUpgrade.textContent = data.success ? '✓ Actualizado' : '✕ Error';
+        setTimeout(() => {
+          btnEcoUpgrade.disabled = false;
+          btnEcoUpgrade.textContent = '★ Actualizar Herramientas';
+        }, 2500);
+      } catch (err) {
+        showConsoleOutput('Error en Actualización', err.message);
+        btnEcoUpgrade.disabled = false;
+        btnEcoUpgrade.textContent = '★ Actualizar Herramientas';
+      }
+    });
+  }
+
+  if (btnEcoCreateBackup) {
+    btnEcoCreateBackup.addEventListener('click', async () => {
+      const desc = prompt('Descripción para el nuevo respaldo (opcional):', 'Respaldo manual desde Web UI');
+      if (desc === null) return;
+      btnEcoCreateBackup.disabled = true;
+      btnEcoCreateBackup.textContent = '⏳ Creando...';
+      try {
+        const res = await fetch('/api/ecosystem/backups/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description: desc })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Fallo al crear snapshot');
+        showConsoleOutput('Respaldo Creado', `Snapshot creado exitosamente con ID: ${data.name}`);
+        await loadBackups();
+      } catch (err) {
+        alert('Error al crear respaldo: ' + err.message);
+      } finally {
+        btnEcoCreateBackup.disabled = false;
+        btnEcoCreateBackup.textContent = '+ Crear Respaldo Ahora';
+      }
+    });
+  }
+
+  function showConsoleOutput(title, content) {
+    if (ecoActionTitle) ecoActionTitle.textContent = title;
+    if (ecoConsoleContent) ecoConsoleContent.textContent = content;
+    if (ecoActionOutput) ecoActionOutput.classList.remove('hidden');
+  }
+
+  async function loadEcosystem() {
+    await Promise.all([
+      loadDoctor(),
+      loadBackups(),
+      loadModels()
+    ]);
+  }
+
+  async function loadDoctor() {
+    if (!ecoDoctorTbody) return;
+    try {
+      const res = await fetch('/api/ecosystem/doctor');
+      if (!res.ok) throw new Error('Fallo al obtener diagnósticos');
+      const data = await res.json();
+      if (ecoDoctorBadge) {
+        ecoDoctorBadge.textContent = data.healthy ? '✓ Sistema Saludable' : '⚠ Advertencias Detectadas';
+        ecoDoctorBadge.className = data.healthy ? 'badge text-success' : 'badge text-warning';
+      }
+      if (!data.checks || data.checks.length === 0) {
+        ecoDoctorTbody.innerHTML = '<tr><td colspan="5" class="empty-state">No se recibieron diagnósticos.</td></tr>';
+        return;
+      }
+      ecoDoctorTbody.innerHTML = data.checks.map(c => {
+        let badgeClass = 'text-success';
+        let statusText = 'Saludable';
+        if (c.status === 'warning') {
+          badgeClass = 'text-warning';
+          statusText = 'Advertencia';
+        } else if (c.status === 'error') {
+          badgeClass = 'text-danger';
+          statusText = 'Error';
+        }
+        return `
+          <tr>
+            <td><strong>${escapeHtml(c.name)}</strong></td>
+            <td><span class="badge">${escapeHtml(c.category)}</span></td>
+            <td><span class="${badgeClass}">● ${statusText}</span></td>
+            <td>${escapeHtml(c.details)}</td>
+            <td>${c.recommendation ? escapeHtml(c.recommendation) : '<span class="subtext">—</span>'}</td>
+          </tr>
+        `;
+      }).join('');
+    } catch (err) {
+      ecoDoctorTbody.innerHTML = `<tr><td colspan="5" class="error-banner">Error cargando diagnósticos: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+
+  async function loadBackups() {
+    if (!ecoBackupsTbody) return;
+    try {
+      const res = await fetch('/api/ecosystem/backups');
+      if (!res.ok) throw new Error('Fallo al consultar respaldos');
+      const data = await res.json();
+      if (ecoBackupsCount) {
+        ecoBackupsCount.textContent = `${(data || []).length} respaldos`;
+      }
+      if (!data || data.length === 0) {
+        ecoBackupsTbody.innerHTML = '<tr><td colspan="5" class="empty-state">No hay respaldos registrados en ~/.axiom/backups/</td></tr>';
+        return;
+      }
+      ecoBackupsTbody.innerHTML = data.map(b => {
+        const fileCount = (b.files || []).length;
+        const pinBadge = b.pinned ? ' <span class="badge">PIN</span>' : '';
+        return `
+          <tr>
+            <td><code>${escapeHtml(b.name)}</code>${pinBadge}</td>
+            <td>${escapeHtml(b.created)}</td>
+            <td>${escapeHtml(b.description || 'Sin descripción')}</td>
+            <td><span class="badge">${fileCount} archivos</span></td>
+            <td>
+              <button class="btn-sm btn-outline btn-restore-backup" data-id="${escapeHtml(b.name)}">Restaurar</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      document.querySelectorAll('.btn-restore-backup').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          if (!confirm(`¿Confirmas que deseas restaurar el respaldo ${id}? Los archivos actuales serán sustituidos.`)) return;
+          btn.disabled = true;
+          btn.textContent = 'Restaurando...';
+          try {
+            const res = await fetch('/api/ecosystem/backups/restore', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: id })
+            });
+            const resData = await res.json();
+            showConsoleOutput(`Restauración de ${id}`, (resData.output || []).join('\n') || resData.message);
+            alert(resData.message || 'Respaldo restaurado correctamente');
+          } catch (err) {
+            alert('Fallo al restaurar: ' + err.message);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = 'Restaurar';
+          }
+        });
+      });
+    } catch (err) {
+      ecoBackupsTbody.innerHTML = `<tr><td colspan="5" class="error-banner">Error cargando respaldos: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+
+  async function loadModels() {
+    if (!ecoModelsTbody) return;
+    try {
+      const res = await fetch('/api/ecosystem/models');
+      if (!res.ok) throw new Error('Fallo al consultar modelos');
+      const data = await res.json();
+      if (ecoPersonaBadge) {
+        ecoPersonaBadge.textContent = `Persona: ${data.active_persona || 'axiom'}`;
+      }
+      if (!data.assignments || data.assignments.length === 0) {
+        ecoModelsTbody.innerHTML = '<tr><td colspan="4" class="empty-state">No se detectaron asignaciones explícitas de modelos en opencode.json. Usando presets predeterminados de Axiom.</td></tr>';
+        return;
+      }
+      ecoModelsTbody.innerHTML = data.assignments.map(m => `
+        <tr>
+          <td><strong>${escapeHtml(m.agent)}</strong></td>
+          <td><span class="badge">${escapeHtml(m.role)}</span></td>
+          <td><code>${escapeHtml(m.model)}</code></td>
+          <td>${m.reasoning ? `<span class="badge">${escapeHtml(m.reasoning)}</span>` : '<span class="subtext">estándar</span>'}</td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      ecoModelsTbody.innerHTML = `<tr><td colspan="4" class="error-banner">Error cargando modelos: ${escapeHtml(err.message)}</td></tr>`;
+    }
   }
 
   function escapeHtml(str) {

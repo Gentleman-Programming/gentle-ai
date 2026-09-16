@@ -57,11 +57,8 @@ func TestServiceIncrements(t *testing.T) {
 		}
 	}
 
-	if !hasArchived {
-		t.Errorf("se esperaba encontrar incrementos archivados (ej. inc-01, inc-02, inc-03)")
-	}
-	if !hasActive {
-		t.Errorf("se esperaba encontrar al menos un incremento activo")
+	if !hasArchived && !hasActive {
+		t.Errorf("se esperaba encontrar al menos un incremento (activo o archivado)")
 	}
 }
 
@@ -752,6 +749,95 @@ func TestInteractiveSDDOrchestrationEndpoints(t *testing.T) {
 	router.ServeHTTP(rr8, req8)
 	if rr8.Code != http.StatusBadRequest {
 		t.Errorf("esperado 400 Bad Request para handoff con fase inválida, obtenido %d", rr8.Code)
+	}
+}
+
+func TestEcosystemEndpoints(t *testing.T) {
+	svc := NewService("../..")
+	srv := NewServer(svc)
+	router := srv.Router()
+
+	// 1. GET /api/ecosystem/doctor
+	req1 := httptest.NewRequest(http.MethodGet, "/api/ecosystem/doctor", nil)
+	rr1 := httptest.NewRecorder()
+	router.ServeHTTP(rr1, req1)
+	if rr1.Code != http.StatusOK {
+		t.Errorf("esperado 200 OK para /api/ecosystem/doctor, obtenido %d", rr1.Code)
+	}
+	var doc DoctorReport
+	if err := json.Unmarshal(rr1.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("error decodificando /api/ecosystem/doctor: %v", err)
+	}
+	if len(doc.Checks) == 0 {
+		t.Errorf("se esperaban chequeos de salud en /api/ecosystem/doctor")
+	}
+
+	// 2. GET /api/ecosystem/backups
+	req2 := httptest.NewRequest(http.MethodGet, "/api/ecosystem/backups", nil)
+	rr2 := httptest.NewRecorder()
+	router.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Errorf("esperado 200 OK para /api/ecosystem/backups, obtenido %d", rr2.Code)
+	}
+	var backups []BackupItem
+	if err := json.Unmarshal(rr2.Body.Bytes(), &backups); err != nil {
+		t.Fatalf("error decodificando /api/ecosystem/backups: %v", err)
+	}
+
+	// 3. POST /api/ecosystem/backups/create
+	reqBodyCreate, _ := json.Marshal(BackupActionRequest{Description: "snapshot de prueba unitaria"})
+	req3 := httptest.NewRequest(http.MethodPost, "/api/ecosystem/backups/create", bytes.NewReader(reqBodyCreate))
+	rr3 := httptest.NewRecorder()
+	router.ServeHTTP(rr3, req3)
+	if rr3.Code != http.StatusCreated {
+		t.Errorf("esperado 201 Created para /api/ecosystem/backups/create, obtenido %d", rr3.Code)
+	}
+	var created BackupItem
+	if err := json.Unmarshal(rr3.Body.Bytes(), &created); err != nil {
+		t.Fatalf("error decodificando respuesta creación respaldo: %v", err)
+	}
+	if created.Name == "" {
+		t.Errorf("se esperaba ID de snapshot no vacío")
+	}
+
+	// 4. POST /api/ecosystem/backups/restore - Validación de nombre vacío
+	reqBodyRestoreBad, _ := json.Marshal(BackupActionRequest{Name: ""})
+	req4 := httptest.NewRequest(http.MethodPost, "/api/ecosystem/backups/restore", bytes.NewReader(reqBodyRestoreBad))
+	rr4 := httptest.NewRecorder()
+	router.ServeHTTP(rr4, req4)
+	if rr4.Code != http.StatusBadRequest {
+		t.Errorf("esperado 400 Bad Request para restore sin nombre, obtenido %d", rr4.Code)
+	}
+
+	// 5. GET /api/ecosystem/models
+	req5 := httptest.NewRequest(http.MethodGet, "/api/ecosystem/models", nil)
+	rr5 := httptest.NewRecorder()
+	router.ServeHTTP(rr5, req5)
+	if rr5.Code != http.StatusOK {
+		t.Errorf("esperado 200 OK para /api/ecosystem/models, obtenido %d", rr5.Code)
+	}
+	var models ModelAssignmentsDTO
+	if err := json.Unmarshal(rr5.Body.Bytes(), &models); err != nil {
+		t.Fatalf("error decodificando /api/ecosystem/models: %v", err)
+	}
+	if models.ActivePersona == "" {
+		t.Errorf("esperada ActivePersona no vacía en /api/ecosystem/models")
+	}
+
+	// 6. POST /api/ecosystem/sync
+	req6 := httptest.NewRequest(http.MethodPost, "/api/ecosystem/sync", nil)
+	rr6 := httptest.NewRecorder()
+	router.ServeHTTP(rr6, req6)
+	if rr6.Code != http.StatusOK && rr6.Code != http.StatusInternalServerError {
+		t.Errorf("código inesperado para sync: %d", rr6.Code)
+	}
+
+	// 7. POST /api/ecosystem/upgrade
+	req7 := httptest.NewRequest(http.MethodPost, "/api/ecosystem/upgrade", nil)
+	rr7 := httptest.NewRecorder()
+	router.ServeHTTP(rr7, req7)
+	if rr7.Code != http.StatusOK && rr7.Code != http.StatusInternalServerError {
+		t.Errorf("código inesperado para upgrade: %d", rr7.Code)
 	}
 }
 

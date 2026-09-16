@@ -13,13 +13,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/app"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
 )
 
@@ -1021,6 +1025,262 @@ func humanizeName(name string) string {
 		}
 	}
 	return strings.Join(words, " ")
+}
+
+// GetDoctorDiagnostics recopila diagnósticos de salud del ecosistema Axiom.
+func (s *Service) GetDoctorDiagnostics() (*DoctorReport, error) {
+	report := &DoctorReport{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Healthy:   true,
+		Checks:    make([]DoctorCheck, 0),
+	}
+
+	// 1. Ejecutar cli.RunDoctor en un buffer para comprobar la verificación global
+	var buf bytes.Buffer
+	docErr := cli.RunDoctor(context.Background(), &buf)
+
+	// 2. Detección de herramientas y agentes del ecosistema
+	home, _ := os.UserHomeDir()
+	det, _ := system.Detect(context.Background())
+	for name, t := range det.Tools {
+		status := "warning"
+		details := "No detectado en el sistema"
+		if t.Installed {
+			status = "ok"
+			details = fmt.Sprintf("Instalado en %s", t.Path)
+		}
+		cat := "agent"
+		if name == "git" || name == "node" || name == "npm" || name == "brew" || name == "go" {
+			cat = "tool"
+		}
+		report.Checks = append(report.Checks, DoctorCheck{
+			Name:     name,
+			Category: cat,
+			Status:   status,
+			Details:  details,
+		})
+	}
+
+	// 4. Directorio base de usuario Axiom
+	axiomDir := filepath.Join(home, ".axiom")
+	if info, err := os.Stat(axiomDir); err == nil && info.IsDir() {
+		report.Checks = append(report.Checks, DoctorCheck{
+			Name:     "directorio-axiom",
+			Category: "environment",
+			Status:   "ok",
+			Details:  fmt.Sprintf("Directorio base activo: %s", axiomDir),
+		})
+	} else {
+		report.Checks = append(report.Checks, DoctorCheck{
+			Name:           "directorio-axiom",
+			Category:       "environment",
+			Status:         "warning",
+			Details:        "Directorio ~/.axiom no existe aún",
+			Recommendation: "Se creará automáticamente al ejecutar acciones de usuario",
+		})
+	}
+
+	// 5. Workspace actual
+	ws, err := s.GetWorkspace()
+	if err == nil && ws.Compliant {
+		report.Checks = append(report.Checks, DoctorCheck{
+			Name:     "workspace-axiom.yaml",
+			Category: "environment",
+			Status:   "ok",
+			Details:  fmt.Sprintf("Topología: %s, Repositorio specs: %s", ws.Topology, ws.SpecsRepository),
+		})
+	} else {
+		report.Checks = append(report.Checks, DoctorCheck{
+			Name:           "workspace-axiom.yaml",
+			Category:       "environment",
+			Status:         "warning",
+			Details:        "axiom.yaml no configurado o no conforme",
+			Recommendation: "Usa 'axiom init' o el botón de inicialización",
+		})
+	}
+
+	if docErr != nil {
+		report.Healthy = false
+	}
+	return report, nil
+}
+
+// RunSync ejecuta la sincronización de configuraciones y reglas de agentes.
+func (s *Service) RunSync() (*EcosystemActionResponse, error) {
+	var buf bytes.Buffer
+	err := app.RunArgs([]string{"sync"}, &buf)
+	rawOut := strings.TrimSpace(buf.String())
+	var lines []string
+	if rawOut != "" {
+		lines = strings.Split(rawOut, "\n")
+	}
+	if err != nil {
+		return &EcosystemActionResponse{
+			Success: false,
+			Action:  "sync",
+			Message: "Error durante la sincronización",
+			Error:   err.Error(),
+			Output:  lines,
+		}, nil
+	}
+	return &EcosystemActionResponse{
+		Success: true,
+		Action:  "sync",
+		Message: "Sincronización completada exitosamente",
+		Output:  lines,
+	}, nil
+}
+
+// RunUpgrade ejecuta la comprobación y actualización de herramientas del ecosistema.
+func (s *Service) RunUpgrade() (*EcosystemActionResponse, error) {
+	var buf bytes.Buffer
+	err := app.RunArgs([]string{"upgrade", "--yes"}, &buf)
+	rawOut := strings.TrimSpace(buf.String())
+	var lines []string
+	if rawOut != "" {
+		lines = strings.Split(rawOut, "\n")
+	}
+	if err != nil {
+		return &EcosystemActionResponse{
+			Success: false,
+			Action:  "upgrade",
+			Message: "Error durante la actualización de herramientas",
+			Error:   err.Error(),
+			Output:  lines,
+		}, nil
+	}
+	return &EcosystemActionResponse{
+		Success: true,
+		Action:  "upgrade",
+		Message: "Actualización procesada exitosamente",
+		Output:  lines,
+	}, nil
+}
+
+// GetBackups retorna los respaldos existentes registrados en el sistema.
+func (s *Service) GetBackups() ([]BackupItem, error) {
+	manifests := app.ListBackups()
+	items := make([]BackupItem, 0, len(manifests))
+	for _, m := range manifests {
+		files := make([]string, 0, len(m.Entries))
+		for _, e := range m.Entries {
+			if e.SnapshotPath != "" {
+				files = append(files, e.OriginalPath)
+			}
+		}
+		items = append(items, BackupItem{
+			Name:        m.ID,
+			Created:     m.CreatedAt.Format(time.RFC3339),
+			Description: m.Description,
+			Pinned:      m.Pinned,
+			Files:       files,
+		})
+	}
+	return items, nil
+}
+
+// CreateBackup genera un snapshot de respaldo bajo demanda.
+func (s *Service) CreateBackup(description string) (*BackupItem, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("obtener directorio de usuario: %w", err)
+	}
+	backupRoot := filepath.Join(home, ".axiom", "backups")
+	_ = os.MkdirAll(backupRoot, 0o755)
+
+	snapshotID := time.Now().UTC().Format("20060102150405.000000000")
+	snapshotDir := filepath.Join(backupRoot, snapshotID)
+
+	targets := []string{}
+	axiomDir := filepath.Join(home, ".axiom")
+	if fileExists(axiomDir) || dirExists(axiomDir) {
+		targets = append(targets, axiomDir)
+	}
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if fileExists(opencodeDir) || dirExists(opencodeDir) {
+		targets = append(targets, opencodeDir)
+	}
+	curWs := s.getRootPath()
+	wsCfg := filepath.Join(curWs, "axiom.yaml")
+	if fileExists(wsCfg) {
+		targets = append(targets, wsCfg)
+	}
+
+	snap := backup.NewSnapshotter()
+	manifest, err := snap.Create(snapshotDir, targets)
+	if err != nil {
+		return nil, fmt.Errorf("crear snapshot: %w", err)
+	}
+	if description != "" {
+		manifest.Description = description
+		_ = backup.WriteManifest(filepath.Join(snapshotDir, backup.ManifestFilename), manifest)
+	}
+
+	return &BackupItem{
+		Name:        manifest.ID,
+		Created:     manifest.CreatedAt.Format(time.RFC3339),
+		Description: manifest.Description,
+		Pinned:      manifest.Pinned,
+	}, nil
+}
+
+// RestoreBackup restaura un respaldo previo por su ID.
+func (s *Service) RestoreBackup(name string) (*EcosystemActionResponse, error) {
+	var buf bytes.Buffer
+	err := cli.RunRestore([]string{name, "--yes"}, &buf)
+	rawOut := strings.TrimSpace(buf.String())
+	var lines []string
+	if rawOut != "" {
+		lines = strings.Split(rawOut, "\n")
+	}
+	if err != nil {
+		return &EcosystemActionResponse{
+			Success: false,
+			Action:  "restore",
+			Message: fmt.Sprintf("Error restaurando respaldo %s", name),
+			Error:   err.Error(),
+			Output:  lines,
+		}, nil
+	}
+	return &EcosystemActionResponse{
+		Success: true,
+		Action:  "restore",
+		Message: fmt.Sprintf("Respaldo %s restaurado correctamente", name),
+		Output:  lines,
+	}, nil
+}
+
+// GetModelAssignments consulta las configuraciones de modelos de IA activas.
+func (s *Service) GetModelAssignments() (*ModelAssignmentsDTO, error) {
+	home, _ := os.UserHomeDir()
+	curWs := s.getRootPath()
+	settingsCandidates := []string{
+		filepath.Join(curWs, "opencode.json"),
+		filepath.Join(home, ".config", "opencode", "opencode.json"),
+	}
+
+	assignments := make([]ModelConfigItem, 0)
+	for _, p := range settingsCandidates {
+		if fileExists(p) {
+			mMap, err := sdd.ReadCurrentModelAssignments(p)
+			if err == nil {
+				for role, a := range mMap {
+					assignments = append(assignments, ModelConfigItem{
+						Agent:     "opencode",
+						Role:      role,
+						Model:     a.FullID(),
+						Reasoning: a.Effort,
+					})
+				}
+				break
+			}
+		}
+	}
+
+	return &ModelAssignmentsDTO{
+		ActivePersona: "axiom",
+		Assignments:   assignments,
+	}, nil
 }
 
 

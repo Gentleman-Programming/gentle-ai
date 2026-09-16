@@ -62,6 +62,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/archive/specs", s.handleArchiveSpecs)
 	s.mux.HandleFunc("/api/archive/specs/", s.handleArchiveSpecDetail)
 	s.mux.HandleFunc("/api/archive/sync", s.handleArchiveSync)
+	s.mux.HandleFunc("/api/ecosystem/doctor", s.handleEcosystemDoctor)
+	s.mux.HandleFunc("/api/ecosystem/sync", s.handleEcosystemSync)
+	s.mux.HandleFunc("/api/ecosystem/upgrade", s.handleEcosystemUpgrade)
+	s.mux.HandleFunc("/api/ecosystem/backups", s.handleEcosystemBackups)
+	s.mux.HandleFunc("/api/ecosystem/backups/create", s.handleEcosystemBackupCreate)
+	s.mux.HandleFunc("/api/ecosystem/backups/restore", s.handleEcosystemBackupRestore)
+	s.mux.HandleFunc("/api/ecosystem/models", s.handleEcosystemModels)
 
 	// 2. Servidor de Archivos Estáticos Embebidos
 	subFS, err := fs.Sub(AssetsFS, "assets")
@@ -589,6 +596,104 @@ func (s *Server) handleArchiveSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleEcosystemDoctor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	report, err := s.service.GetDoctorDiagnostics()
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleEcosystemSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	resp, err := s.service.RunSync()
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, resp)
+		return
+	}
+	s.respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleEcosystemUpgrade(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	resp, err := s.service.RunUpgrade()
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, resp)
+		return
+	}
+	s.respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleEcosystemBackups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	backups, err := s.service.GetBackups()
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, backups)
+}
+
+func (s *Server) handleEcosystemBackupCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req BackupActionRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	item, err := s.service.CreateBackup(req.Description)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) handleEcosystemBackupRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req BackupActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Identificador de respaldo (name) requerido"})
+		return
+	}
+	resp, err := s.service.RestoreBackup(req.Name)
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, resp)
+		return
+	}
+	s.respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleEcosystemModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	models, err := s.service.GetModelAssignments()
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, models)
 }
 
 func (s *Server) respondJSON(w http.ResponseWriter, code int, data interface{}) {

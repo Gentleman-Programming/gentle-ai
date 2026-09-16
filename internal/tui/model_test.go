@@ -2085,8 +2085,8 @@ func TestWelcomeMenu_OpenCodeCommunityPluginsNavigation(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_BackupsNavigation verifies cursor 8 (Manage backups) goes to ScreenBackups.
-func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
+// TestWelcomeMenu_GovernanceNavigation verifies cursor 8 (Proyectos y Gobernanza SDD) goes to ScreenGovernance.
+func TestWelcomeMenu_GovernanceNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 8
@@ -2094,8 +2094,22 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
+	if state.Screen != ScreenGovernance {
+		t.Fatalf("cursor=8 (Gobernanza): screen = %v, want %v", state.Screen, ScreenGovernance)
+	}
+}
+
+// TestWelcomeMenu_BackupsNavigation verifies cursor 9 (Manage backups without profiles) goes to ScreenBackups.
+func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 9
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
 	if state.Screen != ScreenBackups {
-		t.Fatalf("cursor=8 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
+		t.Fatalf("cursor=9 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
 	}
 }
 
@@ -2176,13 +2190,13 @@ func TestWelcomeMenu_UninstallOpenCodePluginEmptyTUIJSON(t *testing.T) {
 func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 11
+	m.Cursor = 12
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=11 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=12 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
@@ -2191,29 +2205,29 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 12
+	m.Cursor = 13
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=12 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=13 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies the welcome menu has 14 items without OpenCode
-// and 15 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
+// TestWelcomeMenu_OptionCount verifies the welcome menu has 15 items without OpenCode
+// and 16 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Without OpenCode detected: 14 options, including the review-mode entry.
+	// Without OpenCode detected: 15 options, including the review-mode and governance entries.
 	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
-	if len(opts) != 14 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 14; got %v", len(opts), opts)
+	if len(opts) != 15 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 15; got %v", len(opts), opts)
 	}
-	// With OpenCode detected: 15 options (adds "OpenCode SDD Profiles").
+	// With OpenCode detected: 16 options (adds "OpenCode SDD Profiles").
 	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
-	if len(optsWithProfiles) != 15 {
-		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 15; got %v", len(optsWithProfiles), optsWithProfiles)
+	if len(optsWithProfiles) != 16 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 16; got %v", len(optsWithProfiles), optsWithProfiles)
 	}
 }
 
@@ -5529,13 +5543,13 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 		t.Fatalf("Esc from ScreenBackups: screen = %v, want ScreenWelcome", afterEsc.Screen)
 	}
 
-	// Navigate back to ScreenBackups (cursor 8 on Welcome → enter, since
-	// slice 3b inserts "Uninstall OpenCode Plugin" at index 7).
-	afterEsc.Cursor = 8
+	// Navigate back to ScreenBackups (cursor 9 on Welcome → enter, since
+	// slice 3b inserts "Uninstall OpenCode Plugin" at index 7 and governance at index 8).
+	afterEsc.Cursor = 9
 	updated2, _ := afterEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	afterReturn := updated2.(Model)
 	if afterReturn.Screen != ScreenBackups {
-		t.Fatalf("Enter cursor=8 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
+		t.Fatalf("Enter cursor=9 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
 	}
 
 	// PinErr must be cleared on re-entry.
@@ -9188,5 +9202,98 @@ func TestOpenCodePluginUninstallStandaloneResetMatchesPluginsPattern(t *testing.
 			state := updated.(Model)
 			tc.validate(t, state)
 		})
+	}
+}
+
+func TestGovernanceScreensNavigationAndActions(t *testing.T) {
+	t.Cleanup(func() { _ = os.RemoveAll("openspec") })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenGovernance
+	m.Cursor = 0
+
+	// 1. Verificar render de ScreenGovernance
+	view := m.View()
+	if !strings.Contains(view, "Gobernanza SDD") {
+		t.Fatalf("View no contiene título de gobernanza: %s", view)
+	}
+
+	// 2. Navegación a HubProjects
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenHubProjects {
+		t.Fatalf("cursor 0 Enter: screen = %v, want ScreenHubProjects", state.Screen)
+	}
+	// Esc vuelve a Governance
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	if state.Screen != ScreenGovernance {
+		t.Fatalf("Esc from HubProjects: screen = %v, want ScreenGovernance", state.Screen)
+	}
+
+	// 3. Navegación a SDDIncrements (cursor 1)
+	state.Cursor = 1
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenSDDIncrements {
+		t.Fatalf("cursor 1 Enter: screen = %v, want ScreenSDDIncrements", state.Screen)
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	if state.Screen != ScreenGovernance {
+		t.Fatalf("Esc from SDDIncrements: screen = %v, want ScreenGovernance", state.Screen)
+	}
+
+	// 4. Navegación a MultiRole (cursor 2)
+	state.Cursor = 2
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenMultiRole {
+		t.Fatalf("cursor 2 Enter: screen = %v, want ScreenMultiRole", state.Screen)
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	if state.Screen != ScreenGovernance {
+		t.Fatalf("Esc from MultiRole: screen = %v, want ScreenGovernance", state.Screen)
+	}
+
+	// 5. Navegación a Handoffs (cursor 3)
+	state.Cursor = 3
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenHandoffs {
+		t.Fatalf("cursor 3 Enter: screen = %v, want ScreenHandoffs", state.Screen)
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	if state.Screen != ScreenGovernance {
+		t.Fatalf("Esc from Handoffs: screen = %v, want ScreenGovernance", state.Screen)
+	}
+
+	// 6. Navegación a LivingDoc (cursor 4)
+	state.Cursor = 4
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenLivingDoc {
+		t.Fatalf("cursor 4 Enter: screen = %v, want ScreenLivingDoc", state.Screen)
+	}
+	// Probar tecla 's' en LivingDoc
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	state = updated.(Model)
+	if state.Screen != ScreenLivingDoc {
+		t.Fatalf("'s' key: screen = %v, want ScreenLivingDoc", state.Screen)
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	if state.Screen != ScreenGovernance {
+		t.Fatalf("Esc from LivingDoc: screen = %v, want ScreenGovernance", state.Screen)
+	}
+
+	// 7. Salir de gobernanza (cursor 5)
+	state.Cursor = 5
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("cursor 5 Enter: screen = %v, want ScreenWelcome", state.Screen)
 	}
 }

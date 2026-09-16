@@ -69,23 +69,23 @@ func TestWelcomeOptions_WithProfiles_CountOne(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 14 options when showProfiles=false
+// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 15 options when showProfiles=false
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false, 0, true)
-	// Includes the Receipt-Driven Development entry.
-	want := 14
+	// Includes the Receipt-Driven Development and Governance entries.
+	want := 15
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=false, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithProfiles verifies 15 options when showProfiles=true
+// TestWelcomeOptions_OptionCount_WithProfiles verifies 16 options when showProfiles=true
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 2, true)
-	// Includes the Receipt-Driven Development entry.
-	want := 15
+	// Includes the Receipt-Driven Development and Governance entries.
+	want := 16
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=true, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
@@ -108,8 +108,7 @@ func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
 
 // TestWelcomeOptions_ProfilesInsertedBeforeManageBackups verifies the ordering:
 // profiles option sits between "Plugins comunitarios de OpenCode" / "Desinstalar plugin de OpenCode"
-// and "Gestionar respaldos". Slice 3b inserts the uninstall shortcut between
-// the plugins entry and the profiles entry.
+// and "📁 Proyectos y Gobernanza SDD ➔" / "Gestionar respaldos".
 func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 1, true)
 
@@ -117,6 +116,7 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	pluginsIdx := -1
 	uninstallIdx := -1
 	profilesIdx := -1
+	governanceIdx := -1
 	manageBackupsIdx := -1
 	for i, opt := range opts {
 		if strings.HasPrefix(opt, "Crear agente personalizado") {
@@ -130,6 +130,9 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 		}
 		if strings.HasPrefix(opt, "Perfiles SDD de OpenCode") {
 			profilesIdx = i
+		}
+		if strings.Contains(opt, "Proyectos y Gobernanza SDD") {
+			governanceIdx = i
 		}
 		if opt == "Gestionar respaldos" {
 			manageBackupsIdx = i
@@ -148,6 +151,9 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	if profilesIdx < 0 {
 		t.Fatal("option 'Perfiles SDD de OpenCode' not found")
 	}
+	if governanceIdx < 0 {
+		t.Fatal("option 'Proyectos y Gobernanza SDD' not found")
+	}
 	if manageBackupsIdx < 0 {
 		t.Fatal("option 'Gestionar respaldos' not found")
 	}
@@ -164,9 +170,13 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 		t.Errorf("profiles option at index %d, expected %d (right after uninstall at %d)",
 			profilesIdx, uninstallIdx+1, uninstallIdx)
 	}
-	if manageBackupsIdx != profilesIdx+1 {
-		t.Errorf("'Gestionar respaldos' at index %d, expected %d (right after profiles at %d)",
-			manageBackupsIdx, profilesIdx+1, profilesIdx)
+	if governanceIdx != profilesIdx+1 {
+		t.Errorf("governance option at index %d, expected %d (right after profiles at %d)",
+			governanceIdx, profilesIdx+1, profilesIdx)
+	}
+	if manageBackupsIdx != governanceIdx+1 {
+		t.Errorf("'Gestionar respaldos' at index %d, expected %d (right after governance at %d)",
+			manageBackupsIdx, governanceIdx+1, governanceIdx)
 	}
 }
 

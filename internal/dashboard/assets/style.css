@@ -1216,6 +1216,44 @@ body {
   pointer-events: none;
 }
 
+/* Ecosistema & Herramientas (INC-17) */
+.console-box {
+  background: #090d16;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+}
+
+.console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.console-box pre {
+  background: #030712;
+  border: 1px solid #1f2937;
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #38bdf8;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 250px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.text-danger {
+  color: var(--danger) !important;
+}
+
 
 
 

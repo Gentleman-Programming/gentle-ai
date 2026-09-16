@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-16 16:47:07 UTC
-> **Total Dominios:** 43 | **Total Requerimientos:** 290 | **Total Escenarios BDD:** 472
+> **Última Sincronización:** 2026-09-16 20:49:53 UTC
+> **Total Dominios:** 44 | **Total Requerimientos:** 300 | **Total Escenarios BDD:** 483
 
 ---
 
@@ -51,6 +51,7 @@
 | `semantic-code` | Especificación de Requerimientos: Conector Semántico de Código (Serena MCP & CodeGraph) (INC-06) | 11 | 14 | [Ver Spec](specs/semantic-code/spec.md) |
 | `structured-handoffs` | Especificación Viva: Handoffs Estructurados y Ciclo de Vida de Transición | 7 | 13 | [Ver Spec](specs/structured-handoffs/spec.md) |
 | `tui-spanish-localization` | Especificación Viva: Localización Integral al Castellano y Desacoplamiento de Avisos en la TUI (Axiom) | 4 | 9 | [Ver Spec](specs/tui-spanish-localization/spec.md) |
+| `tui-ui-parity` | Especificación Viva: Paridad Bidireccional entre TUI y Web UI | 10 | 11 | [Ver Spec](specs/tui-ui-parity/spec.md) |
 | `visual-decoupling` | Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom) | 4 | 7 | [Ver Spec](specs/visual-decoupling/spec.md) |
 | `workspace-topology` | Especificación Viva: Topología de Workspace y CLI de Axiom | 7 | 15 | [Ver Spec](specs/workspace-topology/spec.md) |
 
@@ -1071,6 +1072,34 @@ Garantiza que la interfaz gráfica interactiva de terminal (TUI Bubbletea) de Ax
 - **[REQ-16.4]** Determinismo en la Máquina de Estados y Navegación
   - *Escenario BDD:* Navegación por cursor intacta
   - *Escenario BDD:* Validez de la suite de pruebas
+
+### Dominio: `tui-ui-parity` — Especificación Viva: Paridad Bidireccional entre TUI y Web UI
+
+Permite a los usuarios operar las tareas de mantenimiento, diagnóstico y configuración del ecosistema de desarrollo de Axiom directamente desde el Dashboard Web SPA (`axiom ui`).
+
+**Archivo:** [`specs/tui-ui-parity/spec.md`](specs/tui-ui-parity/spec.md)
+
+- **[REQ-17.1]** Diagnóstico de Salud del Sistema (Axiom Doctor) en Web UI
+  - *Escenario BDD:* Consulta de diagnóstico de salud del sistema
+- **[REQ-17.2]** Sincronización y Actualización Reactiva de Herramientas en Web UI
+  - *Escenario BDD:* Ejecución de sincronización de configuraciones
+  - *Escenario BDD:* Ejecución de comprobación y actualización de herramientas
+- **[REQ-17.3]** Gestión Visual de Respaldos en Web UI
+  - *Escenario BDD:* Listado y creación de un respaldo desde el navegador
+- **[REQ-17.4]** Inspección y Configuración de Modelos de IA en Web UI
+  - *Escenario BDD:* Consulta de modelos asignados en el Dashboard
+- **[REQ-17.5]** Submenú Unificado de Proyectos y Gobernanza SDD en TUI
+  - *Escenario BDD:* Navegación al submenú de gobernanza desde la bienvenida
+- **[REQ-17.6]** Pantalla de Gestión Multi-Proyecto en TUI
+  - *Escenario BDD:* Conmutación de proyecto activo en la TUI
+- **[REQ-17.7]** Pantalla de Ciclo de Vida de Incrementos SDD en TUI
+  - *Escenario BDD:* Visualización y avance de fase de un incremento
+- **[REQ-17.8]** Pantalla de Monitor Multi-Rol y Barrera Fan-In en TUI
+  - *Escenario BDD:* Evaluación de barrera multi-rol desde la TUI
+- **[REQ-17.9]** Pantalla de Visor de Handoffs Estructurados en TUI
+  - *Escenario BDD:* Inspección de relevo formal en la TUI
+- **[REQ-17.10]** Pantalla de Catálogo de Especificaciones Vivas en TUI
+  - *Escenario BDD:* Sincronización del catálogo maestro desde la TUI
 
 ### Dominio: `visual-decoupling` — Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom)
 

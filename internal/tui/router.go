@@ -60,7 +60,13 @@ var linearRoutes = map[Screen]Route{
 	ScreenUninstallProfiles:              {Backward: ScreenUninstallComponents},
 	ScreenUninstallResult:                {Backward: ScreenWelcome},
 	// ScreenUpdatePrompt appears before Welcome; Esc/back goes to Welcome.
-	ScreenUpdatePrompt: {Backward: ScreenWelcome},
+	ScreenUpdatePrompt:  {Backward: ScreenWelcome},
+	ScreenGovernance:    {Backward: ScreenWelcome},
+	ScreenHubProjects:   {Backward: ScreenGovernance},
+	ScreenSDDIncrements: {Backward: ScreenGovernance},
+	ScreenMultiRole:     {Backward: ScreenGovernance},
+	ScreenHandoffs:      {Backward: ScreenGovernance},
+	ScreenLivingDoc:     {Backward: ScreenGovernance},
 }
 
 func NextScreen(screen Screen) (Screen, bool) {
