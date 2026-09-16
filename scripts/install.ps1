@@ -92,7 +92,7 @@ function Install-ViaGo {
     Write-Step "Installing via go install"
     $version = if ($Channel -eq "beta") { "main" } else { "latest" }
     # /v3 is part of the module path, not decoration: Go refuses to resolve a
-    # module whose tags are v2.x unless the import path carries the major
+    # module whose tags are v3.x unless the import path carries the major
     # version suffix.
     $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v3/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"

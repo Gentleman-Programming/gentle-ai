@@ -179,3 +179,48 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 		}
 	}
 }
+
+// TestInstallScriptsGoInstallPackageMatchesModuleMajor guards the install
+// scripts against the regression that shipped in v3.0.1: both scripts build
+// the `go install` package by interpolation, so a module-major migration
+// that rewrites the literal module string misses them. The expected major
+// is derived from go.mod so the next migration fails here first.
+func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
+	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	moduleLine := strings.SplitN(string(goMod), "\n", 2)[0]
+	majorMatch := regexp.MustCompile(`^module github\.com/gentleman-programming/gentle-ai/(v[0-9]+)$`).FindStringSubmatch(strings.TrimSpace(moduleLine))
+	if majorMatch == nil {
+		t.Fatalf("go.mod module line %q does not carry a major version suffix", moduleLine)
+	}
+	major := majorMatch[1]
+
+	cases := []struct {
+		script  string
+		pattern string
+	}{
+		{"install.sh", `local go_package="github.com/${owner_lc}/${GITHUB_REPO}/` + major + `/cmd/${BINARY_NAME}@${version}"`},
+		{"install.ps1", `$goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/` + major + `/cmd/$BINARY_NAME@$version"`},
+	}
+	stale := regexp.MustCompile(`/v[0-9]+/cmd/`)
+	for _, tc := range cases {
+		content, err := os.ReadFile(filepath.Join("..", "..", "scripts", tc.script))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(content)
+		if !strings.Contains(text, tc.pattern) {
+			t.Errorf("scripts/%s must build the go install package on the %s module: missing %q", tc.script, major, tc.pattern)
+		}
+		for _, hit := range stale.FindAllString(text, -1) {
+			if hit != "/"+major+"/cmd/" {
+				t.Errorf("scripts/%s still references %s in a go install package path; go.mod is %s", tc.script, hit, major)
+			}
+		}
+		if strings.Contains(text, "tags are v2.x") {
+			t.Errorf("scripts/%s comment still describes v2.x tags", tc.script)
+		}
+	}
+}

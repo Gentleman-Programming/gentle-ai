@@ -278,7 +278,7 @@ install_go() {
     local owner_lc
     owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
     # /v3 is part of the module path, not decoration: Go refuses to resolve a
-    # module whose tags are v2.x unless the import path carries the major
+    # module whose tags are v3.x unless the import path carries the major
     # version suffix.
     local go_package="github.com/${owner_lc}/${GITHUB_REPO}/v3/cmd/${BINARY_NAME}@${version}"
 
