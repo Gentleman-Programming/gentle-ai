@@ -45,8 +45,14 @@ func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 	if err := RunSDDStatus([]string{change, "--cwd", repo, "--json"}, &statusOutput); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(statusOutput.String(), sibling) {
-		t.Fatalf("granted root absent from SDD status: %s", statusOutput.String())
+	// Decode instead of substring-matching: JSON escapes the backslashes of a
+	// Windows path, so the raw path never appears verbatim in the output.
+	var projected sddstatus.StatusV2Projection
+	if err := json.Unmarshal(statusOutput.Bytes(), &projected); err != nil {
+		t.Fatalf("decode SDD status: %v\n%s", err, statusOutput.String())
+	}
+	if !containsString(projected.ActionContext.AllowedEditRoots, sibling) {
+		t.Fatalf("granted root %q absent from SDD status allowedEditRoots %#v", sibling, projected.ActionContext.AllowedEditRoots)
 	}
 	// An exact duplicate request-id is idempotent through the CLI: same
 	// committed revision, no second record.
