@@ -82,6 +82,12 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 			t.Fatalf("scripts/install.sh is missing %q in beta go install proxy-bypass path", want)
 		}
 	}
+	if !strings.Contains(script, "if ! (\n        if [ \"${CHANNEL}\" = \"beta\" ]; then") {
+		t.Fatal("scripts/install.sh must scope beta-only Go environment exports to the go install subshell")
+	}
+	if !strings.Contains(script, "    ); then\n        fatal \"Failed to install via go install.") {
+		t.Fatal("scripts/install.sh must preserve fatal handling when go install fails")
+	}
 
 	for _, clobber := range []string{
 		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v3 \\",
@@ -209,6 +215,12 @@ func TestInstallScriptGoChannels(t *testing.T) {
 				} {
 					if !strings.Contains(calls, want) {
 						t.Errorf("missing %q in calls:\n%s", want, calls)
+					}
+				}
+				if channel != "stable" {
+					wantPostEnv := "post-env |github.com/acme/*|" + module + "\n"
+					if !strings.Contains(calls, wantPostEnv) {
+						t.Errorf("beta Go environment leaked outside go install subshell: missing %q in calls:\n%s", wantPostEnv, calls)
 					}
 				}
 				if strings.Count("\n"+calls, "\ngit ") != gitCalls || strings.Count(calls, "release\n") != releaseCalls || strings.Count(calls, "install ") != 1 {
@@ -342,8 +354,9 @@ case "$1" in
         [ "$#" = 2 ] || exit 90
         printf 'install %s\nenv %s|%s|%s\n' "$2" "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY" >> "$FIXTURE/calls"
         [ "$FAIL" != install ] || exit 1 ;;
-    env)
+        env)
         [ "$#" = 2 ] && [ "$2" = GOBIN ] || exit 90
+        printf 'post-env %s|%s|%s\n' "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY" >> "$FIXTURE/calls"
         printf '%s/bin\n' "$FIXTURE" ;;
     *) exit 90 ;;
 esac`,

@@ -286,13 +286,15 @@ install_go() {
     local go_package="${module}/cmd/${BINARY_NAME}@${version}"
 
     info "Running: go install ${go_package}"
-    if [ "${CHANNEL}" = "beta" ]; then
-        prepend_go_env_pattern GONOSUMDB "$module"
-        prepend_go_env_pattern GOPRIVATE "$module"
-        prepend_go_env_pattern GONOPROXY "$module"
-        export GONOSUMDB GOPRIVATE GONOPROXY
-    fi
-    if ! go install "$go_package"; then
+    if ! (
+        if [ "${CHANNEL}" = "beta" ]; then
+            prepend_go_env_pattern GONOSUMDB "$module"
+            prepend_go_env_pattern GOPRIVATE "$module"
+            prepend_go_env_pattern GONOPROXY "$module"
+            export GONOSUMDB GOPRIVATE GONOPROXY
+        fi
+        go install "$go_package"
+    ); then
         fatal "Failed to install via go install. Make sure Go is properly configured."
     fi
 
