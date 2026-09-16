@@ -1,6 +1,6 @@
 package reviewerprovider
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v3/internal/model"
 
 // CapturesInProcess reports whether this runtime's compiled transport runs the
 // reviewer itself, inside the capture command, rather than relying on a host or

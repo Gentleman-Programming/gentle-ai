@@ -1,6 +1,6 @@
 package communitytool
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v3/internal/model"
 
 const (
 	rtkReleaseTag           = "v0.49.0"

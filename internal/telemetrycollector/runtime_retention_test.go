@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 func insertRetentionDelivery(t *testing.T, s *Storage, id int, received time.Time) telemetry.RuntimeEvent {

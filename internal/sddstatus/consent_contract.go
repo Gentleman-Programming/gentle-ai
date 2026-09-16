@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/consentenvelope"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/consentenvelope"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
 )
 
 // SDDIntegrationConsentSchema identifies the SDD edit-authority consent

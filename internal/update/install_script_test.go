@@ -72,9 +72,9 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 
 	script := string(content)
 	for _, want := range []string{
-		"prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v2",
-		"prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v2",
-		"prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v2",
+		"prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3",
+		"prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3",
+		"prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3",
 		"go install \"$go_package\"",
 	} {
 		if !strings.Contains(script, want) {
@@ -83,9 +83,9 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 	}
 
 	for _, clobber := range []string{
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2 \\",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2 \\",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2 \\",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v3 \\",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v3 \\",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v3 \\",
 	} {
 		if strings.Contains(script, clobber) {
 			t.Fatalf("scripts/install.sh clobbers existing user env with %q; beta proxy bypass must preserve existing patterns", clobber)
@@ -106,10 +106,10 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 	cmd := exec.Command("bash", "-c", function+`
 GONOSUMDB=example.com/private
 GOPRIVATE=github.com/acme/*
-GONOPROXY=github.com/gentleman-programming/gentle-ai/v2
-prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v2
-prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v2
-prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v2
+GONOPROXY=github.com/gentleman-programming/gentle-ai/v3
+prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3
+prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3
+prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3
 printf '%s\n%s\n%s\n' "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY"
 `)
 	out, err := cmd.CombinedOutput()
@@ -119,9 +119,9 @@ printf '%s\n%s\n%s\n' "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY"
 
 	got := strings.TrimSpace(string(out))
 	want := strings.Join([]string{
-		"github.com/gentleman-programming/gentle-ai/v2,example.com/private",
-		"github.com/gentleman-programming/gentle-ai/v2,github.com/acme/*",
-		"github.com/gentleman-programming/gentle-ai/v2",
+		"github.com/gentleman-programming/gentle-ai/v3,example.com/private",
+		"github.com/gentleman-programming/gentle-ai/v3,github.com/acme/*",
+		"github.com/gentleman-programming/gentle-ai/v3",
 	}, "\n")
 	if got != want {
 		t.Fatalf("prepend_go_env_pattern output = %q, want %q", got, want)
@@ -137,9 +137,9 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 
 	script := string(content)
 	for _, want := range []string{
-		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v2\"",
+		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
 		"& go install $goPackage",
 	} {
 		if !strings.Contains(script, want) {
@@ -148,9 +148,9 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 	}
 
 	for _, clobber := range []string{
-		"$env:GONOSUMDB = \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"$env:GOPRIVATE = \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"$env:GONOPROXY = \"github.com/gentleman-programming/gentle-ai/v2\"",
+		"$env:GONOSUMDB = \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"$env:GOPRIVATE = \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"$env:GONOPROXY = \"github.com/gentleman-programming/gentle-ai/v3\"",
 	} {
 		if strings.Contains(script, clobber) {
 			t.Fatalf("scripts/install.ps1 clobbers existing user env with %q; beta proxy bypass must preserve existing patterns", clobber)
