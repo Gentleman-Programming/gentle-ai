@@ -40,6 +40,7 @@ const (
 	runtimeOperationReset             = "objective/reset"
 	runtimeOperationRescope           = "objective/rescope"
 	runtimeOperationAdvance           = "objective/advance"
+	runtimeOperationApprove           = "objective/approve"
 	runtimeOperationBind              = "binding/set"
 	runtimeOperationGrant             = "authority/grant"
 	maximumRuntimeGrantRoots          = 32
@@ -119,6 +120,8 @@ var (
 	// changed_lines: 0 when real work happened, or a wildly inflated delta —
 	// so this refuses before any candidate capture, not after.
 	ErrRuntimeWorktreeMismatch = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	ErrRuntimeStageVocabularyMismatch = errors.New("runtime objective advance requested a stage from a different vocabulary")
+	ErrRuntimeStageApprovalRequired   = errors.New("runtime objective advance requires the current stage to be approved")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -200,6 +203,7 @@ type RuntimeObjective struct {
 	MaxChangedLines          int             `json:"max_changed_lines"`
 	StageVocabulary          *StageVocabulary `json:"stage_vocabulary,omitempty"`
 	StagePosition            int              `json:"stage_position,omitempty"`
+	ApprovalRevision         string           `json:"approval_revision,omitempty"`
 }
 
 type RuntimeAttempt struct {
@@ -277,14 +281,20 @@ type RuntimeRescope struct {
 	Actor                    string `json:"actor"`
 }
 
+type RuntimeStageApproval struct {
+	Stage            string `json:"stage"`
+	ApprovalRevision string `json:"approval_revision"`
+}
+
 type RuntimeStatus struct {
 	Schema                 string            `json:"schema"`
 	Change                 string            `json:"change"`
 	Revision               string            `json:"revision"`
 	Objective              *RuntimeObjective `json:"objective,omitempty"`
 	ActiveAttempt          *RuntimeAttempt   `json:"active_attempt,omitempty"`
-	Attempts               []RuntimeAttempt  `json:"attempts"`
-	ObjectiveGeneration    int               `json:"objective_generation"`
+	Attempts               []RuntimeAttempt       `json:"attempts"`
+	StageApprovals         []RuntimeStageApproval `json:"stage_approvals,omitempty"`
+	ObjectiveGeneration    int                    `json:"objective_generation"`
 	NextOrdinal            int               `json:"next_ordinal"`
 	CumulativeAttempts     int               `json:"cumulative_attempts"`
 	CumulativeChangedLines int               `json:"cumulative_changed_lines"`
@@ -385,6 +395,12 @@ type BindReviewRequest struct {
 	LineageID               string `json:"lineage_id"`
 }
 
+type ApproveStageRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	Stage            string `json:"stage"`
+}
+
 // RuntimeStore is one provider-owned immutable chain for one SDD change. Its
 // directory is rooted in the repository Git common-dir, so linked worktrees
 // and later processes observe the same attempt ordinals and line charges.
@@ -461,9 +477,15 @@ type runtimeRecord struct {
 	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
 	Rescope          *runtimeRescopeEvent `json:"rescope,omitempty"`
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
+	Approve          *runtimeApproveEvent `json:"approve,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
 	Receipt          *runtimeReceiptEvent `json:"receipt,omitempty"`
 	Grant            *runtimeGrantEvent   `json:"grant,omitempty"`
+}
+
+type runtimeApproveEvent struct {
+	Stage            string `json:"stage"`
+	ApprovalRevision string `json:"approval_revision"`
 }
 
 // runtimeGrantEvent is the persisted per-change edit-authority grant (#2540
@@ -499,9 +521,10 @@ type runtimeGrantEvent struct {
 // record, so closing the passed objective and opening its successor can never
 // be observed apart.
 type runtimeAdvanceEvent struct {
-	PreviousObjectiveID string `json:"previous_objective_id"`
-	PreviousGeneration  int    `json:"previous_generation"`
-	PreviousWorkUnit    string `json:"previous_work_unit"`
+	PreviousObjectiveID      string `json:"previous_objective_id"`
+	PreviousGeneration       int    `json:"previous_generation"`
+	PreviousWorkUnit         string `json:"previous_work_unit"`
+	PreviousEvidenceRevision string `json:"previous_evidence_revision,omitempty"`
 }
 
 type runtimeBeginEvent struct {
@@ -519,9 +542,10 @@ type runtimeBeginEvent struct {
 	// ran under. omitempty is load-bearing — every record predating this field
 	// deserializes it as "", which Finish and replay both treat as "no binding
 	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
-	BeginWorktree   string           `json:"begin_worktree,omitempty"`
-	StageVocabulary *StageVocabulary `json:"stage_vocabulary,omitempty"`
-	StagePosition   int              `json:"stage_position,omitempty"`
+	BeginWorktree    string           `json:"begin_worktree,omitempty"`
+	StageVocabulary  *StageVocabulary `json:"stage_vocabulary,omitempty"`
+	StagePosition    int              `json:"stage_position,omitempty"`
+	ApprovalRevision string           `json:"approval_revision,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -778,6 +802,19 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if advancing && status.Objective.StageVocabulary != nil && len(status.Objective.StageVocabulary.Stages) > 0 {
 			event.StageVocabulary = status.Objective.StageVocabulary
 			event.StagePosition = status.Objective.StagePosition + 1
+			
+			// Enforce approval for the completed stage before advancing
+			approved := false
+			for _, app := range status.StageApprovals {
+				if app.Stage == status.Objective.WorkUnit && app.ApprovalRevision == status.EvidenceRevision {
+					approved = true
+					event.ApprovalRevision = app.ApprovalRevision
+					break
+				}
+			}
+			if !approved {
+				return runtimeRecord{}, ErrRuntimeStageApprovalRequired
+			}
 		} else if !advancing && len(store.vocabulary.Stages) > 0 {
 			event.StageVocabulary = &store.vocabulary
 			event.StagePosition, _ = store.vocabulary.Position(request.WorkUnit)
@@ -785,10 +822,39 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
 				PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
-				PreviousWorkUnit: status.Objective.WorkUnit,
+				PreviousWorkUnit: status.Objective.WorkUnit, PreviousEvidenceRevision: status.EvidenceRevision,
 			}}, nil
 		}
 		return runtimeRecord{Operation: runtimeOperationBegin, Begin: event}, nil
+	})
+}
+
+func (store RuntimeStore) ApproveStage(ctx context.Context, request ApproveStageRequest) (RuntimeStatus, error) {
+	if request.RequestID == "" || !runtimeRequestIDPattern.MatchString(request.RequestID) {
+		return RuntimeStatus{}, errors.New("SDD runtime approve request ID is required and must be alphanumeric with dashes, underscores, or dots (max 128 bytes)")
+	}
+	if request.Stage == "" {
+		return RuntimeStatus{}, errors.New("SDD runtime approve stage cannot be empty")
+	}
+	digest := runtimeValueHash("gentle-ai.sdd-runtime-approve-request/v1", request)
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
+		status := replay.Status
+		if status.Objective == nil {
+			return runtimeRecord{}, errors.New("no objective to approve")
+		}
+		if status.Objective.WorkUnit != request.Stage {
+			return runtimeRecord{}, fmt.Errorf("approve stage %q does not match active objective %q", request.Stage, status.Objective.WorkUnit)
+		}
+		if !status.Complete {
+			return runtimeRecord{}, errors.New("cannot approve an incomplete stage")
+		}
+		if status.DecisionRequired {
+			return runtimeRecord{}, errors.New("cannot approve a stage that failed or requires a decision")
+		}
+		return runtimeRecord{Operation: runtimeOperationApprove, Approve: &runtimeApproveEvent{
+			Stage:            request.Stage,
+			ApprovalRevision: status.EvidenceRevision,
+		}}, nil
 	})
 }
 
@@ -1709,6 +1775,29 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			}
 		}
 
+	case runtimeOperationApprove:
+		event := record.Approve
+		if replay.Status.Objective == nil || !replay.Status.Complete || replay.Status.DecisionRequired {
+			return errors.New("approve event requires a complete and unfailed active objective")
+		}
+		if event.Stage != replay.Status.Objective.WorkUnit {
+			return errors.New("approve event stage does not match active objective")
+		}
+		found := false
+		for i, app := range replay.Status.StageApprovals {
+			if app.Stage == event.Stage {
+				replay.Status.StageApprovals[i].ApprovalRevision = event.ApprovalRevision
+				found = true
+				break
+			}
+		}
+		if !found {
+			replay.Status.StageApprovals = append(replay.Status.StageApprovals, RuntimeStageApproval{
+				Stage:            event.Stage,
+				ApprovalRevision: event.ApprovalRevision,
+			})
+		}
+
 	case runtimeOperationReset:
 		event := record.Reset
 		objective := replay.Status.Objective
@@ -1786,6 +1875,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 			StageVocabulary: event.StageVocabulary, StagePosition: event.StagePosition,
+			ApprovalRevision: event.ApprovalRevision,
 		}
 		replay.Status.ObjectiveGeneration = generation
 	} else {
@@ -1918,7 +2008,8 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 		return errors.New("objective advance is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
 	}
 	if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
-		event.PreviousGeneration != replay.Status.ObjectiveGeneration || event.PreviousWorkUnit != objective.WorkUnit {
+		event.PreviousGeneration != replay.Status.ObjectiveGeneration || event.PreviousWorkUnit != objective.WorkUnit ||
+		event.PreviousEvidenceRevision != replay.Status.EvidenceRevision {
 		return errors.New("objective advance does not match the terminal objective") // refusal:by-design world-action: the predecessor identity was frozen at publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
 	if len(replay.Status.Attempts) == 0 {
@@ -2066,7 +2157,8 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		// must be a bounded, trimmed, single-line value like every other
 		// recorded text field, not raw garbage.
 		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) ||
-		(event.StageVocabulary != nil && event.StageVocabulary.ID != "" && (event.StagePosition < 0 || validateRuntimeText(event.StageVocabulary.ID, 160) != nil || event.StageVocabulary.Validate() != nil)) {
+		(event.StageVocabulary != nil && event.StageVocabulary.ID != "" && (event.StagePosition < 0 || validateRuntimeText(event.StageVocabulary.ID, 160) != nil || event.StageVocabulary.Validate() != nil)) ||
+		(event.ApprovalRevision != "" && !runtimeRevisionPattern.MatchString(event.ApprovalRevision)) {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	request := BeginAttemptRequest{
@@ -2167,6 +2259,20 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return errors.New("atomic SDD runtime remediation request digest does not match record")
+		}
+	case runtimeOperationApprove:
+		if record.Approve == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+			return errors.New("invalid SDD runtime approve record shape")
+		}
+		event := record.Approve
+		if validateRuntimeText(event.Stage, 160) != nil || !runtimeRevisionPattern.MatchString(event.ApprovalRevision) {
+			return errors.New("invalid SDD runtime approve event")
+		}
+		request := ApproveStageRequest{
+			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Stage: event.Stage,
+		}
+		if runtimeValueHash("gentle-ai.sdd-runtime-approve-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD runtime approve request digest does not match record")
 		}
 	case runtimeOperationReset:
 		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
