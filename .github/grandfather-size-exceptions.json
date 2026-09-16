@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "enforcement": "dormant",
+  "limit": 400,
+  "activation_snapshot": null,
+  "grandfathered_prs": []
+}
