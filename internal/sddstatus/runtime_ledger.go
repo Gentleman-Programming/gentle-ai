@@ -452,7 +452,7 @@ func (store RuntimeStore) ForInstance(instance string) (RuntimeStore, error) {
 	if instance == "" {
 		return RuntimeStore{}, errors.New("change-instance identity must not be empty") // refusal:by-design operator-knowledge: only the caller knows the change instance this session serves; retry with the instance identity the status layer derived
 	}
-	if err := validateRuntimeText(instance, 128); err != nil {
+	if err := ValidateRuntimeText(instance, 128); err != nil {
 		return RuntimeStore{}, fmt.Errorf("invalid change-instance identity: %w", err)
 	}
 	store.instance = instance
@@ -2148,16 +2148,16 @@ func applyRuntimeBindingEvent(replay *runtimeReplay, event *runtimeBindingEvent)
 
 func validateRuntimeBeginEvent(record runtimeRecord) error {
 	event := record.Begin
-	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
-		validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
+	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || ValidateRuntimeText(event.WorkUnit, 160) != nil ||
+		ValidateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
 		event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
 		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) ||
 		// BeginWorktree is optional (empty means legacy/pre-field), but a
 		// PRESENT value is still an identity string, not free user input: it
 		// must be a bounded, trimmed, single-line value like every other
 		// recorded text field, not raw garbage.
-		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) ||
-		(event.StageVocabulary != nil && event.StageVocabulary.ID != "" && (event.StagePosition < 0 || validateRuntimeText(event.StageVocabulary.ID, 160) != nil || event.StageVocabulary.Validate() != nil)) ||
+		(event.BeginWorktree != "" && ValidateRuntimeText(event.BeginWorktree, 4096) != nil) ||
+		(event.StageVocabulary != nil && event.StageVocabulary.ID != "" && (event.StagePosition < 0 || ValidateRuntimeText(event.StageVocabulary.ID, 160) != nil || event.StageVocabulary.Validate() != nil)) ||
 		(event.ApprovalRevision != "" && !runtimeRevisionPattern.MatchString(event.ApprovalRevision)) {
 		return errors.New("invalid SDD runtime begin event")
 	}
@@ -2191,7 +2191,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		advance := record.Advance
 		if !runtimeRevisionPattern.MatchString(advance.PreviousObjectiveID) || advance.PreviousGeneration < 1 ||
-			validateRuntimeText(advance.PreviousWorkUnit, 160) != nil || advance.PreviousWorkUnit == record.Begin.WorkUnit {
+			ValidateRuntimeText(advance.PreviousWorkUnit, 160) != nil || advance.PreviousWorkUnit == record.Begin.WorkUnit {
 			return errors.New("invalid SDD runtime objective advance event") // refusal:by-design world-action: the advance event is derived from validated status, so a violation is a mutated record and the exit is restoring the store
 		}
 		// The successor carries an ordinary begin request, so its digest binds
@@ -2207,8 +2207,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		if event.Ordinal < 1 || !validTerminalAttemptOutcome(event.Outcome) || event.ChangedLines < 0 ||
 			event.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(event.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
-			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
-			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
+			ValidateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
+			ValidateRuntimeText(event.CleanupEvidence, 500) != nil || ValidateRuntimeText(event.ProcessEvidence, 500) != nil ||
 			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) {
 			return errors.New("invalid SDD runtime finish event")
 		}
@@ -2230,8 +2230,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			finish.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.RemediatesEvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(finish.FinishCandidateTree) ||
-			validateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
-			validateRuntimeText(finish.CleanupEvidence, 500) != nil || validateRuntimeText(finish.ProcessEvidence, 500) != nil {
+			ValidateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
+			ValidateRuntimeText(finish.CleanupEvidence, 500) != nil || ValidateRuntimeText(finish.ProcessEvidence, 500) != nil {
 			return errors.New("invalid atomic SDD runtime remediation finish event")
 		}
 		if !runtimeRevisionPattern.MatchString(binding.ExpectedRevision) {
@@ -2265,7 +2265,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("invalid SDD runtime approve record shape")
 		}
 		event := record.Approve
-		if validateRuntimeText(event.Stage, 160) != nil || !runtimeRevisionPattern.MatchString(event.ApprovalRevision) {
+		if ValidateRuntimeText(event.Stage, 160) != nil || !runtimeRevisionPattern.MatchString(event.ApprovalRevision) {
 			return errors.New("invalid SDD runtime approve event")
 		}
 		request := ApproveStageRequest{
@@ -2281,7 +2281,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		event := record.Reset
 		if !runtimeRevisionPattern.MatchString(event.PreviousObjectiveID) || event.PreviousGeneration < 1 ||
 			!runtimeRevisionPattern.MatchString(event.ResetCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.ResetCandidateTree) ||
-			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			ValidateRuntimeText(event.Reason, 500) != nil || ValidateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime reset event")
 		}
 		request := ResetObjectiveRequest{
@@ -2300,7 +2300,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			event.PreviousMaxChangedLines < 1 || event.PreviousMaxChangedLines > maximumRuntimeChangedLines ||
 			!runtimeRevisionPattern.MatchString(event.RescopeCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.RescopeCandidateTree) ||
 			!runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 1 ||
-			validateRuntimeText(event.WorkUnit, 160) != nil || validateRuntimeText(event.EvidenceGoal, 240) != nil ||
+			ValidateRuntimeText(event.WorkUnit, 160) != nil || ValidateRuntimeText(event.EvidenceGoal, 240) != nil ||
 			event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
 			event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines ||
 			// The shape-level narrowing check below defends against a record
@@ -2309,7 +2309,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			// recomputes narrowing against the REPLAYED objective, which a
 			// forged PreviousMax* cannot fool (see its doc comment).
 			event.MaxAttempts > event.PreviousMaxAttempts || event.MaxChangedLines > event.PreviousMaxChangedLines ||
-			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			ValidateRuntimeText(event.Reason, 500) != nil || ValidateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime rescope event") // refusal:by-design world-action: this shape (including narrowing) is enforced before publication, so a violation is a mutated record and the exit is restoring the store
 		}
 		request := RescopeObjectiveRequest{
@@ -2382,15 +2382,15 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		event := record.Grant
 		if len(event.Roots) < 1 || len(event.Roots) > maximumRuntimeGrantRoots ||
-			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			ValidateRuntimeText(event.Reason, 500) != nil || ValidateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime grant event") // refusal:by-design world-action: bounds and audit fields are enforced before publication, so a violation is a mutated record and the exit is restoring the store
 		}
-		if event.Instance == "" || validateRuntimeText(event.Instance, 128) != nil {
+		if event.Instance == "" || ValidateRuntimeText(event.Instance, 128) != nil {
 			return errors.New("invalid SDD runtime grant change-instance identity") // refusal:by-design world-action: every writer binds the store's ForInstance identity before publication and no released writer ever emitted an instance-less grant, so a violation is a mutated record and the exit is restoring the store
 		}
 		seen := make(map[string]struct{}, len(event.Roots))
 		for _, root := range event.Roots {
-			if validateRuntimeText(root, 4096) != nil || !filepath.IsAbs(root) {
+			if ValidateRuntimeText(root, 4096) != nil || !filepath.IsAbs(root) {
 				return errors.New("invalid SDD runtime grant root") // refusal:by-design world-action: roots are canonicalized before publication, so a violation is a mutated record and the exit is restoring the store
 			}
 			if _, duplicate := seen[root]; duplicate {
@@ -2425,10 +2425,10 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return BeginAttemptRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
-	if err := validateRuntimeText(request.WorkUnit, 160); err != nil {
+	if err := ValidateRuntimeText(request.WorkUnit, 160); err != nil {
 		return BeginAttemptRequest{}, fmt.Errorf("invalid work_unit: %w", err)
 	}
-	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
+	if err := ValidateRuntimeText(request.EvidenceGoal, 240); err != nil {
 		return BeginAttemptRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
 	if request.MaxAttempts == 0 {
@@ -2483,16 +2483,16 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 			runtimeRevisionShapeObservation(request.EvidenceRevision),
 		)
 	}
-	if err := validateRuntimeText(request.Diagnosis, 500); err != nil {
+	if err := ValidateRuntimeText(request.Diagnosis, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid diagnosis: %w", err)
 	}
 	if !validHarnessDisposition(request.HarnessDisposition) {
 		return FinishAttemptRequest{}, errors.New("harness_disposition must be reused or invalidated")
 	}
-	if err := validateRuntimeText(request.CleanupEvidence, 500); err != nil {
+	if err := ValidateRuntimeText(request.CleanupEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid cleanup_evidence: %w", err)
 	}
-	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
+	if err := ValidateRuntimeText(request.ProcessEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
 	}
 	managedRemediationFields := 0
@@ -2553,10 +2553,10 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return ResetObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
-	if err := validateRuntimeText(request.Reason, 500); err != nil {
+	if err := ValidateRuntimeText(request.Reason, 500); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset reason: %w", err)
 	}
-	if err := validateRuntimeText(request.Actor, 128); err != nil {
+	if err := ValidateRuntimeText(request.Actor, 128); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset actor: %w", err)
 	}
 	return request, nil
@@ -2580,7 +2580,7 @@ func normalizeGrantRootsRequest(request GrantRootsRequest) (GrantRootsRequest, e
 	canonical := make([]string, 0, len(request.Roots))
 	seen := make(map[string]struct{}, len(request.Roots))
 	for _, root := range request.Roots {
-		if err := validateRuntimeText(root, 4096); err != nil {
+		if err := ValidateRuntimeText(root, 4096); err != nil {
 			return GrantRootsRequest{}, fmt.Errorf("invalid grant root: %w", err)
 		}
 		resolved, err := filepath.Abs(root)
@@ -2590,7 +2590,7 @@ func normalizeGrantRootsRequest(request GrantRootsRequest) (GrantRootsRequest, e
 		if err != nil {
 			return GrantRootsRequest{}, fmt.Errorf("resolve grant root %s: %w", pathquote.Quote(root), err)
 		}
-		if err := validateRuntimeText(resolved, 4096); err != nil {
+		if err := ValidateRuntimeText(resolved, 4096); err != nil {
 			return GrantRootsRequest{}, fmt.Errorf("invalid canonical grant root: %w", err)
 		}
 		if _, duplicate := seen[resolved]; duplicate {
@@ -2600,16 +2600,16 @@ func normalizeGrantRootsRequest(request GrantRootsRequest) (GrantRootsRequest, e
 		canonical = append(canonical, resolved)
 	}
 	request.Roots = canonical
-	if err := validateRuntimeText(request.Reason, 500); err != nil {
+	if err := ValidateRuntimeText(request.Reason, 500); err != nil {
 		return GrantRootsRequest{}, fmt.Errorf("invalid grant reason: %w", err)
 	}
-	if err := validateRuntimeText(request.Actor, 128); err != nil {
+	if err := ValidateRuntimeText(request.Actor, 128); err != nil {
 		return GrantRootsRequest{}, fmt.Errorf("invalid grant actor: %w", err)
 	}
 	if request.ChangeInstance == "" {
 		return GrantRootsRequest{}, errors.New("grant requires a change-instance identity") // refusal:by-design operator-knowledge: only the caller knows which change instance this grant authorizes; derive the store with ForInstance and retry
 	}
-	if err := validateRuntimeText(request.ChangeInstance, 128); err != nil {
+	if err := ValidateRuntimeText(request.ChangeInstance, 128); err != nil {
 		return GrantRootsRequest{}, fmt.Errorf("invalid grant change-instance identity: %w", err)
 	}
 	return request, nil
@@ -2628,10 +2628,10 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return RescopeObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier") // refusal:by-design operator-knowledge: only the caller can supply a canonical lowercase request identifier
 	}
-	if err := validateRuntimeText(request.WorkUnit, 160); err != nil {
+	if err := ValidateRuntimeText(request.WorkUnit, 160); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid work_unit: %w", err)
 	}
-	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
+	if err := ValidateRuntimeText(request.EvidenceGoal, 240); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
 	if request.MaxAttempts < 1 || request.MaxAttempts > maximumRuntimeAttemptLimit {
@@ -2640,10 +2640,10 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
 		return RescopeObjectiveRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
 	}
-	if err := validateRuntimeText(request.Reason, 500); err != nil {
+	if err := ValidateRuntimeText(request.Reason, 500); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope reason: %w", err)
 	}
-	if err := validateRuntimeText(request.Actor, 128); err != nil {
+	if err := ValidateRuntimeText(request.Actor, 128); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope actor: %w", err)
 	}
 	return request, nil
@@ -2702,7 +2702,9 @@ func (store RuntimeStore) readLegacyBinding() (*ReviewBinding, string, error) {
 	return &binding, bindingHash(payload), nil
 }
 
-func validateRuntimeText(value string, maximum int) error {
+// ValidateRuntimeText ensures a string is non-empty, within a maximum length,
+// trimmed of leading/trailing whitespace, and contains no newlines or null bytes.
+func ValidateRuntimeText(value string, maximum int) error {
 	if value == "" || len(value) > maximum || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\x00") {
 		return errors.New("value must be non-empty, trimmed, single-line, and bounded")
 	}
