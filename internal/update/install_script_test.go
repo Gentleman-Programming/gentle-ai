@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,9 +73,9 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 
 	script := string(content)
 	for _, want := range []string{
-		"prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3",
-		"prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3",
-		"prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3",
+		`prepend_go_env_pattern GONOSUMDB "$module"`,
+		`prepend_go_env_pattern GOPRIVATE "$module"`,
+		`prepend_go_env_pattern GONOPROXY "$module"`,
 		"go install \"$go_package\"",
 	} {
 		if !strings.Contains(script, want) {
@@ -180,11 +181,200 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 	}
 }
 
+func TestInstallScriptGoChannels(t *testing.T) {
+	const base = "github.com/gentleman-programming/gentle-ai"
+	for _, major := range []string{"", "3", "4", "5", "12"} {
+		for _, channel := range []string{"stable", "beta", "nightly"} {
+			t.Run(channel+"/v"+major, func(t *testing.T) {
+				module, tag := base, "v1.2.3"
+				if major != "" {
+					module += "/v" + major
+					tag = "v" + major + ".2.3"
+				}
+				// Use the actual Go parser, including syntax a line-one parser misses.
+				mod := "// leading comment\n\nmodule \"" + module + "\" // trailing comment\n\ngo 1.99.0\n"
+				calls, output, err := runGoInstallerFixture(t, channel, module, tag, mod, "", "")
+				if err != nil {
+					t.Fatalf("installer failed: %v\n%s\n%s", err, output, calls)
+				}
+				version, gitCalls, releaseCalls := tag, 0, 1
+				env := "env |github.com/acme/*|" + module
+				if channel != "stable" {
+					version, gitCalls, releaseCalls = strings.Repeat("a", 40), 1, 0
+					env = "env " + module + "|" + module + ",github.com/acme/*|" + module
+				}
+				for _, want := range []string{
+					"metadata https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/" + version + "/go.mod\n",
+					"install " + module + "/cmd/gentle-ai@" + version + "\n", env + "\n",
+				} {
+					if !strings.Contains(calls, want) {
+						t.Errorf("missing %q in calls:\n%s", want, calls)
+					}
+				}
+				if strings.Count("\n"+calls, "\ngit ") != gitCalls || strings.Count(calls, "release\n") != releaseCalls || strings.Count(calls, "install ") != 1 {
+					t.Errorf("unexpected channel resolution/install count:\n%s", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestInstallScriptGoFailures(t *testing.T) {
+	const module = "github.com/gentleman-programming/gentle-ai/v5"
+	const valid = "module " + module + "\ngo 1.25.10\n"
+	sha := strings.Repeat("a", 40)
+	for _, tt := range []struct {
+		name, mod, refs, fail string
+	}{
+		{name: "missing module", mod: "go 1.25.10\n"},
+		{name: "duplicate module", mod: valid + "module " + module + "\n"},
+		{name: "malformed module", mod: "module \"unterminated\n"},
+		{name: "lookalike repository", mod: "module github.com/gentleman-programming/gentle-ai-extra/v5\n"},
+		{name: "regex lookalike", mod: "module githubXcom/gentleman-programming/gentle-ai/v5\n"},
+		{name: "trailing segment", mod: "module " + module + "/extra\n"},
+		{name: "noncanonical major", mod: "module github.com/gentleman-programming/gentle-ai/v05\n"},
+		{name: "missing ref", refs: "\n"},
+		{name: "wrong ref", refs: sha + "\trefs/heads/other\n"},
+		{name: "malformed sha", refs: "not-a-sha\trefs/heads/main\n"},
+		{name: "duplicate ref", refs: strings.Repeat(sha+"\trefs/heads/main\n", 2)},
+		{name: "git failure", fail: "git"},
+		{name: "metadata failure", fail: "metadata"},
+		{name: "parser failure", fail: "parser"},
+		{name: "install failure", fail: "install"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mod := tt.mod
+			if mod == "" {
+				mod = valid
+			}
+			calls, output, err := runGoInstallerFixture(t, "beta", module, "v5.2.3", mod, tt.refs, tt.fail)
+			if err == nil {
+				t.Fatalf("installer unexpectedly succeeded:\n%s\n%s", output, calls)
+			}
+			wantInstalls := 0
+			if tt.fail == "install" {
+				wantInstalls = 1
+			}
+			if strings.Count(calls, "install ") != wantInstalls {
+				t.Errorf("unexpected install count:\n%s", calls)
+			}
+		})
+	}
+}
+
+// Execute the whole script with only local utilities and fail-closed command doubles.
+// The only real Go operation allowed by the double is offline metadata parsing.
+func runGoInstallerFixture(t *testing.T, channel, module, tag, mod, refs, fail string) (string, string, error) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Bash installer supports macOS and Linux")
+	}
+	root := t.TempDir()
+	bin, tmp := filepath.Join(root, "bin"), filepath.Join(root, "tmp")
+	for _, dir := range []string{bin, tmp, filepath.Join(root, "telemetry")} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, text string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if refs == "" {
+		refs = strings.Repeat("a", 40) + "\trefs/heads/main\n"
+	}
+	write(filepath.Join(root, "module"), mod, 0o600)
+	write(filepath.Join(root, "refs"), refs, 0o600)
+	write(filepath.Join(root, "calls"), "", 0o600)
+	// Prevent the real parser's telemetry sidecar from racing TempDir cleanup.
+	write(filepath.Join(root, "telemetry", "mode"), "off", 0o600)
+	write(filepath.Join(tmp, "unrelated"), "preserve", 0o600)
+	for _, tool := range []string{"uname", "tr", "sed", "tail", "head", "mktemp", "rm"} {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{
+		"git": `
+[ "$*" = "ls-remote --exit-code https://github.com/Gentleman-Programming/gentle-ai.git refs/heads/main" ] || exit 90
+printf 'git %s\n' "$*" >> "$FIXTURE/calls"
+[ "$FAIL" != git ] || exit 1
+if [ -e "$FIXTURE/resolved" ]; then
+    printf '%040d\trefs/heads/main\n' 1
+else
+    : > "$FIXTURE/resolved"
+    /bin/cat "$FIXTURE/refs"
+fi`,
+		"curl": `
+dest=""
+while [ "$#" -gt 1 ]; do
+    case "$1" in
+        -sL|-sfL|-fsSL) shift ;;
+        -o) dest="$2"; shift 2 ;;
+        -w) [ "$2" = '\n%{http_code}' ] || exit 90; shift 2 ;;
+        *) exit 90 ;;
+    esac
+done
+case "$1" in
+    https://api.github.com/repos/Gentleman-Programming/gentle-ai/releases/latest)
+        printf 'release\n' >> "$FIXTURE/calls"
+        printf '{"tag_name":"%s"}\n200' "$TAG" ;;
+    https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/*/go.mod)
+        printf 'metadata %s\n' "$1" >> "$FIXTURE/calls"
+        [ "$FAIL" != metadata ] || exit 1
+        [ -n "$dest" ] || exit 90
+        /bin/cat "$FIXTURE/module" > "$dest" ;;
+    *) exit 90 ;;
+esac`,
+		"go": `
+case "$1" in
+    mod)
+        [ "$#" = 4 ] && [ "$2" = edit ] && [ "$3" = -json ] || exit 90
+        [ "$FAIL" != parser ] || exit 1
+        exec "$REAL_GO" "$@" ;;
+    install)
+        [ "$#" = 2 ] || exit 90
+        printf 'install %s\nenv %s|%s|%s\n' "$2" "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY" >> "$FIXTURE/calls"
+        [ "$FAIL" != install ] || exit 1 ;;
+    env)
+        [ "$#" = 2 ] && [ "$2" = GOBIN ] || exit 90
+        printf '%s/bin\n' "$FIXTURE" ;;
+    *) exit 90 ;;
+esac`,
+		"gentle-ai": `[ "$*" = version ] || exit 90; printf 'fixture version\n'`,
+	} {
+		write(filepath.Join(bin, name), "#!/bin/bash\nset -euo pipefail\n"+body+"\n", 0o700)
+	}
+	cmd := exec.Command("/bin/bash", "--noprofile", "--norc", "../../scripts/install.sh", "--method", "go", "--channel", channel)
+	cmd.Env = []string{
+		"PATH=" + bin, "HOME=" + root, "TMPDIR=" + tmp, "FIXTURE=" + root,
+		"REAL_GO=" + filepath.Join(runtime.GOROOT(), "bin", "go"), "TAG=" + tag, "FAIL=" + fail,
+		"GOTOOLCHAIN=local", "GOWORK=off", "GOFLAGS=", "GOPROXY=off", "GOSUMDB=off",
+		"TEST_TELEMETRY_DIR=" + filepath.Join(root, "telemetry"),
+		"GONOSUMDB=", "GOPRIVATE=github.com/acme/*", "GONOPROXY=" + module,
+	}
+	out, err := cmd.CombinedOutput()
+	calls, readErr := os.ReadFile(filepath.Join(root, "calls"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	entries, readErr := os.ReadDir(tmp)
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != "unrelated" {
+		t.Errorf("metadata cleanup left unexpected files: %v, error: %v", entries, readErr)
+	}
+	return string(calls), string(out), err
+}
+
 // TestInstallScriptsGoInstallPackageMatchesModuleMajor guards the install
-// scripts against the regression that shipped in v3.0.1: both scripts build
-// the `go install` package by interpolation, so a module-major migration
-// that rewrites the literal module string misses them. The expected major
-// is derived from go.mod so the next migration fails here first.
+// scripts against the regression that shipped in v3.0.1. Check source contracts
+// and exercise the dynamic installer with repository metadata. Derive the
+// expected major from go.mod to cover future module migrations.
 func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
@@ -201,7 +391,7 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		script  string
 		pattern string
 	}{
-		{"install.sh", `local go_package="github.com/${owner_lc}/${GITHUB_REPO}/` + major + `/cmd/${BINARY_NAME}@${version}"`},
+		{"install.sh", `local go_package="${module}/cmd/${BINARY_NAME}@${version}"`},
 		{"install.ps1", `$goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/` + major + `/cmd/$BINARY_NAME@$version"`},
 	}
 	stale := regexp.MustCompile(`/v[0-9]+/cmd/`)
@@ -213,6 +403,19 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		text := string(content)
 		if !strings.Contains(text, tc.pattern) {
 			t.Errorf("scripts/%s must build the go install package on the %s module: missing %q", tc.script, major, tc.pattern)
+		}
+		if tc.script == "install.sh" {
+			t.Run(tc.script, func(t *testing.T) {
+				module, sha := "github.com/gentleman-programming/gentle-ai/"+major, strings.Repeat("a", 40)
+				calls, output, err := runGoInstallerFixture(t, "beta", module, "", string(goMod), "", "")
+				if err != nil {
+					t.Fatalf("installer failed: %v\n%s\n%s", err, output, calls)
+				}
+				want := "install " + module + "/cmd/gentle-ai@" + sha + "\n"
+				if !strings.Contains(calls, want) || strings.Count(calls, "install ") != 1 {
+					t.Errorf("scripts/%s must install the module declared in go.mod: want %q, calls:\n%s", tc.script, want, calls)
+				}
+			})
 		}
 		for _, hit := range stale.FindAllString(text, -1) {
 			if hit != "/"+major+"/cmd/" {
