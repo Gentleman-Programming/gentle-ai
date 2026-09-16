@@ -20,7 +20,7 @@ func renderOptions(options []string, cursor int) string {
 func RenderOperationRunning(title, detail string, spinnerFrame int) string {
 	return styles.TitleStyle.Render(title) + "\n\n" +
 		styles.WarningStyle.Render(SpinnerChar(spinnerFrame)+"  "+detail) + "\n\n" +
-		styles.HelpStyle.Render("Please wait...")
+		styles.HelpStyle.Render("Por favor, espera...")
 }
 
 func renderCheckbox(label string, checked bool, focused bool) string {

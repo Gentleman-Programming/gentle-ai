@@ -33,7 +33,7 @@ var presetLabels = map[model.PresetID]string{
 func RenderPreset(selected model.PresetID, cursor int) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Select Ecosystem Preset"))
+	b.WriteString(styles.TitleStyle.Render("Seleccionar Preset del Ecosistema"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range PresetOptions() {
@@ -44,9 +44,9 @@ func RenderPreset(selected model.PresetID, cursor int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(renderOptions([]string{"Back"}, cursor-len(PresetOptions())))
+	b.WriteString(renderOptions([]string{"Volver"}, cursor-len(PresetOptions())))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navegar • enter: seleccionar • esc: volver"))
 
 	return b.String()
 }

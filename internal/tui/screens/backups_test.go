@@ -77,12 +77,13 @@ func TestRenderRestoreConfirmShowsConfirmAndCancelOptions(t *testing.T) {
 	output := RenderRestoreConfirm(manifest, 0)
 
 	// Must show a restore/confirm action.
-	if !strings.Contains(strings.ToLower(output), "restore") {
+	lower := strings.ToLower(output)
+	if !strings.Contains(lower, "restore") && !strings.Contains(lower, "restaurar") {
 		t.Errorf("RenderRestoreConfirm missing restore option; got:\n%s", output)
 	}
 
 	// Must show a cancel action.
-	if !strings.Contains(strings.ToLower(output), "cancel") && !strings.Contains(strings.ToLower(output), "back") {
+	if !strings.Contains(lower, "cancel") && !strings.Contains(lower, "cancelar") && !strings.Contains(lower, "back") && !strings.Contains(lower, "volver") {
 		t.Errorf("RenderRestoreConfirm missing cancel/back option; got:\n%s", output)
 	}
 }
@@ -100,7 +101,7 @@ func TestRenderRestoreResultSuccessShowsSuccessMessage(t *testing.T) {
 
 	// Must include a success indicator.
 	lower := strings.ToLower(output)
-	if !strings.Contains(lower, "success") && !strings.Contains(lower, "restored") && !strings.Contains(lower, "complete") {
+	if !strings.Contains(lower, "success") && !strings.Contains(lower, "restored") && !strings.Contains(lower, "complete") && !strings.Contains(lower, "éxito") && !strings.Contains(lower, "completada") {
 		t.Errorf("RenderRestoreResult(nil err) should show success; got:\n%s", output)
 	}
 
@@ -122,7 +123,7 @@ func TestRenderRestoreResultFailureShowsErrorMessage(t *testing.T) {
 	output := RenderRestoreResult(manifest, fmt.Errorf("%s", errText))
 
 	lower := strings.ToLower(output)
-	if !strings.Contains(lower, "fail") && !strings.Contains(lower, "error") {
+	if !strings.Contains(lower, "fail") && !strings.Contains(lower, "error") && !strings.Contains(lower, "fallo") {
 		t.Errorf("RenderRestoreResult(err) should show failure; got:\n%s", output)
 	}
 
@@ -132,7 +133,7 @@ func TestRenderRestoreResultFailureShowsErrorMessage(t *testing.T) {
 }
 
 // TestRenderBackups_WithScroll verifies that when there are more than BackupMaxVisible
-// items, scroll indicators (↑ more / ↓ more) are shown appropriately.
+// items, scroll indicators (↑ más / ↓ más) are shown appropriately.
 func TestRenderBackups_WithScroll(t *testing.T) {
 	// Create 15 backups (more than BackupMaxVisible=10).
 	manifests := make([]backup.Manifest, 15)
@@ -147,27 +148,27 @@ func TestRenderBackups_WithScroll(t *testing.T) {
 	t.Run("no scroll indicators when all items visible", func(t *testing.T) {
 		// Only 5 items — all fit, no scroll needed.
 		output := RenderBackups(manifests[:5], 0, 0, nil)
-		if strings.Contains(output, "↑ more") {
+		if strings.Contains(output, "↑ more") || strings.Contains(output, "↑ más") {
 			t.Errorf("should not show ↑ more indicator when scrollOffset=0")
 		}
-		if strings.Contains(output, "↓ more") {
+		if strings.Contains(output, "↓ more") || strings.Contains(output, "↓ más") {
 			t.Errorf("should not show ↓ more indicator when all items fit")
 		}
 	})
 
 	t.Run("shows down indicator when more items below", func(t *testing.T) {
 		output := RenderBackups(manifests, 0, 0, nil)
-		if !strings.Contains(output, "↓ more") {
+		if !strings.Contains(output, "↓ more") && !strings.Contains(output, "↓ más") {
 			t.Errorf("should show ↓ more indicator when list exceeds BackupMaxVisible; got:\n%s", output)
 		}
-		if strings.Contains(output, "↑ more") {
+		if strings.Contains(output, "↑ more") || strings.Contains(output, "↑ más") {
 			t.Errorf("should not show ↑ more indicator when scrollOffset=0; got:\n%s", output)
 		}
 	})
 
 	t.Run("shows up indicator when scrolled down", func(t *testing.T) {
 		output := RenderBackups(manifests, 5, 5, nil)
-		if !strings.Contains(output, "↑ more") {
+		if !strings.Contains(output, "↑ more") && !strings.Contains(output, "↑ más") {
 			t.Errorf("should show ↑ more indicator when scrolled down; got:\n%s", output)
 		}
 	})
@@ -175,10 +176,10 @@ func TestRenderBackups_WithScroll(t *testing.T) {
 	t.Run("shows both indicators when in middle of long list", func(t *testing.T) {
 		// 15 items, scrolled to offset 3, cursor at 3 — 10 items visible (3..12), more above and below.
 		output := RenderBackups(manifests, 3, 3, nil)
-		if !strings.Contains(output, "↑ more") {
+		if !strings.Contains(output, "↑ more") && !strings.Contains(output, "↑ más") {
 			t.Errorf("should show ↑ more indicator; got:\n%s", output)
 		}
-		if !strings.Contains(output, "↓ more") {
+		if !strings.Contains(output, "↓ more") && !strings.Contains(output, "↓ más") {
 			t.Errorf("should show ↓ more indicator; got:\n%s", output)
 		}
 	})
@@ -200,10 +201,10 @@ func TestRenderDeleteConfirm(t *testing.T) {
 	}
 
 	lower := strings.ToLower(output)
-	if !strings.Contains(lower, "delete") {
+	if !strings.Contains(lower, "delete") && !strings.Contains(lower, "eliminar") {
 		t.Errorf("RenderDeleteConfirm should show 'delete' option; got:\n%s", output)
 	}
-	if !strings.Contains(lower, "cancel") {
+	if !strings.Contains(lower, "cancel") && !strings.Contains(lower, "cancelar") {
 		t.Errorf("RenderDeleteConfirm should show 'cancel' option; got:\n%s", output)
 	}
 }
@@ -223,7 +224,7 @@ func TestRenderDeleteResult_Success(t *testing.T) {
 	}
 
 	lower := strings.ToLower(output)
-	if !strings.Contains(lower, "deleted") && !strings.Contains(lower, "success") {
+	if !strings.Contains(lower, "deleted") && !strings.Contains(lower, "success") && !strings.Contains(lower, "eliminado") && !strings.Contains(lower, "éxito") {
 		t.Errorf("RenderDeleteResult(nil err) should show success message; got:\n%s", output)
 	}
 }
@@ -239,7 +240,7 @@ func TestRenderDeleteResult_Error(t *testing.T) {
 	output := RenderDeleteResult(manifest, fmt.Errorf("%s", errText))
 
 	lower := strings.ToLower(output)
-	if !strings.Contains(lower, "fail") && !strings.Contains(lower, "error") {
+	if !strings.Contains(lower, "fail") && !strings.Contains(lower, "error") && !strings.Contains(lower, "fallo") {
 		t.Errorf("RenderDeleteResult(err) should show failure; got:\n%s", output)
 	}
 

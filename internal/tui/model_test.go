@@ -6416,8 +6416,8 @@ func TestWelcomeView_AdvisoryPrefixed(t *testing.T) {
 
 	view := m.View()
 
-	if !strings.Contains(view, "Advisory: critical update") {
-		t.Fatalf("View() does not contain %q\nView output:\n%s", "Advisory: critical update", view)
+	if !strings.Contains(view, "Advisory: critical update") && !strings.Contains(view, "Aviso: critical update") {
+		t.Fatalf("View() does not contain advisory\nView output:\n%s", view)
 	}
 }
 
@@ -6445,7 +6445,7 @@ func TestWelcomeView_NewlineSeparatorBetweenUpdateAndAdvisory(t *testing.T) {
 	if !strings.Contains(view, "Updates available") {
 		t.Fatalf("View() does not contain update banner\nView output:\n%s", view)
 	}
-	if !strings.Contains(view, "Advisory: advisory here") {
+	if !strings.Contains(view, "Advisory: advisory here") && !strings.Contains(view, "Aviso: advisory here") {
 		t.Fatalf("View() does not contain advisory message\nView output:\n%s", view)
 	}
 	// The box renderer wraps the banner string into per-line box rows, so the
@@ -6457,7 +6457,7 @@ func TestWelcomeView_NewlineSeparatorBetweenUpdateAndAdvisory(t *testing.T) {
 		if strings.Contains(line, "Updates available") {
 			updateLineIdx = i
 		}
-		if strings.Contains(line, "Advisory: advisory here") {
+		if strings.Contains(line, "Advisory: advisory here") || strings.Contains(line, "Aviso: advisory here") {
 			advisoryLineIdx = i
 		}
 	}
@@ -6510,13 +6510,13 @@ func TestWelcomeAdvisory_BoundsAndScrollsOverflow(t *testing.T) {
 	if got := lipgloss.Height(initial); got > state.Height {
 		t.Fatalf("welcome height = %d, want <= terminal height %d", got, state.Height)
 	}
-	if !strings.Contains(initial, "PgUp/PgDn: scroll") {
+	if !strings.Contains(initial, "PgUp/PgDn: scroll") && !strings.Contains(initial, "RePág/AvPág: desplazar") {
 		t.Fatalf("overflowing advisory missing scroll affordance\nview:\n%s", initial)
 	}
-	if !strings.Contains(initial, "Latest release:") || !strings.Contains(initial, "v1.49.0") {
+	if (!strings.Contains(initial, "Latest release:") && !strings.Contains(initial, "Última versión:")) || !strings.Contains(initial, "v1.49.0") {
 		t.Fatalf("overflowing advisory did not keep release link visible\nview:\n%s", initial)
 	}
-	if !strings.Contains(initial, "Start installation") {
+	if !strings.Contains(initial, "Start installation") && !strings.Contains(initial, "Iniciar instalación") {
 		t.Fatalf("overflowing advisory crowded out primary action\nview:\n%s", initial)
 	}
 
@@ -6550,10 +6550,10 @@ func TestWelcomeAdvisory_FittingContentShowsLatestReleaseWithoutScrollHint(t *te
 	state := updated.(Model)
 	view := state.View()
 
-	if state.AdvisoryURL != releaseURL || !strings.Contains(view, "Latest release: "+releaseURL) {
+	if state.AdvisoryURL != releaseURL || (!strings.Contains(view, "Latest release: "+releaseURL) && !strings.Contains(view, "Última versión: "+releaseURL)) {
 		t.Fatalf("latest release link not carried through\nview:\n%s", view)
 	}
-	if strings.Contains(view, "PgUp/PgDn: scroll") {
+	if strings.Contains(view, "PgUp/PgDn: scroll") || strings.Contains(view, "RePág/AvPág: desplazar") {
 		t.Fatalf("fitting advisory unexpectedly shows scroll affordance\nview:\n%s", view)
 	}
 }
@@ -6572,7 +6572,7 @@ func TestWelcomeAdvisory_SmallTerminalPreservesMenu(t *testing.T) {
 	if got := lipgloss.Height(view); got != baselineHeight {
 		t.Fatalf("small-terminal advisory added %d lines, want none", got-baselineHeight)
 	}
-	if !strings.Contains(view, "Start installation") {
+	if !strings.Contains(view, "Start installation") && !strings.Contains(view, "Iniciar instalación") {
 		t.Fatalf("small-terminal welcome lost primary action\nview:\n%s", view)
 	}
 }
@@ -6625,9 +6625,9 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 		{name: "narrow resize", width: 80, height: 24},
 		{name: "short viewport", width: 120, height: 19},
 		{name: "below compact height", width: 120, height: 2, minimum: true},
-		{name: "below compact width", width: 18, height: 20, minimum: true},
-		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Go"},
-		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Go", wantControl: "q"},
+		{name: "below compact width", width: 18, height: 20, minimum: true, wantPrimary: "Ir"},
+		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Ir", wantControl: "q"},
+		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Ir", wantControl: "q"},
 		{name: "single column tiny viewport uses atomic labels", width: 1, height: 2, minimum: true, wantPrimary: ">", wantControl: "q"},
 		{name: "compact viewport with optional content", width: 120, height: 17, withOptional: true},
 		{name: "wide resize", width: 160, height: 50},
@@ -6665,7 +6665,7 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 			}
 			primary := tc.wantPrimary
 			if primary == "" {
-				primary = "Start installation"
+				primary = "Iniciar instalación"
 			}
 			if !strings.Contains(content, primary) {
 				t.Fatalf("welcome lost primary action %q after resize\nview:\n%s", primary, view)
@@ -6681,7 +6681,7 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 					}
 				}
 			} else {
-				for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
+				for _, want := range []string{"Salir", "j/k: navegar • enter: seleccionar • q: salir"} {
 					if !strings.Contains(view, want) {
 						t.Fatalf("welcome lost %q after resize\nview:\n%s", want, view)
 					}
@@ -6698,7 +6698,7 @@ func TestWelcomeView_MinimumResizePreservesNonzeroCursor(t *testing.T) {
 
 	const (
 		cursor = 1
-		width  = 18
+		width  = 25
 		height = 20
 	)
 	m := NewModel(system.DetectionResult{}, "dev")
@@ -6717,10 +6717,10 @@ func TestWelcomeView_MinimumResizePreservesNonzeroCursor(t *testing.T) {
 	if got := lipgloss.Height(view); got > height {
 		t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, height, view)
 	}
-	if !strings.Contains(view, styles.UnselectedStyle.Render("Start installation")) {
+	if !strings.Contains(view, styles.UnselectedStyle.Render("Iniciar instalación")) {
 		t.Fatalf("minimum welcome state did not preserve the non-selected style\nview:\n%s", view)
 	}
-	if strings.Contains(view, styles.SelectedStyle.Render("Start installation")) {
+	if strings.Contains(view, styles.SelectedStyle.Render("Iniciar instalación")) {
 		t.Fatalf("minimum welcome state marked Start installation selected for cursor %d\nview:\n%s", cursor, view)
 	}
 }

@@ -11,29 +11,29 @@ import (
 )
 
 func DetectionOptions() []string {
-	return []string{"Continue", "Back"}
+	return []string{"Continuar", "Volver"}
 }
 
 func RenderDetection(result system.DetectionResult, cursor int) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("System Detection"))
+	b.WriteString(styles.TitleStyle.Render("Detección del Sistema"))
 	b.WriteString("\n\n")
 
 	supportedText := styles.ErrorStyle.Render("No")
 	if result.System.Supported {
-		supportedText = styles.SuccessStyle.Render("Yes")
+		supportedText = styles.SuccessStyle.Render("Sí")
 	}
 
 	shellName := filepath.Base(result.System.Shell)
 
-	b.WriteString(fmt.Sprintf("  %s  %s\n", styles.HeadingStyle.Render("OS"), styles.UnselectedStyle.Render(fmt.Sprintf("%s (%s)", result.System.OS, result.System.Arch))))
-	b.WriteString(fmt.Sprintf("  %s  %s\n", styles.HeadingStyle.Render("Shell"), styles.UnselectedStyle.Render(shellName)))
-	b.WriteString(fmt.Sprintf("  %s  %s\n", styles.HeadingStyle.Render("Supported"), supportedText))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", styles.HeadingStyle.Render("SO"), styles.UnselectedStyle.Render(fmt.Sprintf("%s (%s)", result.System.OS, result.System.Arch))))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", styles.HeadingStyle.Render("Intérprete"), styles.UnselectedStyle.Render(shellName)))
+	b.WriteString(fmt.Sprintf("  %s  %s\n", styles.HeadingStyle.Render("Compatible"), supportedText))
 	b.WriteString("\n")
 
 	if len(result.Tools) > 0 {
-		b.WriteString(styles.HeadingStyle.Render("Tools"))
+		b.WriteString(styles.HeadingStyle.Render("Herramientas"))
 		b.WriteString("\n")
 		keys := make([]string, 0, len(result.Tools))
 		for key := range result.Tools {
@@ -42,9 +42,9 @@ func RenderDetection(result system.DetectionResult, cursor int) string {
 		sort.Strings(keys)
 		for _, key := range keys {
 			status := result.Tools[key]
-			indicator := styles.ErrorStyle.Render("not found")
+			indicator := styles.ErrorStyle.Render("no encontrada")
 			if status.Installed {
-				indicator = styles.SuccessStyle.Render("found")
+				indicator = styles.SuccessStyle.Render("encontrada")
 			}
 			b.WriteString(fmt.Sprintf("  %s: %s\n", styles.UnselectedStyle.Render(key), indicator))
 		}
@@ -52,27 +52,27 @@ func RenderDetection(result system.DetectionResult, cursor int) string {
 	}
 
 	if len(result.Dependencies.Dependencies) > 0 {
-		b.WriteString(styles.HeadingStyle.Render("Dependencies"))
+		b.WriteString(styles.HeadingStyle.Render("Dependencias"))
 		b.WriteString("\n")
 		for _, dep := range result.Dependencies.Dependencies {
 			var indicator string
 			if dep.Installed {
 				version := dep.Version
 				if version == "" {
-					version = "found"
+					version = "encontrada"
 				}
 				indicator = styles.SuccessStyle.Render(version)
 			} else {
-				label := "not found"
+				label := "no encontrada"
 				if dep.Required {
-					label = "NOT FOUND (required)"
+					label = "NO ENCONTRADA (requerida)"
 				}
 				indicator = styles.ErrorStyle.Render(label)
 			}
 
 			suffix := ""
 			if !dep.Required {
-				suffix = styles.SubtextStyle.Render(" (optional)")
+				suffix = styles.SubtextStyle.Render(" (opcional)")
 			}
 
 			b.WriteString(fmt.Sprintf("  %s: %s%s\n",
@@ -82,7 +82,7 @@ func RenderDetection(result system.DetectionResult, cursor int) string {
 		if len(result.Dependencies.MissingRequired) > 0 {
 			b.WriteString("\n")
 			b.WriteString(styles.WarningStyle.Render(
-				fmt.Sprintf("Missing required: %s",
+				fmt.Sprintf("Requeridas ausentes: %s",
 					strings.Join(result.Dependencies.MissingRequired, ", "))))
 			b.WriteString("\n")
 		}
@@ -91,12 +91,12 @@ func RenderDetection(result system.DetectionResult, cursor int) string {
 	}
 
 	if len(result.Configs) > 0 {
-		b.WriteString(styles.HeadingStyle.Render("Detected Configs"))
+		b.WriteString(styles.HeadingStyle.Render("Configuraciones Detectadas"))
 		b.WriteString("\n")
 		for _, config := range result.Configs {
-			indicator := styles.ErrorStyle.Render("missing")
+			indicator := styles.ErrorStyle.Render("ausente")
 			if config.Exists {
-				indicator = styles.SuccessStyle.Render("present")
+				indicator = styles.SuccessStyle.Render("presente")
 			}
 			b.WriteString(fmt.Sprintf("  %s: %s\n", styles.UnselectedStyle.Render(config.Agent), indicator))
 		}
@@ -105,7 +105,7 @@ func RenderDetection(result system.DetectionResult, cursor int) string {
 
 	b.WriteString(renderOptions(DetectionOptions(), cursor))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navegar • enter: seleccionar • esc: volver"))
 
 	return b.String()
 }

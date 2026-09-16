@@ -4,7 +4,8 @@
 > **Estado General:**  
 > - **Fase 1: Fundación de la Plataforma e Identidad Base:** ✅ 100% Completada (7/7 Incrementos Archivados)  
 > - **Fase 2: Autonomía, Identidad, Multi-Proyecto y Orquestación SDD:** ✅ 100% Completada (8/8 Incrementos Archivados)  
-> **Total de Incrementos Archivados:** 15 de 15 (INC-01 a INC-15)  
+> - **Fase 3: Experiencia de Usuario, Localización y Ecosistema:** ⏳ En progreso (1 Incremento Archivado)  
+> **Total de Incrementos Archivados:** 16 de 16 (INC-01 a INC-16)  
 > **Última Actualización:** 2026-09-16
 
 ---
@@ -44,6 +45,13 @@
 | **INC-13** | `sdd-commands-axiom-cli-integration` | ✅ Archivado | CLI / Ciclo de Vida | Integración de comandos SDD (`axiom sdd status/continue/attempt/verify-validate/archive-compose`) y ciclo de revisión RDD nativamente en el binario `axiom`. |
 | **INC-14** | `axiom-tui-branding-and-cli-cutover` | ✅ Archivado | TUI & Ecosistema | Unificación de la TUI interactiva Bubbletea (`axiom tui`), comandos de aprovisionamiento (`install`, `sync`, `upgrade`, `doctor`, `backup`, `restore`) y pasarela gentle-ai. |
 | **INC-15** | `dashboard-interactive-sdd-orchestration` | ✅ Archivado | Web UI & Orquestación | Orquestación interactiva SDD en el Dashboard Web (`axiom ui`) con acciones en un clic (`continue`, `verify-validate`, `archive-compose`) y CLI canónico `axiom change create`. |
+
+### Fase 3: Experiencia de Usuario, Localización y Ecosistema
+
+| ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
+| :--- | :--- | :---: | :---: | :--- |
+| **INC-16** | `tui-spanish-localization` | ✅ Archivado | TUI & Experiencia | Localización completa al castellano peninsular de menús y pantallas de la TUI, y desacoplamiento de feeds de avisos externos. |
+
 
 ---
 
@@ -205,6 +213,17 @@
   2. Subcomando canónico en CLI: `axiom change create <nombre> [--intent "..."]`.
   3. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 5/5 requerimientos, 8/8 escenarios BDD).
   4. **HITO HISTÓRICO:** Culminación completa de la Fase 2 del Roadmap de Axiom (8 de 8 incrementos concluidos y archivados).
+
+### [INC-16] tui-spanish-localization (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-16-tui-spanish-localization/`
+- **Especificación viva:** `openspec/specs/tui-spanish-localization/spec.md`
+- **Entregables clave:**
+  1. Localización íntegra al castellano peninsular de todas las pantallas, menús y diálogos de la TUI interactiva (`welcome`, `model_config`, `backups`, `detection`, `preset`, `persona`, `common`).
+  2. Desacoplamiento de avisos de seguridad externos (`advisoryURL` redirigido a repositorio de Axiom con fail-open limpio y sin advertencias ajenas).
+  3. Mantenimiento del comportamiento determinista y responsive en terminales estrechos (modo compacto `Ir` / completo `Iniciar instalación`).
+  4. Batería completa de pruebas unitarias en `internal/tui/...` adaptadas y verificadas al 100% PASS.
+  5. Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 4/4 requerimientos, 9/9 escenarios BDD).
+
 
 
 

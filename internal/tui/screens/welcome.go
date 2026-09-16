@@ -13,7 +13,7 @@ import (
 const (
 	welcomeAdvisoryMaxRegionHeight = 7
 	welcomePrimaryContentHeight    = 44
-	welcomeHelpText                = "j/k: navigate • enter: select • q: quit"
+	welcomeHelpText                = "j/k: navegar • enter: seleccionar • q: salir"
 )
 
 type WelcomeAdvisory struct {
@@ -22,54 +22,54 @@ type WelcomeAdvisory struct {
 	Scroll  int
 }
 
-// WelcomeOptions returns the welcome menu options.
-// When showProfiles is true, an "OpenCode SDD Profiles" option is inserted
-// between "Configure models" and "Manage backups".
+// WelcomeOptions returns the welcome menu options in Spanish.
+// When showProfiles is true, an "Perfiles SDD de OpenCode" option is inserted
+// between "Configurar modelos" and "Gestionar respaldos".
 // profileCount is used to show a badge with the current profile count.
-// When hasEngines is false, "Create your own Agent" is shown as disabled
-// (labelled "(no agents)") to signal that no supported AI engine is installed.
+// When hasEngines is false, "Crear agente personalizado" is shown as disabled
+// (labelled "(sin motores)") to signal that no supported AI engine is installed.
 func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
-	upgradeLabel := "Upgrade tools"
+	upgradeLabel := "Actualizar herramientas"
 	if updateCheckDone && update.HasUpdates(updateResults) {
-		upgradeLabel = "Upgrade tools ★"
+		upgradeLabel = "Actualizar herramientas ★"
 	} else if updateCheckDone && !update.HasUpdates(updateResults) {
-		upgradeLabel = "Upgrade tools (up to date)"
+		upgradeLabel = "Actualizar herramientas (al día)"
 	}
 
-	agentLabel := "Create your own Agent"
+	agentLabel := "Crear agente personalizado"
 	if !hasEngines {
-		agentLabel = "Create your own Agent (no agents)"
+		agentLabel = "Crear agente personalizado (sin motores)"
 	}
 
 	opts := []string{
-		"Start installation",
+		"Iniciar instalación",
 		upgradeLabel,
-		"Sync configs",
-		"Upgrade + Sync",
-		"Configure models",
+		"Sincronizar configuraciones",
+		"Actualizar y sincronizar",
+		"Configurar modelos",
 		agentLabel,
-		"OpenCode Community Plugins",
+		"Plugins comunitarios de OpenCode",
 	}
 
 	// Slice 3b — standalone launcher for the 4-layer managed uninstall of
 	// OpenCode community plugins. Sits next to the install shortcut above
 	// so the menu pairs install + uninstall as mirror operations.
-	opts = append(opts, "Uninstall OpenCode Plugin")
+	opts = append(opts, "Desinstalar plugin de OpenCode")
 
 	if showProfiles {
-		profilesLabel := "OpenCode SDD Profiles"
+		profilesLabel := "Perfiles SDD de OpenCode"
 		if profileCount > 0 {
-			profilesLabel = fmt.Sprintf("OpenCode SDD Profiles (%d)", profileCount)
+			profilesLabel = fmt.Sprintf("Perfiles SDD de OpenCode (%d)", profileCount)
 		}
 		opts = append(opts, profilesLabel)
 	}
 
-	opts = append(opts, "Manage backups")
-	opts = append(opts, "Reset review store")
-	opts = append(opts, "Receipt-Driven Development")
-	opts = append(opts, "Managed uninstall")
-	opts = append(opts, "Community Tools/Plugins")
-	opts = append(opts, "Quit")
+	opts = append(opts, "Gestionar respaldos")
+	opts = append(opts, "Reiniciar almacén de revisiones")
+	opts = append(opts, "Revisión formal RDD")
+	opts = append(opts, "Desinstalación gestionada")
+	opts = append(opts, "Herramientas y plugins comunitarios")
+	opts = append(opts, "Salir")
 
 	return opts
 }
@@ -110,9 +110,9 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 			b.WriteString("\n")
 		}
 		if compact {
-			b.WriteString(renderWelcomeText(styles.HeadingStyle, "Menu", width))
+			b.WriteString(renderWelcomeText(styles.HeadingStyle, "Menú", width))
 		} else {
-			b.WriteString(styles.HeadingStyle.Render("Menu"))
+			b.WriteString(styles.HeadingStyle.Render("Menú"))
 		}
 		if compact || !includeLogo {
 			b.WriteString("\n")
@@ -195,8 +195,8 @@ func renderWelcomeOptions(options []string, cursor int, width int) string {
 }
 
 func renderWelcomeMinimum(width int, height int, cursor int) string {
-	const primaryAction = "Start installation"
-	const compactPrimaryAction = "Go"
+	const primaryAction = "Iniciar instalación"
+	const compactPrimaryAction = "Ir"
 	const narrowPrimaryAction = ">"
 	const compactHelp = "j/k, enter, q"
 	const narrowHelp = "q"
@@ -274,7 +274,7 @@ func renderWelcomeAdvisory(advisory WelcomeAdvisory, width int, height int) stri
 	end := min(scroll+pageSize, len(lines))
 	rendered := styles.WarningStyle.Render(strings.Join(lines[scroll:end], "\n"))
 	if maxScroll > 0 {
-		hint := fmt.Sprintf("PgUp/PgDn: scroll  •  lines %d-%d/%d", scroll+1, end, len(lines))
+		hint := fmt.Sprintf("RePág/AvPág: desplazar  •  líneas %d-%d/%d", scroll+1, end, len(lines))
 		rendered += "\n" + styles.HelpStyle.Render(hint)
 	}
 	return rendered
@@ -285,14 +285,14 @@ func welcomeAdvisoryLines(message string, releaseURL string, width int) []string
 	if message == "" {
 		return nil
 	}
-	if !strings.HasPrefix(message, "Advisory:") {
-		message = "Advisory: " + message
+	if !strings.HasPrefix(message, "Aviso:") && !strings.HasPrefix(message, "Advisory:") {
+		message = "Aviso: " + message
 	}
 	messageLines := strings.Split(wrapWelcomeBanner(message, width), "\n")
 	if releaseURL == "" {
 		return messageLines
 	}
-	link := "Latest release: " + releaseURL
+	link := "Última versión: " + releaseURL
 	if width <= 0 {
 		return append([]string{link}, messageLines...)
 	}

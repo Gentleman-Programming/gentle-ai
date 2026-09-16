@@ -42,11 +42,11 @@ func TestWelcomeMenuOffersTheReviewStoreReset(t *testing.T) {
 	reset, backups, uninstall := -1, -1, -1
 	for index, option := range options {
 		switch option {
-		case "Reset review store":
+		case "Reset review store", "Reiniciar almacén de revisiones":
 			reset = index
-		case "Manage backups":
+		case "Manage backups", "Gestionar respaldos":
 			backups = index
-		case "Managed uninstall":
+		case "Managed uninstall", "Desinstalación gestionada":
 			uninstall = index
 		}
 	}
@@ -74,7 +74,7 @@ func TestWelcomeSelectionEntersTheSurvey(t *testing.T) {
 	}
 	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
 	for index, option := range options {
-		if option == "Reset review store" {
+		if option == "Reset review store" || option == "Reiniciar almacén de revisiones" {
 			m.Cursor = index
 		}
 	}
@@ -326,7 +326,7 @@ func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
 	}
 	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
 	for index, option := range options {
-		if option == "Reset review store" {
+		if option == "Reset review store" || option == "Reiniciar almacén de revisiones" {
 			m.Cursor = index
 		}
 	}

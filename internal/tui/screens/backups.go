@@ -18,13 +18,13 @@ const BackupMaxVisible = 10
 func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int, pinErr error) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Backup Management"))
+	b.WriteString(styles.TitleStyle.Render("Gestión de Respaldos"))
 	b.WriteString("\n\n")
 
 	if len(backups) == 0 {
-		b.WriteString(styles.WarningStyle.Render("No backups found yet."))
+		b.WriteString(styles.WarningStyle.Render("No se encontraron respaldos todavía."))
 		b.WriteString("\n\n")
-		b.WriteString(renderOptions([]string{"Back"}, 0))
+		b.WriteString(renderOptions([]string{"Volver"}, 0))
 		return b.String()
 	}
 
@@ -34,7 +34,7 @@ func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int, pinE
 	}
 
 	if scrollOffset > 0 {
-		b.WriteString(styles.SubtextStyle.Render("  ↑ more"))
+		b.WriteString(styles.SubtextStyle.Render("  ↑ más"))
 		b.WriteString("\n")
 	}
 
@@ -60,18 +60,18 @@ func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int, pinE
 	}
 
 	if end < len(backups) {
-		b.WriteString(styles.SubtextStyle.Render("  ↓ more"))
+		b.WriteString(styles.SubtextStyle.Render("  ↓ más"))
 		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(renderOptions([]string{"Back"}, cursor-len(backups)))
+	b.WriteString(renderOptions([]string{"Volver"}, cursor-len(backups)))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: restore • r: rename • d: delete • p: pin/unpin • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navegar • enter: restaurar • r: renombrar • d: eliminar • p: fijar/desfijar • esc: volver"))
 
 	if pinErr != nil {
 		b.WriteString("\n")
-		b.WriteString(styles.ErrorStyle.Render("pin error: " + pinErr.Error()))
+		b.WriteString(styles.ErrorStyle.Render("error al fijar: " + pinErr.Error()))
 	}
 
 	return b.String()
@@ -79,25 +79,25 @@ func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int, pinE
 
 // RenderRestoreConfirm renders the restore confirmation screen.
 // It shows the backup identity and asks the user to confirm or cancel.
-// Cursor 0 = "Restore", Cursor 1 = "Cancel".
+// Cursor 0 = "Restaurar", Cursor 1 = "Cancelar".
 func RenderRestoreConfirm(manifest backup.Manifest, cursor int) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Restore Backup"))
+	b.WriteString(styles.TitleStyle.Render("Restaurar Respaldo"))
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.HeadingStyle.Render("Backup: "))
+	b.WriteString(styles.HeadingStyle.Render("Respaldo: "))
 	b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render(manifest.DisplayLabel()))
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.WarningStyle.Render("This will overwrite your current configuration."))
+	b.WriteString(styles.WarningStyle.Render("Esto sobrescribirá tu configuración actual."))
 	b.WriteString("\n\n")
 
-	b.WriteString(renderOptions([]string{"Restore", "Cancel"}, cursor))
+	b.WriteString(renderOptions([]string{"Restaurar", "Cancelar"}, cursor))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navegar • enter: seleccionar • esc: volver"))
 
 	return b.String()
 }
@@ -107,60 +107,60 @@ func RenderRestoreConfirm(manifest backup.Manifest, cursor int) string {
 func RenderRestoreResult(manifest backup.Manifest, err error) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Restore Result"))
+	b.WriteString(styles.TitleStyle.Render("Resultado de la Restauración"))
 	b.WriteString("\n\n")
 
 	if err == nil {
-		b.WriteString(styles.SuccessStyle.Render("✓ Restore complete"))
+		b.WriteString(styles.SuccessStyle.Render("✓ Restauración completada con éxito"))
 		b.WriteString("\n\n")
-		b.WriteString(styles.SubtextStyle.Render("Restored: "))
+		b.WriteString(styles.SubtextStyle.Render("Restaurado: "))
 		b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render(manifest.DisplayLabel()))
 		b.WriteString("\n\n")
-		b.WriteString(styles.UnselectedStyle.Render("Your configuration has been restored from this backup."))
+		b.WriteString(styles.UnselectedStyle.Render("Tu configuración ha sido restaurada a partir de este respaldo."))
 	} else {
-		b.WriteString(styles.ErrorStyle.Render("✗ Restore failed"))
+		b.WriteString(styles.ErrorStyle.Render("✗ Fallo en la restauración"))
 		b.WriteString("\n\n")
-		b.WriteString(styles.SubtextStyle.Render("Backup: "))
+		b.WriteString(styles.SubtextStyle.Render("Respaldo: "))
 		b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 		b.WriteString("\n\n")
 		b.WriteString(styles.HeadingStyle.Render("Error:"))
 		b.WriteString("\n")
 		b.WriteString(styles.ErrorStyle.Render("  " + err.Error()))
 		b.WriteString("\n\n")
-		b.WriteString(styles.SubtextStyle.Render("Your files were not modified."))
+		b.WriteString(styles.SubtextStyle.Render("Tus archivos no fueron modificados."))
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.HelpStyle.Render("enter: back to backups • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("enter: volver a respaldos • esc: volver"))
 
 	return b.String()
 }
 
 // RenderDeleteConfirm renders the delete confirmation screen.
 // Shows backup info and asks the user to confirm or cancel the deletion.
-// Cursor 0 = "Delete", Cursor 1 = "Cancel".
+// Cursor 0 = "Eliminar", Cursor 1 = "Cancelar".
 func RenderDeleteConfirm(manifest backup.Manifest, cursor int) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Delete Backup"))
+	b.WriteString(styles.TitleStyle.Render("Eliminar Respaldo"))
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.HeadingStyle.Render("Backup: "))
+	b.WriteString(styles.HeadingStyle.Render("Respaldo: "))
 	b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render(manifest.DisplayLabel()))
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.WarningStyle.Render("Are you sure you want to permanently delete this backup?"))
+	b.WriteString(styles.WarningStyle.Render("¿Seguro que deseas eliminar permanentemente este respaldo?"))
 	b.WriteString("\n")
-	b.WriteString(styles.WarningStyle.Render("This action cannot be undone."))
+	b.WriteString(styles.WarningStyle.Render("Esta acción no se puede deshacer."))
 	b.WriteString("\n\n")
 
-	b.WriteString(renderOptions([]string{"Delete", "Cancel"}, cursor))
+	b.WriteString(renderOptions([]string{"Eliminar", "Cancelar"}, cursor))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navegar • enter: seleccionar • esc: volver"))
 
 	return b.String()
 }
@@ -170,33 +170,33 @@ func RenderDeleteConfirm(manifest backup.Manifest, cursor int) string {
 func RenderDeleteResult(manifest backup.Manifest, err error) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Delete Result"))
+	b.WriteString(styles.TitleStyle.Render("Resultado de la Eliminación"))
 	b.WriteString("\n\n")
 
 	if err == nil {
-		b.WriteString(styles.SuccessStyle.Render("✓ Backup deleted"))
+		b.WriteString(styles.SuccessStyle.Render("✓ Respaldo eliminado con éxito"))
 		b.WriteString("\n\n")
-		b.WriteString(styles.SubtextStyle.Render("Deleted: "))
+		b.WriteString(styles.SubtextStyle.Render("Eliminado: "))
 		b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render(manifest.DisplayLabel()))
 		b.WriteString("\n\n")
-		b.WriteString(styles.UnselectedStyle.Render("The backup has been permanently removed."))
+		b.WriteString(styles.UnselectedStyle.Render("El respaldo ha sido eliminado permanentemente."))
 	} else {
-		b.WriteString(styles.ErrorStyle.Render("✗ Delete failed"))
+		b.WriteString(styles.ErrorStyle.Render("✗ Fallo al eliminar"))
 		b.WriteString("\n\n")
-		b.WriteString(styles.SubtextStyle.Render("Backup: "))
+		b.WriteString(styles.SubtextStyle.Render("Respaldo: "))
 		b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 		b.WriteString("\n\n")
 		b.WriteString(styles.HeadingStyle.Render("Error:"))
 		b.WriteString("\n")
 		b.WriteString(styles.ErrorStyle.Render("  " + err.Error()))
 		b.WriteString("\n\n")
-		b.WriteString(styles.SubtextStyle.Render("The backup directory may still exist."))
+		b.WriteString(styles.SubtextStyle.Render("El directorio del respaldo aún podría existir."))
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(styles.HelpStyle.Render("enter: back to backups • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("enter: volver a respaldos • esc: volver"))
 
 	return b.String()
 }
@@ -206,22 +206,22 @@ func RenderDeleteResult(manifest backup.Manifest, err error) string {
 func RenderRenameBackup(manifest backup.Manifest, inputText string, cursorPos int) string {
 	var b strings.Builder
 
-	b.WriteString(styles.TitleStyle.Render("Rename Backup"))
+	b.WriteString(styles.TitleStyle.Render("Renombrar Respaldo"))
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.HeadingStyle.Render("Backup: "))
+	b.WriteString(styles.HeadingStyle.Render("Respaldo: "))
 	b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render(manifest.DisplayLabel()))
 	b.WriteString("\n\n")
 
 	if manifest.Description != "" {
-		b.WriteString(styles.SubtextStyle.Render("Current description: "))
+		b.WriteString(styles.SubtextStyle.Render("Descripción actual: "))
 		b.WriteString(styles.UnselectedStyle.Render(manifest.Description))
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(styles.HeadingStyle.Render("New description:"))
+	b.WriteString(styles.HeadingStyle.Render("Nueva descripción:"))
 	b.WriteString("\n")
 
 	// Render text input with cursor indicator.
@@ -241,7 +241,7 @@ func RenderRenameBackup(manifest backup.Manifest, inputText string, cursorPos in
 	b.WriteString(inputDisplay.String())
 	b.WriteString("\n\n")
 
-	b.WriteString(styles.HelpStyle.Render("enter: save • esc: cancel • ←/→: move cursor • backspace: delete"))
+	b.WriteString(styles.HelpStyle.Render("enter: guardar • esc: cancelar • ←/→: mover cursor • retroceso: borrar"))
 
 	return b.String()
 }

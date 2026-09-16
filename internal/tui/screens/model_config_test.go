@@ -17,12 +17,12 @@ func TestModelConfigOptions_Count(t *testing.T) {
 }
 
 // TestModelConfigOptions_Order verifies the exact order of options:
-// Claude → OpenCode → Kiro → Codex → Back.
+// Claude → OpenCode → Kiro → Codex → Volver.
 func TestModelConfigOptions_Order(t *testing.T) {
 	opts := ModelConfigOptions()
 
 	// wantKeywords defines the expected order by a unique keyword per option.
-	wantKeywords := []string{"Claude", "OpenCode", "Kiro", "Codex", "Back"}
+	wantKeywords := []string{"Claude", "OpenCode", "Kiro", "Codex", "Volver"}
 
 	if len(opts) != len(wantKeywords) {
 		t.Fatalf("ModelConfigOptions() len = %d, want %d; got %v", len(opts), len(wantKeywords), opts)
@@ -35,7 +35,7 @@ func TestModelConfigOptions_Order(t *testing.T) {
 	}
 }
 
-// TestModelConfigOptions_ContainsCodex verifies Codex is at index 3 and Back at index 4.
+// TestModelConfigOptions_ContainsCodex verifies Codex is at index 3 and Volver at index 4.
 func TestModelConfigOptions_ContainsCodex(t *testing.T) {
 	opts := ModelConfigOptions()
 	if len(opts) < 5 {
@@ -44,17 +44,17 @@ func TestModelConfigOptions_ContainsCodex(t *testing.T) {
 	if !strings.Contains(opts[3], "Codex") {
 		t.Errorf("ModelConfigOptions()[3] = %q, want option containing 'Codex'", opts[3])
 	}
-	if !strings.Contains(opts[4], "Back") {
-		t.Errorf("ModelConfigOptions()[4] = %q, want 'Back'", opts[4])
+	if !strings.Contains(opts[4], "Volver") {
+		t.Errorf("ModelConfigOptions()[4] = %q, want 'Volver'", opts[4])
 	}
 }
 
-// TestModelConfigOptions_BackIsLast verifies that "Back" is the last option.
+// TestModelConfigOptions_BackIsLast verifies that "Volver" is the last option.
 func TestModelConfigOptions_BackIsLast(t *testing.T) {
 	opts := ModelConfigOptions()
 	last := opts[len(opts)-1]
-	if !strings.Contains(last, "Back") {
-		t.Errorf("ModelConfigOptions() last item = %q, want 'Back'", last)
+	if !strings.Contains(last, "Volver") {
+		t.Errorf("ModelConfigOptions() last item = %q, want 'Volver'", last)
 	}
 }
 
@@ -65,8 +65,8 @@ func TestModelConfigOptions_BackIsLast(t *testing.T) {
 func TestRenderModelConfig_RendersAllOptions(t *testing.T) {
 	out := RenderModelConfig(0)
 
-	if !strings.Contains(out, "Model Configuration") {
-		t.Errorf("RenderModelConfig should show 'Model Configuration'; got:\n%s", out)
+	if !strings.Contains(out, "Configuración de Modelos") {
+		t.Errorf("RenderModelConfig should show 'Configuración de Modelos'; got:\n%s", out)
 	}
 
 	for _, opt := range ModelConfigOptions() {
@@ -95,7 +95,7 @@ func TestRenderModelConfig_ContainsNavigationHint(t *testing.T) {
 	out := RenderModelConfig(0)
 
 	lower := strings.ToLower(out)
-	if !strings.Contains(lower, "navigate") && !strings.Contains(lower, "j/k") {
+	if !strings.Contains(lower, "navegar") && !strings.Contains(lower, "j/k") {
 		t.Errorf("RenderModelConfig should contain navigation hint; got:\n%s", out)
 	}
 }

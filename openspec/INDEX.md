@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-16 13:38:54 UTC
-> **Total Dominios:** 42 | **Total Requerimientos:** 286 | **Total Escenarios BDD:** 463
+> **Última Sincronización:** 2026-09-16 16:47:07 UTC
+> **Total Dominios:** 43 | **Total Requerimientos:** 290 | **Total Escenarios BDD:** 472
 
 ---
 
@@ -50,6 +50,7 @@
 | `sdd-research` | sdd-research Specification | 3 | 8 | [Ver Spec](specs/sdd-research/spec.md) |
 | `semantic-code` | Especificación de Requerimientos: Conector Semántico de Código (Serena MCP & CodeGraph) (INC-06) | 11 | 14 | [Ver Spec](specs/semantic-code/spec.md) |
 | `structured-handoffs` | Especificación Viva: Handoffs Estructurados y Ciclo de Vida de Transición | 7 | 13 | [Ver Spec](specs/structured-handoffs/spec.md) |
+| `tui-spanish-localization` | Especificación Viva: Localización Integral al Castellano y Desacoplamiento de Avisos en la TUI (Axiom) | 4 | 9 | [Ver Spec](specs/tui-spanish-localization/spec.md) |
 | `visual-decoupling` | Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom) | 4 | 7 | [Ver Spec](specs/visual-decoupling/spec.md) |
 | `workspace-topology` | Especificación Viva: Topología de Workspace y CLI de Axiom | 7 | 15 | [Ver Spec](specs/workspace-topology/spec.md) |
 
@@ -1050,6 +1051,26 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-2.3]** Subcomando axiom handoff validate
   - *Escenario BDD:* Validación exitosa de handoff
   - *Escenario BDD:* Validación fallida de handoff incompleto
+
+### Dominio: `tui-spanish-localization` — Especificación Viva: Localización Integral al Castellano y Desacoplamiento de Avisos en la TUI (Axiom)
+
+Garantiza que la interfaz gráfica interactiva de terminal (TUI Bubbletea) de Axiom opere con identidad propia, limpia de avisos o dependencias de versiones externas, y que todos sus menús, submenús, diálogos, estados y atajos de navegación se presenten estrictamente en español (castellano peninsular).
+
+**Archivo:** [`specs/tui-spanish-localization/spec.md`](specs/tui-spanish-localization/spec.md)
+
+- **[REQ-16.1]** Desacoplamiento de Comunicados y Avisos Remotos Upstream
+  - *Escenario BDD:* Inicio limpio de la TUI sin avisos ajenos
+  - *Escenario BDD:* Consulta de avisos en repo de Axiom con fail-open
+- **[REQ-16.2]** Localización al Castellano del Menú de Bienvenida
+  - *Escenario BDD:* Visualización de opciones en español
+  - *Escenario BDD:* Microtextos de navegación y encabezados
+- **[REQ-16.3]** Localización de Submenús y Pantallas de Configuración
+  - *Escenario BDD:* Pantalla de Configuración de Modelos
+  - *Escenario BDD:* Pantalla de Gestión de Respaldos
+  - *Escenario BDD:* Pantallas de Desinstalación y Herramientas Comunitarias
+- **[REQ-16.4]** Determinismo en la Máquina de Estados y Navegación
+  - *Escenario BDD:* Navegación por cursor intacta
+  - *Escenario BDD:* Validez de la suite de pruebas
 
 ### Dominio: `visual-decoupling` — Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom)
 
