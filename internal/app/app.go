@@ -113,6 +113,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDPreflightHook(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
+		case "backup":
+			return cli.RunBackup(args[1:], stdout)
 		case "telemetry":
 			return cli.RunTelemetry(args[1:], stdout)
 		case "review":
@@ -308,6 +310,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 		return nil
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
+	case "backup":
+		return cli.RunBackup(args[1:], stdout)
 	case "doctor":
 		return cli.RunDoctor(context.Background(), stdout)
 	default:

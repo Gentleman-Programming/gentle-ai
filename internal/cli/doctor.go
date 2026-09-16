@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -60,9 +61,10 @@ var agentToolBinaries = map[string]string{
 }
 
 const (
-	engramHealthEnvVar = "ENGRAM_BASE_URL"
-	diskWarnThreshold  = int64(100 * 1024 * 1024) // 100 MB
-	diskFailThreshold  = int64(10 * 1024 * 1024)  // 10 MB
+	engramHealthEnvVar           = "ENGRAM_BASE_URL"
+	diskWarnThreshold            = int64(100 * 1024 * 1024) // 100 MB
+	diskFailThreshold            = int64(10 * 1024 * 1024)  // 10 MB
+	backupFootprintWarnThreshold = int64(500 * 1024 * 1024) // 500 MB
 )
 
 // Overridable for testing.
@@ -114,6 +116,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
+		doctor.Check{ID: doctor.CheckBackupFootprint, Run: func(context.Context) doctor.Result { return checkBackupFootprint(homeDir) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
@@ -666,6 +669,48 @@ func checkDiskSpace(homeDir string) CheckResult {
 			Status: CheckStatusPass,
 			Detail: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
 		}
+	}
+}
+
+// checkBackupFootprint reports backup count and disk usage in ~/.gentle-ai/backups/.
+func checkBackupFootprint(homeDir string) CheckResult {
+	const id = doctor.CheckBackupFootprint
+	backupRoot := backupRootDir(homeDir)
+
+	report, err := backup.ListBackupsReport(backupRoot)
+	if err != nil {
+		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: "could not inspect backup directory: " + err.Error()}
+	}
+
+	if report.TotalCount == 0 {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusPass,
+			Detail: "0 backups occupying 0 B in " + backupRoot,
+		}
+	}
+
+	backupWord := "backups"
+	if report.TotalCount == 1 {
+		backupWord = "backup"
+	}
+
+	detail := fmt.Sprintf("%d %s occupying %s in %s",
+		report.TotalCount, backupWord, backup.FormatSize(report.TotalBytes), backupRoot)
+
+	if report.TotalBytes > backupFootprintWarnThreshold {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("%s (exceeds %s threshold)", detail, backup.FormatSize(backupFootprintWarnThreshold)),
+			Remedy: doctor.NewRemedy(doctor.RemedyCleanBackups, "Run 'gentle-ai backup clean' to purge old backups"),
+		}
+	}
+
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusPass,
+		Detail: detail,
 	}
 }
 

@@ -11,6 +11,7 @@ const (
 	CheckInstalledAssetVersion CheckID = "installed:asset_version"
 	CheckEngramReachable       CheckID = "engram:reachable"
 	CheckDiskSpace             CheckID = "disk:space"
+	CheckBackupFootprint       CheckID = "backup:footprint"
 )
 
 // ToolCheckID returns the stable check identifier for a tool binary.
@@ -37,6 +38,7 @@ const (
 	RemedyStartEngram      RemedyID = "start-engram"
 	RemedyInspectEngram    RemedyID = "inspect-engram"
 	RemedyFreeDiskSpace    RemedyID = "free-disk-space"
+	RemedyCleanBackups     RemedyID = "clean-backups"
 )
 
 // RemedyCategory groups remedies by the resource they concern.
@@ -95,7 +97,7 @@ func NewRemedy(id RemedyID, description string) *Remedy {
 		r.EligibilityReason = "requires managed state and existing sync safeguards"
 	case RemedyStartEngram, RemedyInspectEngram:
 		r.Category, r.EligibilityReason = RemedyCategoryService, "external process and log ownership is unknown"
-	case RemedyFreeDiskSpace:
+	case RemedyFreeDiskSpace, RemedyCleanBackups:
 		r.Category, r.EligibilityReason = RemedyCategoryStorage, "disk cleanup is user-owned"
 	default:
 		r.EligibilityReason = "remedy is not allowlisted"

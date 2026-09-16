@@ -71,6 +71,7 @@ COMPATIBILITY COMMANDS
                Anonymous, opt-out usage telemetry; preview shows the exact payload without sending it;
                trigger runs the opportunistic check for hosts that never call install/update/sync
   restore      Restore a config backup
+  backup       Inspect and clean stored backups (list, clean)
   doctor       Run ecosystem health diagnostics
   version      Print version
 

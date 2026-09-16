@@ -144,6 +144,29 @@ func TestRunArgsRestoreListIsDispatched(t *testing.T) {
 	}
 }
 
+// TestRunArgsBackupListIsDispatched verifies that `gentle-ai backup list`
+// is correctly dispatched through RunArgs and produces output without error.
+func TestRunArgsBackupListIsDispatched(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"backup", "list"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(backup list) error = %v", err)
+	}
+
+	out := buf.String()
+	if out == "" {
+		t.Fatalf("backup list produced no output")
+	}
+
+	// Must not produce "unknown command".
+	if strings.Contains(out, "unknown command") {
+		t.Errorf("backup is not registered in RunArgs; got: %s", out)
+	}
+}
+
 // TestRunArgsRestoreByIDWithYes verifies end-to-end wiring of `restore <id> --yes`
 // through app.RunArgs.
 func TestRunArgsRestoreByIDWithYes(t *testing.T) {

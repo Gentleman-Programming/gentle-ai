@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 )
@@ -943,6 +944,67 @@ func TestCheckDiskSpace_StatError(t *testing.T) {
 	}
 }
 
+func TestCheckBackupFootprint_Empty(t *testing.T) {
+	home := t.TempDir()
+	got := checkBackupFootprint(home)
+	if got.Status != CheckStatusPass {
+		t.Errorf("expected pass for empty backups, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "0 backups occupying 0 B") {
+		t.Errorf("unexpected detail for empty backups: %s", got.Detail)
+	}
+}
+
+func TestCheckBackupFootprint_UnderThreshold(t *testing.T) {
+	home := t.TempDir()
+	createTestBackup(t, home, "backup-1", time.Now(), backup.BackupSourceInstall, "test", false)
+
+	got := checkBackupFootprint(home)
+	if got.Status != CheckStatusPass {
+		t.Errorf("expected pass for backup under threshold, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "1 backup occupying") {
+		t.Errorf("unexpected detail: %s", got.Detail)
+	}
+}
+
+func TestCheckBackupFootprint_ExceedsThreshold(t *testing.T) {
+	home := t.TempDir()
+	bDir := filepath.Join(home, ".gentle-ai", "backups", "huge-backup")
+	m := backup.Manifest{
+		ID:        "huge-backup",
+		CreatedAt: time.Now(),
+		RootDir:   bDir,
+		FileCount: 1,
+	}
+	if err := backup.WriteManifest(filepath.Join(bDir, backup.ManifestFilename), m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	// Create dummy file that exceeds 500 MB
+	f, err := os.Create(filepath.Join(bDir, "huge.bin"))
+	if err != nil {
+		t.Fatalf("Create huge file: %v", err)
+	}
+	// Truncate to 501 MB without allocating actual disk blocks
+	if err := f.Truncate(501 * 1024 * 1024); err != nil {
+		_ = f.Close()
+		t.Fatalf("Truncate: %v", err)
+	}
+	_ = f.Close()
+
+	got := checkBackupFootprint(home)
+	if got.Status != CheckStatusWarn {
+		t.Errorf("expected warn for backup exceeding 500 MB, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "exceeds") {
+		t.Errorf("expected 'exceeds' in detail, got: %s", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedyCleanBackups {
+		t.Errorf("expected RemedyCleanBackups, got: %#v", got.Remedy)
+	}
+}
+
 // --- RunDoctor integration test ---
 
 func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
@@ -1011,10 +1073,11 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
   [ok]  disk:space                     1024 MB free on %s filesystem
+  [ok]  backup:footprint               0 backups occupying 0 B in %s
 
-Summary: 8 passed, 0 failed, 0 warnings
+Summary: 9 passed, 0 failed, 0 warnings
 Status:  healthy
-`, configPath, filepath.Join(homeDir, ".gentle-ai"))
+`, configPath, filepath.Join(homeDir, ".gentle-ai"), filepath.Join(homeDir, ".gentle-ai", "backups"))
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}

@@ -59,6 +59,7 @@ func TestNewRemedyClassifiesCurrentRemedies(t *testing.T) {
 		{RemedyStartEngram, RemedyCategoryService, ActionManualOnly, false},
 		{RemedyInspectEngram, RemedyCategoryService, ActionManualOnly, false},
 		{RemedyFreeDiskSpace, RemedyCategoryStorage, ActionManualOnly, false},
+		{RemedyCleanBackups, RemedyCategoryStorage, ActionManualOnly, false},
 	}
 	for _, tt := range tests {
 		r := NewRemedy(tt.id, "guidance")
