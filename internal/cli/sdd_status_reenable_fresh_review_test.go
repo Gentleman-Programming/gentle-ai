@@ -39,8 +39,8 @@ func dispatchReviewStart(t *testing.T, repo, lineage string, extra ...string) Re
 
 func requireEnabledOrdinaryArchive(t *testing.T, status sddstatus.Status, subject string) {
 	t.Helper()
-	if status.ReviewOffer == nil || !status.ReviewOffer.Available {
-		t.Fatalf("%s reviewOffer = %#v, want an available non-deciding review invitation", subject, status.ReviewOffer)
+	if status.ReviewOffer != nil {
+		t.Fatalf("%s reviewOffer = %#v, want nil in decoupled SDD", subject, status.ReviewOffer)
 	}
 	if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
 		t.Fatalf("%s archive=%q next=%q, want ordinary ready/archive", subject, status.Dependencies.Archive, status.NextRecommended)
@@ -150,8 +150,8 @@ func TestSDDStatusEnabledMissingReceiptIsDeclineNotAStop(t *testing.T) {
 	seedArchiveGatedSDDChange(t, root)
 
 	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewOffer == nil || !status.ReviewOffer.Available {
-		t.Fatalf("enabled missing-receipt reviewOffer = %#v, want an available invitation", status.ReviewOffer)
+	if status.ReviewOffer != nil {
+		t.Fatalf("enabled missing-receipt reviewOffer = %#v, want nil in decoupled SDD", status.ReviewOffer)
 	}
 	if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
 		t.Fatalf("enabled missing-receipt archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)

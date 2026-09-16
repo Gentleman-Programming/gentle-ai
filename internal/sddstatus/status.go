@@ -235,21 +235,10 @@ type ArchivedProjection struct {
 	Path string `json:"path"`
 }
 
-// applyReviewOfferRouting is status's one review edge. It runs only after strict
-// independent verification succeeds and never reads or persists review runtime
-// authority.
+// applyReviewOfferRouting en INC-18: reviewOffer queda retirado y desacoplado
+// de las proyecciones de estado SDD, manteniendo ReviewOffer como nil.
 func applyReviewOfferRouting(ctx context.Context, status *Status, workspaceRoot string, reviewDisabled bool) {
-	if reviewDisabled || status.Dependencies.Verify != DependencyAllDone {
-		return
-	}
-	offer, err := reviewOfferForVerify(ctx, workspaceRoot)
-	if err != nil {
-		return
-	}
-	status.ReviewOffer = &ReviewOfferBlock{
-		Available:  offer.Available,
-		Invocation: fmt.Sprintf("gentle-ai review start --cwd %s", pathquote.Quote(workspaceRoot)),
-	}
+	status.ReviewOffer = nil
 }
 
 type ResolveOptions struct {

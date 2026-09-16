@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-16 20:49:53 UTC
-> **Total Dominios:** 44 | **Total Requerimientos:** 300 | **Total Escenarios BDD:** 483
+> **Última Sincronización:** 2026-09-16 21:45:00 UTC
+> **Total Dominios:** 45 | **Total Requerimientos:** 306 | **Total Escenarios BDD:** 489
 
 ---
 
@@ -33,6 +33,7 @@
 | `rdd-candidate-identity` | RDD Candidate Identity Specification | 5 | 8 | [Ver Spec](specs/rdd-candidate-identity/spec.md) |
 | `rdd-candidate-relation-algebra` | RDD Candidate Relation Algebra Specification | 8 | 12 | [Ver Spec](specs/rdd-candidate-relation-algebra/spec.md) |
 | `rdd-closure-disposition-execution` | RDD Closure Disposition Execution Specification | 7 | 9 | [Ver Spec](specs/rdd-closure-disposition-execution/spec.md) |
+| `rdd-decoupling-v3-stability` | Especificación Viva: Desacoplamiento de RDD y Parches de Estabilidad Upstream v3 | 6 | 6 | [Ver Spec](specs/rdd-decoupling-v3-stability/spec.md) |
 | `rdd-delivery-exception-removal` | RDD Delivery Exception Removal Specification | 4 | 4 | [Ver Spec](specs/rdd-delivery-exception-removal/spec.md) |
 | `rdd-freeze-expansion-policy` | RDD Freeze-Expansion Policy Specification | 3 | 3 | [Ver Spec](specs/rdd-freeze-expansion-policy/spec.md) |
 | `rdd-leaf-disposition-execution` | RDD Leaf Disposition Execution Specification | 11 | 11 | [Ver Spec](specs/rdd-leaf-disposition-execution/spec.md) |
@@ -604,6 +605,25 @@ Relaxes Wave 2's `admitLeafDisposition` from `len(closure) == 1` to `len(closure
   - *Escenario BDD:* next_transition offers disposition collect/execute
 - **[REQ-rdd-closure-disposition-execution-7]** Exit Evidence via ds09+ Bench Journeys
   - *Escenario BDD:* Multi-chain and crash-recovery journeys pass
+
+### Dominio: `rdd-decoupling-v3-stability` — Especificación Viva: Desacoplamiento de RDD y Parches de Estabilidad Upstream v3
+
+Consolida la independencia estructural del ciclo de vida Spec-Driven Development (SDD) respecto a Review-Driven Development (RDD), la neutralización de la oferta forzada `reviewOffer` en `sdd status`, y la absorción de correcciones críticas de Gentle-AI v3 (rutas Windows, aislamiento CWD, presets de skills, y resiliencia en Engram).
+
+**Archivo:** [`specs/rdd-decoupling-v3-stability/spec.md`](specs/rdd-decoupling-v3-stability/spec.md)
+
+- **[REQ-18.1]** Desacoplamiento de RDD en la Proyección de Estado SDD
+  - *Escenario BDD:* Proyección de estado SDD tras verificación exitosa sin reviewOffer forzado
+- **[REQ-18.2]** Independencia Operativa de las Herramientas RDD
+  - *Escenario BDD:* Invocación autónoma de comandos review en la CLI
+- **[REQ-18.3]** Resiliencia en Decodificación de Rutas Windows en Salidas JSON de SDD
+  - *Escenario BDD:* Validación de rutas permitidas bajo Windows
+- **[REQ-18.4]** Aislamiento del Directorio de Trabajo (CWD) en la Gestión de Artefactos
+  - *Escenario BDD:* Sincronización de agentes desde un subdirectorio anidado
+- **[REQ-18.5]** Saneamiento del Preset Predeterminado de Skills
+  - *Escenario BDD:* Inspección del preset básico de skills
+- **[REQ-18.6]** Resiliencia de Protocolo Engram ante Ambiguous Project
+  - *Escenario BDD:* Manejo de ambigüedad de proyecto en handshake de sesión Engram
 
 ### Dominio: `rdd-delivery-exception-removal` — RDD Delivery Exception Removal Specification
 

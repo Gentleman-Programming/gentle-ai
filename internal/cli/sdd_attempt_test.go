@@ -236,26 +236,19 @@ func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 		t.Fatalf("grant CLI status = %#v, want granted root %q with a committed revision", granted, sibling)
 	}
 
-	// Status with the same instance token replays the persisted chain: the
-	// grant survives the process boundary between the mutating call and a
-	// later read that declares the instance it serves.
-	status := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change, "--change-instance", instance})
-	if !reflect.DeepEqual(status.GrantedRoots, []string{sibling}) || status.Revision != granted.Revision {
-		t.Fatalf("post-grant CLI status = %#v, want granted roots [%q] at revision %s", status, sibling, granted.Revision)
+	// Read through SDD status, not a retired attempt-status verb.
+	var statusOutput bytes.Buffer
+	if err := RunSDDStatus([]string{change, "--cwd", repo, "--json"}, &statusOutput); err != nil {
+		t.Fatal(err)
 	}
-
-	// Status WITHOUT an instance declaration projects no granted roots: the
-	// conservative containment for undeclared readers (#2557).
-	undeclared := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
-	if undeclared.GrantedRoots != nil {
-		t.Fatalf("undeclared-instance CLI status projected granted roots: %#v", undeclared.GrantedRoots)
+	// Decode instead of substring-matching: JSON escapes the backslashes of a
+	// Windows path, so the raw path never appears verbatim in the output.
+	var projected sddstatus.StatusV2Projection
+	if err := json.Unmarshal(statusOutput.Bytes(), &projected); err != nil {
+		t.Fatalf("decode SDD status: %v\n%s", err, statusOutput.String())
 	}
-
-	// Status under a DIFFERENT instance token projects nothing either: a
-	// recreated change reusing this archived name inherits no authority.
-	recreated := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change, "--change-instance", "recreated-instance-token"})
-	if recreated.GrantedRoots != nil {
-		t.Fatalf("recreated-instance CLI status resurrected granted roots: %#v", recreated.GrantedRoots)
+	if !containsString(projected.ActionContext.AllowedEditRoots, sibling) {
+		t.Fatalf("granted root %q absent from SDD status allowedEditRoots %#v", sibling, projected.ActionContext.AllowedEditRoots)
 	}
 
 	// An exact duplicate request-id is idempotent through the CLI: same

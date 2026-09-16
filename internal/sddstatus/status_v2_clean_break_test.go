@@ -163,26 +163,10 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		if err := json.Unmarshal(enabledPayload, &enabledDocument); err != nil {
 			t.Fatal(err)
 		}
-		offerPayload, ok := enabledDocument["reviewOffer"]
-		if !ok {
-			t.Fatalf("enabled post-verify status omitted reviewOffer: %s", enabledPayload)
+		if _, ok := enabledDocument["reviewOffer"]; ok {
+			t.Fatalf("decoupled SDD status must omit reviewOffer: %s", enabledPayload)
 		}
-		var offer struct {
-			Available  bool   `json:"available"`
-			Invocation string `json:"invocation"`
-		}
-		if err := json.Unmarshal(offerPayload, &offer); err != nil {
-			t.Fatal(err)
-		}
-		var offerKeys map[string]json.RawMessage
-		if err := json.Unmarshal(offerPayload, &offerKeys); err != nil {
-			t.Fatal(err)
-		}
-		assertExactJSONKeys(t, offerKeys, []string{"available", "invocation"})
-		if !offer.Available || offer.Invocation == "" {
-			t.Fatalf("enabled v2 reviewOffer = %#v, want an available actionable offer", offer)
-		}
-		for _, forbidden := range []string{"reviewGate", "reviewTransaction", "reVerify", "runtimeStatus"} {
+		for _, forbidden := range []string{"reviewOffer", "reviewGate", "reviewTransaction", "reVerify", "runtimeStatus"} {
 			if _, present := enabledDocument[forbidden]; present {
 				t.Fatalf("enabled offer retained review authority key %q: %s", forbidden, enabledPayload)
 			}
@@ -212,8 +196,8 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if repeated.ReviewOffer == nil || !repeated.ReviewOffer.Available {
-			t.Fatalf("existing retired authority suppressed the fresh offer: %#v", repeated.ReviewOffer)
+		if repeated.ReviewOffer != nil {
+			t.Fatalf("decoupled SDD status must not inject reviewOffer: %#v", repeated.ReviewOffer)
 		}
 		if repeated.Dependencies.Archive != DependencyReady || repeated.NextRecommended != "archive" {
 			t.Fatalf("repeated enabled archive = %q next = %q, want ready/archive", repeated.Dependencies.Archive, repeated.NextRecommended)

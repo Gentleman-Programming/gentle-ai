@@ -807,10 +807,10 @@ func TestComponentSyncStepRunsPersonaInjectForSync(t *testing.T) {
 	}
 }
 
-func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *testing.T) {
+func TestComponentSyncStepWritesPiPersonaToHomeAndReportsChangedFile(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	path := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
 	var changed []string
 	step := componentSyncStep{
 		id:           "sync:persona",
@@ -828,8 +828,8 @@ func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *tes
 	if !containsPath(changed, path) {
 		t.Fatalf("first Pi persona sync changed files = %v, missing %q", changed, path)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".pi", "gentle-ai", "persona.json")); !os.IsNotExist(err) {
-		t.Fatalf("Pi sync wrote a home-scoped persona config; stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")); !os.IsNotExist(err) {
+		t.Fatalf("Pi sync wrote a workspace persona config; stat err = %v", err)
 	}
 	if got := readTextFile(t, path); got != "{\n  \"mode\": \"neutral\"\n}\n" {
 		t.Fatalf("Pi persona config = %q, want neutral mode", got)
@@ -844,7 +844,7 @@ func TestComponentSyncStepWritesPiPersonaToWorkspaceAndReportsChangedFile(t *tes
 	}
 }
 
-func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T) {
+func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiGlobalConfig(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	selection := model.Selection{
@@ -853,20 +853,20 @@ func TestSyncPersonaPathsAndBackupTargetsTrackOnlyPiWorkspaceConfig(t *testing.T
 		Persona:    model.PersonaNeutral,
 	}
 	adapters := resolveAdapters(selection.Agents)
-	want := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
-	unwanted := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	want := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	unwanted := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
 	prompt := systemPromptFileFor(t, home, model.AgentPi)
 
 	paths := syncPersonaPathsWithWorkspace(home, workspace, selection, adapters)
 	if !containsPath(paths, want) || containsPath(paths, unwanted) {
-		t.Fatalf("sync persona paths = %v, want only workspace Pi config %q", paths, want)
+		t.Fatalf("sync persona paths = %v, want only global Pi config %q", paths, want)
 	}
 	targets, err := syncBackupTargets(home, workspace, selection, adapters)
 	if err != nil {
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 	if !containsPath(targets, want) || !containsPath(targets, prompt) || containsPath(targets, unwanted) {
-		t.Fatalf("sync backup targets = %v, want workspace Pi config %q and cleanup path %q", targets, want, prompt)
+		t.Fatalf("sync backup targets = %v, want global Pi config %q and cleanup path %q", targets, want, prompt)
 	}
 
 	selection.Persona = model.PersonaCustom
@@ -903,10 +903,10 @@ func TestRunSyncExplicitPiRetiresStaleRoutingAndReportsIt(t *testing.T) {
 	}
 }
 
-func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
+func TestPiPersonaSyncSnapshotRestoresGlobalConfig(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	path := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
+	path := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
 	mustWriteFile(t, path, []byte("{\n  \"mode\": \"gentleman\"\n}\n"))
 
 	selection := model.Selection{
@@ -933,7 +933,7 @@ func TestPiPersonaSyncSnapshotRestoresWorkspaceConfig(t *testing.T) {
 		t.Fatalf("Pi persona sync error = %v", err)
 	}
 	if got := readTextFile(t, path); got == "{\n  \"mode\": \"gentleman\"\n}\n" {
-		t.Fatal("Pi persona sync did not change the workspace config before rollback")
+		t.Fatal("Pi persona sync did not change the global config before rollback")
 	}
 	if err := restoreSyncFiles(before); err != nil {
 		t.Fatalf("restoreSyncFiles() error = %v", err)
@@ -1984,7 +1984,7 @@ func TestSyncRollbackRestoresLegacyOpenCodePluginAndRemovesReplacement(t *testin
 	}
 }
 
-func TestSyncSkillBackupRollsBackOpenClawWorkspaceSkills(t *testing.T) {
+func TestSyncSkillBackupRollsBackOpenClawGlobalSkills(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	currentProject := t.TempDir()
@@ -1998,10 +1998,10 @@ func TestSyncSkillBackupRollsBackOpenClawWorkspaceSkills(t *testing.T) {
 
 	openClawGlobalSkills := filepath.Join(home, ".openclaw", "skills")
 	openClawWorkspaceSkills := filepath.Join(workspace, ".openclaw", "skills")
-	workspaceSkill := filepath.Join(openClawWorkspaceSkills, "go-testing", "SKILL.md")
-	workspaceReference := filepath.Join(openClawWorkspaceSkills, "go-testing", "references", "examples.md")
-	writeStale(t, workspaceSkill)
-	writeStale(t, workspaceReference)
+	globalSkill := filepath.Join(openClawGlobalSkills, "go-testing", "SKILL.md")
+	globalReference := filepath.Join(openClawGlobalSkills, "go-testing", "references", "examples.md")
+	writeStale(t, globalSkill)
+	writeStale(t, globalReference)
 
 	runtime, err := newSyncRuntime(home, selection)
 	if err != nil {
@@ -2013,23 +2013,23 @@ func TestSyncSkillBackupRollsBackOpenClawWorkspaceSkills(t *testing.T) {
 	if result.Err == nil {
 		t.Fatal("injected later failure did not trigger sync rollback")
 	}
-	for _, path := range []string{workspaceSkill, workspaceReference} {
+	for _, path := range []string{globalSkill, globalReference} {
 		content, readErr := os.ReadFile(path)
 		if readErr != nil || string(content) != "stale" {
 			t.Errorf("sync rollback did not restore %q: content=%q error=%v", path, content, readErr)
 		}
 	}
 	for _, path := range []string{
-		filepath.Join(openClawGlobalSkills, "go-testing", "SKILL.md"),
-		filepath.Join(openClawGlobalSkills, "go-testing", "references", "examples.md"),
+		filepath.Join(openClawWorkspaceSkills, "go-testing", "SKILL.md"),
+		filepath.Join(openClawWorkspaceSkills, "go-testing", "references", "examples.md"),
 	} {
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-			t.Errorf("OpenClaw sync must not write global skill path %q: %v", path, statErr)
+			t.Errorf("OpenClaw sync must not write configured workspace skill path %q: %v", path, statErr)
 		}
 	}
 }
 
-func TestSyncBackupTargetsOpenClawSkillsUseConfiguredWorkspace(t *testing.T) {
+func TestSyncBackupTargetsOpenClawSkillsUseGlobalRoot(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	selection := model.Selection{
@@ -2044,13 +2044,13 @@ func TestSyncBackupTargetsOpenClawSkillsUseConfiguredWorkspace(t *testing.T) {
 	}
 
 	workspaceReference := filepath.Join(workspace, ".openclaw", "skills", "go-testing", "references", "examples.md")
-	if !containsPath(targets, workspaceReference) {
-		t.Errorf("sync backup targets missing OpenClaw workspace skill path %q\ntargets = %v", workspaceReference, targets)
+	if containsPath(targets, workspaceReference) {
+		t.Errorf("sync backup targets include OpenClaw workspace skill path %q\ntargets = %v", workspaceReference, targets)
 	}
 
 	homeReference := filepath.Join(home, ".openclaw", "skills", "go-testing", "references", "examples.md")
-	if containsPath(targets, homeReference) {
-		t.Errorf("sync backup targets must not include OpenClaw home-root skill path %q\ntargets = %v", homeReference, targets)
+	if !containsPath(targets, homeReference) {
+		t.Errorf("sync backup targets missing OpenClaw home-root skill path %q\ntargets = %v", homeReference, targets)
 	}
 }
 
@@ -5125,8 +5125,12 @@ func TestRunSyncWithSelectionPiUsesNeutralForMissingPersonaField(t *testing.T) {
 	if got, want := result.Selection.Persona, model.PersonaNeutral; got != want {
 		t.Fatalf("Selection.Persona = %q, want %q", got, want)
 	}
-	if got, want := readTextFile(t, piPath), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
-		t.Fatalf("Pi persona config = %q, want %q", got, want)
+	homePiPath := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+	if got, want := readTextFile(t, homePiPath), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
+		t.Fatalf("global Pi persona config = %q, want %q", got, want)
+	}
+	if got, want := readTextFile(t, piPath), "{\n  \"mode\": \"gentleman\"\n}\n"; got != want {
+		t.Fatalf("workspace Pi persona config changed = %q, want %q", got, want)
 	}
 }
 

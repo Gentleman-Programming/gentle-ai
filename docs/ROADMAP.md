@@ -5,9 +5,9 @@
 > - **Fase 1: Fundación de la Plataforma e Identidad Base:** ✅ 100% Completada (7/7 Incrementos Archivados)  
 > - **Fase 2: Autonomía, Identidad, Multi-Proyecto y Orquestación SDD:** ✅ 100% Completada (8/8 Incrementos Archivados)  
 > - **Fase 3: Experiencia de Usuario, Localización y Ecosistema:** ✅ 100% Completada (2/2 Incrementos Archivados)  
-> - **Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3:** 📋 Planificada (2 Incrementos Planificados)  
-> **Total de Incrementos Archivados:** 17 de 17 (INC-01 a INC-17)  
-> **Total de Incrementos Planificados:** 2 (INC-18 y INC-19)  
+> - **Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3:** ⏳ En progreso (1/2 Incrementos Archivados)  
+> **Total de Incrementos Archivados:** 18 de 18 (INC-01 a INC-18)  
+> **Total de Incrementos Planificados:** 1 (INC-19)  
 > **Última Actualización:** 2026-09-16
 
 ---
@@ -62,7 +62,7 @@
 
 | ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
 | :--- | :--- | :---: | :---: | :--- |
-| **INC-18** | `rdd-decoupling-and-v3-stability-fixes` | 📋 Planificado | Core SDD / Estabilidad | Desacoplamiento de RDD del motor de estados SDD y absorción de parches de estabilidad upstream (rutas JSON Windows, aislamiento CWD, saneamiento de presets de skills y Engram session recovery). |
+| **INC-18** | `rdd-decoupling-and-v3-stability-fixes` | ✅ Archivado | Core SDD / Estabilidad | Desacoplamiento de RDD del motor de estados SDD y absorción de parches de estabilidad upstream (rutas JSON Windows, aislamiento CWD, saneamiento de presets de skills y Engram session recovery). |
 | **INC-19** | `sdd-engine-simplification-and-odd-workflow` | 📋 Planificado | Motor SDD & ODD / Experiencia | Poda de burocracia en motor SDD (eliminación de attempts/budget consent preservando verificación formal) e introducción del flujo ODD (Organic Driven Development) en español bajo la Persona Axiom. |
 
 
@@ -258,19 +258,22 @@
 
 ---
 
-### [INC-18] rdd-decoupling-and-v3-stability-fixes (📋 Planificado)
-- **Responsabilidad:** Core SDD / Estabilidad & Plataforma
-- **Alcance planificado:**
+### [INC-18] rdd-decoupling-and-v3-stability-fixes (✅ Archivado)
+- **Directorio de cambio SDD archivado:** `openspec/changes/archive/2026-09-16-inc-18-rdd-decoupling-and-v3-stability-fixes/`
+- **Especificación viva:** `openspec/specs/rdd-decoupling-v3-stability/spec.md`
+- **Entregables clave:**
   1. **Desacoplamiento total de RDD (*Review-Driven Development*):**
-     - Retiro de `reviewOffer` y binding acoplado en las proyecciones de estado (`sdd status`).
-     - Desacoplamiento de las transiciones de fase SDD respecto a la presencia o resultado de revisiones RDD. RDD permanece como herramienta independiente y opt-in gobernada por el usuario.
+     - Neutralización de `applyReviewOfferRouting` en `internal/sddstatus/status.go` y stub limpio en `review_door.go`, garantizando que `status.ReviewOffer` sea `nil` y se omita de forma transparente en JSON (`omitempty`).
+     - Desacoplamiento de `internal/cli/sdd_status.go` del callback de kill-switch de RDD (`ReviewDisabledForWorkspace`). La compuerta de archivado (`archive: ready`) opera de forma completamente autónoma.
+     - Las herramientas de revisión (`axiom review ...`) permanecen 100% operativas como utilidades de auditoría independientes gobernadas por el usuario.
   2. **Absorción de correcciones críticas de upstream v3:**
-     - Fix de rutas en Windows: decodificación JSON adecuada en `sdd status` para evitar fallos por backslashes escapados (`1a2f6775`).
-     - Aislamiento de directorios: cálculo de artefactos inyectados independiente del CWD del proceso (`8c078527`).
-     - Saneamiento de catálogo de skills: separación limpia entre skills internas de desarrollo del repositorio y el preset predeterminado para usuarios (`11f6c000`).
-     - Estabilidad en memoria persistente: tratamiento de `ambiguous_project` y robustez en el handshake de inicio de sesión de Engram MCP (`59e6705f`, `90992285`).
-- **Decisión de producto sobre RTK:**
-  - Descartada la integración de RTK (`rtk-ai/rtk`) debido a que su instalación inyecta *hooks* forzados en los agentes (`PreToolUse`, `rtk rewrite`) que interceptan todas las ejecuciones de terminal, y carece de soporte oficial para Windows en upstream.
+     - **Fix de rutas en Windows (`1a2f6775`):** Deserialización estructurada de `StatusV2Projection` en `internal/cli/sdd_attempt_test.go` inmune a barras invertidas escapadas.
+     - **Aislamiento de CWD (`8c078527`):** Cálculo canónico de rutas de agentes en `internal/cli/run.go` y `sync.go` contra `homeDir` y `componentInjectionDir`, eliminando dependencias de CWD.
+     - **Saneamiento del catálogo de skills (`11f6c000`):** Segregación estricta de las 6 skills internas de colaboración (`contributorSkills`) fuera del preset básico de usuarios en `internal/components/skills/presets.go`.
+     - **Resiliencia en Engram (`59e6705f`, `90992285`):** Protocolo documentado con pautas explícitas de resolución y desambiguación ante `ambiguous_project` en `internal/assets/engram/protocol.md`.
+  3. **Decisión de producto sobre RTK:**
+     - Descarte ratificado de la integración de RTK (`rtk-ai/rtk`) debido a sus hooks forzados en herramientas de consola y carencia de soporte para Windows en upstream.
+  4. **Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 6/6 requerimientos, 6/6 escenarios BDD).**
 
 ### [INC-19] sdd-engine-simplification-and-odd-workflow (📋 Planificado)
 - **Responsabilidad:** Motor SDD & ODD / Experiencia & Arquitectura
