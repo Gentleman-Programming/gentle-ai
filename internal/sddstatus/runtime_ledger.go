@@ -77,6 +77,7 @@ var (
 	// continuation: the reset it refers to needs six flags the message never
 	// listed, and it is itself refused when the candidate has not drifted.
 	ErrRuntimeObjectiveChange = errors.New("SDD runtime objective changed without an explicit reset")
+	ErrRuntimeStageOutOfOrder = errors.New("SDD runtime objective advance requested a stage that is not the immediate successor of the completed stage")
 	ErrRuntimeObjectiveDone   = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
 	ErrRuntimeNoObjective     = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeResetNotAllowed named a STATE and no continuation, which is the
@@ -189,14 +190,16 @@ const (
 )
 
 type RuntimeObjective struct {
-	ID                       string `json:"id"`
-	Generation               int    `json:"generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	InitialCandidateIdentity string `json:"initial_candidate_identity"`
-	InitialCandidateTree     string `json:"initial_candidate_tree"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
+	ID                       string          `json:"id"`
+	Generation               int             `json:"generation"`
+	WorkUnit                 string          `json:"work_unit"`
+	EvidenceGoal             string          `json:"evidence_goal"`
+	InitialCandidateIdentity string          `json:"initial_candidate_identity"`
+	InitialCandidateTree     string          `json:"initial_candidate_tree"`
+	MaxAttempts              int             `json:"max_attempts"`
+	MaxChangedLines          int             `json:"max_changed_lines"`
+	StageVocabulary          *StageVocabulary `json:"stage_vocabulary,omitempty"`
+	StagePosition            int              `json:"stage_position,omitempty"`
 }
 
 type RuntimeAttempt struct {
@@ -420,7 +423,8 @@ type RuntimeStore struct {
 	// into GrantedRoots only when the record's identity equals this one. The
 	// zero value is the conservative containment: a store opened without an
 	// instance identity projects no granted roots at all.
-	instance string
+	instance   string
+	vocabulary StageVocabulary
 }
 
 // ForInstance derives a store bound to one change-instance identity. The
@@ -437,6 +441,12 @@ func (store RuntimeStore) ForInstance(instance string) (RuntimeStore, error) {
 	}
 	store.instance = instance
 	return store, nil
+}
+
+// WithStageVocabulary binds a stage vocabulary to this store session.
+func (store RuntimeStore) WithStageVocabulary(vocabulary StageVocabulary) RuntimeStore {
+	store.vocabulary = vocabulary
+	return store
 }
 
 type runtimeRecord struct {
@@ -495,21 +505,23 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
-	WorkUnit               string `json:"work_unit"`
-	EvidenceGoal           string `json:"evidence_goal"`
-	MaxAttempts            int    `json:"max_attempts"`
-	MaxChangedLines        int    `json:"max_changed_lines"`
-	Ordinal                int    `json:"ordinal"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	ObjectiveID            string          `json:"objective_id"`
+	ObjectiveGeneration    int             `json:"objective_generation,omitempty"`
+	WorkUnit               string          `json:"work_unit"`
+	EvidenceGoal           string          `json:"evidence_goal"`
+	MaxAttempts            int             `json:"max_attempts"`
+	MaxChangedLines        int             `json:"max_changed_lines"`
+	Ordinal                int             `json:"ordinal"`
+	BeginCandidateIdentity string          `json:"begin_candidate_identity"`
+	BeginCandidateTree     string           `json:"begin_candidate_tree"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
 	// deserializes it as "", which Finish and replay both treat as "no binding
 	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
-	BeginWorktree string `json:"begin_worktree,omitempty"`
+	BeginWorktree   string           `json:"begin_worktree,omitempty"`
+	StageVocabulary *StageVocabulary `json:"stage_vocabulary,omitempty"`
+	StagePosition   int              `json:"stage_position,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -690,8 +702,8 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		// completed apply authority along with its evidence.
 		advancing := false
 		if status.Complete {
-			if !runtimeObjectiveAdvanceAdmissible(status, request) {
-				return runtimeRecord{}, ErrRuntimeObjectiveDone
+			if err := runtimeObjectiveAdvanceAdmissible(status, request); err != nil {
+				return runtimeRecord{}, err
 			}
 			advancing = true
 		}
@@ -762,6 +774,13 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			BeginWorktree: store.Workspace,
+		}
+		if advancing && status.Objective.StageVocabulary != nil && len(status.Objective.StageVocabulary.Stages) > 0 {
+			event.StageVocabulary = status.Objective.StageVocabulary
+			event.StagePosition = status.Objective.StagePosition + 1
+		} else if !advancing && len(store.vocabulary.Stages) > 0 {
+			event.StageVocabulary = &store.vocabulary
+			event.StagePosition, _ = store.vocabulary.Position(request.WorkUnit)
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -1153,17 +1172,31 @@ func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context,
 // It is read-only and fail-closed, and it applies the same rule the replay
 // validator re-checks, so an admitted advance can only be one the ledger
 // accepts.
-func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemptRequest) bool {
+func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemptRequest) error {
 	if !status.Complete || status.DecisionRequired || status.ActiveAttempt != nil ||
 		status.Objective == nil || len(status.Attempts) == 0 {
-		return false
-	}
-	if request.WorkUnit == status.Objective.WorkUnit {
-		return false
+		return ErrRuntimeObjectiveDone
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	return last.ObjectiveID == status.Objective.ID && last.Outcome == AttemptPassed &&
-		!last.ChangedLineBudgetExceeded && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
+	if last.ObjectiveID != status.Objective.ID || last.Outcome != AttemptPassed ||
+		last.ChangedLineBudgetExceeded || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
+		return ErrRuntimeObjectiveDone
+	}
+	if status.Objective.StageVocabulary != nil && len(status.Objective.StageVocabulary.Stages) > 0 {
+		nextPosition := status.Objective.StagePosition + 1
+		stage, err := status.Objective.StageVocabulary.At(nextPosition)
+		if err == nil && request.WorkUnit == stage.Label {
+			return nil
+		}
+		if _, err := status.Objective.StageVocabulary.Position(request.WorkUnit); err == nil {
+			return ErrRuntimeStageOutOfOrder
+		}
+		return ErrRuntimeStageUnknown
+	}
+	if request.WorkUnit == status.Objective.WorkUnit {
+		return ErrRuntimeObjectiveDone
+	}
+	return nil
 }
 
 // runtimeGrantClock is the ledger's only wall-clock source (#2540 S2), a
@@ -1752,6 +1785,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+			StageVocabulary: event.StageVocabulary, StagePosition: event.StagePosition,
 		}
 		replay.Status.ObjectiveGeneration = generation
 	} else {
@@ -1895,7 +1929,16 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 		last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 		return errors.New("objective advance does not follow a passed terminal objective") // refusal:by-design world-action: the passed predecessor was verified before publication, so this is a mutated record and the exit is restoring the store
 	}
-	if record.Begin.WorkUnit == objective.WorkUnit {
+	if objective.StageVocabulary != nil && len(objective.StageVocabulary.Stages) > 0 {
+		nextPosition := objective.StagePosition + 1
+		stage, err := objective.StageVocabulary.At(nextPosition)
+		if err != nil {
+			return errors.New("objective advance requested a stage that is not the immediate successor of the completed stage")
+		}
+		if record.Begin.WorkUnit != stage.Label {
+			return errors.New("objective advance requested a stage unknown to the active vocabulary")
+		}
+	} else if record.Begin.WorkUnit == objective.WorkUnit {
 		return errors.New("objective advance does not select a distinct work unit") // refusal:by-design world-action: same-scope advance is refused at write time, so observing one on replay is a forged record and the exit is restoring the store
 	}
 	replay.Status.LastAdvance = &RuntimeAdvance{
@@ -2022,7 +2065,8 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		// PRESENT value is still an identity string, not free user input: it
 		// must be a bounded, trimmed, single-line value like every other
 		// recorded text field, not raw garbage.
-		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) {
+		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) ||
+		(event.StageVocabulary != nil && event.StageVocabulary.ID != "" && (event.StagePosition < 0 || validateRuntimeText(event.StageVocabulary.ID, 160) != nil || event.StageVocabulary.Validate() != nil)) {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	request := BeginAttemptRequest{

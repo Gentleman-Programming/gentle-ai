@@ -155,7 +155,7 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 		// distinct verification the SDD graph still owes. A caller that names no
 		// work unit has named no successor scope, so completion stays terminal
 		// for it.
-		if in.Request.WorkUnit != "" && runtimeObjectiveAdvanceAdmissible(in.Status, in.Request) {
+		if in.Request.WorkUnit != "" && runtimeObjectiveAdvanceAdmissible(in.Status, in.Request) == nil {
 			return CompactAttemptResult{}, false
 		}
 		return CompactAttemptResult{State: CompactStateComplete}, true
