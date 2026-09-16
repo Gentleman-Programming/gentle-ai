@@ -89,6 +89,7 @@
             <button class="filter-btn active" data-filter="all">Todos</button>
             <button class="filter-btn" data-filter="active">Activos</button>
             <button class="filter-btn" data-filter="archived">Archivados</button>
+            <button id="btn-new-increment" class="btn btn-primary" style="margin-left: 0.75rem;" title="Crear un nuevo incremento SDD">+ Nuevo Incremento</button>
           </div>
         </div>
 
@@ -132,11 +133,12 @@
             <h2>Visor de Handoffs Estructurados</h2>
             <p class="description">Documentos de relevo formal entre fases SDD y roles concurrentes.</p>
           </div>
-          <div class="selector-box">
+          <div class="selector-box" style="display: flex; gap: 0.75rem; align-items: center;">
             <label for="handoff-change-select">Cambio:</label>
             <select id="handoff-change-select" class="form-select">
               <option value="">Seleccionar cambio...</option>
             </select>
+            <button id="btn-open-create-handoff" class="btn btn-primary" title="Redactar nuevo relevo formal">+ Crear Handoff</button>
           </div>
         </div>
 
@@ -359,13 +361,25 @@
 
     <!-- Modal Detalle Incremento -->
     <div id="inc-modal" class="modal-backdrop hidden">
-      <div class="modal-dialog">
+      <div class="modal-dialog" style="max-width: 750px;">
         <div class="modal-header">
           <h3 id="modal-title">Detalle del Incremento</h3>
           <button class="btn-close" id="btn-modal-close">✕</button>
         </div>
+        <div class="modal-sdd-toolbar" id="modal-sdd-toolbar">
+          <button id="btn-inc-continue" class="btn btn-sm btn-primary" title="Ejecutar siguiente transición SDD">▶ Continuar SDD</button>
+          <button id="btn-inc-verify" class="btn btn-sm btn-secondary" title="Validar formalmente reporte de verificación">✓ Validar Verificación</button>
+          <button id="btn-inc-create-handoff" class="btn btn-sm btn-outline" title="Redactar documento de relevo formal">🤝 Redactar Handoff</button>
+        </div>
         <div class="modal-body" id="modal-content">
           Cargando...
+        </div>
+        <div id="modal-console-container" class="modal-console hidden">
+          <div class="modal-console-header">
+            <span class="modal-console-title">🖥️ Salida de Ejecución:</span>
+            <button id="btn-clear-console" class="btn btn-xs btn-outline">Limpiar</button>
+          </div>
+          <pre id="modal-console-output" class="modal-console-output"></pre>
         </div>
       </div>
     </div>
@@ -418,6 +432,133 @@
       </div>
     </div>
 
+    <!-- Modal Nuevo Incremento -->
+    <div id="modal-new-increment" class="modal-backdrop hidden">
+      <div class="modal-dialog" style="max-width: 580px;">
+        <div class="modal-header">
+          <h3>Crear Nuevo Incremento SDD</h3>
+          <button class="btn-close" id="btn-close-new-increment">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 1.5rem;">
+          <div style="margin-bottom: 1rem;">
+            <label for="input-inc-name" style="display: block; font-weight: 600; margin-bottom: 0.35rem; font-size: 0.85rem;">
+              Nombre del Incremento (kebab-case):
+            </label>
+            <input type="text" id="input-inc-name" class="form-select" style="width: 100%; box-sizing: border-box;" placeholder="ej. inc-16-metricas-rendimiento">
+            <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 0.25rem;">Solo letras minúsculas, números y guiones.</span>
+          </div>
+          <div style="margin-bottom: 1rem;">
+            <label for="select-inc-type" style="display: block; font-weight: 600; margin-bottom: 0.35rem; font-size: 0.85rem;">
+              Tipo de Cambio:
+            </label>
+            <select id="select-inc-type" class="form-select" style="width: 100%; box-sizing: border-box;">
+              <option value="feature">Feature (Nueva Capacidad o Funcionalidad)</option>
+              <option value="fix">Fix (Corrección de Defecto o Bug)</option>
+              <option value="refactor">Refactor (Refactorización Estructural)</option>
+              <option value="architecture">Architecture (Decisión de Arquitectura)</option>
+            </select>
+          </div>
+          <div style="margin-bottom: 1.5rem;">
+            <label for="input-inc-intent" style="display: block; font-weight: 600; margin-bottom: 0.35rem; font-size: 0.85rem;">
+              Intención / Propósito Técnico:
+            </label>
+            <textarea id="input-inc-intent" class="form-select" style="width: 100%; height: 90px; box-sizing: border-box; resize: vertical;" placeholder="Describa el objetivo técnico y valor que introduce este incremento..."></textarea>
+          </div>
+          <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+            <button id="btn-cancel-new-increment" class="btn btn-secondary">Cancelar</button>
+            <button id="btn-submit-new-increment" class="btn btn-primary">Crear Incremento</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal Redactar Handoff -->
+    <div id="modal-create-handoff" class="modal-backdrop hidden">
+      <div class="modal-dialog" style="max-width: 680px;">
+        <div class="modal-header">
+          <h3>Redactar Handoff Estructurado</h3>
+          <button class="btn-close" id="btn-close-create-handoff">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 1.5rem; max-height: 80vh; overflow-y: auto;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+            <div>
+              <label for="handoff-modal-change" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">Cambio / Incremento:</label>
+              <select id="handoff-modal-change" class="form-select" style="width: 100%; box-sizing: border-box;"></select>
+            </div>
+            <div>
+              <label for="handoff-modal-status" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">Estado:</label>
+              <select id="handoff-modal-status" class="form-select" style="width: 100%; box-sizing: border-box;">
+                <option value="ready">Listo (ready)</option>
+                <option value="in-progress">En Progreso (in-progress)</option>
+                <option value="blocked">Bloqueado (blocked)</option>
+              </select>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+            <div>
+              <label for="handoff-modal-from-phase" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">Fase Origen:</label>
+              <select id="handoff-modal-from-phase" class="form-select" style="width: 100%; box-sizing: border-box;">
+                <option value="explore">Explore</option>
+                <option value="propose">Propose</option>
+                <option value="spec">Spec</option>
+                <option value="design" selected>Design</option>
+                <option value="tasks">Tasks</option>
+                <option value="apply">Apply</option>
+                <option value="verify">Verify</option>
+                <option value="archive">Archive</option>
+              </select>
+            </div>
+            <div>
+              <label for="handoff-modal-to-phase" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">Fase Destino:</label>
+              <select id="handoff-modal-to-phase" class="form-select" style="width: 100%; box-sizing: border-box;">
+                <option value="explore">Explore</option>
+                <option value="propose">Propose</option>
+                <option value="spec">Spec</option>
+                <option value="design">Design</option>
+                <option value="tasks">Tasks</option>
+                <option value="apply" selected>Apply</option>
+                <option value="verify">Verify</option>
+                <option value="archive">Archive</option>
+              </select>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+            <div>
+              <label for="handoff-modal-from-role" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">Rol Emisor:</label>
+              <input type="text" id="handoff-modal-from-role" class="form-select" style="width: 100%; box-sizing: border-box;" value="architect" placeholder="ej. architect">
+            </div>
+            <div>
+              <label for="handoff-modal-to-role" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">Rol Receptor:</label>
+              <input type="text" id="handoff-modal-to-role" class="form-select" style="width: 100%; box-sizing: border-box;" value="developer" placeholder="ej. developer">
+            </div>
+          </div>
+          <div style="margin-bottom: 1rem;">
+            <label for="handoff-modal-summary" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">1. Resumen Ejecutivo:</label>
+            <textarea id="handoff-modal-summary" class="form-select" style="width: 100%; height: 60px; box-sizing: border-box; resize: vertical;" placeholder="Síntesis del estado del cambio y objetivos transferidos..."></textarea>
+          </div>
+          <div style="margin-bottom: 1rem;">
+            <label for="handoff-modal-artifacts" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">2. Artefactos Modificados y Creados:</label>
+            <textarea id="handoff-modal-artifacts" class="form-select" style="width: 100%; height: 50px; box-sizing: border-box; resize: vertical;" placeholder="openspec/changes/..."></textarea>
+          </div>
+          <div style="margin-bottom: 1rem;">
+            <label for="handoff-modal-decisions" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">3. Decisiones Críticas Tomadas:</label>
+            <textarea id="handoff-modal-decisions" class="form-select" style="width: 100%; height: 50px; box-sizing: border-box; resize: vertical;" placeholder="Decisiones de arquitectura o alcance adoptadas..."></textarea>
+          </div>
+          <div style="margin-bottom: 1rem;">
+            <label for="handoff-modal-risks" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">4. Riesgos y Puntos de Atención:</label>
+            <textarea id="handoff-modal-risks" class="form-select" style="width: 100%; height: 50px; box-sizing: border-box; resize: vertical;" placeholder="Gotchas, dependencias o riesgos identificados..."></textarea>
+          </div>
+          <div style="margin-bottom: 1.25rem;">
+            <label for="handoff-modal-instructions" style="display: block; font-weight: 600; margin-bottom: 0.3rem; font-size: 0.85rem;">5. Instrucciones de Continuación:</label>
+            <textarea id="handoff-modal-instructions" class="form-select" style="width: 100%; height: 60px; box-sizing: border-box; resize: vertical;" placeholder="Pasos concretos para el rol receptor..."></textarea>
+          </div>
+          <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+            <button id="btn-cancel-create-handoff" class="btn btn-secondary">Cancelar</button>
+            <button id="btn-submit-create-handoff" class="btn btn-primary">Registrar Handoff</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Footer -->
     <footer class="app-footer">

@@ -291,3 +291,110 @@ func TestRunBackup_Output(t *testing.T) {
 	}
 }
 
+func TestRunChangeHelp(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"flag --help", []string{"--help"}},
+		{"flag -h", []string{"-h"}},
+		{"create --help", []string{"create", "--help"}},
+		{"sin argumentos", []string{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exitCode := runChange(tc.args, &stdout, &stderr)
+			out := stdout.String()
+
+			if len(tc.args) == 0 {
+				if exitCode != 1 {
+					t.Fatalf("se esperaba código 1 sin argumentos, se obtuvo %d", exitCode)
+				}
+			} else {
+				if exitCode != 0 {
+					t.Fatalf("se esperaba código 0 con %v, se obtuvo %d", tc.args, exitCode)
+				}
+			}
+
+			if !strings.Contains(out, "axiom change") || !strings.Contains(out, "create") {
+				t.Fatalf("la salida no contiene la ayuda esperada:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestRunChangeCreate_Success(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "axiom-cli-change-*")
+	if err != nil {
+		t.Fatalf("error creando tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	var stdout, stderr bytes.Buffer
+	args := []string{
+		"create", "inc-cli-feature",
+		"--intent", "Integración completa de subcomando CLI con arnés SDD",
+		"--type", "feature",
+		"--cwd", tempDir,
+	}
+	exitCode := runChange(args, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("runChange falló con código %d:\nstderr: %s\nstdout: %s", exitCode, stderr.String(), stdout.String())
+	}
+
+	outStr := stdout.String()
+	if !strings.Contains(outStr, "creado correctamente") {
+		t.Errorf("salida no contiene mensaje de éxito: %s", outStr)
+	}
+
+	// Comprobar proposal.md generado en disco
+	proposalPath := filepath.Join(tempDir, "openspec", "changes", "inc-cli-feature", "proposal.md")
+	data, err := os.ReadFile(proposalPath)
+	if err != nil {
+		t.Fatalf("no se creó proposal.md en %s: %v", proposalPath, err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "# Propuesta: Inc Cli Feature") ||
+		!strings.Contains(content, "Integración completa de subcomando CLI") {
+		t.Errorf("proposal.md no contiene el formato esperado:\n%s", content)
+	}
+}
+
+func TestRunChangeCreate_ValidationAndCollision(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "axiom-cli-validation-*")
+	if err != nil {
+		t.Fatalf("error creando tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// 1. Nombre inválido
+	var stdout1, stderr1 bytes.Buffer
+	code1 := runChange([]string{"create", "Nombre Invalido!", "--cwd", tempDir}, &stdout1, &stderr1)
+	if code1 != 1 {
+		t.Errorf("esperado código 1 para nombre inválido, obtenido %d", code1)
+	}
+	if !strings.Contains(stderr1.String(), "kebab-case") {
+		t.Errorf("stderr no contiene advertencia de kebab-case: %s", stderr1.String())
+	}
+
+	// 2. Creación inicial
+	var stdout2, stderr2 bytes.Buffer
+	code2 := runChange([]string{"create", "feature-colision", "--intent", "Primera creación", "--cwd", tempDir}, &stdout2, &stderr2)
+	if code2 != 0 {
+		t.Fatalf("primera creación falló: %s", stderr2.String())
+	}
+
+	// 3. Colisión por duplicado
+	var stdout3, stderr3 bytes.Buffer
+	code3 := runChange([]string{"create", "feature-colision", "--intent", "Segunda creación duplicada", "--cwd", tempDir}, &stdout3, &stderr3)
+	if code3 != 1 {
+		t.Errorf("esperado código 1 para cambio colisionante, obtenido %d", code3)
+	}
+	if !strings.Contains(stderr3.String(), "ya existe") {
+		t.Errorf("stderr no contiene advertencia de cambio existente: %s", stderr3.String())
+	}
+}
+
+

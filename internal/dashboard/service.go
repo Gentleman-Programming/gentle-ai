@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
@@ -752,5 +754,274 @@ func (s *Service) SetHubManager(m *hub.Manager) {
 	defer s.mu.Unlock()
 	s.hubManager = m
 }
+
+var validIncrementNameRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// CreateIncrement crea un nuevo cambio SDD con su plantilla inicial de proposal.md en español.
+func (s *Service) CreateIncrement(req CreateIncrementRequest) (*CreateIncrementResponse, error) {
+	name := strings.ToLower(strings.TrimSpace(req.Name))
+	if name == "" {
+		return nil, fmt.Errorf("el nombre del incremento no puede estar vacío")
+	}
+	if !validIncrementNameRegex.MatchString(name) {
+		return nil, fmt.Errorf("el nombre %q no es válido: debe estar en minúsculas kebab-case (ej. mi-cambio-funcional)", name)
+	}
+
+	root := s.getRootPath()
+	activePath := filepath.Join(root, "openspec", "changes", name)
+	if _, err := os.Stat(activePath); err == nil {
+		return nil, fmt.Errorf("el incremento %q ya existe como cambio activo", name)
+	}
+
+	// Comprobar colisión con archivados
+	archiveDir := filepath.Join(root, "openspec", "changes", "archive")
+	if entries, err := os.ReadDir(archiveDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && (e.Name() == name || strings.HasSuffix(e.Name(), "-"+name)) {
+				return nil, fmt.Errorf("el incremento %q ya existe archivado (%s)", name, e.Name())
+			}
+		}
+	}
+
+	if err := os.MkdirAll(activePath, 0755); err != nil {
+		return nil, fmt.Errorf("error al crear el directorio del incremento: %w", err)
+	}
+
+	intent := strings.TrimSpace(req.Intent)
+	if intent == "" {
+		intent = fmt.Sprintf("Implementación e integración de la funcionalidad %s bajo la metodología SDD.", name)
+	}
+
+	title := humanizeName(name)
+	changeType := strings.TrimSpace(req.Type)
+	if changeType == "" {
+		changeType = "feature"
+	}
+
+	proposalContent := fmt.Sprintf(`# Propuesta: %s (%s)
+
+## Propósito (Intent)
+
+%s
+
+---
+
+## Alcance (Scope)
+
+### Dentro de Alcance (In Scope)
+- Diseño, implementación y verificación de las capacidades de %s.
+- Cobertura de pruebas unitarias y validación formal de requerimientos.
+
+### Fuera de Alcance (Out of Scope)
+- Cambios no relacionados directamente con los objetivos de esta iteración.
+
+---
+
+## Capacidades (Capabilities)
+
+### Nuevas Capacidades
+- `+"`%s`"+`: Funcionalidad principal introducida por el cambio.
+
+---
+
+## Enfoque de Implementación (Approach)
+1. Exploración y definición de especificaciones con escenarios BDD en spec.md.
+2. Diseño técnico detallado y arquitectura en design.md.
+3. Desglose y seguimiento de tareas en tasks.md.
+4. Verificación formal y consolidación de documentación viva en archive.
+`, title, name, intent, name, name)
+
+	proposalPath := filepath.Join(activePath, "proposal.md")
+	if err := os.WriteFile(proposalPath, []byte(proposalContent), 0644); err != nil {
+		return nil, fmt.Errorf("error al escribir proposal.md: %w", err)
+	}
+
+	return &CreateIncrementResponse{
+		Success: true,
+		Name:    name,
+		Path:    proposalPath,
+		Message: fmt.Sprintf("Incremento %s inicializado correctamente con proposal.md", name),
+	}, nil
+}
+
+// ContinueIncrement ejecuta la transición del despachador SDD sobre un cambio activo.
+func (s *Service) ContinueIncrement(name string) (*IncrementActionResponse, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("el nombre del incremento es obligatorio")
+	}
+	root := s.getRootPath()
+	_, kind, err := s.FindIncrementPath(name)
+	if err != nil || kind != "active" {
+		return nil, fmt.Errorf("el incremento %q no existe como cambio activo", name)
+	}
+
+	var stdout bytes.Buffer
+	runErr := cli.RunSDDContinue([]string{name, "--cwd", root}, &stdout)
+	outStr := stdout.String()
+	if runErr != nil && outStr == "" {
+		outStr = runErr.Error()
+	}
+
+	errMsg := ""
+	if runErr != nil {
+		errMsg = runErr.Error()
+	}
+
+	return &IncrementActionResponse{
+		Success:    runErr == nil,
+		ChangeName: name,
+		Action:     "sdd-continue",
+		Output:     outStr,
+		Error:      errMsg,
+	}, nil
+}
+
+// VerifyIncrement valida formalmente el reporte de verificación contra las especificaciones.
+func (s *Service) VerifyIncrement(name string) (*IncrementActionResponse, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("el nombre del incremento es obligatorio")
+	}
+	root := s.getRootPath()
+	targetPath, kind, err := s.FindIncrementPath(name)
+	if err != nil || kind != "active" {
+		return nil, fmt.Errorf("el incremento %q no existe como cambio activo", name)
+	}
+
+	verifyFile := filepath.Join(targetPath, "verify-report.md")
+	if !fileExists(verifyFile) {
+		return &IncrementActionResponse{
+			Success:    false,
+			ChangeName: name,
+			Action:     "sdd-verify-validate",
+			Output:     "No se encontró el archivo verify-report.md en el cambio. Se requiere completar la fase verify.",
+			Error:      "verify-report.md ausente",
+		}, nil
+	}
+
+	var stdout bytes.Buffer
+	runErr := cli.RunSDDVerifyValidate([]string{"--report", verifyFile, "--cwd", root}, &stdout)
+	outStr := stdout.String()
+	if runErr != nil && outStr == "" {
+		outStr = runErr.Error()
+	}
+
+	errMsg := ""
+	if runErr != nil {
+		errMsg = runErr.Error()
+	}
+
+	return &IncrementActionResponse{
+		Success:    runErr == nil,
+		ChangeName: name,
+		Action:     "sdd-verify-validate",
+		Output:     outStr,
+		Error:      errMsg,
+	}, nil
+}
+
+// CreateHandoff serializa y guarda un relevo formal estructurado en el cambio indicado.
+func (s *Service) CreateHandoff(req CreateHandoffRequest) (*CreateHandoffResponse, error) {
+	change := strings.TrimSpace(req.Change)
+	if change == "" {
+		return nil, fmt.Errorf("el nombre del cambio es obligatorio")
+	}
+
+	targetPath, kind, err := s.FindIncrementPath(change)
+	if err != nil || kind != "active" {
+		return nil, fmt.Errorf("el incremento %q no existe como cambio activo", change)
+	}
+
+	fromPhase := handoff.Phase(strings.ToLower(strings.TrimSpace(req.FromPhase)))
+	toPhase := handoff.Phase(strings.ToLower(strings.TrimSpace(req.ToPhase)))
+	if fromPhase == "" {
+		fromPhase = handoff.PhaseDesign
+	}
+	if toPhase == "" {
+		toPhase = handoff.PhaseApply
+	}
+
+	status := handoff.Status(strings.ToLower(strings.TrimSpace(req.Status)))
+	if status == "" {
+		status = handoff.StatusReady
+	}
+
+	fromRole := strings.TrimSpace(req.FromRole)
+	if fromRole == "" {
+		fromRole = "architect"
+	}
+	toRole := strings.TrimSpace(req.ToRole)
+	if toRole == "" {
+		toRole = "developer"
+	}
+
+	execSummary := strings.TrimSpace(req.ExecutiveSummary)
+	if execSummary == "" {
+		return nil, fmt.Errorf("el resumen ejecutivo es obligatorio")
+	}
+	artifacts := strings.TrimSpace(req.Artifacts)
+	if artifacts == "" {
+		artifacts = fmt.Sprintf("openspec/changes/%s", change)
+	}
+	decisions := strings.TrimSpace(req.Decisions)
+	if decisions == "" {
+		decisions = "Ninguna decisión crítica adicional documentada."
+	}
+	risks := strings.TrimSpace(req.Risks)
+	if risks == "" {
+		risks = "Sin riesgos identificados al momento del relevo."
+	}
+	instructions := strings.TrimSpace(req.Instructions)
+	if instructions == "" {
+		instructions = "Continuar con el avance de la siguiente fase según spec y tasks."
+	}
+
+	ho := &handoff.Handoff{
+		Metadata: handoff.Metadata{
+			Change:    change,
+			FromPhase: fromPhase,
+			ToPhase:   toPhase,
+			FromRole:  fromRole,
+			ToRole:    toRole,
+			Timestamp: time.Now().UTC(),
+			Status:    status,
+		},
+		Sections: handoff.Sections{
+			ExecutiveSummary:   execSummary,
+			Artifacts:          artifacts,
+			Decisions:          decisions,
+			RisksAndBlockers:   risks,
+			DirectInstructions: instructions,
+		},
+	}
+
+	if err := handoff.Validate(ho, nil); err != nil {
+		return nil, fmt.Errorf("handoff inválido: %w", err)
+	}
+
+	filePath := filepath.Join(targetPath, "handoff.md")
+	if err := handoff.WriteFile(filePath, ho); err != nil {
+		return nil, fmt.Errorf("error al escribir handoff.md: %w", err)
+	}
+
+	return &CreateHandoffResponse{
+		Success:  true,
+		Change:   change,
+		FilePath: filePath,
+		Message:  fmt.Sprintf("Handoff para %s creado correctamente", change),
+	}, nil
+}
+
+func humanizeName(name string) string {
+	words := strings.Split(name, "-")
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 
 

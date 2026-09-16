@@ -45,6 +45,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/projects/init", s.handleProjectsInit)
 	s.mux.HandleFunc("/api/workspace", s.handleWorkspace)
 	s.mux.HandleFunc("/api/increments", s.handleIncrements)
+	s.mux.HandleFunc("/api/increments/continue", s.handleIncrementContinue)
+	s.mux.HandleFunc("/api/increments/verify", s.handleIncrementVerify)
 	s.mux.HandleFunc("/api/increments/migrate-cumulative", s.handleMigrateCumulative)
 	s.mux.HandleFunc("/api/increments/", s.handleIncrementDetail)
 	s.mux.HandleFunc("/api/roles", s.handleRoles)
@@ -240,16 +242,65 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIncrements(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		list, err := s.service.GetIncrements()
+		if err != nil {
+			s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		s.respondJSON(w, http.StatusOK, list)
+	case http.MethodPost:
+		var req CreateIncrementRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido: " + err.Error()})
+			return
+		}
+		res, err := s.service.CreateIncrement(req)
+		if err != nil {
+			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.respondJSON(w, http.StatusCreated, res)
+	default:
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleIncrementContinue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	list, err := s.service.GetIncrements()
-	if err != nil {
-		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	var req IncrementActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido: " + err.Error()})
 		return
 	}
-	s.respondJSON(w, http.StatusOK, list)
+	res, err := s.service.ContinueIncrement(req.Name)
+	if err != nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleIncrementVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req IncrementActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido: " + err.Error()})
+		return
+	}
+	res, err := s.service.VerifyIncrement(req.Name)
+	if err != nil {
+		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleIncrementDetail(w http.ResponseWriter, r *http.Request) {
@@ -320,22 +371,35 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHandoffs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
-		return
-	}
-	change := r.URL.Query().Get("change")
-	if change == "" {
-		http.Error(w, "Parámetro 'change' es requerido", http.StatusBadRequest)
-		return
-	}
+	switch r.Method {
+	case http.MethodGet:
+		change := r.URL.Query().Get("change")
+		if change == "" {
+			http.Error(w, "Parámetro 'change' es requerido", http.StatusBadRequest)
+			return
+		}
 
-	ho, err := s.service.GetHandoff(change)
-	if err != nil {
-		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
+		ho, err := s.service.GetHandoff(change)
+		if err != nil {
+			s.respondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		s.respondJSON(w, http.StatusOK, ho)
+	case http.MethodPost:
+		var req CreateHandoffRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido: " + err.Error()})
+			return
+		}
+		res, err := s.service.CreateHandoff(req)
+		if err != nil {
+			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.respondJSON(w, http.StatusCreated, res)
+	default:
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 	}
-	s.respondJSON(w, http.StatusOK, ho)
 }
 
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {

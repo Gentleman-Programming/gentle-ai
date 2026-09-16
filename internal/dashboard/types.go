@@ -118,3 +118,56 @@ type MigrateCumulativeRequest struct {
 	Role   string `json:"role"`
 }
 
+// CreateIncrementRequest define los parámetros para crear un nuevo incremento SDD.
+type CreateIncrementRequest struct {
+	Name   string `json:"name"`
+	Intent string `json:"intent"`
+	Type   string `json:"type,omitempty"` // "feature", "fix", "refactor", "architecture"
+}
+
+// CreateIncrementResponse reporta el resultado de la creación de un incremento.
+type CreateIncrementResponse struct {
+	Success bool   `json:"success"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+// IncrementActionRequest define la acción a ejecutar sobre un incremento activo.
+type IncrementActionRequest struct {
+	Name string `json:"name"`
+}
+
+// IncrementActionResponse reporta el resultado de una acción SDD (continue, verify, etc.).
+type IncrementActionResponse struct {
+	Success    bool   `json:"success"`
+	ChangeName string `json:"change_name"`
+	Action     string `json:"action"`
+	Output     string `json:"output"`
+	Error      string `json:"error,omitempty"`
+}
+
+// CreateHandoffRequest define los campos para crear o actualizar un handoff estructurado.
+type CreateHandoffRequest struct {
+	Change           string `json:"change"`
+	FromPhase        string `json:"from_phase"`
+	ToPhase          string `json:"to_phase"`
+	FromRole         string `json:"from_role"`
+	ToRole           string `json:"to_role"`
+	Status           string `json:"status"`
+	ExecutiveSummary string `json:"executive_summary"`
+	Artifacts        string `json:"artifacts"`
+	Decisions        string `json:"decisions"`
+	Risks            string `json:"risks"`
+	Instructions     string `json:"instructions"`
+}
+
+// CreateHandoffResponse reporta el resultado del registro del handoff.
+type CreateHandoffResponse struct {
+	Success  bool   `json:"success"`
+	Change   string `json:"change"`
+	FilePath string `json:"file_path"`
+	Message  string `json:"message"`
+}
+
+

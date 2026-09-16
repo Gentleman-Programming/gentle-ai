@@ -43,6 +43,7 @@ USO:
 
 COMANDOS DE GOBERNANZA Y WORKSPACE:
   init                 Inicializa un proyecto con axiom.yaml, andamiaje base y lo registra en el Hub
+  change create        Crea un nuevo incremento/cambio SDD con plantilla proposal.md en español
   project list         Lista los proyectos registrados en el Hub global (~/.axiom/workspaces.json)
   project switch       Conmuta el proyecto activo por defecto
   project add          Registra un proyecto existente en el Hub
@@ -206,6 +207,10 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "change":
+		exitCode := runChange(os.Args[2:], os.Stdout, os.Stderr)
+		os.Exit(exitCode)
+
 	case "workspace":
 
 		if len(os.Args) < 3 {
@@ -360,6 +365,97 @@ func main() {
 		printHelp()
 		os.Exit(1)
 	}
+}
+
+func runChange(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(stdout, "Uso: axiom change <subcomando> [argumentos]")
+		fmt.Fprintln(stdout, "\nSubcomandos disponibles:")
+		fmt.Fprintln(stdout, "  create, new      Crea un nuevo incremento/cambio SDD con plantilla proposal.md en español")
+		if len(args) < 1 {
+			return 1
+		}
+		return 0
+	}
+
+	subCmd := args[0]
+	subArgs := args[1:]
+
+	switch subCmd {
+	case "create", "new":
+		if len(subArgs) > 0 && (subArgs[0] == "--help" || subArgs[0] == "-h") {
+			fmt.Fprintln(stdout, "Uso: axiom change create <nombre> [--intent <desc>] [--type <tipo>] [--cwd <ruta>]")
+			fmt.Fprintln(stdout, "\nBanderas:")
+			fmt.Fprintln(stdout, "  --intent, -i     Propósito o descripción del incremento/cambio")
+			fmt.Fprintln(stdout, "  --type, -t       Tipo de cambio (feature, fix, refactor, architecture)")
+			fmt.Fprintln(stdout, "  --cwd            Directorio raíz del proyecto")
+			return 0
+		}
+		if err := runChangeCreate(subArgs, stdout, stderr); err != nil {
+			return 1
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para change. Usa 'axiom change [create|new]'.\n", subCmd)
+		return 1
+	}
+}
+
+func runChangeCreate(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("change create", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var intent string
+	var changeType string
+	var cwd string
+
+	fs.StringVar(&intent, "intent", "", "Propósito o descripción del incremento/cambio")
+	fs.StringVar(&intent, "i", "", "Propósito o descripción del incremento/cambio (abreviado)")
+	fs.StringVar(&changeType, "type", "feature", "Tipo de cambio (feature, fix, refactor, architecture)")
+	fs.StringVar(&changeType, "t", "feature", "Tipo de cambio (abreviado)")
+	fs.StringVar(&cwd, "cwd", ".", "Directorio raíz del proyecto")
+
+	var flagArgs []string
+	var posArgs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				flagArgs = append(flagArgs, args[i])
+			}
+		} else {
+			posArgs = append(posArgs, arg)
+		}
+	}
+
+	if err := fs.Parse(flagArgs); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
+		return err
+	}
+
+	if len(posArgs) == 0 {
+		fmt.Fprintln(stderr, "Error: nombre del cambio requerido. Uso: axiom change create <nombre> [--intent <desc>] [--type <tipo>]")
+		return fmt.Errorf("nombre del cambio requerido")
+	}
+
+	changeName := posArgs[0]
+	svc := dashboard.NewService(cwd)
+	res, err := svc.CreateIncrement(dashboard.CreateIncrementRequest{
+		Name:   changeName,
+		Intent: intent,
+		Type:   changeType,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return err
+	}
+
+	fmt.Fprintf(stdout, "Incremento '%s' creado correctamente en %s\n", res.Name, res.Path)
+	return nil
 }
 
 func runWorkspaceValidate(args []string) {

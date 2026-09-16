@@ -39,11 +39,46 @@ document.addEventListener('DOMContentLoaded', () => {
   const hoSectionsContainer = document.getElementById('ho-sections-container');
   const skillsContainer = document.getElementById('skills-container');
 
-  // Modal
+  // Modal Incremento y Acciones SDD (INC-15)
+  let currentSelectedIncrement = null;
   const modal = document.getElementById('inc-modal');
   const modalTitle = document.getElementById('modal-title');
   const modalContent = document.getElementById('modal-content');
   const btnModalClose = document.getElementById('btn-modal-close');
+  const btnIncContinue = document.getElementById('btn-inc-continue');
+  const btnIncVerify = document.getElementById('btn-inc-verify');
+  const btnIncCreateHandoff = document.getElementById('btn-inc-create-handoff');
+  const modalConsoleContainer = document.getElementById('modal-console-container');
+  const modalConsoleOutput = document.getElementById('modal-console-output');
+  const btnClearConsole = document.getElementById('btn-clear-console');
+
+  // Modal Nuevo Incremento (INC-15)
+  const btnNewIncrement = document.getElementById('btn-new-increment');
+  const modalNewIncrement = document.getElementById('modal-new-increment');
+  const btnCloseNewIncrement = document.getElementById('btn-close-new-increment');
+  const btnCancelNewIncrement = document.getElementById('btn-cancel-new-increment');
+  const btnSubmitNewIncrement = document.getElementById('btn-submit-new-increment');
+  const inputIncName = document.getElementById('input-inc-name');
+  const selectIncType = document.getElementById('select-inc-type');
+  const inputIncIntent = document.getElementById('input-inc-intent');
+
+  // Modal Redactar Handoff (INC-15)
+  const btnOpenCreateHandoff = document.getElementById('btn-open-create-handoff');
+  const modalCreateHandoff = document.getElementById('modal-create-handoff');
+  const btnCloseCreateHandoff = document.getElementById('btn-close-create-handoff');
+  const btnCancelCreateHandoff = document.getElementById('btn-cancel-create-handoff');
+  const btnSubmitCreateHandoff = document.getElementById('btn-submit-create-handoff');
+  const handoffModalChange = document.getElementById('handoff-modal-change');
+  const handoffModalStatus = document.getElementById('handoff-modal-status');
+  const handoffModalFromPhase = document.getElementById('handoff-modal-from-phase');
+  const handoffModalToPhase = document.getElementById('handoff-modal-to-phase');
+  const handoffModalFromRole = document.getElementById('handoff-modal-from-role');
+  const handoffModalToRole = document.getElementById('handoff-modal-to-role');
+  const handoffModalSummary = document.getElementById('handoff-modal-summary');
+  const handoffModalArtifacts = document.getElementById('handoff-modal-artifacts');
+  const handoffModalDecisions = document.getElementById('handoff-modal-decisions');
+  const handoffModalRisks = document.getElementById('handoff-modal-risks');
+  const handoffModalInstructions = document.getElementById('handoff-modal-instructions');
 
   // Navegación por Pestañas
   document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -77,6 +112,242 @@ document.addEventListener('DOMContentLoaded', () => {
   modal.addEventListener('click', (e) => {
     if (e.target === modal) modal.classList.add('hidden');
   });
+
+  // Acciones SDD dentro de inc-modal (INC-15)
+  if (btnIncContinue) {
+    btnIncContinue.addEventListener('click', async () => {
+      if (!currentSelectedIncrement) return;
+      btnIncContinue.disabled = true;
+      btnIncContinue.textContent = '⏳ Ejecutando...';
+
+      try {
+        const res = await fetch('/api/increments/continue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: currentSelectedIncrement })
+        });
+        const data = await res.json();
+        if (modalConsoleContainer) modalConsoleContainer.classList.remove('hidden');
+        if (modalConsoleOutput) {
+          if (res.ok && data.success) {
+            modalConsoleOutput.textContent = `[SUCCESS - ACCIÓN SDD: ${data.action || 'continue'}]\n\n` + (data.output || 'Transición efectuada con éxito.');
+          } else {
+            modalConsoleOutput.textContent = `[ERROR]\n\n${data.error || 'Fallo en la transición SDD'}\n\n${data.output || ''}`;
+          }
+        }
+        await loadIncrements();
+        await openIncrementModal(currentSelectedIncrement);
+      } catch (err) {
+        if (modalConsoleContainer) modalConsoleContainer.classList.remove('hidden');
+        if (modalConsoleOutput) modalConsoleOutput.textContent = `[ERROR DE CONEXIÓN]\n\n${err.message}`;
+      } finally {
+        btnIncContinue.disabled = false;
+        btnIncContinue.textContent = '▶ Continuar SDD';
+      }
+    });
+  }
+
+  if (btnIncVerify) {
+    btnIncVerify.addEventListener('click', async () => {
+      if (!currentSelectedIncrement) return;
+      btnIncVerify.disabled = true;
+      btnIncVerify.textContent = '⏳ Validando...';
+
+      try {
+        const res = await fetch('/api/increments/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: currentSelectedIncrement })
+        });
+        const data = await res.json();
+        if (modalConsoleContainer) modalConsoleContainer.classList.remove('hidden');
+        if (modalConsoleOutput) {
+          if (res.ok && data.success) {
+            modalConsoleOutput.textContent = `[VERIFICACIÓN FORMAL - PASS]\n\n` + (data.output || 'Conformidad de especificaciones aprobada.');
+          } else {
+            modalConsoleOutput.textContent = `[VERIFICACIÓN FORMAL - INCONSISTENCIA/ERROR]\n\n${data.error || 'Fallo en la verificación'}\n\n${data.output || ''}`;
+          }
+        }
+      } catch (err) {
+        if (modalConsoleContainer) modalConsoleContainer.classList.remove('hidden');
+        if (modalConsoleOutput) modalConsoleOutput.textContent = `[ERROR DE CONEXIÓN]\n\n${err.message}`;
+      } finally {
+        btnIncVerify.disabled = false;
+        btnIncVerify.textContent = '✓ Validar Verificación';
+      }
+    });
+  }
+
+  if (btnIncCreateHandoff) {
+    btnIncCreateHandoff.addEventListener('click', () => {
+      if (!currentSelectedIncrement) return;
+      modal.classList.add('hidden');
+      if (handoffModalChange) handoffModalChange.value = currentSelectedIncrement;
+      if (modalCreateHandoff) modalCreateHandoff.classList.remove('hidden');
+    });
+  }
+
+  if (btnClearConsole) {
+    btnClearConsole.addEventListener('click', () => {
+      if (modalConsoleOutput) modalConsoleOutput.textContent = '';
+      if (modalConsoleContainer) modalConsoleContainer.classList.add('hidden');
+    });
+  }
+
+  // Eventos Modal Nuevo Incremento (INC-15)
+  if (btnNewIncrement) {
+    btnNewIncrement.addEventListener('click', () => {
+      if (inputIncName) inputIncName.value = '';
+      if (inputIncIntent) inputIncIntent.value = '';
+      if (selectIncType) selectIncType.value = 'feature';
+      if (modalNewIncrement) modalNewIncrement.classList.remove('hidden');
+      if (inputIncName) inputIncName.focus();
+    });
+  }
+  if (btnCloseNewIncrement) {
+    btnCloseNewIncrement.addEventListener('click', () => modalNewIncrement.classList.add('hidden'));
+  }
+  if (btnCancelNewIncrement) {
+    btnCancelNewIncrement.addEventListener('click', () => modalNewIncrement.classList.add('hidden'));
+  }
+  if (modalNewIncrement) {
+    modalNewIncrement.addEventListener('click', (e) => {
+      if (e.target === modalNewIncrement) modalNewIncrement.classList.add('hidden');
+    });
+  }
+  if (btnSubmitNewIncrement) {
+    btnSubmitNewIncrement.addEventListener('click', async () => {
+      const name = inputIncName ? inputIncName.value.trim() : '';
+      const type = selectIncType ? selectIncType.value : 'feature';
+      const intent = inputIncIntent ? inputIncIntent.value.trim() : '';
+
+      const kebabRegex = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+      if (!name || !kebabRegex.test(name)) {
+        alert('El nombre del incremento debe seguir el formato kebab-case (ej. inc-16-metricas-rendimiento)');
+        if (inputIncName) inputIncName.focus();
+        return;
+      }
+      if (!intent) {
+        alert('Debes ingresar la intención o propósito técnico del incremento.');
+        if (inputIncIntent) inputIncIntent.focus();
+        return;
+      }
+
+      btnSubmitNewIncrement.disabled = true;
+      btnSubmitNewIncrement.textContent = 'Creando...';
+
+      try {
+        const res = await fetch('/api/increments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, type, intent })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Error al crear incremento');
+        }
+
+        if (modalNewIncrement) modalNewIncrement.classList.add('hidden');
+        await loadIncrements();
+        // Abrir modal de detalle para el incremento recién creado
+        openIncrementModal(name);
+      } catch (err) {
+        alert('Error: ' + err.message);
+      } finally {
+        btnSubmitNewIncrement.disabled = false;
+        btnSubmitNewIncrement.textContent = 'Crear Incremento';
+      }
+    });
+  }
+
+  // Eventos Modal Redactar Handoff (INC-15)
+  if (btnOpenCreateHandoff) {
+    btnOpenCreateHandoff.addEventListener('click', () => {
+      if (handoffChangeSelect && handoffChangeSelect.value && handoffModalChange) {
+        handoffModalChange.value = handoffChangeSelect.value;
+      }
+      if (modalCreateHandoff) modalCreateHandoff.classList.remove('hidden');
+    });
+  }
+  if (btnCloseCreateHandoff) {
+    btnCloseCreateHandoff.addEventListener('click', () => modalCreateHandoff.classList.add('hidden'));
+  }
+  if (btnCancelCreateHandoff) {
+    btnCancelCreateHandoff.addEventListener('click', () => modalCreateHandoff.classList.add('hidden'));
+  }
+  if (modalCreateHandoff) {
+    modalCreateHandoff.addEventListener('click', (e) => {
+      if (e.target === modalCreateHandoff) modalCreateHandoff.classList.add('hidden');
+    });
+  }
+  if (btnSubmitCreateHandoff) {
+    btnSubmitCreateHandoff.addEventListener('click', async () => {
+      const change = handoffModalChange ? handoffModalChange.value : '';
+      const status = handoffModalStatus ? handoffModalStatus.value : 'ready';
+      const fromPhase = handoffModalFromPhase ? handoffModalFromPhase.value : 'design';
+      const toPhase = handoffModalToPhase ? handoffModalToPhase.value : 'apply';
+      const fromRole = handoffModalFromRole ? handoffModalFromRole.value.trim() : 'architect';
+      const toRole = handoffModalToRole ? handoffModalToRole.value.trim() : 'developer';
+      const summary = handoffModalSummary ? handoffModalSummary.value.trim() : '';
+      const artifacts = handoffModalArtifacts ? handoffModalArtifacts.value.trim() : '';
+      const decisions = handoffModalDecisions ? handoffModalDecisions.value.trim() : '';
+      const risks = handoffModalRisks ? handoffModalRisks.value.trim() : '';
+      const instructions = handoffModalInstructions ? handoffModalInstructions.value.trim() : '';
+
+      if (!change) {
+        alert('Debes seleccionar un incremento para el handoff.');
+        return;
+      }
+      if (!summary) {
+        alert('Debes ingresar el resumen ejecutivo del relevo formal.');
+        if (handoffModalSummary) handoffModalSummary.focus();
+        return;
+      }
+
+      btnSubmitCreateHandoff.disabled = true;
+      btnSubmitCreateHandoff.textContent = 'Registrando...';
+
+      try {
+        const res = await fetch('/api/handoffs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            change,
+            from_phase: fromPhase,
+            to_phase: toPhase,
+            from_role: fromRole,
+            to_role: toRole,
+            status,
+            executive_summary: summary,
+            artifacts,
+            decisions,
+            risks,
+            instructions
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Error al registrar handoff');
+        }
+
+        if (modalCreateHandoff) modalCreateHandoff.classList.add('hidden');
+        if (handoffChangeSelect) {
+          handoffChangeSelect.value = change;
+        }
+        await loadHandoffForChange(change);
+
+        // Cambiar a la pestaña de handoffs si no está activa
+        const handoffTab = document.querySelector('.nav-tab[data-tab="tab-handoffs"]');
+        if (handoffTab) handoffTab.click();
+      } catch (err) {
+        alert('Error al registrar handoff: ' + err.message);
+      } finally {
+        btnSubmitCreateHandoff.disabled = false;
+        btnSubmitCreateHandoff.textContent = 'Registrar Handoff';
+      }
+    });
+  }
+
 
   // Elementos del Constructor de Roles Dinámico
   const rolesBuilderContainer = document.getElementById('roles-builder-container');
@@ -398,9 +669,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateChangeSelects(items) {
     const prevRoleVal = roleChangeSelect.value;
     const prevHoVal = handoffChangeSelect.value;
+    const prevModalHoVal = handoffModalChange ? handoffModalChange.value : '';
 
     roleChangeSelect.innerHTML = '<option value="">Seleccionar cambio...</option>';
     handoffChangeSelect.innerHTML = '<option value="">Seleccionar cambio...</option>';
+    if (handoffModalChange) handoffModalChange.innerHTML = '';
 
     items.forEach(inc => {
       const opt1 = document.createElement('option');
@@ -412,10 +685,18 @@ document.addEventListener('DOMContentLoaded', () => {
       opt2.value = inc.name;
       opt2.textContent = `${inc.name} (${inc.type === 'active' ? 'Activo' : 'Archivado'})`;
       handoffChangeSelect.appendChild(opt2);
+
+      if (handoffModalChange && inc.type === 'active') {
+        const opt3 = document.createElement('option');
+        opt3.value = inc.name;
+        opt3.textContent = `${inc.name} (Fase: ${inc.phase})`;
+        handoffModalChange.appendChild(opt3);
+      }
     });
 
     if (prevRoleVal) roleChangeSelect.value = prevRoleVal;
     if (prevHoVal) handoffChangeSelect.value = prevHoVal;
+    if (handoffModalChange && prevModalHoVal) handoffModalChange.value = prevModalHoVal;
   }
 
   function renderIncrements() {
@@ -470,14 +751,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function openIncrementModal(name) {
+    currentSelectedIncrement = name;
     modalTitle.textContent = `Incremento: ${name}`;
     modalContent.innerHTML = '<div class="loading-state">Cargando artefactos...</div>';
+    if (modalConsoleContainer) modalConsoleContainer.classList.add('hidden');
+    if (modalConsoleOutput) modalConsoleOutput.textContent = '';
     modal.classList.remove('hidden');
 
     try {
       const res = await fetch(`/api/increments/${name}`);
       if (!res.ok) throw new Error('No se pudo obtener el detalle');
       const data = await res.json();
+
+      const isArchived = data.summary.type === 'archived';
+      if (btnIncContinue) btnIncContinue.disabled = isArchived;
+      if (btnIncVerify) btnIncVerify.disabled = isArchived;
 
       let html = `
         <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">

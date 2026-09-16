@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-16 11:44:06 UTC
-> **Total Dominios:** 41 | **Total Requerimientos:** 281 | **Total Escenarios BDD:** 455
+> **Última Sincronización:** 2026-09-16 12:40:50 UTC
+> **Total Dominios:** 42 | **Total Requerimientos:** 286 | **Total Escenarios BDD:** 463
 
 ---
 
@@ -15,6 +15,7 @@
 | `axiom-sdd-cli-integration` | Especificación de Requerimientos: Integración de Comandos SDD en la CLI axiom (INC-13) | 4 | 5 | [Ver Spec](specs/axiom-sdd-cli-integration/spec.md) |
 | `axiom-tui-branding` | Especificación de Requerimientos: Unificación de TUI Bubbletea, Comandos de Ecosistema en CLI axiom y Pasarela de gentle-ai (INC-14) | 4 | 9 | [Ver Spec](specs/axiom-tui-branding/spec.md) |
 | `axiom-user-state-and-env` | Especificación de Requerimientos: Unificación de Estado en ~/.axiom y Variables AXIOM_* (INC-12) | 3 | 5 | [Ver Spec](specs/axiom-user-state-and-env/spec.md) |
+| `dashboard-sdd-orchestration` | Especificación de Requerimientos: Orquestación Interactiva SDD y Creación de Cambios en Dashboard Web y CLI (INC-15) | 5 | 8 | [Ver Spec](specs/dashboard-sdd-orchestration/spec.md) |
 | `engram-protocol-injection` | Engram protocol injection Specification | 5 | 12 | [Ver Spec](specs/engram-protocol-injection/spec.md) |
 | `gga` | GGA Specification | 3 | 8 | [Ver Spec](specs/gga/spec.md) |
 | `installer-picker-navigation` | Installer Picker Navigation Specification | 3 | 9 | [Ver Spec](specs/installer-picker-navigation/spec.md) |
@@ -158,6 +159,26 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-12.3]** Precedencia de variables AXIOM_* sobre GENTLE_AI_*
   - *Escenario BDD:* Variable AXIOM_* toma precedencia
   - *Escenario BDD:* Fallback a GENTLE_AI_* si AXIOM_* no está definido
+
+### Dominio: `dashboard-sdd-orchestration` — Especificación de Requerimientos: Orquestación Interactiva SDD y Creación de Cambios en Dashboard Web y CLI (INC-15)
+
+<!-- Especificación Viva generada a partir de '2026-09-16-inc-15-dashboard-interactive-sdd-orchestration' -->
+
+**Archivo:** [`specs/dashboard-sdd-orchestration/spec.md`](specs/dashboard-sdd-orchestration/spec.md)
+
+- **[REQ-15.1]** Creación de Incrementos y Andamiaje SDD vía API
+  - *Escenario BDD:* Creación exitosa de un nuevo incremento con plantilla en español
+  - *Escenario BDD:* Rechazo de creación ante nombre inválido o colisión
+- **[REQ-15.2]** Ejecución y Avance de Fase SDD vía API
+  - *Escenario BDD:* Avance de fase exitoso con captura de acción autorizada
+  - *Escenario BDD:* Rechazo de avance para un cambio inexistente
+- **[REQ-15.3]** Validación Formal de Verificación vía API
+  - *Escenario BDD:* Validación de reporte de verificación existente
+- **[REQ-15.4]** Compositor y Registro de Handoffs Estructurados
+  - *Escenario BDD:* Registro exitoso de handoff formal desde el Dashboard Web
+- **[REQ-15.5]** Subcomando axiom change create en la CLI
+  - *Escenario BDD:* Creación de cambio mediante CLI con flags
+  - *Escenario BDD:* Invocación de ayuda para axiom change
 
 ### Dominio: `engram-protocol-injection` — Engram protocol injection Specification
 

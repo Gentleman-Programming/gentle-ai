@@ -597,5 +597,164 @@ func TestMigrateCumulativeEndpoint(t *testing.T) {
 	}
 }
 
+func TestInteractiveSDDOrchestrationEndpoints(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "axiom-interactive-sdd-*")
+	if err != nil {
+		t.Fatalf("error creando tempDir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Inicializar estructura básica de openspec
+	_ = os.MkdirAll(filepath.Join(tempDir, "openspec", "changes"), 0755)
+
+	svc := NewService(tempDir)
+	server := NewServer(svc)
+	router := server.Router()
+
+	// 1. POST /api/increments - Creación válida
+	reqBodyValid, _ := json.Marshal(CreateIncrementRequest{
+		Name:   "inc-test-auth",
+		Intent: "Añadir autenticación segura mediante tokens JWT",
+		Type:   "feature",
+	})
+	req1 := httptest.NewRequest(http.MethodPost, "/api/increments", bytes.NewReader(reqBodyValid))
+	rr1 := httptest.NewRecorder()
+	router.ServeHTTP(rr1, req1)
+
+	if rr1.Code != http.StatusCreated {
+		t.Fatalf("POST /api/increments esperado 201 Created, obtenido %d: %s", rr1.Code, rr1.Body.String())
+	}
+	var res1 CreateIncrementResponse
+	if err := json.Unmarshal(rr1.Body.Bytes(), &res1); err != nil {
+		t.Fatalf("error decodificando respuesta de /api/increments: %v", err)
+	}
+	if !res1.Success || res1.Name != "inc-test-auth" {
+		t.Errorf("respuesta inesperada: %+v", res1)
+	}
+
+	// Comprobar que proposal.md existe y está en español
+	proposalPath := filepath.Join(tempDir, "openspec", "changes", "inc-test-auth", "proposal.md")
+	proposalContent, err := os.ReadFile(proposalPath)
+	if err != nil {
+		t.Fatalf("proposal.md no fue creado en disco: %v", err)
+	}
+	if !strings.Contains(string(proposalContent), "# Propuesta: ") || !strings.Contains(string(proposalContent), "Añadir autenticación segura") {
+		t.Errorf("proposal.md no contiene la plantilla esperada en español: %s", string(proposalContent))
+	}
+
+	// 2. POST /api/increments - Rechazo de nombre inválido
+	reqBodyInvalidName, _ := json.Marshal(CreateIncrementRequest{
+		Name:   "Nombre Invalido Con Espacios",
+		Intent: "Intento cualquiera",
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/api/increments", bytes.NewReader(reqBodyInvalidName))
+	rr2 := httptest.NewRecorder()
+	router.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusBadRequest {
+		t.Errorf("esperado 400 Bad Request para nombre inválido, obtenido %d", rr2.Code)
+	}
+
+	// 3. POST /api/increments - Rechazo por colisión / duplicado
+	req3 := httptest.NewRequest(http.MethodPost, "/api/increments", bytes.NewReader(reqBodyValid))
+	rr3 := httptest.NewRecorder()
+	router.ServeHTTP(rr3, req3)
+	if rr3.Code != http.StatusBadRequest {
+		t.Errorf("esperado 400 Bad Request por incremento duplicado, obtenido %d", rr3.Code)
+	}
+
+	// 4. POST /api/increments/continue - Para cambio existente
+	reqBodyContinue, _ := json.Marshal(IncrementActionRequest{Name: "inc-test-auth"})
+	req4 := httptest.NewRequest(http.MethodPost, "/api/increments/continue", bytes.NewReader(reqBodyContinue))
+	rr4 := httptest.NewRecorder()
+	router.ServeHTTP(rr4, req4)
+	if rr4.Code != http.StatusOK {
+		t.Fatalf("POST /api/increments/continue esperado 200 OK, obtenido %d: %s", rr4.Code, rr4.Body.String())
+	}
+	var res4 IncrementActionResponse
+	if err := json.Unmarshal(rr4.Body.Bytes(), &res4); err != nil {
+		t.Fatalf("error decodificando respuesta de continue: %v", err)
+	}
+	if !res4.Success {
+		t.Errorf("esperado success=true en continue")
+	}
+
+	// 5. POST /api/increments/continue - Para cambio inexistente
+	reqBodyContinue404, _ := json.Marshal(IncrementActionRequest{Name: "cambio-fantasma-999"})
+	req5 := httptest.NewRequest(http.MethodPost, "/api/increments/continue", bytes.NewReader(reqBodyContinue404))
+	rr5 := httptest.NewRecorder()
+	router.ServeHTTP(rr5, req5)
+	if rr5.Code != http.StatusNotFound {
+		t.Errorf("esperado 404 Not Found para continue con cambio inexistente, obtenido %d", rr5.Code)
+	}
+
+	// 6. POST /api/increments/verify - Para cambio inexistente
+	reqBodyVerify404, _ := json.Marshal(IncrementActionRequest{Name: "cambio-fantasma-999"})
+	req6 := httptest.NewRequest(http.MethodPost, "/api/increments/verify", bytes.NewReader(reqBodyVerify404))
+	rr6 := httptest.NewRecorder()
+	router.ServeHTTP(rr6, req6)
+	if rr6.Code != http.StatusNotFound {
+		t.Errorf("esperado 404 Not Found para verify con cambio inexistente, obtenido %d", rr6.Code)
+	}
+
+	// 7. POST /api/handoffs - Creación válida
+	reqBodyHandoff, _ := json.Marshal(CreateHandoffRequest{
+		Change:           "inc-test-auth",
+		FromPhase:        "design",
+		ToPhase:          "tasks",
+		FromRole:         "architect",
+		ToRole:           "backend",
+		Status:           "ready",
+		ExecutiveSummary: "Diseño de autenticación completado y aprobado",
+		Artifacts:        "openspec/changes/inc-test-auth/design.md",
+		Decisions:        "Tokens JWT con rotación simétrica",
+		Risks:            "Expiración de claves en sesiones activas",
+		Instructions:     "Implementar middleware de validación en Go",
+	})
+	req7 := httptest.NewRequest(http.MethodPost, "/api/handoffs", bytes.NewReader(reqBodyHandoff))
+	rr7 := httptest.NewRecorder()
+	router.ServeHTTP(rr7, req7)
+
+	if rr7.Code != http.StatusCreated {
+		t.Fatalf("POST /api/handoffs esperado 201 Created, obtenido %d: %s", rr7.Code, rr7.Body.String())
+	}
+	var res7 CreateHandoffResponse
+	if err := json.Unmarshal(rr7.Body.Bytes(), &res7); err != nil {
+		t.Fatalf("error decodificando respuesta de /api/handoffs: %v", err)
+	}
+	if !res7.Success {
+		t.Errorf("esperado success=true en /api/handoffs")
+	}
+
+	// Comprobar que handoff.md existe y contiene Frontmatter y encabezados en español
+	handoffPath := filepath.Join(tempDir, "openspec", "changes", "inc-test-auth", "handoff.md")
+	handoffContent, err := os.ReadFile(handoffPath)
+	if err != nil {
+		t.Fatalf("handoff.md no fue creado en disco: %v", err)
+	}
+	if !strings.Contains(string(handoffContent), "from_phase: design") ||
+		!strings.Contains(string(handoffContent), "# 1. Resumen Ejecutivo") ||
+		!strings.Contains(string(handoffContent), "Tokens JWT con rotación simétrica") {
+		t.Errorf("handoff.md no contiene el formato canónico esperado: %s", string(handoffContent))
+	}
+
+	// 8. POST /api/handoffs - Rechazo por fase inválida
+	reqBodyHandoffBadPhase, _ := json.Marshal(CreateHandoffRequest{
+		Change:           "inc-test-auth",
+		FromPhase:        "fase-inventada",
+		ToPhase:          "apply",
+		FromRole:         "architect",
+		ToRole:           "backend",
+		Status:           "ready",
+		ExecutiveSummary: "Resumen cualquiera",
+	})
+	req8 := httptest.NewRequest(http.MethodPost, "/api/handoffs", bytes.NewReader(reqBodyHandoffBadPhase))
+	rr8 := httptest.NewRecorder()
+	router.ServeHTTP(rr8, req8)
+	if rr8.Code != http.StatusBadRequest {
+		t.Errorf("esperado 400 Bad Request para handoff con fase inválida, obtenido %d", rr8.Code)
+	}
+}
+
+
 
 
