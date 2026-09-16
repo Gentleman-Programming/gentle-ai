@@ -1,8 +1,14 @@
 package sddstatus
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"flag"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -253,5 +259,219 @@ func TestCompactAcquireStaysCompleteForTheSettledWorkUnit(t *testing.T) {
 	if result.State != CompactStateComplete || result.Token != "" ||
 		countRuntimeRecords(t, fixture.store.Dir) != before {
 		t.Fatalf("settled-scope acquire = %#v records=%d", result, countRuntimeRecords(t, fixture.store.Dir))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0 regression gate (qa-orchestrator-v2 #3282, tasks 0.1/0.2)
+// ---------------------------------------------------------------------------
+
+// updateRuntimeLedgerVocabularyLessGolden regenerates the golden fixtures
+// TestRuntimeLedgerVocabularyLessChainReplaysByteIdentically compares
+// against, following the same -update convention as
+// internal/components/golden_test.go and
+// internal/cli/review_new_lineage_switch_off_golden_test.go.
+var updateRuntimeLedgerVocabularyLessGolden = flag.Bool("update", false, "update the vocabulary-less runtime ledger golden fixtures")
+
+const (
+	vocabularyLessGoldenChange     = "qa-orchestrator-v2-regression-gate"
+	vocabularyLessGoldenApplyWork  = "implement-migration-schema"
+	vocabularyLessGoldenApplyGoal  = "prove the vocabulary-less chain stays byte-identical"
+	vocabularyLessGoldenVerifyWork = "verify-migration-schema"
+	vocabularyLessGoldenVerifyGoal = "independently verify implementation against spec tasks"
+)
+
+// TestRuntimeLedgerVocabularyLessChainReplaysByteIdentically is Phase 0 of
+// qa-orchestrator-v2 (#3282): the regression gate that blocks every
+// runtime_ledger.go edit in later phases. It hand-authors an ordinary
+// Begin->Finish->Begin(advance)->Finish chain with NO stage vocabulary --
+// today's only real usage pattern -- directly through runtimeRecord/
+// runtimeBeginEvent/runtimeFinishEvent/runtimeAdvanceEvent and the package's
+// own runtimeObjectiveID/runtimeValueHash/runtimeRecordRevision helpers
+// (never through a live git repo), so every persisted byte is a pure
+// function of fixed literal inputs -- no wall clock, no host-specific
+// temp-directory path (BeginWorktree is deliberately left "", the same
+// legacy/no-binding-recorded shape #2296 already defines for chains that
+// predate that field), and therefore fully reproducible across machines and
+// runs. It asserts the exact bytes of each immutable record, plus the exact
+// bytes of the final replayed RuntimeStatus, are byte-identical to goldens
+// captured from the pre-change binary.
+//
+// This test is the safety net, not a test of new behavior: there is no
+// StageVocabulary/StagePosition/ApprovalRevision field yet. Once Phase 2/3
+// add those fields as omitempty (design decision D1), this exact test must
+// keep passing unmodified for a chain that never sets them -- any field
+// that leaks a non-empty value into a vocabulary-less chain, or any change
+// to runtimeObjectiveAdvanceAdmissible's/applyRuntimeAdvanceEvent's ordering
+// for a vocabulary-less predecessor, fails this test first.
+func TestRuntimeLedgerVocabularyLessChainReplaysByteIdentically(t *testing.T) {
+	const change = vocabularyLessGoldenChange
+	store := RuntimeStore{Dir: t.TempDir(), Change: change}
+
+	applyCandidateIdentity := "sha256:" + strings.Repeat("a", 64)
+	applyCandidateTree := strings.Repeat("a", 40)
+	applyGeneration := 1
+	applyObjectiveID := runtimeObjectiveID(change, vocabularyLessGoldenApplyWork, vocabularyLessGoldenApplyGoal, applyCandidateIdentity, applyGeneration)
+	beginApplyRequest := BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "golden-apply-begin", WorkUnit: vocabularyLessGoldenApplyWork,
+		EvidenceGoal: vocabularyLessGoldenApplyGoal, MaxAttempts: 3, MaxChangedLines: 20,
+	}
+	record1 := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: change, PreviousRevision: "", Operation: runtimeOperationBegin,
+		RequestID: beginApplyRequest.RequestID,
+		RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", beginApplyRequest),
+		Begin: &runtimeBeginEvent{
+			ObjectiveID: applyObjectiveID, ObjectiveGeneration: applyGeneration, WorkUnit: beginApplyRequest.WorkUnit,
+			EvidenceGoal: beginApplyRequest.EvidenceGoal, MaxAttempts: beginApplyRequest.MaxAttempts,
+			MaxChangedLines: beginApplyRequest.MaxChangedLines, Ordinal: 1,
+			BeginCandidateIdentity: applyCandidateIdentity, BeginCandidateTree: applyCandidateTree,
+		},
+	}
+	revision1, payload1 := writeGoldenRuntimeRecord(t, store, record1)
+	assertRuntimeLedgerGoldenBytes(t, "01-begin-apply.golden.json", payload1)
+
+	applyFinishCandidateIdentity := "sha256:" + strings.Repeat("b", 64)
+	applyFinishCandidateTree := strings.Repeat("b", 40)
+	finishApplyRequest := FinishAttemptRequest{
+		ExpectedRevision: revision1, RequestID: "golden-apply-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('c'), Diagnosis: "apply gates passed",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "apply cleanup completed",
+		ProcessEvidence: "apply process scan found no descendants",
+	}
+	record2 := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: change, PreviousRevision: revision1, Operation: runtimeOperationFinish,
+		RequestID: finishApplyRequest.RequestID,
+		RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", finishApplyRequest),
+		Finish: &runtimeFinishEvent{
+			Ordinal: 1, FinishCandidateIdentity: applyFinishCandidateIdentity, FinishCandidateTree: applyFinishCandidateTree,
+			Outcome: finishApplyRequest.Outcome, ChangedLines: 1, EvidenceRevision: finishApplyRequest.EvidenceRevision,
+			Diagnosis: finishApplyRequest.Diagnosis, HarnessDisposition: finishApplyRequest.HarnessDisposition,
+			CleanupEvidence: finishApplyRequest.CleanupEvidence, ProcessEvidence: finishApplyRequest.ProcessEvidence,
+		},
+	}
+	revision2, payload2 := writeGoldenRuntimeRecord(t, store, record2)
+	assertRuntimeLedgerGoldenBytes(t, "02-finish-apply.golden.json", payload2)
+
+	verifyGeneration := 2
+	// The verify objective's candidate continues from the passed apply
+	// attempt's finish candidate -- the same continuity a live advance
+	// produces -- though replay's objective==nil begin branch (taken right
+	// after an advance clears Objective) does not itself re-check it.
+	verifyObjectiveID := runtimeObjectiveID(change, vocabularyLessGoldenVerifyWork, vocabularyLessGoldenVerifyGoal, applyFinishCandidateIdentity, verifyGeneration)
+	beginVerifyRequest := BeginAttemptRequest{
+		ExpectedRevision: revision2, RequestID: "golden-verify-begin", WorkUnit: vocabularyLessGoldenVerifyWork,
+		EvidenceGoal: vocabularyLessGoldenVerifyGoal, MaxAttempts: 2, MaxChangedLines: 30,
+	}
+	record3 := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: change, PreviousRevision: revision2, Operation: runtimeOperationAdvance,
+		RequestID: beginVerifyRequest.RequestID,
+		RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", beginVerifyRequest),
+		Begin: &runtimeBeginEvent{
+			ObjectiveID: verifyObjectiveID, ObjectiveGeneration: verifyGeneration, WorkUnit: beginVerifyRequest.WorkUnit,
+			EvidenceGoal: beginVerifyRequest.EvidenceGoal, MaxAttempts: beginVerifyRequest.MaxAttempts,
+			MaxChangedLines: beginVerifyRequest.MaxChangedLines, Ordinal: 2,
+			BeginCandidateIdentity: applyFinishCandidateIdentity, BeginCandidateTree: applyFinishCandidateTree,
+		},
+		Advance: &runtimeAdvanceEvent{
+			PreviousObjectiveID: applyObjectiveID, PreviousGeneration: applyGeneration,
+			PreviousWorkUnit: vocabularyLessGoldenApplyWork,
+		},
+	}
+	revision3, payload3 := writeGoldenRuntimeRecord(t, store, record3)
+	assertRuntimeLedgerGoldenBytes(t, "03-begin-advance-verify.golden.json", payload3)
+
+	verifyFinishCandidateIdentity := "sha256:" + strings.Repeat("e", 64)
+	verifyFinishCandidateTree := strings.Repeat("e", 40)
+	finishVerifyRequest := FinishAttemptRequest{
+		ExpectedRevision: revision3, RequestID: "golden-verify-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('d'), Diagnosis: "verify gates passed",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verify cleanup completed",
+		ProcessEvidence: "verify process scan found no descendants",
+	}
+	record4 := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: change, PreviousRevision: revision3, Operation: runtimeOperationFinish,
+		RequestID: finishVerifyRequest.RequestID,
+		RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", finishVerifyRequest),
+		Finish: &runtimeFinishEvent{
+			Ordinal: 2, FinishCandidateIdentity: verifyFinishCandidateIdentity, FinishCandidateTree: verifyFinishCandidateTree,
+			Outcome: finishVerifyRequest.Outcome, ChangedLines: 1, EvidenceRevision: finishVerifyRequest.EvidenceRevision,
+			Diagnosis: finishVerifyRequest.Diagnosis, HarnessDisposition: finishVerifyRequest.HarnessDisposition,
+			CleanupEvidence: finishVerifyRequest.CleanupEvidence, ProcessEvidence: finishVerifyRequest.ProcessEvidence,
+		},
+	}
+	revision4, payload4 := writeGoldenRuntimeRecord(t, store, record4)
+	assertRuntimeLedgerGoldenBytes(t, "04-finish-verify.golden.json", payload4)
+
+	if countRuntimeRecords(t, store.Dir) != 4 {
+		t.Fatalf("vocabulary-less golden chain wrote %d records, want 4", countRuntimeRecords(t, store.Dir))
+	}
+
+	// Status() always replays from the persisted records (store.load(), never
+	// an in-memory cache), so this is a genuine replay assertion over the
+	// exact bytes written above, exercised through the CURRENT
+	// load()/applyRuntimeRecord/applyRuntimeBeginEvent/
+	// applyRuntimeAdvanceEvent/applyRuntimeFinishEvent/
+	// validateRuntimeRecordShape code.
+	replayed, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Revision != revision4 || !replayed.Complete {
+		t.Fatalf("replayed terminal status = %#v, want complete at %q", replayed, revision4)
+	}
+	statusJSON, err := json.MarshalIndent(replayed, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusJSON = append(statusJSON, '\n')
+	assertRuntimeLedgerGoldenBytes(t, "05-final-status.golden.json", statusJSON)
+}
+
+// writeGoldenRuntimeRecord computes the exact immutable bytes gentle-ai
+// would persist for record (via runtimeRecordRevision, the same function
+// RuntimeStore.mutate uses at publication), writes them under
+// store.Dir/records, advances HEAD to the new revision (the same bytes
+// publishHead writes: "sha256:<64 hex>\n"), and returns the revision and the
+// exact persisted payload for golden comparison.
+func writeGoldenRuntimeRecord(t *testing.T, store RuntimeStore, record runtimeRecord) (string, []byte) {
+	t.Helper()
+	revision, payload, err := runtimeRecordRevision(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordsDir := filepath.Join(store.Dir, "records")
+	if err := os.MkdirAll(recordsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(recordsDir, strings.TrimPrefix(revision, "sha256:")+".json")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Dir, "HEAD"), []byte(revision+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return revision, payload
+}
+
+func assertRuntimeLedgerGoldenBytes(t *testing.T, name string, actual []byte) {
+	t.Helper()
+	goldenPath := filepath.Join("testdata", "runtime_ledger_vocabulary_less_chain", name)
+	if *updateRuntimeLedgerVocabularyLessGolden {
+		if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(goldenPath, actual, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("updated vocabulary-less runtime ledger golden: %s", goldenPath)
+		return
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read vocabulary-less runtime ledger golden %q: %v (regenerate with `go test ./internal/sddstatus/... -run TestRuntimeLedgerVocabularyLessChainReplaysByteIdentically -update`)", goldenPath, err)
+	}
+	if !bytes.Equal(actual, expected) {
+		t.Fatalf("vocabulary-less runtime ledger chain diverged from golden %s (this test gates ALL later runtime_ledger.go phases -- see qa-orchestrator-v2 Phase 0/2/3 in sdd/qa-orchestrator-v2/tasks):\ngot:\n%s\nwant:\n%s",
+			name, string(actual), string(expected))
 	}
 }

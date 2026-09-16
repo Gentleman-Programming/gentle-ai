@@ -1,0 +1,69 @@
+{
+  "schema": "gentle-ai.sdd-runtime-status/v1",
+  "change": "qa-orchestrator-v2-regression-gate",
+  "revision": "sha256:f656c06955420f3000d34c61d171c0ab1cf428f17b8f9c941a542793851a66be",
+  "objective": {
+    "id": "sha256:549751b8d49eaa8774ecd742df650c295ad372c4974f31d802d1dc43e552ef26",
+    "generation": 2,
+    "work_unit": "verify-migration-schema",
+    "evidence_goal": "independently verify implementation against spec tasks",
+    "initial_candidate_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "initial_candidate_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "max_attempts": 2,
+    "max_changed_lines": 30
+  },
+  "attempts": [
+    {
+      "ordinal": 1,
+      "objective_id": "sha256:fbad525f9dcff4e5774c64ba96dbc4fc34625d2fcf32bf5bf402db6bbcf0e84c",
+      "objective_generation": 1,
+      "work_unit": "implement-migration-schema",
+      "begin_candidate_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "begin_candidate_tree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "finish_candidate_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "finish_candidate_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "outcome": "passed",
+      "changed_lines": 1,
+      "evidence_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "diagnosis": "apply gates passed",
+      "harness_disposition": "reused",
+      "cleanup_evidence": "apply cleanup completed",
+      "process_evidence": "apply process scan found no descendants"
+    },
+    {
+      "ordinal": 2,
+      "objective_id": "sha256:549751b8d49eaa8774ecd742df650c295ad372c4974f31d802d1dc43e552ef26",
+      "objective_generation": 2,
+      "work_unit": "verify-migration-schema",
+      "begin_candidate_identity": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "begin_candidate_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "finish_candidate_identity": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "finish_candidate_tree": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "outcome": "passed",
+      "changed_lines": 1,
+      "evidence_revision": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "diagnosis": "verify gates passed",
+      "harness_disposition": "reused",
+      "cleanup_evidence": "verify cleanup completed",
+      "process_evidence": "verify process scan found no descendants"
+    }
+  ],
+  "objective_generation": 2,
+  "next_ordinal": 3,
+  "cumulative_attempts": 1,
+  "cumulative_changed_lines": 1,
+  "lifetime_attempts": 2,
+  "lifetime_changed_lines": 2,
+  "evidence_revision": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "decision_required": false,
+  "complete": true,
+  "next_action": "complete",
+  "last_advance": {
+    "revision": "sha256:196041c24792873f52d9b6d8db6647db4d9d0170418b57dbc02c7f6e6d1cd779",
+    "previous_objective_id": "sha256:fbad525f9dcff4e5774c64ba96dbc4fc34625d2fcf32bf5bf402db6bbcf0e84c",
+    "previous_generation": 1,
+    "previous_work_unit": "implement-migration-schema",
+    "previous_evidence_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "binding_revision": ""
+}
