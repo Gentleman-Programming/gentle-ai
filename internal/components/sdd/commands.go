@@ -29,24 +29,14 @@ func OpenCodeCommands() []OpenCodeCommand {
 	}
 }
 
-// claudeCommandPrefix namespaces the Claude Code slash commands. Claude Code
-// resolves a same-named skill ahead of a command, and every SDD phase skill is
-// delegate-only, so an unprefixed /sdd-init was refused at the prompt and the
-// same-named skill misrouted the delegated executor (#2644, #2322). Skill
-// directories are shared by every runtime and keep their names.
-const claudeCommandPrefix = "gentle-"
-
 // SlashCommandFileName returns the managed command file for one SDD command on
 // the given runtime.
 func SlashCommandFileName(agent model.AgentID, name string) string {
-	if agent == model.AgentClaudeCode {
-		return claudeCommandPrefix + name + ".md"
-	}
 	return name + ".md"
 }
 
 // SlashCommandPaths lists the managed SDD command files under commandsDir for
-// one runtime. For Claude Code it also lists the unprefixed names an older
+// one runtime. For Claude Code it also lists the legacy gentle-* names an older
 // install wrote, so rollback snapshots capture them and verification expects
 // their absence once install or sync retires them.
 func SlashCommandPaths(agent model.AgentID, commandsDir string) []string {
@@ -61,18 +51,18 @@ func SlashCommandPaths(agent model.AgentID, commandsDir string) []string {
 	return paths
 }
 
-// LegacyClaudeCommandPath returns the unprefixed path a pre-#2644 install wrote
-// for the Claude Code command fileName, or "" when the runtime or file has no
-// retired predecessor.
+// LegacyClaudeCommandPath returns the legacy prefixed path (gentle-sdd-*.md) that
+// previous installs wrote for the Claude Code command fileName (sdd-*.md), or ""
+// when the runtime has no retired predecessor.
 func LegacyClaudeCommandPath(agent model.AgentID, commandsDir, fileName string) string {
-	if agent != model.AgentClaudeCode || !strings.HasPrefix(fileName, claudeCommandPrefix) {
+	if agent != model.AgentClaudeCode || strings.HasPrefix(fileName, "gentle-") {
 		return ""
 	}
-	return filepath.Join(commandsDir, strings.TrimPrefix(fileName, claudeCommandPrefix))
+	return filepath.Join(commandsDir, "gentle-"+fileName)
 }
 
-// IsLegacyClaudeCommandPath reports whether path names a retired unprefixed
-// Claude Code SDD command file, which install and sync remove.
+// IsLegacyClaudeCommandPath reports whether path names a retired prefixed
+// Claude Code SDD command file (gentle-sdd-*.md), which install and sync remove.
 func IsLegacyClaudeCommandPath(path string) bool {
 	path = filepath.Clean(path)
 	commandsDir := filepath.Dir(path)
@@ -80,7 +70,7 @@ func IsLegacyClaudeCommandPath(path string) bool {
 		return false
 	}
 	for _, command := range OpenCodeCommands() {
-		if filepath.Base(path) == command.Name+".md" {
+		if filepath.Base(path) == "gentle-"+command.Name+".md" {
 			return true
 		}
 	}

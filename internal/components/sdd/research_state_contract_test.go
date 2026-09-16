@@ -49,7 +49,7 @@ func TestRuntimeResearchExecutorsAreOutputOnly(t *testing.T) {
 		"cursor/agents/sdd-research.md",
 		"kiro/agents/sdd-research.md",
 		"kimi/agents/sdd-research.md",
-		"claude/commands/gentle-sdd-research.md",
+		"claude/commands/sdd-research.md",
 	} {
 		path := path
 		t.Run(path, func(t *testing.T) {
@@ -102,7 +102,7 @@ func TestRuntimeResearchExecutorsAreOutputOnly(t *testing.T) {
 		}
 	}
 
-	claudeCommand, err := assets.Read("claude/commands/gentle-sdd-research.md")
+	claudeCommand, err := assets.Read("claude/commands/sdd-research.md")
 	if err != nil {
 		t.Fatal(err)
 	}

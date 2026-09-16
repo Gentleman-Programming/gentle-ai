@@ -1,9 +1,9 @@
 ---
 description: Show structured SDD status for an active change
-agent: gentle-orchestrator
+agent: axiom-orchestrator
 ---
 
-You are the `gentle-orchestrator`. This command is read-only: it never prepares consent markers, launches SDD executors, or edits files.
+You are the `axiom-orchestrator`. This command is read-only: it never prepares consent markers, launches SDD executors, or edits files.
 
 Inspection needs no execution preflight, review, delivery, or archive authorization. It grants no write authority.
 

@@ -28,6 +28,34 @@ func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
 func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
 
+func containsPersonaMarker(text string) bool {
+	return strings.Contains(text, "<!-- axiom:persona -->") || strings.Contains(text, "<!-- gentle-ai:persona -->")
+}
+
+func containsPersonaCloseMarker(text string) bool {
+	return strings.Contains(text, "<!-- /axiom:persona -->") || strings.Contains(text, "<!-- /gentle-ai:persona -->")
+}
+
+func countPersonaMarker(text string) int {
+	return strings.Count(text, "<!-- axiom:persona -->") + strings.Count(text, "<!-- gentle-ai:persona -->")
+}
+
+func indexPersonaMarker(text string) int {
+	idx := strings.Index(text, "<!-- axiom:persona -->")
+	if idx >= 0 {
+		return idx
+	}
+	return strings.Index(text, "<!-- gentle-ai:persona -->")
+}
+
+func indexPersonaCloseMarker(text string) int {
+	idx := strings.Index(text, "<!-- /axiom:persona -->")
+	if idx >= 0 {
+		return idx
+	}
+	return strings.Index(text, "<!-- /gentle-ai:persona -->")
+}
+
 var claudeOutputStyleLanguageGuardrails = []string{
 	"Determine the reply language from the latest actual user request",
 	"For mixed-language prompts, use the dominant language of the user's direct request.",
@@ -77,10 +105,10 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("CLAUDE.md missing open marker for persona")
 	}
-	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+	if !containsPersonaCloseMarker(text) {
 		t.Fatal("CLAUDE.md missing close marker for persona")
 	}
 
@@ -515,7 +543,7 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("AGENTS.md missing real persona content")
 	}
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("AGENTS.md missing persona marker")
 	}
 }
@@ -543,15 +571,8 @@ func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	text := string(content)
-	for _, want := range []string{
-		"# User Gemini rules",
-		"<!-- gentle-ai:persona -->",
-		"Senior Architect",
-		"<!-- /gentle-ai:persona -->",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("GEMINI.md missing %q; got:\n%s", want, text)
-		}
+	if !containsPersonaMarker(text) || !containsPersonaCloseMarker(text) || !strings.Contains(text, "# User Gemini rules") || !strings.Contains(text, "Senior Architect") {
+		t.Fatalf("GEMINI.md missing required content; got:\n%s", text)
 	}
 
 	second, err := Inject(home, antigravityAdapter(), model.PersonaGentleman)
@@ -566,7 +587,7 @@ func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() after second inject error = %v", err)
 	}
-	if got := strings.Count(string(content), "<!-- gentle-ai:persona -->"); got != 1 {
+	if got := countPersonaMarker(string(content)); got != 1 {
 		t.Fatalf("persona marker count = %d, want 1", got)
 	}
 }
@@ -702,7 +723,7 @@ func TestInjectOpenCodePreservesUserContentInsteadOfOverwriting(t *testing.T) {
 	if !strings.Contains(text, "Do not overwrite this file.") {
 		t.Fatal("AGENTS.md user content was overwritten")
 	}
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("AGENTS.md missing managed persona section after inject")
 	}
 }
@@ -729,7 +750,7 @@ func TestInjectOpenClawWritesPersonaToWorkspaceSoulAndNotAgents(t *testing.T) {
 		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
 	}
 	soulText := string(soulContent)
-	if !strings.Contains(soulText, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(soulText) {
 		t.Fatalf("SOUL.md missing managed persona marker; got:\n%s", soulText)
 	}
 	if !strings.Contains(soulText, "Senior Architect") {
@@ -747,7 +768,7 @@ func TestInjectOpenClawWritesPersonaToWorkspaceSoulAndNotAgents(t *testing.T) {
 	if !strings.Contains(agentsText, "Keep SDD here.") {
 		t.Fatalf("AGENTS.md user protocol content was modified; got:\n%s", agentsText)
 	}
-	if strings.Contains(agentsText, "<!-- gentle-ai:persona -->") || strings.Contains(agentsText, "Senior Architect") {
+	if containsPersonaMarker(agentsText) || strings.Contains(agentsText, "Senior Architect") {
 		t.Fatalf("OpenClaw persona must not be written to AGENTS.md; got:\n%s", agentsText)
 	}
 }
@@ -783,7 +804,7 @@ func TestInjectOpenClawSoulPersonaIsIdempotentAndPreservesUserContent(t *testing
 	if !strings.Contains(text, "Keep my tone note.") {
 		t.Fatalf("SOUL.md user content was lost; got:\n%s", text)
 	}
-	if count := strings.Count(text, "<!-- gentle-ai:persona -->"); count != 1 {
+	if count := countPersonaMarker(text); count != 1 {
 		t.Fatalf("SOUL.md has %d persona markers, want exactly 1", count)
 	}
 }
@@ -830,7 +851,7 @@ func TestInjectOpenCodeDoesNotStripLookalikeUserContent(t *testing.T) {
 	if !strings.Contains(text, "Do not delete this custom preface.") {
 		t.Fatal("OpenCode AGENTS.md lookalike user content was stripped")
 	}
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("AGENTS.md missing managed persona section after inject")
 	}
 }
@@ -867,7 +888,7 @@ func TestInjectOpenCodePreservesUserPrefaceAboveATLBlock(t *testing.T) {
 	if strings.Contains(text, "BEGIN:agent-teams-lite") {
 		t.Fatal("ATL block should have been stripped by StripLegacyATLBlock")
 	}
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("AGENTS.md missing managed persona section")
 	}
 }
@@ -897,9 +918,9 @@ func TestInjectOpenCodeReplacesExactLegacyAssetWithoutDuplication(t *testing.T) 
 
 	text := string(content)
 	// Must have exactly ONE persona marker — no duplication.
-	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+	if countPersonaMarker(text) != 1 {
 		t.Fatalf("expected exactly 1 persona marker, got %d — legacy asset was not replaced cleanly",
-			strings.Count(text, "<!-- gentle-ai:persona -->"))
+			countPersonaMarker(text))
 	}
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("persona content missing after replacing legacy asset")
@@ -936,7 +957,7 @@ func TestInjectOpenCodePreservesUserPrefaceAboveManagedMarkers(t *testing.T) {
 	if !strings.Contains(text, "My team's custom rules.") {
 		t.Fatal("user preface above managed markers was stripped — should be preserved")
 	}
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("AGENTS.md missing managed persona section after inject")
 	}
 	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
@@ -1510,10 +1531,10 @@ func TestInjectClaudeAutoHealsStaleFreeTextPersona(t *testing.T) {
 	text := string(content)
 
 	// The file should now have the persona inside markers, not as free text.
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("CLAUDE.md missing persona marker after heal")
 	}
-	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
+	if !containsPersonaCloseMarker(text) {
 		t.Fatal("CLAUDE.md missing persona close marker after heal")
 	}
 
@@ -1532,8 +1553,8 @@ func TestInjectClaudeAutoHealsStaleFreeTextPersona(t *testing.T) {
 		t.Fatal("CLAUDE.md still contains legacy 'Senior Architect' text — legacy block not fully stripped")
 	}
 
-	openMarkerIdx := strings.Index(text, "<!-- gentle-ai:persona -->")
-	closeMarkerIdx := strings.Index(text, "<!-- /gentle-ai:persona -->")
+	openMarkerIdx := indexPersonaMarker(text)
+	closeMarkerIdx := indexPersonaCloseMarker(text)
 	if openMarkerIdx < 0 || closeMarkerIdx < 0 || closeMarkerIdx < openMarkerIdx {
 		t.Fatal("CLAUDE.md missing a valid persona marker section after heal")
 	}
@@ -1573,12 +1594,12 @@ func TestInjectClaudeAutoHealStalePersonaOnlyFile(t *testing.T) {
 	text := string(content)
 
 	// Must have markers now.
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("CLAUDE.md missing persona marker")
 	}
 
 	// Must NOT have the legacy free-text block before markers.
-	openMarkerIdx := strings.Index(text, "<!-- gentle-ai:persona -->")
+	openMarkerIdx := indexPersonaMarker(text)
 	if openMarkerIdx >= 0 {
 		before := text[:openMarkerIdx]
 		if strings.Contains(before, "## Rules") {
@@ -1628,7 +1649,7 @@ func TestInjectClaudeHealDoesNotTouchNonPersonaContent(t *testing.T) {
 		t.Fatal("user content was erased — heal was too aggressive")
 	}
 	// Persona section must be appended.
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
+	if !containsPersonaMarker(text) {
 		t.Fatal("persona section not appended")
 	}
 }
@@ -3030,11 +3051,11 @@ func TestInjectHermesGentlemanWritesSOULMD(t *testing.T) {
 	}
 	text := string(content)
 
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
-		t.Fatal("SOUL.md missing <!-- gentle-ai:persona --> open marker")
+	if !containsPersonaMarker(text) {
+		t.Fatal("SOUL.md missing persona open marker")
 	}
-	if !strings.Contains(text, "<!-- /gentle-ai:persona -->") {
-		t.Fatal("SOUL.md missing <!-- /gentle-ai:persona --> close marker")
+	if !containsPersonaCloseMarker(text) {
+		t.Fatal("SOUL.md missing persona close marker")
 	}
 	if strings.Contains(text, availableSkillsIsAuthoritative) {
 		t.Fatal("SOUL.md contains the generic <available_skills> instruction — Hermes-specific asset not used")
@@ -3065,8 +3086,8 @@ func TestInjectHermesNeutralWritesSOULMD(t *testing.T) {
 	}
 	text := string(content)
 
-	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
-		t.Fatal("SOUL.md missing <!-- gentle-ai:persona --> open marker")
+	if !containsPersonaMarker(text) {
+		t.Fatal("SOUL.md missing persona open marker")
 	}
 	if strings.Contains(text, availableSkillsIsAuthoritative) {
 		t.Fatal("SOUL.md contains the generic <available_skills> instruction — generic neutral used instead of Hermes-specific")

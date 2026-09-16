@@ -444,7 +444,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 			profileOverlays[profile.Name] = overlay
 		}
-		if err := validateSessionPreflightOverlay(preparedOverlay, "gentle-orchestrator", opts.PreserveOpenCodeOrchestratorPrompt); err != nil {
+		if err := validateSessionPreflightOverlay(preparedOverlay, "axiom-orchestrator", opts.PreserveOpenCodeOrchestratorPrompt); err != nil {
 			return InjectionResult{}, err
 		}
 	}
@@ -897,21 +897,23 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 		}
 
-		if !hasOpenCodeAgentKey(settingsText, "gentle-orchestrator") {
+		if !hasOpenCodeAgentKey(settingsText, "axiom-orchestrator") && !hasOpenCodeAgentKey(settingsText, "gentle-orchestrator") {
 			// In-memory check failed — try reading from disk as last resort.
 			if diskBytes, readErr := os.ReadFile(settingsPath); readErr == nil {
 				settingsText = string(diskBytes)
 			}
-			if !hasOpenCodeAgentKey(settingsText, "gentle-orchestrator") {
-				return InjectionResult{}, fmt.Errorf("post-check: %q missing gentle-orchestrator agent definition — OpenCode /sdd-* commands will fail", settingsPath)
+			if !hasOpenCodeAgentKey(settingsText, "axiom-orchestrator") && !hasOpenCodeAgentKey(settingsText, "gentle-orchestrator") {
+				return InjectionResult{}, fmt.Errorf("post-check: %q missing axiom-orchestrator agent definition — OpenCode /sdd-* commands will fail", settingsPath)
 			}
 		}
-		if hasOpenCodeAgentKey(settingsText, "sdd-orchestrator") {
-			if diskBytes, readErr := os.ReadFile(settingsPath); readErr == nil {
-				settingsText = string(diskBytes)
-			}
-			if hasOpenCodeAgentKey(settingsText, "sdd-orchestrator") {
-				return InjectionResult{}, fmt.Errorf("post-check: %q still contains legacy sdd-orchestrator agent definition after OpenCode SDD sync", settingsPath)
+		for _, legacyKey := range []string{"sdd-orchestrator", "gentle-orchestrator"} {
+			if hasOpenCodeAgentKey(settingsText, legacyKey) {
+				if diskBytes, readErr := os.ReadFile(settingsPath); readErr == nil {
+					settingsText = string(diskBytes)
+				}
+				if hasOpenCodeAgentKey(settingsText, legacyKey) {
+					return InjectionResult{}, fmt.Errorf("post-check: %q still contains legacy %s agent definition after OpenCode SDD sync", settingsPath, legacyKey)
+				}
 			}
 		}
 		if sddMode == model.SDDModeMulti && !strings.Contains(settingsText, `"sdd-apply"`) {
@@ -1028,7 +1030,14 @@ func validateSessionPreflightOverlay(content []byte, key string, preserved bool)
 	if err := json.Unmarshal(content, &overlay); err != nil {
 		return err
 	}
-	prompt := overlay.Agent[key].Prompt
+	agentEntry, ok := overlay.Agent[key]
+	if !ok && key == "axiom-orchestrator" {
+		agentEntry, ok = overlay.Agent["gentle-orchestrator"]
+	}
+	if !ok && key == "gentle-orchestrator" {
+		agentEntry, ok = overlay.Agent["axiom-orchestrator"]
+	}
+	prompt := agentEntry.Prompt
 	if !preserved {
 		return validateRenderedSessionPreflight(prompt, model.AgentOpenCode)
 	}
@@ -1052,7 +1061,7 @@ func validateSessionPreflightOverlay(content []byte, key string, preserved bool)
 }
 
 func readPreservedOpenCodeOrchestratorPrompt(settingsPath string) (string, error) {
-	for _, agentKey := range []string{"gentle-orchestrator", "sdd-orchestrator"} {
+	for _, agentKey := range []string{"axiom-orchestrator", "gentle-orchestrator", "sdd-orchestrator"} {
 		prompt, err := readOpenCodeAgentPrompt(settingsPath, agentKey)
 		if err != nil || prompt != "" {
 			return prompt, err
@@ -1096,7 +1105,10 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
-	orchestratorRaw, ok := agentsMap["gentle-orchestrator"]
+	orchestratorRaw, ok := agentsMap["axiom-orchestrator"]
+	if !ok {
+		orchestratorRaw, ok = agentsMap["gentle-orchestrator"]
+	}
 	if !ok {
 		return overlayBytes, nil
 	}
@@ -1251,7 +1263,7 @@ func restoreKilocodeManagedAgentTools(agentsMap map[string]any) {
 			continue
 		}
 		switch {
-		case name == "gentle-orchestrator" || strings.HasPrefix(name, "sdd-orchestrator-"):
+		case name == "axiom-orchestrator" || name == "gentle-orchestrator" || strings.HasPrefix(name, "sdd-orchestrator-"):
 			agent["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}}
 		case isKilocodeProfilePhase(name):
 			agent["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
@@ -1375,9 +1387,13 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 
 	replacer := strings.NewReplacer(
 		"Bind this to the dedicated `sdd-orchestrator` agent only.",
-		"Bind this to the dedicated `gentle-orchestrator` agent only.",
+		"Bind this to the dedicated `axiom-orchestrator` agent only.",
 		"agent.sdd-orchestrator.model",
+		"agent.axiom-orchestrator.model",
+		"Bind this to the dedicated `gentle-orchestrator` agent only.",
+		"Bind this to the dedicated `axiom-orchestrator` agent only.",
 		"agent.gentle-orchestrator.model",
+		"agent.axiom-orchestrator.model",
 		"Before continuing with SDD, choose one option per group.\n",
 		"",
 		"Before continuing with SDD, choose one option per group.\r\n",
@@ -2257,13 +2273,15 @@ func stripOpenCodeNativeFallbackAgents(overlayBytes []byte) ([]byte, error) {
 	// Kilocode does not host the OpenCode provider relay that issues the opaque
 	// validator task, so it must not expose or authorize that OpenCode-only role.
 	delete(agents, opencode.ReviewValidatorAgent)
-	if orchestrator, ok := agents["gentle-orchestrator"].(map[string]any); ok {
-		if permission, ok := orchestrator["permission"].(map[string]any); ok {
-			if task, ok := permission["task"].(map[string]any); ok {
-				if replacement, ok := task["__replace__"].(map[string]any); ok {
-					delete(replacement, opencode.ReviewValidatorAgent)
-				} else {
-					delete(task, opencode.ReviewValidatorAgent)
+	for _, orchKey := range []string{"axiom-orchestrator", "gentle-orchestrator"} {
+		if orchestrator, ok := agents[orchKey].(map[string]any); ok {
+			if permission, ok := orchestrator["permission"].(map[string]any); ok {
+				if task, ok := permission["task"].(map[string]any); ok {
+					if replacement, ok := task["__replace__"].(map[string]any); ok {
+						delete(replacement, opencode.ReviewValidatorAgent)
+					} else {
+						delete(task, opencode.ReviewValidatorAgent)
+					}
 				}
 			}
 		}
@@ -2510,7 +2528,7 @@ func mergeJSONFileContents(path string, baseJSON, overlay []byte) (mergeJSONResu
 }
 
 func removeManagedOpenCodeAgentTools(baseJSON, overlay []byte) ([]byte, error) {
-	keys := append([]string{"gentle-orchestrator", "general", "explore"}, ProfilePhaseOrder()...)
+	keys := append([]string{"axiom-orchestrator", "gentle-orchestrator", "general", "explore"}, ProfilePhaseOrder()...)
 	keys = append(keys, opencode.JDPhases()...)
 	keys = append(keys, opencode.ReviewPhases()...)
 	if overlayRoot, err := filemerge.UnmarshalJSONObject(overlay); err == nil {
@@ -2622,9 +2640,10 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 	}
 
 	legacy, hasLegacy := agentsMap["sdd-orchestrator"]
+	gentle, hasGentle := agentsMap["gentle-orchestrator"]
 	revokedGentleman, hasRevokedGentleman := agentsMap["gentleman"]
 	gentlemanLooksLikeConductor := hasRevokedGentleman && looksLikeOpenCodeSDDConductor(revokedGentleman)
-	if !hasLegacy && !hasRevokedGentleman {
+	if !hasLegacy && !hasGentle && !hasRevokedGentleman {
 		return baseJSON, nil
 	}
 	if !hasLegacy && gentlemanLooksLikeConductor {
@@ -2632,9 +2651,14 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 		hasLegacy = true
 	}
 
-	if _, hasGentleOrchestrator := agentsMap["gentle-orchestrator"]; !hasGentleOrchestrator && hasLegacy {
-		agentsMap["gentle-orchestrator"] = legacy
+	if _, hasAxiomOrchestrator := agentsMap["axiom-orchestrator"]; !hasAxiomOrchestrator {
+		if hasGentle {
+			agentsMap["axiom-orchestrator"] = gentle
+		} else if hasLegacy {
+			agentsMap["axiom-orchestrator"] = legacy
+		}
 	}
+	delete(agentsMap, "gentle-orchestrator")
 	delete(agentsMap, "sdd-orchestrator")
 	if hasRevokedGentleman {
 		delete(agentsMap, "gentleman")
@@ -3433,28 +3457,33 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 }
 
 // normalizeOpenCodeSDDModelAssignments accepts the historical
-// sdd-orchestrator assignment key as an input alias, but writes it to the
-// current base coordinator key: gentle-orchestrator. Named profile keys remain unchanged.
+// sdd-orchestrator and gentle-orchestrator assignment keys as input aliases, but writes them to the
+// current base coordinator key: axiom-orchestrator. Named profile keys remain unchanged.
 func normalizeOpenCodeSDDModelAssignments(assignments map[string]model.ModelAssignment) map[string]model.ModelAssignment {
 	if len(assignments) == 0 {
 		return assignments
 	}
 	legacyAssignment, hasLegacy := assignments["sdd-orchestrator"]
-	if !hasLegacy {
+	gentleAssignment, hasGentle := assignments["gentle-orchestrator"]
+	if !hasLegacy && !hasGentle {
 		return assignments
 	}
-	if _, hasGentleOrchestrator := assignments["gentle-orchestrator"]; hasGentleOrchestrator {
+	if _, hasAxiomOrchestrator := assignments["axiom-orchestrator"]; hasAxiomOrchestrator {
 		return assignments
 	}
 
 	normalized := make(map[string]model.ModelAssignment, len(assignments))
 	for key, assignment := range assignments {
-		if key == "sdd-orchestrator" {
+		if key == "sdd-orchestrator" || key == "gentle-orchestrator" {
 			continue
 		}
 		normalized[key] = assignment
 	}
-	normalized["gentle-orchestrator"] = legacyAssignment
+	if hasGentle {
+		normalized["axiom-orchestrator"] = gentleAssignment
+	} else if hasLegacy {
+		normalized["axiom-orchestrator"] = legacyAssignment
+	}
 	return normalized
 }
 

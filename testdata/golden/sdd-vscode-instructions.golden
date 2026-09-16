@@ -4,7 +4,7 @@ description: Gentleman persona with SDD orchestration and Engram protocol
 applyTo: "**"
 ---
 
-<!-- gentle-ai:sdd-orchestrator -->
+<!-- axiom:sdd-orchestrator -->
 <!-- section:model-capable -->
 # Agent Teams Lite — Orchestrator Instructions
 
@@ -486,4 +486,4 @@ Convention files under the agent's global skills directory (global) or `.agent/s
 - `engram` → `mem_search(...)` → `mem_get_observation(...)`
 - `openspec` → read `openspec/changes/*/state.yaml`
 - `none` → state not persisted — explain to user
-<!-- /gentle-ai:sdd-orchestrator -->
+<!-- /axiom:sdd-orchestrator -->

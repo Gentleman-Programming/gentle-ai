@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	ManagedAgent = "gentle-orchestrator"
-	schema       = "gentle-ai.opencode-default-agent"
-	version      = 1
+	ManagedAgent       = "axiom-orchestrator"
+	LegacyManagedAgent = "gentle-orchestrator"
+	schema             = "gentle-ai.opencode-default-agent"
+	version            = 1
 )
 
 type ownership struct {
@@ -55,6 +56,9 @@ func PrepareInstall(settingsPath string) (*InstallPlan, error) {
 	}
 	agents, _ := root["agent"].(map[string]any)
 	_, managedAgentPresent := agents[ManagedAgent]
+	if !managedAgentPresent {
+		_, managedAgentPresent = agents[LegacyManagedAgent]
+	}
 	return &InstallPlan{settingsPath: settingsPath, owned: owned, recapture: !exists || !managedAgentPresent}, nil
 }
 func (p *InstallPlan) Apply() (bool, error) {
@@ -63,7 +67,7 @@ func (p *InstallPlan) Apply() (bool, error) {
 		return false, err
 	}
 	owned := p.owned
-	if owned == nil || p.recapture || !current.present || current.value != ManagedAgent {
+	if owned == nil || p.recapture || !current.present || (current.value != ManagedAgent && current.value != LegacyManagedAgent) {
 		owned = newOwnership(current)
 	}
 	root["default_agent"] = ManagedAgent
@@ -95,7 +99,7 @@ func (p *UninstallPlan) Apply(cleaned []byte, settingsExist bool) (changed, remo
 			return false, false, fmt.Errorf("parse cleaned OpenCode settings: %w", err)
 		}
 	}
-	if p.settingsExist && p.current.present && p.current.value == ManagedAgent {
+	if p.settingsExist && p.current.present && (p.current.value == ManagedAgent || p.current.value == LegacyManagedAgent) {
 		if p.owned == nil || p.owned.PreviousState == "absent" {
 			delete(root, "default_agent")
 		} else {

@@ -353,6 +353,9 @@ func managedOrchestratorPrompt(settings map[string]any, settingsPath string) (st
 
 	orchestratorRaw, ok := agentsMap[opencodedefault.ManagedAgent]
 	if !ok || orchestratorRaw == nil {
+		orchestratorRaw, ok = agentsMap[opencodedefault.LegacyManagedAgent]
+	}
+	if !ok || orchestratorRaw == nil {
 		return "", nil
 	}
 	orchestratorMap, ok := orchestratorRaw.(map[string]any)

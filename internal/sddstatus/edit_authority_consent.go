@@ -26,7 +26,10 @@ import (
 // token from artifact content instead was rejected: a recreated change with
 // byte-identical artifacts would inherit the archived change's authority,
 // which is the resurrection hazard S5 exists to close.
-const changeInstanceMarkerFile = ".gentle-ai-instance"
+const (
+	changeInstanceMarkerFile       = ".axiom-instance"
+	legacyChangeInstanceMarkerFile = ".gentle-ai-instance"
+)
 
 const (
 	// sddConsentGrantActor and sddConsentGrantReason are the audit fields the
@@ -43,12 +46,21 @@ func readChangeInstanceMarker(changeRoot string) (string, error) {
 	markerPath := filepath.Join(changeRoot, changeInstanceMarkerFile)
 	info, err := os.Lstat(markerPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
+		legacyMarkerPath := filepath.Join(changeRoot, legacyChangeInstanceMarkerFile)
+		legacyInfo, legacyErr := os.Lstat(legacyMarkerPath)
+		if errors.Is(legacyErr, os.ErrNotExist) {
+			return "", nil
+		}
+		if legacyErr != nil {
+			return "", fmt.Errorf("inspect change-instance marker: %w", legacyErr)
+		}
+		if !legacyInfo.Mode().IsRegular() {
+			return "", errors.New("change-instance marker must be a regular file")
+		}
+		markerPath = legacyMarkerPath
+	} else if err != nil {
 		return "", fmt.Errorf("inspect change-instance marker: %w", err)
-	}
-	if !info.Mode().IsRegular() {
+	} else if !info.Mode().IsRegular() {
 		return "", errors.New("change-instance marker must be a regular file") // refusal:by-design world-action: inspect and recover the change-local marker before continuation
 	}
 	payload, err := readChangeInstanceMarkerFile(markerPath)
@@ -90,7 +102,7 @@ func ensureChangeInstanceMarker(changeRoot string) (string, error) {
 	}
 	token := "sdd-" + hex.EncodeToString(seed)
 	markerPath := filepath.Join(changeRoot, changeInstanceMarkerFile)
-	temporary, err := os.CreateTemp(changeRoot, ".gentle-ai-instance-*")
+	temporary, err := os.CreateTemp(changeRoot, ".axiom-instance-*")
 	if err != nil {
 		return "", fmt.Errorf("create change-instance marker publication: %w", err)
 	}

@@ -140,7 +140,7 @@ func TestNamedProfileResearchCollectorMatchesDefaultBoundary(t *testing.T) {
 
 func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *testing.T) {
 	command := assets.MustRead("opencode/commands/sdd-research.md")
-	for _, required := range []string{"agent: gentle-orchestrator", "hidden `sdd-research` sub-agent", "SDD Session Preflight must already be complete"} {
+	for _, required := range []string{"agent: axiom-orchestrator", "hidden `sdd-research` sub-agent", "SDD Session Preflight must already be complete"} {
 		if !strings.Contains(command, required) {
 			t.Fatalf("OpenCode research command missing %q", required)
 		}
@@ -153,7 +153,7 @@ func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *tes
 				t.Fatalf("unmarshal %s: %v", path, err)
 			}
 			agents := root["agent"].(map[string]any)
-			orchestrator := agents["gentle-orchestrator"].(map[string]any)
+			orchestrator := agents["axiom-orchestrator"].(map[string]any)
 			permission := orchestrator["permission"].(map[string]any)
 			tasks := permission["task"].(map[string]any)["__replace__"].(map[string]any)
 			if got := tasks["sdd-research"]; got != "allow" {
@@ -201,7 +201,7 @@ func TestSlashCommandPathsNamespaceClaudeOnly(t *testing.T) {
 	if len(claude) != 2*len(OpenCodeCommands()) {
 		t.Fatalf("claude paths = %d, want new and retired name per command", len(claude))
 	}
-	if claude[0] != filepath.Join(dir, "gentle-sdd-init.md") || claude[1] != filepath.Join(dir, "sdd-init.md") {
+	if claude[0] != filepath.Join(dir, "sdd-init.md") || claude[1] != filepath.Join(dir, "gentle-sdd-init.md") {
 		t.Fatalf("claude paths start = %v", claude[:2])
 	}
 	if !IsLegacyClaudeCommandPath(claude[1]) || IsLegacyClaudeCommandPath(claude[0]) {

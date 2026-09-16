@@ -686,6 +686,16 @@ const (
 	legacyTriggerRulesOpenMarker = "<!-- gentle-ai:trigger-rules -->"
 )
 
+func containsRoutingMarkers(prompt string) bool {
+	hasOpen := strings.Contains(prompt, "<!-- axiom:"+agentguidance.RoutingSectionID+" -->") || strings.Contains(prompt, routingOpenMarker)
+	hasClose := strings.Contains(prompt, "<!-- /axiom:"+agentguidance.RoutingSectionID+" -->") || strings.Contains(prompt, routingCloseMarker)
+	return hasOpen && hasClose
+}
+
+func containsRemoteAuthMarker(prompt string) bool {
+	return strings.Contains(prompt, "<!-- axiom:remote-authorization -->") || strings.Contains(prompt, "<!-- gentle-ai:remote-authorization -->")
+}
+
 // newTestInstallRuntime builds an install runtime whose resolved plan mirrors
 // the selection, which is what the real planner produces for these inputs.
 func newTestInstallRuntime(t *testing.T, home string, selection model.Selection) *installRuntime {
@@ -804,7 +814,7 @@ func TestInstallRemoteAuthorizationIndependentOfComponents(t *testing.T) {
 			}
 			runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
 			prompt := readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode))
-			if !strings.Contains(prompt, "<!-- gentle-ai:remote-authorization -->") {
+			if !containsRemoteAuthMarker(prompt) {
 				t.Fatal("install omitted remote authorization without SDD/default persona")
 			}
 		})
@@ -887,10 +897,10 @@ func TestInstallRoutingGuidanceSurvivesOpenCodeSDDInjection(t *testing.T) {
 	runInstallComponentSteps(t, newTestInstallRuntime(t, home, selection))
 
 	prompt := openCodeOrchestratorPrompt(t, home)
-	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+	if !containsRoutingMarkers(prompt) {
 		t.Fatalf("SDD injection erased the routing guidance from the OpenCode orchestrator prompt:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "<!-- gentle-ai:remote-authorization -->") {
+	if !containsRemoteAuthMarker(prompt) {
 		t.Fatal("SDD reinjection erased the nested remote authorization boundary")
 	}
 	if !strings.Contains(prompt, "SDD Orchestrator") {

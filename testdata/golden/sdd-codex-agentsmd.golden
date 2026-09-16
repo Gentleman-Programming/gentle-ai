@@ -1,4 +1,4 @@
-<!-- gentle-ai:sdd-orchestrator -->
+<!-- axiom:sdd-orchestrator -->
 # SDD Orchestrator for Codex
 
 Bind this to the dedicated `sdd-orchestrator` agent or rule only. Do NOT apply it to executor phase agents such as `sdd-apply` or `sdd-verify`.
@@ -568,4 +568,4 @@ These profile files apply to whole CLI sessions: `codex --profile <name> "<promp
 | `sdd-mid` | `gpt-5.6-terra` | `high` | apply, fix-agent |
 | `sdd-cheap` | `gpt-5.6-luna` | `high` | spec, tasks, archive, onboard |
 
-<!-- /gentle-ai:sdd-orchestrator -->
+<!-- /axiom:sdd-orchestrator -->

@@ -1,6 +1,6 @@
 ---
 description: Start a new SDD change — runs exploration then creates a proposal
-agent: gentle-orchestrator
+agent: axiom-orchestrator
 ---
 
 Follow the SDD orchestrator workflow for starting a new change named "$ARGUMENTS".

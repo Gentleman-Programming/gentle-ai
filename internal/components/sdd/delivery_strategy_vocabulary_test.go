@@ -547,9 +547,12 @@ func preservedOrchestratorPrompt(t *testing.T, settingsPath string) string {
 	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
 		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
 	}
-	prompt := settings.Agent["gentle-orchestrator"].Prompt
+	prompt := settings.Agent["axiom-orchestrator"].Prompt
 	if prompt == "" {
-		t.Fatal("opencode.json lost the preserved gentle-orchestrator prompt")
+		prompt = settings.Agent["gentle-orchestrator"].Prompt
+	}
+	if prompt == "" {
+		t.Fatal("opencode.json lost the preserved orchestrator prompt")
 	}
 	return prompt
 }

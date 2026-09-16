@@ -322,7 +322,7 @@ func TestPiCodeGraphPathsExcludesUnsafeManifestPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Dir(outside), escapedDir); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlink not supported on this platform/privilege: %v", err)
 	}
 
 	for _, tt := range []struct {

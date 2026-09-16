@@ -174,7 +174,7 @@ func TestSDDEditAuthorityConsentGrantLoop(t *testing.T) {
 
 	// Only explicit continuation prepares the identity before read-only re-entry.
 	initial, initialPayload := consentStatus(t, environment, planning, change)
-	markerPath := filepath.Join(planning, "openspec", "changes", change, ".gentle-ai-instance")
+	markerPath := filepath.Join(planning, "openspec", "changes", change, ".axiom-instance")
 	if initial.Consent != nil || initial.ApplyState != "blocked" || len(initial.ActionContext.AllowedEditRoots) != 1 {
 		t.Fatalf("initial status granted authority: %s", initialPayload)
 	}
@@ -271,7 +271,7 @@ func TestSDDSameParentRepositoryConsentGrantLoop(t *testing.T) {
 	}, "\n"))
 
 	initial, initialPayload := consentStatus(t, environment, planning, change)
-	markerPath := filepath.Join(planning, "openspec", "changes", change, ".gentle-ai-instance")
+	markerPath := filepath.Join(planning, "openspec", "changes", change, ".axiom-instance")
 	if initial.Consent != nil || initial.ApplyState != "blocked" || len(initial.ActionContext.AllowedEditRoots) != 1 {
 		t.Fatalf("initial status granted authority: %s", initialPayload)
 	}
@@ -328,7 +328,7 @@ func TestSDDSingleRepoStatusStaysByteIdenticalWithZeroConsentFootprint(t *testin
 	if strings.Contains(first, "\"consent\"") || strings.Contains(first, "edit_authority_missing") {
 		t.Fatalf("single-repo status carries a consent footprint: %s", first)
 	}
-	if _, err := os.Lstat(filepath.Join(planning, "openspec", "changes", change, ".gentle-ai-instance")); !os.IsNotExist(err) {
+	if _, err := os.Lstat(filepath.Join(planning, "openspec", "changes", change, ".axiom-instance")); !os.IsNotExist(err) {
 		t.Fatalf("single-repo status minted an instance marker: %v", err)
 	}
 }

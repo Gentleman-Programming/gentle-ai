@@ -80,11 +80,11 @@ func TestNoSubtaskOnSDDOpenCodeCommands(t *testing.T) {
 	root := filepath.Join("..", "..", "internal", "assets", "opencode", "commands")
 	for _, name := range delegatingSDDCommands {
 		meta := decodeCommandFrontmatter(t, filepath.Join(root, name))
-		if meta.Agent != "gentle-orchestrator" {
-			t.Errorf("%s lost `agent: gentle-orchestrator` routing (got %q); the fix must remove only `subtask: true`", name, meta.Agent)
+		if meta.Agent != "axiom-orchestrator" {
+			t.Errorf("%s lost `agent: axiom-orchestrator` routing (got %q); the fix must remove only `subtask: true`", name, meta.Agent)
 		}
 		if meta.Subtask {
-			t.Errorf("%s still declares `subtask: true`; OpenCode will force gentle-orchestrator into a sub-agent invocation. Remove the line from the YAML frontmatter (the orchestrator `task` allowlist already covers every phase worker).", name)
+			t.Errorf("%s still declares `subtask: true`; OpenCode will force axiom-orchestrator into a sub-agent invocation. Remove the line from the YAML frontmatter (the orchestrator `task` allowlist already covers every phase worker).", name)
 		}
 	}
 }

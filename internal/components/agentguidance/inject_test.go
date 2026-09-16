@@ -87,8 +87,10 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 				t.Fatal(err)
 			}
 			prompt := deliveredGuidance(t, first.Files[0])
+			if !containsRemoteAuthMarker(prompt) {
+				t.Errorf("primary carrier missing remote-authorization marker")
+			}
 			for _, required := range []string{
-				"<!-- gentle-ai:remote-authorization -->",
 				"destination", "operation", "credential/session",
 				"SSH agents", "ControlMaster", "not a sandbox",
 			} {
@@ -146,10 +148,10 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 			if !strings.Contains(written, rendered) {
 				t.Fatalf("InjectRouting(%q) did not write the rendered guidance:\n%s", agent.ID, written)
 			}
-			if !strings.Contains(written, "<!-- gentle-ai:"+RoutingSectionID+" -->") {
+			if !containsRoutingOpenMarker(written) {
 				t.Fatalf("InjectRouting(%q) did not open the managed section:\n%s", agent.ID, written)
 			}
-			if !strings.Contains(written, "<!-- /gentle-ai:"+RoutingSectionID+" -->") {
+			if !containsRoutingCloseMarker(written) {
 				t.Fatalf("InjectRouting(%q) did not close the managed section:\n%s", agent.ID, written)
 			}
 			if !strings.Contains(written, "First establish whether the requested outcome explicitly authorizes a change.") {
@@ -414,8 +416,7 @@ func TestInjectRoutingUsesAlwaysLoadedOrchestratorScope(t *testing.T) {
 			if !strings.Contains(prompt, rendered) {
 				t.Fatalf("orchestrator prompt for %q carries no routing guidance:\n%s", agent, prompt)
 			}
-			if !strings.Contains(prompt, "<!-- gentle-ai:"+RoutingSectionID+" -->") ||
-				!strings.Contains(prompt, "<!-- /gentle-ai:"+RoutingSectionID+" -->") {
+			if !containsRoutingOpenMarker(prompt) || !containsRoutingCloseMarker(prompt) {
 				t.Fatalf("orchestrator prompt for %q carries no managed section:\n%s", agent, prompt)
 			}
 
@@ -693,18 +694,32 @@ func orchestratorPrompt(t *testing.T, path string) string {
 	return settings.Agent[opencodedefault.ManagedAgent].Prompt
 }
 
+func containsRoutingOpenMarker(content string) bool {
+	return strings.Contains(content, "<!-- axiom:"+RoutingSectionID+" -->") || strings.Contains(content, "<!-- gentle-ai:"+RoutingSectionID+" -->")
+}
+
+func containsRoutingCloseMarker(content string) bool {
+	return strings.Contains(content, "<!-- /axiom:"+RoutingSectionID+" -->") || strings.Contains(content, "<!-- /gentle-ai:"+RoutingSectionID+" -->")
+}
+
+func containsRemoteAuthMarker(content string) bool {
+	return strings.Contains(content, "<!-- axiom:remote-authorization -->") || strings.Contains(content, "<!-- gentle-ai:remote-authorization -->")
+}
+
 // managedRoutingBlock returns only the content Gentle AI owns, so assertions
 // about the block never accidentally inspect surrounding user content.
 func managedRoutingBlock(content string) string {
-	open := "<!-- gentle-ai:" + RoutingSectionID + " -->"
-	closing := "<!-- /gentle-ai:" + RoutingSectionID + " -->"
-
-	start := strings.Index(content, open)
-	end := strings.Index(content, closing)
-	if start < 0 || end <= start {
-		return ""
+	for _, prefix := range []string{"<!-- axiom:", "<!-- gentle-ai:"} {
+		open := prefix + RoutingSectionID + " -->"
+		closePrefix := "<!-- /" + strings.TrimPrefix(prefix, "<!-- ")
+		closing := closePrefix + RoutingSectionID + " -->"
+		start := strings.Index(content, open)
+		end := strings.Index(content, closing)
+		if start >= 0 && end > start {
+			return content[start+len(open) : end]
+		}
 	}
-	return content[start+len(open) : end]
+	return ""
 }
 
 func writeJSON(t *testing.T, path string, value map[string]any) {

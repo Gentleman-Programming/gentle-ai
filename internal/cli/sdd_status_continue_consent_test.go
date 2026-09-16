@@ -23,7 +23,7 @@ func TestSDDStatusDoesNotPrepareConsentMarker(t *testing.T) {
 	if err := RunSDDStatus([]string{"marker-status", "--cwd", root, "--json"}, &stdout); err != nil {
 		t.Fatalf("RunSDDStatus() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(changeRoot, ".gentle-ai-instance")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(changeRoot, ".axiom-instance")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("status prepared a marker: stat error = %v", err)
 	}
 	var status sddstatus.Status
@@ -47,7 +47,7 @@ func TestSDDContinuePlanningMarkerScopePreparesWhileApplyStaysBlocked(t *testing
 	if err := RunSDDContinue([]string{"marker-continue", "--cwd", root, "--json"}, &stdout); err != nil {
 		t.Fatalf("RunSDDContinue() error = %v", err)
 	}
-	marker, err := os.ReadFile(filepath.Join(changeRoot, ".gentle-ai-instance"))
+	marker, err := os.ReadFile(filepath.Join(changeRoot, ".axiom-instance"))
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(marker)), "sdd-") {
 		t.Fatalf("continue did not prepare a marker: %q, %v", marker, err)
 	}
@@ -64,7 +64,7 @@ func TestSDDContinueRefusesMarkerFilesystemFailure(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedSDDStatusReadyChange(t, root, "marker-read-only", "- [ ] 1.1 Update `../source/main.go`\n")
 	writeSDDStatusFile(t, filepath.Join(root, "source", "main.go"), "package source\n")
-	markerPath := filepath.Join(changeRoot, ".gentle-ai-instance")
+	markerPath := filepath.Join(changeRoot, ".axiom-instance")
 	if err := os.Mkdir(markerPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +142,7 @@ func TestSDDCLIRepeatedStatusAndPreparationPreserveAuthority(t *testing.T) {
 			t.Fatal("status mutated marker/artifact/authority bytes")
 		}
 		if present {
+			delete(before, filepath.Join(root, ".axiom-instance"))
 			delete(before, filepath.Join(root, ".gentle-ai-instance"))
 			if !reflect.DeepEqual(before, initial) {
 				t.Fatal("preparation changed more than marker")

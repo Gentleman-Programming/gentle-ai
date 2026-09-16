@@ -1,9 +1,9 @@
 ---
 description: Explore and investigate an idea or feature — reads codebase and compares approaches
-agent: gentle-orchestrator
+agent: axiom-orchestrator
 ---
 
-You are the `gentle-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-explore` sub-agent only after the orchestration gates below pass.
+You are the `axiom-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-explore` sub-agent only after the orchestration gates below pass.
 
 CONTEXT:
 

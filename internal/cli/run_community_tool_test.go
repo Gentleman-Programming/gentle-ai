@@ -780,7 +780,8 @@ func assertOpenCodeSharedPromptCodeGraphGuidance(t *testing.T, home string, want
 		t.Fatalf("ReadFile(%q) error = %v", promptPath, err)
 	}
 	text := string(content)
-	hasGuidance := strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") && strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>")
+	hasMarker := strings.Contains(text, "<!-- axiom:codegraph-guidance -->") || strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->")
+	hasGuidance := hasMarker && strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>")
 	if hasGuidance != want {
 		t.Fatalf("CodeGraph guidance present = %v, want %v in %s", hasGuidance, want, promptPath)
 	}

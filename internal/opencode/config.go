@@ -264,12 +264,15 @@ func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
 	assignments := make(map[string]AssignmentPresence, len(agentRaw))
 	for name, raw := range agentRaw {
 		key := name
-		if name == "sdd-orchestrator" {
-			key = "gentle-orchestrator"
+		if name == "sdd-orchestrator" || name == "gentle-orchestrator" {
+			key = "axiom-orchestrator"
 		}
 		def, ok := raw.(map[string]any)
 		if !ok {
 			assignments[key] = AssignmentPresence{Present: true}
+			if key != name {
+				assignments[name] = assignments[key]
+			}
 			continue
 		}
 		modelValue, hasModel := def["model"]
@@ -279,15 +282,25 @@ func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
 			// cleared. Restoration may exempt a managed definition when its active
 			// mode intentionally generates agents without model fields.
 			assignments[key] = AssignmentPresence{Present: true, Cleared: true, Managed: looksLikeManagedOpenCodeAgent(def)}
+			if key != name {
+				assignments[name] = assignments[key]
+			}
 			continue
 		}
 		providerID, modelID, ok := model.SplitModelSpec(strings.TrimSpace(modelSpec))
 		if !ok {
 			assignments[key] = AssignmentPresence{Present: true}
+			if key != name {
+				assignments[name] = assignments[key]
+			}
 			continue
 		}
 		effort, _ := def["variant"].(string)
-		assignments[key] = AssignmentPresence{Present: true, Assignment: model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}}
+		presence := AssignmentPresence{Present: true, Assignment: model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}}
+		assignments[key] = presence
+		if key != name {
+			assignments[name] = presence
+		}
 	}
 	return assignments
 }
@@ -318,7 +331,7 @@ func managedConfigPriority(path string) int {
 	agents, _ := root["agent"].(map[string]any)
 	for _, raw := range agents {
 		def, _ := raw.(map[string]any)
-		if def["__managed_by"] == "gentle-ai/sdd" {
+		if def["__managed_by"] == "axiom/sdd" || def["__managed_by"] == "gentle-ai/sdd" {
 			return 2
 		}
 	}
@@ -332,7 +345,7 @@ func managedConfigPriority(path string) int {
 }
 
 func managedOpenCodeAgentKeys() []string {
-	keys := []string{"gentle-orchestrator", "sdd-orchestrator", ReviewRefuterAgent, ReviewValidatorAgent}
+	keys := []string{"axiom-orchestrator", "gentle-orchestrator", "sdd-orchestrator", ReviewRefuterAgent, ReviewValidatorAgent}
 	keys = append(keys, SDDPhases()...)
 	keys = append(keys, JDPhases()...)
 	return keys

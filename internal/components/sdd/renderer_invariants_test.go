@@ -248,16 +248,23 @@ func TestOpenCodeBaseInjectionBindsAssignmentsAndPreservesContract(t *testing.T)
 	assertCurrentOpenCodeOrchestratorContract(t, "OpenCode base injection", prompt, model.AgentOpenCode, "")
 
 	for agentName, wantModel := range map[string]string{
-		"gentle-orchestrator": "openai/gpt-5.1",
-		"sdd-apply":           "anthropic/claude-sonnet-4-5",
+		"axiom-orchestrator": "openai/gpt-5.1",
+		"sdd-apply":          "anthropic/claude-sonnet-4-5",
 	} {
 		entry, ok := agentsMap[agentName].(map[string]any)
+		if !ok && agentName == "axiom-orchestrator" {
+			entry, ok = agentsMap["gentle-orchestrator"].(map[string]any)
+		}
 		if !ok || entry["model"] != wantModel {
 			t.Fatalf("%s model = %#v, want %q", agentName, entry["model"], wantModel)
 		}
 	}
-	if variant := agentsMap["gentle-orchestrator"].(map[string]any)["variant"]; variant != "high" {
-		t.Fatalf("gentle-orchestrator variant = %#v, want high", variant)
+	orchEntry, _ := agentsMap["axiom-orchestrator"].(map[string]any)
+	if orchEntry == nil {
+		orchEntry = agentsMap["gentle-orchestrator"].(map[string]any)
+	}
+	if variant := orchEntry["variant"]; variant != "high" {
+		t.Fatalf("orchestrator variant = %#v, want high", variant)
 	}
 }
 

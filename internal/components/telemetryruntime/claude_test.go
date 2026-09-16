@@ -60,7 +60,7 @@ func TestReadClaudeFileRefusesOutsideHomeSymlink(t *testing.T) {
 	}
 	link := filepath.Join(home, "transcript.jsonl")
 	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlink not supported on this platform/privilege: %v", err)
 	}
 	if _, _, err := readClaudeFile(home, link, telemetry.ClaudeTranscriptMaxBytes, true); err == nil {
 		t.Fatal("followed symlink outside home")

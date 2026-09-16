@@ -23,7 +23,7 @@ func TestSDDAttemptRefusesRecreatedMarker(t *testing.T) {
 	if err := RunSDDContinue([]string{change, "--cwd", repo, "--json"}, &continued); err != nil {
 		t.Fatalf("RunSDDContinue() error = %v", err)
 	}
-	oldMarker, err := os.ReadFile(filepath.Join(changeRoot, ".gentle-ai-instance"))
+	oldMarker, err := os.ReadFile(filepath.Join(changeRoot, ".axiom-instance"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestSDDAttemptRefusesRecreatedMarker(t *testing.T) {
 	if err == nil {
 		t.Fatal("RunSDDAttempt(grant) error = nil, want stale-marker refusal")
 	}
-	if _, err := os.Stat(filepath.Join(changeRoot, ".gentle-ai-instance")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(changeRoot, ".axiom-instance")); !os.IsNotExist(err) {
 		t.Fatalf("stale grant initialized recreated marker: %v", err)
 	}
 	after, err := store.Status()
@@ -72,7 +72,7 @@ func TestSDDAttemptRefusesRecreatedMarker(t *testing.T) {
 	if err := RunSDDContinue([]string{change, "--cwd", repo, "--json"}, &continued); err != nil {
 		t.Fatal(err)
 	}
-	markerPath := filepath.Join(changeRoot, ".gentle-ai-instance")
+	markerPath := filepath.Join(changeRoot, ".axiom-instance")
 	newMarker, err := os.ReadFile(markerPath)
 	if err != nil || bytes.Equal(newMarker, oldMarker) {
 		t.Fatalf("B did not get distinct persisted marker: %q %v", newMarker, err)

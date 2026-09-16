@@ -1,9 +1,9 @@
 {
   "agent": {
-    "gentle-orchestrator": {
+    "axiom-orchestrator": {
       "__managed_by": "gentle-ai/sdd",
       "mode": "primary",
-      "description": "Gentle AI SDD Orchestrator - coordinates sub-agents, never does work inline",
+      "description": "Axiom SDD Orchestrator - coordinates sub-agents, never does work inline",
       "prompt": "{file:./AGENTS.md}",
       "permission": {
         "question": "allow",

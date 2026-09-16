@@ -1,4 +1,4 @@
-<!-- gentle-ai:persona -->
+<!-- axiom:persona -->
 ## Rules
 
 - Never add "Co-Authored-By" or AI attribution to commits. Use conventional commits only.
@@ -73,9 +73,9 @@ The `<available_skills>` block in your system prompt is authoritative — it lis
 **Self-check BEFORE every response**: does this request match any skill in `<available_skills>`? If yes, read the matching SKILL.md (using your agent's read mechanism) BEFORE generating your reply. This is a blocking requirement, not optional context. Skipping it is a discipline failure.
 
 Multiple skills can apply at once. Match by file context (extensions, paths) and task context (what the user is asking for).
-<!-- /gentle-ai:persona -->
+<!-- /axiom:persona -->
 
-<!-- gentle-ai:sdd-orchestrator -->
+<!-- axiom:sdd-orchestrator -->
 # Agent Teams Lite — Orchestrator Instructions (Windsurf Cascade)
 
 Bind this to the dedicated `sdd-orchestrator` rule or memory only. Do NOT apply it to phase skill files such as `sdd-apply` or `sdd-verify`.
@@ -603,9 +603,9 @@ DAG state is tracked in Engram under `sdd/{change-name}/state`. Update it after 
 - `engram` → `mem_search(...)` → `mem_get_observation(...)`
 - `openspec` → read `openspec/changes/*/state.yaml`
 - `none` → state not persisted — explain to user
-<!-- /gentle-ai:sdd-orchestrator -->
+<!-- /axiom:sdd-orchestrator -->
 
-<!-- gentle-ai:engram-protocol -->
+<!-- axiom:engram-protocol -->
 ## Engram Persistent Memory — Protocol
 
 You have access to Engram, a persistent memory system that survives across sessions and compactions.
@@ -737,4 +737,4 @@ If you see a compaction message or "FIRST ACTION REQUIRED":
 3. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
-<!-- /gentle-ai:engram-protocol -->
+<!-- /axiom:engram-protocol -->

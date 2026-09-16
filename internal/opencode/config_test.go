@@ -91,6 +91,7 @@ func TestResolveEffectiveConfigPrecedenceAndDefaultWriteTarget(t *testing.T) {
 	}
 	emptyHome := t.TempDir()
 	t.Setenv("HOME", emptyHome)
+	t.Setenv("USERPROFILE", emptyHome)
 	emptyProject := filepath.Join(emptyHome, "empty-project")
 	if err := os.MkdirAll(emptyProject, 0o700); err != nil {
 		t.Fatalf("mkdir empty project: %v", err)

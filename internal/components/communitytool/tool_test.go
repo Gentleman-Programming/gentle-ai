@@ -390,7 +390,7 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 			t.Fatalf("ReadFile(%q) error = %v", path, err)
 		}
 		text := string(content)
-		if !strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
+		if !containsCodeGraphMarker(text) || !strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
 			t.Fatalf("%q missing CodeGraph guidance:\n%s", path, text)
 		}
 	}
@@ -432,10 +432,13 @@ func TestCodeGraphGuidanceInjectRemovesLegacySkipBlock(t *testing.T) {
 			t.Fatalf("legacy CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "more notes", "gentle-ai codegraph init --cwd <project-root>"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
+	}
+	if !containsCodeGraphMarker(text) {
+		t.Fatalf("updated guidance missing codegraph-guidance marker:\n%s", text)
 	}
 }
 
@@ -479,10 +482,13 @@ func TestCodeGraphGuidanceInjectRemovesUnmarkedUpstreamDuplicateBlock(t *testing
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "## CodeGraph manual notes", "This manual section is unrelated and must stay.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "## CodeGraph manual notes", "This manual section is unrelated and must stay.", "more notes", "gentle-ai codegraph init --cwd <project-root>"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
+	}
+	if !containsCodeGraphMarker(text) {
+		t.Fatalf("updated guidance missing codegraph-guidance marker:\n%s", text)
 	}
 }
 
@@ -526,10 +532,13 @@ func TestCodeGraphGuidanceInjectPreservesManualNotesInsideUnmarkedCodeGraphSecti
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "Manual note: keep CodeGraph indexes outside throwaway directories.", "Manual note: rerun `codegraph sync` after large refactors.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "Manual note: keep CodeGraph indexes outside throwaway directories.", "Manual note: rerun `codegraph sync` after large refactors.", "more notes", "gentle-ai codegraph init --cwd <project-root>"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
+	}
+	if !containsCodeGraphMarker(text) {
+		t.Fatalf("updated guidance missing codegraph-guidance marker:\n%s", text)
 	}
 }
 
@@ -580,10 +589,13 @@ func TestCodeGraphGuidanceInjectPreservesManualNoteBoundaryBeforeNextHeading(t *
 			t.Fatalf("manual note boundary contains invalid separator %q:\n%s", broken, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "This section must remain separate.", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "This section must remain separate.", "gentle-ai codegraph init --cwd <project-root>"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
+	}
+	if !containsCodeGraphMarker(text) {
+		t.Fatalf("updated guidance missing codegraph-guidance marker:\n%s", text)
 	}
 }
 
@@ -627,10 +639,13 @@ func TestCodeGraphGuidanceInjectPreservesManualNotesBeforeUnmarkedUpstreamDuplic
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "Manual note: always inspect the project root before using generated indexes.", "Manual note: never initialize CodeGraph in scratch directories.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "Manual note: always inspect the project root before using generated indexes.", "Manual note: never initialize CodeGraph in scratch directories.", "more notes", "gentle-ai codegraph init --cwd <project-root>"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
+	}
+	if !containsCodeGraphMarker(text) {
+		t.Fatalf("updated guidance missing codegraph-guidance marker:\n%s", text)
 	}
 }
 
@@ -673,10 +688,13 @@ func TestCodeGraphGuidanceInjectPreservesManualNotesInterleavedWithUnmarkedUpstr
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "Manual note: prefer the MCP tool when it returns exact source.", "Manual note: shell fallback is okay after CodeGraph initialization fails.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "Manual note: prefer the MCP tool when it returns exact source.", "Manual note: shell fallback is okay after CodeGraph initialization fails.", "more notes", "gentle-ai codegraph init --cwd <project-root>"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
+	}
+	if !containsCodeGraphMarker(text) {
+		t.Fatalf("updated guidance missing codegraph-guidance marker:\n%s", text)
 	}
 }
 
@@ -1458,4 +1476,8 @@ func findAgentStatus(t *testing.T, status Status, id model.AgentID) AgentStatus 
 	}
 	t.Fatalf("agent %s not found in %#v", id, status.Agents)
 	return AgentStatus{}
+}
+
+func containsCodeGraphMarker(text string) bool {
+	return strings.Contains(text, "<!-- axiom:codegraph-guidance -->") || strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->")
 }

@@ -1,4 +1,4 @@
-<!-- gentle-ai:sdd-orchestrator -->
+<!-- axiom:sdd-orchestrator -->
 # Agent Teams Lite — Orchestrator Instructions
 
 Bind this to the Claude Code orchestrator rule only. Do NOT apply it to executor phase agents such as `sdd-apply` or `sdd-verify`.
@@ -261,4 +261,4 @@ The detailed SDD procedure is intentionally NOT embedded in this always-on paren
 `.claude/skills/_shared/sdd-orchestrator-workflow.md` under the workspace when a workspace-scope install wrote it there, otherwise `~/.claude/skills/_shared/sdd-orchestrator-workflow.md`
 
 That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
-<!-- /gentle-ai:sdd-orchestrator -->
+<!-- /axiom:sdd-orchestrator -->

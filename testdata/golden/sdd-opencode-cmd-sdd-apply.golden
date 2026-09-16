@@ -1,9 +1,9 @@
 ---
 description: Implement SDD tasks — writes code following specs and design
-agent: gentle-orchestrator
+agent: axiom-orchestrator
 ---
 
-You are the `gentle-orchestrator`, not an SDD executor. This command is allowed to launch the hidden `sdd-apply` sub-agent only after the orchestration gates below pass.
+You are the `axiom-orchestrator`, not an SDD executor. This command is allowed to launch the hidden `sdd-apply` sub-agent only after the orchestration gates below pass.
 
 CONTEXT:
 

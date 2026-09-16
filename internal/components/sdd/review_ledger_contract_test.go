@@ -244,9 +244,12 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 func assertOpenCodeTargetedValidator(t *testing.T, label string, agents map[string]any) {
 	t.Helper()
 
-	orchestrator, ok := agents["gentle-orchestrator"].(map[string]any)
+	orchestrator, ok := agents["axiom-orchestrator"].(map[string]any)
 	if !ok {
-		t.Fatalf("%s missing gentle-orchestrator", label)
+		orchestrator, ok = agents["gentle-orchestrator"].(map[string]any)
+	}
+	if !ok {
+		t.Fatalf("%s missing axiom-orchestrator", label)
 	}
 	permission, ok := orchestrator["permission"].(map[string]any)
 	if !ok {
@@ -515,7 +518,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
 	// INC-10: Language Domain Contract updated for Axiom Spanish SDD artifacts. Deliberate, not drift.
-	const want = "29c68c51dfbaf72193685a91de2faa420d3af291770cbb3f034418b54ad159a0"
+	// INC-11: Orchestrator agent renamed to axiom-orchestrator. Deliberate, not drift.
+	const want = "fdee23b479f8b1dd40590976bb2795e66f4d1bc95fb77a8265b028dc84b99219"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -805,8 +809,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// headroom each row already had.
 		// #4324 adds 1,354 canonical remote-authorization characters per reviewer.
 		// Preserve the existing absolute ceiling margins (3 and 1,533 characters).
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_718, maxCharacters: 18_721},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_125, maxCharacters: 36_658},
+		// INC-11: Canonical markers <!-- axiom:... --> save 16 characters per section vs legacy <!-- gentle-ai:... -->.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_702, maxCharacters: 18_721},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_061, maxCharacters: 36_658},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -892,7 +897,13 @@ func readGentleOrchestratorPrompt(t *testing.T, settingsPath string) string {
 		t.Fatal(err)
 	}
 	agentsMap := root["agent"].(map[string]any)
-	orchestrator := agentsMap["gentle-orchestrator"].(map[string]any)
+	orchestrator, ok := agentsMap["axiom-orchestrator"].(map[string]any)
+	if !ok {
+		orchestrator, ok = agentsMap["gentle-orchestrator"].(map[string]any)
+	}
+	if !ok {
+		t.Fatal("missing orchestrator in agents map")
+	}
 	return orchestrator["prompt"].(string)
 }
 

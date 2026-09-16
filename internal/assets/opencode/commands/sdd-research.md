@@ -1,9 +1,9 @@
 ---
 description: Collect source-backed evidence for a selected SDD research lane
-agent: gentle-orchestrator
+agent: axiom-orchestrator
 ---
 
-You are the `gentle-orchestrator`, not the executor. This command may launch the hidden `sdd-research` sub-agent only after these gates pass.
+You are the `axiom-orchestrator`, not the executor. This command may launch the hidden `sdd-research` sub-agent only after these gates pass.
 
 1. SDD Session Preflight must already be complete. If missing, ask the exact orchestrator preflight prompt and STOP.
 2. `sdd-init` and a selected research request must exist.

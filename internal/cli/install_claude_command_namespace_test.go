@@ -34,25 +34,26 @@ func claudeCommandSkillCollisions(t *testing.T, home string) []string {
 	return collisions
 }
 
-func TestRunInstallClaudeCommandsNeverShareASkillName(t *testing.T) {
+func TestRunInstallClaudeCommandsCanonical(t *testing.T) {
 	home := installTestHome(t)
 
 	if _, err := RunInstall([]string{"--agents", "claude-code", "--components", "sdd"}, system.DetectionResult{}); err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
 
-	if collisions := claudeCommandSkillCollisions(t, home); len(collisions) > 0 {
-		t.Fatalf("~/.claude/commands files shadowed by same-named ~/.claude/skills directories: %v", collisions)
-	}
 	for _, command := range sdd.OpenCodeCommands() {
-		path := filepath.Join(home, ".claude", "commands", "gentle-"+command.Name+".md")
+		path := filepath.Join(home, ".claude", "commands", command.Name+".md")
 		if _, err := os.Stat(path); err != nil {
-			t.Errorf("expected namespaced Claude command %q: %v", path, err)
+			t.Errorf("expected canonical Claude command %q: %v", path, err)
+		}
+		legacyPath := filepath.Join(home, ".claude", "commands", "gentle-"+command.Name+".md")
+		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+			t.Errorf("unexpected legacy Claude command %q still present", legacyPath)
 		}
 	}
 }
 
-func TestRunSyncRetiresUnprefixedClaudeCommands(t *testing.T) {
+func TestRunSyncRetiresPrefixedClaudeCommands(t *testing.T) {
 	home := installTestHome(t)
 	restoreBackupHome := backup.UserHomeDirFn
 	backup.UserHomeDirFn = func() (string, error) { return home, nil }
@@ -65,8 +66,8 @@ func TestRunSyncRetiresUnprefixedClaudeCommands(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("state.Write() error = %v", err)
 	}
-	legacy := filepath.Join(home, ".claude", "commands", "sdd-init.md")
-	mustWriteFile(t, legacy, []byte("# pre-#2644 managed command\n"))
+	legacy := filepath.Join(home, ".claude", "commands", "gentle-sdd-init.md")
+	mustWriteFile(t, legacy, []byte("# legacy managed command\n"))
 	custom := filepath.Join(home, ".claude", "commands", "my-command.md")
 	mustWriteFile(t, custom, []byte("keep"))
 
@@ -81,13 +82,10 @@ func TestRunSyncRetiresUnprefixedClaudeCommands(t *testing.T) {
 	if !containsPath(result.ChangedFiles, legacy) {
 		t.Errorf("ChangedFiles missing retired command %q\nchanged = %#v", legacy, result.ChangedFiles)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".claude", "commands", "gentle-sdd-init.md")); err != nil {
-		t.Errorf("sync did not write the namespaced command: %v", err)
+	if _, err := os.Stat(filepath.Join(home, ".claude", "commands", "sdd-init.md")); err != nil {
+		t.Errorf("sync did not write the canonical command: %v", err)
 	}
 	if _, err := os.Stat(custom); err != nil {
 		t.Errorf("sync removed a user-owned command: %v", err)
-	}
-	if collisions := claudeCommandSkillCollisions(t, home); len(collisions) > 0 {
-		t.Fatalf("~/.claude/commands files shadowed by same-named ~/.claude/skills directories: %v", collisions)
 	}
 }

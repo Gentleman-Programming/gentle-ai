@@ -8,7 +8,7 @@ import (
 func TestInjectMarkdownSection_EmptyFile(t *testing.T) {
 	result := InjectMarkdownSection("", "sdd", "## SDD Config\nSome content here.\n")
 
-	want := "<!-- gentle-ai:sdd -->\n## SDD Config\nSome content here.\n<!-- /gentle-ai:sdd -->\n"
+	want := "<!-- axiom:sdd -->\n## SDD Config\nSome content here.\n<!-- /axiom:sdd -->\n"
 	if result != want {
 		t.Fatalf("empty file inject:\ngot:  %q\nwant: %q", result, want)
 	}
@@ -21,6 +21,33 @@ func TestExtractHTMLCommentSection(t *testing.T) {
 	}
 	if got := ExtractHTMLCommentSection(content, "missing"); got != content {
 		t.Fatalf("ExtractHTMLCommentSection() missing = %q, want original content", got)
+	}
+
+	axiomContent := "before\n<!-- axiom:sdd -->\nsdd body\n<!-- /axiom:sdd -->\nafter\n"
+	if got := ExtractHTMLCommentSection(axiomContent, "sdd"); got != "sdd body\n" {
+		t.Fatalf("ExtractHTMLCommentSection(axiom) = %q, want section body", got)
+	}
+
+	legacyContent := "before\n<!-- gentle-ai:sdd -->\nlegacy body\n<!-- /gentle-ai:sdd -->\nafter\n"
+	if got := ExtractHTMLCommentSection(legacyContent, "sdd"); got != "legacy body\n" {
+		t.Fatalf("ExtractHTMLCommentSection(legacy) = %q, want section body", got)
+	}
+}
+
+func TestExtractManagedSection(t *testing.T) {
+	axiomContent := "before\n<!-- axiom:sdd -->\nsdd body\n<!-- /axiom:sdd -->\nafter\n"
+	if got := ExtractManagedSection(axiomContent, "sdd"); got != "sdd body\n" {
+		t.Fatalf("ExtractManagedSection(axiom) = %q, want section body", got)
+	}
+
+	legacyContent := "before\n<!-- gentle-ai:sdd -->\nlegacy body\n<!-- /gentle-ai:sdd -->\nafter\n"
+	if got := ExtractManagedSection(legacyContent, "sdd"); got != "legacy body\n" {
+		t.Fatalf("ExtractManagedSection(legacy) = %q, want section body", got)
+	}
+
+	missing := "before and after"
+	if got := ExtractManagedSection(missing, "sdd"); got != missing {
+		t.Fatalf("ExtractManagedSection(missing) = %q, want original content", got)
 	}
 }
 
@@ -71,33 +98,47 @@ func TestInjectMarkdownSection_AppendToExistingContent(t *testing.T) {
 	existing := "# My Config\n\nSome existing content.\n"
 	result := InjectMarkdownSection(existing, "persona", "You are a senior architect.\n")
 
-	want := "# My Config\n\nSome existing content.\n\n<!-- gentle-ai:persona -->\nYou are a senior architect.\n<!-- /gentle-ai:persona -->\n"
+	want := "# My Config\n\nSome existing content.\n\n<!-- axiom:persona -->\nYou are a senior architect.\n<!-- /axiom:persona -->\n"
 	if result != want {
 		t.Fatalf("append to existing:\ngot:  %q\nwant: %q", result, want)
 	}
 }
 
 func TestInjectMarkdownSection_UpdateExistingSection(t *testing.T) {
-	existing := "# Config\n\n<!-- gentle-ai:sdd -->\nOld SDD content.\n<!-- /gentle-ai:sdd -->\n\nOther stuff.\n"
+	existing := "# Config\n\n<!-- axiom:sdd -->\nOld SDD content.\n<!-- /axiom:sdd -->\n\nOther stuff.\n"
 	result := InjectMarkdownSection(existing, "sdd", "New SDD content.\n")
 
-	want := "# Config\n\n<!-- gentle-ai:sdd -->\nNew SDD content.\n<!-- /gentle-ai:sdd -->\n\nOther stuff.\n"
+	want := "# Config\n\n<!-- axiom:sdd -->\nNew SDD content.\n<!-- /axiom:sdd -->\n\nOther stuff.\n"
 	if result != want {
 		t.Fatalf("update existing section:\ngot:  %q\nwant: %q", result, want)
 	}
 }
 
+func TestInjectMarkdownSection_MigratesLegacyGentleAiSection(t *testing.T) {
+	existing := "# Config\n\n<!-- gentle-ai:sdd -->\nOld SDD content.\n<!-- /gentle-ai:sdd -->\n\nOther stuff.\n"
+	result := InjectMarkdownSection(existing, "sdd", "New SDD content.\n")
+
+	want := "# Config\n\n<!-- axiom:sdd -->\nNew SDD content.\n<!-- /axiom:sdd -->\n\nOther stuff.\n"
+	if result != want {
+		t.Fatalf("migrate legacy gentle-ai section:\ngot:  %q\nwant: %q", result, want)
+	}
+}
+
 func TestInjectMarkdownSection_CollapsesDuplicateTargetSections(t *testing.T) {
 	const (
-		open  = "<!-- gentle-ai:persona -->"
-		close = "<!-- /gentle-ai:persona -->"
+		open  = "<!-- axiom:persona -->"
+		close = "<!-- /axiom:persona -->"
 	)
 
 	first := open + "\nfirst\n" + close
 	second := open + "\nsecond\n" + close
 	third := open + "\nthird\n" + close
 	canonical := open + "\ncurrent\n" + close
-	sdd := "<!-- gentle-ai:sdd -->\nkeep sdd\n<!-- /gentle-ai:sdd -->"
+	sdd := "<!-- axiom:sdd -->\nkeep sdd\n<!-- /axiom:sdd -->"
+
+	legacyOpen := "<!-- gentle-ai:persona -->"
+	legacyClose := "<!-- /gentle-ai:persona -->"
+	legacyFirst := legacyOpen + "\nlegacy first\n" + legacyClose
 
 	tests := []struct {
 		name        string
@@ -135,6 +176,12 @@ func TestInjectMarkdownSection_CollapsesDuplicateTargetSections(t *testing.T) {
 			replacement: "",
 			want:        "# Before\nUser middle.\n\n\n# After\n",
 		},
+		{
+			name:        "mixed legacy and canonical duplicate blocks collapse to canonical",
+			existing:    legacyFirst + "\n" + second,
+			replacement: "current\n",
+			want:        canonical + "\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -153,23 +200,23 @@ func TestInjectMarkdownSection_CollapsesDuplicateTargetSections(t *testing.T) {
 }
 
 func TestInjectMarkdownSection_MultipleSectionsOnlyTargetedOneUpdated(t *testing.T) {
-	existing := "# Config\n\n<!-- gentle-ai:persona -->\nPersona content.\n<!-- /gentle-ai:persona -->\n\n<!-- gentle-ai:sdd -->\nOld SDD.\n<!-- /gentle-ai:sdd -->\n\n<!-- gentle-ai:skills -->\nSkills content.\n<!-- /gentle-ai:skills -->\n"
+	existing := "# Config\n\n<!-- axiom:persona -->\nPersona content.\n<!-- /axiom:persona -->\n\n<!-- axiom:sdd -->\nOld SDD.\n<!-- /axiom:sdd -->\n\n<!-- axiom:skills -->\nSkills content.\n<!-- /axiom:skills -->\n"
 
 	result := InjectMarkdownSection(existing, "sdd", "Updated SDD.\n")
 
 	// persona and skills should be unchanged
-	want := "# Config\n\n<!-- gentle-ai:persona -->\nPersona content.\n<!-- /gentle-ai:persona -->\n\n<!-- gentle-ai:sdd -->\nUpdated SDD.\n<!-- /gentle-ai:sdd -->\n\n<!-- gentle-ai:skills -->\nSkills content.\n<!-- /gentle-ai:skills -->\n"
+	want := "# Config\n\n<!-- axiom:persona -->\nPersona content.\n<!-- /axiom:persona -->\n\n<!-- axiom:sdd -->\nUpdated SDD.\n<!-- /axiom:sdd -->\n\n<!-- axiom:skills -->\nSkills content.\n<!-- /axiom:skills -->\n"
 	if result != want {
 		t.Fatalf("multiple sections:\ngot:  %q\nwant: %q", result, want)
 	}
 }
 
 func TestInjectMarkdownSection_PreserveUserContentBeforeAndAfter(t *testing.T) {
-	existing := "# User's custom intro\n\nHand-written notes.\n\n<!-- gentle-ai:persona -->\nAuto persona.\n<!-- /gentle-ai:persona -->\n\n# User's custom footer\n\nMore hand-written content.\n"
+	existing := "# User's custom intro\n\nHand-written notes.\n\n<!-- axiom:persona -->\nAuto persona.\n<!-- /axiom:persona -->\n\n# User's custom footer\n\nMore hand-written content.\n"
 
 	result := InjectMarkdownSection(existing, "persona", "Updated persona.\n")
 
-	want := "# User's custom intro\n\nHand-written notes.\n\n<!-- gentle-ai:persona -->\nUpdated persona.\n<!-- /gentle-ai:persona -->\n\n# User's custom footer\n\nMore hand-written content.\n"
+	want := "# User's custom intro\n\nHand-written notes.\n\n<!-- axiom:persona -->\nUpdated persona.\n<!-- /axiom:persona -->\n\n# User's custom footer\n\nMore hand-written content.\n"
 	if result != want {
 		t.Fatalf("preserve user content:\ngot:  %q\nwant: %q", result, want)
 	}
@@ -177,7 +224,7 @@ func TestInjectMarkdownSection_PreserveUserContentBeforeAndAfter(t *testing.T) {
 
 func TestInjectMarkdownSection_MalformedMarkersTreatedAsNotFound(t *testing.T) {
 	// Only opening marker, no closing marker — treat as not found, append.
-	existing := "# Config\n\n<!-- gentle-ai:sdd -->\nOrphaned content.\n"
+	existing := "# Config\n\n<!-- axiom:sdd -->\nOrphaned content.\n"
 	result := InjectMarkdownSection(existing, "sdd", "New SDD content.\n")
 
 	// Should append since closing marker is missing.
@@ -186,7 +233,7 @@ func TestInjectMarkdownSection_MalformedMarkersTreatedAsNotFound(t *testing.T) {
 	}
 
 	// Result should contain the new properly-formed section.
-	wantOpen := "<!-- gentle-ai:sdd -->\nNew SDD content.\n<!-- /gentle-ai:sdd -->\n"
+	wantOpen := "<!-- axiom:sdd -->\nNew SDD content.\n<!-- /axiom:sdd -->\n"
 	if !strings.Contains(result, wantOpen) {
 		t.Fatalf("malformed markers: result should contain proper section:\ngot: %q", result)
 	}
@@ -194,11 +241,11 @@ func TestInjectMarkdownSection_MalformedMarkersTreatedAsNotFound(t *testing.T) {
 
 func TestInjectMarkdownSection_CloseBeforeOpenTreatedAsNotFound(t *testing.T) {
 	// Closing marker appears before opening — treat as not found.
-	existing := "<!-- /gentle-ai:sdd -->\nSome content.\n<!-- gentle-ai:sdd -->\n"
+	existing := "<!-- /axiom:sdd -->\nSome content.\n<!-- axiom:sdd -->\n"
 	result := InjectMarkdownSection(existing, "sdd", "New content.\n")
 
 	// Should append the section, not replace.
-	wantSuffix := "<!-- gentle-ai:sdd -->\nNew content.\n<!-- /gentle-ai:sdd -->\n"
+	wantSuffix := "<!-- axiom:sdd -->\nNew content.\n<!-- /axiom:sdd -->\n"
 	if !strings.HasSuffix(result, wantSuffix) {
 		t.Fatalf("close-before-open: expected appended section:\ngot: %q\nwant suffix: %q", result, wantSuffix)
 	}
@@ -208,8 +255,8 @@ func TestInjectMarkdownSection_CloseBeforeOpenTreatedAsNotFound(t *testing.T) {
 // infinite block accumulation caused by orphan closing markers being mishandled.
 func TestInjectMarkdownSection_OrphanRepair(t *testing.T) {
 	const sid = "engram-protocol"
-	open := "<!-- gentle-ai:" + sid + " -->"
-	close := "<!-- /gentle-ai:" + sid + " -->"
+	open := "<!-- axiom:" + sid + " -->"
+	close := "<!-- /axiom:" + sid + " -->"
 	newContent := "Engram protocol content.\n"
 
 	oneBlock := open + "\n" + newContent + close + "\n"
@@ -292,7 +339,7 @@ func TestInjectMarkdownSection_OrphanRepair(t *testing.T) {
 			},
 		},
 		{
-			// Scenario 4: file has NO markers at all. First sync must add exactly
+			// Scenario 4: file has NO markers at all. First sync adds exactly
 			// one complete block without duplicating anything.
 			name:     "no markers — first sync adds exactly one block",
 			existing: "# Clean file\n\nUser content only.\n",
@@ -329,12 +376,22 @@ func TestInjectMarkdownSection_OrphanRepair(t *testing.T) {
 }
 
 func TestInjectMarkdownSection_EmptyContentRemovesSection(t *testing.T) {
-	existing := "# Config\n\n<!-- gentle-ai:sdd -->\nSDD content here.\n<!-- /gentle-ai:sdd -->\n\nOther stuff.\n"
+	existing := "# Config\n\n<!-- axiom:sdd -->\nSDD content here.\n<!-- /axiom:sdd -->\n\nOther stuff.\n"
 	result := InjectMarkdownSection(existing, "sdd", "")
 
 	want := "# Config\n\nOther stuff.\n"
 	if result != want {
 		t.Fatalf("empty content removes section:\ngot:  %q\nwant: %q", result, want)
+	}
+}
+
+func TestInjectMarkdownSection_EmptyContentRemovesLegacySection(t *testing.T) {
+	existing := "# Config\n\n<!-- gentle-ai:sdd -->\nSDD content here.\n<!-- /gentle-ai:sdd -->\n\nOther stuff.\n"
+	result := InjectMarkdownSection(existing, "sdd", "")
+
+	want := "# Config\n\nOther stuff.\n"
+	if result != want {
+		t.Fatalf("empty content removes legacy section:\ngot:  %q\nwant: %q", result, want)
 	}
 }
 
@@ -350,7 +407,7 @@ func TestInjectMarkdownSection_EmptyContentOnMissingSectionNoOp(t *testing.T) {
 func TestInjectMarkdownSection_ContentWithoutTrailingNewline(t *testing.T) {
 	result := InjectMarkdownSection("", "test", "no trailing newline")
 
-	want := "<!-- gentle-ai:test -->\nno trailing newline\n<!-- /gentle-ai:test -->\n"
+	want := "<!-- axiom:test -->\nno trailing newline\n<!-- /axiom:test -->\n"
 	if result != want {
 		t.Fatalf("content without trailing newline:\ngot:  %q\nwant: %q", result, want)
 	}
@@ -360,7 +417,7 @@ func TestInjectMarkdownSection_ExistingWithoutTrailingNewline(t *testing.T) {
 	existing := "# Title"
 	result := InjectMarkdownSection(existing, "test", "Content.\n")
 
-	want := "# Title\n\n<!-- gentle-ai:test -->\nContent.\n<!-- /gentle-ai:test -->\n"
+	want := "# Title\n\n<!-- axiom:test -->\nContent.\n<!-- /axiom:test -->\n"
 	if result != want {
 		t.Fatalf("existing without trailing newline:\ngot:  %q\nwant: %q", result, want)
 	}

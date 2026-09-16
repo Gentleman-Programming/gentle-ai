@@ -511,7 +511,7 @@ func isExactLegacyPersonaAsset(existing string) bool {
 }
 
 func shouldStripManagedLegacyPersona(existing string) bool {
-	return strings.Contains(existing, "<!-- gentle-ai:persona -->")
+	return strings.Contains(existing, "<!-- axiom:persona -->") || strings.Contains(existing, "<!-- gentle-ai:persona -->")
 }
 
 // isGentlemanConversationPersona reports whether the persona keeps the voseo
@@ -673,7 +673,20 @@ func preserveManagedSections(existing, newPersona string, persona model.PersonaI
 		return "", false
 	}
 
-	idx := strings.Index(existing, "<!-- gentle-ai:")
+	idxAxiom := strings.Index(existing, "<!-- axiom:")
+	idxLegacy := strings.Index(existing, "<!-- gentle-ai:")
+	idx := -1
+	if idxAxiom >= 0 && idxLegacy >= 0 {
+		if idxAxiom < idxLegacy {
+			idx = idxAxiom
+		} else {
+			idx = idxLegacy
+		}
+	} else if idxAxiom >= 0 {
+		idx = idxAxiom
+	} else {
+		idx = idxLegacy
+	}
 	if idx < 0 {
 		return "", false
 	}

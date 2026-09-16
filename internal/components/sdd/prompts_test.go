@@ -112,6 +112,12 @@ func readOpenCodeAgents(t *testing.T, settingsPath string) map[string]any {
 func agentPrompt(t *testing.T, agentsMap map[string]any, agentName string) string {
 	t.Helper()
 	agentRaw, ok := agentsMap[agentName]
+	if !ok && agentName == "gentle-orchestrator" {
+		agentRaw, ok = agentsMap["axiom-orchestrator"]
+	}
+	if !ok && agentName == "axiom-orchestrator" {
+		agentRaw, ok = agentsMap["gentle-orchestrator"]
+	}
 	if !ok {
 		t.Fatalf("agent %q missing", agentName)
 	}
@@ -483,7 +489,7 @@ func TestWriteSharedPromptFilesOmitCodeGraphGuidanceByDefault(t *testing.T) {
 			t.Fatalf("ReadFile(%q) error = %v", path, err)
 		}
 		text := string(content)
-		if strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
+		if containsCodeGraphGuidance(text) {
 			t.Fatalf("%s unexpectedly contains CodeGraph guidance by default", phase)
 		}
 	}
@@ -504,10 +510,10 @@ func TestWriteSharedPromptFilesIncludeCodeGraphGuidanceWhenEnabled(t *testing.T)
 			t.Fatalf("ReadFile(%q) error = %v", path, err)
 		}
 		text := string(content)
-		if !strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
+		if !containsCodeGraphGuidance(text) {
 			t.Fatalf("%s missing CodeGraph guidance when enabled", phase)
 		}
-		if count := strings.Count(text, "<!-- gentle-ai:codegraph-guidance -->"); count != 1 {
+		if count := countCodeGraphGuidance(text); count != 1 {
 			t.Fatalf("%s has %d CodeGraph guidance sections, want 1", phase, count)
 		}
 	}
@@ -524,7 +530,7 @@ func TestInjectOpenCodeSingleModeSubagentPromptsOmitCodeGraphGuidanceByDefault(t
 	agentsMap := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
 	for _, agentName := range sddInstalledSubAgentsForCodeGraphTest() {
 		prompt := agentPrompt(t, agentsMap, agentName)
-		if strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
+		if containsCodeGraphGuidance(prompt) {
 			t.Fatalf("%s unexpectedly contains CodeGraph guidance by default", agentName)
 		}
 	}
@@ -542,22 +548,22 @@ func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGra
 	bashCapableAgents := append(withoutStrings(SharedPromptPhases(), "sdd-research"), "jd-fix-agent", opencode.ReviewValidatorAgent)
 	for _, agentName := range bashCapableAgents {
 		prompt := agentPrompt(t, agentsMap, agentName)
-		if !strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
+		if !containsCodeGraphGuidance(prompt) {
 			t.Fatalf("%s missing CodeGraph guidance when enabled", agentName)
 		}
-		if count := strings.Count(prompt, "<!-- gentle-ai:codegraph-guidance -->"); count != 1 {
+		if count := countCodeGraphGuidance(prompt); count != 1 {
 			t.Fatalf("%s has %d CodeGraph guidance sections, want 1", agentName, count)
 		}
 	}
 	for _, agentName := range sddShellDisabledSubAgentsForCodeGraphTest() {
 		prompt := agentPrompt(t, agentsMap, agentName)
-		if strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
+		if containsCodeGraphGuidance(prompt) {
 			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
 		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
 	}
 	researchPrompt := agentPrompt(t, agentsMap, "sdd-research")
-	if strings.Contains(researchPrompt, "<!-- gentle-ai:codegraph-guidance -->") {
+	if containsCodeGraphGuidance(researchPrompt) {
 		t.Fatal("sdd-research must not receive shell-based CodeGraph guidance with bash disabled")
 	}
 }
@@ -577,25 +583,25 @@ func TestInjectOpenCodeMultiModeSubagentPromptFilesIncludeCodeGraphGuidanceWhenE
 			t.Fatalf("ReadFile(%q) error = %v", path, err)
 		}
 		text := string(content)
-		if !strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
+		if !containsCodeGraphGuidance(text) {
 			t.Fatalf("%s missing CodeGraph guidance when enabled", phase)
 		}
 	}
 
 	agentsMap := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
 	fixPrompt := agentPrompt(t, agentsMap, "jd-fix-agent")
-	if !strings.Contains(fixPrompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(fixPrompt, "gentle-ai codegraph init --cwd <project-root>") {
+	if !containsCodeGraphGuidance(fixPrompt) {
 		t.Fatal("jd-fix-agent missing CodeGraph guidance in multi-mode inline prompt when enabled")
 	}
 	for _, agentName := range sddShellDisabledSubAgentsForCodeGraphTest() {
 		prompt := agentPrompt(t, agentsMap, agentName)
-		if strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
+		if containsCodeGraphGuidance(prompt) {
 			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
 		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
 	}
 	researchPrompt := agentPrompt(t, agentsMap, "sdd-research")
-	if strings.Contains(researchPrompt, "<!-- gentle-ai:codegraph-guidance -->") {
+	if containsCodeGraphGuidance(researchPrompt) {
 		t.Fatal("sdd-research must not receive shell-based CodeGraph guidance with bash disabled")
 	}
 }
@@ -632,7 +638,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 					t.Fatalf("ReadFile(%q) error = %v", path, err)
 				}
 				text := string(content)
-				if count := strings.Count(text, "<!-- gentle-ai:codegraph-guidance -->"); count != 1 {
+				if count := countCodeGraphGuidance(text); count != 1 {
 					t.Fatalf("%s guidance count = %d, want 1", fileName, count)
 				}
 
@@ -725,7 +731,7 @@ func TestInjectNativeSDDSubagentsOmitCodeGraphGuidanceByDefault(t *testing.T) {
 					t.Fatalf("ReadFile(%q) error = %v", path, err)
 				}
 				text := string(content)
-				if strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
+				if containsCodeGraphGuidance(text) {
 					t.Fatalf("%s native subagent unexpectedly contains CodeGraph guidance by default", fileName)
 				}
 				for _, grant := range []string{claudeCodeGraphToolGrant, kiroCodeGraphToolGrant} {
@@ -789,7 +795,7 @@ func TestInjectKimiYAMLSubagentsRemainControlFilesWhenCodeGraphEnabled(t *testin
 				t.Fatalf("%s YAML missing %q:\n%s", fileName, want, text)
 			}
 		}
-		for _, forbidden := range []string{"  instructions: |-", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+		for _, forbidden := range []string{"  instructions: |-", "<!-- gentle-ai:codegraph-guidance -->", "<!-- axiom:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
 			if strings.Contains(text, forbidden) {
 				t.Fatalf("%s YAML unexpectedly contains %q:\n%s", fileName, forbidden, text)
 			}
@@ -801,7 +807,7 @@ func TestInjectKimiYAMLSubagentsRemainControlFilesWhenCodeGraphEnabled(t *testin
 			t.Fatalf("ReadFile(%q) error = %v", markdownPath, err)
 		}
 		markdownText := string(markdownContent)
-		if !strings.Contains(markdownText, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(markdownText, "gentle-ai codegraph init --cwd <project-root>") {
+		if !containsCodeGraphGuidance(markdownText) {
 			t.Fatalf("%s referenced Markdown prompt missing CodeGraph guidance when enabled", markdownPath)
 		}
 	}
@@ -855,3 +861,13 @@ func TestInjectOpenCodeMultiModeIdempotentWithPromptFiles(t *testing.T) {
 		t.Fatal("Inject(multi) second changed = true — should be idempotent with prompt files")
 	}
 }
+
+func containsCodeGraphGuidance(text string) bool {
+	hasMarker := strings.Contains(text, "<!-- axiom:codegraph-guidance -->") || strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->")
+	return hasMarker && strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>")
+}
+
+func countCodeGraphGuidance(text string) int {
+	return strings.Count(text, "<!-- axiom:codegraph-guidance -->") + strings.Count(text, "<!-- gentle-ai:codegraph-guidance -->")
+}
+

@@ -8,7 +8,7 @@ import (
 // #2130: a workspace-scope install writes the lazy SDD workflow under the
 // workspace's .claude, so every pointer names that location first, then home.
 func TestClaudeWorkflowPointersNameWorkspaceAndHomeLocations(t *testing.T) {
-	for _, asset := range []string{"claude/commands/gentle-sdd-new.md", "claude/commands/gentle-sdd-continue.md", "claude/commands/gentle-sdd-ff.md", "claude/sdd-orchestrator.md"} {
+	for _, asset := range []string{"claude/commands/sdd-new.md", "claude/commands/sdd-continue.md", "claude/commands/sdd-ff.md", "claude/sdd-orchestrator.md"} {
 		content := MustRead(asset)
 		workspace := strings.Index(content, "`.claude/skills/_shared/sdd-orchestrator-workflow.md`")
 		home := strings.Index(content, "`~/.claude/skills/_shared/sdd-orchestrator-workflow.md`")
@@ -21,7 +21,7 @@ func TestClaudeWorkflowPointersNameWorkspaceAndHomeLocations(t *testing.T) {
 func TestClaudeMetaCommandsDelegatePolicy(t *testing.T) {
 	for _, name := range []string{"new", "continue", "ff"} {
 		t.Run(name, func(t *testing.T) {
-			content := MustRead("claude/commands/gentle-sdd-" + name + ".md")
+			content := MustRead("claude/commands/sdd-" + name + ".md")
 			for _, required := range []string{"description:", "Intent:", "$ARGUMENTS", "under the workspace first; if absent", "authoritative lazy workflow"} {
 				if !strings.Contains(content, required) {
 					t.Errorf("entrypoint missing %q", required)

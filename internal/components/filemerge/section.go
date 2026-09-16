@@ -5,24 +5,72 @@ import (
 )
 
 // ExtractHTMLCommentSection extracts the content between a paired
-// <!-- section:NAME --> ... <!-- /section:NAME --> marker pair. A missing,
-// lone, or reversed marker pair returns the full content unchanged.
+// <!-- section:NAME --> ... <!-- /section:NAME --> marker pair. If not found,
+// it also checks for canonical <!-- axiom:NAME --> and legacy <!-- gentle-ai:NAME -->.
+// A missing, lone, or reversed marker pair returns the full content unchanged.
 func ExtractHTMLCommentSection(content, name string) string {
-	openMarker := "<!-- section:" + name + " -->"
-	closeMarker := "<!-- /section:" + name + " -->"
-	start := strings.Index(content, openMarker)
-	end := strings.Index(content, closeMarker)
-	if start == -1 || end == -1 || end <= start {
-		return content
+	openSectionMarker := "<!-- section:" + name + " -->"
+	closeSectionMarker := "<!-- /section:" + name + " -->"
+	start := strings.Index(content, openSectionMarker)
+	end := strings.Index(content, closeSectionMarker)
+	if start >= 0 && end > start {
+		afterOpen := start + len(openSectionMarker)
+		return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
 	}
-	afterOpen := start + len(openMarker)
-	return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+
+	axiomOpen := openMarker(name)
+	axiomClose := closeMarker(name)
+	start = strings.Index(content, axiomOpen)
+	end = strings.Index(content, axiomClose)
+	if start >= 0 && end > start {
+		afterOpen := start + len(axiomOpen)
+		return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+	}
+
+	legacyOpen := legacyOpenMarker(name)
+	legacyClose := legacyCloseMarker(name)
+	start = strings.Index(content, legacyOpen)
+	end = strings.Index(content, legacyClose)
+	if start >= 0 && end > start {
+		afterOpen := start + len(legacyOpen)
+		return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+	}
+
+	return content
+}
+
+// ExtractManagedSection extracts the content between a paired managed section marker
+// <!-- axiom:NAME --> ... <!-- /axiom:NAME --> or legacy <!-- gentle-ai:NAME --> ... <!-- /gentle-ai:NAME -->.
+// Returns the trimmed content or original content if not found.
+func ExtractManagedSection(content, sectionID string) string {
+	open := openMarker(sectionID)
+	close := closeMarker(sectionID)
+	start := strings.Index(content, open)
+	end := strings.Index(content, close)
+	if start >= 0 && end > start {
+		afterOpen := start + len(open)
+		return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+	}
+
+	legacyOpen := legacyOpenMarker(sectionID)
+	legacyClose := legacyCloseMarker(sectionID)
+	start = strings.Index(content, legacyOpen)
+	end = strings.Index(content, legacyClose)
+	if start >= 0 && end > start {
+		afterOpen := start + len(legacyOpen)
+		return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
+	}
+
+	return content
 }
 
 const (
-	markerPrefix = "<!-- gentle-ai:"
+	markerPrefix = "<!-- axiom:"
 	markerSuffix = " -->"
-	closePrefix  = "<!-- /gentle-ai:"
+	closePrefix  = "<!-- /axiom:"
+
+	legacyMarkerPrefix = "<!-- gentle-ai:"
+	legacyClosePrefix  = "<!-- /gentle-ai:"
 )
 
 // legacyPersonaFingerprints are substrings that appear in the Gentleman persona
@@ -36,12 +84,12 @@ var legacyPersonaFingerprints = []string{
 }
 
 // StripLegacyPersonaBlock removes a free-text Gentleman persona block that was
-// written to a markdown file outside of <!-- gentle-ai: --> markers.
+// written to a markdown file outside of <!-- axiom: --> or legacy <!-- gentle-ai: --> markers.
 //
 // It is safe to call on any file: if no legacy block is detected, the original
 // content is returned unchanged. Stripping requires ALL fingerprints to be
 // present in the pre-marker zone (the region before the first
-// <!-- gentle-ai: --> marker). A fingerprint that exists only inside a marker
+// <!-- axiom: --> or <!-- gentle-ai: --> marker). A fingerprint that exists only inside a marker
 // section is ignored — this prevents false positives when a user's own section
 // headers happen to match one or two of the fingerprint strings while the
 // remaining fingerprints live inside a managed marker block.
@@ -57,6 +105,9 @@ func StripLegacyPersonaBlock(content string) string {
 	// potential legacy zone. If there are no markers, the whole file is the
 	// legacy zone.
 	firstMarkerIdx := strings.Index(content, markerPrefix)
+	if legacyIdx := strings.Index(content, legacyMarkerPrefix); legacyIdx >= 0 && (firstMarkerIdx < 0 || legacyIdx < firstMarkerIdx) {
+		firstMarkerIdx = legacyIdx
+	}
 
 	// Determine the candidate zone to inspect.
 	zone := content
@@ -219,6 +270,40 @@ func closeMarker(sectionID string) string {
 	return closePrefix + sectionID + markerSuffix
 }
 
+// legacyOpenMarker returns the legacy opening marker for a section ID.
+func legacyOpenMarker(sectionID string) string {
+	return legacyMarkerPrefix + sectionID + markerSuffix
+}
+
+// legacyCloseMarker returns the legacy closing marker for a section ID.
+func legacyCloseMarker(sectionID string) string {
+	return legacyClosePrefix + sectionID + markerSuffix
+}
+
+// stripSectionDuplicates removes all complete (open...close) section pairs from s.
+func stripSectionDuplicates(s, open, close string) string {
+	var preserved strings.Builder
+	for {
+		duplicateOpen := strings.Index(s, open)
+		if duplicateOpen < 0 {
+			preserved.WriteString(s)
+			break
+		}
+
+		bodyStart := duplicateOpen + len(open)
+		duplicateCloseOffset := strings.Index(s[bodyStart:], close)
+		if duplicateCloseOffset < 0 {
+			preserved.WriteString(s)
+			break
+		}
+
+		duplicateEnd := bodyStart + duplicateCloseOffset + len(close)
+		preserved.WriteString(s[:duplicateOpen])
+		s = s[duplicateEnd:]
+	}
+	return preserved.String()
+}
+
 // stripOrphanMarkers removes unpaired opening or closing markers for the given
 // sectionID from content before injection logic runs.
 //
@@ -268,7 +353,9 @@ func stripOrphanMarkers(content, open, close string) string {
 }
 
 // InjectMarkdownSection replaces or appends a marked section in a markdown file.
-// Markers use HTML comments: <!-- gentle-ai:SECTION_ID --> ... <!-- /gentle-ai:SECTION_ID -->
+// Markers use HTML comments: <!-- axiom:SECTION_ID --> ... <!-- /axiom:SECTION_ID -->
+// Legacy markers <!-- gentle-ai:SECTION_ID --> ... <!-- /gentle-ai:SECTION_ID --> are also recognized
+// and upgraded to canonical markers.
 // If the section already exists, its content is replaced.
 // If it doesn't exist, it's appended at the end.
 // Content outside markers is never touched.
@@ -280,39 +367,39 @@ func stripOrphanMarkers(content, open, close string) string {
 func InjectMarkdownSection(existing, sectionID, content string) string {
 	open := openMarker(sectionID)
 	close := closeMarker(sectionID)
+	legacyOpen := legacyOpenMarker(sectionID)
+	legacyClose := legacyCloseMarker(sectionID)
 
 	// Repair any orphan markers left by previous (buggy) sync runs before
 	// attempting replacement. This is the core fix for issue #301.
 	existing = stripOrphanMarkers(existing, open, close)
+	existing = stripOrphanMarkers(existing, legacyOpen, legacyClose)
 
 	openIdx := strings.Index(existing, open)
 	closeIdx := strings.Index(existing, close)
+	hasCanonical := openIdx >= 0 && closeIdx >= 0 && closeIdx > openIdx
 
-	// If both markers are found and in the correct order, replace the section.
-	if openIdx >= 0 && closeIdx >= 0 && closeIdx > openIdx {
-		before := existing[:openIdx]
-		after := existing[closeIdx+len(close):]
+	legacyOpenIdx := strings.Index(existing, legacyOpen)
+	legacyCloseIdx := strings.Index(existing, legacyClose)
+	hasLegacy := legacyOpenIdx >= 0 && legacyCloseIdx >= 0 && legacyCloseIdx > legacyOpenIdx
 
-		var preservedAfter strings.Builder
-		for {
-			duplicateOpen := strings.Index(after, open)
-			if duplicateOpen < 0 {
-				preservedAfter.WriteString(after)
-				break
-			}
-
-			bodyStart := duplicateOpen + len(open)
-			duplicateCloseOffset := strings.Index(after[bodyStart:], close)
-			if duplicateCloseOffset < 0 {
-				preservedAfter.WriteString(after)
-				break
-			}
-
-			duplicateEnd := bodyStart + duplicateCloseOffset + len(close)
-			preservedAfter.WriteString(after[:duplicateOpen])
-			after = after[duplicateEnd:]
+	if hasCanonical || hasLegacy {
+		var before, after string
+		if hasCanonical && (!hasLegacy || openIdx < legacyOpenIdx) {
+			// Canonical block appears first.
+			before = existing[:openIdx]
+			after = existing[closeIdx+len(close):]
+		} else {
+			// Legacy block appears first.
+			before = existing[:legacyOpenIdx]
+			after = existing[legacyCloseIdx+len(legacyClose):]
 		}
-		after = preservedAfter.String()
+
+		// Strip duplicate canonical blocks and any legacy blocks from before and after.
+		before = stripSectionDuplicates(before, open, close)
+		before = stripSectionDuplicates(before, legacyOpen, legacyClose)
+		after = stripSectionDuplicates(after, open, close)
+		after = stripSectionDuplicates(after, legacyOpen, legacyClose)
 
 		// If content is empty, remove the entire section including markers.
 		if content == "" {

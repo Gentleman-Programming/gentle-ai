@@ -43,6 +43,22 @@ func antigravityAdapter() agents.Adapter {
 
 func piAdapter() agents.Adapter { return pi.NewAdapter() }
 
+func containsEngramMarker(text string) bool {
+	return strings.Contains(text, "<!-- axiom:engram-protocol -->") || strings.Contains(text, "<!-- gentle-ai:engram-protocol -->")
+}
+
+func containsEngramCloseMarker(text string) bool {
+	return strings.Contains(text, "<!-- /axiom:engram-protocol -->") || strings.Contains(text, "<!-- /gentle-ai:engram-protocol -->")
+}
+
+func countEngramMarker(text string) int {
+	return strings.Count(text, "<!-- axiom:engram-protocol -->") + strings.Count(text, "<!-- gentle-ai:engram-protocol -->")
+}
+
+func countEngramCloseMarker(text string) int {
+	return strings.Count(text, "<!-- /axiom:engram-protocol -->") + strings.Count(text, "<!-- /gentle-ai:engram-protocol -->")
+}
+
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
 func assertArgsHaveToolsAgent(t *testing.T, path string) {
@@ -125,10 +141,10 @@ func TestInjectClaudeWritesProtocolSection(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+	if !containsEngramMarker(text) {
 		t.Fatal("CLAUDE.md missing open marker for engram-protocol")
 	}
-	if !strings.Contains(text, "<!-- /gentle-ai:engram-protocol -->") {
+	if !containsEngramCloseMarker(text) {
 		t.Fatal("CLAUDE.md missing close marker for engram-protocol")
 	}
 	// Real content check.
@@ -230,7 +246,7 @@ func TestInjectOpenCodeMergesEngramToSettings(t *testing.T) {
 		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
 	}
 	agentsText := string(agentsContent)
-	if !strings.Contains(agentsText, "<!-- gentle-ai:engram-protocol -->") {
+	if !containsEngramMarker(agentsText) {
 		t.Fatal("AGENTS.md missing engram protocol section marker")
 	}
 	if !strings.Contains(agentsText, "mem_save") {
@@ -1021,7 +1037,7 @@ func TestInjectClaudePreservesManagedLegacyParentLayouts(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(actualParent, parent); err != nil {
-					t.Fatal(err)
+					t.Skipf("symlink not supported on this platform/privilege: %v", err)
 				}
 			} else if err := os.MkdirAll(parent, 0o755); err != nil {
 				t.Fatal(err)
@@ -2208,14 +2224,8 @@ func TestInjectOpenClawWritesEngramProtocolToWorkspaceAgentsOnly(t *testing.T) {
 		t.Fatalf("ReadFile(AGENTS.md) error = %v", err)
 	}
 	agentsText := string(agentsContent)
-	for _, want := range []string{
-		"<!-- gentle-ai:engram-protocol -->",
-		"<!-- /gentle-ai:engram-protocol -->",
-		"mem_save",
-	} {
-		if !strings.Contains(agentsText, want) {
-			t.Fatalf("OpenClaw AGENTS.md missing Engram protocol content %q; got:\n%s", want, agentsText)
-		}
+	if !containsEngramMarker(agentsText) || !containsEngramCloseMarker(agentsText) || !strings.Contains(agentsText, "mem_save") {
+		t.Fatalf("OpenClaw AGENTS.md missing Engram protocol content; got:\n%s", agentsText)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, ".openclaw", "AGENTS.md")); !os.IsNotExist(err) {
 		t.Fatalf("OpenClaw Engram injection must not write global .openclaw/AGENTS.md; stat err=%v", err)
@@ -2226,7 +2236,7 @@ func TestInjectOpenClawWritesEngramProtocolToWorkspaceAgentsOnly(t *testing.T) {
 		t.Fatalf("ReadFile(TOOLS.md) error = %v", err)
 	}
 	toolsText := string(toolsContent)
-	if strings.Contains(toolsText, "gentle-ai:engram-protocol") || strings.Contains(toolsText, "mem_save") {
+	if strings.Contains(toolsText, "engram-protocol") || strings.Contains(toolsText, "mem_save") {
 		t.Fatalf("TOOLS.md must not receive Engram protocol sections; got:\n%s", toolsText)
 	}
 	if !strings.Contains(toolsText, "User-owned tool notes.") {
@@ -2244,7 +2254,7 @@ func TestInjectOpenClawWritesEngramProtocolToWorkspaceAgentsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(AGENTS.md) second error = %v", err)
 	}
-	if count := strings.Count(string(updated), "<!-- gentle-ai:engram-protocol -->"); count != 1 {
+	if count := countEngramMarker(string(updated)); count != 1 {
 		t.Fatalf("AGENTS.md has %d Engram protocol markers, want exactly 1", count)
 	}
 }
@@ -2631,7 +2641,7 @@ func TestInjectWithOptionsReInjectConvergesFullToSlimAndBack(t *testing.T) {
 	if !strings.Contains(string(afterFull), "needs_review") {
 		t.Fatalf("expected FULL section after first inject; got:\n%s", afterFull)
 	}
-	if n := strings.Count(string(afterFull), "<!-- gentle-ai:engram-protocol -->"); n != 1 {
+	if n := countEngramMarker(string(afterFull)); n != 1 {
 		t.Fatalf("expected exactly 1 open marker after first inject, got %d", n)
 	}
 
@@ -2650,10 +2660,10 @@ func TestInjectWithOptionsReInjectConvergesFullToSlimAndBack(t *testing.T) {
 	if !strings.Contains(string(afterSlim), "SessionStart hook") {
 		t.Fatalf("expected SLIM pointer content after re-inject; got:\n%s", afterSlim)
 	}
-	if n := strings.Count(string(afterSlim), "<!-- gentle-ai:engram-protocol -->"); n != 1 {
+	if n := countEngramMarker(string(afterSlim)); n != 1 {
 		t.Fatalf("expected exactly 1 open marker after re-inject to slim (no duplication), got %d", n)
 	}
-	if n := strings.Count(string(afterSlim), "<!-- /gentle-ai:engram-protocol -->"); n != 1 {
+	if n := countEngramCloseMarker(string(afterSlim)); n != 1 {
 		t.Fatalf("expected exactly 1 close marker after re-inject to slim (no duplication), got %d", n)
 	}
 
@@ -2668,7 +2678,7 @@ func TestInjectWithOptionsReInjectConvergesFullToSlimAndBack(t *testing.T) {
 	if !strings.Contains(string(afterBackToFull), "needs_review") {
 		t.Fatalf("expected FULL section after re-inject back to full; got:\n%s", afterBackToFull)
 	}
-	if n := strings.Count(string(afterBackToFull), "<!-- gentle-ai:engram-protocol -->"); n != 1 {
+	if n := countEngramMarker(string(afterBackToFull)); n != 1 {
 		t.Fatalf("expected exactly 1 open marker after re-inject back to full (no duplication), got %d", n)
 	}
 }

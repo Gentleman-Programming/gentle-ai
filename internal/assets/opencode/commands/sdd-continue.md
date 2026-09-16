@@ -1,6 +1,6 @@
 ---
 description: Continue the next SDD phase in the dependency chain
-agent: gentle-orchestrator
+agent: axiom-orchestrator
 ---
 
 Follow the SDD orchestrator workflow to continue the active change; this explicit command may prepare its change-local consent marker but grants no edit roots.

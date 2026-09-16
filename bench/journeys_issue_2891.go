@@ -84,9 +84,13 @@ func issue2891SameParentStatus(sandbox *Sandbox, observation Observation) error 
 		if status.Consent != nil {
 			return fmt.Errorf("initial read-only status emitted consent: %v", status.Consent)
 		}
-		marker := filepath.Join(sandbox.Repo, "openspec", "changes", "same-repo-rollout", ".gentle-ai-instance")
+		marker := filepath.Join(sandbox.Repo, "openspec", "changes", "same-repo-rollout", ".axiom-instance")
+		legacyMarker := filepath.Join(sandbox.Repo, "openspec", "changes", "same-repo-rollout", ".gentle-ai-instance")
 		if _, err := os.Lstat(marker); !os.IsNotExist(err) {
 			return fmt.Errorf("initial read-only status marker: %v, want absent", err)
+		}
+		if _, err := os.Lstat(legacyMarker); !os.IsNotExist(err) {
+			return fmt.Errorf("initial read-only status legacy marker: %v, want absent", err)
 		}
 		sandbox.Scratch["issue-2891-status-read"] = "true"
 		return nil

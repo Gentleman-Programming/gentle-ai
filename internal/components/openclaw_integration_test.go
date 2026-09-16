@@ -48,9 +48,9 @@ func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
 	}
 
 	agentsText := readText(t, filepath.Join(workspace, "AGENTS.md"))
-	for _, want := range []string{"gentle-ai:engram-protocol", "gentle-ai:sdd-orchestrator", "gentle-ai:strict-tdd-mode"} {
-		if !strings.Contains(agentsText, want) {
-			t.Fatalf("OpenClaw AGENTS.md missing %q; got:\n%s", want, agentsText)
+	for _, id := range []string{"engram-protocol", "sdd-orchestrator", "strict-tdd-mode"} {
+		if !containsMarker(agentsText, id) {
+			t.Fatalf("OpenClaw AGENTS.md missing marker for %q; got:\n%s", id, agentsText)
 		}
 	}
 	if strings.Contains(agentsText, "Senior Architect") {
@@ -58,7 +58,7 @@ func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
 	}
 
 	soulText := readText(t, filepath.Join(workspace, "SOUL.md"))
-	if !strings.Contains(soulText, "gentle-ai:persona") || !strings.Contains(soulText, "Senior Architect") {
+	if !containsMarker(soulText, "persona") || !strings.Contains(soulText, "Senior Architect") {
 		t.Fatalf("OpenClaw SOUL.md missing managed persona content; got:\n%s", soulText)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "TOOLS.md")); !os.IsNotExist(err) {
@@ -131,4 +131,8 @@ func objectAt(t *testing.T, root map[string]any, key string) map[string]any {
 		t.Fatalf("key %q has type %T, want object", key, value)
 	}
 	return object
+}
+
+func containsMarker(text, id string) bool {
+	return strings.Contains(text, "axiom:"+id) || strings.Contains(text, "gentle-ai:"+id)
 }

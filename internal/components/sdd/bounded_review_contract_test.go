@@ -471,7 +471,7 @@ func TestPreservedSharedOrchestratorSubstitutesRuntimeAgentIdentity(t *testing.T
 		preserved,
 		model.AgentKilocode,
 	)
-	if !strings.Contains(rendered, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
+	if !strings.Contains(rendered, "Bind this to the dedicated `axiom-orchestrator` agent only.") && !strings.Contains(rendered, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
 		t.Fatalf("preserved prompt lost its migration:\n%s", rendered)
 	}
 	if strings.Contains(rendered, runtimeAgentIDPlaceholder) {
@@ -698,7 +698,7 @@ func TestReviewLifecycleContractNamesTheEntryRuleBeforeTheAtomicLifecycle(t *tes
 }
 
 func TestOpenCodeAndClaudeApplyCommandsUseTheAtomicLifecycle(t *testing.T) {
-	for _, path := range []string{"opencode/commands/sdd-apply.md", "claude/commands/gentle-sdd-apply.md"} {
+	for _, path := range []string{"opencode/commands/sdd-apply.md", "claude/commands/sdd-apply.md"} {
 		t.Run(path, func(t *testing.T) {
 			raw := assets.MustRead(path)
 			if strings.Count(raw, authorityFirstProcedurePlaceholder) != 1 {
@@ -726,7 +726,7 @@ func TestOpenCodeAndClaudeApplyCommandsUseTheAtomicLifecycle(t *testing.T) {
 }
 
 func TestOpenCodeAndClaudeArchiveInstructionsDoNotGateOnReviewAuthority(t *testing.T) {
-	for _, path := range []string{"opencode/commands/sdd-archive.md", "claude/commands/gentle-sdd-archive.md"} {
+	for _, path := range []string{"opencode/commands/sdd-archive.md", "claude/commands/sdd-archive.md"} {
 		t.Run(path, func(t *testing.T) {
 			content := assets.MustRead(path)
 			for _, required := range []string{

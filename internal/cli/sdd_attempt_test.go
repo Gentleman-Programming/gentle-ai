@@ -221,7 +221,7 @@ func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 	if err := RunSDDContinue([]string{change, "--cwd", repo, "--json"}, &continued); err != nil {
 		t.Fatal(err)
 	}
-	marker, err := os.ReadFile(filepath.Join(repo, "openspec", "changes", change, ".gentle-ai-instance"))
+	marker, err := os.ReadFile(filepath.Join(repo, "openspec", "changes", change, ".axiom-instance"))
 	if err != nil {
 		t.Fatal(err)
 	}

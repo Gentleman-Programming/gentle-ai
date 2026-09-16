@@ -247,7 +247,11 @@ func TestSDDStatusV2CleanBreak(t *testing.T) {
 		if !strings.Contains(contract, "sdd-status/v2") {
 			t.Fatal("active status asset does not advertise v2")
 		}
-		if golden := mustReadStatusGolden(t, "sdd-claude-cmd-gentle-sdd-status.golden"); strings.Contains(golden, "sdd-status/v1") || strings.Contains(golden, "Native status v1") {
+		goldenName := "sdd-claude-cmd-sdd-status.golden"
+		if _, err := os.Stat(filepath.Join("..", "..", "testdata", "golden", goldenName)); os.IsNotExist(err) {
+			goldenName = "sdd-claude-cmd-gentle-sdd-status.golden"
+		}
+		if golden := mustReadStatusGolden(t, goldenName); strings.Contains(golden, "sdd-status/v1") || strings.Contains(golden, "Native status v1") {
 			t.Fatal("generated status golden still pins v1")
 		}
 	})
@@ -454,7 +458,7 @@ func TestConsentPreparationRefusesMalformedOrEscapedMarker(t *testing.T) {
 			case "marker-symlink":
 				write(t, filepath.Join(outside, "marker"), "sdd-"+strings.Repeat("a", 32)+"\n")
 				if err := os.Symlink(filepath.Join(outside, "marker"), marker); err != nil {
-					t.Fatal(err)
+					t.Skipf("symlink not supported: %v", err)
 				}
 			case "escaped-change", "escaped-planning":
 				path := root
@@ -466,7 +470,7 @@ func TestConsentPreparationRefusesMalformedOrEscapedMarker(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(moved, path); err != nil {
-					t.Fatal(err)
+					t.Skipf("symlink not supported: %v", err)
 				}
 			}
 			before := snapshotStatusReadTree(t, outside)
@@ -660,7 +664,7 @@ func TestConsentPreparationUnwritableAndUnreadable(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, entry := range entries {
-				if strings.HasPrefix(entry.Name(), ".gentle-ai-instance") && !unreadable {
+				if (strings.HasPrefix(entry.Name(), ".axiom-instance") || strings.HasPrefix(entry.Name(), ".gentle-ai-instance")) && !unreadable {
 					t.Fatalf("unwritable entry published %s", entry.Name())
 				}
 			}

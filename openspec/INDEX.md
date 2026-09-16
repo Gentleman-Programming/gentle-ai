@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-15 21:16:38 UTC
-> **Total Dominios:** 37 | **Total Requerimientos:** 264 | **Total Escenarios BDD:** 429
+> **Última Sincronización:** 2026-09-16 08:07:20 UTC
+> **Total Dominios:** 38 | **Total Requerimientos:** 270 | **Total Escenarios BDD:** 436
 
 ---
 
@@ -19,8 +19,9 @@
 | `local-web-dashboard` | Especificación Viva: Servidor HTTP Local Embebido y Dashboard Web | 8 | 15 | [Ver Spec](specs/local-web-dashboard/spec.md) |
 | `multi-project-hub` | Especificación Viva: Hub Multi-Proyecto, Selector Dinámico en Dashboard Web y CLI axiom init (INC-08) | 6 | 10 | [Ver Spec](specs/multi-project-hub/spec.md) |
 | `multi-role-fan-out` | Especificación Viva: Despliegue Multi-Rol y Barrera de Sincronización en SDD | 8 | 13 | [Ver Spec](specs/multi-role-fan-out/spec.md) |
+| `orchestrator-commands-markers` | Especificación de Requerimientos: axiom-orchestrator y Comandos Slash Canónicos (INC-11) | 4 | 5 | [Ver Spec](specs/orchestrator-commands-markers/spec.md) |
 | `organic-agent-trigger-rules` | Organic Agent Routing Projection | 12 | 17 | [Ver Spec](specs/organic-agent-trigger-rules/spec.md) |
-| `persona-behavior-contract` | persona-behavior-contract Specification | 15 | 30 | [Ver Spec](specs/persona-behavior-contract/spec.md) |
+| `persona-behavior-contract` | persona-behavior-contract Specification | 17 | 32 | [Ver Spec](specs/persona-behavior-contract/spec.md) |
 | `rdd-authority-disposition-plan` | RDD Authority Disposition Plan Specification | 7 | 11 | [Ver Spec](specs/rdd-authority-disposition-plan/spec.md) |
 | `rdd-authority-graph-classification` | RDD Authority Graph Classification Specification | 4 | 6 | [Ver Spec](specs/rdd-authority-graph-classification/spec.md) |
 | `rdd-authority-store` | RDD Authority Store Specification | 5 | 7 | [Ver Spec](specs/rdd-authority-store/spec.md) |
@@ -276,6 +277,22 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
   - *Escenario BDD:* Barrera aprobada en terminal con advertencia diferida
   - *Escenario BDD:* Barrera denegada en terminal por bloqueo
 
+### Dominio: `orchestrator-commands-markers` — Especificación de Requerimientos: axiom-orchestrator y Comandos Slash Canónicos (INC-11)
+
+<!-- Especificación Viva generada orgánicamente (Zero-Doc Cold Start) a partir de '2026-09-16-inc-11-orchestrator-slash-commands-and-markers' -->
+
+**Archivo:** [`specs/orchestrator-commands-markers/spec.md`](specs/orchestrator-commands-markers/spec.md)
+
+- **[REQ-11.1]** Registro de axiom-orchestrator en overlays de OpenCode
+  - *Escenario BDD:* Generación de opencode.json con agente axiom-orchestrator
+- **[REQ-11.2]** Retrocompatibilidad de lectura con gentle-orchestrator
+  - *Escenario BDD:* Migración transparente de configuraciones existentes
+- **[REQ-11.3]** Comandos slash sin prefijo en Claude Code
+  - *Escenario BDD:* Nombres de comandos slash en Claude Code
+- **[REQ-11.4]** Soporte de marcadores axiom: con lectura de marcadores legados
+  - *Escenario BDD:* Inyección de secciones con marcador canónico
+  - *Escenario BDD:* Limpieza de secciones con marcadores legados
+
 ### Dominio: `organic-agent-trigger-rules` — Organic Agent Routing Projection
 
 Define the managed, provider-neutral instructions that project Gentle AI's
@@ -361,6 +378,10 @@ Define the managed, provider-neutral instructions that project Gentle AI's
 - **[REQ-persona-behavior-contract-15]** Per-Adapter Test and Golden Coverage
   - *Escenario BDD:* Claude goldens capture the residual section; Kimi is covered by unit assertions
   - *Escenario BDD:* Non-output-style adapter goldens remain unchanged
+- **[REQ-10.1 & REQ-10.2]** Axiom Persona Definition and Default Selection
+  - *Escenario BDD:* Axiom persona is default and uses Peninsular Spanish
+- **[REQ-10.3 & REQ-10.4]** SDD Language Domain Contract for Axiom Projects
+  - *Escenario BDD:* SDD technical artifacts generated in Spanish in Axiom projects
 
 ### Dominio: `rdd-authority-disposition-plan` — RDD Authority Disposition Plan Specification
 

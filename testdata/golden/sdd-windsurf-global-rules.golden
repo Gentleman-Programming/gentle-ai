@@ -1,4 +1,4 @@
-<!-- gentle-ai:sdd-orchestrator -->
+<!-- axiom:sdd-orchestrator -->
 # Agent Teams Lite — Orchestrator Instructions (Windsurf Cascade)
 
 Bind this to the dedicated `sdd-orchestrator` rule or memory only. Do NOT apply it to phase skill files such as `sdd-apply` or `sdd-verify`.
@@ -526,4 +526,4 @@ DAG state is tracked in Engram under `sdd/{change-name}/state`. Update it after 
 - `engram` → `mem_search(...)` → `mem_get_observation(...)`
 - `openspec` → read `openspec/changes/*/state.yaml`
 - `none` → state not persisted — explain to user
-<!-- /gentle-ai:sdd-orchestrator -->
+<!-- /axiom:sdd-orchestrator -->

@@ -340,7 +340,10 @@ func TestBlockedEditAuthorityStatusCarriesConsentEnvelope(t *testing.T) {
 	// The derivation rule: the embedded change-instance token IS the marker
 	// persisted in the change's own directory, so the grant the human
 	// consents to binds exactly the identity a later status read projects.
-	marker, err := os.ReadFile(filepath.Join(changeRoot, ".gentle-ai-instance"))
+	marker, err := os.ReadFile(filepath.Join(changeRoot, ".axiom-instance"))
+	if err != nil {
+		marker, err = os.ReadFile(filepath.Join(changeRoot, ".gentle-ai-instance"))
+	}
 	if err != nil {
 		t.Fatalf("blocked status persisted no change-instance marker: %v", err)
 	}
@@ -459,5 +462,35 @@ func TestRecreatedChangeNameDoesNotInheritGrantedRoots(t *testing.T) {
 	fresh, err := readChangeInstanceMarker(changeRoot)
 	if err != nil || fresh == "" || fresh == token {
 		t.Fatalf("recreated change did not mint a fresh instance token: %q vs %q (%v)", fresh, token, err)
+	}
+}
+
+func TestChangeInstanceMarkerLegacyFallback(t *testing.T) {
+	changeRoot := t.TempDir()
+	legacyMarkerPath := filepath.Join(changeRoot, ".gentle-ai-instance")
+	legacyToken := "sdd-0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(legacyMarkerPath, []byte(legacyToken+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readChangeInstanceMarker(changeRoot)
+	if err != nil {
+		t.Fatalf("readChangeInstanceMarker() error = %v", err)
+	}
+	if got != legacyToken {
+		t.Fatalf("readChangeInstanceMarker() = %q, want %q", got, legacyToken)
+	}
+
+	// ensureChangeInstanceMarker should return existing legacy marker without minting a new .axiom-instance
+	ensured, err := ensureChangeInstanceMarker(changeRoot)
+	if err != nil {
+		t.Fatalf("ensureChangeInstanceMarker() error = %v", err)
+	}
+	if ensured != legacyToken {
+		t.Fatalf("ensureChangeInstanceMarker() = %q, want %q", ensured, legacyToken)
+	}
+
+	if _, err := os.Stat(filepath.Join(changeRoot, ".axiom-instance")); !os.IsNotExist(err) {
+		t.Fatal("ensureChangeInstanceMarker minted .axiom-instance when legacy marker existed")
 	}
 }

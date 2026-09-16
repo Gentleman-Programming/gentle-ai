@@ -74,7 +74,7 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFile(%q): %v", workspaceFile, err)
 			}
-			if !strings.Contains(string(body), tt.marker) {
+			if !containsAnyOpenClawMarker(string(body), tt.marker) {
 				t.Fatalf("workspace file missing marker %q; got:\n%s", tt.marker, string(body))
 			}
 			if _, err := os.Stat(homeFile); !os.IsNotExist(err) {
@@ -142,7 +142,7 @@ func TestComponentSyncStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFile(%q): %v", workspaceFile, err)
 			}
-			if !strings.Contains(string(body), tt.marker) {
+			if !containsAnyOpenClawMarker(string(body), tt.marker) {
 				t.Fatalf("workspace file missing marker %q; got:\n%s", tt.marker, string(body))
 			}
 			if _, err := os.Stat(homeFile); !os.IsNotExist(err) {
@@ -276,17 +276,25 @@ func quoteJSON(value string) string {
 	return `"` + strings.ReplaceAll(value, `\`, `\\`) + `"`
 }
 
+func containsAnyOpenClawMarker(body, marker string) bool {
+	if strings.Contains(body, marker) {
+		return true
+	}
+	axiomMarker := strings.ReplaceAll(marker, "gentle-ai:", "axiom:")
+	return strings.Contains(body, axiomMarker)
+}
+
 func assertOpenClawInstructionsInWorkspace(t *testing.T, workspace string) {
 	t.Helper()
 	agentsText := readOpenClawTestFile(t, filepath.Join(workspace, "AGENTS.md"))
 	for _, want := range []string{"gentle-ai:engram-protocol", "gentle-ai:sdd-orchestrator", "gentle-ai:strict-tdd-mode"} {
-		if !strings.Contains(agentsText, want) {
+		if !containsAnyOpenClawMarker(agentsText, want) {
 			t.Fatalf("active workspace AGENTS.md missing %q; got:\n%s", want, agentsText)
 		}
 	}
 
 	soulText := readOpenClawTestFile(t, filepath.Join(workspace, "SOUL.md"))
-	if !strings.Contains(soulText, "gentle-ai:persona") || !strings.Contains(soulText, "Senior Architect") {
+	if !containsAnyOpenClawMarker(soulText, "gentle-ai:persona") || !strings.Contains(soulText, "Senior Architect") {
 		t.Fatalf("active workspace SOUL.md missing Gentle AI persona; got:\n%s", soulText)
 	}
 }

@@ -792,7 +792,7 @@ func TestComponentSyncStepRunsPersonaInjectForSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile AGENTS.md: %v", err)
 	}
-	if !strings.Contains(string(body), "<!-- gentle-ai:persona -->") {
+	if !strings.Contains(string(body), "<!-- axiom:persona -->") && !strings.Contains(string(body), "<!-- gentle-ai:persona -->") {
 		t.Errorf("AGENTS.md missing persona open marker after sync; got:\n%s", string(body))
 	}
 
@@ -2463,10 +2463,11 @@ func TestCodeGraphGuidanceSyncStepRepairsCodexConfigOnlyGuidance(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
 	}
 	text := string(body)
-	for _, want := range []string{"<!-- gentle-ai:codegraph-guidance -->", "immediately run `gentle-ai codegraph init --cwd <project-root>`"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("Codex AGENTS.md missing managed CodeGraph guidance %q:\n%s", want, text)
-		}
+	if !strings.Contains(text, "<!-- axiom:codegraph-guidance -->") && !strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") {
+		t.Fatalf("Codex AGENTS.md missing managed CodeGraph guidance marker:\n%s", text)
+	}
+	if !strings.Contains(text, "immediately run `gentle-ai codegraph init --cwd <project-root>`") {
+		t.Fatalf("Codex AGENTS.md missing managed CodeGraph guidance instruction:\n%s", text)
 	}
 	if !reflect.DeepEqual(changed, []string{agentsPath}) {
 		t.Fatalf("changed files = %#v, want %#v", changed, []string{agentsPath})
