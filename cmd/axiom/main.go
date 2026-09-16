@@ -24,8 +24,28 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
 )
+
+func init() {
+	// Desacoplar el comprobador de actualizaciones del upstream de Gentle AI:
+	// Axiom es un fork independiente (IGutierrezZ/axiom) y no debe comparar
+	// su versión contra Gentleman-Programming/gentle-ai ni forzar upgrades ajenos.
+	for i, t := range update.Tools {
+		if t.Name == "gentle-ai" {
+			update.Tools[i] = update.ToolInfo{
+				Name:          "axiom",
+				Owner:         "IGutierrezZ",
+				Repo:          "axiom",
+				DetectCmd:     nil, // versión resuelta desde build-time (app.Version)
+				VersionPrefix: "v",
+				InstallMethod: update.InstallBinary,
+				GoImportPath:  "github.com/IGutierrezZ/axiom/cmd/axiom",
+			}
+		}
+	}
+}
 
 const (
 	Version   = "v0.1.0"
