@@ -1094,24 +1094,35 @@ func ListBackups() []backup.Manifest {
 		return nil
 	}
 
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	entries, err := os.ReadDir(backupRoot)
-	if err != nil {
-		return nil
+	roots := []string{
+		filepath.Join(homeDir, ".axiom", "backups"),
+		filepath.Join(homeDir, ".gentle-ai", "backups"),
 	}
 
-	manifests := make([]backup.Manifest, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	manifests := make([]backup.Manifest, 0)
+	seenIDs := make(map[string]struct{})
 
-		manifestPath := filepath.Join(backupRoot, entry.Name(), backup.ManifestFilename)
-		manifest, err := backup.ReadManifest(manifestPath)
+	for _, backupRoot := range roots {
+		entries, err := os.ReadDir(backupRoot)
 		if err != nil {
 			continue
 		}
-		manifests = append(manifests, manifest)
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			manifestPath := filepath.Join(backupRoot, entry.Name(), backup.ManifestFilename)
+			manifest, err := backup.ReadManifest(manifestPath)
+			if err != nil {
+				continue
+			}
+			if _, exists := seenIDs[manifest.ID]; !exists {
+				seenIDs[manifest.ID] = struct{}{}
+				manifests = append(manifests, manifest)
+			}
+		}
 	}
 
 	// Sort by creation time (newest first) — the IDs are timestamps.

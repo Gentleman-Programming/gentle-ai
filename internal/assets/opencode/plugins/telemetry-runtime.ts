@@ -9,7 +9,8 @@ const MAX_BYTES = 16384
 
 function veto(): boolean {
   const truthy = (value: string | undefined) => !["", "0", "false"].includes((value ?? "").trim().toLowerCase())
-  return truthy(process.env.DO_NOT_TRACK) || process.env.GENTLE_AI_TELEMETRY === "0"
+  const envTelemetry = process.env.AXIOM_TELEMETRY ?? process.env.GENTLE_AI_TELEMETRY
+  return truthy(process.env.DO_NOT_TRACK) || envTelemetry === "0"
     || truthy(process.env.CI) || truthy(process.env.GITHUB_ACTIONS)
 }
 

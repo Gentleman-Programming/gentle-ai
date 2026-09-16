@@ -1027,10 +1027,14 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 			ops = append(ops, removeDirIfEmpty(pluginDir))
 
-			modelVariantsCacheDir := filepath.Join(homeDir, ".gentle-ai", "cache")
-			for _, cachePath := range modelVariantsCachePaths(modelVariantsCacheDir) {
-				targets = append(targets, cachePath)
-				ops = append(ops, removeFile(cachePath))
+			for _, cacheDir := range []string{
+				filepath.Join(homeDir, ".axiom", "cache"),
+				filepath.Join(homeDir, ".gentle-ai", "cache"),
+			} {
+				for _, cachePath := range modelVariantsCachePaths(cacheDir) {
+					targets = append(targets, cachePath)
+					ops = append(ops, removeFile(cachePath))
+				}
 			}
 
 			depDir := filepath.Join(homeDir, ".config", "opencode", "node_modules", "unique-names-generator")

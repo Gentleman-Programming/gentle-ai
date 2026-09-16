@@ -22,12 +22,16 @@ func TestDecidePrecedence(t *testing.T) {
 		{"CI is case-insensitive", map[string]string{"CI": "True"}, enabledState, SourceCI},
 		{"state disable is the last resort", map[string]string{}, disabledState, SourceStateDisable},
 		{"default enabled when nothing opts out", map[string]string{"DO_NOT_TRACK": "0", "GENTLE_AI_TELEMETRY": "1", "CI": "false"}, enabledState, SourceDefault},
+		{"axiom env opt-out", map[string]string{"AXIOM_TELEMETRY": "0"}, enabledState, SourceAxiomEnvOptOut},
+		{"axiom env 1 overrides gentle env 0", map[string]string{"AXIOM_TELEMETRY": "1", "GENTLE_AI_TELEMETRY": "0"}, enabledState, SourceDefault},
+		{"fallback to gentle env 0 when axiom unset", map[string]string{"GENTLE_AI_TELEMETRY": "0"}, enabledState, SourceEnvOptOut},
 		{"DO_NOT_TRACK opts out for any non-off value", map[string]string{"DO_NOT_TRACK": "yes"}, enabledState, SourceDoNotTrack},
 		{"DO_NOT_TRACK true opts out", map[string]string{"DO_NOT_TRACK": "true"}, enabledState, SourceDoNotTrack},
 		{"DO_NOT_TRACK 0 stays default", map[string]string{"DO_NOT_TRACK": "0"}, enabledState, SourceDefault},
 		{"DO_NOT_TRACK false stays default", map[string]string{"DO_NOT_TRACK": "false"}, enabledState, SourceDefault},
 		{"DO_NOT_TRACK empty stays default", map[string]string{"DO_NOT_TRACK": ""}, enabledState, SourceDefault},
 		{"GENTLE_AI_TELEMETRY requires exactly 0", map[string]string{"GENTLE_AI_TELEMETRY": "false"}, enabledState, SourceDefault},
+		{"AXIOM_TELEMETRY requires exactly 0", map[string]string{"AXIOM_TELEMETRY": "false"}, enabledState, SourceDefault},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -50,6 +54,13 @@ func TestEndpointDefaultAndOverride(t *testing.T) {
 	custom := "https://example.invalid/v1/events"
 	if got := Endpoint(envMap(map[string]string{EndpointEnvVar: custom})); got != custom {
 		t.Fatalf("Endpoint() = %q, want override %q", got, custom)
+	}
+	legacyCustom := "https://legacy.invalid/v1/events"
+	if got := Endpoint(envMap(map[string]string{EndpointGentleEnvVar: legacyCustom})); got != legacyCustom {
+		t.Fatalf("Endpoint() legacy = %q, want override %q", got, legacyCustom)
+	}
+	if got := Endpoint(envMap(map[string]string{EndpointAxiomEnvVar: custom, EndpointGentleEnvVar: legacyCustom})); got != custom {
+		t.Fatalf("Endpoint() precedence = %q, want axiom override %q", got, custom)
 	}
 	if got := Endpoint(envMap(map[string]string{EndpointEnvVar: "  "})); got != DefaultEndpoint {
 		t.Fatalf("Endpoint() with blank override = %q, want default", got)

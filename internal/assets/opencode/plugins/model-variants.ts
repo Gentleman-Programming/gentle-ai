@@ -49,7 +49,7 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
         }
       }
 
-      const cacheDir = path.join(homedir(), ".gentle-ai", "cache")
+      const cacheDir = path.join(homedir(), ".axiom", "cache")
       await mkdir(cacheDir, { recursive: true })
 
       // Always write through a per-invocation tmp file before renaming, so

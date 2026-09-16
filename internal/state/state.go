@@ -12,7 +12,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-const stateDir = ".gentle-ai"
+const stateDir = ".axiom"
+const legacyStateDir = ".gentle-ai"
 const stateFile = "state.json"
 
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
@@ -169,10 +170,29 @@ func Path(homeDir string) string {
 	return filepath.Join(homeDir, stateDir, stateFile)
 }
 
+// LegacyPath returns the absolute path to the legacy Gentle AI state file for the given home directory.
+func LegacyPath(homeDir string) string {
+	return filepath.Join(homeDir, legacyStateDir, stateFile)
+}
+
 // Read reads and unmarshals the state file from the given home directory.
+// If ~/.axiom/state.json does not exist but ~/.gentle-ai/state.json does,
+// it defensively migrates the state to ~/.axiom/state.json while preserving
+// the legacy file as backup.
 // Returns an error if the file does not exist or cannot be decoded.
 func Read(homeDir string) (InstallState, error) {
-	data, err := os.ReadFile(Path(homeDir))
+	canonicalPath := Path(homeDir)
+	data, err := os.ReadFile(canonicalPath)
+	if err != nil && os.IsNotExist(err) {
+		legacyPath := LegacyPath(homeDir)
+		if legacyData, legacyErr := os.ReadFile(legacyPath); legacyErr == nil {
+			if mkErr := os.MkdirAll(filepath.Dir(canonicalPath), 0o755); mkErr == nil {
+				_, _ = filemerge.WriteFileAtomic(canonicalPath, legacyData, 0o644)
+			}
+			data = legacyData
+			err = nil
+		}
+	}
 	if err != nil {
 		return InstallState{}, err
 	}
@@ -258,7 +278,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 }
 
 // Write persists the full install state to disk under the given home directory.
-// It creates the .gentle-ai directory if it does not already exist.
+// It creates the .axiom directory if it does not already exist.
 func Write(homeDir string, s InstallState) error {
 	dir := filepath.Join(homeDir, stateDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

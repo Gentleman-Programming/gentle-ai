@@ -130,7 +130,7 @@ func TestPiBackgroundStateIsOptionalAndLossless(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(legacy, ".gentle-ai"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(state.Path(legacy), []byte(`{"installed_agents":["pi"]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(legacy, ".gentle-ai", "state.json"), []byte(`{"installed_agents":["pi"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, err = state.Read(legacy)
@@ -480,3 +480,30 @@ func TestSyncPiBackgroundPrecedenceAndDryRunReporting(t *testing.T) {
 		})
 	}
 }
+
+func TestResolvePiBackgroundCLI_Precedence(t *testing.T) {
+	os.Unsetenv(PiBackgroundSubagentsAxiomEnv)
+	os.Unsetenv(PiBackgroundSubagentsGentleEnv)
+
+	// Fallback to legacy
+	t.Setenv(PiBackgroundSubagentsGentleEnv, "on")
+	res, err := resolvePiBackgroundCLI(false, "", state.InstallState{})
+	if err != nil {
+		t.Fatalf("resolvePiBackgroundCLI error = %v", err)
+	}
+	if res.Effective != model.PiBackgroundOn {
+		t.Fatalf("fallback to legacy failed: got %q, want %q", res.Effective, model.PiBackgroundOn)
+	}
+
+	// Axiom takes precedence over legacy
+	t.Setenv(PiBackgroundSubagentsAxiomEnv, "off")
+	t.Setenv(PiBackgroundSubagentsGentleEnv, "on")
+	res, err = resolvePiBackgroundCLI(false, "", state.InstallState{})
+	if err != nil {
+		t.Fatalf("resolvePiBackgroundCLI error = %v", err)
+	}
+	if res.Effective != model.PiBackgroundOff {
+		t.Fatalf("axiom precedence failed: got %q, want %q", res.Effective, model.PiBackgroundOff)
+	}
+}
+

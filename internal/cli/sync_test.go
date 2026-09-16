@@ -6246,7 +6246,8 @@ func TestSyncRemoteAuthorizationUpdatesExistingInstallation(t *testing.T) {
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}}
 	runSyncInjectionSteps(t, home, selection)
 	first := readTextFile(t, path)
-	if !strings.Contains(first, personal) || !strings.Contains(first, "<!-- gentle-ai:remote-authorization -->") {
+	hasRemoteAuth := strings.Contains(first, "<!-- axiom:remote-authorization -->") || strings.Contains(first, "<!-- gentle-ai:remote-authorization -->")
+	if !strings.Contains(first, personal) || !hasRemoteAuth {
 		t.Fatal("component-independent sync lost personal text or omitted remote authorization")
 	}
 	runSyncInjectionSteps(t, home, selection)
@@ -6265,7 +6266,7 @@ func TestSyncDeliversRoutingGuidanceWithoutSDDComponent(t *testing.T) {
 	})
 
 	prompt := readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode))
-	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+	if !containsRoutingMarkers(prompt) {
 		t.Fatalf("sync without the SDD component left the agent unrouted:\n%s", prompt)
 	}
 }
@@ -6288,13 +6289,16 @@ func TestSyncRoutingGuidanceIsIndependentOfSDDSelection(t *testing.T) {
 	plain := readTextFile(t, systemPromptFileFor(t, withoutSDD, model.AgentClaudeCode))
 	sdd := readTextFile(t, systemPromptFileFor(t, withSDD, model.AgentClaudeCode))
 
-	if !strings.Contains(plain, routingOpenMarker) || !strings.Contains(sdd, routingOpenMarker) {
+	if !containsRoutingMarkers(plain) || !containsRoutingMarkers(sdd) {
 		t.Fatalf("routing guidance is not independent of the SDD selection\nwithout sdd:\n%s\nwith sdd:\n%s", plain, sdd)
 	}
-	if strings.Contains(plain, sddMarker) {
+	hasSDD := func(p string) bool {
+		return strings.Contains(p, "<!-- axiom:sdd-orchestrator -->") || strings.Contains(p, sddMarker)
+	}
+	if hasSDD(plain) {
 		t.Fatalf("sync without the SDD component gained SDD orchestration assets:\n%s", plain)
 	}
-	if !strings.Contains(sdd, sddMarker) {
+	if !hasSDD(sdd) {
 		t.Fatalf("sync with the SDD component lost SDD orchestration assets:\n%s", sdd)
 	}
 }
@@ -6311,14 +6315,14 @@ func TestSyncRoutingGuidanceSurvivesOpenCodeSDDInjection(t *testing.T) {
 	}
 
 	runSyncInjectionSteps(t, home, selection)
-	if synced := openCodeOrchestratorPrompt(t, home); !strings.Contains(synced, routingOpenMarker) {
+	if synced := openCodeOrchestratorPrompt(t, home); !containsRoutingMarkers(synced) {
 		t.Fatalf("sync did not deliver routing guidance to the OpenCode orchestrator prompt:\n%s", synced)
 	}
 
 	runSyncComponentSteps(t, home, selection)
 
 	prompt := openCodeOrchestratorPrompt(t, home)
-	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+	if !containsRoutingMarkers(prompt) {
 		t.Fatalf("SDD sync erased the routing guidance from the OpenCode orchestrator prompt:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "SDD Orchestrator") {

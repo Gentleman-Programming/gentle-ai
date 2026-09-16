@@ -778,3 +778,30 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 		t.Fatalf("no-op published intent = %q, error = %v", persisted.BackgroundIntent, err)
 	}
 }
+
+func TestResolveOpenCodeBackgroundCLI_Precedence(t *testing.T) {
+	os.Unsetenv(OpenCodeBackgroundSubagentsAxiomEnv)
+	os.Unsetenv(OpenCodeBackgroundSubagentsGentleEnv)
+
+	// Fallback to legacy
+	t.Setenv(OpenCodeBackgroundSubagentsGentleEnv, "on")
+	res, err := resolveOpenCodeBackgroundCLI(false, "", state.InstallState{})
+	if err != nil {
+		t.Fatalf("resolveOpenCodeBackgroundCLI error = %v", err)
+	}
+	if res.Effective != model.OpenCodeBackgroundOn {
+		t.Fatalf("fallback to legacy failed: got %q, want %q", res.Effective, model.OpenCodeBackgroundOn)
+	}
+
+	// Axiom takes precedence over legacy
+	t.Setenv(OpenCodeBackgroundSubagentsAxiomEnv, "off")
+	t.Setenv(OpenCodeBackgroundSubagentsGentleEnv, "on")
+	res, err = resolveOpenCodeBackgroundCLI(false, "", state.InstallState{})
+	if err != nil {
+		t.Fatalf("resolveOpenCodeBackgroundCLI error = %v", err)
+	}
+	if res.Effective != model.OpenCodeBackgroundOff {
+		t.Fatalf("axiom precedence failed: got %q, want %q", res.Effective, model.OpenCodeBackgroundOff)
+	}
+}
+

@@ -2,8 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type InstallChannel string
@@ -12,13 +13,15 @@ const (
 	ChannelStable InstallChannel = "stable"
 	ChannelBeta   InstallChannel = "beta"
 
-	channelEnvVar = "GENTLE_AI_CHANNEL"
+	ChannelAxiomEnvVar  = "AXIOM_CHANNEL"
+	ChannelGentleEnvVar = "GENTLE_AI_CHANNEL"
+	channelEnvVar       = ChannelGentleEnvVar
 )
 
 func ResolveInstallChannel(flagValue string) (InstallChannel, error) {
 	raw := strings.TrimSpace(flagValue)
 	if raw == "" {
-		raw = strings.TrimSpace(os.Getenv(channelEnvVar))
+		raw = strings.TrimSpace(system.Getenv(ChannelAxiomEnvVar, ChannelGentleEnvVar))
 	}
 	if raw == "" {
 		return ChannelStable, nil
@@ -31,7 +34,7 @@ func ResolveInstallChannel(flagValue string) (InstallChannel, error) {
 		return ChannelBeta, nil
 	default:
 		// refusal:by-design operator-knowledge: only the operator knows which channel they meant; the message already states the complete next action (use stable, beta, or nightly), and no runnable command can pick it for them
-		return "", fmt.Errorf("unsupported Gentle AI channel %q (use stable, beta, or nightly)", raw)
+		return "", fmt.Errorf("unsupported channel %q (use stable, beta, or nightly)", raw)
 	}
 }
 

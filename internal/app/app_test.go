@@ -996,7 +996,7 @@ func TestTuiSyncModelConfigPropagatesAssignmentWriteFailure(t *testing.T) {
 	}
 
 	statePath := state.Path(home)
-	stateTarget := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	stateTarget := filepath.Join(filepath.Dir(statePath), "persisted-state.json")
 	if err := os.Rename(statePath, stateTarget); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
@@ -1482,7 +1482,7 @@ func TestPersistAssignmentsNoOpWhenEmpty(t *testing.T) {
 		t.Fatalf("state.Write: %v", err)
 	}
 
-	statePath := filepath.Join(home, ".gentle-ai", "state.json")
+	statePath := state.Path(home)
 	infoBefore, _ := os.Stat(statePath)
 
 	selection := model.Selection{} // empty assignments
@@ -1837,7 +1837,7 @@ func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
 		t.Fatalf("pre-install config read error = %v, want absent", err)
 	}
 	statePath := state.Path(home)
-	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	target := filepath.Join(filepath.Dir(statePath), "persisted-state.json")
 	if err := os.Rename(statePath, target); err != nil {
 		t.Fatal(err)
 	}
@@ -2416,7 +2416,7 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 
 	// Keep state readable through a symlink while making atomic replacement refuse it.
 	stateFilePath := state.Path(home)
-	stateTargetPath := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	stateTargetPath := filepath.Join(filepath.Dir(stateFilePath), "persisted-state.json")
 	if err := os.Rename(stateFilePath, stateTargetPath); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}

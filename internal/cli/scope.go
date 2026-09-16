@@ -2,8 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // InstallScope controls where agent-scoped config files (system prompts, skills/, agents/, etc.) are written.
@@ -17,8 +18,9 @@ const (
 	// ScopeWorkspace writes to the current workspace config root for each selected agent.
 	ScopeWorkspace InstallScope = "workspace"
 
-	// scopeEnvVar is the environment variable that controls install scope.
-	scopeEnvVar = "GENTLE_AI_INSTALL_SCOPE"
+	ScopeAxiomEnvVar  = "AXIOM_INSTALL_SCOPE"
+	ScopeGentleEnvVar = "GENTLE_AI_INSTALL_SCOPE"
+	scopeEnvVar       = ScopeAxiomEnvVar
 )
 
 // ResolveInstallScope resolves the install scope from the flag value and env var.
@@ -27,7 +29,7 @@ const (
 func ResolveInstallScope(flagValue string) (InstallScope, error) {
 	raw := strings.TrimSpace(flagValue)
 	if raw == "" {
-		raw = strings.TrimSpace(os.Getenv(scopeEnvVar))
+		raw = strings.TrimSpace(system.Getenv(ScopeAxiomEnvVar, ScopeGentleEnvVar))
 	}
 	if raw == "" {
 		return ScopeGlobal, nil

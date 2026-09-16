@@ -327,8 +327,11 @@ func (o ActivationOptions) normalized() ActivationOptions {
 	return o
 }
 
-// BinDir returns the Gentle-owned launcher directory.
-func BinDir(homeDir string) string { return filepath.Join(homeDir, ".gentle-ai", "bin") }
+// BinDir returns the Axiom-owned launcher directory.
+func BinDir(homeDir string) string { return filepath.Join(homeDir, ".axiom", "bin") }
+
+// LegacyBinDir returns the legacy Gentle-owned launcher directory.
+func LegacyBinDir(homeDir string) string { return filepath.Join(homeDir, ".gentle-ai", "bin") }
 
 // POSIXLauncherPath returns the POSIX launcher path.
 func POSIXLauncherPath(homeDir string) string { return filepath.Join(BinDir(homeDir), "opencode") }
@@ -348,13 +351,22 @@ func ManagedLauncherPaths(homeDir, goos string) []string {
 	return []string{POSIXLauncherPath(homeDir)}
 }
 
+// LegacyManagedLauncherPaths returns the legacy Gentle launcher files for cleanup.
+func LegacyManagedLauncherPaths(homeDir, goos string) []string {
+	if goos == "windows" {
+		return []string{filepath.Join(LegacyBinDir(homeDir), "opencode.cmd"), filepath.Join(LegacyBinDir(homeDir), "opencode.ps1")}
+	}
+	return []string{filepath.Join(LegacyBinDir(homeDir), "opencode")}
+}
+
 // LauncherPaths is an alias with a concise name for callers that already know
-// they are asking for Gentle-owned paths.
+// they are asking for Axiom-owned paths.
 func LauncherPaths(homeDir, goos string) []string { return ManagedLauncherPaths(homeDir, goos) }
 
-// ResolveTarget finds the real OpenCode executable while excluding the
-// Gentle-owned bin directory. It must be called before that directory is added
-// to PATH, and remains safe on repeated activation after it is already there.
+// ResolveTarget finds the real OpenCode executable while excluding both
+// Axiom-owned and legacy Gentle-owned bin directories. It must be called before
+// that directory is added to PATH, and remains safe on repeated activation after
+// it is already there.
 func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 	if goos == "" {
 		goos = runtime.GOOS
@@ -363,6 +375,7 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve managed OpenCode bin directory: %w", err)
 	}
+	legacyDir, _ := filepath.Abs(LegacyBinDir(homeDir))
 	for _, entry := range splitPath(pathValue, goos) {
 		entry = strings.Trim(strings.TrimSpace(entry), `"`)
 		if entry == "" || !filepath.IsAbs(entry) {
@@ -372,7 +385,7 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 		if err != nil {
 			continue
 		}
-		if samePath(entry, managedDir, goos) {
+		if samePath(entry, managedDir, goos) || (legacyDir != "" && samePath(entry, legacyDir, goos)) {
 			continue
 		}
 		for _, name := range targetNames(goos) {
@@ -389,7 +402,7 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 			if absErr != nil {
 				continue
 			}
-			if pathUnder(realPath, managedDir, goos) {
+			if pathUnder(realPath, managedDir, goos) || (legacyDir != "" && pathUnder(realPath, legacyDir, goos)) {
 				continue
 			}
 			return realPath, nil
@@ -522,6 +535,11 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 func PrepareDeactivation(homeDir string, options ActivationOptions) (*ActivationPlan, error) {
 	options = options.normalized()
 	paths := ManagedLauncherPaths(homeDir, options.OS)
+	for _, lp := range LegacyManagedLauncherPaths(homeDir, options.OS) {
+		if _, err := os.Stat(lp); err == nil {
+			paths = append(paths, lp)
+		}
+	}
 	plan := &ActivationPlan{
 		homeDir: homeDir,
 		goos:    options.OS,

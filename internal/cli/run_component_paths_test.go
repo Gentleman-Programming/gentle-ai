@@ -832,7 +832,7 @@ func TestInstallDeliversRoutingGuidanceWithoutSDDComponent(t *testing.T) {
 	runInstallInjectionSteps(t, rt)
 
 	prompt := readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode))
-	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+	if !containsRoutingMarkers(prompt) {
 		t.Fatalf("install without the SDD component left the agent unrouted:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "Implementation Routing") {
@@ -859,15 +859,18 @@ func TestInstallRoutingGuidanceIsIndependentOfSDDSelection(t *testing.T) {
 	sdd := readTextFile(t, systemPromptFileFor(t, withSDD, model.AgentClaudeCode))
 
 	for label, prompt := range map[string]string{"without sdd": plain, "with sdd": sdd} {
-		if !strings.Contains(prompt, routingOpenMarker) {
+		if !containsRoutingMarkers(prompt) {
 			t.Fatalf("%s: routing guidance missing:\n%s", label, prompt)
 		}
 	}
 
-	if strings.Contains(plain, sddMarker) {
+	hasSDD := func(p string) bool {
+		return strings.Contains(p, "<!-- axiom:sdd-orchestrator -->") || strings.Contains(p, sddMarker)
+	}
+	if hasSDD(plain) {
 		t.Fatalf("install without the SDD component gained SDD orchestration assets:\n%s", plain)
 	}
-	if !strings.Contains(sdd, sddMarker) {
+	if !hasSDD(sdd) {
 		t.Fatalf("install with the SDD component lost SDD orchestration assets:\n%s", sdd)
 	}
 }
@@ -890,7 +893,7 @@ func TestInstallRoutingGuidanceSurvivesOpenCodeSDDInjection(t *testing.T) {
 	}
 
 	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
-	if installed := openCodeOrchestratorPrompt(t, home); !strings.Contains(installed, routingOpenMarker) {
+	if installed := openCodeOrchestratorPrompt(t, home); !containsRoutingMarkers(installed) {
 		t.Fatalf("install did not deliver routing guidance to the OpenCode orchestrator prompt:\n%s", installed)
 	}
 
@@ -934,7 +937,7 @@ func TestInstallStripsLegacyTriggerRulesSection(t *testing.T) {
 	if !strings.Contains(prompt, "# My own notes") {
 		t.Fatalf("stripping the legacy section destroyed unmanaged user content:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, routingOpenMarker) {
+	if !containsRoutingMarkers(prompt) {
 		t.Fatalf("routing guidance missing after the legacy strip:\n%s", prompt)
 	}
 }
@@ -995,7 +998,7 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 
 	prompt := openCodeOrchestratorPrompt(t, home)
-	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+	if !containsRoutingMarkers(prompt) {
 		t.Fatalf("workspace-scoped install left the home OpenCode orchestrator prompt unrouted:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "Retired WorkRun ceremony") {

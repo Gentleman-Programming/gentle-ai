@@ -8765,24 +8765,30 @@ func TestOpenCodePluginUninstallSpinnerAdvancesFrame(t *testing.T) {
 
 func setNoAnimationEnv(t *testing.T, value *string) {
 	t.Helper()
-	const name = "GENTLE_AI_NO_ANIMATION"
-	previous, wasSet := os.LookupEnv(name)
+	prevAxiom, axiomSet := os.LookupEnv("AXIOM_NO_ANIMATION")
+	prevGentle, gentleSet := os.LookupEnv("GENTLE_AI_NO_ANIMATION")
 	t.Cleanup(func() {
-		if wasSet {
-			_ = os.Setenv(name, previous)
+		if axiomSet {
+			_ = os.Setenv("AXIOM_NO_ANIMATION", prevAxiom)
 		} else {
-			_ = os.Unsetenv(name)
+			_ = os.Unsetenv("AXIOM_NO_ANIMATION")
+		}
+		if gentleSet {
+			_ = os.Setenv("GENTLE_AI_NO_ANIMATION", prevGentle)
+		} else {
+			_ = os.Unsetenv("GENTLE_AI_NO_ANIMATION")
 		}
 	})
 
+	_ = os.Unsetenv("GENTLE_AI_NO_ANIMATION")
 	var err error
 	if value == nil {
-		err = os.Unsetenv(name)
+		err = os.Unsetenv("AXIOM_NO_ANIMATION")
 	} else {
-		err = os.Setenv(name, *value)
+		err = os.Setenv("AXIOM_NO_ANIMATION", *value)
 	}
 	if err != nil {
-		t.Fatalf("set %s: %v", name, err)
+		t.Fatalf("set AXIOM_NO_ANIMATION: %v", err)
 	}
 }
 
@@ -8840,6 +8846,39 @@ func TestTickMsg_NoAnimationRequiresExactOne(t *testing.T) {
 				t.Fatalf("tick command present = %t, want %t", cmd != nil, tt.wantCmd)
 			}
 		})
+	}
+}
+
+func TestTickMsg_NoAnimationPrecedence(t *testing.T) {
+	prevAxiom, axiomSet := os.LookupEnv("AXIOM_NO_ANIMATION")
+	prevGentle, gentleSet := os.LookupEnv("GENTLE_AI_NO_ANIMATION")
+	t.Cleanup(func() {
+		if axiomSet {
+			_ = os.Setenv("AXIOM_NO_ANIMATION", prevAxiom)
+		} else {
+			_ = os.Unsetenv("AXIOM_NO_ANIMATION")
+		}
+		if gentleSet {
+			_ = os.Setenv("GENTLE_AI_NO_ANIMATION", prevGentle)
+		} else {
+			_ = os.Unsetenv("GENTLE_AI_NO_ANIMATION")
+		}
+	})
+
+	os.Unsetenv("AXIOM_NO_ANIMATION")
+	os.Unsetenv("GENTLE_AI_NO_ANIMATION")
+
+	// Fallback to legacy
+	_ = os.Setenv("GENTLE_AI_NO_ANIMATION", "1")
+	if !tuiAnimationsDisabled() {
+		t.Fatal("fallback to GENTLE_AI_NO_ANIMATION failed")
+	}
+
+	// Axiom takes precedence (disabling fallback)
+	_ = os.Setenv("AXIOM_NO_ANIMATION", "0")
+	_ = os.Setenv("GENTLE_AI_NO_ANIMATION", "1")
+	if tuiAnimationsDisabled() {
+		t.Fatal("AXIOM_NO_ANIMATION=0 did not override GENTLE_AI_NO_ANIMATION=1")
 	}
 }
 

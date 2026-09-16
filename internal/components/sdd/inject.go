@@ -1231,26 +1231,29 @@ func preserveOpenCodeRoutingGuidance(settingsPath string, orchestratorMap map[st
 	return nil
 }
 
-// extractManagedSection returns the content of one gentle-ai managed section.
+// extractManagedSection returns the content of one axiom/gentle-ai managed section.
 //
 // An absent or malformed marker pair yields the empty string. That fail-closed
 // default matters here: filemerge.ExtractHTMLCommentSection serves a different
 // marker syntax and returns the whole document when it finds no section, which
 // would smuggle an entire orchestrator prompt into a guidance block.
 func extractManagedSection(content, sectionID string) string {
-	open := "<!-- gentle-ai:" + sectionID + " -->"
-	closing := "<!-- /gentle-ai:" + sectionID + " -->"
+	for _, prefix := range []string{"axiom", "gentle-ai"} {
+		open := "<!-- " + prefix + ":" + sectionID + " -->"
+		closing := "<!-- /" + prefix + ":" + sectionID + " -->"
 
-	start := strings.Index(content, open)
-	if start < 0 {
-		return ""
-	}
-	end := strings.Index(content, closing)
-	if end <= start {
-		return ""
-	}
+		start := strings.Index(content, open)
+		if start < 0 {
+			continue
+		}
+		end := strings.Index(content, closing)
+		if end <= start {
+			continue
+		}
 
-	return strings.Trim(content[start+len(open):end], "\n")
+		return strings.Trim(content[start+len(open):end], "\n")
+	}
+	return ""
 }
 
 // restoreKilocodeManagedAgentTools restores the exact Kilocode tools and

@@ -9,10 +9,20 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
-const OpenCodeBackgroundSubagentsEnv = "GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS"
+const (
+	OpenCodeBackgroundSubagentsAxiomEnv  = "AXIOM_OPENCODE_BACKGROUND_SUBAGENTS"
+	OpenCodeBackgroundSubagentsGentleEnv = "GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS"
+
+	OpenCodeBackgroundSubagentsEnv = OpenCodeBackgroundSubagentsAxiomEnv
+)
+
+func lookupOpenCodeBackgroundEnv() (string, bool) {
+	return system.LookupEnv(OpenCodeBackgroundSubagentsAxiomEnv, OpenCodeBackgroundSubagentsGentleEnv)
+}
 
 // OpenCodeBackgroundResolveInput contains already-discovered sources. The
 // resolver is pure so loading state and reading the process environment remain
@@ -104,7 +114,7 @@ func parseBackgroundIntent(source, raw string, present bool) (model.OpenCodeBack
 }
 
 func resolveOpenCodeBackgroundCLI(set bool, raw string, persisted state.InstallState) (OpenCodeBackgroundResolution, error) {
-	envValue, envSet := os.LookupEnv(OpenCodeBackgroundSubagentsEnv)
+	envValue, envSet := lookupOpenCodeBackgroundEnv()
 	return ResolveOpenCodeBackground(OpenCodeBackgroundResolveInput{
 		CLISet:       set,
 		CLIValue:     model.OpenCodeBackgroundIntent(raw),
@@ -120,7 +130,7 @@ func resolveOpenCodeBackgroundCLI(set bool, raw string, persisted state.InstallS
 // the TUI flow, so a missing prior and missing environment decision is the
 // only case that requests the TUI choice screen.
 func ResolveOpenCodeBackgroundInteractive(prior model.OpenCodeBackgroundIntent) (OpenCodeBackgroundResolution, error) {
-	envValue, envSet := os.LookupEnv(OpenCodeBackgroundSubagentsEnv)
+	envValue, envSet := lookupOpenCodeBackgroundEnv()
 	return ResolveOpenCodeBackground(OpenCodeBackgroundResolveInput{
 		EnvSet:       envSet,
 		EnvValue:     envValue,

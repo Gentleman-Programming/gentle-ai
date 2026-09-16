@@ -11,6 +11,7 @@ func TestResolveInstallChannel(t *testing.T) {
 	tests := []struct {
 		name      string
 		flagValue string
+		axiomEnv  string
 		envValue  string
 		want      InstallChannel
 		wantErr   bool
@@ -19,6 +20,8 @@ func TestResolveInstallChannel(t *testing.T) {
 		{name: "flag beta", flagValue: "beta", want: ChannelBeta},
 		{name: "flag nightly aliases beta", flagValue: "nightly", want: ChannelBeta},
 		{name: "env beta", envValue: "beta", want: ChannelBeta},
+		{name: "axiom env beta", axiomEnv: "beta", want: ChannelBeta},
+		{name: "axiom env wins over gentle env", axiomEnv: "stable", envValue: "beta", want: ChannelStable},
 		{name: "flag wins over env", flagValue: "stable", envValue: "beta", want: ChannelStable},
 		{name: "invalid", flagValue: "engram-beta", wantErr: true},
 		// Spec: empty-string env var treated as unset → stable (slice 3 channel-honoring).
@@ -27,7 +30,8 @@ func TestResolveInstallChannel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(channelEnvVar, tt.envValue)
+			t.Setenv(ChannelAxiomEnvVar, tt.axiomEnv)
+			t.Setenv(ChannelGentleEnvVar, tt.envValue)
 
 			got, err := ResolveInstallChannel(tt.flagValue)
 			if (err != nil) != tt.wantErr {

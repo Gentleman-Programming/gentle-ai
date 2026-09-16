@@ -209,10 +209,14 @@ func containsString(values []string, target string) bool {
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
 
-const noAnimationEnv = "GENTLE_AI_NO_ANIMATION"
+const (
+	noAnimationAxiomEnv  = "AXIOM_NO_ANIMATION"
+	noAnimationGentleEnv = "GENTLE_AI_NO_ANIMATION"
+	noAnimationEnv       = noAnimationAxiomEnv
+)
 
 func tuiAnimationsDisabled() bool {
-	return os.Getenv(noAnimationEnv) == "1"
+	return system.Getenv(noAnimationAxiomEnv, noAnimationGentleEnv) == "1"
 }
 
 // CodexModelsDiscoveredMsg delivers one Custom picker catalog discovery result.

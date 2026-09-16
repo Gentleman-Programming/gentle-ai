@@ -113,6 +113,29 @@ func TestResolveTargetSkipsManagedBinAndPreventsRecursion(t *testing.T) {
 	}
 }
 
+func TestResolveTargetSkipsLegacyManagedBinAndPreventsRecursion(t *testing.T) {
+	home := t.TempDir()
+	legacyManaged := LegacyBinDir(home)
+	real := filepath.Join(t.TempDir(), resolveTargetCandidateName())
+	if err := os.MkdirAll(legacyManaged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyManaged, resolveTargetCandidateName()), []byte("legacy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveTarget(home, runtime.GOOS, legacyManaged+string(os.PathListSeparator)+filepath.Dir(real))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != normalizedCandidatePath(t, real) {
+		t.Fatalf("ResolveTarget() = %q, want %q", got, real)
+	}
+}
+
 // normalizedCandidatePath resolves the fixture path exactly the way
 // ResolveTarget resolves candidates (EvalSymlinks + Abs): on Windows
 // t.TempDir() hands out 8.3 short names that production expands (#3209),

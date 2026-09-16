@@ -24,7 +24,7 @@ func TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	target := filepath.Join(home, ".axiom", "persisted-state.json")
 	if err := os.Rename(statePath, target); err != nil {
 		t.Fatal(err)
 	}
@@ -354,13 +354,77 @@ func TestWriteCreatesStateDir(t *testing.T) {
 	}
 }
 
-// TestWriteStateFilePath verifies Path() returns the expected location.
+// TestWriteStateFilePath verifies Path() and LegacyPath() return the expected locations.
 func TestWriteStateFilePath(t *testing.T) {
 	home := t.TempDir()
 	got := Path(home)
-	want := filepath.Join(home, ".gentle-ai", "state.json")
+	want := filepath.Join(home, ".axiom", "state.json")
 	if got != want {
 		t.Errorf("Path() = %q, want %q", got, want)
+	}
+
+	gotLegacy := LegacyPath(home)
+	wantLegacy := filepath.Join(home, ".gentle-ai", "state.json")
+	if gotLegacy != wantLegacy {
+		t.Errorf("LegacyPath() = %q, want %q", gotLegacy, wantLegacy)
+	}
+}
+
+// TestLegacyStateMigration verifies automatic defensive migration from ~/.gentle-ai/state.json
+// to ~/.axiom/state.json when ~/.axiom does not exist.
+func TestLegacyStateMigration(t *testing.T) {
+	home := t.TempDir()
+
+	// 1. Setup legacy ~/.gentle-ai/state.json
+	legacyDir := filepath.Join(home, ".gentle-ai")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyState := `{"installed_agents":["claude-code","opencode"],"persona":"neutral"}`
+	legacyPath := filepath.Join(legacyDir, "state.json")
+	if err := os.WriteFile(legacyPath, []byte(legacyState), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Read should detect missing ~/.axiom/state.json and migrate
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() failed during migration: %v", err)
+	}
+
+	if len(s.InstalledAgents) != 2 || s.InstalledAgents[0] != "claude-code" || s.InstalledAgents[1] != "opencode" {
+		t.Errorf("Read() migrated agents = %v, want [claude-code opencode]", s.InstalledAgents)
+	}
+	if s.Persona != "neutral" {
+		t.Errorf("Read() migrated persona = %q, want neutral", s.Persona)
+	}
+
+	// 3. Verify ~/.axiom/state.json was created on disk
+	axiomPath := Path(home)
+	data, err := os.ReadFile(axiomPath)
+	if err != nil {
+		t.Fatalf("migrated ~/.axiom/state.json was not written: %v", err)
+	}
+	if string(data) != legacyState {
+		t.Errorf("migrated content = %s, want %s", string(data), legacyState)
+	}
+
+	// 4. Verify legacy file was preserved intact
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Errorf("legacy ~/.gentle-ai/state.json was removed or inaccessible: %v", err)
+	}
+
+	// 5. Verify ~/.axiom/state.json takes precedence when both exist
+	modifiedAxiom := `{"installed_agents":["opencode"],"persona":"gentleman"}`
+	if err := os.WriteFile(axiomPath, []byte(modifiedAxiom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s2.InstalledAgents) != 1 || s2.InstalledAgents[0] != "opencode" || s2.Persona != "gentleman" {
+		t.Errorf("Read() did not prioritize ~/.axiom/state.json: %+v", s2)
 	}
 }
 

@@ -943,6 +943,44 @@ func TestCheckDiskSpace_StatError(t *testing.T) {
 	}
 }
 
+func TestCheckDiskSpace_DirectoryTargeting(t *testing.T) {
+	orig := availableBytesFn
+	defer func() { availableBytesFn = orig }()
+
+	var probedDir string
+	availableBytesFn = func(dir string) (int64, error) {
+		probedDir = dir
+		return diskWarnThreshold * 2, nil
+	}
+
+	// 1. Neither exists -> probes homeDir
+	home := t.TempDir()
+	checkDiskSpace(home)
+	if probedDir != home {
+		t.Fatalf("expected probe of %q, got %q", home, probedDir)
+	}
+
+	// 2. Only legacy ~/.gentle-ai exists -> probes ~/.gentle-ai
+	legacyDir := filepath.Join(home, ".gentle-ai")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkDiskSpace(home)
+	if probedDir != legacyDir {
+		t.Fatalf("expected probe of legacy %q, got %q", legacyDir, probedDir)
+	}
+
+	// 3. Canonical ~/.axiom exists -> probes ~/.axiom (outranks legacy)
+	axiomDir := filepath.Join(home, ".axiom")
+	if err := os.MkdirAll(axiomDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkDiskSpace(home)
+	if probedDir != axiomDir {
+		t.Fatalf("expected probe of canonical %q, got %q", axiomDir, probedDir)
+	}
+}
+
 // --- RunDoctor integration test ---
 
 func TestRunDoctor_IntegrationAllMocked(t *testing.T) {

@@ -1454,6 +1454,39 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVaria
 	}
 }
 
+func TestComponentOperationsSDD_OpenCodeRemovesAxiomModelVariantsCache(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	axiomCacheDir := filepath.Join(homeDir, ".axiom", "cache")
+	if err := os.MkdirAll(axiomCacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(axiomCacheDir) error = %v", err)
+	}
+	axiomCachePath := filepath.Join(axiomCacheDir, "model-variants.json")
+	if err := os.WriteFile(axiomCachePath, []byte("cache"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	applySDDOpenCodeOperations(t, svc, adapter)
+
+	if _, err := os.Stat(axiomCachePath); !os.IsNotExist(err) {
+		t.Fatalf("managed axiom cache file %q should be removed; stat err = %v", axiomCachePath, err)
+	}
+	if _, err := os.Stat(axiomCacheDir); err != nil {
+		t.Fatalf("axiom cache dir should be preserved; stat err = %v", err)
+	}
+}
+
 func TestComponentOperationsSDD_OpenCodePreservesEmptyModelVariantsCacheDirectory(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

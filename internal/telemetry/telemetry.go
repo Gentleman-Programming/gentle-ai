@@ -30,7 +30,11 @@ const (
 const DefaultEndpoint = "https://telemetry.gentlemanprogramming.com/v1/events"
 
 // EndpointEnvVar overrides DefaultEndpoint.
-const EndpointEnvVar = "GENTLE_AI_TELEMETRY_ENDPOINT"
+const (
+	EndpointAxiomEnvVar  = "AXIOM_TELEMETRY_ENDPOINT"
+	EndpointGentleEnvVar = "GENTLE_AI_TELEMETRY_ENDPOINT"
+	EndpointEnvVar       = EndpointAxiomEnvVar
+)
 
 // NoticeLine is printed to stderr exactly once: by Opportunistic's
 // enrollment step, before any event is ever built or sent. That one
