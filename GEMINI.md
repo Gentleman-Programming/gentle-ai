@@ -23,6 +23,7 @@ Para el trabajo habitual, refactorizaciones y funcionalidades directas sin sobre
 1. **Documento Único de Tarea:** Se crea y mantiene un único archivo vivo `odd/tasks/<nombre-feature>.md` y su réplica sincronizada en Engram MCP bajo el tópico `odd/<nombre-feature>/tasks`.
 2. **Ciclo Ágil:** `Exploración proporcional ➔ Implementación autorizada ➔ Comprobación funcional / TDD`.
 3. **Control y Evidencia:** El archivo de tarea registra objetivos, restricciones, lista de tareas accionables con IDs estables, progreso y comandos de prueba ejecutados.
+4. **Comandos canónicos ya operativos:** `axiom odd create <nombre>`, `axiom odd status [--json] [--check-mirror]` y `axiom odd promote <feature> [--dry-run] [--name <nombre>]`, con superficie reactiva en `axiom ui` (pestaña ODD) y `axiom tui` (Gobernanza → Carril Ágil ODD).
 
 ### B. SDD (Spec-Driven Development) — Vía Formal de Arquitectura
 Reservado para grandes incrementos del sistema, cambios estructurales profundos o cuando el usuario pida explícitamente *"usa SDD"*:

@@ -3059,3 +3059,80 @@ func TestSDDSpecAndProposeNameTheChangeLocalSpecLocation(t *testing.T) {
 		}
 	}
 }
+
+// axiomODDWorkflowRequired lists the Spanish-language ODD/SDD dual-lane
+// guidance every Persona axiom asset must carry (INC-19 Phase 8, task
+// 8.1/8.2). Values mirror the real, shipped command contract from Phases 3
+// and 5 of the same increment — never an aspirational or invented shape.
+var axiomODDWorkflowRequired = []string{
+	"## Flujo Dual: ODD y SDD",
+	"`odd/tasks/<feature>.md`",
+	"`odd/<feature>/tasks`",
+	"`axiom odd create <nombre>`",
+	"`axiom odd status [--json] [--check-mirror]`",
+	"`axiom odd promote <feature> [--dry-run] [--name <nombre>]`",
+	"orientación de lectura, no un disparador",
+}
+
+// axiomODDWorkflowForbiddenTriggers guards risk R7 (capability
+// organic-agent-trigger-rules): this guidance must never wire a filesystem,
+// Git, or CI event to an automatic `axiom odd` invocation — only an explicit
+// human or agent command.
+var axiomODDWorkflowForbiddenTriggers = []string{
+	"pre-commit hook",
+	"post-commit hook",
+	"git hook that",
+	"cron job",
+	"webhook",
+	"runs automatically when",
+	"se ejecuta automáticamente cuando",
+	"on file save",
+}
+
+// axiomPersonaAssetPaths is the same asset family TestPersonaAxiomAssetsContract
+// (language_contract_test.go) covers: every Persona axiom channel across
+// every supported runtime.
+func axiomPersonaAssetPaths() []string {
+	return []string{
+		"generic/persona-axiom.md",
+		"claude/persona-axiom.md",
+		"claude/output-style-axiom.md",
+		"opencode/persona-axiom.md",
+		"kiro/persona-axiom.md",
+		"hermes/persona-axiom.md",
+		"kimi/output-style-axiom.md",
+	}
+}
+
+// TestPersonaAxiomAssetsDescribeODDWorkflowDeterministically is the RED/GREEN
+// pair for INC-19 tasks 8.1 (RED) and 8.2 (GREEN): every Persona axiom asset
+// must carry the real ODD/SDD dual-lane command contract, render identically
+// across reads, and never bind a repository event to an automatic action.
+func TestPersonaAxiomAssetsDescribeODDWorkflowDeterministically(t *testing.T) {
+	for _, path := range axiomPersonaAssetPaths() {
+		t.Run(path, func(t *testing.T) {
+			first, err := Read(path)
+			if err != nil {
+				t.Fatalf("Read(%q) error = %v", path, err)
+			}
+			second, err := Read(path)
+			if err != nil {
+				t.Fatalf("second Read(%q) error = %v", path, err)
+			}
+			if first != second {
+				t.Fatalf("%s rendering is not deterministic across reads", path)
+			}
+
+			for _, required := range axiomODDWorkflowRequired {
+				if !strings.Contains(first, required) {
+					t.Fatalf("%s missing ODD dual-lane workflow guidance %q", path, required)
+				}
+			}
+			for _, forbidden := range axiomODDWorkflowForbiddenTriggers {
+				if strings.Contains(first, forbidden) {
+					t.Fatalf("%s binds a repository event to an automatic axiom odd action via %q (organic-agent-trigger-rules R7)", path, forbidden)
+				}
+			}
+		})
+	}
+}

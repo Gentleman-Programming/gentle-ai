@@ -5,10 +5,10 @@
 > - **Fase 1: Fundación de la Plataforma e Identidad Base:** ✅ 100% Completada (7/7 Incrementos Archivados)  
 > - **Fase 2: Autonomía, Identidad, Multi-Proyecto y Orquestación SDD:** ✅ 100% Completada (8/8 Incrementos Archivados)  
 > - **Fase 3: Experiencia de Usuario, Localización y Ecosistema:** ✅ 100% Completada (2/2 Incrementos Archivados)  
-> - **Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3:** ⏳ En progreso (1/2 Incrementos Archivados)  
+> - **Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3:** ⏳ En progreso (1/3 Incrementos Archivados)  
 > **Total de Incrementos Archivados:** 18 de 18 (INC-01 a INC-18)  
-> **Total de Incrementos Planificados:** 1 (INC-19)  
-> **Última Actualización:** 2026-09-16
+> **Total de Incrementos Planificados:** 2 (INC-19, INC-20)  
+> **Última Actualización:** 2026-09-17
 
 ---
 
@@ -63,7 +63,8 @@
 | ID | Incremento | Estado | Responsabilidad | Descripción Resumida |
 | :--- | :--- | :---: | :---: | :--- |
 | **INC-18** | `rdd-decoupling-and-v3-stability-fixes` | ✅ Archivado | Core SDD / Estabilidad | Desacoplamiento de RDD del motor de estados SDD y absorción de parches de estabilidad upstream (rutas JSON Windows, aislamiento CWD, saneamiento de presets de skills y Engram session recovery). |
-| **INC-19** | `sdd-engine-simplification-and-odd-workflow` | 📋 Planificado | Motor SDD & ODD / Experiencia | Poda de burocracia en motor SDD (eliminación de attempts/budget consent preservando verificación formal) e introducción del flujo ODD (Organic Driven Development) en español bajo la Persona Axiom. |
+| **INC-19** | `inc-19-odd-workflow-and-promotion` | ⏳ En progreso | ODD & Puerta de Promoción / Experiencia | Carril ágil ODD operativo (documento vivo `odd/tasks/<feature>.md`, espejo de solo lectura en Engram, CLI `axiom odd create`, `status` y `promote`, superficie en Web UI y TUI) y puerta de promoción no destructiva hacia el carril formal SDD. |
+| **INC-20** | `inc-20-sdd-engine-contract-retirement` | 📋 Planificado | Motor SDD / Arquitectura | Retirada coordinada del contrato de runtime ya publicado de *attempts*, presupuesto y remediación (`internal/sddstatus`, `axiom sdd attempt`) y resolución de la capacidad `sdd-research` sin implementación conectada, con deltas de especificación viva y migración de los activos distribuidos que hoy invocan esa superficie. |
 
 
 ---
@@ -275,15 +276,24 @@
      - Descarte ratificado de la integración de RTK (`rtk-ai/rtk`) debido a sus hooks forzados en herramientas de consola y carencia de soporte para Windows en upstream.
   4. **Verificación formal en arnés OpenSpec aprobada (veredicto PASS: 6/6 requerimientos, 6/6 escenarios BDD).**
 
-### [INC-19] sdd-engine-simplification-and-odd-workflow (📋 Planificado)
-- **Responsabilidad:** Motor SDD & ODD / Experiencia & Arquitectura
-- **Alcance planificado:**
-  1. **Poda y simplificación del motor SDD (`internal/sddstatus`):**
-     - Eliminación de la sobrecarga burocrática de *attempts* contados, presupuestos de tokens, contratos de admisión de investigación y cadenas complejas de remediación.
-     - **Preservación del rigor de Axiom:** Mantenimiento de la compuerta de verificación formal (`verify-report.md`, validación de suites de pruebas antes de archivar e integración viva con el Dashboard Web `axiom ui` y la TUI).
-  2. **Introducción de ODD (*Organic Driven Development*) en Axiom:**
-     - Flujo ágil y directo para tareas cotidianas que no requieren las 7 fases completas de SDD: gestión centrada en un único documento vivo de tarea `odd/tasks/<feature>.md` con sincronización en Engram MCP (`odd/<feature>/tasks`).
-     - Redacción de directrices, prompts del orquestador y plantillas íntegramente en castellano peninsular bajo la Persona oficial `axiom`.
-     - Subcomandos canónicos en la CLI: `axiom odd create <nombre>`, `axiom odd status`.
-     - Integración reactiva en el Dashboard Web local (`axiom ui`) y en la TUI interactiva (`axiom tui`), permitiendo alternar con fluidez entre modo ágil (ODD) y modo formal de ingeniería (SDD).
+### [INC-19] inc-19-odd-workflow-and-promotion (⏳ En progreso)
+- **Directorio de cambio SDD:** `openspec/changes/inc-19-odd-workflow-and-promotion/`
+- **Responsabilidad:** ODD & Puerta de Promoción / Experiencia
+- **Nota de corrección:** el enunciado original de este incremento (visible en el historial de este documento) afirmaba una poda simultánea del motor SDD (*attempts*, presupuestos de tokens, contratos de admisión de investigación). Esa poda se verificó **falsa contra el código** al arrancar el trabajo — no existe presupuesto de tokens de LLM ni contrato de investigación conectado en `internal/sddstatus` — y el incremento se reencuadró a lo que realmente entrega: el carril ODD y su puerta de promoción. La poda diferida y honestamente reencuadrada como retirada de un contrato ya publicado se registra en **INC-20**.
+- **Alcance real entregado (Fases 1-8):**
+  1. **Motor del documento vivo** (`internal/odd`, paquete hoja sin dependencias hacia `dashboard`/`cli`/`tui`): estructura canónica de doce secciones en castellano peninsular, identidad estable de *feature* con denylist de nombres reservados de Windows, identificadores estables de tarea (`T1`, `T2`, …), progreso derivado vía `multirole.CountTasks` sobre la sola sección de checklist, y espejo de recuperación de solo lectura en Engram (`odd/<feature>/tasks`) con tres estados (`sincronizado`, `divergente`, `no disponible`) que nunca altera el código de salida.
+  2. **CLI `axiom odd create`, `axiom odd status` (`--json`, `--check-mirror`) y `axiom odd promote`** (`--dry-run`, `--name`): promoción en dos fases — crear el cambio SDD primero, marcar el documento ODD después — que nunca deriva capacidades inventadas y nunca produce un cambio SDD duplicado.
+  3. **Extensión protegida de `CreateIncrement`** (REQ-15.1 modificado): campo opcional `proposal_body` que la promoción siembra, protegida por un test de caracterización byte a byte que preserva intacto el comportamiento vigente cuando el campo está vacío.
+  4. **Web UI y TUI:** pestaña `tab-odd` con listado, filtros, creación, promoción y comprobación de espejo desde el navegador; pantalla `ScreenODDFeatures` alcanzable desde Gobernanza en la TUI; conmutación explícita y visible entre el carril ágil (ODD) y el carril formal (SDD) en ambas superficies.
+  5. **Directrices ODD/SDD en castellano peninsular bajo la Persona `axiom`**, distribuidas en `internal/assets/` con renderizado determinista y sin vínculo evento → acción.
+
+### [INC-20] inc-20-sdd-engine-contract-retirement (📋 Planificado)
+- **Responsabilidad:** Motor SDD / Arquitectura
+- **Naturaleza real, no burocracia huérfana:** este incremento no retira código muerto aislado. Retira un **contrato de runtime ya publicado**: la maquinaria de *attempts*, presupuesto y remediación de `internal/sddstatus` la invocan hoy los propios activos que Axiom distribuye a los agentes que instala (`internal/assets/claude/sdd-orchestrator-workflow.md`, `internal/assets/skills/_shared/sdd-orchestrator-sections.md` y `sdd-status-contract.md`), y choca de frente con dos especificaciones vivas: `axiom-sdd-cli-integration` (REQ-13.3 exige `axiom sdd attempt acquire`/`settle` con escenario BDD propio) y `rdd-sdd-receipt-consumption` (propiedad del libro mayor de intentos, confirmada por el mantenedor el 2026-08-02). Retirarlo exige deltas de especificación coordinados y migración de los activos distribuidos, no un borrado mecánico.
+- **Alcance planificado (sin iniciar; pendiente de las decisiones de producto D1-D5 de la preproposal):**
+  1. Blindaje previo de la compuerta de verificación formal (`verify → archive`) como contrato especificado y cubierto por tests de caracterización, antes de tocar cualquier otra pieza.
+  2. Poda selectiva de *attempts*, presupuesto y cadenas de remediación en `internal/sddstatus`, preservando un registro mínimo que siga sosteniendo el `ReceiptRef` terminal exigido por `rdd-sdd-receipt-consumption`.
+  3. Deltas coordinados sobre `axiom-sdd-cli-integration` y `rdd-sdd-receipt-consumption`, y migración de los activos distribuidos que hoy invocan la superficie retirada.
+  4. Resolución diferida de `internal/agents/researchcapability` (cero importadores Go, pero respaldado por la especificación viva `sdd-research` y el activo `internal/assets/skills/sdd-research/SKILL.md`): no es código muerto aislado, es una capacidad publicada sin implementación conectada.
+- **Preproposal:** análisis completo persistido en Engram bajo el topic `sdd/inc-20-sdd-engine-contract-retirement/preproposal`.
 
