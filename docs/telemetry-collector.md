@@ -95,6 +95,64 @@ purges whole deliveries strictly before the UTC cutoff; deduplication ends when
 the corresponding delivery is purged. No runtime daily rollup, new scheduler,
 production configuration change, or deployment is included.
 
+## Runtime metrics for VictoriaMetrics
+
+`--runtime-store` selects how a newly stored `/v1/runtime-events` delivery is
+persisted:
+
+- `sqlite` (default): today's behavior, unchanged — `runtime_deliveries` and
+  `runtime_rows` as described above, no counters, `GET /metrics` serves an
+  empty body.
+- `metrics`: no raw rows at all. The delivery is deduplicated by id alone in
+  `runtime_delivery_ids(delivery_id TEXT PRIMARY KEY, received_at INTEGER NOT
+  NULL)`, and its rows are folded into an in-memory Prometheus counters
+  registry instead. This table stores no payload, because in this mode there
+  is no canonical payload to compare a repeat against — a repeated id is
+  always treated as `duplicate`, the same trust model as any bare idempotency
+  key (contrast `runtime_deliveries`, which detects a same-id-different-payload
+  conflict via its stored `canonical_payload`). It shares `--retention-days`
+  and the daily purge with `runtime_deliveries`/`runtime_rows`; an id expires
+  the same way and a retry past that point is `stored` again, not tombstoned.
+- `both`: writes raw rows and observes into the registry, for a transition
+  window before cutover.
+
+A delivery is only ever observed into the registry once, on `stored` — never
+on `duplicate`, and never at all under `sqlite`.
+
+`GET /metrics` renders that registry as Prometheus text exposition
+(`Content-Type: text/plain; version=0.0.4`) for VictoriaMetrics to scrape. It
+has no auth: the collector's listener is loopback-only and VictoriaMetrics
+scrapes it from the same host, the same trust boundary every other
+unauthenticated route on this listener already relies on. Every metric is a
+monotonically increasing counter (reset only by process restart, handled
+downstream by `increase()`/`rate()`), all carrying `host`:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `gentle_runtime_deliveries_total` | `host` | one per stored delivery |
+| `gentle_runtime_rows_total` | `host,agent_kind,agent_class,provider,model,selected_effort` | one per row |
+| `gentle_runtime_responses_total` | same as rows | sum of `responses` |
+| `gentle_runtime_launches_total` | same as rows | sum of `launches` (a `null` observation adds 0) |
+| `gentle_runtime_tokens_total` | same as rows, `+kind` (`input\|output\|cache_read\|cache_creation\|reasoning\|total`) | sum of each token object's `sum` |
+| `gentle_runtime_token_fields_total` | same as rows, `+kind,state` (`reported\|unavailable\|unsupported`) | sum of each token object's coverage counts |
+| `gentle_runtime_errors_total` | same as rows, `+category` | one per row, skipped entirely when `error_category` is `none` |
+| `gentle_runtime_duration_ms_sum` | same as rows, `+duration_kind` | sum of `duration.sum_ms` |
+| `gentle_runtime_duration_measured_total` | same as rows, `+duration_kind` | sum of `duration.measured_count` |
+| `gentle_runtime_rows_by_evidence_total` | `host,model_evidence,effective_effort` | one per row, kept low-cardinality by leaving out agent/provider/model |
+
+A label value is sanitized for the exposition format (`\`, `"`, and newline
+escaped) and an empty value renders as `unknown`; in practice every label
+already comes from a closed wire-contract vocabulary (see
+[Runtime observations](#runtime-observations)), so this only matters if
+`RuntimeMetrics.Observe` is ever called from something other than a parsed,
+validated `telemetry.RuntimeEvent`.
+
+**Cutover**: the default stays `sqlite` until the VictoriaMetrics deploy
+(`deploy/telemetry/`, not yet built — see the feature's task list) is
+installed, backfilled, and verified. Flipping `--runtime-store` before that
+exists means either losing runtime history (`metrics` with nothing scraping
+`/metrics` yet) or, in `both`, doubling work for no benefit.
+
 ## HTTP API
 
 | Endpoint | Method | Auth | Notes |
@@ -103,6 +161,7 @@ production configuration change, or deployment is included.
 | `/v1/runtime-events` | POST | none | Body ≤ 16 KiB; strict public observations; own per-address rate limit (`--runtime-rate-limit-per-minute`). `200` with `stored`/`duplicate`; one client attempt only. |
 | `/v1/summary` | GET | `Authorization: Bearer <token>` | Returns the JSON described below. `401` without a valid token. |
 | `/healthz` | GET | none | Liveness check for the reverse proxy / process supervisor. |
+| `/metrics` | GET | none | Prometheus text exposition of the runtime counters registry — see [Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics). Empty body under `--runtime-store=sqlite` (the default). |
 
 ### No IP addresses, anywhere
 
@@ -280,6 +339,7 @@ address"`, with the header's value itself never logged.
 --retention-days 90                                        # raw event retention
 --rate-limit-per-minute 60                                 # per-address budget on /v1/events
 --runtime-rate-limit-per-minute 600                         # per-address budget on /v1/runtime-events
+--runtime-store sqlite                                      # sqlite (default) | metrics | both — see Runtime metrics for VictoriaMetrics
 --trusted-proxy-cidr 127.0.0.0/8 --trusted-proxy-cidr ::1/128  # peers allowed to set X-Forwarded-For (repeatable; this is the default)
 --npm-package gentle-pi --npm-package gentle-engram        # npm packages to fetch daily downloads for (repeatable; this is the default)
 --github-repo Gentleman-Programming/gentle-ai              # GitHub repo to fetch release downloads for (repeatable; this is the default)
