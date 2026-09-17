@@ -6,16 +6,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# The binary, user/group, and state paths below stay pinned to the
-# gentle-telemetry name: they resolve to cmd/gentle-telemetry (Go source,
-# out of this rename's scope) and to already-provisioned host state
-# (user, StateDirectory, config); renaming them here with no migration
-# path would silently orphan an existing deployment (REQ-20.12).
+	# The binary, user/group, and state paths below stay pinned to the
+	# gentle-telemetry name: they resolve to cmd/gentle-telemetry (Go source,
+	# out of this rename's scope) and to already-provisioned host state
+	# (user, StateDirectory, config); renaming them here with no migration
+	# path would silently orphan an existing deployment (REQ-20.12).
+	# runtime.env may carry GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics;
+	# install.sh writes it when VictoriaMetrics is installed. An absent file or an
+	# empty variable expands to no argument, which keeps the sqlite default.
+	EnvironmentFile=-/etc/gentle-telemetry/runtime.env
 ExecStart=/usr/local/bin/gentle-telemetry \
 	--listen 127.0.0.1:18181 \
 	--db /var/lib/gentle-telemetry/events.sqlite \
 	--retention-days 90 \
-	--rate-limit-per-minute 60
+	--rate-limit-per-minute 60 \
+	$GENTLE_TELEMETRY_RUNTIME_STORE_FLAG
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=15s

@@ -644,6 +644,10 @@ curl -sH "Authorization: Bearer $(sudo cat /etc/gentle-telemetry/summary.token)"
 - **RDD adoption**: `rdd_enabled_ratio`.
 - **Upgrade lag**: `version_distribution`.
 
+### Runtime store selection
+
+`gentle-telemetry.service` reads `/etc/gentle-telemetry/runtime.env`. `install.sh --with-victoria-metrics` writes `GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics` there, so the next collector restart stops writing raw runtime rows and serves counters on `/metrics`; without VictoriaMetrics the file stays commented and the collector keeps the `sqlite` default. Change the mode by editing that file and restarting the unit.
+
 ## Grafana dashboards
 
 ### Runtime received observations
