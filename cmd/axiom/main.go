@@ -22,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/odd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
@@ -93,7 +94,7 @@ COMANDOS DE GOBERNANZA Y WORKSPACE:
   sdd archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas
   odd create           Crea un documento vivo ODD para una nueva feature del carril ágil
   odd status           Consulta el progreso de los documentos vivos ODD (--json, --check-mirror)
-  odd promote          Promueve un documento vivo ODD a una propuesta SDD sembrada (aun no disponible)
+  odd promote          Promueve un documento vivo ODD a una propuesta SDD sembrada (--dry-run, --name)
   review               Gestiona el ciclo de revisión formal RDD (start, resume, step, mode, validate)
   ui                   Inicia el servidor local y abre el dashboard web interactivo
 
@@ -1756,16 +1757,16 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 }
 
 // runODD despacha los subcomandos de "axiom odd" (REQ-19.5, REQ-19.6,
-// REQ-19.7, parte de REQ-19.8): create y status en esta rebanada. promote se
-// añade en una fase posterior [D-16]. Calcado de runSDD: ayuda con exit 1
-// cuando falta el subcomando, exit 0 con --help/-h, mensaje explícito y
-// exit 1 ante un subcomando desconocido.
+// REQ-19.7, REQ-19.8): create, status y promote. Calcado de runSDD: ayuda
+// con exit 1 cuando falta el subcomando, exit 0 con --help/-h, mensaje
+// explícito y exit 1 ante un subcomando desconocido.
 func runODD(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(stdout, "Uso: axiom odd <subcomando> [argumentos]")
 		fmt.Fprintln(stdout, "\nSubcomandos disponibles:")
 		fmt.Fprintln(stdout, "  create           Crea un documento vivo ODD para una nueva feature (--cwd)")
 		fmt.Fprintln(stdout, "  status           Consulta el progreso de los documentos vivos ODD (--json, --check-mirror, --cwd)")
+		fmt.Fprintln(stdout, "  promote          Promueve un documento vivo ODD a una propuesta SDD sembrada (--name, --intent, --type, --dry-run, --cwd)")
 		if len(args) < 1 {
 			return 1
 		}
@@ -1781,8 +1782,10 @@ func runODD(args []string, stdout, stderr io.Writer) int {
 		err = cli.RunODDCreate(subArgs, stdout)
 	case "status":
 		err = cli.RunODDStatus(subArgs, stdout)
+	case "promote":
+		err = cli.RunODDPromote(subArgs, stdout, newDashboardScaffolder)
 	default:
-		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para odd. Opciones: create, status\n", subCmd)
+		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para odd. Opciones: create, status, promote\n", subCmd)
 		return 1
 	}
 
@@ -1791,6 +1794,50 @@ func runODD(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// dashboardScaffolder satisface odd.Scaffolder invocando
+// dashboard.Service.CreateIncrement bajo root para "axiom odd promote"
+// [D-01, D-07]. Vive en package main -- no en internal/cli, como planteaba
+// el diseño (§5.5, §5.8) -- porque internal/dashboard/service.go:19 ya
+// importa internal/cli (para RunSDDContinue, RunSDDVerifyValidate,
+// RunDoctor y RunRestore): si internal/cli importara internal/dashboard
+// para construir este adaptador, el grafo cerraría el ciclo
+// cli → dashboard → cli, con independencia total de internal/odd, que
+// sigue siendo una hoja del árbol de dependencias sin este cambio.
+// package main no lo importa nadie, así que es el único punto del árbol de
+// dependencias actual que puede importar ambos paquetes y construir el
+// adaptador sin ciclar [desviación deliberada de D-01, documentada en el
+// informe de esta fase].
+type dashboardScaffolder struct {
+	root string
+}
+
+// newDashboardScaffolder construye el dashboardScaffolder de producción
+// para root. Es el único valor que runODD pasa a cli.RunODDPromote; los
+// tests de internal/cli pasan en su lugar un Scaffolder falso.
+func newDashboardScaffolder(root string) odd.Scaffolder {
+	return dashboardScaffolder{root: root}
+}
+
+// Scaffold traduce req al contrato de dashboard.CreateIncrementRequest y
+// proyecta la respuesta a odd.ScaffoldResult. El error de
+// dashboard.Service.CreateIncrement se propaga sin envolver: su mensaje
+// (colisión con un cambio activo o archivado, nombre inválido) ya es la
+// explicación completa que el usuario de "axiom odd promote" debe leer,
+// idéntica a la que produce "axiom change create" para el mismo fallo
+// (REQ-19.10).
+func (a dashboardScaffolder) Scaffold(req odd.ScaffoldRequest) (odd.ScaffoldResult, error) {
+	resp, err := dashboard.NewService(a.root).CreateIncrement(dashboard.CreateIncrementRequest{
+		Name:         req.Name,
+		Intent:       req.Intent,
+		Type:         req.Type,
+		ProposalBody: req.ProposalBody,
+	})
+	if err != nil {
+		return odd.ScaffoldResult{}, err
+	}
+	return odd.ScaffoldResult{Name: resp.Name, Path: resp.Path}, nil
 }
 
 func runReview(args []string, stdout, stderr io.Writer) int {

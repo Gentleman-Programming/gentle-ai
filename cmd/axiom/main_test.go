@@ -144,7 +144,7 @@ func TestRunODDHelp(t *testing.T) {
 			if !strings.Contains(out, "Uso: axiom odd <subcomando>") {
 				t.Fatalf("la salida no contiene el uso esperado:\n%s", out)
 			}
-			for _, sub := range []string{"create", "status"} {
+			for _, sub := range []string{"create", "status", "promote"} {
 				if !strings.Contains(out, sub) {
 					t.Fatalf("la ayuda de odd no documenta el subcomando %q:\n%s", sub, out)
 				}
@@ -154,15 +154,15 @@ func TestRunODDHelp(t *testing.T) {
 }
 
 // TestRunODDUnknownSubcommand cubre "odd inexistente" (frontera T-8): un
-// subcomando no reconocido, incluido "promote" (todavía sin cablear hasta la
-// Fase 5), devuelve exit 1 con un mensaje explícito.
+// subcomando no reconocido devuelve exit 1 con un mensaje explícito. "promote"
+// ya no es un caso de este test desde la Fase 5: TestRunODDPromoteDispatch lo
+// cubre como subcomando reconocido y cableado.
 func TestRunODDUnknownSubcommand(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 	}{
 		{"subcomando inexistente", []string{"subcomando-inexistente"}},
-		{"promote todavía no cableado en esta rebanada", []string{"promote", "demo"}},
 	}
 
 	for _, tc := range tests {
@@ -211,6 +211,55 @@ func TestRunODDCreateAndStatusDispatch(t *testing.T) {
 	var data map[string]interface{}
 	if err := json.Unmarshal(jsonOut.Bytes(), &data); err != nil {
 		t.Fatalf("runODD status --json no produjo JSON válido: %v\nsalida: %s", err, jsonOut.String())
+	}
+}
+
+// TestRunODDPromoteDispatch confirma que runODD enruta de verdad "promote"
+// hacia cli.RunODDPromote con el Scaffolder de producción sobre
+// dashboard.Service.CreateIncrement (frontera T-8, tarea 5.9): extiende la
+// tabla de enrutamiento de TestRunODDCreateAndStatusDispatch con los tres
+// usos completos de REQ-19.8 -- "odd promote <feature>", "odd promote
+// <feature> --dry-run" y "odd promote <feature> --name <otro>" -- sobre un
+// workspace real, sin ningún Scaffolder falso: es la única prueba
+// automatizada de este incremento que ejercita el adaptador de producción
+// (definido en este mismo fichero, ver ddScaffolder) de principio a fin.
+func TestRunODDPromoteDispatch(t *testing.T) {
+	root := t.TempDir()
+	const feature = "gestion-inventario"
+
+	var createOut, createErr bytes.Buffer
+	if code := runODD([]string{"create", feature, "--cwd", root}, &createOut, &createErr); code != 0 {
+		t.Fatalf("runODD create falló con código %d: %s", code, createErr.String())
+	}
+
+	var dryOut, dryErr bytes.Buffer
+	if code := runODD([]string{"promote", feature, "--cwd", root, "--dry-run"}, &dryOut, &dryErr); code != 0 {
+		t.Fatalf("runODD promote --dry-run falló con código %d: %s", code, dryErr.String())
+	}
+	if !strings.Contains(dryOut.String(), "## Propósito (Intent)") {
+		t.Fatalf("runODD promote --dry-run no reenvió el cuerpo sembrado real: %q", dryOut.String())
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "openspec")); !os.IsNotExist(statErr) {
+		t.Fatalf("runODD promote --dry-run creó %q, se esperaba que no existiera ningún directorio openspec/", filepath.Join(root, "openspec"))
+	}
+
+	const changeName = "modulo-inventario-v2"
+	var promoteOut, promoteErr bytes.Buffer
+	if code := runODD([]string{"promote", feature, "--cwd", root, "--name", changeName}, &promoteOut, &promoteErr); code != 0 {
+		t.Fatalf("runODD promote --name falló con código %d: %s", code, promoteErr.String())
+	}
+	proposalPath := filepath.Join(root, "openspec", "changes", changeName, "proposal.md")
+	proposal, err := os.ReadFile(proposalPath)
+	if err != nil {
+		t.Fatalf("runODD promote --name no creó %s de verdad vía dashboard.Service.CreateIncrement: %v", proposalPath, err)
+	}
+	if !strings.Contains(string(proposal), "Documento sembrado por promoción ODD") {
+		t.Fatalf("proposal.md creado no contiene el cuerpo sembrado por la promoción ODD: %q", string(proposal))
+	}
+
+	var secondOut, secondErr bytes.Buffer
+	if code := runODD([]string{"promote", feature, "--cwd", root}, &secondOut, &secondErr); code == 0 {
+		t.Fatalf("runODD promote una segunda vez sobre la misma feature devolvió código 0, se esperaba un rechazo por idempotencia")
 	}
 }
 
