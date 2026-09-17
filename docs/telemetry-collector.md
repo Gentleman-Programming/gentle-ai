@@ -611,6 +611,22 @@ http://127.0.0.1:8428`, not default) alongside the existing SQLite
 datasource, so dashboard panels can reference it directly without a
 manual re-link after install.
 
+**Dashboard**: in `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
+the 25 runtime panels under the "Live activity" and "Subagents" rows (live
+deliveries/responses/tokens/hosts, subagent coverage and breakdowns, host
+and model and effort usage, token coverage, error and duration observations)
+now query VictoriaMetrics through the `gentle-runtime-vm` datasource with
+PromQL `increase()`/`rate()` expressions instead of raw SQL against the
+retired `runtime_rows`/`runtime_deliveries` SQLite tables; each rewritten
+panel's `description` states its exact windowing choice (a fixed window for
+the "last 15 min"/"last 3h"/"last 24h" panels, `increase(metric[$__range])`
+for the panels driven by the dashboard's time picker). The adoption panels
+(install/heartbeat events, rollups, npm and GitHub download counts) are
+unaffected and still read the SQLite datasource. The dashboard's default
+time range (`time.from`) now starts at **2026-09-10**, the start of the
+backfilled VictoriaMetrics history, so the "in range" runtime stat and table
+panels show a meaningful total by default instead of only the last 7 days.
+
 ### Answering "how many people use it"
 
 ```
