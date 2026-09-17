@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mattn/go-isatty"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/app"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
@@ -26,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
+	"github.com/mattn/go-isatty"
 )
 
 func init() {
@@ -91,6 +91,9 @@ COMANDOS DE GOBERNANZA Y WORKSPACE:
   sdd attempt          Gestiona el presupuesto y libro mayor de intentos de ejecución (acquire/settle)
   sdd verify-validate  Valida un reporte de verificación contra las especificaciones activas
   sdd archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas
+  odd create           Crea un documento vivo ODD para una nueva feature del carril ágil
+  odd status           Consulta el progreso de los documentos vivos ODD (--json, --check-mirror)
+  odd promote          Promueve un documento vivo ODD a una propuesta SDD sembrada (aun no disponible)
   review               Gestiona el ciclo de revisión formal RDD (start, resume, step, mode, validate)
   ui                   Inicia el servidor local y abre el dashboard web interactivo
 
@@ -116,6 +119,7 @@ Ejemplos:
   axiom init --name "MiProyecto"
   axiom sdd status mi-cambio --json
   axiom sdd continue mi-cambio
+  axiom odd status
   axiom install claude-code
   axiom sync
   axiom doctor
@@ -347,6 +351,9 @@ func main() {
 
 	case "ui":
 		runUI(os.Args[2:])
+
+	case "odd":
+		os.Exit(runODD(os.Args[2:], os.Stdout, os.Stderr))
 
 	case "sdd":
 		os.Exit(runSDD(os.Args[2:], os.Stdout, os.Stderr))
@@ -1008,7 +1015,6 @@ func runUI(args []string) {
 
 	svc := dashboard.NewServiceWithHub(baseDir, hubMgr)
 	server := dashboard.NewServer(svc)
-
 
 	actualPort, err := server.ListenAndServe(*portFlag)
 	if err != nil {
@@ -1739,6 +1745,44 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 		err = cli.RunSDDPreflightHook(subArgs, stdout)
 	default:
 		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, verify-validate, archive-compose, task-result, preflight-hook\n", subCmd)
+		return 1
+	}
+
+	if err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// runODD despacha los subcomandos de "axiom odd" (REQ-19.5, REQ-19.6,
+// REQ-19.7, parte de REQ-19.8): create y status en esta rebanada. promote se
+// añade en una fase posterior [D-16]. Calcado de runSDD: ayuda con exit 1
+// cuando falta el subcomando, exit 0 con --help/-h, mensaje explícito y
+// exit 1 ante un subcomando desconocido.
+func runODD(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprintln(stdout, "Uso: axiom odd <subcomando> [argumentos]")
+		fmt.Fprintln(stdout, "\nSubcomandos disponibles:")
+		fmt.Fprintln(stdout, "  create           Crea un documento vivo ODD para una nueva feature (--cwd)")
+		fmt.Fprintln(stdout, "  status           Consulta el progreso de los documentos vivos ODD (--json, --check-mirror, --cwd)")
+		if len(args) < 1 {
+			return 1
+		}
+		return 0
+	}
+
+	subCmd := args[0]
+	subArgs := args[1:]
+	var err error
+
+	switch subCmd {
+	case "create":
+		err = cli.RunODDCreate(subArgs, stdout)
+	case "status":
+		err = cli.RunODDStatus(subArgs, stdout)
+	default:
+		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para odd. Opciones: create, status\n", subCmd)
 		return 1
 	}
 
