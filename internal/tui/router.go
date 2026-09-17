@@ -67,6 +67,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenMultiRole:     {Backward: ScreenGovernance},
 	ScreenHandoffs:      {Backward: ScreenGovernance},
 	ScreenLivingDoc:     {Backward: ScreenGovernance},
+	ScreenODDFeatures:   {Backward: ScreenGovernance},
 }
 
 func NextScreen(screen Screen) (Screen, bool) {
