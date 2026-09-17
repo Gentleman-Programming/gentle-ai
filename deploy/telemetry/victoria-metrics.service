@@ -49,7 +49,9 @@ MemoryDenyWriteExecute=yes
 RemoveIPC=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
-SystemCallFilter=@system-service
+# mincore is outside @system-service; VictoriaMetrics calls it from its page-cache
+# accounting (lib/fs) and aborts with FATAL when the filter refuses it.
+SystemCallFilter=@system-service mincore
 SystemCallErrorNumber=EPERM
 UMask=0077
 
