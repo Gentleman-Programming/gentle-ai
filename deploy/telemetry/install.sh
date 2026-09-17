@@ -493,6 +493,17 @@ EOF
 		grafana_cli plugins install frser-sqlite-datasource
 	fi
 
+	# Grafana 12+ ships Prometheus as an externalized plugin that its
+	# background installer fetches at startup as the grafana user. The
+	# root-run install above leaves the plugins directory root-owned, which
+	# makes that installer fail with "permission denied" and leaves the
+	# VictoriaMetrics datasource without a plugin, so install it here and
+	# hand the directory back to grafana.
+	if [[ "${WITH_VICTORIA_METRICS}" == "true" ]] && ! grafana_cli plugins ls 2>/dev/null | grep -q '^prometheus '; then
+		grafana_cli plugins install prometheus || printf 'prometheus plugin install skipped (bundled on this Grafana or catalog unreachable)\n'
+	fi
+	chown -R grafana:grafana /var/lib/grafana/plugins
+
 	mkdir -p "${GRAFANA_PROVISIONING_DIR}/datasources" "${GRAFANA_PROVISIONING_DIR}/dashboards" "${GRAFANA_DASHBOARD_DIR}"
 	install -m 0644 "${SCRIPT_DIR}/grafana/provisioning/datasources/telemetry.yaml" "${GRAFANA_PROVISIONING_DIR}/datasources/telemetry.yaml"
 	if [[ "${WITH_VICTORIA_METRICS}" == "true" ]]; then
