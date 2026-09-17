@@ -32,10 +32,10 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/artifact-subject.schema.json":   "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
 		"schemas/capabilities-v1.4.schema.json":  "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
-		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
+		"schemas/start.schema.json":              "7d5a51feb58057b3774aa7eba45ccf3b1de9df6eb88a5b639a719b0d0626743c",
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
-		"schemas/start-v2.schema.json":             "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
+		"schemas/start-v2.schema.json":             "b38f921bb96d143698d6f4fa2b2b9c6092cd30ecc5874c821b2735947bf50dc6",
 		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
 		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
 		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
@@ -135,7 +135,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// allowed property, but the native-git transport no longer needs to
 		// inline it since artifact_subject.changed_path_manifest_sha256 already
 		// commits to it. Deliberate, not drift.
-		"schemas/start.schema.json":     "27954ad34319719a68f90768c90f39254d94c62cf7f8ea90525ec4e2dbafd182",
+		"schemas/start.schema.json":     "21c632b836c16e06199bbec61cfc0f81defd690f3aca267b3034f354049aa310",
 		"schemas/status-v5.schema.json": "8f6d05bd4ed64abc765bd7ce9ae8bed0470448cd260fc0a94dc5929b88f42a18",
 	}
 	for name, expected := range want {
@@ -160,7 +160,7 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
 		"fixtures/start-v4.fixture.json":          "639a6e78b40cb5e000ec15265fd444c243e28594035c7d376c378142162bfb02",
 		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
-		"schemas/start-v4.schema.json":            "770c6a7e40a62a945d1134cba933cfd811f4c5e6ab407a36a26ba56508bc00e4",
+		"schemas/start-v4.schema.json":            "9c534d707fc6c640e1e7683a5e1b8bdb7f09ed4cabcbbebc5e1e816fc4677791",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

@@ -745,10 +745,10 @@ func TestReviewLensContextAdmitsManyPathsFarUnderByteBudget(t *testing.T) {
 	}, &output); err != nil {
 		t.Fatalf("33 one-line paths were refused: %v", err)
 	}
-	if output.Len() > reviewLensContextByteBudget/8 {
-		t.Fatalf("fixture is not far under budget: block = %d bytes of %d", output.Len(), reviewLensContextByteBudget)
+	if output.Len() > reviewtransaction.MaxFrozenCandidateDiffBytes/8 {
+		t.Fatalf("fixture is not far under budget: block = %d bytes of %d", output.Len(), reviewtransaction.MaxFrozenCandidateDiffBytes)
 	}
-	t.Logf("33-path reviewer block = %d bytes of the %d byte budget", output.Len(), reviewLensContextByteBudget)
+	t.Logf("33-path reviewer block = %d bytes of the %d byte budget", output.Len(), reviewtransaction.MaxFrozenCandidateDiffBytes)
 }
 
 // startCompactAuthorityWithoutFacadeChecks persists reviewing authority the way
@@ -859,6 +859,60 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 
 // replaceArgValue returns args with one flag's value replaced, so a refusal case
 // can corrupt exactly one token of the otherwise-exact closed command form.
+type reviewLensContextBlockFixtureInspector struct {
+	frozen   reviewtransaction.FrozenCandidateContext
+	payloads map[int][]byte
+}
+
+func (inspector reviewLensContextBlockFixtureInspector) FrozenCandidateContext() reviewtransaction.FrozenCandidateContext {
+	return inspector.frozen
+}
+
+func (inspector reviewLensContextBlockFixtureInspector) Inspect(_ context.Context, operation string, pathIndex int, _ string) ([]byte, error) {
+	if operation == "name-status" {
+		return []byte("M\tgenerated/pnpm-lock.yaml\nM\tinternal/subject.go\n"), nil
+	}
+	if operation == "numstat" {
+		return []byte("10\t1\tgenerated/pnpm-lock.yaml\n1\t1\tinternal/subject.go\n"), nil
+	}
+	return inspector.payloads[pathIndex], nil
+}
+
+func (inspector reviewLensContextBlockFixtureInspector) Close() error { return nil }
+
+func TestReviewLensContextBlockSummarizesGeneratedPatches(t *testing.T) {
+	generatedPatch := []byte("diff --git a/generated/pnpm-lock.yaml b/generated/pnpm-lock.yaml\nindex abc123..def456 100644\n--- a/generated/pnpm-lock.yaml\n+++ b/generated/pnpm-lock.yaml\n@@ -1 +1 @@\n-old lock\n+new lock\n")
+	normalPatch := []byte("diff --git a/internal/subject.go b/internal/subject.go\nindex 111111..222222 100644\n--- a/internal/subject.go\n+++ b/internal/subject.go\n@@ -1 +1 @@\n-old subject\n+new subject\n")
+	frozen := reviewtransaction.FrozenCandidateContext{
+		BaseTree: "base", CandidateTree: "candidate",
+		ChangedPathManifest: []reviewtransaction.ChangedPathManifestEntry{
+			{Path: "generated/pnpm-lock.yaml", Status: reviewtransaction.CandidatePathModified, OldMode: "100644", NewMode: "100644", Generated: true},
+			{Path: "internal/subject.go", Status: reviewtransaction.CandidatePathModified, OldMode: "100644", NewMode: "100644"},
+		},
+	}
+	inspector := reviewLensContextBlockFixtureInspector{frozen: frozen, payloads: map[int][]byte{0: generatedPatch, 1: normalPatch}}
+	block, err := reviewLensContextBlock(t.Context(), reviewLensContextDependencies(), inspector, reviewLensContextBinding{
+		Lineage: "lineage", Target: "target", Lens: reviewtransaction.LensReadability, SubjectHash: "sha256:subject",
+	}, reviewtransaction.ArtifactSubject{}, frozen)
+	if err != nil {
+		t.Fatalf("reviewLensContextBlock() error = %v", err)
+	}
+	text := string(block)
+	if strings.Contains(text, "@@ -1 +1 @@\n-old lock") {
+		t.Fatalf("generated patch retained hunks:\n%s", text)
+	}
+	if !strings.Contains(text, "index abc123..def456 100644") || !strings.Contains(text, "GENERATED SUMMARY: path frozen as generated; hunks omitted") {
+		t.Fatalf("generated patch summary omitted identity or marker:\n%s", text)
+	}
+	if !strings.Contains(text, "@@ -1 +1 @@\n-old subject\n+new subject") {
+		t.Fatalf("normal patch lost full hunks:\n%s", text)
+	}
+	instruction, found := lensContextSection(text, reviewLensContextInstruction)
+	if !found || !strings.Contains(instruction, "manifest entries marked generated") || !strings.Contains(instruction, "must not claim line-level inspection") {
+		t.Fatalf("instruction does not name the generated summary evidence rule:\n%s", instruction)
+	}
+}
+
 func replaceArgValue(args []string, name, value string) []string {
 	replaced := append([]string{}, args...)
 	if index := slices.Index(replaced, name); index >= 0 && index+1 < len(replaced) {
