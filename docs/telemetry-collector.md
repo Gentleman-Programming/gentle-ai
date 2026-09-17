@@ -87,7 +87,9 @@ and unavailable requests return 400, 413, 429, and 500 respectively. Clients do
 not retry any of them or retain the event after a lost response.
 
 Existing SQLite `runtime_deliveries`/`runtime_rows`, `user_version=1`, transactional
-storage, shared rate limiting, and startup/daily retention remain unchanged.
+storage, and startup/daily retention remain unchanged. Rate limiting for
+`/v1/runtime-events` has its own budget, separate from `/v1/events` — see
+[Rate limiting](#rate-limiting).
 `received_at` is delivery time, not activity time. Existing `--retention-days`
 purges whole deliveries strictly before the UTC cutoff; deduplication ends when
 the corresponding delivery is purged. No runtime daily rollup, new scheduler,
@@ -97,15 +99,16 @@ production configuration change, or deployment is included.
 
 | Endpoint | Method | Auth | Notes |
 |---|---|---|---|
-| `/v1/events` | POST | none | Body ≤ 4 KiB, strict schema validation, per-IP rate limit. `202` on accept, `400` invalid, `413` oversize, `429` rate-limited. |
-| `/v1/runtime-events` | POST | none | Body ≤ 16 KiB; strict public observations. `200` with `stored`/`duplicate`; one client attempt only. |
+| `/v1/events` | POST | none | Body ≤ 4 KiB, strict schema validation, own per-address rate limit (`--rate-limit-per-minute`). `202` on accept, `400` invalid, `413` oversize, `429` rate-limited. |
+| `/v1/runtime-events` | POST | none | Body ≤ 16 KiB; strict public observations; own per-address rate limit (`--runtime-rate-limit-per-minute`). `200` with `stored`/`duplicate`; one client attempt only. |
 | `/v1/summary` | GET | `Authorization: Bearer <token>` | Returns the JSON described below. `401` without a valid token. |
 | `/healthz` | GET | none | Liveness check for the reverse proxy / process supervisor. |
 
 ### No IP addresses, anywhere
 
-- The per-IP rate limiter keys an in-memory token bucket by remote address,
-  and never writes that address to disk, to a log line, or anywhere else.
+- The per-address rate limiters (one for `/v1/events`, one for
+  `/v1/runtime-events`) key an in-memory token bucket by remote address,
+  and never write that address to disk, to a log line, or anywhere else.
   See `internal/telemetrycollector/limiter.go`.
 - The `events` table has no column that could hold a remote address (see
   the schema below); `Event`, decoded from the request body, structurally
@@ -237,12 +240,36 @@ querying a handful of small SQLite tables is fast enough at this scale.
 
 ## Rate limiting
 
-`POST /v1/events` is limited per remote address by an in-memory token
-bucket (`--rate-limit-per-minute`, default 60): burst capacity equals the
-configured limit, refilled continuously at `limit/60` tokens per second.
-Buckets are swept every 10 minutes and evicted after 30 minutes of
-inactivity, so the limiter's memory does not grow unbounded across many
-distinct callers. None of this state is ever persisted.
+`POST /v1/events` and `POST /v1/runtime-events` each have their own
+in-memory token bucket per remote address, keyed by the same client
+address (see "Deriving the client address" below): `--rate-limit-per-minute`
+(default 60) for `/v1/events`, and `--runtime-rate-limit-per-minute`
+(default 600) for `/v1/runtime-events`. They used to share one bucket,
+which meant frequent runtime heartbeats and infrequent stored events
+competed for the same budget — stored deliveries plateaued at exactly the
+configured limit while heartbeats were rejected once it was exhausted, and
+"active machines" counts collapsed as a result. Burst capacity equals each
+limit, refilled continuously at `limit/60` tokens per second. Buckets are
+swept every 10 minutes and evicted after 30 minutes of inactivity, so
+neither limiter's memory grows unbounded across many distinct callers.
+None of this state is ever persisted. A 429 on either endpoint is logged
+(`"telemetry event rejected"` / `"runtime telemetry rejected"`,
+`"reason", "rate_limited"`) with no client address attached.
+
+### Deriving the client address
+
+The rate limiter's key is the TCP peer address, unless the peer is a
+trusted proxy (`--trusted-proxy-cidr`, default `127.0.0.0/8,::1/128`), in
+which case it is the first `X-Forwarded-For` hop that parses as an IP
+address (falling back to `X-Real-IP`, then the peer). A forwarded value
+that does not parse as an IP is skipped rather than trusted verbatim: a
+misconfigured reverse proxy has been observed sending
+`X-Forwarded-For: (null), <client>`, which — without this validation —
+keyed every client on the literal string `"(null)"`, collapsing the rate
+limiter (and "active machines" counts derived from it) to a single shared
+bucket. When a trusted proxy's forwarded header has no element that
+parses, this is logged once per minute as `"ignored an invalid forwarded
+address"`, with the header's value itself never logged.
 
 ## Running it
 
@@ -251,7 +278,8 @@ distinct callers. None of this state is ever persisted.
 --db /var/lib/gentle-telemetry/events.sqlite              # SQLite file
 --summary-token-file <path>                               # bearer token for /v1/summary (local runs; systemd uses LoadCredential, see Token rotation)
 --retention-days 90                                        # raw event retention
---rate-limit-per-minute 60                                 # per-IP budget on /v1/events
+--rate-limit-per-minute 60                                 # per-address budget on /v1/events
+--runtime-rate-limit-per-minute 600                         # per-address budget on /v1/runtime-events
 --trusted-proxy-cidr 127.0.0.0/8 --trusted-proxy-cidr ::1/128  # peers allowed to set X-Forwarded-For (repeatable; this is the default)
 --npm-package gentle-pi --npm-package gentle-engram        # npm packages to fetch daily downloads for (repeatable; this is the default)
 --github-repo Gentleman-Programming/gentle-ai              # GitHub repo to fetch release downloads for (repeatable; this is the default)
@@ -629,10 +657,16 @@ Alongside the collector's own telemetry, the daily job also fetches two
 - **GitHub release downloads** (`--github-repo`, repeatable, default
   `Gentleman-Programming/gentle-ai`; optional `--github-token-file` to
   raise the rate limit — the token is never logged): `GET
-  https://api.github.com/repos/<owner>/<repo>/releases?per_page=20`,
-  summing `assets[].download_count` per release. GitHub's own counts are
-  already cumulative-since-release, so each day's fetch stores a snapshot
-  of that running total under today, not a daily delta.
+  https://api.github.com/repos/<owner>/<repo>/releases?per_page=100`,
+  following the response's `Link: rel="next"` header for up to 10 pages
+  (1,000 releases) so older releases are not silently dropped, and summing
+  `assets[].download_count` per release across every page fetched. A
+  failure on a later page (or too little of the collector's own fetch
+  budget left to be worth starting another request) stops pagination but
+  keeps whatever earlier pages already returned, rather than discarding
+  the whole fetch. GitHub's own counts are already cumulative-since-release,
+  so each day's fetch stores a snapshot of that running total under today,
+  not a daily delta.
 
 Both are stored in `rollups_daily` (`npm_downloads_day` / `key=<pkg>`,
 `github_release_downloads_total` / `key=<tag>`) alongside the collector's
