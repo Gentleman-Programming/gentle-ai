@@ -2322,3 +2322,52 @@ func TestStagingCommandTimeoutIsBoundedByFloorAndCeiling(t *testing.T) {
 		t.Fatalf("%d tracked paths: got %s, want ceiling %s", huge, got, ceiling)
 	}
 }
+
+// A legacy authority carries no generated-path interpretation, and no live
+// repository state can ever produce that absence again: every fresh rebuild
+// stamps the current interpretation. Live revalidation proves that a frozen
+// snapshot still describes its live target, which is a statement about
+// content, so a reviewer-representation discriminator must not decide it.
+func TestValidateLiveSnapshotPreservesHistoricalInterpretation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	expected, err := builder.BuildStoredSnapshot(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"candidate.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.ValidateLiveSnapshot(context.Background(), expected); err != nil {
+		t.Fatalf("fresh snapshot must validate against its own live target: %v", err)
+	}
+	expected.GeneratedPathInterpretation = ""
+	if err := builder.ValidateLiveSnapshot(context.Background(), expected); err != nil {
+		t.Fatalf("historical snapshot rejected against an unchanged repository: %v", err)
+	}
+}
+
+// review/invalidate rebuilds live evidence for a stored authority. A legacy
+// authority must remain invalidatable: refusing it would strand every lineage
+// created before generated-path summaries existed.
+func TestRebuildCurrentSnapshotEvidenceAcceptsHistoricalInterpretation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := SnapshotBuilder{Repo: repo}.BuildStoredSnapshot(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"candidate.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuildCurrentSnapshotEvidence(context.Background(), repo, stored); err != nil {
+		t.Fatalf("fresh authority must rebuild its own live evidence: %v", err)
+	}
+	stored.GeneratedPathInterpretation = ""
+	if err := rebuildCurrentSnapshotEvidence(context.Background(), repo, stored); err != nil {
+		t.Fatalf("historical authority rejected against an unchanged repository: %v", err)
+	}
+}
