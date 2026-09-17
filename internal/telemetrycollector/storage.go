@@ -78,10 +78,15 @@ func OpenStorage(path string) (*Storage, error) {
 	}
 
 	for _, pragma := range []string{
+		// busy_timeout must be applied before journal_mode: switching journal
+		// mode needs a moment of exclusive access, and if an external reader
+		// (Grafana, the open-data export) holds a lock at that instant,
+		// applying busy_timeout first makes the mode switch itself wait up to
+		// five seconds instead of failing immediately with SQLITE_BUSY.
+		"PRAGMA busy_timeout=5000;",
 		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
 		"PRAGMA foreign_keys=ON;",
-		"PRAGMA busy_timeout=5000;",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
 			db.Close()
