@@ -36,7 +36,11 @@ func (s *Server) handleRuntimeEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.logger().Error("runtime telemetry storage failed", "reason", "storage_unavailable", "error", err.Error())
+		reason := "storage_unavailable"
+		if errors.Is(err, errRuntimeStorageBusy) {
+			reason = "storage_busy"
+		}
+		s.logger().Error("runtime telemetry storage failed", "reason", reason, "error", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
