@@ -284,7 +284,12 @@ func TestHandleEvents_LogsErrorTextOnStorageFailure(t *testing.T) {
 	if !strings.Contains(logBuf.String(), "telemetry event storage failed") {
 		t.Fatalf("log missing failure message: %s", logBuf.String())
 	}
-	if !strings.Contains(logBuf.String(), "error=") {
+	// A bare "error=" key check would already pass without this change (the
+	// handler always logged an "error" attribute, just typed as error
+	// instead of string). Assert the induced trigger message itself made it
+	// into the log line, which only holds once the underlying error text is
+	// actually captured.
+	if !strings.Contains(logBuf.String(), "induced failure") {
 		t.Errorf("log missing the underlying error text: %s", logBuf.String())
 	}
 }

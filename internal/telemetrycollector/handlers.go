@@ -124,6 +124,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.Storage.InsertEvent(r.Context(), event, s.now()); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
+		// err.Error() is behavior-neutral here under both the text and JSON
+		// slog handlers: slog already special-cases a top-level error Attr
+		// value by calling its Error method (see log/slog's JSONHandler
+		// doc), so this produced the same log line even before this call
+		// was made explicit. Kept explicit for symmetry with
+		// handleRuntimeEvents' error-attribute logging.
 		s.logger().Error("telemetry event storage failed", "error", err.Error())
 		return
 	}

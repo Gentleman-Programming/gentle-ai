@@ -257,7 +257,13 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 	}
 	runOnce()
 
-	maintenanceTimer := time.NewTimer(nextMaintenanceDelay(time.Now()))
+	// Logged at startup and after every run so a mis-anchored timer (wrong
+	// timezone, clock skew, a bug in nextMaintenanceDelay) is visible in
+	// journalctl instead of only showing up as stale dashboard data a day
+	// later.
+	initialDelay := nextMaintenanceDelay(time.Now())
+	logger.Info("next daily maintenance scheduled", "in", initialDelay.Round(time.Second))
+	maintenanceTimer := time.NewTimer(initialDelay)
 	defer maintenanceTimer.Stop()
 	sweepTicker := time.NewTicker(rateLimiterSweepEvery)
 	defer sweepTicker.Stop()
@@ -268,7 +274,9 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 			return
 		case <-maintenanceTimer.C:
 			runOnce()
-			maintenanceTimer.Reset(nextMaintenanceDelay(time.Now()))
+			delay := nextMaintenanceDelay(time.Now())
+			logger.Info("next daily maintenance scheduled", "in", delay.Round(time.Second))
+			maintenanceTimer.Reset(delay)
 		case <-sweepTicker.C:
 			limiter.Sweep(rateLimiterSweepMaxIdle)
 		}

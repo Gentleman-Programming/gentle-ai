@@ -433,8 +433,16 @@ EOF
 	# requires for its own DynamicUser bookkeeping and would make other
 	# DynamicUser units refuse to (re)start.
 	setfacl -m u:grafana:rx "${STATE_DIR}"
-	# Default ACL so a -wal/-shm sidecar created later (or recreated after
-	# a checkpoint) inherits read access without rerunning this installer.
+	# Default ACL so a -wal/-shm sidecar created on the next start inherits
+	# read access without rerunning this installer. A WAL checkpoint does
+	# not remove these files; SQLite only removes them when the last
+	# connection to the database closes cleanly, and recreates them on the
+	# next open (e.g. after gentle-telemetry.service restarts). This ACL
+	# applies to every file later created directly under STATE_DIR, not
+	# only the three SQLite files below; do not use this directory as a
+	# general scratch space without accounting for that. See
+	# docs/telemetry-collector.md#grafana-setup for the full detail on how
+	# this interacts with SQLite recreating the sidecars.
 	setfacl -d -m u:grafana:r "${STATE_DIR}"
 	for db_file in events.sqlite events.sqlite-wal events.sqlite-shm; do
 		if [[ -f "${STATE_DIR}/${db_file}" ]]; then

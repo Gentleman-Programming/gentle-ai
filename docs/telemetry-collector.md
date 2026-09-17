@@ -538,8 +538,32 @@ membership. Because the collector opens SQLite with `journal_mode=WAL`
 (see [Storage](#storage)), this now covers three files, not one:
 `events.sqlite` itself plus its `-wal`/`-shm` sidecars, each granted
 individually when present, plus a default ACL on the directory so a
-sidecar created or recreated later (for example after a WAL checkpoint)
-inherits read access without rerunning the installer.
+sidecar created on a later collector restart inherits read access without
+rerunning the installer. A WAL checkpoint does not remove the `-wal`/`-shm`
+files; SQLite only removes them when the last connection to the database
+closes cleanly, and recreates them on the next open.
+
+A few things follow from that setup, worth knowing before relying on it:
+
+- The default ACL on `STATE_DIR` grants `grafana` read on every file
+  created there from that point on, not only the three SQLite files above.
+  Do not treat the directory as a general scratch space (a manual backup
+  copy, a debug dump) without accounting for that: anything dropped there
+  becomes Grafana-readable too.
+- A read-only reader can only open a WAL database while its sidecars
+  exist. They exist for the lifetime of the collector's own connection and
+  are only removed on a clean close (a graceful `systemctl stop
+  gentle-telemetry`), so Grafana has nothing consistent to read from in
+  the window between that stop and the collector's next start, which
+  recreates them.
+- SQLite creates a `-wal`/`-shm` sidecar with the same file mode as
+  `events.sqlite` at that moment. Once `events.sqlite` itself carries the
+  `grafana` ACL entry (from the per-file grant above, or inherited from
+  the directory's default ACL if it did not exist yet when the ACL was
+  set), a freshly created sidecar mirrors that mode and inherits the entry
+  too. This is why the default ACL keeps working across restarts even
+  though it only directly targets `STATE_DIR` itself, not the database
+  file.
 
 **Dashboard**: `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
 provisioned via `deploy/telemetry/grafana/provisioning/dashboards/telemetry.yaml`

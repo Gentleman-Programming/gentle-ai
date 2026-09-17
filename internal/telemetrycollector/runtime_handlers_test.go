@@ -152,7 +152,16 @@ func TestRuntimeHandleEvents_LogsErrorTextOnStorageFailure(t *testing.T) {
 	if entry == nil {
 		t.Fatal("no storage_unavailable log line found")
 	}
-	if entry["error"] == nil || entry["error"] == "" {
-		t.Errorf("log entry missing non-empty error field: %v", entry)
+	// A non-nil/non-empty check would also pass for a bare error value: the
+	// JSON handler marshals an unwrapped error to "{}" (neither nil nor an
+	// empty string), which would hide a regression back to logging the
+	// error type instead of its text. Require the field to be the exact
+	// sentinel string, which also confirms no raw driver/trigger text
+	// leaked (see the canary assertions in TestRuntimeHandleEvents): this
+	// trigger is a generic abort, not a busy/locked failure, so the
+	// applicable sentinel is errRuntimeStorage's text.
+	errText, ok := entry["error"].(string)
+	if !ok || errText != "runtime storage unavailable" {
+		t.Errorf("log entry error field = %#v, want the string %q", entry["error"], "runtime storage unavailable")
 	}
 }
