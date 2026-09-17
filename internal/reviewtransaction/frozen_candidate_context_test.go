@@ -3,6 +3,7 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,6 +15,63 @@ import (
 	"sync"
 	"testing"
 )
+
+func TestGeneratedCandidatePathRecognizesExplicitBasenamesAndGoldenFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "root package lock", path: "package-lock.json", want: true},
+		{name: "nested npm shrinkwrap", path: "web/npm-shrinkwrap.json", want: true},
+		{name: "nested pnpm lock", path: "packages/app/pnpm-lock.yaml", want: true},
+		{name: "nested yarn lock", path: "frontend/yarn.lock", want: true},
+		{name: "root go sum", path: "go.sum", want: true},
+		{name: "nested cargo lock", path: "rust/Cargo.lock", want: true},
+		{name: "existing golden rule", path: "internal/testdata/golden/rendered.golden", want: true},
+		{name: "go module near miss", path: "go.mod", want: false},
+		{name: "lockfile suffix near miss", path: "docs/yarn.lock.example", want: false},
+		{name: "lockfile prefix near miss", path: "package-lock.json.bak", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isGeneratedCandidatePath(tt.path); got != tt.want {
+				t.Fatalf("isGeneratedCandidatePath(%q) = %t, want %t", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChangedPathManifestGeneratedFieldPreservesLegacyJSONAndDigest(t *testing.T) {
+	const legacyJSON = `[{"path":"tracked.txt","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}]`
+	var entries []ChangedPathManifestEntry
+	if err := json.Unmarshal([]byte(legacyJSON), &entries); err != nil {
+		t.Fatalf("decode legacy manifest: %v", err)
+	}
+	encoded, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("encode legacy manifest: %v", err)
+	}
+	if string(encoded) != legacyJSON {
+		t.Fatalf("legacy manifest serialization changed:\ngot  %s\nwant %s", encoded, legacyJSON)
+	}
+	digest, err := ChangedPathManifestDigest(entries)
+	if err != nil {
+		t.Fatalf("legacy manifest digest: %v", err)
+	}
+	if digest != "sha256:64d028ff676fb4ef10f2d4a3488d568854b364b4cc4399578b5932d144d2347b" {
+		t.Fatalf("legacy manifest digest = %q, want the published digest", digest)
+	}
+
+	entries[0].Generated = true
+	generated, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("encode generated manifest: %v", err)
+	}
+	if !strings.Contains(string(generated), `"generated":true`) {
+		t.Fatalf("generated manifest omitted its true classification: %s", generated)
+	}
+}
 
 func TestFrozenCandidateContextUsesImmutableTreesAndCanonicalManifest(t *testing.T) {
 	requireSnapshotGit(t)
