@@ -531,6 +531,17 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	sort.Slice(scopeChangedCandidates, func(i, j int) bool {
 		return scopeChangedCandidates[i].lineage < scopeChangedCandidates[j].lineage
 	})
+	if len(candidates) == 0 {
+		consumed, err := CompactTargetConsumed(ctx, repo, live.Identity)
+		if err != nil {
+			return TargetStatusResult{}, err
+		}
+		if consumed {
+			base.Applicability = TargetApplicabilityUnrelated
+			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityNotReplayable
+			return base, nil
+		}
+	}
 	if len(candidates) == 0 && len(scopeChangedCandidates) > 1 {
 		// Two or more stale (scope-changed) lineages never decide anything
 		// by themselves: with no EXACTLY governing candidate, nothing

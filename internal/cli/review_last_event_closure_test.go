@@ -1104,10 +1104,17 @@ func TestNegotiatedStatusReplaysPendingAcknowledgementWithoutLineageSelector(t *
 	assertAcknowledgedEnvelope(t, acknowledged.Bytes(), started.LineageID, pending.TargetIdentity, pending.ExpectedRevision)
 
 	after := runSelectorlessNegotiatedStatus(t, repo)
-	if after.NextTransition == nil || after.NextTransition.Kind != reviewNextTransitionExecute ||
-		after.NextTransition.ReasonCode != "fresh_target_ready" || after.NextTransition.Execute == nil ||
-		after.NextTransition.Execute.Operation != "review.start" {
-		t.Fatalf("selectorless STATUS after the burn = %#v, want fresh_target_ready START", after.NextTransition)
+	if after.NextTransition == nil || after.NextTransition.Kind != reviewNextTransitionStop ||
+		after.NextTransition.ReasonCode != "target_already_acknowledged" || after.NextTransition.Execute != nil {
+		t.Fatalf("selectorless STATUS after the burn = %#v, want terminal consumption", after.NextTransition)
+	}
+	if after.Authority != nil || after.TargetIdentity != pending.TargetIdentity {
+		t.Fatalf("terminal status recreated authority or changed identity: %#v", after)
+	}
+	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", "a changed candidate after acknowledgement\n", 0o644)
+	changed := runSelectorlessNegotiatedStatus(t, repo)
+	if changed.NextTransition == nil || changed.NextTransition.Execute == nil || changed.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("changed candidate did not remain reviewable: %#v", changed.NextTransition)
 	}
 }
 

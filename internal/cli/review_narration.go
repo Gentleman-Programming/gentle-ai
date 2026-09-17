@@ -146,6 +146,9 @@ var reviewStopReasonNarration = map[string]string{
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
 		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
+	"target_already_acknowledged": "This exact target was already acknowledged and its review authority was burned. " +
+		"No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. " +
+		"Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target.",
 	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",

@@ -40,6 +40,11 @@ const reviewStopReasonDocsTerminalPrefix = "Terminal"
 // removed from this table entirely, not marked with either disposition — see
 // the organic-dx Phase 3 investigation note on escalated_recovery_requires_changed_target.
 var reviewStopInvariantClassification = map[string]reviewStopDisposition{
+	"target_already_acknowledged": {
+		Terminal:      true,
+		Justification: "the exact target was already acknowledged and its authority burned; no review continuation is required, delivery follows ordinary repository policy, and changed targets remain eligible",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"captured_artifacts_unverifiable": {
 		Terminal:      true,
 		Justification: "inspection failure of an already-captured artifact, not a routable state; requires a maintainer to inspect the review authority store directly",
