@@ -316,11 +316,7 @@ install -m 0644 "${SCRIPT_DIR}/axiom-telemetry.service" "${UNIT_DIR}/axiom-telem
 # --with-victoria-metrics it stops writing raw runtime rows and serves counters
 # on /metrics for the scrape; otherwise an existing choice is left alone and a
 # fresh install stays on sqlite. Applied on the next collector restart.
-if [[ "${WITH_VICTORIA_METRICS}" == "true" ]]; then
-	printf 'GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics\n' >"${CONFIG_DIR}/runtime.env"
-	chmod 0644 "${CONFIG_DIR}/runtime.env"
-	printf 'runtime store -> metrics (%s/runtime.env)\n' "${CONFIG_DIR}"
-elif [[ ! -f "${CONFIG_DIR}/runtime.env" ]]; then
+if [[ "${WITH_VICTORIA_METRICS}" != "true" ]] && [[ ! -f "${CONFIG_DIR}/runtime.env" ]]; then
 	printf '# GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics\n' >"${CONFIG_DIR}/runtime.env"
 	chmod 0644 "${CONFIG_DIR}/runtime.env"
 fi
@@ -416,6 +412,9 @@ install_victoria_metrics() {
 
 if [[ "${WITH_VICTORIA_METRICS}" == "true" ]]; then
 	install_victoria_metrics
+	printf 'GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics\n' >"${CONFIG_DIR}/runtime.env"
+	chmod 0644 "${CONFIG_DIR}/runtime.env"
+	printf 'runtime store -> metrics (%s/runtime.env)\n' "${CONFIG_DIR}"
 fi
 
 # set_ini_kv upserts key = value under [section] in an ini file, creating

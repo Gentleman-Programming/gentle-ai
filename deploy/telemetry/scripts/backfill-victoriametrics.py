@@ -30,7 +30,8 @@ keeps the backfill's data volume bounded for a multi-day window.
 Re-running this script (same --db, --since, --until) is idempotent: it
 always recomputes byte-identical samples for the same historical data, and
 VictoriaMetrics deduplicates identical (metric, labels, timestamp) points
-on import.
+on import. Deliveries and lines are streamed end to end, so memory stays
+bounded by the number of live series, not by the --since/--until window.
 
 Usage:
     python3 backfill-victoriametrics.py --db /var/lib/gentle-telemetry/events.sqlite \\
@@ -40,6 +41,7 @@ Usage:
 """
 
 import argparse
+import itertools
 import json
 import math
 import sqlite3
@@ -246,21 +248,15 @@ def _format_line(metric, labels, value, timestamp_ms):
     return f"{metric}{{{label_text}}} {_format_value(value)} {timestamp_ms}"
 
 
-def _emit_all(totals, timestamp_ns, sink):
+def _emit_all(totals, timestamp_ns):
     timestamp_ms = timestamp_ns // 1_000_000
     for (metric, labels), value in totals.items():
-        sink.append(_format_line(metric, labels, value, timestamp_ms))
+        yield _format_line(metric, labels, value, timestamp_ms)
 
 
-def build_lines(deliveries):
-    """deliveries: an iterable of (received_at_ns, host, rows), already in
-    received_at order. Returns (lines, totals): the Prometheus exposition
-    lines to import, and the final cumulative totals keyed by (metric,
-    label tuple) — the latter is reused by --verify to compute expected
-    sums without a second pass over the database.
-    """
-    totals = {}
-    lines = []
+def stream_lines(deliveries, totals, stats):
+    """Streams exposition lines for (received_at_ns, host, rows) deliveries in
+    received_at order, mutating totals and stats in place."""
     current_bucket = None
     last_received_at_ns = None
 
@@ -269,15 +265,22 @@ def build_lines(deliveries):
         if current_bucket is None:
             current_bucket = bucket
         elif bucket > current_bucket:
-            _emit_all(totals, current_bucket + BUCKET_NS, lines)
+            yield from _emit_all(totals, current_bucket + BUCKET_NS)
             current_bucket = bucket
         apply_delivery(totals, host, rows)
+        stats["deliveries"] += 1
         last_received_at_ns = received_at_ns
 
     if last_received_at_ns is not None:
-        _emit_all(totals, last_received_at_ns, lines)
+        stats["last_sample_ms"] = last_received_at_ns // 1_000_000
+        yield from _emit_all(totals, last_received_at_ns)
 
-    return lines, totals
+
+def build_lines(deliveries):
+    """List-returning wrapper over stream_lines: (lines, totals)."""
+    totals = {}
+    stats = {"deliveries": 0, "last_sample_ms": None}
+    return list(stream_lines(deliveries, totals, stats)), totals
 
 
 def iter_deliveries(conn, since_ns, until_ns):
@@ -286,7 +289,9 @@ def iter_deliveries(conn, since_ns, until_ns):
     tie-breaker). host comes from canonical_payload, the only place it is
     stored (RuntimeRow itself carries no host field); rows come from
     runtime_rows so this reads exactly the per-row canonical JSON the Go
-    registry's Observe would have received.
+    registry's Observe would have received. The outer cursor projects only
+    delivery_id/received_at (there is no received_at index) and a second
+    cursor runs one join query per delivery, so nothing is held in memory.
     """
     clauses = []
     params = []
@@ -297,21 +302,24 @@ def iter_deliveries(conn, since_ns, until_ns):
         clauses.append("received_at <= ?")
         params.append(until_ns)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    query = (
-        "SELECT delivery_id, received_at, canonical_payload FROM runtime_deliveries"
+    outer_query = (
+        "SELECT delivery_id, received_at FROM runtime_deliveries"
         f"{where} ORDER BY received_at ASC, delivery_id ASC"
     )
-    for delivery_id, received_at_ns, canonical_payload in conn.execute(query, params):
-        payload = json.loads(canonical_payload)
-        host = payload.get("host", "")
-        rows = [
-            json.loads(row_json)
-            for (row_json,) in conn.execute(
-                "SELECT row_json FROM runtime_rows WHERE delivery_id = ? ORDER BY ordinal",
-                (delivery_id,),
-            )
-        ]
-        yield received_at_ns, host, rows
+    outer_cursor = conn.cursor()
+    row_cursor = conn.cursor()
+    for delivery_id, received_at_ns in outer_cursor.execute(outer_query, params):
+        rows = []
+        payload_json = "{}"
+        for payload_json, row_json in row_cursor.execute(
+            "SELECT d.canonical_payload, r.row_json FROM runtime_deliveries d "
+            "LEFT JOIN runtime_rows r ON r.delivery_id = d.delivery_id "
+            "WHERE d.delivery_id = ? ORDER BY r.ordinal",
+            (delivery_id,),
+        ):
+            if row_json is not None:
+                rows.append(json.loads(row_json))
+        yield received_at_ns, json.loads(payload_json).get("host", ""), rows
 
 
 def _default_sender(url, body):
@@ -344,13 +352,18 @@ def post_chunks(
     retry, no further chunks) on a 4xx, since that means the request
     itself is malformed and retrying would just repeat the same rejection.
     `sender(url, body_bytes)` is injectable for tests; it must raise
-    urllib.error.HTTPError on a non-2xx response.
+    urllib.error.HTTPError on a non-2xx response. lines may be any
+    iterable; returns the number of lines posted.
     """
     send = sender or _default_sender
     url = vm_url.rstrip("/") + "/api/v1/import/prometheus"
-
-    for start in range(0, len(lines), chunk_size):
-        chunk = lines[start : start + chunk_size]
+    source = iter(lines)
+    posted = 0
+    while True:
+        chunk = list(itertools.islice(source, chunk_size))
+        if not chunk:
+            break
+        posted += len(chunk)
         body = ("\n".join(chunk) + "\n").encode("utf-8")
         delay = backoff_seconds
         attempt = 0
@@ -380,6 +393,8 @@ def post_chunks(
                 if delay:
                     time.sleep(delay)
                 delay *= 2
+
+    return posted
 
 
 VERIFY_SPECS = [
@@ -416,9 +431,9 @@ VERIFY_SPECS = [
 ]
 
 
-def vm_query(vm_url, promql, at_seconds):
+def vm_query(vm_url, promql, at_ms):
     url = vm_url.rstrip("/") + "/api/v1/query?" + urllib.parse.urlencode(
-        {"query": promql, "time": str(at_seconds)}
+        {"query": promql, "time": f"{at_ms / 1000:.3f}"}
     )
     with urllib.request.urlopen(url, timeout=30) as response:
         data = json.loads(response.read())
@@ -428,16 +443,25 @@ def vm_query(vm_url, promql, at_seconds):
     return float(result[0]["value"][1])
 
 
-def run_verify(vm_url, totals, at_seconds):
-    """Compares sum(metric) from VictoriaMetrics at at_seconds against this
-    script's own final totals for the four series named in VERIFY_SPECS,
-    prints a pass/fail table, and returns True only if every row passes.
+def run_verify(vm_url, totals, at_ms, attempts=5):
+    """Compares sum(metric) from VictoriaMetrics at at_ms (Unix ms) against
+    this run's own totals for VERIFY_SPECS. Freshly imported samples become
+    searchable only once VictoriaMetrics flushes its ingest buffer, so each
+    attempt forces a flush and a mismatch is retried one second later.
     """
+    for attempt in range(attempts):
+        try:
+            urllib.request.urlopen(vm_url.rstrip("/") + "/internal/force_flush", timeout=30).close()
+        except urllib.error.URLError:
+            pass
+        rows = [(name, fn(totals), vm_query(vm_url, promql, at_ms)) for name, promql, fn in VERIFY_SPECS]
+        if all(math.isclose(e, a, rel_tol=1e-9, abs_tol=1e-6) for _, e, a in rows):
+            break
+        if attempt < attempts - 1:
+            time.sleep(1)
     all_ok = True
     print(f"{'metric':28}{'expected':>16}{'actual':>16}  status")
-    for name, promql, expected_fn in VERIFY_SPECS:
-        expected = expected_fn(totals)
-        actual = vm_query(vm_url, promql, at_seconds)
+    for name, expected, actual in rows:
         ok = math.isclose(expected, actual, rel_tol=1e-9, abs_tol=1e-6)
         all_ok = all_ok and ok
         print(f"{name:28}{expected:16.4f}{actual:16.4f}  {'PASS' if ok else 'FAIL'}")
@@ -481,33 +505,29 @@ def main(argv=None):
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     try:
-        deliveries = list(iter_deliveries(conn, since_ns, until_ns))
+        totals = {}
+        stats = {"deliveries": 0, "last_sample_ms": None}
+        lines = stream_lines(iter_deliveries(conn, since_ns, until_ns), totals, stats)
+        if args.dry_run:
+            count = 0
+            for count, line in enumerate(lines, 1):
+                if count <= 10:
+                    print(line)
+            print(f"{count} lines across {stats['deliveries']} deliveries")
+            return 0
+        count = post_chunks(args.vm_url, lines, chunk_size=args.chunk_size)
+        if count == 0:
+            print("no deliveries in the given range; nothing to import")
+        else:
+            print(f"imported {count} lines across {stats['deliveries']} deliveries")
+        if args.verify:
+            at_ms = stats["last_sample_ms"]
+            if at_ms is None:
+                at_ms = int(time.time() * 1000)
+            if not run_verify(args.vm_url, totals, at_ms):
+                return 1
     finally:
         conn.close()
-
-    lines, totals = build_lines(deliveries)
-
-    if args.dry_run:
-        print(f"{len(lines)} lines across {len(deliveries)} deliveries")
-        for line in lines[:10]:
-            print(line)
-        return 0
-
-    if lines:
-        post_chunks(args.vm_url, lines, chunk_size=args.chunk_size)
-        print(f"imported {len(lines)} lines across {len(deliveries)} deliveries")
-    else:
-        print("no deliveries in the given range; nothing to import")
-
-    if args.verify:
-        if until_ns is not None:
-            at_seconds = until_ns // 1_000_000_000
-        elif deliveries:
-            at_seconds = deliveries[-1][0] // 1_000_000_000
-        else:
-            at_seconds = int(time.time())
-        if not run_verify(args.vm_url, totals, at_seconds):
-            return 1
 
     return 0
 

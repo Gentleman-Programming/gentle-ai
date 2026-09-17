@@ -274,6 +274,14 @@ class BuildLinesTests(unittest.TestCase):
         self.assertEqual(lines, [])
         self.assertEqual(totals, {})
 
+    def test_stream_lines_reports_stats_and_matches_build_lines(self):
+        totals = {}
+        stats = {"deliveries": 0, "last_sample_ms": None}
+        streamed = list(backfill.stream_lines(self.deliveries, totals, stats))
+        self.assertEqual(stats["deliveries"], 2)
+        self.assertEqual(stats["last_sample_ms"], self.final_ms)
+        self.assertEqual(streamed, backfill.build_lines(self.deliveries)[0])
+
 
 class ChunkingTests(unittest.TestCase):
     def test_post_chunks_splits_by_chunk_size(self):
@@ -290,6 +298,21 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(len(seen_bodies), 3)
         self.assertEqual(seen_bodies[0].count("\n"), 5)
         self.assertEqual(seen_bodies[1].count("\n"), 5)
+        self.assertEqual(seen_bodies[2].count("\n"), 2)
+
+    def test_post_chunks_accepts_a_generator(self):
+        lines = [f"metric{{host=\"h\"}} {i} 1000" for i in range(12)]
+        seen_bodies = []
+
+        def fake_post(url, body):
+            seen_bodies.append(body.decode("utf-8"))
+
+        count = backfill.post_chunks(
+            "http://127.0.0.1:8428", (x for x in lines), chunk_size=5, sender=fake_post
+        )
+        self.assertEqual(count, 12)
+        self.assertEqual(len(seen_bodies), 3)
+        self.assertEqual(seen_bodies[0].count("\n"), 5)
         self.assertEqual(seen_bodies[2].count("\n"), 2)
 
     def test_stops_on_4xx_without_further_chunks(self):
@@ -331,6 +354,7 @@ class ChunkingTests(unittest.TestCase):
 class FakeVictoriaMetrics(http.server.BaseHTTPRequestHandler):
     imports = []
     query_sums = {}
+    query_times = []
 
     def log_message(self, *args):
         pass
@@ -350,6 +374,7 @@ class FakeVictoriaMetrics(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/api/v1/query?"):
             query = urllib.parse.parse_qs(self.path.split("?", 1)[1])
             promql = query.get("query", [""])[0]
+            FakeVictoriaMetrics.query_times.append(query.get("time", [""])[0])
             value = FakeVictoriaMetrics.query_sums.get(promql)
             if value is None:
                 result = []
@@ -378,6 +403,7 @@ class EndToEndImportAndVerifyTests(unittest.TestCase):
     def setUpClass(cls):
         FakeVictoriaMetrics.imports = []
         FakeVictoriaMetrics.query_sums = {}
+        FakeVictoriaMetrics.query_times = []
         cls.server = http.server.HTTPServer(("127.0.0.1", 0), FakeVictoriaMetrics)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -392,15 +418,16 @@ class EndToEndImportAndVerifyTests(unittest.TestCase):
     def setUp(self):
         FakeVictoriaMetrics.imports = []
         FakeVictoriaMetrics.query_sums = {}
+        FakeVictoriaMetrics.query_times = []
         self.tmpdir = self._make_tmpdir()
         self.db_path = str(self.tmpdir / "events.sqlite")
         t1 = iso_ns("2026-09-10T00:00:10Z")
-        t2 = iso_ns("2026-09-10T00:01:20Z")
+        self.t2 = iso_ns("2026-09-10T00:01:20.250Z")
         make_db(
             self.db_path,
             [
                 ("d1", t1, "pi", [make_row(responses=1, launches=1, input_sum=10)]),
-                ("d2", t2, "pi", [make_row(responses=2, launches=1, input_sum=20)]),
+                ("d2", self.t2, "pi", [make_row(responses=2, launches=1, input_sum=20)]),
             ],
         )
         self.vm_url = f"http://127.0.0.1:{self.port}"
@@ -434,6 +461,10 @@ class EndToEndImportAndVerifyTests(unittest.TestCase):
         }
         rc = backfill.main(["--db", self.db_path, "--vm-url", self.vm_url, "--verify"])
         self.assertEqual(rc, 0)
+        want_time = f"{self.t2 // 1_000_000 / 1000:.3f}"
+        self.assertTrue(FakeVictoriaMetrics.query_times)
+        for got_time in FakeVictoriaMetrics.query_times:
+            self.assertEqual(got_time, want_time)
 
     def test_verify_fails_when_server_reports_mismatching_sums(self):
         FakeVictoriaMetrics.query_sums = {
