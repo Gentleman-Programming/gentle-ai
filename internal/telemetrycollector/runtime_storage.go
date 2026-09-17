@@ -221,3 +221,25 @@ func (s *Storage) InsertRuntimeEvent(ctx context.Context, event telemetry.Runtim
 	}
 	return decision, nil
 }
+
+// InsertRuntimeDeliveryID records a delivery id in runtime_delivery_ids for
+// --runtime-store=metrics dedup, without storing the delivery's payload:
+// that mode never writes runtime_deliveries/runtime_rows, so there is no
+// canonical payload here to compare a repeat against (contrast
+// InsertRuntimeEvent, which detects a same-id-different-payload conflict).
+// A repeated id is always "duplicate", trusting the caller not to reuse an
+// id for a different delivery, same as any bare idempotency key.
+func (s *Storage) InsertRuntimeDeliveryID(ctx context.Context, deliveryID string, receivedAt time.Time) (string, error) {
+	result, err := s.db.ExecContext(ctx, `INSERT INTO runtime_delivery_ids(delivery_id,received_at) VALUES(?,?) ON CONFLICT(delivery_id) DO NOTHING`, deliveryID, receivedAtKey(receivedAt))
+	if err != nil {
+		return "", runtimeStorageError(err)
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return "", runtimeStorageError(err)
+	}
+	if inserted == 0 {
+		return "duplicate", nil
+	}
+	return "stored", nil
+}

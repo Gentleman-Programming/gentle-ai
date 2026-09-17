@@ -53,6 +53,23 @@ func (f *repeatableFlag) Set(v string) error {
 	return nil
 }
 
+// validateRuntimeStoreMode normalizes and validates --runtime-store: an
+// empty value defaults to "sqlite" (today's behavior, unchanged until the
+// VictoriaMetrics cutover), and any value other than the three the
+// collector understands is rejected rather than silently falling back, so
+// a typo in deploy config fails fast at startup instead of quietly staying
+// on raw-row storage.
+func validateRuntimeStoreMode(value string) (string, error) {
+	switch value {
+	case "":
+		return telemetrycollector.RuntimeStoreSQLite, nil
+	case telemetrycollector.RuntimeStoreSQLite, telemetrycollector.RuntimeStoreMetrics, telemetrycollector.RuntimeStoreBoth:
+		return value, nil
+	default:
+		return "", fmt.Errorf("unknown value %q (want sqlite, metrics, or both)", value)
+	}
+}
+
 func parseCIDRs(values []string) ([]*net.IPNet, error) {
 	nets := make([]*net.IPNet, 0, len(values))
 	for _, v := range values {
@@ -86,7 +103,13 @@ func run() error {
 	var githubRepos repeatableFlag
 	flag.Var(&githubRepos, "github-repo", "GitHub owner/repo to fetch release download counts for (repeatable; default Gentleman-Programming/gentle-ai)")
 	githubTokenFile := flag.String("github-token-file", "", "path to a file containing a GitHub token, to raise the API rate limit for --github-repo")
+	runtimeStore := flag.String("runtime-store", "", "how to persist a newly stored runtime delivery: sqlite (default, raw rows), metrics (Prometheus counters only, no raw rows), or both")
 	flag.Parse()
+
+	runtimeStoreMode, err := validateRuntimeStoreMode(*runtimeStore)
+	if err != nil {
+		return fmt.Errorf("parse --runtime-store: %w", err)
+	}
 
 	if len(trustedProxyCIDRs) == 0 {
 		trustedProxyCIDRs = repeatableFlag{"127.0.0.0/8", "::1/128"} // matches Apache on loopback
@@ -140,10 +163,20 @@ func run() error {
 	limiter := telemetrycollector.NewRateLimiter(*rateLimitPerMinute)
 	runtimeLimiter := telemetrycollector.NewRateLimiter(*runtimeRateLimitPerMinute)
 
+	// A registry is only built (and GET /metrics only has anything to
+	// serve) for the two modes that actually observe into it; sqlite mode
+	// stays exactly as before, with no registry allocated at all.
+	var runtimeMetrics *telemetrycollector.RuntimeMetrics
+	if runtimeStoreMode != telemetrycollector.RuntimeStoreSQLite {
+		runtimeMetrics = telemetrycollector.NewRuntimeMetrics()
+	}
+
 	server := &telemetrycollector.Server{
 		Storage:        storage,
 		Limiter:        limiter,
 		RuntimeLimiter: runtimeLimiter,
+		RuntimeStore:   runtimeStoreMode,
+		Metrics:        runtimeMetrics,
 		SummaryToken:   summaryToken,
 		Logger:         logger,
 		TrustedProxies: trustedProxies,

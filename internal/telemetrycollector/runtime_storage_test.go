@@ -418,3 +418,31 @@ func TestInsertRuntimeEvent_ReportsBusyDatabaseDistinctly(t *testing.T) {
 		t.Fatalf("InsertRuntimeEvent after lock release: %v", err)
 	}
 }
+
+// TestRuntimeInsertDeliveryIDDedup exercises the identity-only dedup table
+// backing --runtime-store=metrics: unlike InsertRuntimeEvent, it never
+// compares payloads (there is none to compare — see InsertRuntimeDeliveryID),
+// and it never writes runtime_deliveries or runtime_rows.
+func TestRuntimeInsertDeliveryIDDedup(t *testing.T) {
+	s := openTestStorage(t)
+	ctx := context.Background()
+
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, "dddddddddddddddddddddddddddddddd", time.Unix(1, 0)); err != nil || decision != "stored" {
+		t.Fatalf("first insert: %q %v", decision, err)
+	}
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, "dddddddddddddddddddddddddddddddd", time.Unix(2, 0)); err != nil || decision != "duplicate" {
+		t.Fatalf("repeat insert: %q %v", decision, err)
+	}
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", time.Unix(3, 0)); err != nil || decision != "stored" {
+		t.Fatalf("distinct id insert: %q %v", decision, err)
+	}
+
+	var ids, deliveries, rows int
+	if err := s.db.QueryRow(`SELECT (SELECT count(*) FROM runtime_delivery_ids),
+	 (SELECT count(*) FROM runtime_deliveries), (SELECT count(*) FROM runtime_rows)`).Scan(&ids, &deliveries, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if ids != 2 || deliveries != 0 || rows != 0 {
+		t.Fatalf("ids/deliveries/rows = %d/%d/%d, want 2/0/0", ids, deliveries, rows)
+	}
+}

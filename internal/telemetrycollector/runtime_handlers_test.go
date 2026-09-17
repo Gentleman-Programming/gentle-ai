@@ -289,3 +289,134 @@ func TestRuntimeHandleEvents_LogsErrorTextOnStorageFailure(t *testing.T) {
 		t.Errorf("log entry error field = %#v, want the string %q", entry["error"], "runtime storage unavailable")
 	}
 }
+
+func runtimeTableCounts(t *testing.T, s *Storage) (deliveries, rows, deliveryIDs int) {
+	t.Helper()
+	if err := s.db.QueryRow(`SELECT (SELECT count(*) FROM runtime_deliveries),
+	 (SELECT count(*) FROM runtime_rows), (SELECT count(*) FROM runtime_delivery_ids)`).Scan(&deliveries, &rows, &deliveryIDs); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+
+func TestRuntimeHandleEvents_DefaultModeStoresRowsAndNeverObserves(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// RuntimeStore intentionally left unset: the default must stay today's
+	// behavior even when a Metrics registry happens to be wired.
+	server := &Server{Storage: s, Limiter: NewRateLimiter(100), Metrics: NewRuntimeMetrics()}
+	mux := server.NewMux()
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/runtime-events", bytes.NewReader(runtimeFixture()))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	if deliveries, rows, ids := runtimeTableCounts(t, s); deliveries != 1 || rows != 1 || ids != 0 {
+		t.Fatalf("deliveries/rows/ids = %d/%d/%d, want 1/1/0", deliveries, rows, ids)
+	}
+
+	var metricsBody bytes.Buffer
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	server.Metrics.WriteTo(&metricsBody)
+	if metricsBody.Len() != 0 {
+		t.Fatalf("sqlite mode observed a delivery: %s", metricsBody.String())
+	}
+}
+
+func TestRuntimeHandleEvents_MetricsModeStoresNoRowsAndExposesCounters(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	server := &Server{Storage: s, Limiter: NewRateLimiter(100), RuntimeStore: RuntimeStoreMetrics, Metrics: NewRuntimeMetrics()}
+	mux := server.NewMux()
+	send := func(body []byte) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/v1/runtime-events", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+
+	valid := runtimeFixture()
+	if w := send(valid); w.Code != http.StatusOK {
+		t.Fatalf("first request: status = %d, want 200", w.Code)
+	}
+	var ack map[string]string
+	if err := json.Unmarshal(send(valid).Body.Bytes(), &ack); err != nil || ack["decision"] != "duplicate" {
+		t.Fatalf("second request: ack = %v, err = %v, want decision=duplicate", ack, err)
+	}
+
+	if deliveries, rows, ids := runtimeTableCounts(t, s); deliveries != 0 || rows != 0 || ids != 1 {
+		t.Fatalf("deliveries/rows/ids = %d/%d/%d, want 0/0/1 (no rows stored, one duplicate never re-observed)", deliveries, rows, ids)
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsW := httptest.NewRecorder()
+	mux.ServeHTTP(metricsW, metricsReq)
+	if ct := metricsW.Header().Get("Content-Type"); ct != "text/plain; version=0.0.4" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if !strings.Contains(metricsW.Body.String(), `gentle_runtime_deliveries_total{host="pi"} 1`) {
+		t.Fatalf("duplicate delivery was double-counted or never observed:\n%s", metricsW.Body.String())
+	}
+}
+
+func TestRuntimeHandleEvents_BothModeStoresRowsAndObserves(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	server := &Server{Storage: s, Limiter: NewRateLimiter(100), RuntimeStore: RuntimeStoreBoth, Metrics: NewRuntimeMetrics()}
+	mux := server.NewMux()
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/runtime-events", bytes.NewReader(runtimeFixture()))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	if deliveries, rows, ids := runtimeTableCounts(t, s); deliveries != 1 || rows != 1 || ids != 0 {
+		t.Fatalf("deliveries/rows/ids = %d/%d/%d, want 1/1/0 (both mode does not touch the metrics-only dedup table)", deliveries, rows, ids)
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsW := httptest.NewRecorder()
+	mux.ServeHTTP(metricsW, metricsReq)
+	if !strings.Contains(metricsW.Body.String(), `gentle_runtime_deliveries_total{host="pi"} 1`) {
+		t.Fatalf("both mode did not observe:\n%s", metricsW.Body.String())
+	}
+}
+
+func TestHandleMetrics_EmptyRegistryServesEmptyBody(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Metrics intentionally left nil: sqlite mode (the default) never
+	// constructs a registry.
+	mux := (&Server{Storage: s, Limiter: NewRateLimiter(100)}).NewMux()
+
+	r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/plain; version=0.0.4" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("body = %q, want empty", w.Body.String())
+	}
+}

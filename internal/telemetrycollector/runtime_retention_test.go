@@ -80,6 +80,40 @@ func TestRuntimePurgeCutoffAndDedupeExpiry(t *testing.T) {
 	assertRetentionCounts(t, s, 1, 3, 6)
 }
 
+// TestRuntimePurgeDeletesExpiredDeliveryIDs proves PurgeOlderThan reaches
+// runtime_delivery_ids (the --runtime-store=metrics dedup table) the same
+// way it reaches runtime_deliveries/runtime_rows: strictly-older rows are
+// removed, rows at or after cutoff survive.
+func TestRuntimePurgeDeletesExpiredDeliveryIDs(t *testing.T) {
+	s := openTestStorage(t)
+	ctx := context.Background()
+	cutoff := time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
+
+	if _, err := s.InsertRuntimeDeliveryID(ctx, fmt.Sprintf("%032x", 1), cutoff.Add(-time.Nanosecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertRuntimeDeliveryID(ctx, fmt.Sprintf("%032x", 2), cutoff); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.PurgeOlderThan(ctx, cutoff); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT count(*) FROM runtime_delivery_ids`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("runtime_delivery_ids count = %d, want 1", count)
+	}
+	// A retried id past its retention window is treated as fresh, exactly
+	// like runtime_deliveries: purge ends dedupe, it does not tombstone.
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, fmt.Sprintf("%032x", 1), cutoff.Add(time.Hour)); err != nil || decision != "stored" {
+		t.Fatalf("expired retry: %q %v", decision, err)
+	}
+}
+
 func TestRuntimePurgeRollback(t *testing.T) {
 	for _, stage := range []string{"legacy", "child", "parent", "commit"} {
 		t.Run(stage, func(t *testing.T) {

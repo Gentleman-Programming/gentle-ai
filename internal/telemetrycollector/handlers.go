@@ -24,6 +24,22 @@ type Server struct {
 	Logger       *slog.Logger
 	Now          func() time.Time
 
+	// RuntimeStore selects how POST /v1/runtime-events persists a newly
+	// stored delivery: RuntimeStoreSQLite (the default, "" also means this)
+	// keeps today's behavior (runtime_deliveries/runtime_rows, no metrics);
+	// RuntimeStoreMetrics stops writing raw rows entirely, deduping by id
+	// only (runtime_delivery_ids) and observing into Metrics instead;
+	// RuntimeStoreBoth does both, for a transition window. See
+	// runtimeStoreMode and handleRuntimeEvents.
+	RuntimeStore string
+
+	// Metrics is the in-memory Prometheus counters registry GET /metrics
+	// serves. Only Observe()d for a newly stored delivery under
+	// RuntimeStoreMetrics/RuntimeStoreBoth (never for a duplicate, and
+	// never at all under RuntimeStoreSQLite even if this is non-nil). Left
+	// nil, GET /metrics serves an empty body.
+	Metrics *RuntimeMetrics
+
 	// RuntimeLimiter is the rate budget for POST /v1/runtime-events,
 	// separate from Limiter (POST /v1/events): heartbeats are frequent and
 	// were sharing one 60/min bucket with stored deliveries, plateauing
@@ -51,6 +67,7 @@ func (s *Server) NewMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/runtime-events", s.handleRuntimeEvents)
 	mux.HandleFunc("GET /v1/summary", s.handleSummary)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	return mux
 }
 

@@ -66,3 +66,32 @@ func TestNextMaintenanceDelay(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRuntimeStoreMode(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{"default empty stays sqlite", "", "sqlite", false},
+		{"explicit sqlite", "sqlite", "sqlite", false},
+		{"metrics", "metrics", "metrics", false},
+		{"both", "both", "both", false},
+		{"unknown value rejected", "prometheus", "", true},
+		{"case sensitive", "Metrics", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateRuntimeStoreMode(tt.value)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("validateRuntimeStoreMode(%q) = (%q, nil), want an error", tt.value, got)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("validateRuntimeStoreMode(%q) = (%q, %v), want (%q, nil)", tt.value, got, err, tt.want)
+			}
+		})
+	}
+}

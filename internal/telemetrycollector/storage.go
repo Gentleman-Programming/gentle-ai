@@ -34,6 +34,19 @@ CREATE TABLE IF NOT EXISTS rollups_daily (
 	value INTEGER NOT NULL,
 	PRIMARY KEY (day, metric, key)
 );
+
+-- runtime_delivery_ids backs --runtime-store=metrics: identity-only dedup
+-- for POST /v1/runtime-events with no payload stored (the row data is only
+-- ever aggregated into the in-memory RuntimeMetrics registry, see
+-- metrics.go). Deliberately no foreign key or shared identity with
+-- runtime_deliveries: sqlite/both modes dedup by payload comparison there,
+-- metrics mode dedups by id only here, and a collector is never run in more
+-- than one mode at a time.
+CREATE TABLE IF NOT EXISTS runtime_delivery_ids (
+	delivery_id TEXT PRIMARY KEY,
+	received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_delivery_ids_received_at ON runtime_delivery_ids(received_at);
 `
 
 const dayLayout = "2006-01-02"
