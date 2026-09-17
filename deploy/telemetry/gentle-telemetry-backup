@@ -94,7 +94,11 @@ if systemctl is-active --quiet "${VM_UNIT}" 2>/dev/null; then
 	vm_snapshot="${raw_vm_snapshot}"
 
 	vm_archive="${backup_dir}/vm-${ts}.tar.gz"
-	tar -czf "${vm_archive}" -C "${VM_DIR}/snapshots" "${vm_snapshot}"
+	# A VictoriaMetrics snapshot directory is a tree of relative symlinks
+	# into the hard-linked data partitions (data/<kind>/snapshots/<name>);
+	# tar must dereference them (-h) or the archive stores the symlinks
+	# themselves and ships no data.
+	tar -czhf "${vm_archive}" -C "${VM_DIR}/snapshots" "${vm_snapshot}"
 	rclone copy "${vm_archive}" "${GENTLE_TELEMETRY_BACKUP_REMOTE}"
 
 	# The upstream delete itself happens in cleanup() above so it also

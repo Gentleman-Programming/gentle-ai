@@ -168,16 +168,28 @@ sqlite3 "${db2}" "CREATE TABLE events (id INTEGER PRIMARY KEY); INSERT INTO even
 fakebin2="${tmp2}/fakebin"
 mkdir -p "${fakebin2}"
 rclone_log2="${tmp2}/rclone.log"
+# The script deletes its local archive/snapshot on exit (cleanup() above),
+# so the fake rclone also copies whatever it was asked to "upload" into
+# remote_dir2, letting the assertions below inspect it after the run.
+remote_dir2="${tmp2}/remote"
+mkdir -p "${remote_dir2}"
 cat >"${fakebin2}/rclone" <<EOF
 #!/usr/bin/env bash
 echo "\$@" >>"${rclone_log2}"
+cp "\$2" "${remote_dir2}/"
 EOF
 chmod +x "${fakebin2}/rclone"
 write_fake_systemctl "${fakebin2}"
 
 vm_dir2="${tmp2}/victoria-metrics"
-mkdir -p "${vm_dir2}/snapshots/${snapshot_name}"
-echo "fake series data" >"${vm_dir2}/snapshots/${snapshot_name}/data.bin"
+# Mirror VictoriaMetrics' real snapshot layout: the hard-linked data part
+# lives under data/<kind>/snapshots/<name>, and the snapshot directory
+# itself holds only a relative symlink into it, plus a small metadata file.
+mkdir -p "${vm_dir2}/data/small/snapshots/${snapshot_name}"
+head -c 4096 /dev/urandom >"${vm_dir2}/data/small/snapshots/${snapshot_name}/part-0.bin"
+mkdir -p "${vm_dir2}/snapshots/${snapshot_name}/data" "${vm_dir2}/snapshots/${snapshot_name}/metadata"
+ln -s "../../../data/small/snapshots/${snapshot_name}" "${vm_dir2}/snapshots/${snapshot_name}/data/small"
+head -c 8 /dev/urandom >"${vm_dir2}/snapshots/${snapshot_name}/metadata/minTimestampForCompositeIndex"
 
 vm_requests_log2="${tmp2}/vm-requests.log"
 start_fake_vm_server "${vm_requests_log2}" "${snapshot_name}" "${tmp2}/vm-port"
@@ -200,6 +212,24 @@ grep -qx "/snapshot/delete?snapshot=${snapshot_name}" "${vm_requests_log2}" || f
 
 compgen -G "${tmp2}/vm-*.tar.gz" >/dev/null && fail "vm archive was not cleaned up"
 compgen -G "${tmp2}/backup-*.sqlite" >/dev/null && fail "sqlite snapshot was not cleaned up"
+
+# The real snapshot directory is a tree of relative symlinks into the data
+# partitions (see the fixture above); the uploaded archive must contain the
+# dereferenced regular file, not the symlink itself, or it ships no data.
+uploaded_vm_archive2="$(compgen -G "${remote_dir2}/vm-*.tar.gz")" ||
+	fail "vm archive was never copied to the fake remote"
+tar_listing2="$(tar -tzvf "${uploaded_vm_archive2}")"
+printf '%s\n' "${tar_listing2}" | grep -E '^l' &&
+	fail "uploaded vm archive still contains a symlink entry: ${tar_listing2}"
+printf '%s\n' "${tar_listing2}" | grep -qE '^-.*part-0\.bin$' ||
+	fail "uploaded vm archive does not contain part-0.bin as a regular file: ${tar_listing2}"
+
+extract_dir2="${tmp2}/extracted"
+mkdir -p "${extract_dir2}"
+tar -xzf "${uploaded_vm_archive2}" -C "${extract_dir2}"
+extracted_part2="$(find "${extract_dir2}" -name part-0.bin)"
+cmp -s "${extracted_part2}" "${vm_dir2}/data/small/snapshots/${snapshot_name}/part-0.bin" ||
+	fail "extracted part-0.bin is not byte-identical to the source data"
 
 printf 'PASS: VictoriaMetrics snapshot archived, uploaded, and deleted upstream\n'
 
