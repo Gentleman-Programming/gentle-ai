@@ -24,11 +24,15 @@ import (
 )
 
 const (
-	defaultListen           = "127.0.0.1:18181"
-	defaultDB               = "/var/lib/gentle-telemetry/events.sqlite"
-	defaultRetentionDays    = 90
-	defaultRateLimitPerMin  = 60
-	maintenanceInterval     = 24 * time.Hour
+	defaultListen          = "127.0.0.1:18181"
+	defaultDB              = "/var/lib/gentle-telemetry/events.sqlite"
+	defaultRetentionDays   = 90
+	defaultRateLimitPerMin = 60
+	// maintenanceUTCOffset anchors the daily rollup to shortly after UTC
+	// midnight instead of 24h after process start, so the previous day's
+	// rollup lands within minutes of being complete regardless of when
+	// the process was last restarted.
+	maintenanceUTCOffset    = 5 * time.Minute
 	rateLimiterSweepEvery   = 10 * time.Minute
 	rateLimiterSweepMaxIdle = 30 * time.Minute
 	shutdownTimeout         = 10 * time.Second
@@ -214,11 +218,29 @@ func loadSummaryToken(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// runMaintenanceLoop runs the daily rollup+retention job once at startup and
-// then on a fixed interval, fetches external npm/GitHub download counts
-// right after it (a separate, independent step: a failure there is logged
-// and retried the next run, and never affects the rollup or ingest), and
-// periodically sweeps idle rate-limiter buckets, until ctx is cancelled.
+// nextMaintenanceDelay returns the duration from now until the next
+// maintenanceUTCOffset past UTC midnight, strictly after now. now is
+// converted to UTC before comparing, so the result does not depend on the
+// caller's local time zone. If now is exactly at the offset, the next run
+// is a full day away (a duration of 0 would fire immediately, which is not
+// "the next" occurrence). The result is always in (0, 24h].
+func nextMaintenanceDelay(now time.Time) time.Duration {
+	now = now.UTC()
+	next := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Add(maintenanceUTCOffset)
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next.Sub(now)
+}
+
+// runMaintenanceLoop runs the daily rollup+retention job once at startup
+// (catching up any rollup missed while the process was down), then again
+// every day anchored to maintenanceUTCOffset past UTC midnight so the
+// dashboard never carries more than a few minutes of stale rollup data. It
+// fetches external npm/GitHub download counts right after each run (a
+// separate, independent step: a failure there is logged and retried the
+// next run, and never affects the rollup or ingest), and periodically
+// sweeps idle rate-limiter buckets, until ctx is cancelled.
 func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage, limiter *telemetrycollector.RateLimiter, retentionDays int, downloadsCfg telemetrycollector.DownloadsConfig, downloadsClient *http.Client, logger *slog.Logger) {
 	runOnce := func() {
 		if err := telemetrycollector.RunMaintenance(ctx, storage, time.Now(), retentionDays); err != nil {
@@ -235,8 +257,8 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 	}
 	runOnce()
 
-	maintenanceTicker := time.NewTicker(maintenanceInterval)
-	defer maintenanceTicker.Stop()
+	maintenanceTimer := time.NewTimer(nextMaintenanceDelay(time.Now()))
+	defer maintenanceTimer.Stop()
 	sweepTicker := time.NewTicker(rateLimiterSweepEvery)
 	defer sweepTicker.Stop()
 
@@ -244,8 +266,9 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 		select {
 		case <-ctx.Done():
 			return
-		case <-maintenanceTicker.C:
+		case <-maintenanceTimer.C:
 			runOnce()
+			maintenanceTimer.Reset(nextMaintenanceDelay(time.Now()))
 		case <-sweepTicker.C:
 			limiter.Sweep(rateLimiterSweepMaxIdle)
 		}
