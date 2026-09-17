@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 730" width="1240" height="730" role="img" aria-labelledby="engTitle engDesc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+  <title id="engTitle">How Engram keeps project context</title>
+  <desc id="engDesc">Three work sessions sit side by side, separated by a restart and by context compaction. Each break cuts the session layer but stops at the memory layer underneath. In the first session the agent saves a decision. The next session, with zero history, asks memory before it asks you. Weeks later the same question is answered from memory rather than by re-reading the repository. Engram saves automatically as you work, and engram sync writes the memories into the repo so a teammate starts with the same context.</desc>
+
+  <defs>
+    <radialGradient id="engAmbient" cx="12%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#F095C8" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#F095C8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1240" height="730" rx="24" fill="#1A1218"/>
+  <rect width="1240" height="730" rx="24" fill="url(#engAmbient)"/>
+
+  <!-- header -->
+  <text x="40" y="58" font-size="27" font-weight="700" fill="#F7ECF2">Engram&#8482; &#8212; context that outlives the session</text>
+  <text x="41" y="88" font-size="14.5" fill="#A88E9B">Restarts and compaction cut the conversation. They do not cut the memory underneath it.</text>
+  <rect x="922" y="38" width="278" height="34" rx="17" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="1061" y="60" font-size="12.5" text-anchor="middle" fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">automatic &#183; nothing to memorize</text>
+
+  <!-- break markers: they cut the sessions, and stop at the memory layer -->
+  <rect x="355" y="127" width="120" height="26" rx="13" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="415" y="145" font-size="10.5" font-weight="700" letter-spacing="1.2" text-anchor="middle" fill="#9C8391">RESTART</text>
+  <path d="M415 165 L415 452" stroke="#5A414E" stroke-width="1.5" stroke-dasharray="5 5"/>
+
+  <rect x="750" y="127" width="150" height="26" rx="13" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="825" y="145" font-size="10.5" font-weight="700" letter-spacing="1.2" text-anchor="middle" fill="#9C8391">COMPACTION</text>
+  <path d="M825 165 L825 452" stroke="#5A414E" stroke-width="1.5" stroke-dasharray="5 5"/>
+
+  <!-- ============ SESSION 1 ============ -->
+  <rect x="40" y="185" width="340" height="160" rx="18" fill="#221820" stroke="#392A33"/>
+  <text x="64" y="222" font-size="11" font-weight="700" letter-spacing="1.6" fill="#F095C8" opacity="0.55">FIRST SESSION</text>
+  <text x="64" y="256" font-size="17" font-weight="600" fill="#F7ECF2">You make a call</text>
+  <text x="64" y="284" font-size="12" fill="#9C8391">You pick Postgres over Mongo,</text>
+  <text x="64" y="302" font-size="12" fill="#9C8391">and say why.</text>
+  <text x="64" y="330" font-size="11" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">mem_save</text>
+
+  <!-- ============ SESSION 2 ============ -->
+  <rect x="450" y="185" width="340" height="160" rx="18" fill="#221820" stroke="#392A33"/>
+  <text x="474" y="222" font-size="11" font-weight="700" letter-spacing="1.6" fill="#F095C8" opacity="0.55">NEXT SESSION</text>
+  <text x="474" y="256" font-size="17" font-weight="600" fill="#F7ECF2">A blank agent</text>
+  <text x="474" y="284" font-size="12" fill="#9C8391">Zero history in the window.</text>
+  <text x="474" y="302" font-size="12" fill="#9C8391">It asks memory before it asks you.</text>
+  <text x="474" y="330" font-size="11" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">mem_context</text>
+
+  <!-- ============ SESSION 3 ============ -->
+  <rect x="860" y="185" width="340" height="160" rx="18" fill="#241A22" stroke="#F095C8" stroke-opacity="0.5"/>
+  <text x="884" y="222" font-size="11" font-weight="700" letter-spacing="1.6" fill="#F095C8" opacity="0.55">WEEKS LATER</text>
+  <text x="884" y="256" font-size="17" font-weight="600" fill="#F7ECF2">&#8220;Why Postgres?&#8221;</text>
+  <text x="884" y="284" font-size="12" fill="#D7A0B8">Answered from memory &#8212; not by</text>
+  <text x="884" y="302" font-size="12" fill="#D7A0B8">re-reading the whole repo.</text>
+  <text x="884" y="330" font-size="11" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">mem_search</text>
+
+  <!-- save (solid, down) and recall (dashed, up) -->
+  <path d="M210 356 L210 440" stroke="#F095C8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M204 434 L210 442 L216 434" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="224" y="404" font-size="10.5" fill="#8A6E7C" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">save</text>
+
+  <path d="M540 440 L540 356" stroke="#D7A0B8" stroke-width="2" stroke-linecap="round" stroke-dasharray="4 4"/>
+  <path d="M534 362 L540 354 L546 362" fill="none" stroke="#D7A0B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="554" y="404" font-size="10.5" fill="#8A6E7C" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">recall</text>
+
+  <path d="M712 356 L712 440" stroke="#F095C8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M706 434 L712 442 L718 434" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="726" y="404" font-size="10.5" fill="#8A6E7C" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">save</text>
+
+  <path d="M950 440 L950 356" stroke="#D7A0B8" stroke-width="2" stroke-linecap="round" stroke-dasharray="4 4"/>
+  <path d="M944 362 L950 354 L956 362" fill="none" stroke="#D7A0B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="964" y="404" font-size="10.5" fill="#8A6E7C" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">recall</text>
+
+  <!-- ============ THE MEMORY LAYER ============ -->
+  <rect x="40" y="452" width="1160" height="118" rx="18" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.45"/>
+  <text x="64" y="488" font-size="18" font-weight="600" fill="#F7ECF2">One memory, for the whole project</text>
+  <text x="64" y="512" font-size="12" fill="#A88E9B">Written as you work. You never call a command.</text>
+
+  <rect x="64" y="528" width="86" height="26" rx="13" fill="#3A2530" stroke="#8A5E75"/>
+  <text x="107" y="546" font-size="11" text-anchor="middle" fill="#D7A0B8">decision</text>
+  <rect x="160" y="528" width="78" height="26" rx="13" fill="#3A2530" stroke="#8A5E75"/>
+  <text x="199" y="546" font-size="11" text-anchor="middle" fill="#D7A0B8">bugfix</text>
+  <rect x="248" y="528" width="94" height="26" rx="13" fill="#3A2530" stroke="#8A5E75"/>
+  <text x="295" y="546" font-size="11" text-anchor="middle" fill="#D7A0B8">discovery</text>
+  <rect x="352" y="528" width="104" height="26" rx="13" fill="#3A2530" stroke="#8A5E75"/>
+  <text x="404" y="546" font-size="11" text-anchor="middle" fill="#D7A0B8">convention</text>
+
+  <text x="1176" y="512" font-size="11" text-anchor="end" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">project = normalized git remote URL</text>
+  <text x="1176" y="546" font-size="11" text-anchor="end" fill="#7E6672">Local by default. Nothing leaves your machine.</text>
+
+  <!-- team strip -->
+  <rect x="40" y="598" width="1160" height="54" rx="16" fill="#221820" stroke="#392A33"/>
+  <text x="620" y="623" font-size="15" font-weight="700" text-anchor="middle" fill="#F095C8">Hand it to the team</text>
+  <text x="620" y="643" font-size="12" text-anchor="middle" fill="#A88E9B">engram sync writes the memories into the repo. A teammate clones, imports, and their first session already knows the project.</text>
+
+  <text x="620" y="694" font-size="12" text-anchor="middle" fill="#8A6E7C" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">engram sync &#160;&#183;&#160; engram sync --import</text>
+</svg>

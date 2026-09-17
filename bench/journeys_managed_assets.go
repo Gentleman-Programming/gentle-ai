@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // historicalManagedAssetStateSHA256 pins the exact state bytes emitted by
@@ -69,9 +68,15 @@ func staleManagedAssetsStatusIsNotUnknown(r *journeyRun) error {
 		return fmt.Errorf("stale managed assets initial STATUS = %+v", status.NextTransition)
 	}
 	continuation := status.NextTransition.Continuation
-	if continuation == nil || continuation.Operation != "sync" || continuation.Agent != "opencode" ||
-		!strings.HasPrefix(continuation.Command, "gentle-ai sync") {
+	if continuation == nil || continuation.Operation != "sync" || continuation.Agent != "opencode" {
 		return fmt.Errorf("stale managed assets STATUS continuation = %+v", continuation)
+	}
+	// #4434: the printed continuation is anchored to the executable that
+	// diagnosed the skew, so it must name THIS driven binary and run its sync
+	// through it -- never an unqualified `gentle-ai` PATH could swap.
+	anchoredArgs, err := anchoredContinuationArguments(continuation.Command, r.sandbox.Binary)
+	if err != nil {
+		return fmt.Errorf("stale managed assets continuation %w", err)
 	}
 
 	inspection, err := proveInspection(r.sandbox)
@@ -86,11 +91,7 @@ func staleManagedAssetsStatusIsNotUnknown(r *journeyRun) error {
 	// reconciles the recorded digest through the product's own documented
 	// remedy (docs/review-integration.md), and the very same candidate is
 	// offered again with nothing else about it changed.
-	syncArgs, err := printedCommandArguments(continuation.Command)
-	if err != nil {
-		return fmt.Errorf("stale managed assets continuation %w", err)
-	}
-	sync := r.run(syncArgs, false)
+	sync := r.run(anchoredArgs, false)
 	if sync.ExitCode != 0 {
 		return fmt.Errorf("stale managed assets continuation %q exited %d: %s", continuation.Command, sync.ExitCode, firstLine(sync.Stderr))
 	}

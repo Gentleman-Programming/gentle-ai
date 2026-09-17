@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 740" width="1240" height="740" role="img" aria-labelledby="rddTitle rddDesc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+  <title id="rddTitle">How RDD checks a finished change</title>
+  <desc id="rddDesc">Receipt-Driven Development is opt-in and off by default. First the exact change is frozen to a lineage, revision and target. Then a read-only risk assessment decides the depth: passive gets a structural readback with zero reviewer lenses, medium gets one focused lens, high gets the canonical 4R — Risk, Resilience, Readability and Reliability — in parallel. At most one bounded correction is allowed. One exact acknowledgement closes the transaction and burns the authority. Delivery stays human-owned: a review never commits, pushes or opens a pull request.</desc>
+
+  <defs>
+    <radialGradient id="rddAmbient" cx="12%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#F095C8" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#F095C8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1240" height="740" rx="24" fill="#1A1218"/>
+  <rect width="1240" height="740" rx="24" fill="url(#rddAmbient)"/>
+
+  <!-- header -->
+  <text x="40" y="58" font-size="27" font-weight="700" fill="#F7ECF2">RDD &#8212; checked at the right depth</text>
+  <text x="41" y="88" font-size="14.5" fill="#A88E9B">The change is frozen first, then its own risk decides how hard it gets reviewed.</text>
+  <rect x="962" y="38" width="238" height="34" rx="17" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="1081" y="60" font-size="12.5" text-anchor="middle" fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">opt-in &#183; off by default</text>
+
+  <!-- stage labels -->
+  <text x="40" y="160" font-size="12" font-weight="700" letter-spacing="2" fill="#D7A0B8"><tspan fill="#F095C8" opacity="0.5">01 </tspan>FREEZE</text>
+  <text x="292" y="160" font-size="12" font-weight="700" letter-spacing="2" fill="#D7A0B8"><tspan fill="#F095C8" opacity="0.5">02 </tspan>ASSESS</text>
+  <text x="478" y="160" font-size="12" font-weight="700" letter-spacing="2" fill="#D7A0B8"><tspan fill="#F095C8" opacity="0.5">03 </tspan>CHECK</text>
+  <text x="950" y="160" font-size="12" font-weight="700" letter-spacing="2" fill="#D7A0B8"><tspan fill="#F095C8" opacity="0.5">04 </tspan>ACKNOWLEDGE</text>
+
+  <!-- ============ 01 FREEZE ============ -->
+  <rect x="40" y="278" width="230" height="210" rx="18" fill="#221820" stroke="#392A33"/>
+  <rect x="64" y="320" width="22" height="15" rx="3" fill="none" stroke="#F095C8" stroke-width="2"/>
+  <path d="M69 320 v-5 a6 6 0 0 1 12 0 v5" fill="none" stroke="#F095C8" stroke-width="2"/>
+  <text x="64" y="374" font-size="19" font-weight="600" fill="#F7ECF2">Freeze</text>
+  <text x="64" y="400" font-size="12" fill="#9C8391">The exact change is locked</text>
+  <text x="64" y="418" font-size="12" fill="#9C8391">before anything reads it.</text>
+  <text x="64" y="454" font-size="11" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">lineage &#183; revision &#183; target</text>
+
+  <path d="M270 383 L284 383" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round"/>
+  <path d="M279 378 L286 383 L279 388" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- ============ 02 ASSESS ============ -->
+  <rect x="292" y="318" width="130" height="130" rx="18" fill="#221820" stroke="#392A33"/>
+  <text x="357" y="370" font-size="17" font-weight="600" text-anchor="middle" fill="#F7ECF2">Assess</text>
+  <text x="357" y="393" font-size="11.5" text-anchor="middle" fill="#9C8391">Risk decides,</text>
+  <text x="357" y="409" font-size="11.5" text-anchor="middle" fill="#9C8391">not the model.</text>
+  <text x="357" y="432" font-size="10.5" text-anchor="middle" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">read-only</text>
+
+  <!-- fan: one of these three runs -->
+  <path d="M422 383 C 448 383, 452 232, 478 232" fill="none" stroke="#6B4F5D" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <path d="M422 383 C 448 383, 452 352, 478 352" fill="none" stroke="#6B4F5D" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <path d="M422 383 C 448 383, 452 472, 478 472" fill="none" stroke="#6B4F5D" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+  <!-- ============ 03 CHECK : three tiers ============ -->
+  <rect x="478" y="180" width="442" height="104" rx="16" fill="#221820" stroke="#392A33"/>
+  <rect x="498" y="202" width="92" height="26" rx="13" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="544" y="220" font-size="10.5" font-weight="700" letter-spacing="1.2" text-anchor="middle" fill="#9C8391">PASSIVE</text>
+  <text x="610" y="222" font-size="17" font-weight="600" fill="#F7ECF2">Structural readback</text>
+  <text x="610" y="246" font-size="12" fill="#9C8391">Zero reviewer lenses. Nothing to argue about.</text>
+  <text x="610" y="266" font-size="11.5" fill="#7E6672">Docs proven passive by their own frozen bytes</text>
+
+  <rect x="478" y="300" width="442" height="104" rx="16" fill="#221820" stroke="#4A3540"/>
+  <rect x="498" y="322" width="92" height="26" rx="13" fill="#3A2530" stroke="#8A5E75"/>
+  <text x="544" y="340" font-size="10.5" font-weight="700" letter-spacing="1.2" text-anchor="middle" fill="#D7A0B8">MEDIUM</text>
+  <text x="610" y="342" font-size="17" font-weight="600" fill="#F7ECF2">One focused lens</text>
+  <text x="610" y="366" font-size="12" fill="#9C8391">A single reviewer on the frozen candidate.</text>
+  <text x="610" y="386" font-size="11.5" fill="#7E6672">You are asked for consent before it runs</text>
+
+  <rect x="478" y="420" width="442" height="104" rx="16" fill="#241A22" stroke="#F095C8" stroke-opacity="0.5"/>
+  <rect x="498" y="442" width="92" height="26" rx="13" fill="#4A2233" stroke="#F095C8"/>
+  <text x="544" y="460" font-size="10.5" font-weight="700" letter-spacing="1.2" text-anchor="middle" fill="#F095C8">HIGH</text>
+  <text x="610" y="462" font-size="17" font-weight="600" fill="#F7ECF2">The canonical 4R</text>
+  <text x="610" y="486" font-size="12" fill="#9C8391">Four reviewers, launched in parallel.</text>
+  <text x="610" y="506" font-size="11.5" fill="#D7A0B8">Risk &#183; Resilience &#183; Readability &#183; Reliability</text>
+
+  <!-- bounded correction -->
+  <rect x="478" y="544" width="442" height="44" rx="12" fill="#221820" stroke="#392A33" stroke-dasharray="5 4"/>
+  <text x="498" y="566" font-size="13" font-weight="600" fill="#D7A0B8">At most one bounded correction</text>
+  <text x="498" y="582" font-size="11.5" fill="#7E6672">Never a loop that grinds until clean.</text>
+
+  <path d="M920 383 L934 383" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round"/>
+  <path d="M929 378 L936 383 L929 388" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- ============ 04 ACKNOWLEDGE ============ -->
+  <rect x="950" y="278" width="250" height="210" rx="18" fill="#221820" stroke="#392A33"/>
+  <text x="974" y="340" font-size="19" font-weight="600" fill="#F7ECF2">Acknowledge</text>
+  <text x="974" y="370" font-size="12" fill="#9C8391">One exact command closes</text>
+  <text x="974" y="388" font-size="12" fill="#9C8391">the transaction, and the</text>
+  <text x="974" y="406" font-size="12" fill="#9C8391">authority burns.</text>
+  <text x="974" y="444" font-size="11" fill="#F095C8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">nothing survives to reuse</text>
+
+  <!-- delivery strip -->
+  <rect x="40" y="612" width="1160" height="54" rx="16" fill="#2A1B24" stroke="#5A3A49"/>
+  <text x="620" y="637" font-size="15" font-weight="700" text-anchor="middle" fill="#F095C8">Delivery stays yours</text>
+  <text x="620" y="657" font-size="12" text-anchor="middle" fill="#A88E9B">A review is informational. It never commits, pushes, or opens a pull request.</text>
+
+  <text x="620" y="702" font-size="12" text-anchor="middle" fill="#8A6E7C" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">gentle-ai review mode enable --scope global</text>
+</svg>

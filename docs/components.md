@@ -9,13 +9,15 @@
 | Component | ID | Description |
 |-----------|-----|-------------|
 | Engram™ | `engram` | Persistent cross-session memory via MCP — auto-detection of project name, full-text search, git sync, project consolidation. See [engram repo](https://github.com/Gentleman-Programming/engram) |
-| SDD | `sdd` | Spec-Driven Development workflow (10 phases, including `sdd-onboard`) — the agent handles SDD organically when the task warrants it, or when you ask; you don't need to learn the commands |
+| SDD | `sdd` | Optional Spec-Driven Development workflow, including `sdd-onboard`; selected explicitly when its formal phase artifacts are wanted |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
 | Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
 | Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode (the two adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx` |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
+
+ODD (Organic Driven Development) is shared routing guidance, not a separate component to install. Use it for everyday direct/delegated work; installing the SDD component does not select SDD for a task. See [ODD and recovery](usage.md#organic-driven-development-odd).
 
 ## Primary remote-authorization guidance
 
@@ -34,6 +36,23 @@ After global install, enable GGA per project with:
 ```bash
 gga init
 gga install
+```
+
+---
+
+## Optional Community Tools
+
+Community Tools are opt-in and are not included by presets or automatic detection. Select them from the installer’s **Community Tools/Plugins** screen.
+
+| Tool | Behavior | Removal |
+|---|---|---|
+| CodeGraph | Installs its CLI and configures supported agent MCP/guidance integration. | Use CodeGraph’s upstream lifecycle commands. |
+| RTK | On supported macOS/Linux architectures, downloads pinned `v0.49.0` to `~/.local/bin/rtk` and runs RTK’s global setup only for detected selected Claude Code, OpenCode, Codex CLI, and Pi installations. Telemetry is disabled for every RTK child process. | Follow RTK’s upstream manual removal guidance; Gentle AI does not automate RTK uninstall. |
+
+RTK remains unavailable on Windows. Gentle AI does not edit shell profiles or `PATH`; if `~/.local/bin` is not already effective, add it manually:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ---
@@ -76,7 +95,7 @@ gga install
 | Work Unit Commits | `work-unit-commits` | Split implementation into reviewable work units |
 | RDD Defect Workflow | `rdd-defect-workflow` | Guide receipt-driven defect work with truthful evidence and authority boundaries |
 
-These foundation skills are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets.
+Of these, `go-testing`, `skill-creator`, `skill-improver`, `skill-registry`, `chained-pr`, `cognitive-doc-design` and `work-unit-commits` are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets. `branch-pr`, `issue-creation`, `comment-writer` and `rdd-defect-workflow` are repository-contributor workflow skills: they remain selectable with an explicit `--skills <id>`, but no default preset installs them.
 
 ### Coding Skills (separate repository)
 

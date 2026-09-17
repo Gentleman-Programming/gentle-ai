@@ -57,7 +57,7 @@ Writes name a mechanism because writing a file and saving an observation are dif
 Before reading implementation files or writing code, consume the structured status provided by the orchestrator or build the equivalent status from artifacts.
 
 - If `applyState` is `blocked`, STOP and return `blocked` with the missing artifacts or unsafe context.
-- If `applyState` is `all_done`, do not edit. Return `success` with `next_recommended: sdd-verify` or `sdd-archive` based on dependency state.
+- If `applyState` is `all_done`, do not edit. Return `success` with `next_recommended: sdd-archive`; verification remains optional.
 - If `applyState` is `ready`, proceed only on the assigned pending tasks.
 - Read context from `contextFiles` / `artifactPaths` instead of assuming fixed filenames. For spec-driven OpenSpec, these normally map to proposal, specs, design, and tasks.
 - If `actionContext.mode` is `workspace-planning` and `allowedEditRoots` is empty, STOP before editing. Treat linked repos and folders as read-only planning context.
@@ -143,7 +143,7 @@ If Strict TDD Mode is active (either from orchestrator injection or self-discove
 - You MUST produce a **TDD Cycle Evidence** table in your apply-progress artifact
 - Each task row MUST have: RED (test written first) → GREEN (implementation passes) → REFACTOR columns
 - If you complete a task WITHOUT writing tests first, mark it as FAILED in the evidence table
-- The verify phase WILL reject your work if the TDD Evidence table is missing or incomplete
+- When optional verification runs, missing or incomplete TDD evidence must be reported honestly
 
 **There is no silent fallback.** If you resolved Strict TDD as active, you follow it or you report failure. You do NOT quietly switch to Standard Mode.
 
@@ -159,9 +159,7 @@ Every assigned work unit, including standard mode, MUST produce a **Work Unit Ev
 
 If design/tasks contain applicable threat-matrix cases, write and run each mapped RED test before the corresponding production change even in standard mode. Preserve Strict TDD's full RED → GREEN → REFACTOR evidence when active; this table supplements it and never replaces it. Do not mark the work unit complete if focused tests or an applicable runtime harness fail.
 
-After all implementation work units finish, return control to the parent orchestrator for independent SDD verification. Do not launch or recommend review directly after apply. The executor never launches 4R, Judgment Day, a refuter, a correction actor, or a scoped validator. Only after independent SDD verification passes may the parent offer the optional review lifecycle.
-
-Focused remediation is the sole `applyState: all_done` exception. It follows ordinary SDD failed-evidence accounting for the exact `failed_evidence_revision`; a bare envelope, stale revision, or exhausted attempt budget never completes remediation.
+After all implementation work units finish, return control to the parent orchestrator for archive. Verification is optional practical diagnostics, not a required phase or archive certificate. The executor never launches 4R, Judgment Day, a refuter, a correction actor, or a scoped validator; neither executor nor parent offers or launches RDD within SDD.
 
 ### Step 4: Implement Tasks (Standard Workflow)
 
@@ -209,7 +207,7 @@ When saving apply-progress:
 
 ### Step 7: Return Summary
 
-Before returning, re-read the persisted tasks artifact and confirm every task you report as completed is marked `[x]` there. If the artifact still shows a completed task as `- [ ]`, fix the checkbox before returning. Do not report `Ready for verify` while completed work is only reflected in internal todos or apply-progress.
+Before returning, re-read the persisted tasks artifact and confirm every task you report as completed is marked `[x]` there. If the artifact still shows a completed task as `- [ ]`, fix the checkbox before returning. Do not report `Ready for archive` while completed work is only reflected in internal todos or apply-progress.
 
 Return to the orchestrator:
 
@@ -250,7 +248,7 @@ If none, say "None."}
 - Estimated review budget impact: {brief note}
 
 ### Status
-{N}/{total} tasks complete. {Ready for next batch / Ready for verify / Blocked by X}
+{N}/{total} tasks complete. {Ready for next batch / Ready for archive / Blocked by X}
 ```
 
 ## Rules
@@ -311,7 +309,6 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - Never minify the diff (strip comments, blank lines, docs, or tests) to fit the review budget; implement the cohesive slice honestly and report the final count with a `size:exception` recommendation when it stays over
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
-- Focused remediation is the sole `all_done` exception and must bind evidence to the exact failed_evidence_revision from native status
 - Apply any `rules.apply` from `openspec/config.yaml`
 
 ## Steps

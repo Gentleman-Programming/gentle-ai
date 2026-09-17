@@ -1,6 +1,7 @@
 package system
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,14 @@ func TestInstallHintGitArch(t *testing.T) {
 	hint := installHintGit(profile)
 	if !strings.Contains(hint, "pacman -S") {
 		t.Fatalf("installHintGit(arch) = %q", hint)
+	}
+}
+
+func TestInstallHintGitSilverblue(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	hint := installHintGit(profile)
+	if hint != "rpm-ostree install -y --apply-live git" {
+		t.Fatalf("installHintGit(silverblue) = %q, want %q", hint, "rpm-ostree install -y --apply-live git")
 	}
 }
 
@@ -58,6 +67,36 @@ func TestInstallHintNodeFedora(t *testing.T) {
 	hint := installHintNode(profile)
 	if !strings.Contains(hint, "rpm.nodesource.com") || !strings.Contains(hint, "dnf install -y nodejs") {
 		t.Fatalf("installHintNode(fedora) = %q, want NodeSource LTS setup + dnf install", hint)
+	}
+}
+
+func TestInstallHintNodeSilverblue(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	hint := installHintNode(profile)
+	if hint != "rpm-ostree install -y --apply-live nodejs npm" {
+		t.Fatalf("installHintNode(silverblue) = %q, want %q", hint, "rpm-ostree install -y --apply-live nodejs npm")
+	}
+}
+
+func TestInstallHintsSilverblueAllDeps(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	tests := []struct {
+		dep  string
+		want string
+	}{
+		{dep: "git", want: "rpm-ostree install -y --apply-live git"},
+		{dep: "curl", want: "rpm-ostree install -y --apply-live curl"},
+		{dep: "node", want: "rpm-ostree install -y --apply-live nodejs npm"},
+		{dep: "go", want: "rpm-ostree install -y --apply-live golang"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.dep, func(t *testing.T) {
+			got := InstallHintForDep(tt.dep, profile)
+			if got != tt.want {
+				t.Fatalf("InstallHintForDep(%q) = %q, want %q", tt.dep, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -182,6 +221,31 @@ func TestInstallCommandsForDepGitFedoraUsesDnf(t *testing.T) {
 	}
 }
 
+func TestInstallCommandsForDepSilverblueUsesRpmOstree(t *testing.T) {
+	profile := PlatformProfile{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora}
+	tests := []struct {
+		dep     string
+		wantCmd []string
+	}{
+		{dep: "git", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "git"}},
+		{dep: "curl", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "curl"}},
+		{dep: "node", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "nodejs", "npm"}},
+		{dep: "go", wantCmd: []string{"rpm-ostree", "install", "-y", "--apply-live", "golang"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.dep, func(t *testing.T) {
+			cmds := InstallCommandsForDep(tt.dep, profile)
+			if len(cmds) != 1 {
+				t.Fatalf("commands for %q = %d, want 1", tt.dep, len(cmds))
+			}
+			if !slices.Equal(cmds[0], tt.wantCmd) {
+				t.Fatalf("command for %q = %v, want %v", tt.dep, cmds[0], tt.wantCmd)
+			}
+		})
+	}
+}
+
 func TestFormatMissingDepsMessageAllPresent(t *testing.T) {
 	report := DependencyReport{AllPresent: true}
 	msg := FormatMissingDepsMessage(report)
@@ -281,6 +345,7 @@ func TestInstallCommandsFullMatrix(t *testing.T) {
 		{OS: "linux", PackageManager: "apt", LinuxDistro: "ubuntu"},
 		{OS: "linux", PackageManager: "pacman", LinuxDistro: "arch"},
 		{OS: "linux", PackageManager: "dnf", LinuxDistro: LinuxDistroFedora},
+		{OS: "linux", PackageManager: "rpm-ostree", LinuxDistro: LinuxDistroFedora},
 	}
 
 	deps := []string{"git", "curl", "node", "go"}

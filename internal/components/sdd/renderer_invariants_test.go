@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 type orchestratorContractSection struct {
@@ -63,7 +63,7 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 		name:   "session preflight",
 		marker: "### SDD Session Preflight (HARD GATE)",
 		sentinels: []string{
-			"all three groups (Pace, Artifacts, and PR strategy)",
+			"never collect these answers as typed chat text",
 			"no sequential wizard and no three separate calls",
 			"cache choices for the session",
 		},
@@ -93,15 +93,6 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 			"gatekeeper runs after every phase",
 			"re-run the same phase exactly once",
 			"Do not advance to dependent phases on a failed gate",
-		},
-	},
-	{
-		name:   "runtime attempt authority",
-		marker: "### Native Runtime Attempt Authority (MANDATORY)",
-		sentinels: []string{
-			"provider-owned Git-common-dir runtime ledger",
-			"sdd-attempt acquire",
-			"sdd-attempt settle",
 		},
 	},
 	{

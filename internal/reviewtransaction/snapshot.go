@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathidentity"
 )
 
 type TargetKind string
@@ -802,61 +802,6 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 	return selected, nil
 }
 
-// StillUntrackedIntended returns the subset of a HISTORICAL intended-untracked
-// selection whose paths are still absent from the real index, preserving the
-// recorded order.
-//
-// Issue #3842: a ledger that replays a recorded selection into a later capture
-// must first reconcile it against the index the capture will actually read. A
-// selected path the user has since committed is already part of the ordinary
-// candidate — its bytes live in HEAD/index/worktree — so keeping it in the
-// overlay list only trips buildCurrentChanges's "already tracked" refusal,
-// while dropping it keeps the candidate tree byte-identical. Snapshot
-// identity binds trees and paths, not the selection itself, so a bare
-// landing of the selection replays as zero drift and any further edit reads
-// as ordinary candidate drift — exactly the distinction the ledger's
-// reset/rescope split already routes on. This is strictly a replay-time
-// reconciliation: FRESH caller-supplied selections must never pass through
-// here, so an explicit selection of a tracked path keeps failing loudly as
-// the scope declaration error it is.
-//
-// A selection that landed completely returns a non-nil empty slice, because
-// snapshot targets demand an explicit selection rather than an absent one; an
-// empty (including nil) input short-circuits unchanged without touching the
-// repository.
-func (builder SnapshotBuilder) StillUntrackedIntended(ctx context.Context, intended []string) ([]string, error) {
-	if len(intended) == 0 {
-		return intended, nil
-	}
-	root, err := builder.ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	trackedOutput, err := runGitInventory(ctx, root, "ls-files", "--cached", "-z", "--")
-	if err != nil {
-		return nil, err
-	}
-	tracked := nulSeparatedPathSet(trackedOutput)
-	remaining := make([]string, 0, len(intended))
-	for _, path := range intended {
-		if _, isTracked := tracked[path]; isTracked {
-			continue
-		}
-		// A recorded path that no longer exists in the working tree has left
-		// the candidate just as surely as one that became tracked: carrying it
-		// forward would make every later capture fail on the missing file
-		// instead of classifying the discard as drift (#4055).
-		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("intended-untracked path %q: %w", path, err)
-		}
-		remaining = append(remaining, path)
-	}
-	return remaining, nil
-}
-
 func intendedUntrackedInventoryDigest(paths []string) string {
 	hash := sha256.New()
 	writeLengthPrefixed(hash, []byte("gentle-ai.intended-untracked-inventory/v1"))
@@ -942,36 +887,6 @@ func linkedWorktreeDirectories(ctx context.Context, root string) ([]string, erro
 	return directories, nil
 }
 
-// DiscoverTrackedAndUnignoredPaths returns the canonical Git-owned workspace
-// inventory: every cached path plus every unignored untracked path.
-func (builder SnapshotBuilder) DiscoverTrackedAndUnignoredPaths(ctx context.Context) ([]string, error) {
-	root, err := builder.ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	output, err := runGitInventory(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return nil, err
-	}
-	parts := bytes.Split(output, []byte{0})
-	paths := make([]string, 0, len(parts))
-	for _, item := range parts {
-		if len(item) > 0 {
-			value := string(item)
-			if strings.HasSuffix(value, "/") {
-				value = strings.TrimSuffix(value, "/")
-				if value == "" || strings.HasSuffix(value, "/") {
-					return nil, fmt.Errorf("invalid opaque Git inventory path %q", item)
-				}
-			}
-			paths = append(paths, value)
-		}
-	}
-	return canonicalPaths(paths)
-}
-
-// HasDirtyTrackedChanges reports whether the worktree or index differs from
-// HEAD, excluding untracked paths.
 func (builder SnapshotBuilder) HasDirtyTrackedChanges(ctx context.Context) (bool, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -1708,6 +1623,18 @@ func canonicalProjection(projection Projection) (Projection, error) {
 
 func snapshotIdentity(kind TargetKind, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
 	return snapshotIdentityForProjection(kind, "", baseTree, candidateTree, pathsDigest, proof, intended, ledgerIDs)
+}
+
+// IdentityForComponents recomputes the content-addressed snapshot identity
+// from its published components alone (issue #4494): kind, projection,
+// base_tree, candidate_tree, and paths_digest. The untracked-replay proof,
+// the intended untracked list, and ledger IDs are deliberately absent: they
+// never enter the identity hash (maintainer decision D1 on #2471), so a
+// negotiated continuation that carries these five components can prove that
+// its token and its --target identity belong to the same negotiation without
+// any persisted negotiation state.
+func IdentityForComponents(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest string) string {
+	return snapshotIdentityForProjection(kind, projection, baseTree, candidateTree, pathsDigest, "", nil, nil)
 }
 
 // snapshotIdentityForProjection mints the purified, content-addressed

@@ -40,6 +40,10 @@ func TestReviewConsentEnvelopeSerializedBytesUnchanged(t *testing.T) {
 			if err := result.Validate(); err != nil {
 				t.Fatalf("consent fixture no longer validates: %v", err)
 			}
+			const executionReason = "Review can help detect execution issues in these changes."
+			if result.Reason != executionReason || bytes.Contains([]byte(result.Reason), []byte("/")) {
+				t.Fatalf("%s reason = %q, want generic path-free %q", fixture.name, result.Reason, executionReason)
+			}
 			remarshaled, err := json.MarshalIndent(result, "", "  ")
 			if err != nil {
 				t.Fatal(err)

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const (
@@ -221,6 +221,21 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			// instead, and — exactly like the refusal it replaces — name it
 			// without deriving it, so the caller keeps choosing the scope.
 			if status.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(status.Projection.Paths) == 0 {
+				// Issue #4412: when STATUS could resolve the remote default
+				// branch's unique merge-base, the reviewed work is already
+				// committed and the truthful answer is the executable
+				// committed-range START the working `--base-ref --committed-only`
+				// STATUS path already publishes, not the unroutable
+				// external.select_base_ref collect (transition_input.submission
+				// is a closed oneOf, so no submission was ever schema-legal).
+				// The collect below stays the fallback for every repository
+				// shape the derivation cannot resolve.
+				if derived := status.derivedCommittedRange; derived != nil {
+					return reviewExecuteTransition("fresh_target_ready", "review.start",
+						reviewStartArguments(*derived, input.StartLineage, input.RuntimeAgent, derived.intendedUntracked),
+						[]ReviewTransitionArgument{{Name: "target_identity", Value: derived.TargetIdentity}},
+						ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: derived.TargetIdentity}, nil)
+				}
 				return reviewCollectTransition("empty_candidate_base_ref_required", ReviewTransitionInput{
 					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
 					Arguments: reviewTargetArguments(status),
@@ -734,6 +749,27 @@ type reviewTransitionSelector struct {
 	PrePRRepresentable                 bool
 }
 
+// reviewStatusTargetEvidenceToken composes the negotiated evidence token for
+// a STATUS-fresh target. It returns "" unless the components recomputed from
+// the published projection reproduce the exact target identity, so a
+// transition whose target is not the live snapshot never carries evidence
+// that would contradict it.
+func reviewStatusTargetEvidenceToken(status ReviewTargetStatusResult) string {
+	if status.Projection.CurrentCandidateTree == "" || status.Projection.PathsDigest == "" {
+		return ""
+	}
+	token := formatReviewTargetEvidence(reviewtransaction.Snapshot{
+		Kind: status.Projection.Kind, Projection: status.Projection.Projection,
+		BaseTree: status.Projection.BaseTree, CandidateTree: status.Projection.CurrentCandidateTree,
+		PathsDigest: status.Projection.PathsDigest,
+	})
+	parsed, err := parseReviewTargetEvidenceToken(token)
+	if err != nil || parsed.identity() != status.TargetIdentity {
+		return ""
+	}
+	return token
+}
+
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID, intended reviewIntendedUntrackedScope) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
@@ -742,14 +778,29 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 	arguments := []ReviewTransitionArgument{
 		{Name: "cwd", Value: status.repositoryRoot}, {Name: "contract", Value: contract},
 		{Name: "target", Value: status.TargetIdentity},
-		{Name: "projection", Value: string(status.Projection.Projection)},
 	}
+	// The self-describing evidence token rides beside the identity hash
+	// (#4494) only when it recomputes the exact target identity, so a
+	// transition whose target is not the live snapshot never carries
+	// contradicting evidence.
+	if token := reviewStatusTargetEvidenceToken(status); token != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "target-evidence", Value: token})
+	}
+	arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(status.Projection.Projection)})
 	if status.repositoryRoot == "" {
 		arguments = arguments[1:]
 	}
 	switch status.Projection.Kind {
 	case reviewtransaction.TargetBaseDiff:
-		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: status.Projection.BaseTree}, ReviewTransitionArgument{Name: "committed-only", Value: "true"})
+		baseRef := status.Projection.BaseTree
+		// Issue #4412: a selectorless STATUS that derived a committed range
+		// discloses the exact merge-base commit it resolved, not the tree
+		// object the derived snapshot froze, so the caller can see and
+		// override the scope it was offered.
+		if status.committedRangeBaseRef != "" {
+			baseRef = status.committedRangeBaseRef
+		}
+		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: baseRef}, ReviewTransitionArgument{Name: "committed-only", Value: "true"})
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: status.Projection.BaseTree}, ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"})
 	}

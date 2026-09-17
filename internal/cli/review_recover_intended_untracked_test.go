@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // escalatedIntendedUntrackedRecoveryFixture is the #3159 predecessor: an
@@ -99,10 +99,10 @@ func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeSt
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func() reviewerprovider.Adapter {
+	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
 		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
 			return payload, nil
-		})
+		}), nil
 	}
 	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	if err := RunReviewCaptureValidation([]string{

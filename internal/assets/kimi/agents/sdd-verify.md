@@ -17,14 +17,16 @@ Read the skill file at `~/.config/agents/skills/sdd-verify/SKILL.md` and follow 
 Also read shared conventions at `~/.config/agents/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read spec artifact (required): read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
-2. Read tasks artifact (required): read the `tasks` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
-3. Read design artifact: read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
-4. Check completeness: all tasks done?
+1. Read spec artifact (when available): read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+2. Read tasks artifact (when available): read the `tasks` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+3. Read design artifact (when available): read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+4. Report observed completed and unfinished tasks; do not change their state.
 5. Run tests
 6. Run build/type check
 7. Build spec compliance matrix: each scenario → COMPLIANT / FAILING / UNTESTED / PARTIAL
 8. Report verdict: PASS / PASS WITH WARNINGS / FAIL
+
+Missing inputs limit conclusions, not useful partial diagnostics; report missing artifacts and unavailable checks honestly, and never invent passing checks or completed tasks.
 
 Do NOT create or modify project files — your job is verification only, not implementation.
 Do NOT fix any issues found — only report them.
@@ -44,6 +46,6 @@ Return a structured result with these fields:
 - `status`: `done` | `blocked` | `partial`
 - `executive_summary`: one-sentence verdict
 - `artifacts`: topic_keys or file paths written
-- `next_recommended`: `sdd-archive` (if PASS) or `sdd-apply` (if FAIL/blockers found)
+- `next_recommended`: follow refreshed native task-progress routing: completed implementation normally proceeds to `sdd-archive`, unfinished work to `sdd-apply`, independent of diagnostic findings
 - `risks`: CRITICAL issues and WARNINGs
 - `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

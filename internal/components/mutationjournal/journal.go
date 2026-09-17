@@ -15,7 +15,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 )
 
 // OwnedFile is the persisted before-image record. It mirrors what an external

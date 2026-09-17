@@ -52,13 +52,17 @@ type Storage struct {
 // of concurrent SQLite writers, and a single connection sidesteps
 // SQLITE_BUSY entirely.
 //
-// journal_mode is DELETE, not WAL: WAL's main benefit is letting readers
-// and a writer proceed concurrently, which this process cannot use anyway
-// since SetMaxOpenConns(1) already serializes every read and write of its
-// own onto one connection. DELETE mode also never creates -wal/-shm
-// sidecar files, which keeps the read-only Grafana deployment (see
-// deploy/telemetry/install.sh's install_grafana) down to granting access
-// to one file instead of three.
+// journal_mode is WAL, not DELETE: this process serializes its own reads
+// and writes onto a single connection (SetMaxOpenConns(1)), but it is not
+// the only reader of this database. Grafana's SQLite datasource and the
+// open-data export both hold read-only connections against the same file
+// from outside this process. Under DELETE mode any one of those external
+// reads that outlasted busy_timeout made InsertRuntimeEvent fail outright
+// (issue #4717): DELETE takes an exclusive lock to commit, so a slow
+// external reader blocks the writer, not just other readers. WAL lets
+// writes commit without waiting on those external readers. WAL adds
+// -wal/-shm sidecar files next to the database; deploy/telemetry/install.sh's
+// install_grafana grants Grafana read access to both via ACLs.
 func OpenStorage(path string) (*Storage, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -66,21 +70,28 @@ func OpenStorage(path string) (*Storage, error) {
 	}
 	db.SetMaxOpenConns(1)
 
+	// Admission precedes even persistent PRAGMAs: rejected databases must not
+	// acquire legacy tables or have their journal mode changed.
+	if err := migrateRuntimeStorage(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	for _, pragma := range []string{
-		"PRAGMA journal_mode=DELETE;",
+		// busy_timeout must be applied before journal_mode: switching journal
+		// mode needs a moment of exclusive access, and if an external reader
+		// (Grafana, the open-data export) holds a lock at that instant,
+		// applying busy_timeout first makes the mode switch itself wait up to
+		// five seconds instead of failing immediately with SQLITE_BUSY.
+		"PRAGMA busy_timeout=5000;",
+		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
 		"PRAGMA foreign_keys=ON;",
-		"PRAGMA busy_timeout=5000;",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("apply pragma %q: %w", pragma, err)
 		}
-	}
-
-	if _, err := db.Exec(schemaDDL); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 
 	return &Storage{db: db}, nil
@@ -292,15 +303,31 @@ type rollupRow struct {
 	Value int64
 }
 
-// PurgeOlderThan deletes raw events received before cutoff and reports how
-// many rows were removed. Rollups are never purged by this call: they are
-// the durable historical record once raw events age out.
+// PurgeOlderThan atomically deletes legacy events and whole runtime deliveries
+// received strictly before cutoff. Its count remains legacy events only, not
+// runtime rows, deliveries, observations, or people. Rollups are never purged.
+// Runtime delivery identities expire with their rows; retries do not renew age.
 func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM events WHERE received_at < ?`, receivedAtKey(cutoff))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM events WHERE received_at < ?`, receivedAtKey(cutoff))
 	if err != nil {
 		return 0, fmt.Errorf("purge events before %s: %w", cutoff, err)
 	}
-	return res.RowsAffected()
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := purgeRuntimeOlderThan(ctx, tx, cutoff); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, errRuntimeStorage
+	}
+	return count, nil
 }
 
 // receivedAtKey and parseReceivedAtKey convert between time.Time and the

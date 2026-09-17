@@ -1,0 +1,576 @@
+package telemetryruntime
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
+)
+
+func TestOpenCodeTelemetryApprovedPriorAssetUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	prior, err := os.ReadFile("testdata/telemetry-runtime-a9cab7dd.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest := fmt.Sprintf("%x", sha256.Sum256(prior)); digest != priorPluginDigestA9cab7dd {
+		t.Fatalf("prior asset digest = %s, want %s", digest, priorPluginDigestA9cab7dd)
+	}
+	writeManagedTelemetryFixture(t, dir, prior)
+
+	changed, err := Reconcile(dir)
+	if err != nil {
+		t.Fatalf("upgrade approved prior asset: %v", err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("upgrade changed %d files, want plugin and manifest", len(changed))
+	}
+	paths := ManagedPaths(dir)
+	current := assets.MustRead("opencode/plugins/telemetry-runtime.ts")
+	if plugin, err := os.ReadFile(paths[0]); err != nil || string(plugin) != current {
+		t.Fatalf("plugin was not upgraded: %v", err)
+	}
+	manifestBytes, err := os.ReadFile(paths[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest managedManifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.File.After != current || manifest.File.AfterHash != fmt.Sprintf("%x", sha256.Sum256([]byte(current))) {
+		t.Fatal("ownership manifest was not refreshed to the current asset")
+	}
+	if err := CheckManaged(dir); err != nil {
+		t.Fatalf("upgraded asset is not currently owned: %v", err)
+	}
+	customPath := filepath.Join(dir, "plugins", "custom.ts")
+	if err := os.WriteFile(customPath, []byte("custom"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := RemoveManaged(dir)
+	if err != nil || len(removed) != 2 {
+		t.Fatalf("remove upgraded owned asset: %v, paths=%v", err, removed)
+	}
+	for _, path := range paths {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("owned path remains after uninstall: %s: %v", path, err)
+		}
+	}
+	if custom, err := os.ReadFile(customPath); err != nil || string(custom) != "custom" {
+		t.Fatalf("uninstall changed unrelated file: %q, %v", custom, err)
+	}
+}
+
+func TestOpenCodeTelemetryUnapprovedPriorAssetConflicts(t *testing.T) {
+	dir := t.TempDir()
+	unapproved := []byte(ownershipMarker + "// unapproved historical content\n")
+	writeManagedTelemetryFixture(t, dir, unapproved)
+	paths := ManagedPaths(dir)
+
+	if err := CheckManaged(dir); err == nil {
+		t.Fatal("unapproved prior asset passed ownership validation")
+	}
+	if _, err := Reconcile(dir); err == nil {
+		t.Fatal("unapproved prior asset was upgraded")
+	}
+	if _, err := RemoveManaged(dir); err == nil {
+		t.Fatal("unapproved prior asset was removed")
+	}
+	if plugin, err := os.ReadFile(paths[0]); err != nil || !bytes.Equal(plugin, unapproved) {
+		t.Fatalf("unapproved plugin was not preserved: %v", err)
+	}
+}
+
+func TestOpenCodeTelemetryCurrentAssetRemainsOwned(t *testing.T) {
+	dir := t.TempDir()
+	if changed, err := Reconcile(dir); err != nil || len(changed) != 2 {
+		t.Fatalf("install current asset: changed=%v err=%v", changed, err)
+	}
+	if changed, err := Reconcile(dir); err != nil || len(changed) != 0 {
+		t.Fatalf("current asset is not idempotent: changed=%v err=%v", changed, err)
+	}
+	if err := CheckManaged(dir); err != nil {
+		t.Fatalf("current asset is not owned: %v", err)
+	}
+}
+
+func writeManagedTelemetryFixture(t *testing.T, dir string, content []byte) {
+	t.Helper()
+	paths := ManagedPaths(dir)
+	if err := os.MkdirAll(filepath.Dir(paths[0]), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths[0], content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := managedManifest{Schema: ownershipSchema, File: mutationjournal.OwnedFile{
+		After: string(content), AfterHash: fmt.Sprintf("%x", sha256.Sum256(content)), Overlay: false, Mode: 0o644,
+	}}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths[1], append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Exercise the retained rollback guard with a synthetic changed prior image,
+// independently of the approved-digest upgrade path.
+func TestOpenCodeTelemetryOwnedUpdateRollback(t *testing.T) {
+	for _, edited := range []int{0, 1} {
+		t.Run(fmt.Sprint(edited), func(t *testing.T) {
+			dir := t.TempDir()
+			if _, err := Reconcile(dir); err != nil {
+				t.Fatal(err)
+			}
+			paths := ManagedPaths(dir)
+			files := make([]guardedFile, 2)
+			before := make([][]byte, 2)
+			for i, path := range paths {
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[i] = []byte(fmt.Sprintf("previous approved fixture bytes %d", i))
+				if err := os.WriteFile(path, before[i], 0600); err != nil {
+					t.Fatal(err)
+				}
+				info, _ := os.Lstat(path)
+				files[i] = guardedFile{configDir: dir, path: path, journal: mutationjournal.New(dir), expected: after, mode: info.Mode()}
+				if _, err := files[i].journal.WriteWithMode(path, after, info.Mode()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(paths[edited], []byte("concurrent custom edit"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for i := range files {
+				err := files[i].restore()
+				if i == edited {
+					if err == nil {
+						t.Fatal("changed prior image was not protected")
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				data, _ := os.ReadFile(paths[i])
+				want := before[i]
+				if i == edited {
+					want = []byte("concurrent custom edit")
+				}
+				if !bytes.Equal(data, want) {
+					t.Fatal("wrong rollback content")
+				}
+			}
+		})
+	}
+}
+
+func TestOpenCodeTelemetryManagedModeEquivalence(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		goos     string
+		expected os.FileMode
+		observed os.FileMode
+		want     bool
+	}{
+		{"exact writable on Unix", "linux", 0644, 0644, true},
+		{"read-only drift on Unix", "linux", 0644, 0444, false},
+		{"different writable mode on Unix", "linux", 0644, 0640, false},
+		{"widened writable plugin on Windows", "windows", 0644, 0666, true},
+		{"widened writable manifest on Windows", "windows", 0600, 0666, true},
+		{"read-only expected file remains distinct on Windows", "windows", 0444, 0666, false},
+		{"other writable modes remain distinct on Windows", "windows", 0644, 0664, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := managedModeMatchesForOS(tt.goos, tt.expected, tt.observed); got != tt.want {
+				t.Errorf("managedModeMatchesForOS(%q, %#o, %#o) = %t, want %t", tt.goos, tt.expected, tt.observed, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenCodeTelemetryManagedModeLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	changed, rollback, err := ReconcileWithRollback(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("first reconcile changed %d files, want 2", len(changed))
+	}
+	if err := CheckManaged(dir); err != nil {
+		t.Fatalf("validate reconciled files: %v", err)
+	}
+	if err := rollback(); err != nil {
+		t.Fatalf("rollback reconciled files: %v", err)
+	}
+	for _, path := range ManagedPaths(dir) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("rollback left managed file %s: %v", path, err)
+		}
+	}
+}
+
+func TestOpenCodeTelemetryManifestStrictness(t *testing.T) {
+	for _, kind := range []string{"alias", "nested-alias", "duplicate", "nested-duplicate", "missing", "null", "schema-null", "mode-null", "mode-type", "mode-value", "mode-drift", "metadata-mode", "unknown-pair", "oversized", "trailing"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			if _, err := Reconcile(dir); err != nil {
+				t.Fatal(err)
+			}
+			paths := ManagedPaths(dir)
+			raw, _ := os.ReadFile(paths[1])
+			text := string(raw)
+			switch kind {
+			case "alias":
+				text = strings.Replace(text, `"schema"`, `"Schema"`, 1)
+			case "nested-alias":
+				text = strings.Replace(text, `"afterHash"`, `"AfterHash"`, 1)
+			case "nested-duplicate":
+				text = strings.Replace(text, `"overlay":`, `"overlay":true,"overlay":`, 1)
+			case "schema-null":
+				text = strings.Replace(text, `"schema": "`+ownershipSchema+`"`, `"schema":null`, 1)
+			case "mode-null":
+				text = string(replaceManagedManifestMode(t, raw, json.RawMessage("null")))
+			case "trailing":
+				text += `{}`
+			case "duplicate":
+				text = strings.Replace(text, `"schema":`, `"schema":"discarded","schema":`, 1)
+			case "missing":
+				text = strings.Replace(text, `"overlay": false,`, "", 1)
+			case "null":
+				text = strings.Replace(text, `"overlay": false`, `"overlay": null`, 1)
+			case "mode-type":
+				text = string(replaceManagedManifestMode(t, raw, json.RawMessage(`"420"`)))
+			case "mode-value":
+				text = string(replaceManagedManifestMode(t, raw, json.RawMessage("511")))
+			case "mode-drift":
+				if runtime.GOOS == "windows" {
+					t.Skip("Windows does not preserve POSIX chmod mode drift")
+				}
+				if err := os.Chmod(paths[0], 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "metadata-mode":
+				if runtime.GOOS == "windows" {
+					t.Skip("Windows does not support writable metadata after POSIX chmod drift")
+				}
+				if err := os.Chmod(paths[1], 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "unknown-pair":
+				custom := ownershipMarker + "// custom data, not a package asset\n"
+				var m managedManifest
+				if err := json.Unmarshal(raw, &m); err != nil {
+					t.Fatal(err)
+				}
+				m.File.After = custom
+				m.File.AfterHash = fmt.Sprintf("%x", sha256.Sum256([]byte(custom)))
+				raw, _ = json.Marshal(m)
+				text = string(raw)
+				if err := os.WriteFile(paths[0], []byte(custom), 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "oversized":
+				text += strings.Repeat(" ", 65537)
+			}
+			if err := os.WriteFile(paths[1], []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := os.ReadFile(paths[0])
+			if err := CheckManaged(dir); err == nil {
+				t.Error("manifest accepted")
+			}
+			if _, err := Reconcile(dir); err == nil {
+				t.Error("unsafe reconcile accepted")
+			}
+			if _, err := RemoveManaged(dir); err == nil {
+				t.Error("unsafe uninstall accepted")
+			}
+			if after, err := os.ReadFile(paths[0]); err != nil || !bytes.Equal(before, after) {
+				t.Error("custom pair not preserved")
+			}
+		})
+	}
+}
+
+// replaceManagedManifestMode targets the parsed field instead of assuming the
+// platform's serialized writable mode (0600 on POSIX, 0666 on Windows).
+func replaceManagedManifestMode(t *testing.T, raw []byte, mode json.RawMessage) []byte {
+	t.Helper()
+	var manifest map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(manifest["file"], &file); err != nil {
+		t.Fatal(err)
+	}
+	file["mode"] = mode
+	encodedFile, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest["file"] = encodedFile
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func TestOpenCodeTelemetryManifestRecordsActualMode(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Reconcile(dir); err != nil {
+		t.Fatal(err)
+	}
+	paths := ManagedPaths(dir)
+	raw, _ := os.ReadFile(paths[1])
+	var m managedManifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.File.Mode = 0600
+	raw, _ = json.Marshal(m)
+	if err := os.Chmod(paths[0], 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths[1], raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(paths[1])
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Lstat(paths[0])
+	if uint32(info.Mode().Perm()) != m.File.Mode {
+		t.Fatal("recorded mode differs from actual preserved mode")
+	}
+	if err := CheckManaged(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenCodeTelemetryManagedLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Reconcile(dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(ManagedPaths(dir)[1])
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManagedPaths(dir)[1], compact.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := Reconcile(dir); err != nil || len(changed) != 1 {
+		t.Fatal("metadata refresh", changed, err)
+	}
+	if changed, err := Reconcile(dir); err != nil || len(changed) != 0 {
+		t.Fatal("not idempotent", changed, err)
+	}
+	paths := ManagedPaths(dir)
+	if err := os.Rename(paths[0], filepath.Join(dir, "removed-plugin")); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := Reconcile(dir); err != nil || len(changed) != 1 {
+		t.Fatal("missing asset not repaired", changed, err)
+	}
+	if removed, err := RemoveManaged(dir); err != nil || len(removed) != 2 {
+		t.Fatal("uninstall", removed, err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("owned file remains", path, err)
+		}
+	}
+}
+
+// TestOpenCodeTelemetryManagedAcceptsSymlinkedConfigRoot covers the
+// stow/chezmoi dotfiles pattern where the agent's whole configuration
+// directory is a symlink into a tracked repository (issue #4559). The
+// managed pair must install, validate, reconcile idempotently and remove
+// cleanly through that symlinked root, ending up on disk under the real
+// resolved target rather than being refused outright.
+func TestOpenCodeTelemetryManagedAcceptsSymlinkedConfigRoot(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "opencode-real")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "opencode")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip(err)
+	}
+
+	changed, err := Reconcile(link)
+	if err != nil {
+		t.Fatalf("reconcile through symlinked config root: %v", err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("reconcile through symlinked root changed %d files, want 2", len(changed))
+	}
+	for _, path := range ManagedPaths(target) {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("managed file missing under resolved root: %s: %v", path, err)
+		}
+	}
+	if err := CheckManaged(link); err != nil {
+		t.Fatalf("check managed through symlinked root: %v", err)
+	}
+	if changed, err := Reconcile(link); err != nil || len(changed) != 0 {
+		t.Fatalf("second reconcile through symlinked root not idempotent: changed=%v err=%v", changed, err)
+	}
+
+	removed, err := RemoveManaged(link)
+	if err != nil || len(removed) != 2 {
+		t.Fatalf("remove managed through symlinked root: removed=%v err=%v", removed, err)
+	}
+	for _, path := range ManagedPaths(target) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("managed file remains under resolved root after removal: %s: %v", path, err)
+		}
+	}
+	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
+		t.Fatalf("resolved root directory was removed or altered: %v", err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config root symlink was removed or altered: %v", err)
+	}
+}
+
+// TestOpenCodeTelemetryManagedRefusesSymlinkedPluginsDirectory covers real
+// indirection strictly inside a regular (non-symlinked) managed root: a
+// symlinked "plugins" directory must still be refused, unlike the root
+// symlink itself.
+func TestOpenCodeTelemetryManagedRefusesSymlinkedPluginsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	realPlugins := filepath.Join(t.TempDir(), "plugins-real")
+	if err := os.MkdirAll(realPlugins, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pluginsLink := filepath.Join(dir, "plugins")
+	if err := os.Symlink(realPlugins, pluginsLink); err != nil {
+		t.Skip(err)
+	}
+
+	_, err := Reconcile(dir)
+	if err == nil {
+		t.Fatal("symlinked plugins directory was accepted")
+	}
+	if !strings.Contains(err.Error(), "telemetry runtime symlink conflict:") {
+		t.Fatalf("unexpected error missing conflict prefix: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rerun 'gentle-ai sync'") {
+		t.Fatalf("error does not name an executable exit: %v", err)
+	}
+	if err := CheckManaged(dir); err == nil {
+		t.Fatal("symlinked plugins directory passed check")
+	}
+	if _, err := RemoveManaged(dir); err == nil {
+		t.Fatal("symlinked plugins directory passed removal check")
+	}
+}
+
+func TestOpenCodeTelemetryManagedAcceptsSymlinkedConfigRootWithTrailingSeparator(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "opencode-real")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "opencode")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip(err)
+	}
+	uncleaned := link + string(filepath.Separator)
+
+	if _, err := Reconcile(uncleaned); err != nil {
+		t.Fatalf("reconcile through uncleaned symlinked config root: %v", err)
+	}
+	for _, path := range ManagedPaths(target) {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("managed file missing under resolved target: %v", err)
+		}
+	}
+	if err := CheckManaged(uncleaned); err != nil {
+		t.Fatalf("check through uncleaned symlinked config root: %v", err)
+	}
+}
+
+func TestOpenCodeTelemetryManagedRefusesDanglingConfigRootSymlink(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "opencode")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing-target"), link); err != nil {
+		t.Skip(err)
+	}
+
+	_, err := Reconcile(link)
+	if err == nil {
+		t.Fatal("dangling config root symlink was accepted")
+	}
+	if !strings.Contains(err.Error(), "telemetry runtime symlink conflict:") {
+		t.Fatalf("unexpected error missing conflict prefix: %v", err)
+	}
+	if !strings.Contains(err.Error(), "does not resolve to an existing directory") {
+		t.Fatalf("error does not explain the dangling root: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rerun 'gentle-ai sync'") {
+		t.Fatalf("error does not name an executable exit: %v", err)
+	}
+	if err := CheckManaged(link); err == nil {
+		t.Fatal("dangling config root symlink passed check")
+	}
+}
+
+func TestOpenCodeTelemetryManagedPreservesConflicts(t *testing.T) {
+	for _, kind := range []string{"unowned", "modified", "symlink", "metadata"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := ManagedPaths(dir)
+			if kind == "modified" || kind == "metadata" {
+				if _, err := Reconcile(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Dir(paths[0]), 0700); err != nil {
+				t.Fatal(err)
+			}
+			target := paths[0]
+			if kind == "metadata" {
+				target = paths[1]
+			}
+			if kind == "symlink" {
+				target = filepath.Join(dir, "custom.ts")
+				if err := os.WriteFile(target, []byte("personal"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, paths[0]); err != nil {
+					t.Skip(err)
+				}
+			} else if err := os.WriteFile(target, []byte("personal"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Reconcile(dir); err == nil {
+				t.Fatal("conflict silently overwritten")
+			}
+			if _, err := RemoveManaged(dir); err == nil {
+				t.Fatal("conflict not reported during uninstall")
+			}
+			if data, err := os.ReadFile(target); err != nil || string(data) != "personal" {
+				t.Fatal("custom content changed", err)
+			}
+		})
+	}
+}

@@ -18,6 +18,7 @@ Use it for:
 - Turning a large change into chained or stacked PRs.
 - Keeping reviewer cognitive load healthy.
 - Applying SDD tasks without accidentally producing a PR above 400 changed lines.
+- Closing an ODD task with a work-unit commit.
 
 ## Critical Rules
 
@@ -86,6 +87,15 @@ Its implementation evidence MUST include:
 - Runtime harness command/scenario and exact result, or explicit `N/A` with reason.
 - Rollback boundary stated independently of commit creation; uncommitted work units still require it.
 - When fixing a bounded review ledger, group atomic work units inside the single correction transaction; work-unit count never creates another fix budget.
+
+## ODD Relationship
+
+Organic Driven Development (ODD) closes every substantial task with a work-unit commit on the feature branch, not only SDD tasks:
+
+- Every ODD task closes with at least one work-unit commit, branch first when on the default branch, with tests and docs alongside the behavior and a Conventional Commit message.
+- The native review candidate is that commit, or the PR slice it belongs to when review is deferred, against the previous reviewed boundary. It is never a TODO checkbox and never the accumulated feature branch.
+- The running authored line count from work-unit commits feeds the same delivery-strategy vocabulary as SDD: `ask-on-risk`, `auto-chain`, `single-pr`, `exception-ok`.
+- The ODD feature document records the commit identity as evidence and, once a delivery strategy applies, the chosen chain strategy and slice boundaries (which commits each PR holds).
 
 ## Commands
 

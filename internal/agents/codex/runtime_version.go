@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -29,6 +30,25 @@ var (
 	}
 )
 
+// gpt56RuntimeUnavailableError marks a missing Codex executable. It preserves
+// the normal requirement message while allowing shared-file configuration to
+// proceed without creating CLI-only GPT-5.6 profiles.
+type gpt56RuntimeUnavailableError struct {
+	requirement error
+	cause       error
+}
+
+func (e *gpt56RuntimeUnavailableError) Error() string { return e.requirement.Error() }
+func (e *gpt56RuntimeUnavailableError) Unwrap() error { return e.cause }
+
+// IsGPT56RuntimeUnavailable reports whether validation failed because the Codex
+// executable was not found. Other execution and version-validation errors remain
+// runtime requirement failures.
+func IsGPT56RuntimeUnavailable(err error) bool {
+	var unavailable *gpt56RuntimeUnavailableError
+	return errors.As(err, &unavailable)
+}
+
 type semanticVersion struct {
 	core       [3]string
 	prerelease []string
@@ -43,7 +63,11 @@ func ValidateGPT56Runtime() error {
 		if detail := strings.TrimSpace(string(output)); detail != "" {
 			reason += ": " + detail
 		}
-		return runtimeRequirementError(reason)
+		requirementErr := runtimeRequirementError(reason)
+		if errors.Is(err, exec.ErrNotFound) {
+			return &gpt56RuntimeUnavailableError{requirement: requirementErr, cause: err}
+		}
+		return requirementErr
 	}
 	installed, err := parseCodexVersion(string(output))
 	if err != nil {

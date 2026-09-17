@@ -31,6 +31,7 @@ func TestCompactReviewBoundsCandidateCausalityToGenesisLocations(t *testing.T) {
 		{name: "explicit unknown remains escalated", location: "tracked.txt:1", causality: CausalUnknown, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
 		{name: "in genesis inferential requires refuter", location: "tracked.txt:1", causality: CausalIntroduced, class: EvidenceInferential, wantRefuterRequired: true},
 		{name: "in genesis inferential uses one refuter", location: "tracked.txt:1", causality: CausalIntroduced, class: EvidenceInferential, refuter: []EvidenceResult{{FindingID: "R3-001", Outcome: OutcomeCorroborated, Proof: "independent reproduction"}}, wantState: StateCorrectionRequired, wantCausality: CausalIntroduced, wantOutcome: OutcomeCorroborated, wantFix: true},
+		{name: "in genesis inferential refuter inconclusive routes to correction", location: "tracked.txt:1", causality: CausalIntroduced, class: EvidenceInferential, refuter: []EvidenceResult{{FindingID: "R3-001", Outcome: OutcomeInconclusive, Proof: "could not disprove"}}, wantState: StateCorrectionRequired, wantCausality: CausalIntroduced, wantOutcome: OutcomeInconclusive, wantFix: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

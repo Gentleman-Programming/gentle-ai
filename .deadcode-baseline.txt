@@ -71,6 +71,7 @@ internal/components/sdd/boundedreview.go	ReviewExecutionContractFor
 internal/components/sdd/inject.go	injectClaudeModelAssignments
 internal/components/sdd/inject.go	resolveClaudeModelAlias
 internal/components/sdd/read_assignments.go	ReadCurrentProfiles
+internal/components/telemetryruntime/managed.go	Reconcile
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv
@@ -163,7 +164,6 @@ internal/reviewtransaction/transaction.go	CanonicalLensResult
 internal/reviewtransaction/transaction.go	NewLineage
 internal/reviewtransaction/transaction.go	NewTransaction
 internal/reviewtransaction/transaction.go	Transaction.addFixFinding
-internal/reviewtransaction/tree_blob.go	RestoreTreeBlob
 internal/reviewtransaction/verification_contract.go	AggregateVerificationCost
 internal/reviewtransaction/verification_contract.go	BuildCorrectionImpactClosure
 internal/reviewtransaction/verification_contract.go	BuildVerificationPlan
@@ -213,19 +213,9 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
-internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
-internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
 internal/sddstatus/status.go	RenderNativePhasePrompt
 internal/sddstatus/status.go	blockerReasons.forRoute
 internal/sddstatus/status.go	dependencyForPhase
-internal/sddstatus/status.go	normalizeReportToken
-internal/sddstatus/status.go	reportField
-internal/sddstatus/status.go	reportIsClearlyPassing
-internal/sddstatus/status.go	reportLineHasBlocker
-internal/sddstatus/status.go	reportLineHasPassSignal
-internal/sddstatus/status.go	reportTextIsClearlyPassing
-internal/sddstatus/status.go	reportValueIsBenign
-internal/sddstatus/status.go	stripMarkdownSignal
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew
@@ -237,6 +227,7 @@ internal/telemetry/recording_spawn.go	NewRecordingSpawner
 internal/telemetry/recording_spawn.go	RecordingSpawner.Calls
 internal/telemetry/recording_spawn.go	RecordingSpawner.Reset
 internal/telemetry/recording_spawn.go	RecordingSpawner.Spawn
+internal/telemetry/runtime_event.go	ParseRuntimeEvent
 internal/tui/model.go	setOSExecutableForTest
 internal/tui/model.go	setOSGetwdForTest
 internal/tui/model.go	setOSRemoveForTest

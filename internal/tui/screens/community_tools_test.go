@@ -4,13 +4,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 func TestRenderCommunityToolsShowsCodeGraph(t *testing.T) {
 	out := RenderCommunityTools([]model.CommunityToolID{model.CommunityToolCodeGraph}, 0, nil, false, nil)
 	for _, want := range []string{"Community Tools/Plugins", "[x] CodeGraph", "View repo: https://github.com/colbymchenry/codegraph", "Continue", "Back"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderCommunityTools missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderCommunityToolsShowsRTK(t *testing.T) {
+	out := RenderCommunityTools([]model.CommunityToolID{model.CommunityToolRTK}, 2, nil, false, nil)
+	for _, want := range []string{"[x] RTK", "View repo: https://github.com/rtk-ai/rtk"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderCommunityTools missing %q; output:\n%s", want, out)
 		}

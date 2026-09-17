@@ -186,7 +186,7 @@ Ready for tasks (sdd-tasks).
 - Keep ASCII diagrams simple — clarity over beauty
 - Apply any `rules.design` from `openspec/config.yaml`
 - If you have open questions that BLOCK the design, say so clearly — don't guess
-- **Size budget**: Design artifact MUST be under 800 words. Architecture decisions as tables (option | tradeoff | decision). Code snippets only for non-obvious patterns.
+- **Sufficient detail**: Include enough detail to explain decisions, alternatives, rationale, interfaces and testing. Use tables or code snippets where they clarify non-obvious behavior. Do not truncate required detail to meet a word or line cap.
 - Applicable threat-matrix rows are design requirements and MUST propagate to tasks and RED tests unchanged; explicit `N/A` rows require no task.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
 

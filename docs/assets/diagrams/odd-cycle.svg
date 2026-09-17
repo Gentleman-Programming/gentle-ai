@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 700" width="1240" height="700" role="img" aria-labelledby="oddTitle oddDesc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+  <title id="oddTitle">Organic Driven Development keeps work proportional</title>
+  <desc id="oddDesc">A request is authorized and understood before changes begin. Read-only work ends separately. Authorized work stays lightweight when small or keeps a recoverable record when substantial, then is implemented, checked, and closed. Formal SDD phases are an explicit choice, not an automatic escalation.</desc>
+
+  <defs>
+    <radialGradient id="oddAmbient" cx="12%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#F095C8" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#F095C8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1240" height="700" rx="24" fill="#1A1218"/>
+  <rect width="1240" height="700" rx="24" fill="url(#oddAmbient)"/>
+
+  <text x="48" y="62" font-size="30" font-weight="700" fill="#F7ECF2">Make progress without overhead</text>
+  <text x="49" y="91" font-size="16" fill="#A88E9B">Understand the work first. Give it only the structure it needs.</text>
+  <rect x="972" y="42" width="220" height="34" rx="17" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="1082" y="64" font-size="13" text-anchor="middle" fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">default workflow</text>
+
+  <rect x="40" y="118" width="1160" height="526" rx="22" fill="#221820" stroke="#392A33"/>
+
+  <!-- Authorize before exploring. -->
+  <rect x="74" y="154" width="300" height="96" rx="16" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="100" y="210" font-size="24" font-weight="700" fill="#F7ECF2">Authorize the change</text>
+
+  <path d="M374 202 H450" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M442 195 L451 202 L442 209" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="412" y="185" font-size="14" text-anchor="middle" fill="#D7A0B8">authorized</text>
+
+  <rect x="460" y="154" width="350" height="96" rx="16" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.55"/>
+  <text x="488" y="210" font-size="24" font-weight="700" fill="#F7ECF2">Understand first</text>
+
+  <!-- Read-only work terminates before implementation. -->
+  <path d="M224 250 V282" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round"/>
+  <path d="M217 274 L224 283 L231 274" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="74" y="292" width="300" height="82" rx="16" fill="#251A21" stroke="#6B4F5D" stroke-dasharray="5 5"/>
+  <text x="100" y="341" font-size="22" font-weight="700" fill="#D7A0B8">Read-only ends here</text>
+
+  <!-- Classify the authorized work. -->
+  <path d="M635 250 V278" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M628 270 L635 279 L642 270" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="430" y="288" width="410" height="78" rx="16" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.55"/>
+  <text x="635" y="334" font-size="24" text-anchor="middle" font-weight="700" fill="#F7ECF2">Keep work proportional</text>
+
+  <path d="M635 366 V388 H294 V402" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M635 366 V388 H961 V402" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M287 394 L294 403 L301 394" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M954 394 L961 403 L968 394" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="74" y="412" width="440" height="92" rx="16" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="102" y="466" font-size="23" font-weight="700" fill="#F7ECF2">Small work stays light</text>
+
+  <rect x="756" y="412" width="410" height="92" rx="16" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.55"/>
+  <text x="784" y="466" font-size="22" font-weight="700" fill="#F7ECF2">Substantial work: keep a record</text>
+
+  <!-- Both authorized paths converge for delivery. -->
+  <path d="M294 504 V526 H635 V538" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M961 504 V526 H635" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M628 530 L635 539 L642 530" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="430" y="548" width="370" height="72" rx="16" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="456" y="591" font-size="23" font-weight="700" fill="#F7ECF2">Implement + check</text>
+
+  <path d="M800 584 H858" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M850 577 L859 584 L850 591" fill="none" stroke="#F095C8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="868" y="548" width="298" height="72" rx="16" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.55"/>
+  <text x="894" y="591" font-size="20" font-weight="700" fill="#F7ECF2">Close with outcome</text>
+
+  <text x="620" y="677" font-size="14" text-anchor="middle" fill="#A88E9B">Formal SDD phases are an explicit choice — never an automatic escalation.</text>
+</svg>

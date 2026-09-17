@@ -20,9 +20,8 @@ EnvironmentFile=/etc/gentle-telemetry/backup.env
 # systemd to misinterpret.
 ExecStart=/usr/local/bin/gentle-telemetry-backup
 
-# Runs as root: it needs read access to the collector's DynamicUser-owned
-# StateDirectory, which a second, differently-allocated DynamicUser would
-# not have.
+# Runs as root: simplest way to guarantee read access to the collector's
+# StateDirectory regardless of which static user owns it.
 User=root
 Group=root
 PrivateTmp=yes

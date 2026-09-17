@@ -331,24 +331,42 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	lines := strings.Split(content, "\n")
 	lineValue := fmt.Sprintf("%s = %q", key, value)
 
-	// Remove all existing occurrences of the key.
+	// Remove existing occurrences of the key from the root TOML scope only.
+	// Assignments after a table or array-table header belong to that table.
 	var cleaned []string
+	inTopLevel := true
+	rootArrayDepth := 0
+	var multilineQuote byte
+	var removingMultilineQuote byte
+	removingArrayDepth := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") {
+		if removingMultilineQuote != 0 || removingArrayDepth != 0 {
+			removingMultilineQuote = updateTOMLMultilineString(line, removingMultilineQuote, &removingArrayDepth)
+			continue
+		}
+		if inTopLevel && rootArrayDepth == 0 && multilineQuote == 0 && isTOMLKeyAssignment(trimmed, key) {
+			removingMultilineQuote = updateTOMLMultilineString(line, 0, &removingArrayDepth)
 			continue
 		}
 		cleaned = append(cleaned, line)
+		if rootArrayDepth == 0 && multilineQuote == 0 && isTOMLTableHeader(trimmed) {
+			inTopLevel = false
+		}
+		multilineQuote = updateTOMLMultilineString(line, multilineQuote, &rootArrayDepth)
 	}
 
 	// Find insertion point: before the first [section] header.
 	insertAt := len(cleaned)
+	rootArrayDepth = 0
+	multilineQuote = 0
 	for i, line := range cleaned {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		if rootArrayDepth == 0 && multilineQuote == 0 && isTOMLTableHeader(trimmed) {
 			insertAt = i
 			break
 		}
+		multilineQuote = updateTOMLMultilineString(line, multilineQuote, &rootArrayDepth)
 	}
 
 	var out []string
@@ -357,4 +375,109 @@ func UpsertTopLevelTOMLString(content, key, value string) string {
 	out = append(out, cleaned[insertAt:]...)
 
 	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
+func isTOMLKeyAssignment(line, key string) bool {
+	if !strings.HasPrefix(line, key) {
+		return false
+	}
+
+	remainder := line[len(key):]
+	for len(remainder) > 0 && (remainder[0] == ' ' || remainder[0] == '\t') {
+		remainder = remainder[1:]
+	}
+	return strings.HasPrefix(remainder, "=")
+}
+
+// updateTOMLMultilineString tracks multiline basic and literal string values.
+// When arrayDepth is provided, it also tracks brackets outside strings and comments.
+func updateTOMLMultilineString(line string, multilineQuote byte, arrayDepth *int) byte {
+	var quote byte
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		char := line[i]
+		if multilineQuote != 0 {
+			if char == multilineQuote && i+2 < len(line) && line[i+1] == multilineQuote && line[i+2] == multilineQuote && (multilineQuote == '\'' || !escapedTOMLCharacter(line, i)) {
+				multilineQuote = 0
+				i += 2
+			}
+			continue
+		}
+
+		if quote != 0 {
+			if quote == '"' && char == '\\' && !escaped {
+				escaped = true
+				continue
+			}
+			if char == quote && !escaped {
+				quote = 0
+			}
+			escaped = false
+			continue
+		}
+
+		switch char {
+		case '#':
+			return 0
+		case '"', '\'':
+			if i+2 < len(line) && line[i+1] == char && line[i+2] == char {
+				multilineQuote = char
+				i += 2
+				continue
+			}
+			quote = char
+		case '[':
+			if arrayDepth != nil {
+				(*arrayDepth)++
+			}
+		case ']':
+			if arrayDepth != nil && *arrayDepth > 0 {
+				(*arrayDepth)--
+			}
+		}
+	}
+
+	return multilineQuote
+}
+
+func escapedTOMLCharacter(line string, index int) bool {
+	backslashes := 0
+	for index > 0 && line[index-1] == '\\' {
+		backslashes++
+		index--
+	}
+	return backslashes%2 == 1
+}
+
+func isTOMLTableHeader(line string) bool {
+	if !strings.HasPrefix(line, "[") {
+		return false
+	}
+
+	var quote byte
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		char := line[i]
+		if quote != 0 {
+			if quote == '"' && char == '\\' && !escaped {
+				escaped = true
+				continue
+			}
+			if char == quote && !escaped {
+				quote = 0
+			}
+			escaped = false
+			continue
+		}
+
+		switch char {
+		case '"', '\'':
+			quote = char
+		case '#':
+			line = strings.TrimSpace(line[:i])
+			return strings.HasSuffix(line, "]")
+		}
+	}
+
+	return strings.HasSuffix(line, "]")
 }

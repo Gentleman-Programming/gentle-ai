@@ -80,25 +80,26 @@ type TargetStatusDecision struct {
 }
 
 type TargetStatusResult struct {
-	Applicability                      TargetApplicability    `json:"applicability"`
-	AuthorityVersion                   AuthorityVersion       `json:"authority_version,omitempty"`
-	LineageID                          string                 `json:"lineage_id,omitempty"`
-	State                              State                  `json:"state,omitempty"`
-	Generation                         int                    `json:"generation,omitempty"`
-	Revision                           string                 `json:"revision,omitempty"`
-	Action                             TargetStatusAction     `json:"action"`
-	ActionDisposition                  RecoveryDisposition    `json:"action_disposition,omitempty"`
-	Replayability                      Replayability          `json:"replayability"`
-	OriginalChangedLines               int                    `json:"original_changed_lines,omitempty"`
-	Tier                               RiskLevel              `json:"tier,omitempty"`
-	CorrectionBudget                   int                    `json:"correction_budget,omitempty"`
-	CorrectionBudgetPolicy             string                 `json:"correction_budget_policy,omitempty"`
-	SelectedLenses                     []string               `json:"selected_lenses,omitempty"`
-	TargetIdentity                     string                 `json:"target_identity"`
-	AuthorityTargetIdentity            string                 `json:"authority_target_identity,omitempty"`
-	Projection                         TargetProjectionStatus `json:"projection"`
-	CandidateLineageIDs                []string               `json:"candidate_lineage_ids"`
-	Decision                           TargetStatusDecision   `json:"-"`
+	Applicability                      TargetApplicability        `json:"applicability"`
+	AuthorityVersion                   AuthorityVersion           `json:"authority_version,omitempty"`
+	LineageID                          string                     `json:"lineage_id,omitempty"`
+	State                              State                      `json:"state,omitempty"`
+	Generation                         int                        `json:"generation,omitempty"`
+	Revision                           string                     `json:"revision,omitempty"`
+	Action                             TargetStatusAction         `json:"action"`
+	ActionDisposition                  RecoveryDisposition        `json:"action_disposition,omitempty"`
+	Replayability                      Replayability              `json:"replayability"`
+	OriginalChangedLines               int                        `json:"original_changed_lines,omitempty"`
+	Tier                               RiskLevel                  `json:"tier,omitempty"`
+	CorrectionBudget                   int                        `json:"correction_budget,omitempty"`
+	CorrectionBudgetPolicy             string                     `json:"correction_budget_policy,omitempty"`
+	SelectedLenses                     []string                   `json:"selected_lenses,omitempty"`
+	TargetIdentity                     string                     `json:"target_identity"`
+	AuthorityTargetIdentity            string                     `json:"authority_target_identity,omitempty"`
+	Projection                         TargetProjectionStatus     `json:"projection"`
+	CandidateLineageIDs                []string                   `json:"candidate_lineage_ids"`
+	Escalation                         *CompactEscalationEvidence `json:"escalation,omitempty"`
+	Decision                           TargetStatusDecision       `json:"-"`
 	authorityTargetKind                TargetKind
 	authorityProjection                Projection
 	selectorFreeAccountingOnlyRecovery bool
@@ -235,6 +236,56 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 		ancestors = append(ancestors, selectorlessCommittedBaseDiffAncestor{commit: fields[0], tree: fields[1]})
 	}
 	return ancestors, nil
+}
+
+// ResolveCommittedRangeBase returns the single merge-base commit between HEAD
+// and the remote default branch, but only when that committed range is
+// unambiguous (issue #4412). STATUS derives the committed-range START a
+// selectorless empty workspace candidate needs from exactly this base, so an
+// ambiguous repository must fall back to today's base_ref collect rather than
+// silently pick a scope the caller never named.
+//
+// The base is deliberately the remote default branch (refs/remotes/origin/HEAD)
+// and never the local branch upstream: for a fully pushed branch `@{upstream}`
+// names the last pushed commit, whose range is empty, which is precisely the
+// state that produces the zero-path candidate this derivation serves. Every
+// other outcome -- no origin/HEAD, a criss-cross history, an empty range, or any
+// Git fault -- is returned as an error so the caller keeps the truthful
+// fallback.
+func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
+	refOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return "", err
+	}
+	ref := strings.TrimSpace(string(refOutput))
+	if ref == "" {
+		return "", fmt.Errorf("refs/remotes/origin/HEAD does not resolve to a remote branch") // refusal:by-design world-action: an absent remote default branch is not a decision a command can make unambiguous; the caller falls back to collecting a base_ref
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, ref)
+	if err != nil {
+		return "", err
+	}
+	merges := strings.Fields(string(bases))
+	if len(merges) != 1 {
+		return "", fmt.Errorf("remote default branch history has %d merge bases", len(merges)) // refusal:by-design world-action: a criss-cross history has no single base to derive, so the caller falls back to collecting a base_ref
+	}
+	base := merges[0]
+	if base == head {
+		return "", fmt.Errorf("HEAD is the remote default branch merge-base") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
+	}
+	countOutput, err := runGit(ctx, repo, nil, nil, "rev-list", "--count", base+".."+head)
+	if err != nil {
+		return "", err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(countOutput)))
+	if err != nil || count <= 0 {
+		return "", fmt.Errorf("committed range between the merge-base and HEAD is empty") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
+	}
+	return base, nil
 }
 
 // selectorlessCommittedBaseDiffMatchedPredecessor finds the lineage's frozen
@@ -664,6 +715,9 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		result.OriginalChangedLines, result.Tier, result.CorrectionBudget, result.CorrectionBudgetPolicy = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget, state.CorrectionBudgetPolicy
 		result.SelectedLenses = append([]string{}, state.SelectedLenses...)
 		result.Projection = targetProjectionFromCompact(state, result.Projection)
+		if state.State == StateEscalated {
+			result.Escalation = state.EscalationEvidence()
+		}
 		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots && candidate.frozenReviewingDrifted {
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
@@ -674,7 +728,11 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 			result.selectorFreeAccountingOnlyRecovery = candidate.selectorFreeAccountingOnlyRecovery
 			return result
 		}
-		if state.State == StateEscalated || state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
+		if state.State == StateEscalated {
+			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+			return result
+		}
+		if state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
 		}

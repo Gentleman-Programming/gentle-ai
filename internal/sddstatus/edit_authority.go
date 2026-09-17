@@ -1,7 +1,6 @@
 package sddstatus
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
 )
 
 // Issue #2547 (S1 of #2540): work units carry no structured target field, so
@@ -382,9 +381,12 @@ func detectUnauthorizedEditRootsForCurrentWorkUnit(tasksText, workspaceRoot stri
 }
 
 // futureEditRootsNote reports a later work unit's own unauthorized edit
-// targets without blocking the current work unit (#4103). It carries no
-// `blocked(...)` reason code, so it never flips applyState — it exists purely
-// so a human sees the future authority need before reaching that work unit.
+// targets without blocking the current work unit (#4103). It is an informational
+// diagnostic, so it travels on the non-blocking `notes` channel (#4372): it
+// carries no `blocked(...)` reason code, never flips applyState, and — since a
+// non-empty `blockedReasons` is a gate in every consumer contract — must never
+// reach that gated field. It exists purely so a human sees the future authority
+// need before reaching that work unit.
 func futureEditRootsNote(roots []string) string {
 	quoted := make([]string, 0, len(roots))
 	for _, root := range roots {
@@ -404,7 +406,7 @@ func futureEditRootsNote(roots []string) string {
 // It also returns the unauthorized edit roots so the caller can raise the typed
 // consent question naming exactly them (#2563, S4b of #2540). Detection is
 // scoped to the current work unit (#4103): a future work unit's own
-// unauthorized roots are reported through reasons as an informational note,
+// unauthorized roots are reported through the non-blocking notes channel (#4372),
 // never as a blocker.
 func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tasksText string, workspaceRoot string, allowedEditRoots []string) (ApplyState, []string) {
 	if applyState != ApplyReady {
@@ -412,107 +414,11 @@ func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tas
 	}
 	roots, futureRoots := detectUnauthorizedEditRootsForCurrentWorkUnit(tasksText, workspaceRoot, allowedEditRoots)
 	if len(futureRoots) != 0 {
-		reasons.genuine = append(reasons.genuine, futureEditRootsNote(futureRoots))
+		reasons.notes = append(reasons.notes, futureEditRootsNote(futureRoots))
 	}
 	if len(roots) == 0 {
 		return applyState, nil
 	}
 	reasons.genuine = append(reasons.genuine, editAuthorityBlockedReason(roots))
 	return ApplyBlocked, roots
-}
-
-// applyRuntimeTopologyBlock stops only a currently routed runtime actor when a
-// task target belongs to a different Git common directory. Edit authority is
-// deliberately checked first: a grant can authorize a path, but it cannot make
-// an independent repository share the planning change's candidate accounting.
-func applyRuntimeTopologyBlock(ctx context.Context, applyState *ApplyState, dependencies *Dependencies, nextRecommended *string, reasons *blockerReasons, tasksText, workspaceRoot, change string) {
-	if applyState == nil || dependencies == nil || nextRecommended == nil {
-		return
-	}
-	switch *nextRecommended {
-	case string(PhaseApply), string(PhaseVerify), string(PhaseRemediate):
-	default:
-		return
-	}
-	roots, err := foreignRuntimeTopologyRoots(ctx, tasksText, workspaceRoot, change)
-	if err != nil {
-		reasons.genuine = append(reasons.genuine, runtimeTopologyBlockedReason(nil, err))
-	} else if len(roots) == 0 {
-		return
-	} else {
-		reasons.genuine = append(reasons.genuine, runtimeTopologyBlockedReason(roots, nil))
-	}
-	if *applyState == ApplyReady {
-		*applyState = ApplyBlocked
-		dependencies.Apply = DependencyBlocked
-	}
-	dependencies.Verify = DependencyBlocked
-	dependencies.Archive = DependencyBlocked
-	*nextRecommended = "resolve-blockers"
-}
-
-func foreignRuntimeTopologyRoots(ctx context.Context, tasksText, workspaceRoot, change string) ([]string, error) {
-	planningStore, err := OpenRuntimeStore(ctx, workspaceRoot, change)
-	if err != nil {
-		return nil, fmt.Errorf("resolve the planning repository Git common directory: %w", err)
-	}
-	foreign := map[string]bool{}
-	for _, line := range strings.Split(tasksText, "\n") {
-		for _, token := range editTargetTokens(line, workspaceRoot) {
-			resolved := token
-			if !filepath.IsAbs(resolved) {
-				resolved = filepath.Join(workspaceRoot, resolved)
-			}
-			target := gitRootOf(resolveExistingPath(filepath.Clean(resolved)))
-			if target == "" {
-				continue
-			}
-			targetStore, err := OpenRuntimeStore(ctx, target, change)
-			if err != nil {
-				return nil, fmt.Errorf("resolve the target repository Git common directory for %s: %w", pathquote.Quote(target), err)
-			}
-			same, err := sameRuntimeCommonDirectory(planningStore.commonDir, targetStore.commonDir)
-			if err != nil {
-				return nil, err
-			}
-			if !same {
-				foreign[target] = true
-			}
-		}
-	}
-	roots := make([]string, 0, len(foreign))
-	for root := range foreign {
-		roots = append(roots, root)
-	}
-	sort.Strings(roots)
-	return roots, nil
-}
-
-func sameRuntimeCommonDirectory(left, right string) (bool, error) {
-	leftInfo, err := os.Stat(left)
-	if err != nil {
-		return false, fmt.Errorf("read planning repository Git common directory: %w", err)
-	}
-	rightInfo, err := os.Stat(right)
-	if err != nil {
-		return false, fmt.Errorf("read task target Git common directory: %w", err)
-	}
-	return os.SameFile(leftInfo, rightInfo), nil
-}
-
-func runtimeTopologyBlockedReason(roots []string, err error) string {
-	detail := ""
-	if err != nil {
-		detail = fmt.Sprintf("cannot verify Git common-dir identity: %v", err)
-	} else {
-		quoted := make([]string, 0, len(roots))
-		for _, root := range roots {
-			quoted = append(quoted, pathquote.Quote(root))
-		}
-		detail = fmt.Sprintf("tasks.md targets repositories with a different Git common directory: %s", strings.Join(quoted, ", "))
-	}
-	return fmt.Sprintf(
-		"blocked(cross_common_dir_runtime_target): %s; keep runtime work in the planning repository or a shared linked worktree with the same Git common directory, or split independent repositories into separately planned and runtime-accounted SDD changes; an edit-authority grant does not supply candidate accounting",
-		detail,
-	)
 }

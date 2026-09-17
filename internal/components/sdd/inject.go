@@ -9,14 +9,14 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 const legacyMandatoryWording = "TOTALMENTE " + "obligatorio"
@@ -964,7 +964,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 func renderClaudeSessionPreflight() (string, error) {
 	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
-	return projectSDDSessionPreflightWithTool(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
+	return projectSDDSessionPreflightWithTool(substituteSharedOrchestratorSections(content), "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
 }
 
 // Preparation is read-only. A template composer panic must not escape after a
@@ -1394,13 +1394,12 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 }
 
 func ensurePreservedOpenCodeResearchLifecycle(prompt string) string {
-	if strings.Contains(prompt, "<!-- gentle-ai:sdd-research-lifecycle -->") && strings.Contains(prompt, researchLifecycleContract()) {
-		return prompt
-	}
+	// Older generated prompts embedded this managed gate as one unmarked line.
+	// Replace that exact legacy shape without deleting unrelated user questions.
 	lines := strings.Split(prompt, "\n")
 	kept := lines[:0]
 	for _, line := range lines {
-		if strings.Contains(line, "Before the `sdd-propose` phase in interactive mode") || strings.Contains(line, "proposal question round") {
+		if strings.HasPrefix(line, "### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research`") {
 			continue
 		}
 		kept = append(kept, line)
@@ -1414,6 +1413,13 @@ func renderPreservedOpenCodeOrchestratorPrompt(
 	options ...OrchestratorRenderOptions,
 ) string {
 	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	if agent == model.AgentOpenCode {
+		migrated = strings.ReplaceAll(migrated, legacyOpenCodeConsentV3QuestionRoute, openCodeConsentV3QuestionRoute)
+		migrated = strings.ReplaceAll(migrated, openCodeFallbackSourceClause, openCodeConsentV3FallbackClause)
+	}
+	if strings.Contains(migrated, openCodeNativeQuestionSourceRoute) {
+		migrated = replaceOpenCodeConsentV3QuestionRoute(migrated, agent)
+	}
 	var renderOptions OrchestratorRenderOptions
 	if len(options) > 0 {
 		renderOptions = options[0]
@@ -1801,7 +1807,15 @@ func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (Inj
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("install Claude review stop-hook: %w", err)
 	}
-	return InjectionResult{Changed: changed || stopHookChanged, Files: []string{settingsPath}}, nil
+	preflightHookChanged, err := ensureClaudeSDDPreflightHook(settingsPath, adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude SDD preflight hook: %w", err)
+	}
+	telemetryHookChanged, err := ensureClaudeTelemetryHooks(settingsPath)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("install Claude runtime telemetry hooks: %w", err)
+	}
+	return InjectionResult{Changed: changed || stopHookChanged || preflightHookChanged || telemetryHookChanged, Files: []string{settingsPath}}, nil
 }
 
 func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
@@ -1815,10 +1829,6 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 	}
 
 	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
-	if claudeHookExists(root, command) {
-		return false, nil
-	}
-
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
 	if hasHooks && hooksMap == nil {
@@ -1828,23 +1838,54 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 		hooksMap = map[string]any{}
 	}
 
-	sessionRaw, hasSessionStart := hooksMap["SessionStart"]
-	sessionStart, _ := sessionRaw.([]any)
-	if hasSessionStart && sessionStart == nil {
-		return false, fmt.Errorf("Codex hooks %q has unsupported hooks.SessionStart shape: want array", hooksPath)
-	}
-	sessionStart = append(sessionStart, map[string]any{
-		"matcher": "startup|resume|clear|compact",
-		"hooks": []any{
-			map[string]any{
-				"type":          "command",
-				"command":       command,
-				"timeout":       30,
-				"statusMessage": "Refreshing skill registry",
+	changed := false
+	if !hookCommandExists(hooksMap, "SessionStart", command) {
+		sessionRaw, hasSessionStart := hooksMap["SessionStart"]
+		sessionStart, _ := sessionRaw.([]any)
+		if hasSessionStart && sessionStart == nil {
+			return false, fmt.Errorf("Codex hooks %q has unsupported hooks.SessionStart shape: want array", hooksPath)
+		}
+		sessionStart = append(sessionStart, map[string]any{
+			"matcher": "startup|resume|clear|compact",
+			"hooks": []any{
+				map[string]any{
+					"type":          "command",
+					"command":       command,
+					"timeout":       30,
+					"statusMessage": "Refreshing skill registry",
+				},
 			},
-		},
-	})
-	hooksMap["SessionStart"] = sessionStart
+		})
+		hooksMap["SessionStart"] = sessionStart
+		changed = true
+	}
+
+	const telemetryCommand = `gentle-ai telemetry runtime codex --json`
+	for _, event := range []string{"SubagentStop", "Stop"} {
+		if hookCommandExists(hooksMap, event, telemetryCommand) {
+			continue
+		}
+		raw, exists := hooksMap[event]
+		entries, _ := raw.([]any)
+		if exists && entries == nil {
+			return false, fmt.Errorf("Codex hooks %q has unsupported hooks.%s shape: want array", hooksPath, event)
+		}
+		entries = append(entries, map[string]any{
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": telemetryCommand,
+					"async":   true,
+					"timeout": 4,
+				},
+			},
+		})
+		hooksMap[event] = entries
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
 	root["hooks"] = hooksMap
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -1860,6 +1901,21 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 		return false, err
 	}
 	return wr.Changed, nil
+}
+
+func hookCommandExists(hooksMap map[string]any, event, command string) bool {
+	entries, _ := hooksMap[event].([]any)
+	for _, entry := range entries {
+		entryMap, _ := entry.(map[string]any)
+		hooks, _ := entryMap["hooks"].([]any)
+		for _, hook := range hooks {
+			hookMap, _ := hook.(map[string]any)
+			if hookMap["command"] == command {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
@@ -1902,6 +1958,65 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	hooksMap["UserPromptSubmit"] = userPromptSubmit
 	root["hooks"] = hooksMap
 
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
+// ensureClaudeSDDPreflightHook binds one successful parent AskUserQuestion
+// preflight to later SDD Agent launches in the same Claude session.
+func ensureClaudeSDDPreflightHook(settingsPath string, agentID model.AgentID) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+
+	command := fmt.Sprintf("gentle-ai sdd-preflight-hook --agent %s", agentID)
+	changed := false
+	// The guard derives parent-confirmed SDD preflight authority at dispatch
+	// time directly from the session transcript the hook runner supplies on
+	// stdin (transcript_path and session_id). A model-started copy of this
+	// hook command cannot influence the real dispatch, because Claude Code
+	// only honors the output of the hook invocation it started itself, and
+	// that invocation's stdin is runner-supplied. No hook mints or persists
+	// authority; install only this single fail-closed PreToolUse(Agent) entry.
+	for _, hook := range []struct{ key, matcher string }{
+		{key: "PreToolUse", matcher: "Agent"},
+	} {
+		added, err := appendClaudeReviewStopHookEntry(hooksMap, hook.key, settingsPath, command, map[string]any{
+			"matcher": hook.matcher,
+			"hooks":   []any{map[string]any{"type": "command", "command": command, "timeout": 30}},
+		})
+		if err != nil {
+			return false, err
+		}
+		changed = changed || added
+	}
+	if !changed {
+		return false, nil
+	}
+
+	root["hooks"] = hooksMap
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return false, err
@@ -2010,12 +2125,61 @@ func appendClaudeReviewStopHookEntry(hooksMap map[string]any, hookKey, settingsP
 	return true, nil
 }
 
+// ensureClaudeTelemetryHooks installs one asynchronous, one-shot command for
+// both main-agent and subagent completions. Native policy checks run before the
+// hook payload or any transcript is read, so installation itself never enrolls
+// telemetry and disabled installations remain inert.
+func ensureClaudeTelemetryHooks(settingsPath string) (bool, error) {
+	root := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err := json.Unmarshal(data, &root); err != nil {
+			return false, fmt.Errorf("parse Claude settings %q: %w", settingsPath, err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	hooksRaw, hasHooks := root["hooks"]
+	hooksMap, _ := hooksRaw.(map[string]any)
+	if hasHooks && hooksMap == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks shape: want object", settingsPath)
+	}
+	if hooksMap == nil {
+		hooksMap = map[string]any{}
+	}
+	const command = "gentle-ai telemetry runtime claude --json"
+	changed := false
+	for _, hookKey := range []string{"SubagentStop", "Stop"} {
+		added, err := appendClaudeReviewStopHookEntry(hooksMap, hookKey, settingsPath, command, map[string]any{
+			"matcher": "",
+			"hooks":   []any{map[string]any{"type": "command", "command": command, "async": true, "timeout": 5}},
+		})
+		if err != nil {
+			return false, err
+		}
+		changed = changed || added
+	}
+	if !changed {
+		return false, nil
+	}
+	root["hooks"] = hooksMap
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	out = append(out, '\n')
+	wr, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644)
+	if err != nil {
+		return false, err
+	}
+	return wr.Changed, nil
+}
+
 func claudeHookExists(root map[string]any, command string) bool {
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return false
 	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop"} {
+	for _, key := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop"} {
 		hookEntries, ok := hooksMap[key].([]any)
 		if !ok {
 			continue
@@ -2826,64 +2990,74 @@ func stripBareOrchestratorForFilePrompt(content string) string {
 	return result
 }
 
-// legacyPiSystemPromptSectionIDs lists every gentle-ai:-marked section that a
-// Pi install made before the capability manifest started reporting
-// SupportsSystemPrompt()==false for Pi (see 965187e6) could have left behind
-// in the Pi adapter's SystemPromptFile. Nothing manages this file anymore, so
-// none of these blocks self-heal on install/sync/uninstall. The
-// "codegraph-guidance" entry mirrors communitytool.codeGraphGuidanceSectionID,
-// which is unexported; agentguidance.RoutingSectionID covers the routing
-// guidance block a defect once wrote here instead of skipping Pi (#4063).
+// legacyPiSystemPromptSectionIDs are the only marker pairs this cleanup owns.
+// Pi's package owns APPEND_SYSTEM.md, so unmarked and non-allowlisted content
+// must never be interpreted as Gentle AI content.
 var legacyPiSystemPromptSectionIDs = []string{
-	"sdd-orchestrator",
-	"strict-tdd-mode",
-	"persona",
-	"codegraph-guidance",
-	agentguidance.RoutingSectionID,
+	"persona", "engram-protocol", "sdd-orchestrator", "strict-tdd-mode",
+	"agent-routing", "trigger-rules", "codegraph-guidance",
 }
 
-// RetirePiSystemPromptBlocks removes any gentle-ai managed markdown sections
-// (and a bare legacy SDD orchestrator block) that an older gentle-ai build
-// wrote into the Pi adapter's SystemPromptFile. gentle-pi owns the Pi system
-// prompt, so this file should carry no gentle-ai content going forward.
-//
-// It is safe to call unconditionally: a missing file is a no-op, and repeated
-// calls are idempotent. Content outside the managed markers is preserved
-// byte-for-byte. If nothing but whitespace remains after stripping, the file
-// is rewritten with that whitespace-only remainder rather than deleted: a
-// whitespace-only file is harmless (Pi appends nothing), the rewrite is
-// recoverable and consistent with every other managed-section rewrite, and
-// only the uninstall call site registers a backup target for this file.
-//
-// Only ever call this with the Pi adapter. Unlike the SupportsSystemPrompt()
-// gated helpers elsewhere in this package, it strips these sections
-// unconditionally regardless of what the adapter reports.
+// RetirePiSystemPromptBlocks removes only complete legacy managed sections from
+// Pi's APPEND_SYSTEM.md. It refuses a direct file symlink but permits symlinked
+// parent directories, preserving regular-file mode and every unowned byte.
 func RetirePiSystemPromptBlocks(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	promptPath := adapter.SystemPromptFile(homeDir)
-
-	existing, err := readFileOrEmpty(promptPath)
-	if err != nil {
-		return InjectionResult{}, err
-	}
-
-	updated := existing
-	if hasLegacyBareOrchestrator(updated) {
-		updated = stripBareOrchestratorForFilePrompt(updated)
-	}
-	for _, sectionID := range legacyPiSystemPromptSectionIDs {
-		updated = filemerge.InjectMarkdownSection(updated, sectionID, "")
-	}
-
-	if updated == existing {
+	info, err := os.Lstat(promptPath)
+	if os.IsNotExist(err) {
 		return InjectionResult{}, nil
 	}
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("stat Pi system prompt %q: %w", promptPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return InjectionResult{}, fmt.Errorf("Pi system prompt %q is not a regular file", promptPath)
+	}
 
-	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	existing, err := os.ReadFile(promptPath)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("read Pi system prompt %q: %w", promptPath, err)
+	}
+	updated, removed := removePiManagedSections(string(existing))
+	if !removed {
+		return InjectionResult{}, nil
+	}
+	if strings.TrimSpace(updated) == "" {
+		if err := os.Remove(promptPath); err != nil {
+			return InjectionResult{}, fmt.Errorf("remove empty Pi system prompt %q: %w", promptPath, err)
+		}
+		return InjectionResult{Changed: true, Files: []string{promptPath}}, nil
+	}
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), info.Mode().Perm())
 	if err != nil {
 		return InjectionResult{}, err
 	}
-
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
+func removePiManagedSections(content string) (string, bool) {
+	removed := false
+	for _, sectionID := range legacyPiSystemPromptSectionIDs {
+		open := "<!-- gentle-ai:" + sectionID + " -->"
+		close := "<!-- /gentle-ai:" + sectionID + " -->"
+		for search := 0; ; {
+			start := strings.Index(content[search:], open)
+			if start < 0 {
+				break
+			}
+			start += search
+			end := strings.Index(content[start+len(open):], close)
+			if end < 0 {
+				search = start + len(open)
+				continue
+			}
+			end += start + len(open) + len(close)
+			content = content[:start] + content[end:]
+			removed = true
+			search = start
+		}
+	}
+	return content, removed
 }
 
 const instructionsFrontmatter = "---\n" +

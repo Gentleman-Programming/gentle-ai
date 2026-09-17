@@ -1,24 +1,21 @@
-# SDD Research Lifecycle Contract
+### Optional Research and Product Discovery
 
-Research is optional until selected. Selection makes this fail-closed contract mandatory; research produces evidence, while the orchestrator owns product decisions and proposal admission.
+Research remains optional, including after selection. After exploration, recommend a scoped investigation only when an unresolved question would benefit from external evidence. No fixed questionnaire, mandatory rounds or research-completion ceremony is required.
 
-## Evidence artifact
+- Establish the problem, intended outcome, constraints and current evidence. Inspect the code through ordinary exploration; pass relevant context to the output-only research collector.
+- The orchestrator owns product discovery. Ask one focused product question at a time and wait for the answer; do not choose for the user or repeat settled decisions. A delegated worker returns decision gaps to the orchestrator rather than interviewing the user or inventing choices.
+- Use external documentation or web tools only when actually available and authorized; prefer primary sources. Never infer access from a tool name, Bash, generic MCP access or a source-class declaration, and never bypass configured permissions.
+- Forward the research objective, relevant context, actual tool restrictions and these evidence-quality instructions to the collector. Adapt depth to uncertainty and consequences, not a fixed number of questions or sources.
+- Attribute material claims to URLs or supplied sources; distinguish verified facts from assumptions, contradictions, freshness limits and evidence gaps. Unavailable tools or unsupported claims must be disclosed, not represented as completed research.
+- Return concise findings, recommendations, tradeoffs, open questions and implementation implications. Research does not require a separate research proposal; pass useful findings into the normal requested SDD proposal.
+- Missing, partial, unavailable or divergent research metadata does not block proposal work. No request token, positive revision, readiness state or cross-store equality certificate is required. Pause only work dependent on an unresolved product decision or unsafe missing evidence; continue independent work within the authorized scope.
+- Keep research output in conversation unless the selected store or an explicit request calls for persistence. The orchestrator handles any authorized persistence and reports failed writes honestly; no research-store handshake admits proposals. Preserve historical research/preproposal artifacts and observations rather than rewriting or deleting them.
 
-`research.md` and `sdd/{change-name}/research` use `gentle-ai.sdd-research/v1` and record:
+#### Research-specific gatekeeper precedence
 
-- a positive `revision`, explicit `done | partial | blocked` outcome, and the questions;
-- admission and observed exact grants;
-- sources with `id, class, title, publisher, URL, accessed_at, excerpt`;
-- validated claims where each claim maps to source IDs;
-- contradictions, uncertainty and freshness; and
-- product choices are separate and non-authoritative.
+For `sdd-research` only (including named-profile variants), this contract takes precedence over the generic Automatic Mode Gatekeeper, including its lazy-loaded workflow rules:
 
-Selected `done` evidence must satisfy every field above; partial or blocked outcomes MUST exclude unvalidated claims. Admission denial produces no source claims.
-
-## Pre-proposal state
-
-`gentle-ai.sdd-preproposal/v1` records the positive `revision`, exploration outcome/reference, research request and classes, admission and outcome, OpenSpec and Engram evidence references, product decisions (`pending | confirmed`), and `proposal_ready`.
-
-Selected research is ready only when evidence is valid and `done`, decisions are confirmed, references are valid, and its selected store mode is ready: OpenSpec-only or Engram-only validates that store, hybrid requires equal revision and bytes in both, and no-store remains unready. Unselected research skips only this research condition. The proposal handoff carries the state revision, confirmed decisions, and optional evidence references.
-
-<!-- research-lifecycle-gate:start -->### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research` immediately after `sdd-explore`; selection makes completion mandatory. Before every `propose`, invoke `sdd-propose` only when selected research is `done` or research is unselected, product decisions are `confirmed`, evidence references are valid, and the selected artifact-store state is ready. The orchestrator owns product discovery. Automatic unresolved choices require one lossless grouped prompt with all context, options, consequences, allowed answers, and exact tokens; it MUST persist the pending state before prompting, then STOP without invoking `sdd-propose`. The proposer receives a confirmed pre-proposal handoff and MUST NOT interview or infer consent. Native `gentle-ai.sdd-status/v2` is the sole status contract.<!-- research-lifecycle-gate:end -->
+- Validate honest findings, source attribution and disclosed limitations; do not require a persisted artifact or full-success status. Read back any artifact actually claimed as persisted, but accept useful inline or partial research with its gaps visible. Never manufacture success or evidence.
+- Do not automatically retry or STOP solely because research is partial, inline or tools are unavailable. Continue independent authorized work; this exception does not admit dishonest claims or unsupported conclusions.
+- Preserve real tool permissions, unresolved human product decisions and unsafe-dependent-work blocks. Terminal transport failures retain their existing stop/continuation rules; missing or malformed transport results are not usable partial research.
+- All other phases retain their existing gatekeeper checks and failure handling. This is not a general artifact, success or retry exemption for planning or implementation.

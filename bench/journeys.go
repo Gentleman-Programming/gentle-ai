@@ -479,6 +479,51 @@ func printedTransitionArguments(envelope statusEnvelope) ([]string, error) {
 	return args, nil
 }
 
+// anchoredContinuationArguments validates a printed managed-assets
+// continuation whose executable token is anchored to the driven binary
+// (#4434): the command must name THAT binary -- an unqualified `gentle-ai`
+// could resolve through PATH to a different binary whose sync never
+// reconciles the refusal -- followed by the sync verb and its arguments. It
+// returns the verb and arguments for execution through the same driven
+// binary, mirroring printedCommandArguments' contract for anchored forms.
+func anchoredContinuationArguments(command, binary string) ([]string, error) {
+	if strings.ContainsAny(command, "\r\n") {
+		return nil, fmt.Errorf("printed a multiline continuation command: %q", command)
+	}
+	words, err := splitPrintedCommandWords(command)
+	if err != nil {
+		return nil, err
+	}
+	if len(words) < 3 {
+		return nil, fmt.Errorf("printed a command that names no verb or arguments: %q", command)
+	}
+	if words[1] != "sync" {
+		return nil, fmt.Errorf("printed a command whose verb is %q, not sync: %q", words[1], command)
+	}
+	identity := false
+	for _, candidate := range drivenExecutableIdentities(binary) {
+		if words[0] == candidate {
+			identity = true
+			break
+		}
+	}
+	if !identity {
+		return nil, fmt.Errorf("printed a continuation that starts with %q, not the driven binary %q", words[0], binary)
+	}
+	return words[1:], nil
+}
+
+// drivenExecutableIdentities names the path forms the driven binary can
+// report for itself through os.Executable: the absolute path the runner
+// resolved, and its symlink-resolved real path (macOS invokes can differ).
+func drivenExecutableIdentities(binary string) []string {
+	identities := []string{binary}
+	if resolved, err := filepath.EvalSymlinks(binary); err == nil && resolved != binary {
+		identities = append(identities, resolved)
+	}
+	return identities
+}
+
 // printedCommandArguments turns one printed command line into the argv a POSIX
 // shell would hand the product, and refuses anything that is not a complete,
 // immediately runnable `gentle-ai ...` invocation.
@@ -812,8 +857,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, sddJourneys()...)
 	journeys = append(journeys, issue2891Journeys()...)
 	journeys = append(journeys, issue2696Journeys()...)
-	journeys = append(journeys, sddChainJourneys()...)
-	journeys = append(journeys, issue3094Journeys()...)
+	journeys = append(journeys, issue4210Journeys()...)
 	journeys = append(journeys, issue3065Journeys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)
@@ -825,13 +869,9 @@ func Journeys() []Journey {
 	journeys = append(journeys, lensContextBudgetJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
-	journeys = append(journeys, selectedUntrackedSDDJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, issue2031Journeys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
-	journeys = append(journeys, rescopeWriteGuardJourneys()...)
-	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)
-	journeys = append(journeys, consecutiveRescopeRepairJourneys()...)
 	journeys = append(journeys, reviewedSupersetJourneys()...)
 	journeys = append(journeys, stagedDeliveryJourneys()...)
 	journeys = append(journeys, frozenLineageResumeJourneys()...)
@@ -849,19 +889,16 @@ func Journeys() []Journey {
 	journeys = append(journeys, providerCaptureRetryJourneys()...)
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)
 	journeys = append(journeys, sddSharedScaffoldingJourneys()...)
-	journeys = append(journeys, sddPostReviewVerifyReportJourneys()...)
-	journeys = append(journeys, issue3564Journeys()...)
 	journeys = append(journeys, issue3321Journeys()...)
 	journeys = append(journeys, issue3587Journeys()...)
 	journeys = append(journeys, issue3748Journeys()...)
 	journeys = append(journeys, issue3772Journeys()...)
 	journeys = append(journeys, issue3776Journeys()...)
 	journeys = append(journeys, issue3766Journeys()...)
+	journeys = append(journeys, issue4377Journeys()...)
+	journeys = append(journeys, issue4395Journeys()...)
 	journeys = append(journeys, issue3813Journeys()...)
-	journeys = append(journeys, issue3842Journeys()...)
-	journeys = append(journeys, handoffJourneys()...)
 	journeys = append(journeys, stopHookJourneys()...)
-	journeys = append(journeys, untrackedInventoryRecoveryLoopJourneys()...)
 	journeys = removeRetiredAtomicJourneys(journeys)
 	return declareCoreJourneyReviewModes(journeys)
 }

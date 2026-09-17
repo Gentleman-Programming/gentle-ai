@@ -10,6 +10,7 @@
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
+| Linux (Fedora Silverblue) | rpm-ostree | Supported |
 | Windows 10/11 | `go install` (Go toolchain) | Supported (binary distribution held) |
 
 Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
@@ -26,13 +27,29 @@ Restart OpenCode after enabling managed activation. Restart the shell if the lau
 
 ---
 
+## Fedora Silverblue (rpm-ostree) Notes
+
+- **Package Layering and Live Application:** On Fedora Silverblue hosts, system dependencies are layered with `rpm-ostree install -y --apply-live <package>`. The `--apply-live` flag creates a transient overlayfs over `/usr` so newly installed binaries are immediately available in the active session without requiring a reboot.
+- **Precedence:** When Homebrew on Linux (`brew`) is present on an `rpm-ostree` host, Homebrew takes precedence because it installs packages entirely into user space (`/home/linuxbrew/.linuxbrew`) and does not modify the immutable sysroot. On mutable Fedora, `dnf` takes precedence when both managers are on `PATH`. On OSTree-booted Fedora Silverblue, `rpm-ostree` takes precedence over `dnf`.
+- **Degraded Path (Pending Deployments):** If an OS upgrade or prior package operation has already staged a pending deployment, `rpm-ostree` will refuse `--apply-live`. In this state, stage the installation without live-apply and reboot to apply the layered deployment:
+
+  ```bash
+  rpm-ostree install <package>
+  systemctl reboot
+  ```
+
+  Alternatively, reboot the machine first to finalize the pending deployment before retrying the installation with `--apply-live`.
+- **Validation Evidence:** Manually tested and verified on Fedora Linux 44.20260827.0 (Silverblue) with `rpm-ostree` 2026.2 (Git: 2a87ed0ffc35fd62bf2c0040cf372f33b139afa4).
+
+---
+
 ## Windows Notes
 
 - **Install from source** with Go 1.25.10+:
-  `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest`.
+  `go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest`.
 - **`gentle-ai upgrade` updates itself automatically on release channels when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
   Because `go install` writes to `GOBIN` (or `GOPATH\bin`), which is not necessarily the directory your shell resolves, the upgrade checks the destination afterwards and warns — naming both full paths — if a different `gentle-ai.exe` earlier on `PATH` would keep running.
-   On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
+   On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main`).
    Re-running either installer defaults to stable, so preserve beta explicitly: `curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta` on macOS/Linux, or `$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex` in PowerShell.
 - **Without Go on `PATH`, the upgrader fails closed.** It downloads and executes nothing, and prints the runnable `go install` command instead.
 - **Scoop and official Windows binaries are still temporarily unavailable.** No unsigned artifact is ever downloaded and `gentle-ai upgrade` never executes a remote update script.

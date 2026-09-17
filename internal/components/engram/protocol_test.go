@@ -81,6 +81,36 @@ func TestCodexCompactMatchesPreConsolidationCompactPrompt(t *testing.T) {
 	}
 }
 
+func TestRenderedProtocolUsesOnlyRuntimeSessionIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		rendered string
+	}{
+		{name: "full", rendered: protocolFull()},
+		{name: "codex instructions", rendered: codexInstructions()},
+		{name: "compact", rendered: codexCompact()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, required := range []string{
+				"workspace directory supplied by the runtime",
+				"authoritative session ID already registered by the top-level runtime",
+				"Never invent, derive, generate, or register a session ID",
+				"reuse that exact identity across compaction",
+				"omit `session_id` entirely",
+			} {
+				if !strings.Contains(tt.rendered, required) {
+					t.Errorf("rendered protocol missing required session-identity contract %q", required)
+				}
+			}
+			if strings.Contains(tt.rendered, "Call `mem_session_start`") {
+				t.Error("rendered protocol must not direct the model to register a session")
+			}
+		})
+	}
+}
+
 func TestExtractProtocolSectionBoundsAllFourMarkerPairs(t *testing.T) {
 	content := protocolAssetContent()
 
@@ -111,5 +141,64 @@ func TestExtractProtocolSectionBoundsAllFourMarkerPairs(t *testing.T) {
 		if !strings.HasPrefix(section, tt.mustHavePrefix) {
 			t.Fatalf("extractProtocolSection(%q) = %q, want prefix %q", tt.name, section[:min(40, len(section))], tt.mustHavePrefix)
 		}
+	}
+}
+
+// TestProtocolAmbiguousProjectRecoveryDistinction asserts that every rendered protocol
+// surface (full and slim) documents recovery for ambiguous_project errors, explicitly
+// separating the repository directory retry for mem_session_start from write-tool recovery
+// parameters (project, project_choice_reason, recovery_token).
+func TestProtocolAmbiguousProjectRecoveryDistinction(t *testing.T) {
+	surfaces := map[string]string{
+		"full": protocolFull(),
+		"slim": protocolSlim(),
+	}
+
+	requiredPhrases := []struct {
+		name   string
+		phrase string
+	}{
+		{"ambiguous-project-error-code", "ambiguous_project"},
+		{"session-start-target", "mem_session_start"},
+		{"session-start-directory-retry", "directory"},
+		{"session-start-unregistered-id", "unregistered"},
+		{"write-tools-target-mem-save", "mem_save"},
+		{"write-tools-target-mem-save-prompt", "mem_save_prompt"},
+		{"write-tools-target-mem-session-summary", "mem_session_summary"},
+		{"write-tools-available-projects", "available_projects"},
+		{"write-tools-project-choice-reason", "project_choice_reason=user_selected_after_ambiguous_project"},
+		{"write-tools-recovery-token", "recovery_token"},
+	}
+
+	for surfaceName, content := range surfaces {
+		t.Run(surfaceName, func(t *testing.T) {
+			for _, req := range requiredPhrases {
+				if !strings.Contains(content, req.phrase) {
+					t.Errorf("surface %q missing required phrase %q (%s)", surfaceName, req.phrase, req.name)
+				}
+			}
+
+			normalized := normalizeForSemanticMatch(content)
+
+			// Verify session start recovery binds ambiguous_project to directory retry.
+			if !strings.Contains(normalized, "`mem_session_start` fails with `ambiguous_project`") ||
+				!strings.Contains(normalized, "retry `mem_session_start` with that root as `directory`") {
+				t.Errorf("surface %q does not connect mem_session_start ambiguous_project to directory retry", surfaceName)
+			}
+
+			// Verify distinction: mem_session_start must exclude all three write-recovery parameters.
+			hasFullExclusion := strings.Contains(normalized, "`mem_session_start`") &&
+				strings.Contains(normalized, "does not accept `project`, `project_choice_reason`, or `recovery_token`")
+			hasSlimExclusion := strings.Contains(normalized, "do not pass `project`, `project_choice_reason`, or `recovery_token` to `mem_session_start`")
+			if !hasFullExclusion && !hasSlimExclusion {
+				t.Errorf("surface %q does not enforce exclusion of project, project_choice_reason, and recovery_token from mem_session_start", surfaceName)
+			}
+
+			// Verify write-tool recovery binds available_projects, project, project_choice_reason, and recovery_token.
+			if !strings.Contains(normalized, "choose exactly one value from `available_projects`") ||
+				!strings.Contains(normalized, "`project`, `project_choice_reason=user_selected_after_ambiguous_project`, and the returned `recovery_token`") {
+				t.Errorf("surface %q does not connect write-tool recovery parameters to available_projects selection", surfaceName)
+			}
+		})
 	}
 }

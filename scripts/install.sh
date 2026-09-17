@@ -277,16 +277,16 @@ install_go() {
     # bash 3.2, so piping `| bash` would fail with "bad substitution".
     local owner_lc
     owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
-    # /v2 is part of the module path, not decoration: Go refuses to resolve a
-    # module whose tags are v2.x unless the import path carries the major
+    # /v3 is part of the module path, not decoration: Go refuses to resolve a
+    # module whose tags are v3.x unless the import path carries the major
     # version suffix.
-    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/v2/cmd/${BINARY_NAME}@${version}"
+    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/v3/cmd/${BINARY_NAME}@${version}"
 
     info "Running: go install ${go_package}"
     if [ "${CHANNEL}" = "beta" ]; then
-        prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v2
-        prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v2
-        prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v2
+        prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3
+        prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3
+        prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3
         export GONOSUMDB GOPRIVATE GONOPROXY
 
         if ! go install "$go_package"; then

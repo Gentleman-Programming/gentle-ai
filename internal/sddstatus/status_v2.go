@@ -25,13 +25,12 @@ type StatusV2Projection struct {
 	ApplyState        ApplyState                   `json:"applyState"`
 	ActionContext     actionContextV2              `json:"actionContext"`
 	Relationships     relationshipsV2              `json:"relationships"`
-	RemediationState  remediationStateV2           `json:"remediationState"`
-	ReviewOffer       *ReviewOfferBlock            `json:"reviewOffer,omitempty"`
 	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
 	Archived          *ArchivedProjection          `json:"archived,omitempty"`
 	PhaseInstructions *phaseInstructionsV2         `json:"phaseInstructions,omitempty"`
 	NextRecommended   string                       `json:"nextRecommended"`
 	BlockedReasons    []string                     `json:"blockedReasons"`
+	Notes             []string                     `json:"notes"`
 }
 
 type planningHomeV2 struct {
@@ -79,18 +78,10 @@ type relationshipsV2 struct {
 	SameDomainActiveChanges []string `json:"sameDomainActiveChanges"`
 }
 
-type remediationStateV2 struct {
-	Required               bool   `json:"required"`
-	Complete               bool   `json:"complete"`
-	FailedEvidenceRevision string `json:"failedEvidenceRevision"`
-	Reason                 string `json:"reason"`
-}
-
 type phaseInstructionsV2 struct {
-	Apply     []string `json:"apply"`
-	Verify    []string `json:"verify"`
-	Remediate []string `json:"remediate"`
-	Archive   []string `json:"archive"`
+	Apply   []string `json:"apply"`
+	Verify  []string `json:"verify"`
+	Archive []string `json:"archive"`
 }
 
 // ProjectStatusV2 rejects unsupported internal values rather than exposing
@@ -115,36 +106,30 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 	}
 
 	projected := StatusV2Projection{
-		SchemaName:    status.SchemaName,
-		SchemaVersion: status.SchemaVersion,
-		ChangeName:    status.ChangeName,
-		ArtifactStore: status.ArtifactStore,
-		PlanningHome:  projectPlanningHomeV2(status.PlanningHome),
-		ChangeRoot:    status.ChangeRoot,
-		ArtifactPaths: projectArtifactPathsV2(status.ArtifactPaths),
-		ContextFiles:  projectArtifactPathsV2(status.ContextFiles),
-		Artifacts:     artifacts,
-		TaskProgress:  projectTaskProgressV2(status.TaskProgress),
-		Dependencies:  projectDependenciesV2(status.Dependencies),
-		ApplyState:    status.ApplyState,
-		ActionContext: projectActionContextV2(status.ActionContext),
-		Relationships: projectRelationshipsV2(status.Relationships),
-		RemediationState: remediationStateV2{
-			Required:               status.RemediationState.Required,
-			Complete:               status.RemediationState.Complete,
-			FailedEvidenceRevision: status.RemediationState.FailedEvidenceRevision,
-			Reason:                 status.RemediationState.Reason,
-		},
-		ReviewOffer:     status.ReviewOffer,
+		SchemaName:      status.SchemaName,
+		SchemaVersion:   status.SchemaVersion,
+		ChangeName:      status.ChangeName,
+		ArtifactStore:   status.ArtifactStore,
+		PlanningHome:    projectPlanningHomeV2(status.PlanningHome),
+		ChangeRoot:      status.ChangeRoot,
+		ArtifactPaths:   projectArtifactPathsV2(status.ArtifactPaths),
+		ContextFiles:    projectArtifactPathsV2(status.ContextFiles),
+		Artifacts:       artifacts,
+		TaskProgress:    projectTaskProgressV2(status.TaskProgress),
+		Dependencies:    projectDependenciesV2(status.Dependencies),
+		ApplyState:      status.ApplyState,
+		ActionContext:   projectActionContextV2(status.ActionContext),
+		Relationships:   projectRelationshipsV2(status.Relationships),
 		Consent:         status.Consent,
 		Archived:        status.Archived,
 		NextRecommended: status.NextRecommended,
 		BlockedReasons:  status.BlockedReasons,
+		Notes:           status.Notes,
 	}
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV2{
 			Apply: status.PhaseInstructions.Apply, Verify: status.PhaseInstructions.Verify,
-			Remediate: status.PhaseInstructions.Remediate, Archive: status.PhaseInstructions.Archive,
+			Archive: status.PhaseInstructions.Archive,
 		}
 	}
 	return projected, nil
@@ -226,7 +211,7 @@ func statusV2NextRecommended(value string) bool {
 	// phase remains, and the archived block carries the location fact. This is
 	// an additive v2 enum value; no existing value or field changes.
 	switch value {
-	case "apply", "verify", "remediate", "archive", "archived", "resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
+	case "apply", "verify", "archive", "archived", "resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
 		return true
 	default:
 		return false

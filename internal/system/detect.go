@@ -49,14 +49,23 @@ const (
 // and the refusal in EnsureSupportedPlatform names this exact list so a user
 // on a machine with none of them knows what to install.
 var linuxPackageManagers = []string{
-	"brew",   // any distribution, via Homebrew on Linux
-	"apt",    // Debian, Ubuntu, Mint, Pop!_OS, Deepin, UOS
-	"dnf",    // Fedora, RHEL, CentOS Stream, Rocky, AlmaLinux, Nobara
-	"pacman", // Arch, Manjaro, EndeavourOS
-	"apk",    // Alpine
-	"zypper", // openSUSE, SUSE Linux Enterprise
-	"nix",    // NixOS
-	"emerge", // Gentoo, Calculate
+	"brew",       // any distribution, via Homebrew on Linux
+	"apt",        // Debian, Ubuntu, Mint, Pop!_OS, Deepin, UOS
+	"dnf",        // Fedora, RHEL, CentOS Stream, Rocky, AlmaLinux, Nobara
+	"rpm-ostree", // Fedora Silverblue
+	"pacman",     // Arch, Manjaro, EndeavourOS
+	"apk",        // Alpine
+	"zypper",     // openSUSE, SUSE Linux Enterprise
+	"nix",        // NixOS
+	"emerge",     // Gentoo, Calculate
+}
+
+// isOSTreeBooted reports whether the running Linux system was booted as an
+// rpm-ostree deployment. /run/ostree-booted is created early in boot by
+// systemd/ostree on immutable systems. Package-level var for testability.
+var isOSTreeBooted = func() bool {
+	_, err := os.Stat("/run/ostree-booted")
+	return err == nil
 }
 
 // detectedToolNames is the fixed probe list passed to DetectTools: the tools
@@ -165,7 +174,22 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		// calls itself, for humans reading logs and error messages.
 		profile.LinuxDistro = osReleaseID(linuxOSRelease)
 
+		// When booted under OSTree (e.g. Fedora Silverblue), rpm-ostree is the
+		// authoritative system package manager and must win over dnf.
+		// On mutable systems, rpm-ostree must not be selected so systems with
+		// the build tool installed are not misclassified.
+		// brew remains first because userland Homebrew never mutates the sysroot.
+		isOSTree := isOSTreeBooted()
+
 		for _, manager := range linuxPackageManagers {
+			if manager == "rpm-ostree" && !isOSTree {
+				continue
+			}
+			if manager == "dnf" && isOSTree && tools["rpm-ostree"].Installed {
+				profile.PackageManager = "rpm-ostree"
+				profile.Supported = true
+				return profile
+			}
 			if tool, ok := tools[manager]; ok && tool.Installed {
 				profile.PackageManager = manager
 				profile.Supported = true

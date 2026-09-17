@@ -1,7 +1,6 @@
 ---
 description: Implement SDD tasks — writes code following specs and design
 agent: gentle-orchestrator
-subtask: true
 ---
 
 You are the `gentle-orchestrator`, not an SDD executor. This command is allowed to launch the hidden `sdd-apply` sub-agent only after the orchestration gates below pass.
@@ -36,8 +35,8 @@ If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.
 
-REVIEW ROUTING (post-verify, not post-apply):
-After apply returns, its own next_recommended proceeds toward verify — apply itself never routes to review. If the parent later observes a fresh `reviewOffer` block, it may present and run only its exact invocation. SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority; the apply executor never launches review.
+SDD CONTINUATION:
+After apply returns, its own next_recommended proceeds toward archive when tasks are complete; verification is optional — apply itself never routes to review. SDD never offers or launches RDD, including after verification. SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority; the apply executor never launches review.
 
 {{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}
 

@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -166,10 +167,12 @@ func TestReportedFalsePositiveProseDoesNotBlockEditAuthorityApply(t *testing.T) 
 	}
 }
 
-// TestFutureWorkUnitEditAuthorityRootIsInformationalNotBlocking pins #4103: a future
-// work unit (a higher leading task number, e.g. "2.1" following "1.x") that
-// genuinely targets an external root must not block the current work unit's
-// apply. Its unauthorized root is reported informationally instead.
+// TestFutureWorkUnitEditAuthorityRootIsInformationalNotBlocking pins #4103's
+// scoping fix and #4372's channel split: a future work unit (a higher leading
+// task number, e.g. "2.1" following "1.x") that genuinely targets an external
+// root must not block the current work unit's apply, and the informational
+// report of that root must travel on `notes` — never on the gated
+// `blockedReasons` a consumer contract reads as "stop".
 func TestFutureWorkUnitEditAuthorityRootIsInformationalNotBlocking(t *testing.T) {
 	workspace := t.TempDir()
 	planning := filepath.Join(workspace, "planning")
@@ -202,9 +205,44 @@ func TestFutureWorkUnitEditAuthorityRootIsInformationalNotBlocking(t *testing.T)
 	if strings.Contains(reasons, "blocked(edit_authority_missing)") {
 		t.Fatalf("future work unit's external root produced a blocking reason: %v", status.BlockedReasons)
 	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("a non-blocking informational note reached the gated blockedReasons: %v", status.BlockedReasons)
+	}
 	wantDeploy := realPath(t, deploy)
-	if !strings.Contains(reasons, "note(future_edit_roots)") || !strings.Contains(reasons, wantDeploy) {
-		t.Fatalf("blocked reasons must carry an informational future-edit-roots note naming %q: %v", wantDeploy, status.BlockedReasons)
+	notes := strings.Join(status.Notes, "\n")
+	if !strings.Contains(notes, "note(future_edit_roots)") || !strings.Contains(notes, wantDeploy) {
+		t.Fatalf("notes must carry an informational future-edit-roots note naming %q: %v", wantDeploy, status.Notes)
+	}
+
+	// The consumer-visible document is the surface that actually contradicted the
+	// contracts in #4372, so pin the split after projection too.
+	projected, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := document["notes"]; !ok {
+		t.Fatalf("v2 document omitted the notes field: %s", payload)
+	}
+	var projectedBlockers, projectedNotes []string
+	if err := json.Unmarshal(document["blockedReasons"], &projectedBlockers); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(document["notes"], &projectedNotes); err != nil {
+		t.Fatal(err)
+	}
+	if len(projectedBlockers) != 0 {
+		t.Fatalf("v2 blockedReasons retained the informational note: %v", projectedBlockers)
+	}
+	if len(projectedNotes) != len(status.Notes) {
+		t.Fatalf("v2 notes = %v, want the resolved notes %v", projectedNotes, status.Notes)
 	}
 }
 

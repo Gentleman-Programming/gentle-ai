@@ -1205,7 +1205,7 @@ func (state CompactState) CompactReviewView() (CompactReviewView, error) {
 				return CompactReviewView{}, invalidCompactReviewView("refuter outcome is unsupported")
 			}
 			view.Outcomes[finding.ID] = result.Outcome
-			if result.Outcome == OutcomeCorroborated {
+			if result.Outcome == OutcomeCorroborated || result.Outcome == OutcomeInconclusive {
 				view.FixFindingIDs = append(view.FixFindingIDs, finding.ID)
 			}
 		}
@@ -1703,9 +1703,15 @@ func validateCompactReviewInput(state CompactState, input CompactReviewInput, vi
 }
 
 func compactReviewViewHasUnresolvedFindings(view CompactReviewView) bool {
-	for _, outcome := range view.Outcomes {
+	fixSet := make(map[string]struct{}, len(view.FixFindingIDs))
+	for _, id := range view.FixFindingIDs {
+		fixSet[id] = struct{}{}
+	}
+	for id, outcome := range view.Outcomes {
 		if outcome == OutcomeInconclusive {
-			return true
+			if _, fixing := fixSet[id]; !fixing {
+				return true
+			}
 		}
 	}
 	return false

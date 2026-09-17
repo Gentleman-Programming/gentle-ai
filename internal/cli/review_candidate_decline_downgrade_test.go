@@ -20,7 +20,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // candidateDeclineDowngradeScanRoots mirrors review_pre_pr_composition_deletion_test.go's

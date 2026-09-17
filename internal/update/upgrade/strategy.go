@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary on the stable channel.
@@ -663,7 +663,7 @@ func gentleAIModulePath(tool update.ToolInfo) string {
 	// suffix: for major 2 and above the module path must end in /vN or the
 	// toolchain refuses every resolution of that repository, including the
 	// branch pseudo-versions this beta path installs.
-	return repository + "/v2"
+	return repository + "/v3"
 }
 
 func goProxyBypassEnv(base []string, module string) []string {

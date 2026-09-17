@@ -110,7 +110,7 @@ func captureAtomicBurnReviewerSlots(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	return captureAtomicReviewerSlots(r, lineage, false)
+	return captureAtomicReviewerSlotsWithTerminalVerifier(r, lineage, false, requireAtomicLastCaptureReviewerResults)
 }
 
 func requirePendingApproval(lineage string) func(*Sandbox, Observation) error {
@@ -197,13 +197,13 @@ func requireExplicitAtomicFourLensStatusFor(r *journeyRun, lineage string) error
 func atomicReviewJourneys() []Journey {
 	return []Journey{{
 		ID:     "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-		Title:  "#3797: selectorless STATUS renders a printed START, the last lens emits acknowledgement, and repeat START follows the exact burn",
-		Source: "#3797: selectorless STATUS owns compact binding; terminal approval awaits exact acknowledgement, leaves no receipt or sidecar, and delivery gates remain informational",
+		Title:  "#3797/#4453: selectorless STATUS renders a printed START, and the last lens exposes every canonical reviewer result before acknowledgement",
+		Source: "#3797 compact binding and #4453 terminal readback expose the complete admitted selected-lens results before exact acknowledgement; delivery gates remain informational",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: high-risk candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
 			{Name: "selectorless STATUS renders and executes the initial printed START", Requires: atomicReviewStatusCapability, Composite: startAtomicBurnFromSelectorlessStatus},
-			{Name: "capture every exact four-lens result; the last capture emits acknowledgement before the exact burn", Requires: captureResultCapability, Composite: captureAtomicBurnReviewerSlots},
+			{Name: "capture every exact four-lens result; the last response exposes canonical results before acknowledgement", Requires: captureResultCapability, Composite: captureAtomicBurnReviewerSlots},
 			{Name: "the exact acknowledgement leaves no reusable authority, receipt, or evidence", Requires: statusCapability, Composite: func(r *journeyRun) error {
 				return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage)
 			}},

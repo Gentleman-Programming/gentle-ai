@@ -1,6 +1,6 @@
 ---
 name: sdd-archive
-description: "Archive a completed SDD change by syncing delta specs. Trigger: orchestrator launches archive after implementation and verification."
+description: "Archive an SDD change honestly by syncing delta specs and preserving its artifacts. Trigger: orchestrator launches archive."
 disable-model-invocation: true
 user-invocable: false
 license: MIT
@@ -37,7 +37,6 @@ From the orchestrator:
 - Artifact store mode (`engram | openspec | hybrid | none`)
 - Structured status from `skills/_shared/sdd-status-contract.md`, including artifact paths, task progress, dependency states, and actionContext
 - Explicit final-state facts for work completed after intermediate artifacts were persisted (verify warnings fixed in later commits, blockers resolved, updated test counts), when the orchestrator has them
-- Any explicit intentional archive override text from the user/orchestrator
 
 ## Final-State Authority
 
@@ -47,7 +46,7 @@ The archive report is the terminal record of the cycle. It describes the state o
 
 When sources disagree about a fact, rank them — most authoritative first:
 
-1. **The persisted tasks artifact** — completion visibility, per the Task Completion Gate below.
+1. **The persisted tasks artifact** — observed completion visibility; unchecked tasks remain unchecked.
 2. **Explicit final-state facts in the orchestrator's launch prompt** — e.g. "these verify warnings were fixed in later commits", "this blocker was resolved and verification passed". The launch prompt is the most recent account of the change and outranks intermediate snapshots.
 3. **`verify-report` and `apply-progress`** — intermediate snapshots. Lowest rank: valid history of what was true at their time, never evidence of final state.
 
@@ -59,48 +58,26 @@ Reporting rules that follow:
 - Carry final numbers (test counts, warnings, open issues) from the highest-ranked source that covers them; do not copy numbers from `verify-report` or `apply-progress` when later work changed them.
 - Never merge distinct defects or failures into a single causal story. A cause is recorded as confirmed only with evidence; otherwise record the failure as undiagnosed.
 
-This hierarchy governs how the archive REPORTS facts. CRITICAL issues in `verify-report` still block archive with no prompt override (a claim that a CRITICAL was fixed requires re-running `sdd-verify`, not a prompt assertion), and the Task Completion Gate below remains authoritative.
+This hierarchy governs reporting, not admission. Missing, stale, malformed, or failed optional reports and unfinished tasks do not block archive. Record unresolved findings and incomplete work without claiming they passed or were completed.
 
 ## Execution and Persistence Contract
 
 > Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, and `sdd/{change-name}/verify-report` (all required). Record all observation IDs actually read in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
+- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, and `sdd/{change-name}/verify-report` when available; verification is optional. Record all observation IDs actually read in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
 - **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Perform merge and archive folder moves.
 - **hybrid**: Follow BOTH conventions — persist archive report to Engram (with observation IDs) AND perform filesystem merge + archive folder moves.
 - **none**: Return closure summary only. Do not perform archive file operations.
 
 ### Archive Readiness
 
-Before any task reconciliation, spec sync, or archive move, require structured status. Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`. A post-verify `reviewOffer` is an invitation only and is never read as archive state.
+Before any spec sync or archive move, require structured status. Use refreshed native SDD status and preserve actual edit permissions. Completed implementation normally recommends archive; an explicit archive request may close unfinished work without a verification certificate. SDD never offers or launches RDD; review mode is not archive state.
 
-The Task Completion Gate and strict independent verification decide whether archive can proceed; ordinary repository policy decides delivery.
+Archive records actual progress and findings; ordinary repository policy decides delivery.
 
-### Task Completion Gate
+### Honest Partial Archive
 
-`sdd-apply` is responsible for marking completed tasks in the persisted tasks artifact. `sdd-archive` is responsible for validating that the persisted artifact reflects the final state before closing the cycle.
-
-Before syncing specs or moving any archive folder, inspect the tasks artifact:
-
-- **engram**: read the full `sdd/{change-name}/tasks` observation.
-- **openspec/hybrid**: read `openspec/changes/{change-name}/tasks.md`.
-
-If any implementation task remains unchecked (`- [ ]`):
-
-1. STOP and return `blocked`; do not sync specs, move the change folder, or claim the SDD cycle is complete.
-2. Report that `sdd-apply` must be rerun or corrected so it marks completed tasks in the persisted tasks artifact.
-3. Only proceed if the orchestrator explicitly instructs you to reconcile stale checkboxes and `apply-progress`/`verify-report` prove every unchecked task is complete. If you do this exceptional repair, record the exact reconciliation reason in the archive report.
-
-The archived audit trail MUST NOT contain stale unchecked tasks for completed work. Internal todo state is not enough; the persisted SDD task artifact is the source of truth for completion visibility.
-
-### Strict-vs-OpenSpec Archive Policy
-
-OpenSpec permits archiving with incomplete artifacts or tasks after a user confirmation. gentle-ai is stricter by default:
-
-- Incomplete implementation tasks block archive unless they are stale checkboxes and apply-progress/verify-report prove completion.
-- CRITICAL issues in `verify-report` always block archive. Do not accept an override for CRITICAL verification issues.
-- `sdd-archive` does not own normal task completion. `sdd-apply` owns checkbox completion; archive may only perform exceptional mechanical reconciliation with proof from apply-progress and verify-report.
-- Missing proposal/spec/design artifacts should be reported. Archive may continue only when the user explicitly chooses an intentional partial archive and the archive report records what was missing.
+Read the available tasks and reports before closure. Record completed and unfinished tasks, missing artifacts, unresolved findings, and unrun checks. Do not repair checkboxes or rewrite historical reports during archive. Archive may close incomplete work; it must never describe that work as fully implemented or verified. No additional waiver or verification verdict is required.
 
 ### Action Context Guard
 
@@ -123,7 +100,7 @@ Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
 
 ### Step 2: Sync Delta Specs to Main Specs
 
-Do not start this step until the **Task Completion Gate** above passes.
+Inspect available delta specs; preserve edit permissions and the mechanical safety checks below.
 
 **IF mode is `engram`:** Skip filesystem sync — artifacts live in Engram only. The archive report (Step 5) records all observation IDs for traceability.
 
@@ -311,14 +288,14 @@ Never automatically delete, overwrite, or merge the outer archive directory. If 
 **IF mode is `openspec` or `hybrid`:** The Mechanical Copy Contract above is the verification: the verbatim `diff -r` output from Steps 2 and 3 MUST appear in the phase result, and an empty diff is the only passing evidence. In addition, confirm:
 - [ ] Main specs updated correctly
 - [ ] Change folder moved to archive
-- [ ] Archive contains all artifacts (proposal, specs, design, tasks)
-- [ ] Archived `tasks.md` has no unchecked implementation tasks, unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof
+- [ ] Archive preserves all artifacts that existed; missing artifacts are reported
+- [ ] Archived tasks retain their original bytes; completed and unfinished counts are reported honestly
 - [ ] Active changes directory no longer has this change
 - [ ] Verbatim `diff -r` readback output is included in the result and is empty (no differences)
 
 A failed or skipped `diff -r` FAILS the phase regardless of the checkboxes above — agent self-report is never sufficient evidence of byte-identity.
 
-**IF mode is `engram`:** Confirm all artifact observation IDs are recorded in the archive report and the tasks observation has no unchecked implementation tasks unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof.
+**IF mode is `engram`:** Confirm available artifact observation IDs are recorded in the archive report; preserve the tasks observation and report unfinished work and diagnostic findings honestly.
 
 **IF mode is `none`:** Skip verification — no persisted artifacts.
 
@@ -347,18 +324,18 @@ Return to the orchestrator:
 | {domain} | Created/Updated | {N added, M modified, K removed requirements} |
 
 ### Archive Contents
-- proposal.md ✅
-- specs/ ✅
-- design.md ✅
-- tasks.md ✅ ({N}/{N} tasks complete)
+- proposal.md: {observed present/missing; do not infer completion}
+- specs/: {observed present/missing; do not infer completion}
+- design.md: {observed present/missing; do not infer completion}
+- tasks.md: {present/missing}, {completed}/{total} tasks complete; {pending} unfinished
 
 ### Source of Truth Updated
 The following specs now reflect the new behavior:
 - `openspec/specs/{domain}/spec.md`
 
 ### SDD Cycle Complete
-The change has been fully planned, implemented, verified, and archived.
-Ready for the next change.
+The change is archived. Implementation: {actual state}. Verification: {not run / partial / actual results}.
+Unfinished tasks and unresolved findings: {list or none observed}.
 ```
 
 ## Rules
@@ -367,9 +344,6 @@ Ready for the next change.
 - After every archive copy or move, run `diff -r` (source vs. destination, archive-report additive-only) and include its verbatim output in the phase result; an empty diff is the only passing evidence, and a skipped/missing `diff -r` FAILS the phase
 - If shell access is unavailable for mechanical copy, STOP and report `blocked` — do NOT fall back to Read/Write copying
 - The archive report reflects FINAL state per the Final-State Authority hierarchy: never echo stale `verify-report`/`apply-progress` claims as current facts, and record unrankable contradictions explicitly instead of resolving them silently
-- NEVER archive a change that has CRITICAL issues in its verification report
-- If the user explicitly approves a non-critical partial archive or stale-checkbox reconciliation, record the exact reason in the archive report and mark the archive as intentional-with-warnings
-- NEVER archive completed work while `tasks.md` / the tasks observation still shows stale unchecked implementation tasks
 - ALWAYS sync delta specs BEFORE moving to archive
 - When merging into existing specs, PRESERVE requirements not mentioned in the delta
 - Use ISO date format (YYYY-MM-DD) for archive folder prefix

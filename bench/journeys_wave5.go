@@ -87,5 +87,5 @@ func waveFiveJourneys() []Journey {
 			},
 		},
 	}
-	return append(journeys, revisionCanonJourneys()...)
+	return journeys
 }

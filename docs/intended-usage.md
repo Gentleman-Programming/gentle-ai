@@ -12,7 +12,7 @@ This page explains how gentle-ai is meant to be used. Not the flags, not the arc
 
 Once you run `gentle-ai` and select your agent(s), components, and preset, the ecosystem is configured for normal use. You do not need to memorize SDD phases, hand-edit generated config files, or manually wire the agent workflow.
 
-Open your AI agent in a project and start working. For richer project context, the agent may run `/sdd-init` or refresh the skill registry automatically when SDD needs it. You can also run those manually, but they are not required for basic usage.
+Open your AI agent in a project and describe the outcome. Organic Driven Development (ODD) is the everyday path; it does not need `/sdd-init`. Project initialization belongs to an explicitly selected SDD workflow, not ordinary implementation or TDD detection.
 
 ---
 
@@ -39,19 +39,21 @@ For full documentation: [github.com/Gentleman-Programming/engram](https://github
 
 ---
 
-## SDD (Spec-Driven Development) -- It Happens Organically
+## ODD (Organic Driven Development) -- The Everyday Path
 
-SDD is a structured planning workflow for substantial features. It has phases (explore, propose, spec, design, implement, verify), but you do NOT need to learn any of them.
+Describe the outcome, such as "Add CSV export using the existing report filters." The agent explores, resolves only real decisions, implements within your authorization, and checks the result. Read-only requests stay read-only; small, understood changes need no durable task artifacts. Substantial work can use focused workers without becoming SDD.
 
-Here's how it actually works:
+One `odd/tasks/<feature-name>.md` holds objective/problem/why, scope/constraints, actionable tasks, evidence, progress, next step, and meaningful accepted-change rationale. A full project-scoped Engram copy at `odd/<feature-name>/tasks` retains its file locator. Accepted changes revise intent and affected tasks, preserve valid completed work, and explain reopened items. Findings alone do not authorize scope expansion.
 
-- **Small request?** The agent just does it. No ceremony.
-- **Substantial feature?** The agent will suggest using SDD to plan it properly -- exploring the codebase, proposing an approach, designing the architecture, then implementing step by step.
-- **Want SDD explicitly?** Just say "use sdd" or "hazlo con sdd" and the agent starts the workflow.
+Before implementation or resume, the parent reads both copies, reconciles current evidence, and forwards the locator and relevant context; workers read the document before edits. Unavailable memory leaves explicit pending synchronization, not invented success. [ODD details](usage.md#organic-driven-development-odd) cover conflicts and partial progress.
 
-The agent handles all the phases internally. You just review and approve at key decision points.
+TDD mode, source, and exact runner come from existing configuration or explicit user choice and are forwarded to workers, then refreshed on resume. Tests existing does not enable TDD. Enabled means observed RED → GREEN → REFACTOR; disabled still requires functional checks. RDD is separate, opt-in, and user-owned at deliverable boundaries.
 
-If you want the project-level OpenSpec config convention SDD phases use for conventions, strict TDD, and testing metadata, see [OpenSpec Config for SDD](openspec-config.md).
+### When to choose SDD instead
+
+Spec-Driven Development remains supported when you explicitly want separate proposal, spec, design, tasks, and verification artifacts. Those phases and handoffs add coordination, so they are not the everyday recommendation when one feature document is enough. Size, uncertainty, and risk alone never select SDD; research and clarification can stay in ODD.
+
+Say "use SDD" when you want that workflow. The agent coordinates its phases under the chosen execution mode. For its project configuration, see [OpenSpec Config for SDD](openspec-config.md).
 
 ---
 
@@ -91,7 +93,7 @@ For the complete support matrix, see [Supported Agents](agents.md).
 
 ## Sub-Agents -- Smarter Than You Think
 
-When the orchestrator delegates work to a sub-agent (say, `sdd-explore` to investigate a codebase), that sub-agent is not a dumb executor running a single script. It's a full agent with its own session, tools, and context.
+When the orchestrator delegates work to a sub-agent (an ODD exploration worker, or `sdd-explore` inside selected SDD), that sub-agent is not a dumb executor running a single script. It's a full agent with its own session, tools, and context.
 
 What makes them "super sub-agents":
 
@@ -168,8 +170,41 @@ The less you think about gentle-ai after installing, the better it's working.
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Run the installer, pick your agents and preset             | Manually edit the generated config files                                          |
 | Just start coding with your AI agent                       | Memorize SDD phases or commands                                                   |
-| Let the agent suggest SDD when a task is big enough        | Force SDD on every small task                                                     |
+| Use ODD for everyday work, including substantial features | Select SDD automatically because of size, uncertainty, or risk                    |
 | Trust that engram is saving context when installed and active | Dig into engram's storage unless you need `engram sync` or `engram tui`           |
 | Let startup hooks or SDD init refresh the skill registry      | Manually rescan skills unless you need `gentle-ai skill-registry refresh --force` |
 | Say "use sdd" if you know you want structured planning     | Worry about which SDD phase comes next                                            |
 | Re-run the installer to update or change your setup        | Manually patch skill files or persona instructions                                |
+
+---
+
+## The SDD cycle, end to end
+
+You never need this diagram to use SDD -- the agent drives the phases. It is here for when you want to see the whole machine at once.
+
+```mermaid
+flowchart TD
+    A["User: sdd-new / sdd-explore<br/>(gentle-sdd-* in Claude Code)"] --> B["Explore<br/>investigate codebase and approaches"]
+    B --> BR{"External research<br/>selected?"}
+    BR -->|"yes"| BX["Research<br/>optional source-backed findings<br/>authorized tools · honest limitations"]
+    BR -->|"no"| C["Propose<br/>intent · scope · approach"]
+    BX --> C
+    C --> D{"User approves<br/>the proposal?"}
+    D -->|"no"| B
+    D -->|"yes"| E["Spec<br/>requirements + scenarios"]
+    E --> F["Design<br/>architecture decisions"]
+    F --> G["Tasks<br/>ordered deliverable checklist"]
+    G --> H["Apply<br/>sub-agent implements against specs"]
+    H --> V{"Optional verification<br/>requested?"}
+    V -->|"yes"| Q["Verify<br/>report findings and missing evidence honestly"]
+    V -->|"no"| W{"Implementation complete?"}
+    Q --> W
+    W -->|"no"| H
+    W -->|"yes"| R["Archive<br/>preserve task truth · safe spec merge"]
+    R --> S["Ordinary repository policy"]
+    S --> T["Commit → Push → PR"]
+
+    style T fill:#2D4F67,color:#fff
+```
+
+SDD never offers, launches, or consumes RDD. Completed implementation proceeds directly to archive; verification is optional; standalone organic RDD remains separate. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.

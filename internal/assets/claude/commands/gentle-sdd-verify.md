@@ -11,29 +11,29 @@ CONTEXT:
 - Artifact store mode: engram
 
 TASK:
-Verify the active SDD change. Read the proposal, specs, design, and tasks artifacts. Then:
+Verify the active SDD change. Read the available proposal, specs, design, and tasks artifacts. Then:
 
-This is the single independent requirements/runtime final verification — it runs directly with no review-state prerequisite. A contradiction or failing check escalates; it never launches another review/refuter/fix loop. After verify returns, rerun native SDD status and route only from its refreshed `nextRecommended`. Present the post-verify review offer only if that refreshed status contains a fresh `reviewOffer` block; if it is absent, proceed toward archive with no review ceremony — do not call `gentle-ai review status` and do not fabricate an offer.
+This is optional practical verification, including partial diagnostics, with no review-state prerequisite. Report findings without an automatic review/refuter/fix loop. After verify returns, rerun native SDD status and route only from its refreshed `nextRecommended`. Completed implementation normally proceeds toward archive regardless of diagnostic findings; unfinished implementation normally returns to apply. Do not offer or invoke RDD; do not call `gentle-ai review status`.
 
 STATUS GATE:
-Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Continue only when tasks and implementation evidence exist. If status reports `workspace-planning`, STOP and explain that full workspace implementation verification is not supported in this slice. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
+Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Missing inputs limit conclusions, not useful partial diagnostics; report missing artifacts and unavailable checks honestly, and never invent passing checks or completed tasks. If status reports `workspace-planning`, STOP and explain that full workspace implementation verification is not supported in this slice. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
 
 ENGRAM PERSISTENCE (artifact store mode: engram):
-CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
+CRITICAL: mem_search returns 300-char PREVIEWS, not full content. Call mem_get_observation(id) for every found artifact; do not invent IDs for missing artifacts.
 STEP A — SEARCH (get IDs only):
   mem_search(query: "sdd/{change-name}/spec", project: "{project}") → save spec_id
   mem_search(query: "sdd/{change-name}/design", project: "{project}") → save design_id
   mem_search(query: "sdd/{change-name}/tasks", project: "{project}") → save tasks_id
-STEP B — RETRIEVE FULL CONTENT (mandatory):
-  mem_get_observation(id: spec_id) → full spec
-  mem_get_observation(id: design_id) → full design
-  mem_get_observation(id: tasks_id) → full tasks
+STEP B — RETRIEVE FULL CONTENT FOR FOUND ARTIFACTS:
+  if spec_id exists: mem_get_observation(id: spec_id) → full spec
+  if design_id exists: mem_get_observation(id: design_id) → full design
+  if tasks_id exists: mem_get_observation(id: tasks_id) → full tasks
 Save report:
   mem_save(title: "sdd/{change-name}/verify-report", topic_key: "sdd/{change-name}/verify-report", type: "architecture", project: "{project}", capture_prompt: false, content: "{verification report}")
   Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 Then:
-1. Check completeness — are all tasks done?
+1. Report observed completed and unfinished tasks without changing their state.
 2. Check correctness — does code match specs?
 3. Check coherence — were design decisions followed?
 4. Run tests and build (real execution)

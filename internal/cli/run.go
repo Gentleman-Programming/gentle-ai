@@ -15,33 +15,35 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	codexagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
 
 type InstallResult struct {
@@ -62,17 +64,18 @@ type InstallResult struct {
 }
 
 var (
-	osUserHomeDir                = os.UserHomeDir
-	osSetenv                     = os.Setenv
-	osStat                       = os.Stat
-	runCommand                   = executeCommand
-	cmdLookPath                  = exec.LookPath
-	streamCommandOutput          = true
-	goEnv                        = defaultGoEnv
-	installCommunityTool         = communitytool.Install
-	installCommunityToolWithHome = communitytool.InstallWithHome
-	injectSDD                    = sdd.Inject
-	pathEnvEntries               = func(profile system.PlatformProfile) []string {
+	osUserHomeDir                         = os.UserHomeDir
+	osSetenv                              = os.Setenv
+	osStat                                = os.Stat
+	runCommand                            = executeCommand
+	cmdLookPath                           = exec.LookPath
+	streamCommandOutput                   = true
+	goEnv                                 = defaultGoEnv
+	installCommunityTool                  = communitytool.Install
+	installCommunityToolWithHome          = communitytool.InstallWithHome
+	installCommunityToolWithHomeAndAgents = communitytool.InstallWithHomeAndAgents
+	injectSDD                             = sdd.Inject
+	pathEnvEntries                        = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
 	addUserPath          = system.AddToUserPath
@@ -658,6 +661,7 @@ type installRuntime struct {
 }
 
 type runtimeState struct {
+	telemetryRollback        func() error
 	manifest                 backup.Manifest
 	rollbackSnapshotDir      string
 	piCodeGraph              *communitytool.PiCodeGraphResult
@@ -715,7 +719,6 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 	}
 
 	workspaceDir, _ := os.Getwd()
-	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, resolved.Agents)
 
 	return &installRuntime{
 		homeDir:      homeDir,
@@ -749,7 +752,14 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir})
+	telemetryDir := openCodeTelemetryConfigDir(r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents)
+	if telemetryDir != "" {
+		prepare = append([]pipeline.Step{openCodeTelemetryStep{id: "prepare:opencode-telemetry", configDir: telemetryDir, checkOnly: true}}, prepare...)
+	}
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
+	if telemetryDir != "" {
+		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
+	}
 	if r.backgroundActivation != nil {
 		apply = append(apply, openCodeBackgroundActivationStep{id: "opencode:background-activation", plan: r.backgroundActivation, state: r.state, ready: &r.runtimeReady})
 	}
@@ -776,7 +786,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
 	}
 
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
@@ -870,10 +880,19 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
 
-	// Pi (and any future agent without a managed system prompt) owns its own
-	// prompt delivery outside gentle-ai, so there is nothing to strip or
-	// inject here: skip the step entirely rather than writing routing
-	// guidance into a file gentle-ai does not own (issue #4063).
+	// Pi owns its prompt delivery, but old installs left only allowlisted
+	// Gentle AI sections in APPEND_SYSTEM.md. Retire those before skipping prompt
+	// injection so install and every sync path converge without recreating routing.
+	if adapter.Agent() == model.AgentPi {
+		result, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter)
+		if err != nil {
+			return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
+		}
+		if s.changedFiles != nil && result.Changed {
+			*s.changedFiles = append(*s.changedFiles, result.Files...)
+		}
+		return nil
+	}
 	if !adapter.SupportsSystemPrompt() {
 		return nil
 	}
@@ -1171,10 +1190,11 @@ func (s prepareBackupStep) Run() error {
 }
 
 type rollbackRestoreStep struct {
-	id           string
-	state        *runtimeState
-	homeDir      string
-	workspaceDir string
+	id                 string
+	state              *runtimeState
+	homeDir            string
+	workspaceDir       string
+	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -1208,11 +1228,29 @@ func (s rollbackRestoreStep) Run() error {
 
 func (s rollbackRestoreStep) Rollback() error {
 	defer s.state.cleanupRollbackSnapshot()
-	if len(s.state.manifest.Entries) == 0 {
-		return nil
+	manifest := s.state.manifest
+	var telemetryErr error
+	roots := rollbackRoots(s.homeDir, s.workspaceDir)
+	if s.telemetryConfigDir != "" {
+		roots = append(roots, s.telemetryConfigDir)
+		// The retained journals, never the generic backup, own this pair's rollback.
+		// Exclude even when its apply step failed or never ran: restoring an absent
+		// snapshot entry would otherwise delete a concurrent user's new file.
+		protected := telemetryruntime.ManagedPaths(s.telemetryConfigDir)
+		manifest.Entries = nil
+		for _, entry := range s.state.manifest.Entries {
+			if filepath.Clean(entry.OriginalPath) != protected[0] && filepath.Clean(entry.OriginalPath) != protected[1] {
+				manifest.Entries = append(manifest.Entries, entry)
+			}
+		}
+		if s.state.telemetryRollback != nil {
+			telemetryErr = s.state.telemetryRollback()
+		}
 	}
-
-	return backup.RestoreService{Roots: rollbackRoots(s.homeDir, s.workspaceDir)}.Restore(s.state.manifest)
+	if len(manifest.Entries) == 0 {
+		return telemetryErr
+	}
+	return errors.Join(telemetryErr, (backup.RestoreService{Roots: roots}).Restore(manifest))
 }
 
 // rollbackRoots returns the directories this install/sync run could
@@ -1222,8 +1260,8 @@ func (s rollbackRestoreStep) Rollback() error {
 //
 // homeDir is always included. workspaceDir is included too when set and
 // distinct from homeDir: componentInjectionDirScoped resolves most
-// component targets there under ScopeWorkspace, and OpenClaw resolves its
-// workspace independent of --scope entirely (resolveOpenClawWorkspaceDir).
+// component targets there under ScopeWorkspace, while project tools retain
+// their cwd independently of agent artifact scope.
 // Both values are exactly what backupTargets/syncBackupTargets used to
 // compute what this run actually snapshotted, so allowing rollback to
 // write within them is not wider than what this run could already do.
@@ -1241,6 +1279,37 @@ type agentInstallStep struct {
 	homeDir  string
 	profile  system.PlatformProfile
 	progress pipeline.ProgressFunc
+}
+
+func openCodeTelemetryConfigDir(home, workspace string, scope InstallScope, agentIDs []model.AgentID) string {
+	if !containsAgent(agentIDs, model.AgentOpenCode) {
+		return ""
+	}
+	adapter := opencodeagent.NewAdapter()
+	return adapter.GlobalConfigDir(componentInjectionDirScoped(home, workspace, scope, adapter))
+}
+
+type openCodeTelemetryStep struct {
+	state        *runtimeState
+	id           string
+	configDir    string
+	changedFiles *[]string
+	checkOnly    bool
+}
+
+func (s openCodeTelemetryStep) ID() string { return s.id }
+func (s openCodeTelemetryStep) Run() error {
+	if s.checkOnly {
+		return telemetryruntime.CheckManaged(s.configDir)
+	}
+	changed, rollback, err := telemetryruntime.ReconcileWithRollback(s.configDir)
+	if s.state != nil {
+		s.state.telemetryRollback = rollback
+	}
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, changed...)
+	}
+	return err
 }
 
 type openCodePluginInstallStep struct {
@@ -1329,13 +1398,24 @@ type communityToolInstallStep struct {
 	tool         model.CommunityToolID
 	workspaceDir string
 	homeDir      string
+	agents       []model.AgentID
 	state        *runtimeState
 }
 
 func (s communityToolInstallStep) ID() string { return s.id }
 
 func (s communityToolInstallStep) Run() error {
-	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath))
+	var runner communitytool.Runner = communitytool.RunnerFunc(runCommand)
+	if s.tool == model.CommunityToolRTK {
+		runner = rtkHomeRunner{homeDir: s.homeDir}
+	}
+	var result communitytool.Result
+	var err error
+	if s.tool == model.CommunityToolRTK {
+		result, err = installCommunityToolWithHomeAndAgents(s.tool, s.workspaceDir, s.homeDir, s.agents, runner, communitytool.DetectorFunc(cmdLookPath))
+	} else {
+		result, err = installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, runner, communitytool.DetectorFunc(cmdLookPath))
+	}
 	if err != nil {
 		return fmt.Errorf("install community tool %q: %w", s.tool, err)
 	}
@@ -1343,6 +1423,35 @@ func (s communityToolInstallStep) Run() error {
 		s.state.piCodeGraph = result.PiCodeGraph
 	}
 	return nil
+}
+
+type rtkHomeRunner struct{ homeDir string }
+
+func (r rtkHomeRunner) Run(name string, args ...string) error { return r.run(nil, name, args...) }
+
+func (r rtkHomeRunner) RunWithEnv(environment map[string]string, name string, args ...string) error {
+	return r.run(environment, name, args...)
+}
+
+func (r rtkHomeRunner) run(environment map[string]string, name string, args ...string) error {
+	command := exec.Command(name, args...)
+	system.EnsureCommandDir(command)
+	command.Env = overrideCommandEnvironment(os.Environ(), rtkHomeEnvironment(r.homeDir, environment))
+	output, err := command.CombinedOutput()
+	if err != nil && len(output) > 0 {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return err
+}
+
+func rtkHomeEnvironment(homeDir string, environment map[string]string) map[string]string {
+	overrides := make(map[string]string, len(environment)+2)
+	for key, value := range environment {
+		overrides[key] = value
+	}
+	overrides["HOME"] = homeDir
+	overrides["XDG_CONFIG_HOME"] = filepath.Join(homeDir, ".config")
+	return overrides
 }
 
 func (s componentApplyStep) ID() string {
@@ -1625,7 +1734,7 @@ func (s componentApplyStep) Run() error {
 			}
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {
-				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+				_, err = engram.InjectWithPromptDir(s.homeDir, componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter), adapter)
 			} else {
 				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 				if s.scope == ScopeWorkspace {
@@ -1655,9 +1764,6 @@ func (s componentApplyStep) Run() error {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
 				}
-				if _, err := sdd.RetirePiSystemPromptBlocks(s.homeDir, adapter); err != nil {
-					return fmt.Errorf("retire stale Pi system prompt blocks: %w", err)
-				}
 				continue
 			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
@@ -1685,10 +1791,12 @@ func (s componentApplyStep) Run() error {
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 				CodexPhaseModelAssignments:  s.selection.CodexPhaseModelAssignments,
-				WorkspaceDir:                s.workspaceDir,
 				StrictTDD:                   s.selection.StrictTDD,
 				Profiles:                    s.selection.Profiles,
 				CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
+			}
+			if s.scope == ScopeWorkspace {
+				opts.WorkspaceDir = s.workspaceDir
 			}
 			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
 			if _, err := injectSDD(targetDir, adapter, s.selection.SDDMode, opts); err != nil {
@@ -2074,6 +2182,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
 	managesSDDPlugins := false
+	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, scope, resolved.Agents); configDir != "" {
+		for _, path := range telemetryruntime.ManagedPaths(configDir) {
+			paths[path] = struct{}{}
+		}
+	}
 
 	for _, component := range resolved.OrderedComponents {
 		managesSDDPlugins = managesSDDPlugins || component == model.ComponentSDD
@@ -2155,12 +2268,22 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				paths[adapter.SystemPromptFile(homeDir)] = struct{}{}
+			}
+		}
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
 	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
+			paths[path] = struct{}{}
+		}
+	}
+	if selection.HasCommunityTool(model.CommunityToolRTK) {
+		for _, path := range communitytool.RTKManagedPathsForAgents(homeDir, resolved.Agents) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -2308,9 +2431,13 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			case model.StrategyTOMLFile:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
 					paths = append(paths, p)
-					// Track the gentle-ai SDD profile files written alongside
-					// the Codex config.toml so they are removed on uninstall.
+					// Track the gentle-ai files written alongside the Codex config.toml
+					// so they are restored on rollback and removed on uninstall.
 					codexHomeDir := filepath.Dir(p)
+					paths = append(paths,
+						filepath.Join(codexHomeDir, "engram-instructions.md"),
+						filepath.Join(codexHomeDir, "engram-compact-prompt.md"),
+					)
 					paths = append(paths, codexagent.SddProfilePaths(codexHomeDir)...)
 				}
 			}
@@ -2526,24 +2653,14 @@ func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapte
 // componentInjectionDirScoped returns the directory to inject component files for the given adapter,
 // taking the install scope into account. When scope is ScopeWorkspace, agent-scoped
 // components write to workspaceDir instead of the selected agent's global config root.
-// OpenClaw always uses workspaceDir when set, independent of scope.
 func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
-	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) != "" {
-		return workspaceDir
-	}
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
 }
 
 // piPersonaConfigRoots returns the roots whose Pi persona state is managed by
-// install. Global install keeps its global fallback and seeds the active
-// workspace so Pi sees the selected persona immediately; workspace install is
-// limited to the workspace root like every other scoped component.
+// install. Like every scoped component, global install writes only to home.
 func piPersonaConfigRoots(homeDir, workspaceDir string, scope InstallScope) []string {
-	roots := []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
-	if scope == ScopeGlobal && strings.TrimSpace(workspaceDir) != "" && filepath.Clean(workspaceDir) != filepath.Clean(homeDir) {
-		roots = append(roots, workspaceDir)
-	}
-	return roots
+	return []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
 }
 
 func piPersonaConfigPaths(homeDir, workspaceDir string, scope InstallScope) []string {
@@ -2580,44 +2697,6 @@ func communityToolIDsToStrings(tools []model.CommunityToolID) []string {
 		result = append(result, string(tool))
 	}
 	return result
-}
-
-type openClawWorkspaceConfig struct {
-	Agents struct {
-		Defaults struct {
-			Workspace string `json:"workspace"`
-		} `json:"defaults"`
-	} `json:"agents"`
-}
-
-func resolveOpenClawWorkspaceDir(homeDir, fallback string, agentIDs []model.AgentID) string {
-	if !containsAgent(agentIDs, model.AgentOpenClaw) {
-		return fallback
-	}
-
-	configPath := filepath.Join(homeDir, ".openclaw", "openclaw.json")
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		return fallback
-	}
-
-	var config openClawWorkspaceConfig
-	if err := json.Unmarshal(content, &config); err != nil {
-		return fallback
-	}
-
-	workspace := strings.TrimSpace(config.Agents.Defaults.Workspace)
-	if workspace == "" {
-		return fallback
-	}
-	if filepath.IsAbs(workspace) {
-		return filepath.Clean(workspace)
-	}
-	abs, err := filepath.Abs(workspace)
-	if err != nil {
-		return filepath.Clean(workspace)
-	}
-	return abs
 }
 
 func componentPathDir(homeDir, workspaceDir string, adapter agents.Adapter, component model.ComponentID) string {

@@ -3,15 +3,16 @@
 <- [Back to README](../README.md)
 
 Ask for the outcome. Gentle AI™ keeps already-understood work inline, delegates only
-the actions that benefit from fresh context, and offers SDD only when durable
-planning would materially reduce uncertainty. Native providers own verification,
-review mechanics, and lifecycle authority; ordinary repository policy owns delivery.
+the actions that benefit from fresh context, and uses [Organic Driven Development
+(ODD)](usage.md#organic-driven-development-odd) for everyday work. SDD is an explicit
+choice when its separate planning artifacts are wanted, not an ambiguity resolver.
+Native providers own verification, review mechanics, and lifecycle authority; ordinary repository policy owns delivery.
 
 ## Quick path
 
 1. Describe the outcome in natural language.
 2. Gentle AI uses the smallest useful implementation route: direct inline,
-   delegated direct, or an optional SDD proposal.
+   delegated direct ODD, or explicitly selected SDD.
 3. The normal interaction reports only **Working**, **Checking**, **Ready**, or
    **Needs your decision**.
 
@@ -26,7 +27,7 @@ verification cost or external side effects, accepted residual risk, or delivery.
 |---|---|---|
 | **Direct inline** | Deciding or verifying requires **1–3 files**; or the change is **one mechanical, already-understood file** with no research or unresolved design decision. | Keep the bounded action inline. |
 | **Delegated direct** | Understanding requires **4+ files**; reading prepares a write; broad research is needed; or a writer must change **2+ non-trivial files**. | Delegate the narrow exploration and/or one writer needed for that action. |
-| **Optional SDD** | The work has substantial ambiguity, or durable proposal, spec, design, or task artifacts would materially reduce uncertainty. | Propose SDD. Select it only after an explicit request or an accepted proposal. |
+| **Optional SDD** | The user explicitly wants separate proposal, spec, design, tasks, and verification artifacts. | Select only after an explicit request or accepted proposal, never from size, ambiguity, or risk alone. |
 
 The file counts describe the context needed for the current action, not a risk
 score and not an SDD threshold. Risk may strengthen native verification or
@@ -37,10 +38,10 @@ actors may use fresh workers without changing the implementation route or
 creating an SDD run. Direct and delegated work create no SDD artifacts, phase
 attempts, or synthetic SDD lifecycle.
 
-If apparently simple work reveals substantial ambiguity, Gentle AI may offer SDD
-at the next safe boundary. Declining it leads to a safely reduced scope, a
-justified direct or delegated route, or **Needs your decision**—never silent SDD
-enrollment.
+If work reveals uncertainty, use optional scoped research or clarify the affected
+decision within ODD. Do not recommend SDD merely to resolve ambiguity. Its extra
+phases and artifact handoffs are useful when explicitly wanted, not a prerequisite
+for substantial work. No silent SDD enrollment.
 
 ## Native progress and authority
 
@@ -84,7 +85,7 @@ user's behalf. Review context may remain visible when available, but it never
 authorizes or blocks commit, push, PR, release, or archive. Native delivery gates
 report `disabled/unmanaged` when no exact receipt applies and never fabricate approval.
 
-In stable [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0) and unreleased `main`, disabled SDD status skips review authority and leaves `reviewGate` structurally absent. Pre-verify continues without routing to review. When visible, `reviewGate` is informational only; SDD requirements, tasks, and verification determine archive readiness, while ordinary repository policy owns delivery. Native compatibility commands may report `disabled/unmanaged` review context, but no receipt state or validation result governs delivery. See the [SDD status contract](../internal/assets/skills/_shared/sdd-status-contract.md).
+In stable [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0) and unreleased `main`, disabled SDD status skips review authority and leaves `reviewGate` structurally absent. Pre-verify continues without routing to review. When visible, `reviewGate` is informational only; SDD archive preserves actual task and diagnostic history without requiring a verification certificate, while ordinary repository policy owns delivery. Native compatibility commands may report `disabled/unmanaged` review context, but no receipt state or validation result governs delivery. See the [SDD status contract](../internal/assets/skills/_shared/sdd-status-contract.md).
 
 ## Review store reset
 

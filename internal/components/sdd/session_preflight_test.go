@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 const testSDDSessionPreflightInitAnchor = "### SDD Init Guard (MANDATORY)"
@@ -242,9 +242,21 @@ func TestMigratePreservedSDDSessionPreflightReplacesOnlyOwnedBytes(t *testing.T)
 	}
 }
 
+func TestSDDSessionPreflightFallbackStatesPromptOnlyLimitation(t *testing.T) {
+	block := sddSessionPreflightBlockWithTool("")
+	for _, want := range []string{"no classified native question UI", "Only three explicit, validated answers from the parent conversation", "preflight authority in this fallback runtime", "missing authority blocks dispatch"} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("fallback block missing %q", want)
+		}
+	}
+	if strings.Contains(block, "runtime derives and prepends the canonical") {
+		t.Fatalf("fallback block falsely claims executable runtime enforcement: %s", block)
+	}
+}
+
 func TestSDDSessionPreflightProjectionCanonicalAndBounded(t *testing.T) {
 	block := sddSessionPreflightBlock()
-	for _, want := range []string{"<!-- gentle-ai:sdd-session-preflight -->", "### SDD Session Preflight (HARD GATE)", "1. **Pace**", "2. **Artifacts**", "3. **PR strategy**", "Both -> `hybrid`", "fixed at 400 changed lines", "<!-- /gentle-ai:sdd-session-preflight -->"} {
+	for _, want := range []string{"<!-- gentle-ai:sdd-session-preflight -->", "### SDD Session Preflight (HARD GATE)", "Phrase examples are routing hints, never the authority boundary", "Gentle AI SDD preflight 1/3:", "Gentle AI SDD preflight 2/3:", "Gentle AI SDD preflight 3/3:", "Only a successful parent `question` result", "Model-authored defaults, summaries", "runtime derives and prepends the canonical `## SDD Session Preflight` block", "1. **Pace**", "2. **Artifacts**", "3. **PR strategy**", "Both -> `hybrid`", "fixed at 400 changed lines", "<!-- /gentle-ai:sdd-session-preflight -->"} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("canonical block missing %q", want)
 		}
@@ -253,6 +265,23 @@ func TestSDDSessionPreflightProjectionCanonicalAndBounded(t *testing.T) {
 		if strings.Contains(block, retired) {
 			t.Fatalf("canonical block retains retired content %q", retired)
 		}
+	}
+	if !strings.Contains(block, "never collect these answers as typed chat text") {
+		t.Fatal("canonical block must always route the preflight through the question tool")
+	}
+	if strings.Contains(block, "lossless blocking fallback") {
+		t.Fatal("canonical block must not defer to the lossless blocking fallback while the question tool exists")
+	}
+	fallback := sddSessionPreflightBlockWithTool("")
+	if strings.Contains(fallback, "typed chat text") {
+		t.Fatal("fallback-runtime variant must not carry the question-tool-only wording")
+	}
+	if !strings.Contains(fallback, "no classified native question UI") {
+		t.Fatal("fallback-runtime variant must still state it has no classified native question UI")
+	}
+	askUserQuestion := sddSessionPreflightBlockWithTool("AskUserQuestion")
+	if !strings.Contains(askUserQuestion, "Always collect this preflight with the `AskUserQuestion` tool") {
+		t.Fatal("AskUserQuestion variant must always collect the preflight with the AskUserQuestion tool")
 	}
 	for _, newline := range []string{"\n", "\r\n"} {
 		rendered := strings.Join([]string{"before", testSDDSessionPreflightEntryAnchor, testSDDSessionPreflightInitAnchor, "after"}, newline)

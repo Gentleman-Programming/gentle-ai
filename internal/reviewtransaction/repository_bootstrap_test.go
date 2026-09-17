@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathidentity"
 )
 
 func TestPrepareReviewRepositoryRootInitializesOnlyGenuinelyUnversionedWorkspace(t *testing.T) {

@@ -11,15 +11,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/sddstatus"
 )
 
-// The kill switch reaches SDD status through this layer, which owns the single
-// source of truth for both of its sources. These tests hold the three
-// properties that make the seam safe: the switch actually reaches the archive
-// gate, an unreadable switch is not a disabled switch, and a disabled run never
-// produces something that reads as an approval.
+// Standalone review mode remains user-owned. SDD archive ignores it,
+// including disabled, unreadable, linked-worktree and historical-review cases.
 
 // seedArchiveGatedSDDChange stages an SDD change that has reached its archive
 // decision inside a real repository, with no review authority of any kind.
@@ -85,9 +82,6 @@ func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
 		t.Fatalf("disabled archive=%q next=%q blocked=%v, want an unmanaged route to archive",
 			status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
 	}
-	if status.ReviewOffer != nil {
-		t.Fatalf("disabled reviewOffer = %#v, want structural absence", status.ReviewOffer)
-	}
 }
 
 // corruptCloneLocalReviewMode damages the authoritative clone-local head.
@@ -127,7 +121,7 @@ func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
 // TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled retains its stable fixture
 // name while pinning #3417's replacement behavior: terminal closure burned the old
 // approval, so a historical scope change has no deciding gate. Enabled status
-// offers a new review but archive proceeds under ordinary repository policy.
+// offers no review and archive proceeds under ordinary repository policy.
 func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
 	reviewEnabledHome(t)
 	root := t.TempDir()
@@ -223,9 +217,6 @@ func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 		{"thin", "--json"},
 	} {
 		status := runSDDCommandJSON(t, RunSDDStatus, args...)
-		if status.ReviewOffer != nil {
-			t.Fatalf("unreadable mode fabricated review offer: %#v", status.ReviewOffer)
-		}
 		if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
 			t.Fatalf("unreadable mode archive=%q next=%q, want ordinary ready/archive", status.Dependencies.Archive, status.NextRecommended)
 		}

@@ -72,9 +72,9 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 
 	script := string(content)
 	for _, want := range []string{
-		"prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v2",
-		"prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v2",
-		"prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v2",
+		"prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3",
+		"prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3",
+		"prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3",
 		"go install \"$go_package\"",
 	} {
 		if !strings.Contains(script, want) {
@@ -83,9 +83,9 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 	}
 
 	for _, clobber := range []string{
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2 \\",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2 \\",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2 \\",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v3 \\",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v3 \\",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v3 \\",
 	} {
 		if strings.Contains(script, clobber) {
 			t.Fatalf("scripts/install.sh clobbers existing user env with %q; beta proxy bypass must preserve existing patterns", clobber)
@@ -106,10 +106,10 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 	cmd := exec.Command("bash", "-c", function+`
 GONOSUMDB=example.com/private
 GOPRIVATE=github.com/acme/*
-GONOPROXY=github.com/gentleman-programming/gentle-ai/v2
-prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v2
-prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v2
-prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v2
+GONOPROXY=github.com/gentleman-programming/gentle-ai/v3
+prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3
+prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3
+prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3
 printf '%s\n%s\n%s\n' "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY"
 `)
 	out, err := cmd.CombinedOutput()
@@ -119,9 +119,9 @@ printf '%s\n%s\n%s\n' "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY"
 
 	got := strings.TrimSpace(string(out))
 	want := strings.Join([]string{
-		"github.com/gentleman-programming/gentle-ai/v2,example.com/private",
-		"github.com/gentleman-programming/gentle-ai/v2,github.com/acme/*",
-		"github.com/gentleman-programming/gentle-ai/v2",
+		"github.com/gentleman-programming/gentle-ai/v3,example.com/private",
+		"github.com/gentleman-programming/gentle-ai/v3,github.com/acme/*",
+		"github.com/gentleman-programming/gentle-ai/v3",
 	}, "\n")
 	if got != want {
 		t.Fatalf("prepend_go_env_pattern output = %q, want %q", got, want)
@@ -137,9 +137,9 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 
 	script := string(content)
 	for _, want := range []string{
-		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v2\"",
+		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
 		"& go install $goPackage",
 	} {
 		if !strings.Contains(script, want) {
@@ -148,9 +148,9 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 	}
 
 	for _, clobber := range []string{
-		"$env:GONOSUMDB = \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"$env:GOPRIVATE = \"github.com/gentleman-programming/gentle-ai/v2\"",
-		"$env:GONOPROXY = \"github.com/gentleman-programming/gentle-ai/v2\"",
+		"$env:GONOSUMDB = \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"$env:GOPRIVATE = \"github.com/gentleman-programming/gentle-ai/v3\"",
+		"$env:GONOPROXY = \"github.com/gentleman-programming/gentle-ai/v3\"",
 	} {
 		if strings.Contains(script, clobber) {
 			t.Fatalf("scripts/install.ps1 clobbers existing user env with %q; beta proxy bypass must preserve existing patterns", clobber)
@@ -176,6 +176,51 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 	} {
 		if !strings.Contains(function, want) {
 			t.Fatalf("Add-GoEnvPattern does not preserve existing env patterns; missing %q", want)
+		}
+	}
+}
+
+// TestInstallScriptsGoInstallPackageMatchesModuleMajor guards the install
+// scripts against the regression that shipped in v3.0.1: both scripts build
+// the `go install` package by interpolation, so a module-major migration
+// that rewrites the literal module string misses them. The expected major
+// is derived from go.mod so the next migration fails here first.
+func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
+	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	moduleLine := strings.SplitN(string(goMod), "\n", 2)[0]
+	majorMatch := regexp.MustCompile(`^module github\.com/gentleman-programming/gentle-ai/(v[0-9]+)$`).FindStringSubmatch(strings.TrimSpace(moduleLine))
+	if majorMatch == nil {
+		t.Fatalf("go.mod module line %q does not carry a major version suffix", moduleLine)
+	}
+	major := majorMatch[1]
+
+	cases := []struct {
+		script  string
+		pattern string
+	}{
+		{"install.sh", `local go_package="github.com/${owner_lc}/${GITHUB_REPO}/` + major + `/cmd/${BINARY_NAME}@${version}"`},
+		{"install.ps1", `$goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/` + major + `/cmd/$BINARY_NAME@$version"`},
+	}
+	stale := regexp.MustCompile(`/v[0-9]+/cmd/`)
+	for _, tc := range cases {
+		content, err := os.ReadFile(filepath.Join("..", "..", "scripts", tc.script))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(content)
+		if !strings.Contains(text, tc.pattern) {
+			t.Errorf("scripts/%s must build the go install package on the %s module: missing %q", tc.script, major, tc.pattern)
+		}
+		for _, hit := range stale.FindAllString(text, -1) {
+			if hit != "/"+major+"/cmd/" {
+				t.Errorf("scripts/%s still references %s in a go install package path; go.mod is %s", tc.script, hit, major)
+			}
+		}
+		if strings.Contains(text, "tags are v2.x") {
+			t.Errorf("scripts/%s comment still describes v2.x tags", tc.script)
 		}
 	}
 }

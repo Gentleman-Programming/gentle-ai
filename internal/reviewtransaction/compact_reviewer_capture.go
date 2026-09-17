@@ -57,6 +57,99 @@ type CompactTargetedValidatorEvidence struct {
 	FollowUps                     []FollowUp                            `json:"follow_ups"`
 }
 
+// CompactEscalationEvidence describes the cause and evidence for an escalated lineage (issue #4226).
+type CompactEscalationEvidence struct {
+	Cause           string           `json:"cause"`
+	FindingIDs      []string         `json:"finding_ids"`
+	RefuterOutcomes []EvidenceResult `json:"refuter_outcomes,omitempty"`
+}
+
+// EscalationEvidence derives canonical escalation cause and evidence when a lineage reaches StateEscalated.
+func (state CompactState) EscalationEvidence() *CompactEscalationEvidence {
+	if state.State != StateEscalated {
+		return nil
+	}
+	findingIDs := append([]string{}, state.FixFindingIDs...)
+	if len(state.CorrectionAttempts) > 0 {
+		attempt := state.CorrectionAttempts[len(state.CorrectionAttempts)-1]
+		if !attempt.OriginalCriteria.Passed || !attempt.CorrectionRegression.Passed {
+			return &CompactEscalationEvidence{
+				Cause:      "targeted_validator_rejected",
+				FindingIDs: findingIDs,
+			}
+		}
+	}
+	if state.CumulativeCorrectionLines > state.CorrectionBudget ||
+		state.ProposedCorrectionLines != nil && state.CumulativeCorrectionLines+*state.ProposedCorrectionLines > state.CorrectionBudget {
+		return &CompactEscalationEvidence{
+			Cause:      "correction_budget_exceeded",
+			FindingIDs: findingIDs,
+		}
+	}
+	view, err := state.CompactReviewView()
+	if err == nil {
+		unresolvedIDs := []string{}
+		cause := "unresolved_severe_findings"
+		hasUnknownCausality := false
+		hasInsufficientEvidence := false
+		hasMissingRefuter := false
+
+		refuterMap := make(map[string]EvidenceResult, len(view.RefuterOutcomes))
+		for _, r := range view.RefuterOutcomes {
+			refuterMap[r.FindingID] = r
+		}
+		fixSet := make(map[string]struct{}, len(view.FixFindingIDs))
+		for _, id := range view.FixFindingIDs {
+			fixSet[id] = struct{}{}
+		}
+
+		for id, outcome := range view.Outcomes {
+			if outcome == OutcomeInconclusive {
+				if _, fixing := fixSet[id]; !fixing {
+					unresolvedIDs = append(unresolvedIDs, id)
+					if class, found := view.Classifications[id]; found {
+						if class.Causality == CausalUnknown {
+							hasUnknownCausality = true
+						}
+						if class.Class == EvidenceInsufficient {
+							hasInsufficientEvidence = true
+						}
+						if class.Class == EvidenceInferential {
+							if _, inRefuter := refuterMap[id]; !inRefuter {
+								hasMissingRefuter = true
+							}
+						}
+					}
+				}
+			}
+		}
+		sort.Strings(unresolvedIDs)
+		if len(unresolvedIDs) > 0 {
+			if hasUnknownCausality {
+				cause = "unknown_causality"
+			} else if hasInsufficientEvidence {
+				cause = "insufficient_evidence"
+			} else if hasMissingRefuter {
+				cause = "missing_refuter_outcome"
+			}
+			var refuterOutcomes []EvidenceResult
+			if len(view.RefuterOutcomes) > 0 {
+				refuterOutcomes = append([]EvidenceResult(nil), view.RefuterOutcomes...)
+			}
+			return &CompactEscalationEvidence{
+				Cause:           cause,
+				FindingIDs:      unresolvedIDs,
+				RefuterOutcomes: refuterOutcomes,
+			}
+		}
+	}
+
+	return &CompactEscalationEvidence{
+		Cause:      "unresolved_severe_findings",
+		FindingIDs: findingIDs,
+	}
+}
+
 type compactAdmittedTargetedValidatorValue struct {
 	Outcome  string                            `json:"outcome"`
 	Evidence *CompactTargetedValidatorEvidence `json:"evidence,omitempty"`

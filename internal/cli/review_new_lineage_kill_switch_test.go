@@ -2,21 +2,18 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // This file is coverage closure for spec rdd-new-lineage-activation ->
 // "Kill-Switch-Off Is Structurally Unfailable and Creates Nothing" -> "Kill
-// switch off produces no side effect". Prior coverage proved this only for
-// the unwired OfferReviewAfterVerify (review_offer_test.go); it was never
-// proven for the facade at its five observed gate call sites. No production
+// switch off produces no side effect". The facade is exercised at its five observed gate call sites. No production
 // behavior changes here — this is a new test only.
 
 // snapshotAuthorityTree returns a canonical, comparable representation of
@@ -70,7 +67,7 @@ func snapshotAuthorityTree(t *testing.T, root string) string {
 
 // TestNewLineageKillSwitchOffProducesZeroSideEffectsAcrossEntrySurfaces
 // drives every new-lineage-adjacent read surface — all five `review
-// validate` gates plus OfferReviewAfterVerify's own guard path — with the
+// validate` gates  — with the
 // kill switch off, twice against the identical fixture (same-fixture
 // double-eval), and proves the entire
 // .git/gentle-ai subtree is byte-identical before and after each pass.
@@ -108,14 +105,6 @@ func TestNewLineageKillSwitchOffProducesZeroSideEffectsAcrossEntrySurfaces(t *te
 			if result.Allowed || result.Result == reviewtransaction.GateAllow {
 				t.Fatalf("%s: gate %q fabricated an approval while disabled: %#v", pass, gate, result)
 			}
-		}
-
-		offer, offerErr := reviewtransaction.OfferReviewAfterVerify(context.Background(), repo)
-		if offerErr != nil {
-			t.Fatalf("%s: OfferReviewAfterVerify produced an error while the kill switch is off: %v", pass, offerErr)
-		}
-		if offer.Available {
-			t.Fatalf("%s: OfferReviewAfterVerify(kill switch off) = %#v, want Available=false", pass, offer)
 		}
 
 		after := snapshotAuthorityTree(t, authorityRoot)

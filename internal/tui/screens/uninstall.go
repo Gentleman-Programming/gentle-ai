@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 type UninstallModeOption struct {
@@ -381,7 +381,11 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 			b.WriteString(styles.SubtextStyle.Render(result.Manifest.DisplayLabel()))
 		}
 	} else {
-		b.WriteString(styles.SuccessStyle.Render("✓ Uninstall complete"))
+		if len(result.RetainedPiResources) > 0 {
+			b.WriteString(styles.SuccessStyle.Render("✓ Managed uninstall finished; Pi resources retained for review"))
+		} else {
+			b.WriteString(styles.SuccessStyle.Render("✓ Uninstall complete"))
+		}
 		b.WriteString("\n\n")
 		if result.Manifest.ID != "" {
 			b.WriteString(styles.SubtextStyle.Render("Backup: "))
@@ -440,6 +444,24 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 	}
 
 	b.WriteString("\n\n")
+	if len(result.RetainedPiResources) > 0 {
+		b.WriteString(styles.WarningStyle.Render("Retained Pi resources (not deleted):"))
+		for _, path := range result.RetainedPiResources {
+			b.WriteString("\n")
+			b.WriteString(styles.UnselectedStyle.Render("  • " + path))
+		}
+		b.WriteString("\n\n")
+	}
+	if len(result.OptionalPiPackageCleanupCommands) > 0 {
+		b.WriteString(styles.WarningStyle.Render("Optional Pi package cleanup:"))
+		b.WriteString("\n")
+		b.WriteString(styles.UnselectedStyle.Render("  Review shared or user-modified packages/resources before removing them:"))
+		for _, command := range result.OptionalPiPackageCleanupCommands {
+			b.WriteString("\n")
+			b.WriteString(styles.UnselectedStyle.Render("  • " + command))
+		}
+		b.WriteString("\n\n")
+	}
 	b.WriteString(styles.HelpStyle.Render("enter: return • esc: back • q: quit"))
 	return b.String()
 }

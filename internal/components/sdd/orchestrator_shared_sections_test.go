@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // #3817: the SDD orchestrator contract is maintained as twelve hand-written
@@ -22,9 +24,73 @@ import (
 // again. Each runtime keeps its own heading line, which is why codex may hold a
 // section at ## while the others hold it at ###.
 
+// Text contracts prove shipped instructions, not execution by any agent host.
+func assertStatusContinuationContract(t *testing.T, content string) {
+	t.Helper()
+	for _, want := range []string{
+		"gentle-ai sdd-status [change] --cwd <repo> --json --instructions",
+		"every declared artifact store, including Engram", "native v2",
+		"Inspection needs no execution preflight", "No recommendation is executed during inspection",
+		"Only explicit authorized continuation", "current human scope covers the selected change-directory marker",
+		"Read-only or excluded-marker scope forbids this mutating call",
+		"Preparation grants no source roots or attempts", "actionContext",
+		"nextRecommended", "blockedReasons", "non-authoritative",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("missing status/continuation contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"sdd-continue [change] --cwd <repo>` or", "manual status schema",
+		"do NOT invoke the native dispatcher", "resolve status entirely from Engram",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("conflicting status/continuation instruction %q", forbidden)
+		}
+	}
+}
+
+func TestRegisteredAgentsRenderStatusContinuationContract(t *testing.T) {
+	registry, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := registry.SupportedAgents()
+	if len(ids) != 16 {
+		t.Fatalf("registered cohort changed: %v", ids)
+	}
+	templates := map[string]bool{}
+	for _, agent := range ids {
+		templates[sddOrchestratorAsset(agent)] = true
+		t.Run(string(agent), func(t *testing.T) {
+			content := renderSDDOrchestratorAsset(agent)
+			if agent == model.AgentClaudeCode {
+				if !strings.Contains(content, "~/.claude/skills/_shared/sdd-orchestrator-workflow.md") {
+					t.Fatal("Claude bootstrap lost its lazy workflow reference")
+				}
+				lazy, err := renderClaudeSessionPreflight()
+				if err != nil {
+					t.Fatal(err)
+				}
+				content += lazy
+			}
+			assertStatusContinuationContract(t, content)
+		})
+	}
+	if len(templates) != 12 {
+		t.Fatalf("effective template coverage = %d, want 12", len(templates))
+	}
+	t.Run("claude-lazy-workflow", func(t *testing.T) {
+		content, err := renderClaudeSessionPreflight()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStatusContinuationContract(t, content)
+	})
+}
+
 var sharedOrchestratorSectionNames = []string{
 	"Native SDD Dispatcher Guard",
-	"Native Runtime Attempt Authority (MANDATORY)",
 	"Language Domain Contract",
 	"Dependency Graph",
 	"Recovery Rule",
@@ -39,6 +105,11 @@ var sharedOrchestratorSectionNames = []string{
 	// Form)".
 	"Delegated Verification Gate (MANDATORY)",
 	"Delegated Verification Gate (Reduced Form)",
+	// ODD default workflow: every SDD orchestrator asset states, before any
+	// SDD instruction, that Organic Driven Development is this orchestrator's
+	// predefined workflow and SDD is a branch entered only by explicit
+	// selection.
+	"Organic Driven Development Is The Default Workflow (MANDATORY)",
 }
 
 // TestSharedOrchestratorSectionsHaveOneSource pins that each shared section
@@ -109,15 +180,43 @@ func TestEveryRuntimeRendersTheSharedSections(t *testing.T) {
 // exactly like the RDD-off path -- never to a lower bar than RDD off.
 func TestDelegatedVerificationGateDeclinedReviewFallbackRenders(t *testing.T) {
 	const fallbackPhrase = "the native review reaches a terminal outcome for this candidate"
+	const sddBoundary = "SDD never offers or launches RDD"
 
 	for _, name := range []string{
 		"Delegated Verification Gate (MANDATORY)",
 		"Delegated Verification Gate (Reduced Form)",
 	} {
-		if body := sharedOrchestratorSection(name); !strings.Contains(body, fallbackPhrase) {
-			t.Errorf("shared section %q canonical body does not carry %q", name, fallbackPhrase)
+		if body := sharedOrchestratorSection(name); !strings.Contains(body, fallbackPhrase) || !strings.Contains(body, sddBoundary) {
+			t.Errorf("shared section %q canonical body lacks the SDD boundary or %q", name, fallbackPhrase)
 		}
 	}
+
+	for _, entry := range catalog.AllAgents() {
+		agent := entry.ID
+		rendered := renderSDDOrchestratorAsset(agent)
+		if !strings.Contains(rendered, "Delegated Verification Gate") {
+			continue // a runtime that never carries either form keeps not carrying it
+		}
+		if !strings.Contains(rendered, fallbackPhrase) || !strings.Contains(rendered, sddBoundary) {
+			t.Errorf("%s renders a Delegated Verification Gate section without the SDD exclusion or non-SDD declined-review fallback", agent)
+		}
+	}
+}
+
+// TestEveryRuntimeOrchestratorOpensWithODDDefault pins that Organic Driven
+// Development is stated as the default workflow before any SDD-specific
+// instruction in every runtime orchestrator asset. Every asset in this list
+// opens with a coordinator/role paragraph followed by "### Lossless Blocking
+// Prompts (MANDATORY)"; the ODD default-workflow shared section must render
+// before that first SDD-flavored subsection.
+func TestEveryRuntimeOrchestratorOpensWithODDDefault(t *testing.T) {
+	const sectionName = "Organic Driven Development Is The Default Workflow (MANDATORY)"
+
+	body := sharedOrchestratorSection(sectionName)
+	if strings.TrimSpace(body) == "" {
+		t.Fatalf("shared asset carries no body for %q", sectionName)
+	}
+	first := strings.SplitN(strings.TrimSpace(body), "\n", 2)[0]
 
 	for _, agent := range []model.AgentID{
 		model.AgentOpenCode, model.AgentCursor, model.AgentGeminiCLI, model.AgentQwenCode,
@@ -125,11 +224,27 @@ func TestDelegatedVerificationGateDeclinedReviewFallbackRenders(t *testing.T) {
 		model.AgentClaudeCode, model.AgentKiroIDE, model.AgentAntigravity, model.AgentVSCodeCopilot,
 	} {
 		rendered := renderSDDOrchestratorAsset(agent)
-		if !strings.Contains(rendered, "Delegated Verification Gate") {
-			continue // a runtime that never carries either form keeps not carrying it
+
+		oddOffset := strings.Index(rendered, first)
+		if oddOffset < 0 {
+			t.Errorf("%s does not render the ODD default-workflow shared section", agent)
+			continue
 		}
-		if !strings.Contains(rendered, fallbackPhrase) {
-			t.Errorf("%s renders a Delegated Verification Gate section without the declined-review fallback phrase", agent)
+
+		var boundary string
+		switch {
+		case strings.Contains(rendered, "### Lossless Blocking Prompts"):
+			boundary = "### Lossless Blocking Prompts"
+		case strings.Contains(rendered, "### Language Domain Contract"):
+			boundary = "### Language Domain Contract"
+		default:
+			// No known SDD-flavored boundary subsection in this asset; presence
+			// of the shared section body is the complete, deterministic check.
+			continue
+		}
+		boundaryOffset := strings.Index(rendered, boundary)
+		if boundaryOffset < 0 || oddOffset >= boundaryOffset {
+			t.Errorf("%s must render the ODD default-workflow section before %q", agent, boundary)
 		}
 	}
 }

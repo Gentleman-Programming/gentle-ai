@@ -52,7 +52,7 @@
 
 ```powershell
 # Stable channel (`@latest`, currently v2.6.0)
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
 ```
 
 This command uses the `/v2` module path. Go requires that suffix for major
@@ -67,7 +67,7 @@ The current stable release is [`v2.6.0`](https://github.com/Gentleman-Programmin
 ### Install the stable channel
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
@@ -77,11 +77,11 @@ Only use `main` when testing changes that are not part of a release yet:
 
 ```bash
 # macOS / Linux
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main
 gentle-ai version
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main
 gentle-ai version
 ```
 
@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
 ```
 
-> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
+> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main`).
 
 The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 
@@ -150,6 +150,10 @@ When checks pass, installer reports:
 If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram™ MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
 
 For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, and `pi-mcp-adapter`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, and `pi-btw`.
+
+## Start working with ODD
+
+Open your agent in the project and describe an outcome, for example: "Add CSV export using the existing report filters." [Organic Driven Development (ODD)](usage.md#organic-driven-development-odd) is the everyday flow: explore, implement authorized work, and check it. Substantial work keeps one recoverable feature document; small/read-only work avoids durable artifacts. No SDD command is required. Choose SDD explicitly only when you want its separate phase artifacts.
 
 ## Hardening recommendations for users
 

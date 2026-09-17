@@ -26,7 +26,7 @@ Gentle-AI integration code should stay thin: adapters describe where and how an 
 | Agent discovery | Detect config roots or binaries through system/adapters; do not hard-code in UI screens. |
 | MCP wiring | Use adapter MCP strategy instead of custom JSON writes in feature code. |
 | Prompt injection | Use component/filemerge helpers to preserve user content when strategy requires it. |
-| Community tool orchestration | Keep install commands, generated guidance/config, and MCP reconciliation thin and traceable to the selected external tool. |
+| Community tool orchestration | Keep install commands, generated guidance/config, and MCP reconciliation thin and traceable to the selected external tool. RTK acquisition must remain pinned, checksum-verified, archive-safe, opt-in, and Windows-disabled. |
 | Plugin registration | Add external package names or managed local plugin paths; let OpenCode load them at runtime. |
 
 ## Community tools vs OpenCode plugins
@@ -35,7 +35,7 @@ Community tools and OpenCode plugins are different integration paths:
 
 | Path | Gentle-AI owns | Runtime owner |
 |---|---|---|
-| `internal/components/communitytool/` | Installation orchestration plus managed guidance/config/MCP reconciliation, such as CodeGraph setup and guidance. | The external tool runtime. |
+| `internal/components/communitytool/` | Installation orchestration plus managed guidance/config/MCP reconciliation, such as CodeGraph setup and guidance or pinned RTK setup. | The external tool runtime. |
 | `internal/components/opencodeplugin/` | External plugin package-name registration; Gentle Logo also writes/registers a managed local TUI plugin file. | OpenCode and the plugin package or managed local plugin file. |
 
 ## Thin plugin principle

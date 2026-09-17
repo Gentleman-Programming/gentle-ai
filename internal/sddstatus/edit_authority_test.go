@@ -294,6 +294,13 @@ func TestBlockedEditAuthorityStatusCarriesConsentEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := PrepareChangeInstanceConsent(status); err != nil {
+		t.Fatal(err)
+	}
+	status, err = Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	projected, err := ProjectStatusV2(status)
 	if err != nil {
 		t.Fatal(err)
@@ -380,8 +387,12 @@ func TestRecreatedChangeNameDoesNotInheritGrantedRoots(t *testing.T) {
 	}, "\n")
 	changeRoot := seedReadyChange(t, planning, "multi-repo-rollout", tasks)
 
-	// Blocked status mints the marker; grant against exactly that identity.
-	if _, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"}); err != nil {
+	// Explicit continuation prepares the marker; grant against that identity.
+	status, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareChangeInstanceConsent(status); err != nil {
 		t.Fatal(err)
 	}
 	token, err := readChangeInstanceMarker(changeRoot)
@@ -411,11 +422,10 @@ func TestRecreatedChangeNameDoesNotInheritGrantedRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if granted.ApplyState != ApplyBlocked || granted.NextRecommended != "resolve-blockers" ||
-		!strings.Contains(strings.Join(granted.BlockedReasons, "\n"), "blocked(cross_common_dir_runtime_target)") {
-		t.Fatalf("post-grant status = %q/%q with reasons %v, want topology block",
-			granted.ApplyState, granted.NextRecommended, granted.BlockedReasons)
+	if granted.ApplyState != ApplyReady || granted.NextRecommended != "apply" || len(granted.BlockedReasons) != 0 {
+		t.Fatalf("post-grant status = %q/%q reasons %v, want ready/apply without attempt topology governance", granted.ApplyState, granted.NextRecommended, granted.BlockedReasons)
 	}
+
 	if !reflect.DeepEqual(granted.ActionContext.AllowedEditRoots, []string{planning, wantA}) {
 		t.Fatalf("AllowedEditRoots = %v, want [%s %s]", granted.ActionContext.AllowedEditRoots, planning, wantA)
 	}
@@ -428,6 +438,13 @@ func TestRecreatedChangeNameDoesNotInheritGrantedRoots(t *testing.T) {
 	}
 	seedReadyChange(t, planning, "multi-repo-rollout", tasks)
 	recreated, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareChangeInstanceConsent(recreated); err != nil {
+		t.Fatal(err)
+	}
+	recreated, err = Resolve(ResolveOptions{CWD: planning, ChangeName: "multi-repo-rollout"})
 	if err != nil {
 		t.Fatal(err)
 	}

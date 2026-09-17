@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError verifies that
@@ -57,7 +57,7 @@ func fullyPopulatedInstallState() InstallState {
 		Preset:                   model.PresetCustom,
 		SDDMode:                  model.SDDModeMulti,
 		StrictTDD:                true,
-		CommunityTools:           []string{"codegraph", "jq"},
+		CommunityTools:           []string{"codegraph", "rtk"},
 		CommunityToolsConfigured: true,
 		ClaudeModelAssignments:   map[string]string{"sdd-explore": "sonnet"},
 		ClaudePhaseAssignments: map[string]ClaudePhaseAssignmentState{

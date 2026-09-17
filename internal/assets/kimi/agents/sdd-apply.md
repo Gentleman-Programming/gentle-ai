@@ -44,6 +44,6 @@ Return a structured result with these fields:
 - `status`: `done` | `blocked` | `partial`
 - `executive_summary`: one-sentence description of what was implemented
 - `artifacts`: list of files changed and topic_keys updated
-- `next_recommended`: `sdd-verify` (if all tasks are done) or `sdd-apply` again
+- `next_recommended`: `sdd-archive` (if all tasks are done; verification is optional) or `sdd-apply` again
 - `risks`: deviations from design, unexpected complexity, or blocked tasks
 - `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

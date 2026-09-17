@@ -68,18 +68,47 @@ constraints. The result is a dataset that is statistical only: no field in
 it can carry user-authored text, which is what makes it safe to aggregate
 and report on in the first place.
 
+## Runtime observations
+
+`POST /v1/runtime-events` accepts the separate
+[runtime event schema](../contracts/telemetry/runtime/v1/schemas/event.schema.json):
+exactly `schema`, `registry`, a fresh independent `delivery_id`, `host`, and public
+`rows`, bounded to 16 KiB and 32 rows. No batch/session/task/install/user identity,
+activity timestamp, private name, prompt, code, path, or raw error is accepted.
+See [runtime fields and native command](telemetry.md#runtime-metrics-one-attempt-no-client-storage).
+
+Native clients send once over HTTPS, without redirects, with a 3-second network
+budget and bounded acknowledgement. Failure discards metrics; no client queue,
+outbox, retry, cooldown, daemon, or migration cleanup exists. Server deduplication
+remains defensive: HTTP 200 returns exactly
+`{"schema":"gentle-ai.telemetry-runtime-delivery/v1","decision":"stored"}` or
+`duplicate`. A conflicting identity returns 409; invalid, oversized, rate-limited,
+and unavailable requests return 400, 413, 429, and 500 respectively. Clients do
+not retry any of them or retain the event after a lost response.
+
+Existing SQLite `runtime_deliveries`/`runtime_rows`, `user_version=1`, transactional
+storage, and startup/daily retention remain unchanged. Rate limiting for
+`/v1/runtime-events` has its own budget, separate from `/v1/events` — see
+[Rate limiting](#rate-limiting).
+`received_at` is delivery time, not activity time. Existing `--retention-days`
+purges whole deliveries strictly before the UTC cutoff; deduplication ends when
+the corresponding delivery is purged. No runtime daily rollup, new scheduler,
+production configuration change, or deployment is included.
+
 ## HTTP API
 
 | Endpoint | Method | Auth | Notes |
 |---|---|---|---|
-| `/v1/events` | POST | none | Body ≤ 4 KiB, strict schema validation, per-IP rate limit. `202` on accept, `400` invalid, `413` oversize, `429` rate-limited. |
+| `/v1/events` | POST | none | Body ≤ 4 KiB, strict schema validation, own per-address rate limit (`--rate-limit-per-minute`). `202` on accept, `400` invalid, `413` oversize, `429` rate-limited. |
+| `/v1/runtime-events` | POST | none | Body ≤ 16 KiB; strict public observations; own per-address rate limit (`--runtime-rate-limit-per-minute`). `200` with `stored`/`duplicate`; one client attempt only. |
 | `/v1/summary` | GET | `Authorization: Bearer <token>` | Returns the JSON described below. `401` without a valid token. |
 | `/healthz` | GET | none | Liveness check for the reverse proxy / process supervisor. |
 
 ### No IP addresses, anywhere
 
-- The per-IP rate limiter keys an in-memory token bucket by remote address,
-  and never writes that address to disk, to a log line, or anywhere else.
+- The per-address rate limiters (one for `/v1/events`, one for
+  `/v1/runtime-events`) key an in-memory token bucket by remote address,
+  and never write that address to disk, to a log line, or anywhere else.
   See `internal/telemetrycollector/limiter.go`.
 - The `events` table has no column that could hold a remote address (see
   the schema below); `Event`, decoded from the request body, structurally
@@ -92,14 +121,20 @@ and report on in the first place.
 ## Storage
 
 SQLite via `modernc.org/sqlite` (cgo-free), opened with `PRAGMA
-journal_mode=DELETE` and a single connection (`SetMaxOpenConns(1)`): this
+journal_mode=WAL` and a single connection (`SetMaxOpenConns(1)`): this
 collector's expected throughput does not justify concurrent SQLite
 writers, and a single connection avoids `SQLITE_BUSY` entirely rather than
-tuning around it. DELETE, not WAL, because WAL's main benefit — readers
-and a writer proceeding concurrently — is moot when every read and write
-of the collector's own is already serialized onto one connection; skipping
-it also means no `-wal`/`-shm` sidecar files ever exist, which keeps the
-read-only Grafana deployment (below) down to one file instead of three.
+tuning around it. WAL, not DELETE, because this process is not the only
+reader of the database: Grafana's SQLite datasource and the open-data
+export both hold read-only connections against the same file from outside
+this process. Under DELETE mode, an external read that outlasted
+`busy_timeout` made `InsertRuntimeEvent` fail outright, since DELETE takes
+an exclusive lock to commit a write. WAL lets writes commit without
+waiting on those external readers, at the cost of two extra sidecar files
+next to the database, `events.sqlite-wal` and `events.sqlite-shm`; the
+read-only Grafana deployment (below) is granted read access to both via
+POSIX ACLs, including a default ACL so a sidecar recreated later stays
+readable without rerunning the installer.
 
 ```sql
 CREATE TABLE events (
@@ -127,9 +162,12 @@ CREATE TABLE rollups_daily (
 );
 ```
 
-An in-process daily job (`telemetrycollector.RunMaintenance`, driven by a
-24-hour ticker in `cmd/gentle-telemetry/main.go`) runs once at startup and
-once a day thereafter:
+An in-process daily job (`telemetrycollector.RunMaintenance`, driven by
+`cmd/gentle-telemetry/main.go`) runs once at startup (catching up any
+rollup missed while the process was down) and then once a day, anchored to
+00:05 UTC rather than 24 hours after startup, so the previous day's rollup
+is never more than a few minutes stale on the dashboard regardless of when
+the process last restarted:
 
 1. Rolls up **yesterday**'s events into `rollups_daily` (idempotent — safe
    to re-run after a crash or restart).
@@ -202,12 +240,36 @@ querying a handful of small SQLite tables is fast enough at this scale.
 
 ## Rate limiting
 
-`POST /v1/events` is limited per remote address by an in-memory token
-bucket (`--rate-limit-per-minute`, default 60): burst capacity equals the
-configured limit, refilled continuously at `limit/60` tokens per second.
-Buckets are swept every 10 minutes and evicted after 30 minutes of
-inactivity, so the limiter's memory does not grow unbounded across many
-distinct callers. None of this state is ever persisted.
+`POST /v1/events` and `POST /v1/runtime-events` each have their own
+in-memory token bucket per remote address, keyed by the same client
+address (see "Deriving the client address" below): `--rate-limit-per-minute`
+(default 60) for `/v1/events`, and `--runtime-rate-limit-per-minute`
+(default 600) for `/v1/runtime-events`. They used to share one bucket,
+which meant frequent runtime heartbeats and infrequent stored events
+competed for the same budget — stored deliveries plateaued at exactly the
+configured limit while heartbeats were rejected once it was exhausted, and
+"active machines" counts collapsed as a result. Burst capacity equals each
+limit, refilled continuously at `limit/60` tokens per second. Buckets are
+swept every 10 minutes and evicted after 30 minutes of inactivity, so
+neither limiter's memory grows unbounded across many distinct callers.
+None of this state is ever persisted. A 429 on either endpoint is logged
+(`"telemetry event rejected"` / `"runtime telemetry rejected"`,
+`"reason", "rate_limited"`) with no client address attached.
+
+### Deriving the client address
+
+The rate limiter's key is the TCP peer address, unless the peer is a
+trusted proxy (`--trusted-proxy-cidr`, default `127.0.0.0/8,::1/128`), in
+which case it is the first `X-Forwarded-For` hop that parses as an IP
+address (falling back to `X-Real-IP`, then the peer). A forwarded value
+that does not parse as an IP is skipped rather than trusted verbatim: a
+misconfigured reverse proxy has been observed sending
+`X-Forwarded-For: (null), <client>`, which — without this validation —
+keyed every client on the literal string `"(null)"`, collapsing the rate
+limiter (and "active machines" counts derived from it) to a single shared
+bucket. When a trusted proxy's forwarded header has no element that
+parses, this is logged once per minute as `"ignored an invalid forwarded
+address"`, with the header's value itself never logged.
 
 ## Running it
 
@@ -216,7 +278,8 @@ distinct callers. None of this state is ever persisted.
 --db /var/lib/gentle-telemetry/events.sqlite              # SQLite file
 --summary-token-file <path>                               # bearer token for /v1/summary (local runs; systemd uses LoadCredential, see Token rotation)
 --retention-days 90                                        # raw event retention
---rate-limit-per-minute 60                                 # per-IP budget on /v1/events
+--rate-limit-per-minute 60                                 # per-address budget on /v1/events
+--runtime-rate-limit-per-minute 600                         # per-address budget on /v1/runtime-events
 --trusted-proxy-cidr 127.0.0.0/8 --trusted-proxy-cidr ::1/128  # peers allowed to set X-Forwarded-For (repeatable; this is the default)
 --npm-package gentle-pi --npm-package gentle-engram        # npm packages to fetch daily downloads for (repeatable; this is the default)
 --github-repo Gentleman-Programming/gentle-ai              # GitHub repo to fetch release downloads for (repeatable; this is the default)
@@ -268,10 +331,10 @@ domain configured this way, so this kit does not use one.
 | File | Purpose |
 |---|---|
 | `apache/telemetry-vhost.conf.tmpl` | Template for the two `<VirtualHost>` blocks (`:80` and `:443`), mirroring the existing pattern: proxies `/v1/`, `/healthz`, and (with `--with-grafana`) `/grafana/` to loopback, asserts `X-Forwarded-For` from Apache itself, force-HTTPS except for the ACME challenge path, and a supplementary access log that omits the client address for `/v1/`. `__DOMAIN__` is substituted by `install.sh --domain`. Not applied automatically — see below. |
-| `gentle-telemetry.service` | systemd unit: `DynamicUser=yes`, `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). |
-| `gentle-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `gentle-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root (not `DynamicUser`) because it needs to read the collector's `DynamicUser`-owned state directory, which a second, independently allocated dynamic user could not. |
+| `gentle-telemetry.service` | systemd unit: runs as the static `gentle-telemetry` system user (created by `install.sh`), `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). See [Why a static user, not `DynamicUser`](#why-a-static-user-not-dynamicuser). |
+| `gentle-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `gentle-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. |
 | `grafana/` | Datasource and dashboard provisioning for an optional on-box Grafana; see [Grafana dashboards](#grafana-dashboards). |
-| `install.sh` | Installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo. It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
+| `install.sh` | Creates the static `gentle-telemetry` system user (migrating an older `DynamicUser`-layout install in place if found), installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo. It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
 
 ```
 sudo ./deploy/telemetry/install.sh --local-source /path/to/gentle-ai/checkout \
@@ -281,6 +344,47 @@ sudo ./deploy/telemetry/install.sh --local-source /path/to/gentle-ai/checkout \
 (Omit `--domain` to install just the service and have the script print
 where to render `apache/telemetry-vhost.conf.tmpl` yourself; omit
 `--with-grafana` to skip Grafana entirely.)
+
+### Why a static user, not DynamicUser
+
+`gentle-telemetry.service` used to run with `DynamicUser=yes`. With
+`DynamicUser`, systemd materializes `StateDirectory=gentle-telemetry` under
+`/var/lib/private/gentle-telemetry` (a directory it keeps at exactly mode
+`0700`) and leaves a symlink at `/var/lib/gentle-telemetry`. To let Grafana
+read the SQLite file, `install.sh --with-grafana` had to grant the
+`grafana` user search access on every ancestor of that private directory
+that was not already world-searchable, including `/var/lib/private`
+itself. That ACL raised `/var/lib/private`'s effective mode above `0700`,
+and on the next restart systemd refused to start the unit at all:
+
+```
+Directory "/var/lib/private" already exists, but has mode 0710 that is
+too permissive (0700 was requested), refusing.
+```
+
+That is a hard requirement of `DynamicUser`, not a bug to work around with
+a looser ACL: `/var/lib/private` is shared by every `DynamicUser` unit on
+the box, so anything that widens it risks every one of them. The fix is to
+not need a path under `/var/lib/private` at all. `install.sh` now creates
+a static system user/group (`useradd --system --home-dir
+/var/lib/gentle-telemetry --shell /sbin/nologin --user-group
+gentle-telemetry`), and the unit runs with `DynamicUser=no`,
+`User=gentle-telemetry`, `Group=gentle-telemetry`. `StateDirectory` then
+resolves to the real directory `/var/lib/gentle-telemetry` — no symlink,
+nothing under `/var/lib/private` — owned by that user, with
+`StateDirectoryMode=0750`. Grafana gets access via a POSIX ACL scoped to
+exactly two paths: the state directory itself (`u:grafana:rx`) and
+`events.sqlite` (`u:grafana:r`) — never an ancestor.
+
+**Migrating an existing install**: run `install.sh` again. It detects the
+old layout (`/var/lib/gentle-telemetry` is a symlink into
+`/var/lib/private`) and migrates it in place before installing the unit:
+stops `gentle-telemetry.service`, removes the symlink, moves the private
+directory to `/var/lib/gentle-telemetry`, `chown -R`s it to the new
+`gentle-telemetry` user, and strips any ACL this script previously granted
+on `/var/lib/private` (`setfacl -b /var/lib/private; chmod 0700
+/var/lib/private`). It prints one line per step actually taken; nothing
+prints on a fresh install or one already migrated.
 
 ### Going live: DNS, the vhost blocks, and the certificate
 
@@ -360,8 +464,9 @@ skip it if `/v1/summary` (see below) is enough.
 ### Token rotation
 
 `install.sh` generates `/etc/gentle-telemetry/summary.token` (root-owned
-0600) if missing; `LoadCredential` in the unit hands it to the DynamicUser
-service without loosening ownership. To rotate, edit the file and restart:
+0600) if missing; `LoadCredential` in the unit hands it to the service
+(running as the static `gentle-telemetry` user) without loosening
+ownership. To rotate, edit the file and restart:
 
 ```
 sudo install -m 0600 <(openssl rand -hex 32) /etc/gentle-telemetry/summary.token
@@ -408,6 +513,42 @@ curl -sH "Authorization: Bearer $(sudo cat /etc/gentle-telemetry/summary.token)"
 
 ## Grafana dashboards
 
+### Runtime received observations
+
+Four runtime tables read retained `runtime_rows` joined to `runtime_deliveries`:
+
+| Panel | Values grouped by UTC receipt day |
+|---|---|
+| Runtime received observations — responses | Response occurrences by public provider/model, model evidence, and tool host |
+| Runtime received observations — launches | Launch occurrences by agent class, selected effort, and separately effective effort |
+| Runtime received observations — tokens and coverage | Six independent token sums, each with reported/unavailable/unsupported counts |
+| Runtime received observations — duration and errors | Measured count and millisecond sum by request/message/unavailable kind and error category |
+
+These are received observations, not complete consumption or reconstructed
+sessions. A null token sum means no reported values; a reported zero remains zero.
+`total_tokens` is never derived from other fields. Duration sums with no measured
+observations are null; timing kinds are never combined into a latency estimate.
+Occurrence sums include only reported integers, never coercing `unsupported` to
+zero. SQLite uses floating-point arithmetic for fractional duration sums; these
+are not arbitrary-precision decimal totals. Integer sums retain SQLite's signed
+64-bit limit, and Grafana numeric display may round very large values.
+
+The dashboard range applies inclusive bounds to server receipt time:
+`d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000`.
+Grafana supplies milliseconds; storage uses signed Unix nanoseconds. Whole
+millisecond bounds from 0 through 9223372036854 (2262-04-11 UTC) multiply exactly
+as SQLite integers. Use ranges within that supported epoch, not later dates.
+UTC day grouping converts nanoseconds to seconds, as the existing dashboard does.
+Each table returns at most 1000 groups in receipt-day order; narrow the range if
+that limit is reached. Empty ranges show no observations, not synthetic zeros.
+
+The existing service retains raw observations for 90 days and purges them through
+the existing retention job. These panels add no durable daily aggregates or
+retention setting. SQL and JSON1 are tested against the actual dashboard queries
+with the collector's SQLite driver; no production Grafana deployment is required.
+
+### Grafana setup
+
 `--with-grafana` installs Grafana OSS (free, self-hosted) on the same VPS
 with a read-only view over the collector's own SQLite database — no second
 copy of the data, no separate store to keep in sync. It is entirely
@@ -416,14 +557,41 @@ optional; `/v1/summary` above already answers the headline questions.
 **Datasource**: `deploy/telemetry/grafana/provisioning/datasources/telemetry.yaml`
 uses the [`frser-sqlite-datasource`](https://grafana.com/grafana/plugins/frser-sqlite-datasource/)
 plugin pointed read-only at `/var/lib/gentle-telemetry/events.sqlite`.
-Grafana's own process needs read access to that one file; since
-`gentle-telemetry.service` runs under systemd's `DynamicUser` (a group
-allocated per-unit, with no stable name to add `grafana` to),
-`install.sh --with-grafana` grants access via a POSIX ACL
-(`setfacl -m u:grafana:r ...`) instead of group membership. This stays a
-single file to grant because the collector opens SQLite with
-`journal_mode=DELETE`, not WAL (see [Storage](#storage)) — no `-wal`/`-shm`
-sidecar files are ever created for a second ACL entry to chase.
+Grafana's own process needs read access to that database; since
+`gentle-telemetry.service` runs as the static `gentle-telemetry` system
+user (see [Why a static user, not DynamicUser](#why-a-static-user-not-dynamicuser)),
+which `grafana` does not belong to, `install.sh --with-grafana` grants
+access via POSIX ACLs (`setfacl -m u:grafana:r ...`) instead of group
+membership. Because the collector opens SQLite with `journal_mode=WAL`
+(see [Storage](#storage)), this now covers three files, not one:
+`events.sqlite` itself plus its `-wal`/`-shm` sidecars, each granted
+individually when present, plus a default ACL on the directory so a
+sidecar created on a later collector restart inherits read access without
+rerunning the installer. A WAL checkpoint does not remove the `-wal`/`-shm`
+files; SQLite only removes them when the last connection to the database
+closes cleanly, and recreates them on the next open.
+
+A few things follow from that setup, worth knowing before relying on it:
+
+- The default ACL on `STATE_DIR` grants `grafana` read on every file
+  created there from that point on, not only the three SQLite files above.
+  Do not treat the directory as a general scratch space (a manual backup
+  copy, a debug dump) without accounting for that: anything dropped there
+  becomes Grafana-readable too.
+- A read-only reader can only open a WAL database while its sidecars
+  exist. They exist for the lifetime of the collector's own connection and
+  are only removed on a clean close (a graceful `systemctl stop
+  gentle-telemetry`), so Grafana has nothing consistent to read from in
+  the window between that stop and the collector's next start, which
+  recreates them.
+- SQLite creates a `-wal`/`-shm` sidecar with the same file mode as
+  `events.sqlite` at that moment. Once `events.sqlite` itself carries the
+  `grafana` ACL entry (from the per-file grant above, or inherited from
+  the directory's default ACL if it did not exist yet when the ACL was
+  set), a freshly created sidecar mirrors that mode and inherits the entry
+  too. This is why the default ACL keeps working across restarts even
+  though it only directly targets `STATE_DIR` itself, not the database
+  file.
 
 **Dashboard**: `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
 provisioned via `deploy/telemetry/grafana/provisioning/dashboards/telemetry.yaml`
@@ -489,10 +657,16 @@ Alongside the collector's own telemetry, the daily job also fetches two
 - **GitHub release downloads** (`--github-repo`, repeatable, default
   `Gentleman-Programming/gentle-ai`; optional `--github-token-file` to
   raise the rate limit — the token is never logged): `GET
-  https://api.github.com/repos/<owner>/<repo>/releases?per_page=20`,
-  summing `assets[].download_count` per release. GitHub's own counts are
-  already cumulative-since-release, so each day's fetch stores a snapshot
-  of that running total under today, not a daily delta.
+  https://api.github.com/repos/<owner>/<repo>/releases?per_page=100`,
+  following the response's `Link: rel="next"` header for up to 10 pages
+  (1,000 releases) so older releases are not silently dropped, and summing
+  `assets[].download_count` per release across every page fetched. A
+  failure on a later page (or too little of the collector's own fetch
+  budget left to be worth starting another request) stops pagination but
+  keeps whatever earlier pages already returned, rather than discarding
+  the whole fetch. GitHub's own counts are already cumulative-since-release,
+  so each day's fetch stores a snapshot of that running total under today,
+  not a daily delta.
 
 Both are stored in `rollups_daily` (`npm_downloads_day` / `key=<pkg>`,
 `github_release_downloads_total` / `key=<tag>`) alongside the collector's

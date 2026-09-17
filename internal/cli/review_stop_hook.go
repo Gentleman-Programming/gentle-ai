@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // reviewStopHookSchema identifies the reminder envelope this hook prints to
@@ -65,6 +66,13 @@ type reviewStopHookReminderRecord struct {
 	Schema                 string `json:"schema"`
 	TargetIdentity         string `json:"target_identity,omitempty"`
 	BaselineTargetIdentity string `json:"baseline_target_identity,omitempty"`
+	// LastSeenTargetIdentity is the last candidate observed during a Stop that
+	// stayed quiet under a fresh consent-stale marker (#4494). The quiet window
+	// ends as soon as the candidate is stable across two Stop events -- the
+	// concurrent writer settled -- so the ordinary renegotiation reminder can
+	// resume; while the identity keeps changing, reminding would only push the
+	// caller back into the same unexecutable negotiation.
+	LastSeenTargetIdentity string `json:"last_seen_target_identity,omitempty"`
 }
 
 // RunReviewStopHook is the `gentle-ai review stop-hook` entry point. Claude
@@ -185,6 +193,22 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 		if hadRecord && ((record.BaselineTargetIdentity != "" && record.BaselineTargetIdentity == targetIdentity) ||
 			(record.TargetIdentity != "" && record.TargetIdentity == targetIdentity)) {
 			return nil
+		}
+		if marker, ok, merr := readReviewConsentStaleMarker(root); merr == nil && ok &&
+			time.Since(marker.LastRefusedAt) < reviewConsentStaleMarkerWindow {
+			// Issue #4494: a consent answer was just spent on a candidate that
+			// moved between negotiation and answer. While the candidate keeps
+			// changing between Stop events, every reminder would push the caller
+			// back into the same unexecutable negotiation, so the hook stays
+			// quiet and remembers the last candidate it saw. Once the candidate
+			// is stable across two Stops (the writer settled), the ordinary
+			// reminder resumes; the window bounds the silence either way.
+			if record.LastSeenTargetIdentity != targetIdentity {
+				if serr := recordReviewStopHookLastSeen(payload.SessionID, targetIdentity); serr != nil {
+					return serr
+				}
+				return nil
+			}
 		}
 	}
 
@@ -319,6 +343,38 @@ func recordReviewStopHookBaseline(sessionID, targetIdentity string) error {
 	record.Schema = reviewStopHookReminderSchema
 	record.BaselineTargetIdentity = targetIdentity
 
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	_, err = filemerge.WriteFileAtomic(path, payload, 0o644)
+	return err
+}
+
+// recordReviewStopHookLastSeen persists the last candidate identity observed
+// during a marker-quiet Stop, preserving the recorded baseline and reminder
+// identity untouched. An invalid session id is a silent no-op.
+func recordReviewStopHookLastSeen(sessionID, targetIdentity string) error {
+	if !reviewStopHookSessionIDPattern.MatchString(sessionID) {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve user home directory: %w", err)
+	}
+	path := reviewStopHookRecordPath(home, sessionID)
+	record, _, err := readReviewStopHookRecord(path)
+	if err != nil {
+		return err
+	}
+	if record.LastSeenTargetIdentity == targetIdentity {
+		return nil
+	}
+	record.Schema = reviewStopHookReminderSchema
+	record.LastSeenTargetIdentity = targetIdentity
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // reviewStopHookTestPayload builds one Stop hook stdin payload. Extra fields
@@ -477,5 +478,94 @@ func TestReviewStopHookUnknownHookEventNameIsSilent(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("an unrecognized hook_event_name must be silent, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+// reviewStopHookFakeIdentity is a well-formed stand-in target identity for
+// marker fixtures that never touch a real candidate.
+func reviewStopHookFakeIdentity(t *testing.T) string {
+	t.Helper()
+	return "sha256:" + strings.Repeat("a", 64)
+}
+
+// TestReviewStopHookStaysQuietWhileConsentStaleMarkerFreshAndCandidateMoves
+// is the stop-hook half of issue #4494: after a consent answer was spent on a
+// moving candidate, the hook must stop re-arming per candidate while the
+// writer advances, and resume the ordinary reminder once the candidate is
+// stable across two Stop events.
+func TestReviewStopHookStaysQuietWhileConsentStaleMarkerFreshAndCandidateMoves(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	enableReviewStopHookRDD(t, repo)
+	if err := recordReviewConsentStaleRefusal(repo, reviewStopHookFakeIdentity(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	session := "sess-consent-stale-move"
+	runStop := func() bytes.Buffer {
+		var stdout, stderr bytes.Buffer
+		stdin := strings.NewReader(reviewStopHookTestPayload(t, session, repo, false, nil))
+		if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+			t.Fatalf("stop hook run: %v\nstderr: %s", err, stderr.String())
+		}
+		return stdout
+	}
+
+	if stdout := runStop(); stdout.Len() != 0 {
+		t.Fatalf("a fresh consent-stale marker must keep the first Stop quiet while the candidate may still move: %s", stdout.String())
+	}
+	// The concurrent writer advances the candidate: different tracked content
+	// changes the candidate identity for real.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("writer advanced\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if stdout := runStop(); stdout.Len() != 0 {
+		t.Fatalf("a moved candidate under a fresh consent-stale marker must stay quiet: %s", stdout.String())
+	}
+	stable := runStop() // the writer settled: same candidate as the last quiet Stop
+	if stable.Len() == 0 {
+		t.Fatal("a candidate stable across Stop events must remind again so the session can renegotiate")
+	}
+	if decodeReviewStopHookResult(t, stable.Bytes()).Decision != "block" {
+		t.Fatalf("stable-candidate reminder = %s, want block", stable.String())
+	}
+}
+
+// TestReviewStopHookRemindsWhenConsentStaleMarkerExpired proves the quiet
+// window is bounded: an expired consent-stale marker restores today's
+// reminder behavior.
+func TestReviewStopHookRemindsWhenConsentStaleMarkerExpired(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	enableReviewStopHookRDD(t, repo)
+
+	stale := time.Now().Add(-reviewConsentStaleMarkerWindow - time.Minute)
+	record := reviewConsentStaleMarker{
+		Schema:                reviewConsentStaleMarkerSchema,
+		RefusedTargetIdentity: reviewStopHookFakeIdentity(t),
+		FirstRefusedAt:        stale,
+		LastRefusedAt:         stale,
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerPath := reviewConsentStaleMarkerPath(home, repo)
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(markerPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-consent-stale-expired", repo, false, nil))
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("stop hook run: %v\nstderr: %s", err, stderr.String())
+	}
+	if decodeReviewStopHookResult(t, stdout.Bytes()).Decision != "block" {
+		t.Fatalf("expired consent-stale marker must restore the reminder: %s", stdout.String())
 	}
 }

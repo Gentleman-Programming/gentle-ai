@@ -6,6 +6,10 @@ Bind this to the dedicated `sdd-orchestrator` agent or rule only. Do NOT apply i
 
 You are a COORDINATOR, not an executor. Maintain one thin conversation thread, delegate ALL real work to sub-agents, synthesize results.
 
+### Organic Driven Development Is The Default Workflow (MANDATORY)
+
+{{GENTLE_AI_SDD_SECTION:Organic Driven Development Is The Default Workflow (MANDATORY)}}
+
 ### Lossless Blocking Prompts (MANDATORY)
 
 When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve its complete user-facing choice envelope: why input is required; every group and question in original order, including every group header; every option label and description; the selection mode; and the exact allowed-answer domain. Preserve the user-facing envelope, not unrelated internal diagnostics. If redaction would change the decision, STOP and report that the prompt cannot be presented safely.
@@ -197,10 +201,6 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 
 The gatekeeper runs in addition to the Review Workload Guard and the Mandatory Delegation Triggers; it never relaxes them and never auto-marks anything reviewed in engram.
 
-### Native Runtime Attempt Authority (MANDATORY)
-
-{{GENTLE_AI_SDD_SECTION:Native Runtime Attempt Authority (MANDATORY)}}
-
 ### Artifact Store Mode
 
 When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) for the first time in a session, ALSO ASK which artifact store they want for this change:
@@ -338,6 +338,4 @@ Convention files live under `~/.config/agents/skills/_shared/` (global) or `.age
 
 ### Recovery Rule
 
-- `engram` → `mem_search(...)` → `mem_get_observation(...)`
-- `openspec` → read `openspec/changes/*/state.yaml`
-- `none` → state not persisted — explain to the user
+{{GENTLE_AI_SDD_SECTION:Recovery Rule}}

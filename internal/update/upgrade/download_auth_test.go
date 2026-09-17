@@ -20,8 +20,8 @@ import (
 
 	minisign "github.com/jedisct1/go-minisign"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 )
 
 const testMinisignKeyDomain = "gentle-ai issue 359 minisign TEST KEY; never use for releases"

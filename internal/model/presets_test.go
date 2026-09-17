@@ -36,3 +36,20 @@ func TestVisualPolishComponentsReturnsCompleteManagedCleanupInventory(t *testing
 		t.Fatalf("VisualPolishComponents() = %v, want complete cleanup inventory %v", got, want)
 	}
 }
+
+func TestExistingPresetsDoNotImplyCommunityTools(t *testing.T) {
+	for _, preset := range []PresetID{PresetFullGentleman, PresetEcosystemOnly, PresetMinimal, PresetCustom} {
+		t.Run(string(preset), func(t *testing.T) {
+			selection := Selection{
+				Preset:     preset,
+				Components: ComponentsForPreset(preset, PersonaGentleman),
+			}
+			if len(selection.CommunityTools) != 0 {
+				t.Fatalf("preset %q community tools = %v, want none", preset, selection.CommunityTools)
+			}
+			if selection.HasCommunityTool(CommunityToolRTK) {
+				t.Fatalf("preset %q implies RTK", preset)
+			}
+		})
+	}
+}

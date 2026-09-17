@@ -1,7 +1,7 @@
 ---
 name: sdd-archive
 description: >
-  Archive a completed and verified change. Use when verification has passed and the change
+  Archive the actual state of an SDD change, including unfinished work. Use when the change
   needs to be closed, merged, and persisted as final state.
 model: inherit
 readonly: false
@@ -17,12 +17,14 @@ Read the skill file at `~/.config/agents/skills/sdd-archive/SKILL.md` and follow
 Also read shared conventions at `~/.config/agents/skills/_shared/sdd-phase-common.md`.
 
 Execute all steps from the skill directly in this context window:
-1. Read all change artifacts (required):
+Verification is optional. Missing or failed reports and unfinished tasks do not block archive; do not rewrite checkboxes or historical reports.
+
+1. Read available change artifacts; preserve missing artifacts and unfinished work in the summary:
    - read the `proposal` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
    - read the `spec` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
    - read the `design` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
    - read the `tasks` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
-   - read the `verify-report` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
+   - when present, read the optional `verify-report` artifact from the orchestrator-injected locator (see `sdd-phase-common.md` section B)
 2. Merge delta specs into main specs when needed
 3. Move change folder to archive when needed
 4. Write final archive report with traceability

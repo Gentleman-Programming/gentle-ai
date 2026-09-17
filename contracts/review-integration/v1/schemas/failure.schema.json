@@ -94,6 +94,33 @@
         "paths_digest": {"$ref": "#/$defs/sha256"}
       }
     },
+    "negotiated_components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "projection", "candidate_tree", "paths_digest"],
+      "properties": {
+        "kind": {"enum": ["current-changes", "base-diff", "base-workspace-overlay", "fix-diff"]},
+        "projection": {"enum": ["workspace", "staged"]},
+        "base_tree": {"type": "string", "pattern": "^(?:[0-9a-f]{40}(?:[0-9a-f]{24})?)?$"},
+        "candidate_tree": {"$ref": "#/$defs/tree"},
+        "paths_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "target_drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "actual", "differing_components"],
+      "properties": {
+        "expected": {"$ref": "#/$defs/negotiated_components"},
+        "actual": {"$ref": "#/$defs/negotiated_components"},
+        "differing_components": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {"enum": ["kind", "projection", "base_tree", "candidate_tree", "paths_digest"]}
+        }
+      }
+    },
     "scope_change": {
       "type": "object",
       "additionalProperties": false,
@@ -134,9 +161,13 @@
     "gate_context": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scope_change"],
+      "oneOf": [
+        {"required": ["scope_change"], "not": {"required": ["target_drift"]}},
+        {"required": ["target_drift"], "not": {"required": ["scope_change"]}}
+      ],
       "properties": {
-        "scope_change": {"$ref": "#/$defs/scope_change"}
+        "scope_change": {"$ref": "#/$defs/scope_change"},
+        "target_drift": {"$ref": "#/$defs/target_drift"}
       }
     }
   }

@@ -20,15 +20,20 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetrycollector"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetrycollector"
 )
 
 const (
-	defaultListen           = "127.0.0.1:18181"
-	defaultDB               = "/var/lib/gentle-telemetry/events.sqlite"
-	defaultRetentionDays    = 90
-	defaultRateLimitPerMin  = 60
-	maintenanceInterval     = 24 * time.Hour
+	defaultListen                 = "127.0.0.1:18181"
+	defaultDB                     = "/var/lib/gentle-telemetry/events.sqlite"
+	defaultRetentionDays          = 90
+	defaultRateLimitPerMin        = 60
+	defaultRuntimeRateLimitPerMin = 600
+	// maintenanceUTCOffset anchors the daily rollup to shortly after UTC
+	// midnight instead of 24h after process start, so the previous day's
+	// rollup lands within minutes of being complete regardless of when
+	// the process was last restarted.
+	maintenanceUTCOffset    = 5 * time.Minute
 	rateLimiterSweepEvery   = 10 * time.Minute
 	rateLimiterSweepMaxIdle = 30 * time.Minute
 	shutdownTimeout         = 10 * time.Second
@@ -73,6 +78,7 @@ func run() error {
 	summaryTokenFile := flag.String("summary-token-file", "", "path to a file containing the bearer token required for GET /v1/summary")
 	retentionDays := flag.Int("retention-days", defaultRetentionDays, "days of raw events to retain before purge")
 	rateLimitPerMinute := flag.Int("rate-limit-per-minute", defaultRateLimitPerMin, "per-IP request budget for POST /v1/events, per minute")
+	runtimeRateLimitPerMinute := flag.Int("runtime-rate-limit-per-minute", defaultRuntimeRateLimitPerMin, "per-address request budget for POST /v1/runtime-events, per minute")
 	var trustedProxyCIDRs repeatableFlag
 	flag.Var(&trustedProxyCIDRs, "trusted-proxy-cidr", "CIDR of a peer allowed to set X-Forwarded-For/X-Real-IP for rate limiting (repeatable; default 127.0.0.0/8,::1/128)")
 	var npmPackages repeatableFlag
@@ -132,10 +138,12 @@ func run() error {
 	defer storage.Close()
 
 	limiter := telemetrycollector.NewRateLimiter(*rateLimitPerMinute)
+	runtimeLimiter := telemetrycollector.NewRateLimiter(*runtimeRateLimitPerMinute)
 
 	server := &telemetrycollector.Server{
 		Storage:        storage,
 		Limiter:        limiter,
+		RuntimeLimiter: runtimeLimiter,
 		SummaryToken:   summaryToken,
 		Logger:         logger,
 		TrustedProxies: trustedProxies,
@@ -161,7 +169,7 @@ func run() error {
 	maintenanceDone.Add(1)
 	go func() {
 		defer maintenanceDone.Done()
-		runMaintenanceLoop(ctx, storage, limiter, *retentionDays, downloadsCfg, downloadsClient, logger)
+		runMaintenanceLoop(ctx, storage, []*telemetrycollector.RateLimiter{limiter, runtimeLimiter}, *retentionDays, downloadsCfg, downloadsClient, logger)
 	}()
 
 	serveErr := make(chan error, 1)
@@ -214,12 +222,31 @@ func loadSummaryToken(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// runMaintenanceLoop runs the daily rollup+retention job once at startup and
-// then on a fixed interval, fetches external npm/GitHub download counts
-// right after it (a separate, independent step: a failure there is logged
-// and retried the next run, and never affects the rollup or ingest), and
-// periodically sweeps idle rate-limiter buckets, until ctx is cancelled.
-func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage, limiter *telemetrycollector.RateLimiter, retentionDays int, downloadsCfg telemetrycollector.DownloadsConfig, downloadsClient *http.Client, logger *slog.Logger) {
+// nextMaintenanceDelay returns the duration from now until the next
+// maintenanceUTCOffset past UTC midnight, strictly after now. now is
+// converted to UTC before comparing, so the result does not depend on the
+// caller's local time zone. If now is exactly at the offset, the next run
+// is a full day away (a duration of 0 would fire immediately, which is not
+// "the next" occurrence). The result is always in (0, 24h].
+func nextMaintenanceDelay(now time.Time) time.Duration {
+	now = now.UTC()
+	next := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Add(maintenanceUTCOffset)
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next.Sub(now)
+}
+
+// runMaintenanceLoop runs the daily rollup+retention job once at startup
+// (catching up any rollup missed while the process was down), then again
+// every day anchored to maintenanceUTCOffset past UTC midnight so the
+// dashboard never carries more than a few minutes of stale rollup data. It
+// fetches external npm/GitHub download counts right after each run (a
+// separate, independent step: a failure there is logged and retried the
+// next run, and never affects the rollup or ingest), and periodically
+// sweeps idle buckets on every limiter in limiters (events and runtime each
+// have their own), until ctx is cancelled.
+func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage, limiters []*telemetrycollector.RateLimiter, retentionDays int, downloadsCfg telemetrycollector.DownloadsConfig, downloadsClient *http.Client, logger *slog.Logger) {
 	runOnce := func() {
 		if err := telemetrycollector.RunMaintenance(ctx, storage, time.Now(), retentionDays); err != nil {
 			logger.Error("daily maintenance failed", "error", err)
@@ -235,8 +262,14 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 	}
 	runOnce()
 
-	maintenanceTicker := time.NewTicker(maintenanceInterval)
-	defer maintenanceTicker.Stop()
+	// Logged at startup and after every run so a mis-anchored timer (wrong
+	// timezone, clock skew, a bug in nextMaintenanceDelay) is visible in
+	// journalctl instead of only showing up as stale dashboard data a day
+	// later.
+	initialDelay := nextMaintenanceDelay(time.Now())
+	logger.Info("next daily maintenance scheduled", "in", initialDelay.Round(time.Second))
+	maintenanceTimer := time.NewTimer(initialDelay)
+	defer maintenanceTimer.Stop()
 	sweepTicker := time.NewTicker(rateLimiterSweepEvery)
 	defer sweepTicker.Stop()
 
@@ -244,10 +277,15 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 		select {
 		case <-ctx.Done():
 			return
-		case <-maintenanceTicker.C:
+		case <-maintenanceTimer.C:
 			runOnce()
+			delay := nextMaintenanceDelay(time.Now())
+			logger.Info("next daily maintenance scheduled", "in", delay.Round(time.Second))
+			maintenanceTimer.Reset(delay)
 		case <-sweepTicker.C:
-			limiter.Sweep(rateLimiterSweepMaxIdle)
+			for _, limiter := range limiters {
+				limiter.Sweep(rateLimiterSweepMaxIdle)
+			}
 		}
 	}
 }

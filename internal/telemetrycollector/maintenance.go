@@ -9,8 +9,10 @@ import (
 // RunMaintenance performs one cycle of the collector's daily job: it rolls
 // up every UTC day from the last rolled day (or the oldest raw event, if
 // nothing has ever been rolled up) through yesterday — catching up in one
-// run after the process was down for a while — and purges raw events older
-// than retentionDays.
+// run after the process was down for a while — and purges legacy raw events and
+// whole runtime deliveries older than retentionDays. Runtime-only databases
+// still reach purge when the legacy rollup range is empty. Runtime observations
+// are not rolled up here; their age is server receipt time, not activity time.
 //
 // Each day's rollup runs with context.WithoutCancel(ctx), so a cancelled
 // ctx (e.g. SIGTERM) never interrupts a day already in progress: that day's

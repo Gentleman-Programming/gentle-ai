@@ -83,6 +83,13 @@ func TestCompactEscalationAccountingBudgetExceeded(t *testing.T) {
 	if accounting.Remaining != 0 {
 		t.Fatalf("Remaining = %d, want clamped 0 when spent %d exceeds total %d", accounting.Remaining, accounting.Spent, accounting.Total)
 	}
+	state.CorrectionBudget = state.CumulativeCorrectionLines
+	proposed := 1
+	state.ProposedCorrectionLines, state.ActualCorrectionLines = &proposed, nil
+	evidence := state.EscalationEvidence()
+	if evidence.Cause != "correction_budget_exceeded" || evidence.FindingIDs == nil {
+		t.Fatalf("evidence = %#v, want budget cause and non-nil finding IDs", evidence)
+	}
 }
 
 // TestCompactEscalationAccountingOriginalCriteriaFailed pins that an

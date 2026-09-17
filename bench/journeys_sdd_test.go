@@ -9,8 +9,6 @@ var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j59-current-status-and-start-ignore-sibling-worktree-transaction",
 	"j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-	"j80-rescope-authorized-evidence-only-retry",
-	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }
 
 func portableSDDFailClosedAuthorityJourneySet(found bool) map[string]bool {

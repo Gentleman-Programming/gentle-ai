@@ -19,7 +19,7 @@ The symbol is **™**, not **®**, because this policy makes no claim that any m
 The symbol is deliberately **not** applied to technical identifiers, because those are not brand usage and altering them would break the thing they name:
 
 - shell commands, flags, and their output — for example `gentle-ai install`, `engram search`
-- Go module and import paths, package names, and the repository name — for example `github.com/gentleman-programming/gentle-ai/v2`
+- Go module and import paths, package names, and the repository name — for example `github.com/gentleman-programming/gentle-ai/v3`
 - file and directory paths, configuration keys, and environment variables
 - URLs, link targets, and HTML attributes
 - content inside code blocks and inline code spans

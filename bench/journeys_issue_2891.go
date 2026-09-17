@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -78,6 +79,18 @@ func issue2891SameParentStatus(sandbox *Sandbox, observation Observation) error 
 	if len(status.ActionContext.AllowedEditRoots) != 1 || status.ActionContext.AllowedEditRoots[0] != sandbox.Repo {
 		return fmt.Errorf("allowedEditRoots=%v, want only nested planning workspace %s", status.ActionContext.AllowedEditRoots, sandbox.Repo)
 	}
+	// Pure status cannot prepare consent; only the next explicit continuation may.
+	if sandbox.Scratch["issue-2891-status-read"] == "" {
+		if status.Consent != nil {
+			return fmt.Errorf("initial read-only status emitted consent: %v", status.Consent)
+		}
+		marker := filepath.Join(sandbox.Repo, "openspec", "changes", "same-repo-rollout", ".gentle-ai-instance")
+		if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+			return fmt.Errorf("initial read-only status marker: %v, want absent", err)
+		}
+		sandbox.Scratch["issue-2891-status-read"] = "true"
+		return nil
+	}
 	if status.Consent == nil || status.Consent.Schema != "gentle-ai.sdd-integration.consent/v1" ||
 		len(status.Consent.MissingRoots) != 1 || status.Consent.MissingRoots[0] != wantService {
 		return fmt.Errorf("consent missing_roots=%v, want [%s]", status.Consent, wantService)
@@ -120,6 +133,10 @@ func issue2891Journeys() []Journey {
 		Steps: []Step{
 			{Name: "fixture: nested planning workspace and sibling service share one Git root", Fixture: issue2891SameParentRepository},
 			{Name: "sdd-status blocks the unauthorized same-parent target", Requires: sddStatusCapability,
+				Args: productArgs("sdd-status", "same-repo-rollout", "--json"), After: issue2891SameParentStatus},
+			{Name: "explicit fixture-local continuation prepares consent without granting source authority",
+				Args: productArgs("sdd-continue", "same-repo-rollout", "--json"), After: issue2891SameParentStatus},
+			{Name: "read-only status returns the prepared bound consent", Requires: sddStatusCapability,
 				Args: productArgs("sdd-status", "same-repo-rollout", "--json"), After: issue2891SameParentStatus},
 			{Name: "sdd-attempt grant executes the emitted consent invocation", Args: issue2891GrantArgs},
 			{Name: "sdd-status re-entry projects the granted sibling edit root", Requires: sddStatusCapability,

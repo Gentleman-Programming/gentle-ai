@@ -7,14 +7,46 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
+
+func TestComponentPathsGlobalOpenClawAndPiPersonaMatchBackup(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenClaw, model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentEngram, model.ComponentSDD, model.ComponentSkills},
+		Persona:    model.PersonaGentleman, Skills: []model.SkillID{model.SkillGoTesting},
+	}
+	adapters := resolveAdapters(selection.Agents)
+	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, component := range selection.Components {
+		paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, adapters, component)
+		for _, path := range paths {
+			if !strings.HasPrefix(path, home+string(filepath.Separator)) || !containsPath(targets, path) {
+				t.Errorf("%s verification path %q must be at home and backed up", component, path)
+			}
+		}
+	}
+	for _, path := range targets {
+		if strings.HasPrefix(path, workspace+string(filepath.Separator)) {
+			t.Errorf("backup escaped global scope: %s", path)
+		}
+	}
+	for _, relative := range []string{"AGENTS.md", "SOUL.md", ".openclaw/openclaw.json", ".openclaw/skills/go-testing/SKILL.md", ".pi/gentle-ai/persona.json"} {
+		if !containsPath(targets, filepath.Join(home, relative)) {
+			t.Errorf("backup missing %s", relative)
+		}
+	}
+}
 
 func TestComponentPathsSDDIncludesSystemPromptForPromptFileAdapters(t *testing.T) {
 	home := t.TempDir()
@@ -150,7 +182,7 @@ func TestComponentPathsWorkspaceScopedOpenCodeSDDUsesWorkspaceManagedPaths(t *te
 	}
 }
 
-func TestComponentPersonaPiUsesResolvedScopePath(t *testing.T) {
+func TestComponentPathsPiPersonaUsesResolvedScopePath(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentPi})
@@ -160,8 +192,8 @@ func TestComponentPersonaPiUsesResolvedScopePath(t *testing.T) {
 	if !containsPath(global, filepath.Join(home, ".pi", "gentle-ai", "persona.json")) {
 		t.Fatalf("global Pi persona paths = %v, missing home-scoped config", global)
 	}
-	if !containsPath(global, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
-		t.Fatalf("global Pi persona paths = %v, missing active workspace config", global)
+	if containsPath(global, filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")) {
+		t.Fatalf("global Pi persona paths = %v, includes active workspace config", global)
 	}
 
 	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, model.ComponentPersona)
@@ -209,13 +241,6 @@ func TestInstallPiPersonaWritesManagedScopePaths(t *testing.T) {
 			want := filepath.Join(root, ".pi", "gentle-ai", "persona.json")
 			if _, err := os.Stat(want); err != nil {
 				t.Fatalf("Pi persona config %q was not written: %v", want, err)
-			}
-			if tt.scope == ScopeGlobal {
-				workspacePath := filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")
-				if _, err := os.Stat(workspacePath); err != nil {
-					t.Fatalf("global Pi persona config %q was not seeded: %v", workspacePath, err)
-				}
-				return
 			}
 			unwanted := filepath.Join(other, ".pi", "gentle-ai", "persona.json")
 			if _, err := os.Stat(unwanted); !os.IsNotExist(err) {
@@ -313,7 +338,7 @@ func TestComponentPathsWithWorkspaceOpenClawSDDUsesWorkspaceScopedSkills(t *test
 	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenClaw})
 
-	paths := componentPathsWithWorkspace(home, workspace, model.Selection{}, adapters, model.ComponentSDD)
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentSDD)
 
 	for _, want := range []string{
 		filepath.Join(workspace, ".openclaw", "skills", "_shared", "sdd-phase-common.md"),
@@ -348,8 +373,7 @@ func TestComponentPathsOpenClawSkillsSkipsSDDPhaseSkills(t *testing.T) {
 		},
 	}
 
-	// OpenClaw always uses workspaceDir when set, independent of scope.
-	paths := componentPathsWithWorkspace(home, workspace, selection, adapters, model.ComponentSkills)
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, model.ComponentSkills)
 
 	want := filepath.Join(workspace, ".openclaw", "skills", "go-testing", "SKILL.md")
 	if !containsPath(paths, want) {
@@ -784,6 +808,16 @@ func TestRemoteAuthorizationLeavesPiPackagePromptUntouched(t *testing.T) {
 	}
 }
 
+func TestInstallRoutingCleanupRetiresPiPrompt(t *testing.T) {
+	home := t.TempDir()
+	path := systemPromptFileFor(t, home, model.AgentPi)
+	mustWriteFile(t, path, []byte("user\n<!-- gentle-ai:agent-routing -->\nstale\n<!-- /gentle-ai:agent-routing -->\n"))
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, model.Selection{Agents: []model.AgentID{model.AgentPi}}))
+	if got := readTextFile(t, path); strings.Contains(got, "gentle-ai:agent-routing") || !strings.Contains(got, "user") {
+		t.Fatalf("install Pi cleanup = %q", got)
+	}
+}
+
 func TestInstallRemoteAuthorizationIndependentOfComponents(t *testing.T) {
 	for _, persona := range []model.PersonaID{"", model.PersonaCustom} {
 		t.Run(string(persona), func(t *testing.T) {
@@ -996,12 +1030,10 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 }
 
-// TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt covers issue
-// #4063: Pi reports SupportsSystemPrompt()==false because gentle-pi owns its
-// system prompt, so the routing guidance step must leave Pi's
-// APPEND_SYSTEM.md untouched instead of writing an agent-routing block into a
-// file gentle-ai does not own.
-func TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt(t *testing.T) {
+// TestAgentRoutingGuidanceStepRetiresPiManagedBlocks covers issue #3508: Pi
+// owns APPEND_SYSTEM.md, so routing never injects a new block but does remove
+// the paired stale block an older gentle-ai release wrote.
+func TestAgentRoutingGuidanceStepRetiresPiManagedBlocks(t *testing.T) {
 	home := t.TempDir()
 	promptPath := systemPromptFileFor(t, home, model.AgentPi)
 	existing := "user text before\n" +
@@ -1024,8 +1056,8 @@ func TestAgentRoutingGuidanceStepSkipsAgentsWithoutSystemPrompt(t *testing.T) {
 	}
 
 	got := readTextFile(t, promptPath)
-	if got != existing {
-		t.Fatalf("agentRoutingGuidanceStep rewrote Pi's system prompt file, want a no-op:\ngot  = %q\nwant = %q", got, existing)
+	if strings.Contains(got, "gentle-ai:agent-routing") || !strings.Contains(got, "user text before") || !strings.Contains(got, "user text after") {
+		t.Fatalf("Pi routing cleanup = %q, want only user content", got)
 	}
 }
 
@@ -1061,9 +1093,8 @@ func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(
 }
 
 // TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt covers issue
-// #4063: Pi's APPEND_SYSTEM.md must never be listed as a routing guidance
-// target, because the step that would write it is now a no-op for Pi and
-// declaring the path would only add a backup target nothing ever writes.
+// #4063: routing injection does not own Pi's APPEND_SYSTEM.md; cleanup backup
+// coverage is asserted separately.
 func TestRoutingGuidancePathsExcludesAgentsWithoutSystemPrompt(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentPi, model.AgentClaudeCode})
@@ -1132,6 +1163,18 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 		if !containsPath(targets, path) {
 			t.Fatalf("backupTargets missing routing guidance path %q\ntargets = %v", path, targets)
 		}
+	}
+}
+
+func TestBackupTargetsIncludePiPromptForRoutingCleanup(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentPi}}
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := systemPromptFileFor(t, home, model.AgentPi); !containsPath(targets, want) {
+		t.Fatalf("backup targets = %v, missing Pi cleanup path %q", targets, want)
 	}
 }
 
