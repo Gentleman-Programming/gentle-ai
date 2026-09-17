@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,12 @@ type Server struct {
 	// TrustedProxies are peer CIDRs allowed to set X-Forwarded-For/X-Real-IP
 	// for rate-limiting. Any other peer is keyed on its own address.
 	TrustedProxies []*net.IPNet
+
+	// invalidForwardedMu guards invalidForwardedLast, which throttles the
+	// "ignored an invalid forwarded address" log line to at most once per
+	// minute regardless of request volume.
+	invalidForwardedMu   sync.Mutex
+	invalidForwardedLast time.Time
 }
 
 // NewMux builds the collector's HTTP routes.
@@ -53,8 +60,12 @@ func (s *Server) now() time.Time {
 }
 
 // clientKey derives the rate-limiter key: the peer address, unless the peer
-// is a trusted proxy, in which case the first X-Forwarded-For hop (or
-// X-Real-IP) is used. Never persisted or logged.
+// is a trusted proxy, in which case the first X-Forwarded-For hop that
+// parses as an IP address is used (falling back to X-Real-IP, then the
+// peer). A forwarded value that does not parse as an IP is never used as a
+// key: production has seen "X-Forwarded-For: (null), <client>" from a
+// misconfigured proxy, which would otherwise key every client on the
+// literal string "(null)". Never persisted or logged.
 func (s *Server) clientKey(r *http.Request) string {
 	peer, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -64,14 +75,51 @@ func (s *Server) clientKey(r *http.Request) string {
 		return peer
 	}
 	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		if first := strings.TrimSpace(strings.SplitN(forwarded, ",", 2)[0]); first != "" {
-			return first
+		for _, hop := range strings.Split(forwarded, ",") {
+			if ip := parseForwardedAddress(hop); ip != "" {
+				return ip
+			}
 		}
+		s.logInvalidForwardedAddress()
 	}
-	if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); real != "" {
-		return real
+	if ip := parseForwardedAddress(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
 	}
 	return peer
+}
+
+// parseForwardedAddress validates raw as an IP address, accepting a bare
+// IP, a host:port pair, or a bracketed [v6]:port pair (the port, if any, is
+// stripped before validation). Returns "" when raw does not parse as an IP.
+func parseForwardedAddress(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(candidate); err == nil {
+		candidate = host
+	} else {
+		candidate = strings.TrimSuffix(strings.TrimPrefix(candidate, "["), "]")
+	}
+	if net.ParseIP(candidate) == nil {
+		return ""
+	}
+	return candidate
+}
+
+// logInvalidForwardedAddress logs that a trusted proxy sent an
+// X-Forwarded-For header with no parseable IP hop, throttled to at most
+// once per minute so a misconfigured proxy cannot flood the log. The
+// invalid value itself is never logged (privacy).
+func (s *Server) logInvalidForwardedAddress() {
+	now := s.now()
+	s.invalidForwardedMu.Lock()
+	defer s.invalidForwardedMu.Unlock()
+	if !s.invalidForwardedLast.IsZero() && now.Sub(s.invalidForwardedLast) < time.Minute {
+		return
+	}
+	s.invalidForwardedLast = now
+	s.logger().Info("ignored an invalid forwarded address")
 }
 
 func (s *Server) peerIsTrustedProxy(host string) bool {
