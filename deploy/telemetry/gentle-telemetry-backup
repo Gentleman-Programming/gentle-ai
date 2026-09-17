@@ -36,13 +36,28 @@ rm -f "${backup_dir}"/backup-*.sqlite "${backup_dir}"/vm-*.tar.gz
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 snapshot="${backup_dir}/backup-${ts}.sqlite"
 vm_archive=""
+# Only set once the VictoriaMetrics snapshot name below has been validated,
+# so cleanup() below never issues a delete for an unvalidated name.
+vm_snapshot=""
 
-# Always remove this run's own snapshot(s) on exit, success or failure
-# ("set -e" means a failed upload exits early, so only a trap reaches this
-# on the failure path too): the unit still fails and is visible via
-# failed-unit monitoring, but nothing is left on disk to eat space run
-# after run. rm -f on an empty vm_archive path is a silent no-op.
-trap 'rm -f "${snapshot}" "${vm_archive}"' EXIT
+# Always remove this run's own local snapshot(s) on exit, success or
+# failure ("set -e" means a failed upload exits early, so only a trap
+# reaches this on the failure path too): the unit still fails and is
+# visible via failed-unit monitoring, but nothing is left on disk to eat
+# space run after run. rm -f on an empty vm_archive path is a silent
+# no-op. The upstream VictoriaMetrics snapshot (when one was created) is
+# also deleted only from here, never inline after a successful upload, so
+# a failing tar or rclone upload still removes it upstream and there is
+# never more than one delete call to double-fault on.
+cleanup() {
+	local status=$?
+	rm -f "${snapshot}" "${vm_archive}"
+	if [[ -n "${vm_snapshot}" ]]; then
+		curl -fsS -X POST "${VM_URL}/snapshot/delete?snapshot=${vm_snapshot}" >/dev/null 2>&1 || true
+	fi
+	return "${status}"
+}
+trap cleanup EXIT
 
 # sqlite3's `VACUUM INTO` reads one consistent snapshot in a single pass
 # and writes it straight to the destination file. The previous `.backup`
@@ -62,18 +77,28 @@ rclone copy "${snapshot}" "${GENTLE_TELEMETRY_BACKUP_REMOTE}"
 # not every collector deploy runs it (see install.sh --with-victoria-metrics).
 if systemctl is-active --quiet "${VM_UNIT}" 2>/dev/null; then
 	vm_response="$(curl -fsS -X POST "${VM_URL}/snapshot/create")"
-	vm_snapshot="$(printf '%s' "${vm_response}" | sed -n 's/.*"snapshot":"\([^"]*\)".*/\1/p')"
-	if [[ -z "${vm_snapshot}" ]]; then
+	raw_vm_snapshot="$(printf '%s' "${vm_response}" | sed -n 's/.*"snapshot":"\([^"]*\)".*/\1/p')"
+	if [[ -z "${raw_vm_snapshot}" ]]; then
 		printf 'VictoriaMetrics snapshot/create returned no snapshot name: %s\n' "${vm_response}" >&2
 		exit 1
 	fi
+	# This name is about to be used as a `tar -C` archive member and in
+	# a delete URL, so refuse anything outside the alphanumeric/hyphen
+	# shape VictoriaMetrics generates its snapshot names in, rather than
+	# trusting the server, e.g. against a path-traversal name such as
+	# "../../etc".
+	if [[ ! "${raw_vm_snapshot}" =~ ^[A-Za-z0-9-]+$ ]]; then
+		printf 'unexpected snapshot name from VictoriaMetrics\n' >&2
+		exit 1
+	fi
+	vm_snapshot="${raw_vm_snapshot}"
 
 	vm_archive="${backup_dir}/vm-${ts}.tar.gz"
 	tar -czf "${vm_archive}" -C "${VM_DIR}/snapshots" "${vm_snapshot}"
 	rclone copy "${vm_archive}" "${GENTLE_TELEMETRY_BACKUP_REMOTE}"
 
-	# Deleting the snapshot only removes VictoriaMetrics' on-disk hardlink
-	# tree for it; the live series data (and the archive just uploaded
-	# above) are unaffected.
-	curl -fsS -X POST "${VM_URL}/snapshot/delete?snapshot=${vm_snapshot}" >/dev/null
+	# The upstream delete itself happens in cleanup() above so it also
+	# runs when tar or rclone fails; deleting the snapshot only removes
+	# VictoriaMetrics' on-disk hardlink tree for it, the live series data
+	# (and the archive just uploaded above) are unaffected.
 fi
