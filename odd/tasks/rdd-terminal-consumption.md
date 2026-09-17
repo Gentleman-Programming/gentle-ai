@@ -39,7 +39,7 @@ Parent supplied verified approval for #4405, current-main reproduction on b63082
 - [x] RDD-1: Add behavior-first regressions reproducing post-acknowledgement selectorless STATUS and Stop-hook duplicate START.
 - [x] RDD-2: Implement minimal durable consumed-target evidence and route exact unchanged targets to a terminal/silent result without restoring authority.
 - [x] RDD-3: Align derived committed-range transition identity/projection and add regression coverage for empty-live-projection cases.
-- [x] RDD-4: Run focused tests, gofmt check, and relevant package verification; record evidence and work-unit commits. Native review approved and authority was acknowledged/burned; implementation committed as `d96f4d8e`.
+- [ ] RDD-4: Run focused tests, gofmt check, and relevant package verification; record evidence and work-unit commits. The original implementation was reviewed, acknowledged/burned, and committed as `d96f4d8e`; the PR #4737 CI fixture correction below remains pending parent commit/review.
 
 ## Acceptance criteria
 - Exact acknowledged target gets an authority-free `stop` / `target_already_acknowledged`, not another START.
@@ -102,4 +102,24 @@ Classification: these six representative macOS path/lock failures are base/envir
 - Full unfiltered CLI suite now passes; the full reviewtransaction suite was not repeated. Bounded base comparison below confirms six representative path/lock failures predate this candidate.
 - RDD mode is parent-reported enabled. No review transaction was started by this worker; independent review and any consent remain parent-owned.
 - Rollback boundary: remove consumption publication/lookup and the effective-range projection change together with their tests. Existing authority burn remains independently intact; leftover tombstones are non-authoritative.
-- Next: publish the branch, create the issue-linked PR, and merge it under ordinary repository policy after explicit remote authorization.
+- Next: parent commits/reviews the CI correction for existing PR #4737 and follows ordinary repository policy for remote delivery. This worker performed no commit, push, or GitHub mutation.
+
+## PR #4737 CI fixture correction
+
+CI passed `internal/cli` and `internal/reviewtransaction` but exposed stale generated fixtures and rendered-cost expectations after the shipped `target_already_acknowledged` continuation was added for #4405. This correction changes no production behavior.
+
+- Regenerated only the six originally authorized goldens using the test-owned `-update` mechanism. The user additionally authorized incidental rewrites of 20 Claude command/agent fixtures and the Codex sdd-init skill fixture, conditional on unchanged final bytes. A byte comparison against the initially clean HEAD verified all 21 incidental fixtures stayed identical.
+- Inspected all six generated diffs with an exact byte-removal comparison: their sole addition is the terminal continuation row (JSON-escaped newline in the OpenCode fixture).
+- Updated rendered-cost pins to standard 19,108 characters / 4,777 estimated tokens and full-4R 35,515 / 8,878. Both ceilings move by the same 390 characters to preserve their existing absolute margins; no guard was removed.
+- Strict TDD was not activated for this fixture-only correction; historical implementation TDD evidence above remains unchanged.
+
+Observed checks:
+
+1. `go test ./internal/components -run '^(TestGoldenSDD_Claude|TestGoldenSDD_OpenCode_Multi|TestGoldenSDD_Codex|TestGoldenSDD_Codex_LowCost|TestGoldenSDD_Codex_Powerful|TestGoldenCombined_Claude)$' -update -count=1` passed (2.778s).
+2. `go test ./internal/components -run '^(TestGoldenSDD_Claude|TestGoldenSDD_OpenCode_Multi|TestGoldenSDD_Codex|TestGoldenSDD_Codex_LowCost|TestGoldenSDD_Codex_Powerful|TestGoldenCombined_Claude)$' -count=1` passed (2.798s), without update mode.
+3. `go test ./internal/components/sdd -run TestOpenCodeRenderedReviewProtocolCost -count=1` passed (0.491s).
+4. `go test ./internal/components ./internal/components/sdd -count=1` passed (components 12.548s; sdd 133.248s).
+5. `go run ./internal/gofmtcheck` passed (no output).
+6. `git diff --check` passed (no output).
+
+Rollback boundary: the six golden updates, the cost pins/ceilings and explanatory comment, and this correction record. Runtime harness: N/A, generated-fixture synchronization only; no host-runtime behavior changed. Full `go test ./...` was not rerun locally. RDD-4 remains pending parent commit/review.

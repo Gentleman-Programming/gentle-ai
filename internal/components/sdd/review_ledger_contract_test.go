@@ -815,8 +815,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// headroom each row already had.
 		// #4324 adds 1,354 canonical remote-authorization characters per reviewer.
 		// Preserve the existing absolute ceiling margins (3 and 1,533 characters).
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_718, maxCharacters: 18_721},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_125, maxCharacters: 36_658},
+		// #4405 adds the target_already_acknowledged terminal continuation (+390
+		// characters per row). Preserve the existing absolute ceiling margins.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_108, maxCharacters: 19_111},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_515, maxCharacters: 37_048},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
