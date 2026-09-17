@@ -1,0 +1,57 @@
+[Unit]
+Description=VictoriaMetrics (single node) for gentle-telemetry runtime metrics
+Documentation=https://github.com/Gentleman-Programming/gentle-ai/blob/main/docs/telemetry-collector.md
+After=network-online.target gentle-telemetry.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/victoria-metrics \
+	-storageDataPath=/var/lib/victoria-metrics \
+	-retentionPeriod=100y \
+	-httpListenAddr=127.0.0.1:8428 \
+	-promscrape.config=/etc/victoria-metrics/scrape.yaml \
+	-selfScrapeInterval=0
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+
+# A static system user/group (created by install.sh), matching
+# gentle-telemetry.service's own reasoning: DynamicUser would materialize
+# StateDirectory under /var/lib/private/victoria-metrics with a symlink at
+# /var/lib/victoria-metrics, and this unit's storageDataPath needs a real,
+# stable, writable directory rather than that indirection.
+DynamicUser=no
+User=victoria-metrics
+Group=victoria-metrics
+
+# Hardening, mirroring gentle-telemetry.service. This unit only needs to:
+# listen on a loopback TCP port, scrape another loopback TCP port, read
+# its scrape config under /etc/victoria-metrics, and read/write its data
+# under /var/lib/victoria-metrics.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/victoria-metrics
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+# Promscrape configuration for VictoriaMetrics: one job scraping the
+# gentle-telemetry collector's /metrics endpoint (Prometheus text
+# exposition of the runtime counters registry, see
+# internal/telemetrycollector/metrics.go and
+# docs/telemetry-collector.md#runtime-metrics-for-victoriametrics).
+#
+# Installed by deploy/telemetry/install.sh --with-victoria-metrics to
+# /etc/victoria-metrics/scrape.yaml. Both VictoriaMetrics and the
+# collector listen on loopback only, so this scrape never crosses the
+# host boundary.
+scrape_configs:
+  - job_name: gentle-telemetry
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 127.0.0.1:18181

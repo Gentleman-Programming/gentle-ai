@@ -15,6 +15,8 @@
 #   sudo ./install.sh --local-source /path/to/gentle-ai/checkout
 #   sudo ./install.sh --local-source /path/to/gentle-ai/checkout \
 #       --domain telemetry.example.com --with-grafana
+#   sudo ./install.sh --local-source /path/to/gentle-ai/checkout \
+#       --with-victoria-metrics --with-grafana
 #
 # gentle-telemetry (cmd/gentle-telemetry) is not yet wired into
 # .goreleaser.yaml — see docs/telemetry-collector.md for why — so there is
@@ -36,12 +38,17 @@ REPO="Gentleman-Programming/gentle-ai"
 RELEASE_TAG=""
 LOCAL_SOURCE=""
 WITH_GRAFANA="false"
+WITH_VICTORIA_METRICS="false"
+VICTORIA_METRICS_VERSION="v1.152.0"
 DOMAIN=""
 ADDRESS=""
 BIN_DEST="/usr/local/bin/gentle-telemetry"
 UNIT_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/gentle-telemetry"
 STATE_DIR="/var/lib/gentle-telemetry"
+VM_BIN_DEST="/usr/local/bin/victoria-metrics"
+VM_CONFIG_DIR="/etc/victoria-metrics"
+VM_STATE_DIR="/var/lib/victoria-metrics"
 # Where systemd keeps DynamicUser state; only the migration reads it.
 PRIVATE_STATE_ROOT="/var/lib/private"
 APACHE_INCLUDE_FILE="/etc/apache2/conf.d/includes/post_virtualhost_global.conf"
@@ -56,6 +63,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: $0 (--release-tag <tag> | --local-source <path>)
           [--domain <fqdn>] [--with-grafana]
+          [--with-victoria-metrics] [--victoria-metrics-version <tag>]
           [--address <ipv4|*>]
 
   --address  Address to bind the rendered <VirtualHost> blocks to. On a
@@ -65,6 +73,14 @@ Usage: $0 (--release-tag <tag> | --local-source <path>)
              among vhosts bound to the same address). By default this is
              detected from \${APACHE_INCLUDE_FILE}; pass this flag to
              override that detection.
+
+  --with-victoria-metrics    Install single-node VictoriaMetrics
+                              (deploy/telemetry/victoria-metrics.service)
+                              and point it at the collector's /metrics
+                              endpoint. Off by default. With --with-grafana,
+                              also provisions a "gentle-runtime-vm"
+                              datasource.
+  --victoria-metrics-version Release tag to install. Default: v1.152.0.
 EOF
 	exit 1
 }
@@ -90,6 +106,14 @@ while [[ $# -gt 0 ]]; do
 	--with-grafana)
 		WITH_GRAFANA="true"
 		shift
+		;;
+	--with-victoria-metrics)
+		WITH_VICTORIA_METRICS="true"
+		shift
+		;;
+	--victoria-metrics-version)
+		VICTORIA_METRICS_VERSION="$2"
+		shift 2
 		;;
 	-h | --help)
 		usage
@@ -302,6 +326,86 @@ else
 	printf '  systemctl enable --now axiom-telemetry-backup.timer\n'
 fi
 
+# create_victoria_metrics_user idempotently creates the static system
+# user/group victoria-metrics.service runs as, mirroring
+# create_telemetry_user's reasoning: a static user gives the storage
+# directory a stable, real path rather than DynamicUser's
+# /var/lib/private/<name> indirection.
+create_victoria_metrics_user() {
+	if getent passwd victoria-metrics >/dev/null 2>&1; then
+		return
+	fi
+	printf 'creating system user/group victoria-metrics\n'
+	useradd --system --home-dir "${VM_STATE_DIR}" --shell /sbin/nologin --user-group victoria-metrics
+}
+
+# install_victoria_metrics idempotently installs single-node
+# VictoriaMetrics: the pinned release binary (checksum-verified), its
+# scrape config, and its systemd unit, then waits for it to answer
+# healthy. Re-running skips the download once the installed binary
+# already reports ${VICTORIA_METRICS_VERSION} via `victoria-metrics
+# --version`; the directories, unit, and scrape config are always
+# (re)installed so a changed scrape config or a version bump still takes
+# effect without a download.
+install_victoria_metrics() {
+	local asset="victoria-metrics-linux-amd64-${VICTORIA_METRICS_VERSION}.tar.gz"
+	local checksums_file="victoria-metrics-linux-amd64-${VICTORIA_METRICS_VERSION}_checksums.txt"
+	local base_url="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${VICTORIA_METRICS_VERSION}"
+
+	create_victoria_metrics_user
+
+	if [[ -x "${VM_BIN_DEST}" ]] && "${VM_BIN_DEST}" --version 2>&1 | grep -qF -- "-${VICTORIA_METRICS_VERSION}-"; then
+		printf '%s already reports %s; skipping download\n' "${VM_BIN_DEST}" "${VICTORIA_METRICS_VERSION}"
+	else
+		local tmp
+		tmp="$(mktemp -d)"
+		trap 'rm -rf "${tmp}"' RETURN
+
+		printf 'downloading %s\n' "${base_url}/${asset}"
+		curl -fsSL "${base_url}/${asset}" -o "${tmp}/${asset}"
+		curl -fsSL "${base_url}/${checksums_file}" -o "${tmp}/${checksums_file}"
+
+		# Verify only the exact asset's line, fail closed on any mismatch or
+		# missing entry. The release's checksums file is already formatted
+		# as "<sha256>  <filename>" per line, i.e. sha256sum -c's own
+		# output format, so the filtered single line needs no reformatting.
+		if ! grep -F "  ${asset}" "${tmp}/${checksums_file}" >"${tmp}/${asset}.sha256"; then
+			printf 'checksum entry for %s not found in %s\n' "${asset}" "${checksums_file}" >&2
+			exit 1
+		fi
+		(cd "${tmp}" && sha256sum -c "${asset}.sha256")
+
+		tar -xzf "${tmp}/${asset}" -C "${tmp}" victoria-metrics-prod
+		install -m 0755 "${tmp}/victoria-metrics-prod" "${VM_BIN_DEST}"
+	fi
+
+	mkdir -p "${VM_STATE_DIR}" "${VM_CONFIG_DIR}"
+	chown victoria-metrics:victoria-metrics "${VM_STATE_DIR}"
+	chmod 0750 "${VM_STATE_DIR}"
+
+	install -m 0644 "${SCRIPT_DIR}/victoria-metrics.service" "${UNIT_DIR}/victoria-metrics.service"
+	install -m 0644 "${SCRIPT_DIR}/victoria-metrics-scrape.yaml" "${VM_CONFIG_DIR}/scrape.yaml"
+
+	systemctl daemon-reload
+	systemctl enable --now victoria-metrics.service
+
+	printf 'waiting for VictoriaMetrics to answer healthy on 127.0.0.1:8428/health\n'
+	local _attempt
+	for _attempt in $(seq 1 30); do
+		if curl -fsS -o /dev/null "http://127.0.0.1:8428/health"; then
+			printf 'VictoriaMetrics is healthy\n'
+			return
+		fi
+		sleep 1
+	done
+	printf 'VictoriaMetrics did not answer healthy on http://127.0.0.1:8428/health after 30s\n' >&2
+	exit 1
+}
+
+if [[ "${WITH_VICTORIA_METRICS}" == "true" ]]; then
+	install_victoria_metrics
+fi
+
 # set_ini_kv upserts key = value under [section] in an ini file, creating
 # the section if it does not exist yet. Used for grafana.ini below, since
 # it ships with these settings commented out rather than absent.
@@ -380,6 +484,9 @@ EOF
 
 	mkdir -p "${GRAFANA_PROVISIONING_DIR}/datasources" "${GRAFANA_PROVISIONING_DIR}/dashboards" "${GRAFANA_DASHBOARD_DIR}"
 	install -m 0644 "${SCRIPT_DIR}/grafana/provisioning/datasources/telemetry.yaml" "${GRAFANA_PROVISIONING_DIR}/datasources/telemetry.yaml"
+	if [[ "${WITH_VICTORIA_METRICS}" == "true" ]]; then
+		install -m 0644 "${SCRIPT_DIR}/grafana/provisioning/datasources/victoria-metrics.yaml" "${GRAFANA_PROVISIONING_DIR}/datasources/victoria-metrics.yaml"
+	fi
 	install -m 0644 "${SCRIPT_DIR}/grafana/provisioning/dashboards/telemetry.yaml" "${GRAFANA_PROVISIONING_DIR}/dashboards/telemetry.yaml"
 	install -m 0644 "${SCRIPT_DIR}/grafana/dashboards/gentle-ai-usage.json" "${GRAFANA_DASHBOARD_DIR}/gentle-ai-usage.json"
 

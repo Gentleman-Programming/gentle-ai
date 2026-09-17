@@ -392,9 +392,11 @@ domain configured this way, so this kit does not use one.
 |---|---|
 | `apache/telemetry-vhost.conf.tmpl` | Template for the two `<VirtualHost>` blocks (`:80` and `:443`), mirroring the existing pattern: proxies `/v1/`, `/healthz`, and (with `--with-grafana`) `/grafana/` to loopback, asserts `X-Forwarded-For` from Apache itself, force-HTTPS except for the ACME challenge path, and a supplementary access log that omits the client address for `/v1/`. `__DOMAIN__` is substituted by `install.sh --domain`. Not applied automatically — see below. |
 | `axiom-telemetry.service` | systemd unit: runs as the static `gentle-telemetry` system user (created by `install.sh`), `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). See [Why a static user, not `DynamicUser`](#why-a-static-user-not-dynamicuser). |
-| `axiom-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `axiom-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. |
-| `grafana/` | Datasource and dashboard provisioning for an optional on-box Grafana; see [Grafana dashboards](#grafana-dashboards). |
-| `install.sh` | Creates the static `gentle-telemetry` system user (migrating an older `DynamicUser`-layout install in place if found), installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo. It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
+| `axiom-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 VACUUM INTO` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally; also backs up VictoriaMetrics when it is installed. The logic lives in the standalone `axiom-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. See [VictoriaMetrics](#victoriametrics). |
+| `victoria-metrics.service` | systemd unit for single-node VictoriaMetrics, installed with `--with-victoria-metrics`; runs as the static `victoria-metrics` system user with the same hardening approach as `axiom-telemetry.service`. See [VictoriaMetrics](#victoriametrics). |
+| `victoria-metrics-scrape.yaml` | The one `promscrape.config` job (`gentle-telemetry`, 15s interval) scraping the collector's `/metrics` on `127.0.0.1:18181`. Installed to `/etc/victoria-metrics/scrape.yaml`. |
+| `grafana/` | Datasource and dashboard provisioning for an optional on-box Grafana; see [Grafana dashboards](#grafana-dashboards). With both `--with-grafana` and `--with-victoria-metrics`, also provisions the `gentle-runtime-vm` Prometheus datasource. |
+| `install.sh` | Creates the static `gentle-telemetry` system user (migrating an older `DynamicUser`-layout install in place if found), installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo; with `--with-victoria-metrics`, installs single-node VictoriaMetrics (see [VictoriaMetrics](#victoriametrics)). It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
 
 ```
 sudo ./deploy/telemetry/install.sh --local-source /path/to/gentle-ai/checkout \
@@ -553,6 +555,61 @@ Each day's rollup is one all-or-nothing transaction, and a shutdown only
 ever stops the catch-up loop *between* days — the in-progress day always
 either finishes and commits, or never starts — so a restart mid-catch-up
 never leaves a half-written day behind.
+
+### VictoriaMetrics
+
+`install.sh --with-victoria-metrics [--victoria-metrics-version <tag>]`
+(default `v1.152.0`) installs single-node VictoriaMetrics next to the
+collector, so the counters exposed at `/metrics` (see
+[Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics))
+get scraped and kept with effectively unlimited retention.
+
+| What | Where |
+|---|---|
+| Binary | `/usr/local/bin/victoria-metrics` (the release's `victoria-metrics-prod` asset, checksum-verified against that release's own `_checksums.txt` before install) |
+| Unit | `/etc/systemd/system/victoria-metrics.service`, static `victoria-metrics` system user, same hardening approach as `gentle-telemetry.service` |
+| Data | `/var/lib/victoria-metrics`, `-retentionPeriod=100y` |
+| Scrape config | `/etc/victoria-metrics/scrape.yaml` — one job, `gentle-telemetry`, `scrape_interval: 15s`, `metrics_path: /metrics`, target `127.0.0.1:18181` |
+| HTTP API | loopback only, `127.0.0.1:8428` (never proxied publicly by this kit) |
+
+Install is idempotent: re-running `install.sh --with-victoria-metrics`
+skips the download once the installed binary already reports the pinned
+version via `victoria-metrics --version`, but always reinstalls the unit
+and scrape config so a version bump or a scrape config change still takes
+effect without a redundant download. After installing the unit, `install.sh`
+waits (bounded retries against `http://127.0.0.1:8428/health`) for it to
+come up before returning.
+
+**How the scrape works**: `-promscrape.config=/etc/victoria-metrics/scrape.yaml`
+tells VictoriaMetrics to pull the collector's `/metrics` endpoint every 15s
+over loopback. The collector's own counters reset to 0 on every process
+restart (an in-memory registry — see
+[Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics)),
+so every PromQL query against this data uses `increase()`/`rate()`, never
+the raw counter value, and a restart never shows up as a drop.
+
+**Backup**: `gentle-telemetry-backup` skips the VictoriaMetrics step
+silently when `victoria-metrics.service` is not installed/active. When it
+is, the script takes a consistent snapshot via `POST /snapshot/create`,
+tars `/var/lib/victoria-metrics/snapshots/<name>` to `vm-<timestamp>.tar.gz`,
+uploads it via the same `rclone copy` used for the SQLite backup, then
+deletes the snapshot via `POST /snapshot/delete?snapshot=<name>` (this
+only removes VictoriaMetrics' own on-disk snapshot hardlinks; the
+already-uploaded archive and the live series data are unaffected). The
+SQLite half of the same script now takes its snapshot with `VACUUM INTO`
+instead of `sqlite3 .backup`: `.backup` restarts its copy loop every time
+it notices the source changed mid-copy, and under this collector's real
+write rate (~1,150 deliveries/min once #4723 shipped) that restart never
+stopped recurring, so `.backup` never finished under load. `VACUUM INTO`
+reads one consistent snapshot in a single pass regardless of concurrent
+writes.
+
+**Grafana**: with both `--with-victoria-metrics` and `--with-grafana`,
+`install.sh` also provisions a Prometheus datasource named
+`gentle-runtime-vm` (fixed `uid: gentle-runtime-vm`, `url:
+http://127.0.0.1:8428`, not default) alongside the existing SQLite
+datasource, so dashboard panels can reference it directly without a
+manual re-link after install.
 
 ### Answering "how many people use it"
 

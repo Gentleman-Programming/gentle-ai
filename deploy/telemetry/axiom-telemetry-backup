@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Nightly backup of the Axiom telemetry SQLite database: a consistent
-# `sqlite3 .backup` snapshot uploaded via `rclone copy`, then removed
-# locally.
+# Nightly backup of the Axiom telemetry SQLite database (a `VACUUM INTO`
+# snapshot uploaded via `rclone copy`, then removed locally) plus, when
+# victoria-metrics.service is installed and running on this host, a
+# VictoriaMetrics snapshot of the runtime metrics (tar'd and uploaded the
+# same way, then deleted upstream). See
+# docs/telemetry-collector.md#victoriametrics.
 #
 # Installed by install.sh to /usr/local/bin/axiom-telemetry-backup and
 # invoked with no arguments by axiom-telemetry-backup.service's
@@ -14,27 +17,63 @@ set -euo pipefail
 
 DB="${GENTLE_TELEMETRY_DB:-/var/lib/gentle-telemetry/events.sqlite}"
 : "${GENTLE_TELEMETRY_BACKUP_REMOTE:?GENTLE_TELEMETRY_BACKUP_REMOTE is not set}"
+# Overridable for tests only; production always uses the real
+# VictoriaMetrics directory, loopback URL, and unit name installed by
+# install.sh --with-victoria-metrics.
+VM_DIR="${GENTLE_TELEMETRY_VM_DIR:-/var/lib/victoria-metrics}"
+VM_URL="${GENTLE_TELEMETRY_VM_URL:-http://127.0.0.1:8428}"
+VM_UNIT="${GENTLE_TELEMETRY_VM_UNIT:-victoria-metrics.service}"
 
 backup_dir="$(dirname "${DB}")"
 
 # A snapshot left behind by an earlier failed run (upload failure, crash,
 # OOM-kill) is stale by definition — this run is about to take a fresh one
 # — so prune any of them before creating a new one, instead of letting one
-# full DB copy accumulate per failed night on the collector's own
-# filesystem.
-rm -f "${backup_dir}"/backup-*.sqlite
+# full DB copy (or VM archive) accumulate per failed night on the
+# collector's own filesystem.
+rm -f "${backup_dir}"/backup-*.sqlite "${backup_dir}"/vm-*.tar.gz
 
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 snapshot="${backup_dir}/backup-${ts}.sqlite"
+vm_archive=""
 
-# Always remove this run's own snapshot on exit, success or failure ("set
-# -e" means a failed upload exits early, so only a trap reaches this on the
-# failure path too): the unit still fails and is visible via failed-unit
-# monitoring, but no snapshot is left on disk to eat space run after run.
-trap 'rm -f "${snapshot}"' EXIT
+# Always remove this run's own snapshot(s) on exit, success or failure
+# ("set -e" means a failed upload exits early, so only a trap reaches this
+# on the failure path too): the unit still fails and is visible via
+# failed-unit monitoring, but nothing is left on disk to eat space run
+# after run. rm -f on an empty vm_archive path is a silent no-op.
+trap 'rm -f "${snapshot}" "${vm_archive}"' EXIT
 
-# sqlite3's ".backup" command takes a consistent snapshot even while the
-# collector is writing (SQLite's own backup API), so this never needs to
-# stop axiom-telemetry.service.
-sqlite3 "${DB}" ".backup ${snapshot}"
+# sqlite3's `VACUUM INTO` reads one consistent snapshot in a single pass
+# and writes it straight to the destination file. The previous `.backup`
+# command (SQLite's incremental backup API) restarts its copy loop from
+# the beginning whenever it notices the source changed mid-copy; under
+# this collector's real write rate (~1,150 deliveries/min once #4723
+# shipped) that restart never stopped recurring, so `.backup` never
+# finished. `VACUUM INTO` has no such restart behavior. The destination
+# must not already exist — ${snapshot} is a fresh, timestamped path each
+# run, and the line above already removed any leftover from a previous
+# failed run.
+sqlite3 "${DB}" "VACUUM INTO '${snapshot}';"
 rclone copy "${snapshot}" "${GENTLE_TELEMETRY_BACKUP_REMOTE}"
+
+# VictoriaMetrics snapshot backup: skipped silently when
+# victoria-metrics.service is not installed/running on this host, since
+# not every collector deploy runs it (see install.sh --with-victoria-metrics).
+if systemctl is-active --quiet "${VM_UNIT}" 2>/dev/null; then
+	vm_response="$(curl -fsS -X POST "${VM_URL}/snapshot/create")"
+	vm_snapshot="$(printf '%s' "${vm_response}" | sed -n 's/.*"snapshot":"\([^"]*\)".*/\1/p')"
+	if [[ -z "${vm_snapshot}" ]]; then
+		printf 'VictoriaMetrics snapshot/create returned no snapshot name: %s\n' "${vm_response}" >&2
+		exit 1
+	fi
+
+	vm_archive="${backup_dir}/vm-${ts}.tar.gz"
+	tar -czf "${vm_archive}" -C "${VM_DIR}/snapshots" "${vm_snapshot}"
+	rclone copy "${vm_archive}" "${GENTLE_TELEMETRY_BACKUP_REMOTE}"
+
+	# Deleting the snapshot only removes VictoriaMetrics' on-disk hardlink
+	# tree for it; the live series data (and the archive just uploaded
+	# above) are unaffected.
+	curl -fsS -X POST "${VM_URL}/snapshot/delete?snapshot=${vm_snapshot}" >/dev/null
+fi
