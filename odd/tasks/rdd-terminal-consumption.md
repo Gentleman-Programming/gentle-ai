@@ -39,7 +39,7 @@ Parent supplied verified approval for #4405, current-main reproduction on b63082
 - [x] RDD-1: Add behavior-first regressions reproducing post-acknowledgement selectorless STATUS and Stop-hook duplicate START.
 - [x] RDD-2: Implement minimal durable consumed-target evidence and route exact unchanged targets to a terminal/silent result without restoring authority.
 - [x] RDD-3: Align derived committed-range transition identity/projection and add regression coverage for empty-live-projection cases.
-- [ ] RDD-4: Run focused tests, gofmt check, and relevant package verification; record evidence and work-unit commits. Functional checks completed below; parent-owned review and work-unit commit remain pending.
+- [x] RDD-4: Run focused tests, gofmt check, and relevant package verification; record evidence and work-unit commits. Native review approved and authority was acknowledged/burned; implementation committed as `d96f4d8e`.
 
 ## Acceptance criteria
 - Exact acknowledged target gets an authority-free `stop` / `target_already_acknowledged`, not another START.
@@ -95,10 +95,11 @@ Classification: these six representative macOS path/lock failures are base/envir
 
 ## Progress / remaining checks
 - Branch: `fix/rdd-terminal-consumption`; base `main` at `b6308292`.
-- No commits or GitHub mutations. Pre-existing untracked `odd/` was preserved; only this authorized document was changed within it.
+- Native review `review-31fa0d525c1abf2d` approved the frozen candidate; acknowledgement burned authority at revision `sha256:ba337070c60793a82c4d9a789fcccf935976e6a1d548ea2bbfe6fb7bd88c3d9b`.
+- Work-unit commit: `d96f4d8e` (`fix(review): suppress consumed target re-review`). No push, PR, merge, or other GitHub mutation has been performed yet.
 - CodeGraph index/tools were unavailable within the delegated scope; inspected named source paths directly.
 - Runtime evidence: Go entry-point integration tests with isolated Git repositories and hook payloads. No live Claude Code session or driven bench journey was run; these tests do not claim host-runtime E2E proof.
 - Full unfiltered CLI suite now passes; the full reviewtransaction suite was not repeated. Bounded base comparison below confirms six representative path/lock failures predate this candidate.
 - RDD mode is parent-reported enabled. No review transaction was started by this worker; independent review and any consent remain parent-owned.
 - Rollback boundary: remove consumption publication/lookup and the effective-range projection change together with their tests. Existing authority burn remains independently intact; leftover tombstones are non-authoritative.
-- Next: parent structural readback, spot check, native review if authorized, and an explicitly authorized work-unit commit. RDD-4 remains incomplete until those parent-owned actions are recorded.
+- Next: publish the branch, create the issue-linked PR, and merge it under ordinary repository policy after explicit remote authorization.
