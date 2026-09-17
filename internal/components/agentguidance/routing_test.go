@@ -204,8 +204,8 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 		}},
 		{"existing checks and ownership", []string{
 			"Preserve existing native risk selection and applicable functional verification",
-			"Run applicable functional checks per task, not an RDD cycle per TODO checkbox",
-			"native review at the applicable deliverable candidate boundary",
+			"Run applicable functional checks per task, not a review cycle per TODO checkbox",
+			"The native review candidate is a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch",
 			"existing risk, consent, and authority",
 			"Never skip an existing delivery gate",
 			"A task list or assumption challenge never enables RDD",
@@ -246,6 +246,87 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			}
 			if strings.Contains(rendered, "propose SDD only when durable proposal") {
 				t.Error("organic uncertainty still proactively recommends SDD")
+			}
+		})
+	}
+}
+
+// TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt pins the
+// work-unit commit contract: every task closes with a commit on the feature
+// branch, and the native review candidate is that commit or the PR slice it
+// belongs to, bounded to the previous reviewed boundary, rather than a TODO
+// checkbox or the accumulated branch. It also pins the per-tier assessment
+// contract (passive/low stays silent, high or an unavailable assessment
+// reviews the commit immediately, medium defers to the PR slice bounded by
+// the delivery budget) and delivery follows the running authored line count
+// using the shared delivery-strategy vocabulary and named skill registry
+// lookups.
+func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		clauses []string
+	}{
+		{"work-unit commit closes each task", []string{
+			"closes with at least one work-unit commit on the feature branch",
+			"branch first when on the default branch",
+			"tests and docs alongside the behavior",
+			"using a Conventional Commit message",
+			"record the commit identity in the feature document as evidence",
+			"Work-unit commits on the feature branch are part of authorized substantial ODD implementation",
+			"push, pull request creation, and merge remain the user's decisions under ordinary repository policy",
+		}},
+		{"native review candidate is a commit or a slice, never the checkbox or branch", []string{
+			"The native review candidate is a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch",
+		}},
+		{"assess each commit against the last reviewed boundary", []string{
+			"Run applicable functional checks per task, not a review cycle per TODO checkbox",
+			"run `gentle-ai review assess --cwd <repo> --base-ref <last reviewed boundary> --committed-only --json` on that commit",
+			"Passive or low: silent structural checks, and the boundary advances",
+		}},
+		{"high or unavailable assessment reviews the commit immediately", []string{
+			"High, or an unavailable or failed assessment: the commit itself is the candidate",
+			"run the native preflight STATUS with `--base-ref <last reviewed boundary> --committed-only` right away",
+		}},
+		{"medium defers to the PR slice bounded by the delivery budget", []string{
+			"Medium: defer; the candidate is the PR slice, the commits accumulated since the last reviewed boundary, bounded by the delivery budget of about 400 authored changed lines",
+			"at slice close, when the budget is reached or the feature ends, run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
+		}},
+		{"boundaries advance and outcomes are recorded per task", []string{
+			"The first boundary is the branch point, and every reviewed boundary becomes the next base",
+			"Record per task the assessed tier and outcome: granted, declined, passive, deferred to slice, or unavailable",
+			"Never infer low risk from a failed assessment",
+		}},
+		{"delivery strategy vocabulary and skill resolution", []string{
+			"Delivery follows work units",
+			"forecast authored changed lines (additions plus deletions, generated files excluded) from the task list",
+			"keep a running count from work-unit commits",
+			"`ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`",
+			"apply the chosen strategy before the next commit",
+			"`ask-on-risk` asks once for the chain strategy, `stacked-to-main` or `feature-branch-chain`",
+			"`auto-chain` asks only for a missing chain strategy and slices automatically",
+			"record slice boundaries, which commits each pull request holds, in the feature document",
+			"Resolve the `work-unit-commits` and `chained-pr` skills by registry name before planning or creating any pull request, never hardcode their paths",
+		}},
+	}
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					for _, clause := range tt.clauses {
+						if !strings.Contains(rendered, clause) {
+							t.Errorf("missing work-unit commit instruction %q", clause)
+						}
+					}
+				})
 			}
 		})
 	}

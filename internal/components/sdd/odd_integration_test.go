@@ -46,7 +46,7 @@ func TestInstalledODDAndSimplifiedSDDCoexist(t *testing.T) {
 					"odd/tasks/<feature-name>.md", "odd/<feature-name>/tasks",
 					"Tests or frameworks being present does not enable TDD",
 					"Forward mode, source, and runner on every implementation delegation",
-					"not an RDD cycle per TODO checkbox",
+					"not a review cycle per TODO checkbox",
 					"Missing, stale, malformed, or failed reports do not gate archive",
 					"SDD never offers, launches, or consumes RDD",
 					"Research remains optional, including after selection",
