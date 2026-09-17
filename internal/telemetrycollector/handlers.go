@@ -124,7 +124,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.Storage.InsertEvent(r.Context(), event, s.now()); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		s.logger().Error("telemetry event storage failed", "error", err)
+		s.logger().Error("telemetry event storage failed", "error", err.Error())
 		return
 	}
 

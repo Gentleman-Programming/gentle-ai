@@ -118,3 +118,41 @@ func TestRuntimeHandleEventsConcurrent(t *testing.T) {
 		t.Fatalf("concurrent decisions %v", counts)
 	}
 }
+
+func TestRuntimeHandleEvents_LogsErrorTextOnStorageFailure(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var logs bytes.Buffer
+	server := &Server{Storage: s, Limiter: NewRateLimiter(100), Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	mux := server.NewMux()
+
+	if _, err := s.db.Exec(`CREATE TRIGGER fail_runtime BEFORE INSERT ON runtime_rows BEGIN SELECT RAISE(ABORT,'induced failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/runtime-events", strings.NewReader(string(runtimeFixture())))
+	r.RemoteAddr = "192.0.2.123:4321"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	var entry map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(line, "storage_unavailable") {
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatalf("unmarshal log line: %v", err)
+			}
+		}
+	}
+	if entry == nil {
+		t.Fatal("no storage_unavailable log line found")
+	}
+	if entry["error"] == nil || entry["error"] == "" {
+		t.Errorf("log entry missing non-empty error field: %v", entry)
+	}
+}
