@@ -118,14 +118,20 @@ production configuration change, or deployment is included.
 ## Storage
 
 SQLite via `modernc.org/sqlite` (cgo-free), opened with `PRAGMA
-journal_mode=DELETE` and a single connection (`SetMaxOpenConns(1)`): this
+journal_mode=WAL` and a single connection (`SetMaxOpenConns(1)`): this
 collector's expected throughput does not justify concurrent SQLite
 writers, and a single connection avoids `SQLITE_BUSY` entirely rather than
-tuning around it. DELETE, not WAL, because WAL's main benefit — readers
-and a writer proceeding concurrently — is moot when every read and write
-of the collector's own is already serialized onto one connection; skipping
-it also means no `-wal`/`-shm` sidecar files ever exist, which keeps the
-read-only Grafana deployment (below) down to one file instead of three.
+tuning around it. WAL, not DELETE, because this process is not the only
+reader of the database: Grafana's SQLite datasource and the open-data
+export both hold read-only connections against the same file from outside
+this process. Under DELETE mode, an external read that outlasted
+`busy_timeout` made `InsertRuntimeEvent` fail outright, since DELETE takes
+an exclusive lock to commit a write. WAL lets writes commit without
+waiting on those external readers, at the cost of two extra sidecar files
+next to the database, `events.sqlite-wal` and `events.sqlite-shm`; the
+read-only Grafana deployment (below) is granted read access to both via
+POSIX ACLs, including a default ACL so a sidecar recreated later stays
+readable without rerunning the installer.
 
 ```sql
 CREATE TABLE events (
@@ -153,9 +159,12 @@ CREATE TABLE rollups_daily (
 );
 ```
 
-An in-process daily job (`telemetrycollector.RunMaintenance`, driven by a
-24-hour ticker in `cmd/gentle-telemetry/main.go`) runs once at startup and
-once a day thereafter:
+An in-process daily job (`telemetrycollector.RunMaintenance`, driven by
+`cmd/gentle-telemetry/main.go`) runs once at startup (catching up any
+rollup missed while the process was down) and then once a day, anchored to
+00:05 UTC rather than 24 hours after startup, so the previous day's rollup
+is never more than a few minutes stale on the dashboard regardless of when
+the process last restarted:
 
 1. Rolls up **yesterday**'s events into `rollups_daily` (idempotent — safe
    to re-run after a crash or restart).
@@ -520,15 +529,17 @@ optional; `/v1/summary` above already answers the headline questions.
 **Datasource**: `deploy/telemetry/grafana/provisioning/datasources/telemetry.yaml`
 uses the [`frser-sqlite-datasource`](https://grafana.com/grafana/plugins/frser-sqlite-datasource/)
 plugin pointed read-only at `/var/lib/gentle-telemetry/events.sqlite`.
-Grafana's own process needs read access to that one file; since
+Grafana's own process needs read access to that database; since
 `gentle-telemetry.service` runs as the static `gentle-telemetry` system
 user (see [Why a static user, not DynamicUser](#why-a-static-user-not-dynamicuser)),
 which `grafana` does not belong to, `install.sh --with-grafana` grants
-access via a POSIX ACL (`setfacl -m u:grafana:r ...`) instead of group
-membership. This stays a single file to grant because the collector opens
-SQLite with `journal_mode=DELETE`, not WAL (see [Storage](#storage)) — no
-`-wal`/`-shm` sidecar files are ever created for a second ACL entry to
-chase.
+access via POSIX ACLs (`setfacl -m u:grafana:r ...`) instead of group
+membership. Because the collector opens SQLite with `journal_mode=WAL`
+(see [Storage](#storage)), this now covers three files, not one:
+`events.sqlite` itself plus its `-wal`/`-shm` sidecars, each granted
+individually when present, plus a default ACL on the directory so a
+sidecar created or recreated later (for example after a WAL checkpoint)
+inherits read access without rerunning the installer.
 
 **Dashboard**: `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
 provisioned via `deploy/telemetry/grafana/provisioning/dashboards/telemetry.yaml`

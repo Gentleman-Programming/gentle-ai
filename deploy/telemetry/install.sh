@@ -416,27 +416,31 @@ EOF
 	set_ini_kv "${GRAFANA_INI}" auth.anonymous enabled false
 	set_ini_kv "${GRAFANA_INI}" users allow_sign_up false
 
-	# The collector runs SQLite in journal_mode=DELETE (see storage.go),
-	# not WAL: gentle-telemetry.service already serializes all of its own
-	# reads and writes through a single connection, so WAL's concurrent-
-	# reader benefit is moot for the collector itself, and dropping it
-	# avoids ever creating -wal/-shm sidecar files. That leaves only one
-	# file for a second, read-only process to deal with: grant Grafana's
-	# system user read access to it via a POSIX ACL rather than group
-	# membership, since gentle-telemetry:gentle-telemetry is not a group
-	# grafana belongs to.
+	# The collector runs SQLite in journal_mode=WAL (see storage.go): an
+	# external read-only connection, like Grafana's, no longer blocks the
+	# collector's single writer while it holds a read lock. WAL creates
+	# -wal/-shm sidecar files next to the database, so a second, read-only
+	# process now needs read access to three files, not one: grant
+	# Grafana's system user read access to them via a POSIX ACL rather
+	# than group membership, since gentle-telemetry:gentle-telemetry is
+	# not a group grafana belongs to.
 	dnf install -y acl >/dev/null 2>&1 || true
 	# STATE_DIR is a real directory owned by the static gentle-telemetry
 	# user (not a DynamicUser symlink into /var/lib/private), so the ACL
-	# only needs to land on it and on the database file — never on an
+	# only needs to land on it and on the database files, never on an
 	# ancestor. Granting Grafana access anywhere under /var/lib/private
 	# would widen that directory past the exactly-0700 mode systemd
 	# requires for its own DynamicUser bookkeeping and would make other
 	# DynamicUser units refuse to (re)start.
 	setfacl -m u:grafana:rx "${STATE_DIR}"
-	if [[ -f "${STATE_DIR}/events.sqlite" ]]; then
-		setfacl -m u:grafana:r "${STATE_DIR}/events.sqlite"
-	fi
+	# Default ACL so a -wal/-shm sidecar created later (or recreated after
+	# a checkpoint) inherits read access without rerunning this installer.
+	setfacl -d -m u:grafana:r "${STATE_DIR}"
+	for db_file in events.sqlite events.sqlite-wal events.sqlite-shm; do
+		if [[ -f "${STATE_DIR}/${db_file}" ]]; then
+			setfacl -m u:grafana:r "${STATE_DIR}/${db_file}"
+		fi
+	done
 
 	systemctl daemon-reload
 	systemctl enable --now grafana-server
