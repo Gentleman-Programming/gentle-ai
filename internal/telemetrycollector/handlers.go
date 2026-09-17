@@ -24,6 +24,15 @@ type Server struct {
 	Logger       *slog.Logger
 	Now          func() time.Time
 
+	// RuntimeLimiter is the rate budget for POST /v1/runtime-events,
+	// separate from Limiter (POST /v1/events): heartbeats are frequent and
+	// were sharing one 60/min bucket with stored deliveries, plateauing
+	// storage at exactly that rate and rejecting most heartbeats. When nil
+	// (older callers/tests that only set Limiter), runtimeLimiter falls
+	// back to Limiter so existing wiring keeps its previous shared-budget
+	// behavior.
+	RuntimeLimiter *RateLimiter
+
 	// TrustedProxies are peer CIDRs allowed to set X-Forwarded-For/X-Real-IP
 	// for rate-limiting. Any other peer is keyed on its own address.
 	TrustedProxies []*net.IPNet
@@ -57,6 +66,16 @@ func (s *Server) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+// runtimeLimiter returns RuntimeLimiter, falling back to Limiter when
+// RuntimeLimiter is unset so callers that only configure Limiter keep the
+// previous shared-budget behavior.
+func (s *Server) runtimeLimiter() *RateLimiter {
+	if s.RuntimeLimiter != nil {
+		return s.RuntimeLimiter
+	}
+	return s.Limiter
 }
 
 // clientKey derives the rate-limiter key: the peer address, unless the peer

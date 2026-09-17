@@ -10,10 +10,12 @@ import (
 )
 
 func (s *Server) handleRuntimeEvents(w http.ResponseWriter, r *http.Request) {
-	// Reuse the install endpoint's shared, ephemeral abuse quota, never persist
-	// or log its peer key. No delivery ID is treated as authenticated identity.
-	if !s.Limiter.Allow(s.clientKey(r)) {
+	// A separate, ephemeral abuse quota from POST /v1/events (see
+	// RuntimeLimiter), never persisted or logged by peer key. No delivery
+	// ID is treated as authenticated identity.
+	if !s.runtimeLimiter().Allow(s.clientKey(r)) {
 		w.WriteHeader(http.StatusTooManyRequests)
+		s.logger().Info("runtime telemetry rejected", "reason", "rate_limited")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, telemetry.RuntimeMaxBytes+1))
