@@ -52,13 +52,17 @@ type Storage struct {
 // of concurrent SQLite writers, and a single connection sidesteps
 // SQLITE_BUSY entirely.
 //
-// journal_mode is DELETE, not WAL: WAL's main benefit is letting readers
-// and a writer proceed concurrently, which this process cannot use anyway
-// since SetMaxOpenConns(1) already serializes every read and write of its
-// own onto one connection. DELETE mode also never creates -wal/-shm
-// sidecar files, which keeps the read-only Grafana deployment (see
-// deploy/telemetry/install.sh's install_grafana) down to granting access
-// to one file instead of three.
+// journal_mode is WAL, not DELETE: this process serializes its own reads
+// and writes onto a single connection (SetMaxOpenConns(1)), but it is not
+// the only reader of this database. Grafana's SQLite datasource and the
+// open-data export both hold read-only connections against the same file
+// from outside this process. Under DELETE mode any one of those external
+// reads that outlasted busy_timeout made InsertRuntimeEvent fail outright
+// (issue #4717): DELETE takes an exclusive lock to commit, so a slow
+// external reader blocks the writer, not just other readers. WAL lets
+// writes commit without waiting on those external readers. WAL adds
+// -wal/-shm sidecar files next to the database; deploy/telemetry/install.sh's
+// install_grafana grants Grafana read access to both via ACLs.
 func OpenStorage(path string) (*Storage, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -74,7 +78,7 @@ func OpenStorage(path string) (*Storage, error) {
 	}
 
 	for _, pragma := range []string{
-		"PRAGMA journal_mode=DELETE;",
+		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
 		"PRAGMA foreign_keys=ON;",
 		"PRAGMA busy_timeout=5000;",

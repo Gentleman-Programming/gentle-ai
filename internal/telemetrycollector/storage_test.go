@@ -224,3 +224,34 @@ func TestStorage_SubSecondEventStaysOnItsOwnDayAndSurvivesRetention(t *testing.T
 		t.Errorf("event was purged a day early: eventsOnDay = %d, want 1 to survive", len(remaining))
 	}
 }
+
+func TestStorage_OpenStorageUsesWALJournalMode(t *testing.T) {
+	s := openTestStorage(t)
+
+	var mode string
+	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want %q", mode, "wal")
+	}
+}
+
+func TestStorage_OpenStorageAcceptsInMemoryDatabase(t *testing.T) {
+	s, err := OpenStorage(":memory:")
+	if err != nil {
+		t.Fatalf("OpenStorage(:memory:): %v", err)
+	}
+	defer s.Close()
+
+	// :memory: cannot use WAL; SQLite silently falls back and reports the
+	// mode it actually applied instead of erroring. OpenStorage must not
+	// fail just because it asked for a mode SQLite could not honor here.
+	var mode string
+	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if mode == "" {
+		t.Error("journal_mode: empty")
+	}
+}
