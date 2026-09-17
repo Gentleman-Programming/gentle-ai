@@ -353,3 +353,68 @@ func TestRuntimeStorageDelivery(t *testing.T) {
 		t.Fatalf("partial write: %d %v", deliveries, err)
 	}
 }
+
+// TestInsertRuntimeEvent_ReportsBusyDatabaseDistinctly guards issue #4717's
+// actual failure mode: a slow external reader (Grafana, the open-data
+// export) holding a lock long enough that the collector's own write times
+// out. That must surface as errRuntimeStorageBusy, not the generic
+// errRuntimeStorage sentinel, without ever exposing the raw driver error
+// text (see TestRuntimeHandleEvents' canary assertions).
+func TestInsertRuntimeEvent_ReportsBusyDatabaseDistinctly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "busy.db")
+	s, err := OpenStorage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Shorten busy_timeout for this connection only, so a genuine
+	// SQLITE_BUSY surfaces in milliseconds instead of the production 5s.
+	if _, err := s.db.Exec(`PRAGMA busy_timeout=200`); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second, independent connection holds the write lock the whole
+	// collector connection needs, the same way an external reader that
+	// outlives busy_timeout would (WAL still serializes writers).
+	blocker, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	blockerConn, err := blocker.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blockerConn.Close()
+	if _, err := blockerConn.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	ev, err := telemetry.ParseRuntimeEvent(runtimeFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, insertErr := s.InsertRuntimeEvent(context.Background(), ev, time.Now())
+	if !errors.Is(insertErr, errRuntimeStorageBusy) {
+		t.Fatalf("InsertRuntimeEvent error = %v, want errRuntimeStorageBusy", insertErr)
+	}
+	if insertErr.Error() == "" || strings.Contains(insertErr.Error(), "SQLITE") {
+		t.Errorf("error text leaks driver internals: %q", insertErr.Error())
+	}
+
+	if _, err := blockerConn.ExecContext(context.Background(), `ROLLBACK`); err != nil {
+		t.Fatal(err)
+	}
+	if err := blockerConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := blocker.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ev.DeliveryID = "cccccccccccccccccccccccccccccccc"
+	if _, err := s.InsertRuntimeEvent(context.Background(), ev, time.Now()); err != nil {
+		t.Fatalf("InsertRuntimeEvent after lock release: %v", err)
+	}
+}

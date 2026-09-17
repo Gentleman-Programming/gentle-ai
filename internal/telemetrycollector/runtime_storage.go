@@ -8,12 +8,45 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	sqlite "modernc.org/sqlite"
 )
 
 var ErrRuntimeConflict = errors.New("runtime delivery identity conflict")
 var errRuntimeStorage = errors.New("runtime storage unavailable")
+var errRuntimeStorageBusy = errors.New("runtime storage busy")
 var errRuntimeVersion = errors.New("unsupported collector database version")
 var errRuntimeSchema = errors.New("incompatible runtime storage schema")
+
+// SQLite primary result codes (sqlite3.h), kept as literals rather than
+// importing modernc.org/sqlite/lib for two integers: that package is a
+// large generated internal dependency of the driver, not a stable public
+// API surface to depend on from here.
+const (
+	sqliteResultCodeBusy   = 5 // SQLITE_BUSY: a write lock is held elsewhere
+	sqliteResultCodeLocked = 6 // SQLITE_LOCKED: a table is locked by another connection/statement
+	sqlitePrimaryCodeMask  = 0xFF
+)
+
+// runtimeStorageError classifies a runtime storage failure without ever
+// exposing the underlying driver error text: only a fixed sentinel ever
+// reaches the caller (and from there, the logs), matching the invariant
+// TestRuntimeHandleEvents enforces. A contended write lock (SQLITE_BUSY or
+// SQLITE_LOCKED, issue #4717's actual failure mode: an external reader
+// outlasting busy_timeout) is reported distinctly from every other
+// storage failure so operators can tell the two apart.
+func runtimeStorageError(err error) error {
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		// modernc.org/sqlite enables extended result codes, so Code() may
+		// carry extra high bits (e.g. SQLITE_BUSY_SNAPSHOT); the primary
+		// code is authoritative for this classification.
+		switch sqliteErr.Code() & sqlitePrimaryCodeMask {
+		case sqliteResultCodeBusy, sqliteResultCodeLocked:
+			return errRuntimeStorageBusy
+		}
+	}
+	return errRuntimeStorage
+}
 
 // This collector previously owned an unversioned database. Never downgrade an
 // unknown version or adopt pre-existing runtime tables. DDL and version commit
@@ -151,22 +184,22 @@ func (s *Storage) InsertRuntimeEvent(ctx context.Context, event telemetry.Runtim
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", errRuntimeStorage
+		return "", runtimeStorageError(err)
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `INSERT INTO runtime_deliveries(delivery_id,received_at,canonical_payload) VALUES(?,?,?) ON CONFLICT(delivery_id) DO NOTHING`, event.DeliveryID, receivedAtKey(receivedAt), string(canonical))
 	if err != nil {
-		return "", errRuntimeStorage
+		return "", runtimeStorageError(err)
 	}
 	inserted, err := result.RowsAffected()
 	if err != nil {
-		return "", errRuntimeStorage
+		return "", runtimeStorageError(err)
 	}
 	decision := "stored"
 	if inserted == 0 {
 		var existing string
 		if err := tx.QueryRowContext(ctx, `SELECT canonical_payload FROM runtime_deliveries WHERE delivery_id=?`, event.DeliveryID).Scan(&existing); err != nil {
-			return "", errRuntimeStorage
+			return "", runtimeStorageError(err)
 		}
 		if existing != string(canonical) {
 			return "", ErrRuntimeConflict
@@ -179,12 +212,12 @@ func (s *Storage) InsertRuntimeEvent(ctx context.Context, event telemetry.Runtim
 				return "", errRuntimeStorage
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_rows(delivery_id,ordinal,row_json) VALUES(?,?,?)`, event.DeliveryID, i, string(canonicalRow)); err != nil {
-				return "", errRuntimeStorage
+				return "", runtimeStorageError(err)
 			}
 		}
 	}
-	if tx.Commit() != nil {
-		return "", errRuntimeStorage
+	if err := tx.Commit(); err != nil {
+		return "", runtimeStorageError(err)
 	}
 	return decision, nil
 }

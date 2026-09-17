@@ -265,3 +265,31 @@ func TestHandleHealthz(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
+
+func TestHandleEvents_LogsErrorTextOnStorageFailure(t *testing.T) {
+	server, logBuf := newTestServer(t, 60)
+	mux := server.NewMux()
+
+	if _, err := server.Storage.db.Exec(`CREATE TRIGGER fail_events BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT,'induced failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(validInstallEvent))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(logBuf.String(), "telemetry event storage failed") {
+		t.Fatalf("log missing failure message: %s", logBuf.String())
+	}
+	// A bare "error=" key check would already pass without this change (the
+	// handler always logged an "error" attribute, just typed as error
+	// instead of string). Assert the induced trigger message itself made it
+	// into the log line, which only holds once the underlying error text is
+	// actually captured.
+	if !strings.Contains(logBuf.String(), "induced failure") {
+		t.Errorf("log missing the underlying error text: %s", logBuf.String())
+	}
+}
