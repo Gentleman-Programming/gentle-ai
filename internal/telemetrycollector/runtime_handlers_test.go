@@ -12,6 +12,130 @@ import (
 	"testing"
 )
 
+func TestRuntimeHandleEvents_HasIndependentRateBudgetFromEvents(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Events get a one-request budget; runtime gets a generous one. Both
+	// routes share a peer, so if they still shared one limiter the runtime
+	// request below would exhaust the same bucket and the third events
+	// request would still be rejected either way — the real assertion is
+	// the other direction: exhausting events must not touch runtime's
+	// separate budget.
+	server := &Server{Storage: s, Limiter: NewRateLimiter(1), RuntimeLimiter: NewRateLimiter(100)}
+	mux := server.NewMux()
+	send := func(path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		r.RemoteAddr = "192.0.2.123:4321"
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	valid := string(runtimeFixture())
+
+	if w := send("/v1/events", validInstallEvent); w.Code != http.StatusAccepted {
+		t.Fatalf("first events request: status = %d, want 202", w.Code)
+	}
+	if w := send("/v1/events", validInstallEvent); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second events request: status = %d, want 429 (events budget exhausted)", w.Code)
+	}
+	if w := send("/v1/runtime-events", valid); w.Code != http.StatusOK {
+		t.Fatalf("runtime request after events was rate-limited: status = %d, want 200 (separate budget)", w.Code)
+	}
+}
+
+func TestRuntimeHandleEvents_ExhaustingRuntimeLeavesEventsUnaffected(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	server := &Server{Storage: s, Limiter: NewRateLimiter(100), RuntimeLimiter: NewRateLimiter(1)}
+	mux := server.NewMux()
+	send := func(path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		r.RemoteAddr = "192.0.2.123:4321"
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	valid := string(runtimeFixture())
+
+	if w := send("/v1/runtime-events", valid); w.Code != http.StatusOK {
+		t.Fatalf("first runtime request: status = %d, want 200", w.Code)
+	}
+	fresh := strings.Replace(valid, "0123456789abcdef0123456789abcdef", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1)
+	if w := send("/v1/runtime-events", fresh); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second runtime request: status = %d, want 429 (runtime budget exhausted)", w.Code)
+	}
+	if w := send("/v1/events", validInstallEvent); w.Code != http.StatusAccepted {
+		t.Fatalf("events request after runtime was rate-limited: status = %d, want 202 (separate budget)", w.Code)
+	}
+}
+
+func TestRuntimeHandleEvents_RateLimitLogsRejection(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var logs bytes.Buffer
+	server := &Server{Storage: s, Limiter: NewRateLimiter(100), RuntimeLimiter: NewRateLimiter(1), Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	mux := server.NewMux()
+	send := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/v1/runtime-events", strings.NewReader(body))
+		r.RemoteAddr = "192.0.2.123:4321"
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	valid := string(runtimeFixture())
+
+	if w := send(valid); w.Code != http.StatusOK {
+		t.Fatalf("first request: status = %d, want 200", w.Code)
+	}
+	fresh := strings.Replace(valid, "0123456789abcdef0123456789abcdef", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1)
+	w := send(fresh)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", w.Code)
+	}
+	if !strings.Contains(logs.String(), "runtime telemetry rejected") || !strings.Contains(logs.String(), `"reason":"rate_limited"`) {
+		t.Fatalf("log missing rejection message: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "192.0.2.123") {
+		t.Fatalf("log leaked the remote address: %s", logs.String())
+	}
+}
+
+func TestRuntimeHandleEvents_FallsBackToEventsLimiterWhenRuntimeLimiterUnset(t *testing.T) {
+	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// RuntimeLimiter intentionally left nil, as older test/wiring code does.
+	server := &Server{Storage: s, Limiter: NewRateLimiter(1)}
+	mux := server.NewMux()
+	send := func(path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		r.RemoteAddr = "192.0.2.123:4321"
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	valid := string(runtimeFixture())
+
+	if w := send("/v1/runtime-events", valid); w.Code != http.StatusOK {
+		t.Fatalf("first runtime request: status = %d, want 200", w.Code)
+	}
+	if w := send("/v1/events", validInstallEvent); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("events request: status = %d, want 429 (shared budget with runtime when RuntimeLimiter is unset)", w.Code)
+	}
+}
+
 func TestRuntimeHandleEvents(t *testing.T) {
 	s, err := OpenStorage(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {

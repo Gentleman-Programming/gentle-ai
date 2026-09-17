@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,19 @@ import (
 const (
 	metricNpmDownloadsDay        = "npm_downloads_day"
 	metricGithubReleaseDownloads = "github_release_downloads_total"
+
+	// maxGithubReleasePages bounds Link-header pagination in
+	// fetchGithubReleaseDownloads. At 100 releases per page this covers
+	// 1,000 releases, and it caps an unbounded loop should a server ever
+	// keep advertising a "next" page.
+	maxGithubReleasePages = 10
+
+	// githubPaginationDeadlineBuffer is the minimum time left on ctx
+	// required to start fetching another release page. Below it,
+	// pagination stops and returns whatever was already fetched, rather
+	// than starting a request likely to be cut off by the caller's
+	// downloadsTimeout.
+	githubPaginationDeadlineBuffer = 1 * time.Second
 )
 
 // npmDownloadsURL and githubReleasesURL are overridden by tests to point
@@ -27,7 +41,7 @@ var (
 		return "https://api.npmjs.org/downloads/point/last-day/" + url.PathEscape(pkg)
 	}
 	githubReleasesURL = func(repo string) string {
-		return "https://api.github.com/repos/" + repo + "/releases?per_page=20"
+		return "https://api.github.com/repos/" + repo + "/releases?per_page=100"
 	}
 )
 
@@ -118,12 +132,54 @@ type githubRelease struct {
 	Assets  []githubAsset `json:"assets"`
 }
 
-// fetchGithubReleaseDownloads returns, for each release of repo, the sum
-// of its assets' download_count, keyed by tag name.
+// fetchGithubReleaseDownloads returns, for each release of repo across up
+// to maxGithubReleasePages of results, the sum of its assets'
+// download_count, keyed by tag name. It follows the Link header's
+// rel="next" URL to paginate. The first page's request failing returns an
+// error (nothing to report); a later page failing, or ctx's remaining time
+// dropping below githubPaginationDeadlineBuffer before it, stops
+// pagination and returns the releases already aggregated with a nil
+// error, so one slow or failing page never discards the earlier ones.
 func fetchGithubReleaseDownloads(ctx context.Context, client *http.Client, repo, token string) (map[string]int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesURL(repo), nil)
+	totals := make(map[string]int64)
+	nextURL := githubReleasesURL(repo)
+
+	for page := 0; page < maxGithubReleasePages && nextURL != ""; page++ {
+		if page > 0 {
+			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < githubPaginationDeadlineBuffer {
+				break
+			}
+		}
+
+		releases, linkHeader, err := fetchGithubReleasePage(ctx, client, nextURL, token)
+		if err != nil {
+			if page == 0 {
+				return nil, err
+			}
+			break
+		}
+
+		for _, r := range releases {
+			var sum int64
+			for _, a := range r.Assets {
+				sum += a.DownloadCount
+			}
+			totals[r.TagName] = sum
+		}
+
+		nextURL = parseNextLink(linkHeader)
+	}
+
+	return totals, nil
+}
+
+// fetchGithubReleasePage fetches one page of releases and returns its
+// decoded body along with the raw Link response header for the caller to
+// follow.
+func fetchGithubReleasePage(ctx context.Context, client *http.Client, pageURL, token string) ([]githubRelease, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	if token != "" {
@@ -131,25 +187,38 @@ func fetchGithubReleaseDownloads(ctx context.Context, client *http.Client, repo,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request: %w", err)
+		return nil, "", fmt.Errorf("request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	var releases []githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
+		return nil, "", fmt.Errorf("decode: %w", err)
 	}
-	totals := make(map[string]int64, len(releases))
-	for _, r := range releases {
-		var sum int64
-		for _, a := range r.Assets {
-			sum += a.DownloadCount
+	return releases, resp.Header.Get("Link"), nil
+}
+
+// parseNextLink extracts the URL of the rel="next" entry from an HTTP Link
+// header (RFC 8288, as sent by the GitHub API), or "" when there is none.
+func parseNextLink(header string) string {
+	for _, entry := range strings.Split(header, ",") {
+		segments := strings.Split(entry, ";")
+		if len(segments) < 2 {
+			continue
 		}
-		totals[r.TagName] = sum
+		urlPart := strings.TrimSpace(segments[0])
+		if !strings.HasPrefix(urlPart, "<") || !strings.HasSuffix(urlPart, ">") {
+			continue
+		}
+		for _, param := range segments[1:] {
+			if strings.TrimSpace(param) == `rel="next"` {
+				return strings.TrimSuffix(strings.TrimPrefix(urlPart, "<"), ">")
+			}
+		}
 	}
-	return totals, nil
+	return ""
 }
 
 // latestRollupPerKey returns, for each distinct key stored under metric on

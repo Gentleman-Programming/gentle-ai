@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	defaultListen          = "127.0.0.1:18181"
-	defaultDB              = "/var/lib/gentle-telemetry/events.sqlite"
-	defaultRetentionDays   = 90
-	defaultRateLimitPerMin = 60
+	defaultListen                 = "127.0.0.1:18181"
+	defaultDB                     = "/var/lib/gentle-telemetry/events.sqlite"
+	defaultRetentionDays          = 90
+	defaultRateLimitPerMin        = 60
+	defaultRuntimeRateLimitPerMin = 600
 	// maintenanceUTCOffset anchors the daily rollup to shortly after UTC
 	// midnight instead of 24h after process start, so the previous day's
 	// rollup lands within minutes of being complete regardless of when
@@ -77,6 +78,7 @@ func run() error {
 	summaryTokenFile := flag.String("summary-token-file", "", "path to a file containing the bearer token required for GET /v1/summary")
 	retentionDays := flag.Int("retention-days", defaultRetentionDays, "days of raw events to retain before purge")
 	rateLimitPerMinute := flag.Int("rate-limit-per-minute", defaultRateLimitPerMin, "per-IP request budget for POST /v1/events, per minute")
+	runtimeRateLimitPerMinute := flag.Int("runtime-rate-limit-per-minute", defaultRuntimeRateLimitPerMin, "per-address request budget for POST /v1/runtime-events, per minute")
 	var trustedProxyCIDRs repeatableFlag
 	flag.Var(&trustedProxyCIDRs, "trusted-proxy-cidr", "CIDR of a peer allowed to set X-Forwarded-For/X-Real-IP for rate limiting (repeatable; default 127.0.0.0/8,::1/128)")
 	var npmPackages repeatableFlag
@@ -136,10 +138,12 @@ func run() error {
 	defer storage.Close()
 
 	limiter := telemetrycollector.NewRateLimiter(*rateLimitPerMinute)
+	runtimeLimiter := telemetrycollector.NewRateLimiter(*runtimeRateLimitPerMinute)
 
 	server := &telemetrycollector.Server{
 		Storage:        storage,
 		Limiter:        limiter,
+		RuntimeLimiter: runtimeLimiter,
 		SummaryToken:   summaryToken,
 		Logger:         logger,
 		TrustedProxies: trustedProxies,
@@ -165,7 +169,7 @@ func run() error {
 	maintenanceDone.Add(1)
 	go func() {
 		defer maintenanceDone.Done()
-		runMaintenanceLoop(ctx, storage, limiter, *retentionDays, downloadsCfg, downloadsClient, logger)
+		runMaintenanceLoop(ctx, storage, []*telemetrycollector.RateLimiter{limiter, runtimeLimiter}, *retentionDays, downloadsCfg, downloadsClient, logger)
 	}()
 
 	serveErr := make(chan error, 1)
@@ -240,8 +244,9 @@ func nextMaintenanceDelay(now time.Time) time.Duration {
 // fetches external npm/GitHub download counts right after each run (a
 // separate, independent step: a failure there is logged and retried the
 // next run, and never affects the rollup or ingest), and periodically
-// sweeps idle rate-limiter buckets, until ctx is cancelled.
-func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage, limiter *telemetrycollector.RateLimiter, retentionDays int, downloadsCfg telemetrycollector.DownloadsConfig, downloadsClient *http.Client, logger *slog.Logger) {
+// sweeps idle buckets on every limiter in limiters (events and runtime each
+// have their own), until ctx is cancelled.
+func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage, limiters []*telemetrycollector.RateLimiter, retentionDays int, downloadsCfg telemetrycollector.DownloadsConfig, downloadsClient *http.Client, logger *slog.Logger) {
 	runOnce := func() {
 		if err := telemetrycollector.RunMaintenance(ctx, storage, time.Now(), retentionDays); err != nil {
 			logger.Error("daily maintenance failed", "error", err)
@@ -278,7 +283,9 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 			logger.Info("next daily maintenance scheduled", "in", delay.Round(time.Second))
 			maintenanceTimer.Reset(delay)
 		case <-sweepTicker.C:
-			limiter.Sweep(rateLimiterSweepMaxIdle)
+			for _, limiter := range limiters {
+				limiter.Sweep(rateLimiterSweepMaxIdle)
+			}
 		}
 	}
 }

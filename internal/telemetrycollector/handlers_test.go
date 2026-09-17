@@ -142,6 +142,75 @@ func TestHandleEvents_RateLimitIsPerRemoteAddress(t *testing.T) {
 	}
 }
 
+func TestClientKey_ValidatesForwardedAddress(t *testing.T) {
+	server, logBuf := newTestServer(t, 60)
+	server.TrustedProxies = trustedLoopback()
+
+	newReq := func(forwardedFor string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/v1/events", nil)
+		req.RemoteAddr = "127.0.0.1:1"
+		if forwardedFor != "" {
+			req.Header.Set("X-Forwarded-For", forwardedFor)
+		}
+		return req
+	}
+
+	if got := server.clientKey(newReq("(null), 203.0.113.9")); got != "203.0.113.9" {
+		t.Errorf("clientKey = %q, want 203.0.113.9 (skips the leading unparseable element)", got)
+	}
+	if got := server.clientKey(newReq("203.0.113.5, 203.0.113.9")); got != "203.0.113.5" {
+		t.Errorf("clientKey = %q, want 203.0.113.5 (valid first element wins)", got)
+	}
+	if got := server.clientKey(newReq("garbage")); got != "127.0.0.1" {
+		t.Errorf("clientKey = %q, want the peer address when no forwarded element parses", got)
+	}
+
+	preUntrustedLog := logBuf.String()
+
+	untrusted := newReq("203.0.113.10")
+	untrusted.RemoteAddr = "198.51.100.5:1"
+	if got := server.clientKey(untrusted); got != "198.51.100.5" {
+		t.Errorf("clientKey = %q, want the untrusted peer address (forwarded headers ignored)", got)
+	}
+
+	// The untrusted-peer case above carries a forwarded header too, but it
+	// must never be inspected (let alone logged as invalid) for an
+	// untrusted peer: the log must not have grown from this last call.
+	if logBuf.String() != preUntrustedLog {
+		t.Fatalf("logged for an untrusted peer, which never inspects the forwarded header: %s", logBuf.String())
+	}
+}
+
+func TestClientKey_LogsInvalidForwardedAddressOncePerMinute(t *testing.T) {
+	server, logBuf := newTestServer(t, 60)
+	server.TrustedProxies = trustedLoopback()
+	clock := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	server.Now = func() time.Time { return clock }
+
+	newReq := func() *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/v1/events", nil)
+		req.RemoteAddr = "127.0.0.1:1"
+		req.Header.Set("X-Forwarded-For", "garbage")
+		return req
+	}
+
+	server.clientKey(newReq())
+	server.clientKey(newReq())
+	if count := strings.Count(logBuf.String(), "ignored an invalid forwarded address"); count != 1 {
+		t.Fatalf("log count = %d after two calls within the same minute, want 1", count)
+	}
+
+	clock = clock.Add(61 * time.Second)
+	server.clientKey(newReq())
+	if count := strings.Count(logBuf.String(), "ignored an invalid forwarded address"); count != 2 {
+		t.Fatalf("log count = %d after the minute elapsed, want 2", count)
+	}
+
+	if strings.Contains(logBuf.String(), "garbage") {
+		t.Fatalf("log leaked the invalid header value: %s", logBuf.String())
+	}
+}
+
 func TestHandleEvents_RateLimitHonorsForwardedForOnlyFromTrustedProxy(t *testing.T) {
 	server, _ := newTestServer(t, 1)
 	server.TrustedProxies = trustedLoopback()
