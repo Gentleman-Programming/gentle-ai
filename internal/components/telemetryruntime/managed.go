@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
@@ -153,9 +155,15 @@ func inspect(configDir string) ([][]byte, error) {
 		(!managedModeMatches(0600, os.FileMode(manifest.File.Mode)) && !managedModeMatches(0644, os.FileMode(manifest.File.Mode))) || manifest.File.AfterHash != fmt.Sprintf("%x", sha256.Sum256([]byte(manifest.File.After))) {
 		return nil, conflict
 	}
-	embedded, err := assets.Read("opencode/plugins/telemetry-runtime.ts")
-	embeddedDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(embedded)))
+	assetDir := "opencode/plugins/"
 	_, approvedPrior := approvedPriorPluginDigests[manifest.File.AfterHash]
+	if strings.HasPrefix(manifest.File.After, "// gentle-ai:managed telemetry-runtime/v2\n") {
+		assetDir = "opencode/plugins-v2/"
+		// V2 has no released prior asset digest yet. V1 provenance never admits V2.
+		approvedPrior = false
+	}
+	embedded, err := assets.Read(assetDir + "telemetry-runtime.ts")
+	embeddedDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(embedded)))
 	if err != nil || (manifest.File.AfterHash != embeddedDigest && !approvedPrior) {
 		return nil, conflict
 	}
@@ -261,12 +269,21 @@ func (f *guardedFile) restore() error {
 // ReconcileWithRollback retains per-file journals for the outer lifecycle. The
 // caller must exclude this pair from unconditional snapshot restoration, even
 // if reconcile fails or never runs. Safe members restore despite other conflicts.
+// ReconcileWithRollback is the explicit legacy V1 compatibility entrypoint.
+// Production lifecycle callers must use ReconcileForMajorWithRollback.
 func ReconcileWithRollback(configDir string) (changed []string, rollback func() error, err error) {
+	return ReconcileForMajorWithRollback(configDir, opencode.RuntimeV1)
+}
+func ReconcileForMajorWithRollback(configDir string, major opencode.RuntimeMajor) (changed []string, rollback func() error, err error) {
+	assetDir, err := major.PluginAssetDirectory()
+	if err != nil {
+		return nil, nil, err
+	}
 	current, err := inspect(configDir)
 	if err != nil {
 		return nil, nil, err
 	}
-	content, err := assets.Read("opencode/plugins/telemetry-runtime.ts")
+	content, err := assets.Read(assetDir + "telemetry-runtime.ts")
 	if err != nil {
 		return nil, nil, err
 	}

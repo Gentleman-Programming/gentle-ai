@@ -17,6 +17,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 )
@@ -126,6 +127,18 @@ func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile 
 }
 
 func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, error) {
+	major, err := opencode.DetectRuntimeMajor(ctx)
+	if err != nil {
+		return "", &ManualFallbackError{Hint: err.Error()}
+	}
+	if major == opencode.RuntimeV2 {
+		return "", &ManualFallbackError{Hint: "OpenCode community plugin V2 compatibility is unverified; package and user configuration preserved."}
+	}
+	sdk, err := major.PluginDependency()
+	if err != nil {
+		return "", err
+	}
+
 	pkg := strings.TrimSpace(r.Tool.NpmPackage)
 	if pkg == "" {
 		return "", &ManualFallbackError{Hint: openCodePluginManualHint(r)}
@@ -165,7 +178,7 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, 
 	if expectedVersion == "" {
 		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s upgrade cannot be pinned because the expected version is empty; rerun the update check and try again.", pkg)}
 	}
-	targets := []string{pkg + "@" + expectedVersion, "@opencode-ai/plugin@latest"}
+	targets := []string{pkg + "@" + expectedVersion, sdk}
 	var cmd *exec.Cmd
 	switch pm {
 	case "bun":

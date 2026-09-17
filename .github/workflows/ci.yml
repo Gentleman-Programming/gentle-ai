@@ -15,6 +15,24 @@ on:
     - cron: "0 3 * * *"
 
 jobs:
+  opencode-v2-contracts:
+    name: OpenCode V2 Released SDK Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
+        with:
+          node-version: '24'
+      - name: Test bounded V2 host activation polling
+        run: python3 -B -m unittest discover -s scripts -p test_opencode_v2_host_test.py
+      - name: Typecheck V2 assets against released 2.0.4
+        run: bash scripts/test-opencode-v2-contracts.sh
+
   go-format:
     name: Go Format
     runs-on: ubuntu-latest

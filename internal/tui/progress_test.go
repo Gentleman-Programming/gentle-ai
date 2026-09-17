@@ -32,3 +32,11 @@ func TestProgressFromExecutionIncludesAllStages(t *testing.T) {
 		t.Fatalf("Percent() = %d, want %d", got, want)
 	}
 }
+
+func TestProgressSkippedIsTerminalNotSuccess(t *testing.T) {
+	progress := NewProgressState([]string{"logo"})
+	progress.Mark(0, string(pipeline.StepStatusSkipped))
+	if !progress.Done() || progress.HasFailures() || progress.Items[0].Status != "skipped" {
+		t.Fatalf("skip progress: %#v", progress)
+	}
+}

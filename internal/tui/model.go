@@ -1372,6 +1372,13 @@ func (m Model) handleStepProgress(msg StepProgressMsg) (tea.Model, tea.Cmd) {
 	case pipeline.StepStatusSucceeded:
 		m.Progress.Mark(idx, string(pipeline.StepStatusSucceeded))
 		m.Progress.AppendLog("done: %s", msg.StepID)
+	case pipeline.StepStatusSkipped:
+		m.Progress.Mark(idx, string(pipeline.StepStatusSkipped))
+		reason := "unsupported"
+		if msg.Err != nil {
+			reason = msg.Err.Error()
+		}
+		m.Progress.AppendLog("skipped: %s — %s", msg.StepID, reason)
 	case pipeline.StepStatusFailed:
 		m.Progress.Mark(idx, string(pipeline.StepStatusFailed))
 		errMsg := "unknown error"

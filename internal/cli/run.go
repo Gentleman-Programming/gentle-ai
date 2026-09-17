@@ -1302,7 +1302,11 @@ func (s openCodeTelemetryStep) Run() error {
 	if s.checkOnly {
 		return telemetryruntime.CheckManaged(s.configDir)
 	}
-	changed, rollback, err := telemetryruntime.ReconcileWithRollback(s.configDir)
+	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	if err != nil {
+		return err
+	}
+	changed, rollback, err := telemetryruntime.ReconcileForMajorWithRollback(s.configDir, major)
 	if s.state != nil {
 		s.state.telemetryRollback = rollback
 	}

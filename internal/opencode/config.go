@@ -52,7 +52,8 @@ func ResolveRuntimeConfigForHome(homeDir, projectDir string) (ConfigSnapshot, er
 			dirs = append(dirs, filepath.Dir(DefaultSettingsPathForHome(homeDir)))
 		}
 	}
-	root := map[string]any{}
+	snapshot.Providers = map[string]Provider{}
+	snapshot.Assignments = map[string]AssignmentPresence{}
 	var paths []string
 	for i := len(dirs) - 1; i >= 0; i-- {
 		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
@@ -68,13 +69,12 @@ func ResolveRuntimeConfigForHome(homeDir, projectDir string) (ConfigSnapshot, er
 			if err != nil {
 				return snapshot, fmt.Errorf("read OpenCode config %s: %w", path, err)
 			}
-			overlayConfigFields(root, layer)
+			overlayConfiguredProviders(snapshot.Providers, layer)
+			overlayConfiguredAssignments(snapshot.Assignments, layer)
 			snapshot.Path = path
 			paths = append(paths, path)
 		}
 	}
-	snapshot.Providers = configuredProviders(root)
-	snapshot.Assignments = configuredAssignments(root)
 	if len(paths) > 1 {
 		snapshot.Diagnostics = append(snapshot.Diagnostics, fmt.Sprintf("OpenCode layered config (%s): higher-priority overrides are preserved. Model edits to %s may not be effective; file-backed model/profile values are not runtime assignments.", strings.Join(paths, " < "), snapshot.WritePath))
 	}
@@ -213,7 +213,7 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-func configuredProviders(root map[string]any) map[string]Provider {
+func legacyConfiguredProviders(root map[string]any) map[string]Provider {
 	providerRaw, _ := root["provider"].(map[string]any)
 	providers := make(map[string]Provider, len(providerRaw))
 	for id, raw := range providerRaw {
@@ -259,7 +259,7 @@ func configuredModels(provider map[string]any) map[string]Model {
 	return models
 }
 
-func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
+func legacyConfiguredAssignments(root map[string]any) map[string]AssignmentPresence {
 	agentRaw, _ := root["agent"].(map[string]any)
 	assignments := make(map[string]AssignmentPresence, len(agentRaw))
 	for name, raw := range agentRaw {
@@ -281,13 +281,15 @@ func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
 			assignments[key] = AssignmentPresence{Present: true, Cleared: true, Managed: looksLikeManagedOpenCodeAgent(def)}
 			continue
 		}
-		providerID, modelID, ok := model.SplitModelSpec(strings.TrimSpace(modelSpec))
+		assignment, ok := model.ParseModelReference(modelSpec)
 		if !ok {
 			assignments[key] = AssignmentPresence{Present: true}
 			continue
 		}
-		effort, _ := def["variant"].(string)
-		assignments[key] = AssignmentPresence{Present: true, Assignment: model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}}
+		if assignment.Effort == "" {
+			assignment.Effort, _ = def["variant"].(string)
+		}
+		assignments[key] = AssignmentPresence{Present: true, Assignment: assignment}
 	}
 	return assignments
 }

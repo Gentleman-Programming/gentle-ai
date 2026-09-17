@@ -71,7 +71,7 @@ func (p ProgressState) Percent() int {
 
 	completed := 0
 	for _, item := range p.Items {
-		if item.Status == string(pipeline.StepStatusSucceeded) || item.Status == string(pipeline.StepStatusFailed) {
+		if item.Status == string(pipeline.StepStatusSucceeded) || item.Status == string(pipeline.StepStatusFailed) || item.Status == string(pipeline.StepStatusSkipped) {
 			completed++
 		}
 	}

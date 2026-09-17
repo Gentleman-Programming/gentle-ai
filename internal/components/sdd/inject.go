@@ -389,6 +389,17 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if len(options) > 0 {
 		opts = options[0]
 	}
+	pluginAssetDir := "opencode/plugins/"
+	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		var err error
+		pluginAssetDir, err = openCodePluginAssetDirectory(adapter.Agent())
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if err = validateOpenCodePluginReplacement(filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins"), pluginAssetDir); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 	settingsPath := openCodeSettingsPath(homeDir, adapter, opts.OpenCodeSettingsPath)
 	if opts.PreserveOpenCodeOrchestratorPrompt && AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		prompt, err := readPreservedOpenCodeOrchestratorPrompt(settingsPath)
@@ -670,7 +681,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			mergedSettingsBytes = agentResult.merged
 
 			// Install OpenCode plugins (all SDD modes).
-			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
+			pluginResult, err := installOpenCodePluginsDirectory(homeDir, adapter, pluginAssetDir)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -1724,6 +1735,13 @@ func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
 		root = parsedRoot
 	}
 
+	if native, _ := root["agents"].(map[string]any); native != nil {
+		entry, _ := native[agentKey].(map[string]any)
+		if prompt, valid := entry["system"].(string); valid {
+			return prompt, nil
+		}
+	}
+
 	agentsRaw, ok := root["agent"]
 	if !ok {
 		return "", nil
@@ -2289,8 +2307,15 @@ func stripOpenCodeNativeFallbackAgents(overlayBytes []byte) ([]byte, error) {
 // sync. Managed plugins carry no user content, so drift is resolved by
 // overwriting, matching installOpenCodePlugins.
 func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	assetDir, err := openCodePluginAssetDirectory(adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, err
+	}
 	pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
 
+	if err := validateOpenCodePluginReplacement(pluginsDir, assetDir); err != nil {
+		return InjectionResult{}, err
+	}
 	var files []string
 	var changed bool
 	migrate, err := hasRegularLegacyOpenCodeReviewPlugin(pluginsDir)
@@ -2316,7 +2341,7 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 				continue
 			}
 			if os.IsNotExist(err) {
-				content := assets.MustRead("opencode/plugins/" + name)
+				content := assets.MustRead(assetDir + name)
 				writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
 				if err != nil {
 					return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
@@ -2333,7 +2358,7 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 			continue
 		}
 
-		content := assets.MustRead("opencode/plugins/" + name)
+		content := assets.MustRead(assetDir + name)
 		writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
 		if err != nil {
 			return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
@@ -2388,9 +2413,19 @@ func removeLegacyOpenCodeReviewPlugin(pluginsDir string) (string, bool, error) {
 // still manages by default. Native OpenCode subagents replace the legacy
 // background-agents plugin, so that legacy cleanup is scoped to OpenCode only.
 func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	assetDir, err := openCodePluginAssetDirectory(adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	return installOpenCodePluginsDirectory(homeDir, adapter, assetDir)
+}
+func installOpenCodePluginsDirectory(homeDir string, adapter agents.Adapter, assetDir string) (InjectionResult, error) {
 	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")
 
+	if err := validateOpenCodePluginReplacement(pluginsDir, assetDir); err != nil {
+		return InjectionResult{}, err
+	}
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return InjectionResult{}, fmt.Errorf("create plugins dir: %w", err)
 	}
@@ -2425,7 +2460,7 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 
 	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
-		content := assets.MustRead("opencode/plugins/" + name)
+		content := assets.MustRead(assetDir + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 
 		writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
@@ -2465,6 +2500,19 @@ func mergeOpenCodeCompatibleJSONFile(path string, overlay []byte) (mergeJSONResu
 // mergeOpenCodeJSONFile applies the shared legacy settings migrations and then
 // removes deprecated agent-local tools only for OpenCode managed agent keys.
 func mergeOpenCodeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+	// V2 reuses agents for the native map. Do not run the historical plural-key
+	// migration when native-only fields identify the configuration.
+	if data, readErr := os.ReadFile(path); readErr == nil {
+		root, parseErr := filemerge.UnmarshalJSONObject(data)
+		if parseErr == nil && opencode.NativeConfig(root) {
+			converted, err := nativeAgentOverlay(overlay, root)
+			if err != nil {
+				return mergeJSONResult{}, err
+			}
+			return mergeJSONFileContents(path, data, converted)
+		}
+	}
+
 	baseJSON, err := readAndMigrateOpenCodeCompatibleJSON(path)
 	if err != nil {
 		return mergeJSONResult{}, err
@@ -3481,8 +3529,10 @@ func readOpenCodeRootModel(path string) (string, error) {
 		return "", nil
 	}
 
-	rootModelID, _ := root["model"].(string)
-	return rootModelID, nil
+	if selection, ok := model.ParseModelReference(root["model"]); ok {
+		return selection.FullID(), nil
+	}
+	return "", nil
 }
 
 // readExistingAgentModels reads opencode.json at path and returns a set of
@@ -3503,19 +3553,14 @@ func readExistingAgentModels(path string) (map[string]bool, error) {
 		return map[string]bool{}, nil
 	}
 
-	agentRaw, ok := root["agent"]
-	if !ok {
-		return map[string]bool{}, nil
-	}
-	agentMap, ok := agentRaw.(map[string]any)
-	if !ok {
-		return map[string]bool{}, nil
+	result := map[string]bool{}
+	for _, section := range []string{"agent", "agents"} {
+		entries, _ := root[section].(map[string]any)
+		for name := range entries {
+			result[name] = true
+		}
 	}
 
-	result := make(map[string]bool, len(agentMap))
-	for name := range agentMap {
-		result[name] = true
-	}
 	return result, nil
 }
 

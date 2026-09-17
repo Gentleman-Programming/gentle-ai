@@ -209,6 +209,32 @@ not queues them. Callbacks only release process bookkeeping; they never retry.
 Disposal terminates active children. Repeated source events can be counted again:
 this intentionally makes no exactly-once coverage claim.
 
+### OpenCode V2 adapter (assets only; installation wiring pending)
+
+The separate V2 adapter targets the released `@opencode/plugin` 2.0.4 contract.
+V1 remains unchanged. V2 splits attribution (`session.step.started`) from usage
+(`session.step.ended` / `session.step.failed`). The user-authorized V2-only privacy
+exception correlates session/message IDs **in RAM only** within the exact loaded
+location (directory and workspace). IDs, locations and raw error messages never
+enter stdin, logs, files or network payloads. No transcript/SDK retrieval is used.
+
+Correlation stores at most 256 bounded keys, expires entries after 10 minutes
+(on each event and a 30-second idle sweep), and clears on disposal, stream failure
+or observed telemetry veto. Completion consumes its entry before IO. Unmatched,
+expired, malformed and saturated observations are dropped; there is no persistent
+queue or retry. Duplicate completions without a new start are ignored, but this
+is not an exactly-once guarantee across plugin instances or replayed start/end
+pairs. The existing 32-child, 16-KiB-input, 1-KiB-output and 4-second process
+limits remain. Disposal aborts the subscription and terminates owned children.
+
+The `gentle-ai.telemetry-opencode/v2` envelope carries the bounded selected variant
+as `selectedEffort`; V1 rejects that field. Native code maps it to its closed effort
+allowlist and never consults ambient configuration for V2 attribution. The start
+model is a runtime selection, not proof of provider-response identity, so its
+`model_evidence` is `selected` (or `unknown` when absent). Effective effort remains
+unavailable. Duration spans the step through tool settlement, **not provider
+latency**. Runtime installation and end-to-end certification remain separate gates.
+
 Missing/default-zero source tokens remain unavailable; available reasoning is
 preserved, and total tokens are not inferred. Native `build` and `plan`, plus
 `gentle-orchestrator`, map to the orchestrator class. OpenCode's managed fallback
@@ -217,7 +243,7 @@ agents map `explore` to the built-in `explore` class and `general` to the built-
 map to their built-in class. Other non-empty names map to `custom`/`unknown`;
 their raw names never leave native code. Missing names remain `unknown`/`unknown`.
 
-For the observed agent, native code reads up to 1 MiB from the local `opencode.json`
+For V1 only, native code reads up to 1 MiB from the local `opencode.json`
 `agent.<name>.model` and `agent.<name>.variant` assignment. A valid contract effort
 becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
 does not report it. A response provider/model remains authoritative with

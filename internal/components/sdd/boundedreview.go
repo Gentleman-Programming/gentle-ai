@@ -1,12 +1,14 @@
 package sdd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
@@ -122,7 +124,11 @@ func boundedReviewContractFor(agent model.AgentID) string {
 	contract := selectReviewerCaptureTransport(boundedReviewContractSource(), agent)
 	switch {
 	case agent == model.AgentOpenCode:
-		return contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+		rendered := contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+		if major, err := opencode.DetectRuntimeMajor(context.Background()); err == nil && major == opencode.RuntimeV2 {
+			rendered = "OpenCode V2 review transport is unavailable pending organic runtime conformance. Do not start a review or launch reviewer subagents on V2. The following contract is staged reference, not capability authorization.\n\n" + strings.NewReplacer("`task`", "`subagent`", "`subagent_type`", "`agent`").Replace(rendered)
+		}
+		return rendered
 	case reviewerprovider.RegisteredRuntime(agent):
 		return contract + "\n\n" + concurrentReviewerGroupContract
 	}
