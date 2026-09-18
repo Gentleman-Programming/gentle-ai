@@ -127,7 +127,7 @@ func TestStorage_PurgeOlderThanRetainsRecentRows(t *testing.T) {
 		t.Fatalf("InsertEvent(recent): %v", err)
 	}
 
-	purged, err := s.PurgeOlderThan(ctx, cutoff)
+	purged, err := s.PurgeOlderThan(ctx, cutoff, cutoff)
 	if err != nil {
 		t.Fatalf("PurgeOlderThan: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestStorage_PurgeOlderThanIsExclusiveOnRecentBoundary(t *testing.T) {
 		t.Fatalf("InsertEvent: %v", err)
 	}
 
-	purged, err := s.PurgeOlderThan(ctx, cutoff)
+	purged, err := s.PurgeOlderThan(ctx, cutoff, cutoff)
 	if err != nil {
 		t.Fatalf("PurgeOlderThan: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestStorage_SubSecondEventStaysOnItsOwnDayAndSurvivesRetention(t *testing.T
 	// A retention cutoff at exactly midnight of the event's own day must
 	// not purge it: 00:00:00.5 is chronologically AFTER, not before, a
 	// whole-second midnight cutoff on the same day.
-	purged, err := s.PurgeOlderThan(ctx, truncateToDay(day))
+	purged, err := s.PurgeOlderThan(ctx, truncateToDay(day), truncateToDay(day))
 	if err != nil {
 		t.Fatalf("PurgeOlderThan: %v", err)
 	}

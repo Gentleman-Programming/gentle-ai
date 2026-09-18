@@ -24,9 +24,13 @@ import (
 )
 
 const (
-	defaultListen                 = "127.0.0.1:18181"
-	defaultDB                     = "/var/lib/gentle-telemetry/events.sqlite"
-	defaultRetentionDays          = 90
+	defaultListen        = "127.0.0.1:18181"
+	defaultDB            = "/var/lib/gentle-telemetry/events.sqlite"
+	defaultRetentionDays = 90
+	// defaultRuntimeDedupDays: a replay of a runtime delivery arrives within
+	// moments of the original (clients never retry), so two days of
+	// identities is generous; ninety would be a hundred million rows.
+	defaultRuntimeDedupDays       = 2
 	defaultRateLimitPerMin        = 60
 	defaultRuntimeRateLimitPerMin = 600
 	// maintenanceUTCOffset anchors the daily rollup to shortly after UTC
@@ -94,6 +98,7 @@ func run() error {
 	dbPath := flag.String("db", defaultDB, "path to the SQLite database file")
 	summaryTokenFile := flag.String("summary-token-file", "", "path to a file containing the bearer token required for GET /v1/summary")
 	retentionDays := flag.Int("retention-days", defaultRetentionDays, "days of raw events to retain before purge")
+	runtimeDedupDays := flag.Int("runtime-dedup-days", defaultRuntimeDedupDays, "days to remember runtime delivery ids for replay rejection under --runtime-store=metrics (never longer than --retention-days)")
 	rateLimitPerMinute := flag.Int("rate-limit-per-minute", defaultRateLimitPerMin, "per-IP request budget for POST /v1/events, per minute")
 	runtimeRateLimitPerMinute := flag.Int("runtime-rate-limit-per-minute", defaultRuntimeRateLimitPerMin, "per-address request budget for POST /v1/runtime-events, per minute")
 	var trustedProxyCIDRs repeatableFlag
@@ -202,7 +207,7 @@ func run() error {
 	maintenanceDone.Add(1)
 	go func() {
 		defer maintenanceDone.Done()
-		runMaintenanceLoop(ctx, storage, []*telemetrycollector.RateLimiter{limiter, runtimeLimiter}, *retentionDays, downloadsCfg, downloadsClient, logger)
+		runMaintenanceLoop(ctx, storage, []*telemetrycollector.RateLimiter{limiter, runtimeLimiter}, *retentionDays, *runtimeDedupDays, downloadsCfg, downloadsClient, logger)
 	}()
 
 	serveErr := make(chan error, 1)
@@ -279,9 +284,9 @@ func nextMaintenanceDelay(now time.Time) time.Duration {
 // next run, and never affects the rollup or ingest), and periodically
 // sweeps idle buckets on every limiter in limiters (events and runtime each
 // have their own), until ctx is cancelled.
-func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage, limiters []*telemetrycollector.RateLimiter, retentionDays int, downloadsCfg telemetrycollector.DownloadsConfig, downloadsClient *http.Client, logger *slog.Logger) {
+func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage, limiters []*telemetrycollector.RateLimiter, retentionDays, runtimeDedupDays int, downloadsCfg telemetrycollector.DownloadsConfig, downloadsClient *http.Client, logger *slog.Logger) {
 	runOnce := func() {
-		if err := telemetrycollector.RunMaintenance(ctx, storage, time.Now(), retentionDays); err != nil {
+		if err := telemetrycollector.RunMaintenance(ctx, storage, time.Now(), retentionDays, runtimeDedupDays); err != nil {
 			logger.Error("daily maintenance failed", "error", err)
 		}
 		// Derived from ctx (not WithoutCancel): a SIGTERM cancels an

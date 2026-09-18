@@ -392,7 +392,7 @@ func TestRunMaintenance_DownloadRowsDoNotPoisonRollupCatchUp(t *testing.T) {
 	cfg := DownloadsConfig{NpmPackages: []string{"gentle-pi"}, GithubRepos: []string{"Gentleman-Programming/gentle-ai"}}
 	FetchAndStoreDownloads(ctx, s, http.DefaultClient, cfg, day2, nil)
 
-	if err := RunMaintenance(ctx, s, now, 90); err != nil {
+	if err := RunMaintenance(ctx, s, now, 90, 2); err != nil {
 		t.Fatalf("RunMaintenance: %v", err)
 	}
 

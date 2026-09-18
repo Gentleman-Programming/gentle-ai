@@ -317,10 +317,13 @@ type rollupRow struct {
 }
 
 // PurgeOlderThan atomically deletes legacy events and whole runtime deliveries
-// received strictly before cutoff. Its count remains legacy events only, not
-// runtime rows, deliveries, observations, or people. Rollups are never purged.
-// Runtime delivery identities expire with their rows; retries do not renew age.
-func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+// received strictly before cutoff, then trims runtime delivery identities
+// received before dedupCutoff in batches (see purgeRuntimeDeliveryIDsOlderThan).
+// Its count remains legacy events only, not runtime rows, deliveries,
+// identities, observations, or people. Rollups are never purged. Retries do not
+// renew age. dedupCutoff is normally later than cutoff: an identity only has to
+// outlive the moments in which a replay of its delivery can arrive.
+func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff, dedupCutoff time.Time) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -339,6 +342,9 @@ func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, 
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, errRuntimeStorage
+	}
+	if _, err := purgeRuntimeDeliveryIDsOlderThan(ctx, s.db, dedupCutoff); err != nil {
+		return count, err
 	}
 	return count, nil
 }
