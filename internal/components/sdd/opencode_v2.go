@@ -186,6 +186,12 @@ func mergeNativePermissionRules(previous, generated []any, permission any) ([]an
 				copy["effect"] = next["effect"]
 			}
 		}
+		if owned[action] && !seenAction[action] && resource == "*" && rule["effect"] == "allow" && copy["effect"] != "allow" {
+			// This is a generated default replacing a permissive baseline, not
+			// a user restriction. Emit it with generated rules before their
+			// exceptions; retaining it at the end would revoke those grants.
+			continue
+		}
 		existing[action+"\x00"+resource] = true
 		if !seenAction[action] && resource == "*" && copy["effect"] == "allow" {
 			leading = append(leading, copy)

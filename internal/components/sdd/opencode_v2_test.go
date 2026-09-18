@@ -92,6 +92,9 @@ func TestOpenCodeV2ShippedPermissionPreservation(t *testing.T) {
 		rules                         []any
 		want                          string
 	}{
+		{"wildcard allow becomes generated default", "gentle-orchestrator", "subagent", "explore", []any{map[string]any{"action": "subagent", "resource": "*", "effect": "allow"}}, "allow"},
+		{"converted wildcard still denies unrelated agents", "gentle-orchestrator", "subagent", "untrusted-agent", []any{map[string]any{"action": "subagent", "resource": "*", "effect": "allow"}}, "deny"},
+		{"converted wildcard preserves specific user deny", "gentle-orchestrator", "subagent", "explore", []any{map[string]any{"action": "subagent", "resource": "*", "effect": "allow"}, map[string]any{"action": "subagent", "resource": "explore", "effect": "deny"}}, "deny"},
 		{"multiple user task denies", "gentle-orchestrator", "subagent", "explore", []any{map[string]any{"action": "subagent", "resource": "*", "effect": "deny"}, map[string]any{"action": "subagent", "resource": "explore", "effect": "deny"}}, "deny"},
 		{"specific deny with generated exception", "gentle-orchestrator", "subagent", "explore", []any{map[string]any{"action": "subagent", "resource": "*", "effect": "deny"}, map[string]any{"action": "subagent", "resource": "sdd-*", "effect": "allow"}, map[string]any{"action": "subagent", "resource": "explore", "effect": "deny"}}, "deny"},
 		{"existing generated exception survives", "gentle-orchestrator", "subagent", "explore", []any{map[string]any{"action": "subagent", "resource": "*", "effect": "deny"}, map[string]any{"action": "subagent", "resource": "explore", "effect": "allow"}}, "allow"},
