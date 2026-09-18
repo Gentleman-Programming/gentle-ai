@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -41,24 +40,8 @@ func issue2138ZeroConfigFixture(sandbox *Sandbox) error {
 	if err := baseRepo(sandbox); err != nil {
 		return err
 	}
-	binDir := filepath.Join(sandbox.Root, "opencode-bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		return err
-	}
-	binaryName := "opencode"
-	content := "#!/bin/sh\nexit 0\n"
-	if runtime.GOOS == "windows" {
-		binaryName = "opencode.exe"
-		content = "@echo off\r\nexit /b 0\r\n"
-	}
-	path := filepath.Join(binDir, binaryName)
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o755); err != nil {
-		return err
-	}
-	sandbox.PathOverride = binDir
+	// Use the sandbox's version-only native fixture rather than a no-output
+	// stub; capability checks now require explicit supported-version evidence.
 	if _, err := os.Stat(filepath.Join(sandbox.Home, issue2138OpenCodeSettings)); !os.IsNotExist(err) {
 		return fmt.Errorf("zero-config fixture found existing OpenCode settings: %v", err)
 	}
