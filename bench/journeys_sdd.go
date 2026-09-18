@@ -1428,6 +1428,18 @@ func sddJourneys() []Journey {
 			// offer itself, never whether archive proceeds.
 			//
 			// The shipped sdd-archive skill states the same non-gating rule.
+			//
+			// AMENDED 2026-09-18 (Axiom fork). Everything above describes the
+			// contract before the offer step was withdrawn. INC-18 removed the
+			// invocation point entirely and the amendment to
+			// rdd-post-verify-review-offer ratified it, so the "one
+			// distinction" this journey pinned — offer present with reviews on,
+			// absent with reviews off — is gone: reviewOffer is structurally
+			// absent in both states. The non-gating rule itself is untouched
+			// and is now the whole of what this journey proves: archive is
+			// READY on either side of the switch. The prose above is kept
+			// because it records what the contract was, which is exactly the
+			// history that went missing when INC-18 changed it without a delta.
 			Steps: []Step{
 				{Name: "fixture: change complete with an independent verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
@@ -1436,8 +1448,16 @@ func sddJourneys() []Journey {
 						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
 							return fmt.Errorf("dependencies.archive = %q next = %q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewOffer == nil || !status.ReviewOffer.Available {
-							return fmt.Errorf("reviewOffer = %+v, want an available invitation", status.ReviewOffer)
+						// Amendment of 2026-09-18 to rdd-post-verify-review-offer:
+						// the offer step was withdrawn. The distinction this
+						// journey used to pin — offer present with reviews on,
+						// absent with reviews off — no longer exists: the offer
+						// is structurally absent in BOTH states. What survives,
+						// and is what the journey now proves, is the part that
+						// always mattered: archive is READY either way, so the
+						// switch never gates delivery.
+						if status.ReviewOffer != nil {
+							return fmt.Errorf("reviewOffer = %+v, want structural absence: the offer step is withdrawn", status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -1512,8 +1532,12 @@ func sddJourneys() []Journey {
 						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
 							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q; want all_done/ready/archive", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewOffer == nil || !status.ReviewOffer.Available || !strings.Contains(status.ReviewOffer.Invocation, "review start") {
-							return fmt.Errorf("re-enabled archive omitted its optional fresh-review offer: %+v", status.ReviewOffer)
+						// Amendment of 2026-09-18 to rdd-post-verify-review-offer:
+						// the offer step was withdrawn from the sequence, so no
+						// status carries one. What this journey now proves is
+						// that re-enabling the switch does not resurrect it.
+						if status.ReviewOffer != nil {
+							return fmt.Errorf("re-enabled archive carried a withdrawn review offer: %+v", status.ReviewOffer)
 						}
 						return nil
 					})},

@@ -4,13 +4,27 @@
 
 Define the sequence SDD MUST follow per maintainer directive (Engram decision #10123, 2026-08-02): apply -> verify -> offer RDD review -> (optional correction -> targeted re-verify) -> archive. RDD is a service SDD invokes at exactly one point, never a supervisor of the SDD cycle. These are hard MUSTs, not defaults.
 
+**Amendment (INC-18 ratification, 2026-09-18, Axiom fork): the sequence loses its offer step.** The governing sequence in this fork is apply -> verify -> archive. The invocation point was removed, not relocated, so RDD is no longer a service SDD invokes at all: it is reached only through the user-owned `review mode` surface, outside the SDD cycle. The directive's intent — that RDD never supervise the SDD cycle — is satisfied more completely by that absence than by a single guarded call. The rationale, the provenance, and what remains binding are recorded in full on the first requirement below. **The remaining MUSTs of this document are unaffected**; in particular, *Kill-Switch-Off Is Structural Absence* is now satisfied in every kill-switch state rather than only when the switch is off.
+
 ## Requirements
 
 ### Requirement: Offer Occurs Strictly Post-Verify, Pre-Archive
 
-SDD MUST offer RDD review only after verify completes and before archive begins. SDD MUST NOT consult, block on, or offer RDD review before or during apply. The pre-apply status control (`applyPreVerifyReviewRouting`, `applyPreVerifyCompactBridgeRouting`) MUST be removed, not reordered. (Issue #1209)
+**Amendment (INC-18 ratification, 2026-09-18, Axiom fork): the offer itself is withdrawn; only its prohibitions survive.** This requirement's positive obligation — that SDD offer RDD review between verify and archive, calling `OfferReviewAfterVerify` as the sole review entry point — is **superseded and no longer in force**. SDD MUST NOT create review offers on any path. `internal/sddstatus/review_door.go` states the ratified behavior: *"SDD status no longer creates review offers or calls OfferReviewAfterVerify."* `OfferReviewAfterVerify` retains no production caller.
+
+The prohibitions of this requirement are **unchanged and still binding**: SDD MUST NOT consult, block on, or offer RDD review before or during apply, and `applyPreVerifyReviewRouting` / `applyPreVerifyCompactBridgeRouting` MUST stay absent from the call graph. Withdrawing the offer removes a call site; it does not license reintroducing an earlier one.
+
+*Why the maintainer directive of 2026-08-02 (Engram decision #10123) no longer governs.* That directive fixed the sequence apply → verify → **offer** → archive so RDD would be a service SDD invokes at exactly one point rather than a supervisor of the SDD cycle. INC-18 pursued the same goal further and removed the invocation point altogether: with no call at all, RDD cannot supervise the cycle by construction. The directive's purpose is served more completely by absence than by a single guarded call, and this specification already carries the stronger form of that idea in its next requirement, *Kill-Switch-Off Is Structural Absence, Proven by Call-Absence*. INC-18 satisfied that requirement maximally — zero call edges in every state, not only when the switch is off — while leaving this one contradicted. The amendment resolves the contradiction in favour of the requirement the code demonstrably honours.
+
+*Why this is recorded now and not in INC-18.* INC-18 made the change without emitting any delta: the capability was never mentioned in that change. The contradiction stayed invisible because the only artefacts asserting the old behaviour were bench journeys (`j42-kill-switch-versus-sdd-archive`, `j63-disabled-failed-verification-unmanaged-remediation`) inside a CI step that never ran — it sat behind a unit-test step that had been failing for months. This amendment is the delta INC-18 owed, written when the journeys finally executed and surfaced it.
+
+*Consequence for consumers.* A status resolution between verify and archive carries no `reviewOffer`. Callers MUST treat its absence as the normal shape, in every kill-switch state, and MUST NOT infer that verification was skipped. Archive proceeds under ordinary repository policy, which is what the *Decline Proceeds to Unmanaged Ordinary Archive* requirement below already describes for the declined case; that path is now the only path.
+
+**Superseded text, retained for provenance:** *"SDD MUST offer RDD review only after verify completes and before archive begins."* Its two scenarios below are likewise historical: the first no longer holds, and the second survives because it asserts a prohibition, not the offer.
 
 #### Scenario: Offer fires only after verify completes
+
+> **Superseded by the amendment above.** No code path calls `OfferReviewAfterVerify`. Retained to document what the contract required before 2026-09-18.
 
 - GIVEN apply and verify have both completed for a change
 - WHEN SDD reaches its post-verify, pre-archive status resolution — `internal/sddstatus`'s `Resolve()`/`resolveEngramStatus()`, through `applyReviewOfferRouting` and `review_door.go`'s `reviewOfferForVerify` (call-site amendment, 2026-08-03: the originally-named `internal/cli` verify-success exit was found genuinely underspecified — repo/context-free by `RunSDDVerifyValidate`'s own doc comment — and the routing surface that already owns integration was chosen instead; `RunSDDVerifyValidate` itself stays context-free)
