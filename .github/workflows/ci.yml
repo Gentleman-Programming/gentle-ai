@@ -75,7 +75,14 @@ jobs:
 
       - name: Run benchmark evidence
         run: |
-          go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
+          # Build the canonical binary, not ./cmd/gentle-ai. That one is a
+          # deprecation shim that writes a notice to stderr on every
+          # invocation, and the journeys read the product's own output:
+          # j122 parsed the notice's first letter as JSON ("invalid character
+          # 'A'"), and the TUI journeys captured it ahead of the menu they
+          # wait for. The file keeps the retired name because the corpus
+          # resolves the product by that name.
+          go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/axiom
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --out "$RUNNER_TEMP/bench-portable.json"
           jq -e '
             def completed_once($id):
@@ -132,7 +139,9 @@ jobs:
               | ($matches | length == 1) and ($matches[0].status == "unsupported");
             unsupported_once("j97-opencode-custom-agent-model-picker-runtime")
           ' "$RUNNER_TEMP/bench-model-picker-untagged.json"
-          go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
+          # Canonical package, same reason as the build above: ./cmd/gentle-ai
+          # is the deprecation shim and its stderr notice reaches the journeys.
+          go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/axiom
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker.json"
           jq -e '
             def completed_once($id):

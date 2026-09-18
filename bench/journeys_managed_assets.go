@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 // historicalManagedAssetStateSHA256 pins the exact state bytes emitted by
@@ -27,8 +26,13 @@ func staleManagedAssetState(sandbox *Sandbox) error {
 	if got := fmt.Sprintf("%x", sha256.Sum256(historicalManagedAssetState)); got != historicalManagedAssetStateSHA256 {
 		return fmt.Errorf("historical managed asset state SHA-256 = %s, want %s", got, historicalManagedAssetStateSHA256)
 	}
-	path := filepath.Join(sandbox.Home, ".gentle-ai", "state.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// The journey's review opt-in already created the install state, so stage the
+	// predecessor artifact over that exact file. Naming a directory literally
+	// would write beside the live state on a product that renamed it: the stale
+	// digest would never be read, STATUS would report a pristine `fresh_target_ready`,
+	// and the journey would measure an ordinary install instead of the skew it exists for.
+	path, err := managedStatePath(sandbox.Home)
+	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(path, historicalManagedAssetState, 0o644); err != nil {

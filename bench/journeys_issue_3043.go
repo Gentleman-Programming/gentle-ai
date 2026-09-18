@@ -41,8 +41,12 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 	if strings.Contains(observation.Stdout, "OPENCODE_EXPERIMENTAL=true") {
 		return fmt.Errorf("install emitted legacy shell mutation guidance: %s", observation.Stdout)
 	}
-	launcher := filepath.Join(sandbox.Home, ".gentle-ai", "bin", "opencode")
-	data, err := os.ReadFile(launcher)
+	// The managed state directory was renamed to `.axiom`
+	// (internal/opencode.BinDir), while upstream still writes `.gentle-ai`.
+	// bench is a separate Go module and cannot import that constant, so it
+	// probes both and reports both paths when neither exists. The launcher's
+	// own marker was NOT renamed, so it stays a single literal.
+	launcher, data, err := readManagedLauncher(sandbox.Home)
 	if err != nil || !strings.Contains(string(data), "gentle-ai:managed-opencode-launcher/v1") {
 		return fmt.Errorf("managed launcher missing or unowned: %q, %v", data, err)
 	}
@@ -74,4 +78,26 @@ func issue3043Journeys() []Journey {
 			{Name: "install reports managed activation", Args: issue3043InstallArgs, After: issue3043VerifyInstall},
 		},
 	}}
+}
+
+// readManagedLauncher returns the managed OpenCode launcher path and bytes,
+// probing the current `.axiom` state directory first and falling back to the
+// retired `.gentle-ai` one. Accepting both keeps this journey honest against a
+// fork that renamed the directory and an upstream that did not.
+func readManagedLauncher(home string) (string, []byte, error) {
+	var firstErr error
+	candidates := []string{
+		filepath.Join(home, ".axiom", "bin", "opencode"),
+		filepath.Join(home, ".gentle-ai", "bin", "opencode"),
+	}
+	for _, candidate := range candidates {
+		data, err := os.ReadFile(candidate)
+		if err == nil {
+			return candidate, data, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return "", nil, fmt.Errorf("no managed launcher at %s: %w", strings.Join(candidates, " or "), firstErr)
 }
