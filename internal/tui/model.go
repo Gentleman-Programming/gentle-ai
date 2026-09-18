@@ -32,6 +32,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/odd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
@@ -585,6 +586,9 @@ const (
 	ScreenMultiRole
 	ScreenHandoffs
 	ScreenLivingDoc
+	// ScreenODDFeatures muestra los documentos vivos del carril ágil ODD y
+	// permite conmutar al carril formal SDD (REQ-19.14, REQ-19.15).
+	ScreenODDFeatures
 )
 
 type Model struct {
@@ -622,6 +626,9 @@ type Model struct {
 	ActiveHandoff     *handoff.Handoff
 	HandoffErr        string
 	LivingSpecs       []livingdoc.LivingSpecEntry
+	// ODDFeatures son los documentos vivos del carril ágil ODD, cargados
+	// por loadODDFeatures() para ScreenODDFeatures (REQ-19.14).
+	ODDFeatures []screens.ODDFeatureInfo
 
 	// BackgroundIntent is the effective OpenCode background choice for the
 	// current install. BackgroundPersist is published only after success.
@@ -1661,6 +1668,8 @@ func (m Model) View() string {
 		return screens.RenderHubProjects(m.HubProjects, m.HubActivePath, m.Cursor, m.GovernanceMessage)
 	case ScreenSDDIncrements:
 		return screens.RenderSDDIncrements(m.SDDIncrements, m.Cursor, m.GovernanceMessage)
+	case ScreenODDFeatures:
+		return screens.RenderODDFeatures(m.ODDFeatures, m.Cursor, m.GovernanceMessage)
 	case ScreenMultiRole:
 		return screens.RenderMultiRole(m.SDDActiveChange, m.MultiRoles, m.MultiRoleBarrier, m.Cursor, m.GovernanceMessage)
 	case ScreenHandoffs:
@@ -3129,7 +3138,35 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.loadLivingDocs()
 			m.setScreen(ScreenLivingDoc)
 		case 5:
+			m.loadODDFeatures()
+			m.setScreen(ScreenODDFeatures)
+		case 6:
 			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenODDFeatures:
+		action, idx := screens.ODDFeaturesActionAt(m.ODDFeatures, m.Cursor)
+		switch action {
+		case screens.ODDActionSelectFeature:
+			feature := m.ODDFeatures[idx]
+			if strings.TrimSpace(feature.PromotedTo) != "" {
+				m.SDDActiveChange = oddChangeNameFromPromotedTo(feature.PromotedTo)
+				m.loadSDDIncrements()
+				m.setScreen(ScreenSDDIncrements)
+			} else {
+				m.GovernanceMessage = fmt.Sprintf("Documento ODD activo: %s (%s)", feature.Feature, feature.Path)
+			}
+		case screens.ODDActionCreate:
+			m.GovernanceMessage = "Usa «axiom odd create <nombre>» desde la terminal para crear un documento vivo nuevo."
+		case screens.ODDActionPromote:
+			m.GovernanceMessage = "Usa «axiom odd promote <feature>» desde la terminal para promoverla a SDD."
+		case screens.ODDActionCheckMirror:
+			m.GovernanceMessage = "Usa «axiom odd status --check-mirror» desde la terminal para comprobar el espejo Engram."
+		case screens.ODDActionGoToSDDLane:
+			m.loadSDDIncrements()
+			m.setScreen(ScreenSDDIncrements)
+		case screens.ODDActionBack:
+			m.setScreen(ScreenGovernance)
 		}
 		return m, nil
 	case ScreenHubProjects:
@@ -4531,6 +4568,8 @@ func (m Model) optionCount() int {
 		return len(screens.HubProjectsOptions(m.HubProjects, m.HubActivePath))
 	case ScreenSDDIncrements:
 		return len(screens.SDDIncrementsOptions(m.SDDIncrements))
+	case ScreenODDFeatures:
+		return len(screens.ODDFeaturesOptions(m.ODDFeatures))
 	case ScreenMultiRole:
 		return len(screens.MultiRoleOptions(m.MultiRoles))
 	case ScreenHandoffs:
@@ -5910,6 +5949,46 @@ func (m *Model) loadSDDIncrements() {
 		}
 	}
 	m.SDDIncrements = list
+}
+
+// loadODDFeatures deriva la lista de documentos vivos del carril ágil ODD
+// desde el sistema de ficheros (odd.Scan), para ScreenODDFeatures
+// (REQ-19.14). La comprobación del espejo Engram nunca ocurre aquí: es
+// siempre una acción deliberada del usuario (REQ-19.4, REQ-19.7), nunca
+// parte de la carga de la pantalla.
+func (m *Model) loadODDFeatures() {
+	m.GovernanceMessage = ""
+	summaries, err := odd.Scan(".")
+	if err != nil {
+		m.GovernanceMessage = "Error cargando documentos vivos ODD: " + err.Error()
+		return
+	}
+
+	list := make([]screens.ODDFeatureInfo, 0, len(summaries))
+	for _, fs := range summaries {
+		list = append(list, screens.ODDFeatureInfo{
+			Feature:        fs.Feature,
+			Path:           fs.Path,
+			Status:         string(fs.Status),
+			PromotedTo:     fs.PromotedTo,
+			TasksTotal:     fs.Progress.Total,
+			TasksCompleted: fs.Progress.Completed,
+			ProgressPct:    int(fs.Progress.Percent),
+		})
+	}
+	m.ODDFeatures = list
+}
+
+// oddChangeNameFromPromotedTo extrae el nombre desnudo del cambio SDD a
+// partir de la referencia completa que expone odd.Document.PromotedTo
+// ("openspec/changes/<nombre>/"), en el mismo formato que ya consume
+// SDDActiveChange en el resto de esta pantalla y en loadSDDIncrements.
+// Réplica deliberada, en Go, del mismo recorte ya aplicado en
+// assets/app.js::oddOriginMap() para el Dashboard Web (Fase 6, INC-19): la
+// referencia completa identifica el cambio para humanos, pero el resto del
+// árbol de gobernanza de la TUI indexa por el nombre desnudo.
+func oddChangeNameFromPromotedTo(promotedTo string) string {
+	return filepath.Base(strings.TrimSuffix(promotedTo, "/"))
 }
 
 func inspectIncrementForTUI(path, name, kind string) screens.SDDIncrementInfo {
