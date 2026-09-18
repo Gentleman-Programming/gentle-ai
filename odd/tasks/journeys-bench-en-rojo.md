@@ -269,9 +269,11 @@ Réplica exacta del paso «Run benchmark evidence»: mismo binario canónico, mi
 
 ## Progreso
 
-**8/8.** Las 10 journeys en verde en Linux real.
+**8/8.** Las once journeys en verde en Linux real, y las cinco puertas `jq` del paso de bench superadas —las cuatro últimas, por primera vez en este fork.
 
-Balance de causas, que es el resultado que conviene retener: **ninguna journey estaba equivocada sobre su contrato**. Nueve de diez fallaban por el espacio de nombres retirado —binario, directorio, clave de agente, fichero de estado, idioma de la TUI— y una, el grupo A, porque el código contradecía una especificación viva y INC-18 no había emitido el delta que debía. Cero aserciones debilitadas.
+Balance de causas, que es el resultado que conviene retener: **ninguna journey estaba equivocada sobre su contrato**. Diez de once fallaban por el espacio de nombres retirado, en seis superficies distintas —binario, directorio de estado, fichero de estado, clave de agente, idioma de la TUI, idioma del rehúse—, y una, el grupo A, porque el código contradecía una especificación viva y INC-18 no había emitido el delta que debía. Cero aserciones debilitadas.
+
+Y una advertencia que se gana el sitio: el título de este documento decía diez. Eran once, y la undécima solo apareció al reverdecer las otras. **Un paso de CI con puertas encadenadas bajo `bash -e` solo informa del primer fallo**; reverdecerlo destapa fallos nuevos, no confirma que el resto estuviera bien. Ese mismo paso llevaba meses detrás de un `go test` en rojo, así que la cuenta de partida nunca fue una medición: era el primer corte de una.
 
 ## Siguiente paso
 
