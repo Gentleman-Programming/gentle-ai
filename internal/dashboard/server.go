@@ -92,7 +92,6 @@ func (s *Server) registerRoutes() {
 	}
 }
 
-
 // ListenAndServe inicia el servidor buscando un puerto libre a partir del puerto sugerido.
 func (s *Server) ListenAndServe(initialPort int) (int, error) {
 	listener, port, err := s.findAvailablePort(initialPort)
@@ -614,7 +613,6 @@ func (s *Server) handleSkillsReject(w http.ResponseWriter, r *http.Request) {
 		"message": fmt.Sprintf("Propuesta '%s' descartada del buzón", req.Name),
 	})
 }
-
 
 func (s *Server) handleSemanticStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

@@ -79,4 +79,3 @@ type InitResult struct {
 	AlreadyExisted     bool
 	AdoptedSkillsCount int
 }
-

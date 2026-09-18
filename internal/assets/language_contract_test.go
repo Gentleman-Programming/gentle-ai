@@ -534,4 +534,3 @@ func TestPersonaAxiomAssetsContract(t *testing.T) {
 		})
 	}
 }
-

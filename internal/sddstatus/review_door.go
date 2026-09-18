@@ -24,4 +24,3 @@ func reviewOfferForVerify(ctx context.Context, repo string) (bool, error) {
 	reviewEntryHookCallCount++
 	return false, nil
 }
-

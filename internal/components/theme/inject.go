@@ -16,7 +16,6 @@ type InjectionResult struct {
 	Files   []string
 }
 
-
 type claudeTheme struct {
 	Name      string            `json:"name"`
 	Base      string            `json:"base"`
