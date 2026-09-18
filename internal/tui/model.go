@@ -104,6 +104,16 @@ var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
+
+// gitRepoProbeFn reports whether cwd resolves to a Git worktree. It is a
+// package-level variable so tests can stub it without spawning real git
+// processes. It backs the welcome menu's "Reset review store" precondition.
+var gitRepoProbeFn = func(cwd string) bool {
+	cmd := execCommandFn("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
 var communityToolInstallFn = communitytool.Install
 var communityToolInstallScopedFn = func(id model.CommunityToolID, workspace string, agents []model.AgentID, runner communitytool.Runner) (communitytool.Result, error) {
 	return communitytool.InstallWithHomeAndAgents(id, workspace, homeDir(), agents, runner, communitytool.DetectorFunc(exec.LookPath))
@@ -812,6 +822,12 @@ type Model struct {
 	ReviewStoreResetSurveyErr error
 	// ReviewStoreResetErr records the outcome of an applied reset.
 	ReviewStoreResetErr error
+	// InGitRepository records whether the TUI was launched from inside a Git
+	// worktree. It is probed once at NewModel because the working directory
+	// never changes during a session and per-render process spawns would be
+	// wasteful. The welcome menu renders "Reset review store" disabled with a
+	// stated precondition when it is false, and the navigation no-ops on it.
+	InGitRepository bool
 	// ReviewModeCwdFn, ReviewModeStatusFn, and ReviewModeSetGlobalFn are injected
 	// so the screen can be tested without filesystem state or CLI process calls.
 	ReviewModeCwdFn       func() (string, error)
@@ -895,11 +911,17 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
 	}
 
+	inGitRepo := false
+	if cwd, err := osGetwdFn(); err == nil {
+		inGitRepo = gitRepoProbeFn(cwd)
+	}
+
 	return Model{
 		Screen:                ScreenWelcome,
 		Version:               version,
 		Selection:             selection,
 		Detection:             detection,
+		InGitRepository:       inGitRepo,
 		BackgroundIntent:      s.BackgroundIntent,
 		PiBackgroundIntent:    s.PiBackgroundIntent,
 		UninstallAgents:       agents,
@@ -1486,6 +1508,7 @@ func (m Model) View() string {
 		return screens.RenderWelcomeWithAdvisory(
 			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone,
 			m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(),
+			m.inGitRepository(),
 			m.Width, m.Height,
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
@@ -2140,6 +2163,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			next++
 
 			if m.Cursor == next {
+				if !m.inGitRepository() {
+					// Outside a Git worktree the review store cannot exist; the
+					// row renders disabled and selection is a no-op, mirroring
+					// the "Create your own Agent (no agents)" disabled entry.
+					return m, nil
+				}
 				return m.startReviewStoreResetSurvey()
 			}
 			next++
@@ -3337,6 +3366,13 @@ func (m Model) startOpenCodePluginUninstall() tea.Cmd {
 	}
 }
 
+// inGitRepository reports whether the TUI was launched from inside a Git
+// worktree. It gates the repository-scoped "Reset review store" entry in the
+// welcome menu.
+func (m Model) inGitRepository() bool {
+	return m.InGitRepository
+}
+
 // startReviewStoreResetSurvey moves to the confirmation screen and loads the
 // read-only survey behind a spinner. The screen is entered first on purpose: a
 // survey that fails has to be reportable, and a menu entry that silently does
@@ -4305,7 +4341,7 @@ func (m Model) optionCount() int {
 	}
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.inGitRepository()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 0

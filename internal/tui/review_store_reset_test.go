@@ -38,7 +38,7 @@ func settledStoreResetReport() reviewtransaction.StoreResetReport {
 // the TUI at all, and that it sits in the maintenance cluster at the bottom
 // rather than among the everyday entries.
 func TestWelcomeMenuOffersTheReviewStoreReset(t *testing.T) {
-	options := screens.WelcomeOptions(nil, true, false, 0, true)
+	options := screens.WelcomeOptions(nil, true, false, 0, true, true)
 	reset, backups, uninstall := -1, -1, -1
 	for index, option := range options {
 		switch option {
@@ -58,11 +58,113 @@ func TestWelcomeMenuOffersTheReviewStoreReset(t *testing.T) {
 	}
 }
 
+// TestWelcomeResetEntryDisabledOutsideGit proves the repository-scoped entry is
+// a no-op when the TUI was launched outside a Git worktree: the row renders
+// with its precondition, selection does not start the survey, and the screen
+// does not change.
+func TestWelcomeResetEntryDisabledOutsideGit(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.InGitRepository = false
+	surveyed := false
+	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
+		surveyed = true
+		return settledStoreResetReport(), nil
+	}
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.inGitRepository())
+	resetIndex := -1
+	for index, option := range options {
+		if strings.Contains(option, "Reset review store") {
+			resetIndex = index
+			if option != "Reset review store (requires a Git repository)" {
+				t.Fatalf("outside a Git repository the entry should name the precondition, got %q", option)
+			}
+		}
+	}
+	if resetIndex < 0 {
+		t.Fatalf("the disabled entry is missing: %#v", options)
+	}
+	m.Cursor = resetIndex
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("screen = %v, want the welcome menu unchanged", state.Screen)
+	}
+	if surveyed {
+		t.Fatal("selecting the disabled entry started the survey")
+	}
+	if state.OperationRunning {
+		t.Fatal("selecting the disabled entry started an operation")
+	}
+	if cmd != nil {
+		t.Fatalf("selecting the disabled entry returned a command: %v", cmd)
+	}
+}
+
+// TestWelcomeResetEntryActiveInsideGit proves the same entry behaves exactly as
+// before (survey starts, confirmation screen) when the TUI was launched inside
+// a Git worktree.
+func TestWelcomeResetEntryActiveInsideGit(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.InGitRepository = true
+	surveyed := false
+	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
+		surveyed = true
+		return settledStoreResetReport(), nil
+	}
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.inGitRepository())
+	for index, option := range options {
+		if option == "Reset review store" {
+			m.Cursor = index
+		}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenReviewStoreResetConfirm {
+		t.Fatalf("screen = %v, want the confirmation screen", state.Screen)
+	}
+	if cmd == nil {
+		t.Fatal("no survey command was returned")
+	}
+	state = drainReviewStoreResetCmd(t, state, cmd)
+	if !surveyed {
+		t.Fatal("the survey function was never called")
+	}
+	if state.OperationRunning {
+		t.Fatal("the survey never finished")
+	}
+}
+
+// TestNewModelProbesGitRepositoryOnce proves the Git probe runs exactly once at
+// construction, against the TUI working directory, and its result lands on the
+// model for the whole session.
+func TestNewModelProbesGitRepositoryOnce(t *testing.T) {
+	restoreGetwd := setOSGetwdForTest("/repo/gentle-ai", nil)
+	defer restoreGetwd()
+	original := gitRepoProbeFn
+	defer func() { gitRepoProbeFn = original }()
+	gitRepoProbeFn = func(cwd string) bool {
+		if cwd != "/repo/gentle-ai" {
+			t.Fatalf("probe cwd = %q, want the TUI working directory", cwd)
+		}
+		return true
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	if !m.InGitRepository {
+		t.Fatal("NewModel did not record the Git probe result")
+	}
+}
+
 // TestWelcomeSelectionEntersTheSurvey proves the menu entry runs the read-only
 // survey and lands on the confirmation screen, never straight into a removal.
 func TestWelcomeSelectionEntersTheSurvey(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
+	m.InGitRepository = true
 	surveyed := false
 	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
 		surveyed = true
@@ -72,7 +174,7 @@ func TestWelcomeSelectionEntersTheSurvey(t *testing.T) {
 		t.Fatal("selecting the menu entry applied a reset")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.inGitRepository())
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index
@@ -324,7 +426,7 @@ func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
 		t.Fatal("the second Enter after entering the screen destroyed the store")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.inGitRepository())
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index
