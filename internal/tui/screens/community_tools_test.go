@@ -17,15 +17,6 @@ func TestRenderCommunityToolsShowsCodeGraph(t *testing.T) {
 	}
 }
 
-func TestRenderCommunityToolsShowsRTK(t *testing.T) {
-	out := RenderCommunityTools([]model.CommunityToolID{model.CommunityToolRTK}, 2, nil, false, nil)
-	for _, want := range []string{"[x] RTK", "View repo: https://github.com/rtk-ai/rtk"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("RenderCommunityTools missing %q; output:\n%s", want, out)
-		}
-	}
-}
-
 func TestRenderCommunityToolsShowsStatusLoadingAndAgentState(t *testing.T) {
 	loading := RenderCommunityTools(nil, 0, nil, true, nil)
 	if !strings.Contains(loading, "Detecting installed tool and agent wiring") {

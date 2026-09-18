@@ -45,13 +45,6 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 | Tool | Behavior | Removal |
 |---|---|---|
 | CodeGraph | Installs its CLI and configures supported agent MCP/guidance integration. | Use CodeGraph’s upstream lifecycle commands. |
-| RTK | On supported macOS/Linux architectures, downloads pinned `v0.49.0` to `~/.local/bin/rtk` and runs RTK’s global setup only for detected selected Claude Code, OpenCode, Codex CLI, and Pi installations. Telemetry is disabled for every RTK child process. | Follow RTK’s upstream manual removal guidance; Gentle AI does not automate RTK uninstall. |
-
-RTK remains unavailable on Windows. Gentle AI does not edit shell profiles or `PATH`; if `~/.local/bin` is not already effective, add it manually:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
 
 ---
 

@@ -627,9 +627,6 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
-	if r.selection.HasCommunityTool(model.CommunityToolRTK) {
-		apply = append(apply, rtkSyncStep{id: "sync:community-tool:rtk", homeDir: r.homeDir, workspaceDir: r.workspaceDir, agents: r.agentIDs, changedFiles: &r.changedFiles})
-	}
 
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
@@ -736,11 +733,6 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
-			paths[path] = struct{}{}
-		}
-	}
-	if selection.HasCommunityTool(model.CommunityToolRTK) {
-		for _, path := range communitytool.RTKManagedPathsForAgents(homeDir, selection.Agents) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -890,34 +882,6 @@ type codeGraphGuidanceSyncStep struct {
 type piCodeGraphSyncStep struct {
 	id, homeDir, workspaceDir string
 	changedFiles              *[]string
-}
-
-type rtkSyncStep struct {
-	id, homeDir, workspaceDir string
-	agents                    []model.AgentID
-	changedFiles              *[]string
-}
-
-func (s rtkSyncStep) ID() string { return s.id }
-
-func (s rtkSyncStep) Run() error {
-	paths := communitytool.RTKManagedPathsForAgents(s.homeDir, s.agents)
-	before, err := snapshotSyncFiles(paths)
-	if err != nil {
-		return fmt.Errorf("snapshot RTK files: %w", err)
-	}
-	_, err = installCommunityToolWithHomeAndAgents(model.CommunityToolRTK, s.workspaceDir, s.homeDir, s.agents, rtkHomeRunner{homeDir: s.homeDir}, communitytool.DetectorFunc(cmdLookPath))
-	if err != nil {
-		return errors.Join(fmt.Errorf("sync RTK: %w", err), restoreSyncFiles(before))
-	}
-	changed, err := changedSyncFiles(paths, before)
-	if err != nil {
-		return fmt.Errorf("compare RTK sync files: %w", err)
-	}
-	if s.changedFiles != nil {
-		*s.changedFiles = append(*s.changedFiles, changed...)
-	}
-	return nil
 }
 
 // openCodePluginRefreshSyncStep refreshes already-installed managed
@@ -2016,8 +1980,6 @@ func restorePersistedCommunityTools(homeDir string, selection *model.Selection, 
 			switch model.CommunityToolID(tool) {
 			case model.CommunityToolCodeGraph:
 				selection.CommunityTools = append(selection.CommunityTools, model.CommunityToolCodeGraph)
-			case model.CommunityToolRTK:
-				selection.CommunityTools = append(selection.CommunityTools, model.CommunityToolRTK)
 			}
 		}
 		return

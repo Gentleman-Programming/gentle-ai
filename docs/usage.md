@@ -105,15 +105,7 @@ See [Skill Registry](skill-registry.md) for the full index-first flow and diagra
 
 ### Community Tools
 
-The installer’s **Community Tools/Plugins** screen offers opt-in integrations. RTK is never selected by a preset or detection. On supported macOS/Linux architectures it installs pinned RTK `v0.49.0` at `~/.local/bin/rtk`, configures only detected selected Claude Code, OpenCode, Codex CLI, and Pi agents, and disables RTK telemetry for its child processes. Windows is intentionally unavailable.
-
-Gentle AI does not change shell profiles or `PATH`. If RTK is not found after installation, run:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Run `gentle-ai sync` to restore an explicitly persisted RTK selection using the same pinned setup. RTK removal remains the upstream manual workflow; Gentle AI does not create an ownership manifest or uninstall RTK automatically.
+The installer’s **Community Tools/Plugins** screen offers opt-in integrations that are never selected by a preset or detection.
 
 ### sync
 

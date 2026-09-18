@@ -100,12 +100,6 @@ Select CodeGraph during Gentle AI installation to add its read-only MCP server t
 
 Package-owned child files are never edited. Gentle AI creates a same-name overlay in Pi's agent directory when needed. A parent `APPEND_SYSTEM.md` CodeGraph marker is not considered proof that any child has CodeGraph tools or guidance.
 
-## Optional RTK
-
-When you explicitly select RTK in Gentle AI’s Community Tools screen on a supported macOS/Linux architecture, Gentle AI installs the pinned RTK binary at `~/.local/bin/rtk` and runs `rtk init -g --agent pi --auto-patch` for a detected selected Pi installation. RTK owns the generated extension at `PI_CODING_AGENT_DIR/extensions/rtk.ts` (default `~/.pi/agent/extensions/rtk.ts`); Gentle AI only detects its documented rewrite marker. RTK telemetry is disabled for that child process. Windows remains intentionally unavailable.
-
-Gentle AI does not add `~/.local/bin` to your shell profile. If needed, add it yourself with `export PATH="$HOME/.local/bin:$PATH"`. Remove RTK through its upstream manual workflow; Gentle AI does not automate its uninstall.
-
 ## Pi Commands
 
 Run these inside Pi after installing the package stack.

@@ -100,14 +100,6 @@ var definitions = []Definition{
 		RepoURL:     "https://github.com/colbymchenry/codegraph",
 		Description: "Code graph indexing and MCP wiring for supported coding agents",
 	},
-	{
-		ID:          model.CommunityToolRTK,
-		Name:        "RTK",
-		PackageName: "rtk@v0.49.0",
-		CommandName: "rtk",
-		RepoURL:     "https://github.com/rtk-ai/rtk",
-		Description: "Optional runtime command rewriting for supported coding agents",
-	},
 }
 
 func Definitions() []Definition {
@@ -129,13 +121,6 @@ func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Resu
 	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
 }
 
-func InstallWithHomeAndAgents(id model.CommunityToolID, workspaceDir, homeDir string, selectedAgents []model.AgentID, runner Runner, detector Detector) (Result, error) {
-	if id == model.CommunityToolRTK {
-		return installRTKForAgents(homeDir, runner, detector, selectedAgents, true)
-	}
-	return InstallWithHome(id, workspaceDir, homeDir, runner, detector)
-}
-
 func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
@@ -143,9 +128,6 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	def, ok := DefinitionFor(id)
 	if !ok {
 		return Result{}, fmt.Errorf("unknown community tool %q", id)
-	}
-	if def.ID == model.CommunityToolRTK {
-		return installRTKForAgents(homeDir, runner, detector, nil, false)
 	}
 	if def.ID != model.CommunityToolCodeGraph {
 		return Result{}, fmt.Errorf("community tool %q is not supported", id)
@@ -340,9 +322,6 @@ func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) S
 	if !ok {
 		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))
 		return status
-	}
-	if id == model.CommunityToolRTK {
-		return detectRTKStatus(homeDir, detector)
 	}
 	if id != model.CommunityToolCodeGraph {
 		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))

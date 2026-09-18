@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,17 +32,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
-
-func TestSyncPlanIncludesPersistedRTKStep(t *testing.T) {
-	runtime, err := newSyncRuntime(t.TempDir(), model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolRTK}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := runtime.stagePlan()
-	if !slices.ContainsFunc(plan.Apply, func(step pipeline.Step) bool { return step.ID() == "sync:community-tool:rtk" }) {
-		t.Fatalf("sync plan = %#v, want pinned RTK restoration step", plan.Apply)
-	}
-}
 
 func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 	home := t.TempDir()
@@ -2639,7 +2627,7 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 		want      bool
 	}{
 		{name: "explicit selected", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"codegraph"}}, want: true},
-		{name: "explicit none", persisted: state.InstallState{CommunityToolsConfigured: true}},
+		{name: "unknown persisted value", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"unknown"}}},
 		{name: "legacy managed marker", persisted: state.InstallState{}, want: true},
 	}
 	for _, test := range tests {
@@ -2649,29 +2637,11 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 			if got := selection.HasCommunityTool(model.CommunityToolCodeGraph); got != test.want {
 				t.Fatalf("CodeGraph selected = %t, want %t", got, test.want)
 			}
+			if !test.want && len(selection.CommunityTools) != 0 {
+				t.Fatalf("community tools = %v, want unknown values ignored", selection.CommunityTools)
+			}
 		})
 	}
-}
-
-func TestRestorePersistedCommunityToolsRestoresRTKAndSchedulesSync(t *testing.T) {
-	home := t.TempDir()
-	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
-	restorePersistedCommunityTools(home, &selection, state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"rtk", "unknown"}})
-	if !selection.HasCommunityTool(model.CommunityToolRTK) || len(selection.CommunityTools) != 1 {
-		t.Fatalf("restored community tools = %v, want only RTK", selection.CommunityTools)
-	}
-	runtime, err := newSyncRuntime(home, selection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range runtime.stagePlan().Apply {
-		if step.ID() == "sync:community-tool:rtk" {
-			if got := step.(rtkSyncStep).agents; reflect.DeepEqual(got, []model.AgentID{model.AgentOpenCode}) {
-				return
-			}
-		}
-	}
-	t.Fatal("persisted RTK selection did not schedule the scoped RTK sync step")
 }
 
 func TestRestorePersistedCommunityToolsDoesNotAdoptExternalWiring(t *testing.T) {
