@@ -542,6 +542,52 @@ El volcado de goroutines solo muestra el test que tocaba en ese instante.
 Además, el CI lanza los shards como **matriz en paralelo**; encadenarlos en
 serie en local multiplica el reloj por cuatro sin aportar nada.
 
+## Hallazgo de la ejecución real del CI: el paso de bench nunca se había ejecutado
+
+El job `Unit Tests` tiene varios pasos. `go test ./...` es el primero y llevaba
+meses en rojo, así que **«Run benchmark evidence» jamás llegó a ejecutarse en
+este fork**. Al dejar los tests en verde, ese paso corre por primera vez y
+falla con **10 journeys en rojo** (CI Linux).
+
+Mismo patrón que el `panic`: arreglar lo de arriba destapa lo de abajo.
+
+**Probado que son heredadas, no regresión de esta rama.** Comparación limpia
+shim contra shim (el CI usa `./cmd/gentle-ai`), bench local ejecutado contra un
+binario construido desde `004c9232` y contra el de esta rama: **conjuntos
+idénticos de 14 fallos, diferencia cero**. Las 10 del CI son el subconjunto no
+dependiente de Windows.
+
+> Hipótesis descartada por el camino: se atribuyó primero al aviso de
+> deprecación del shim contaminando stderr, como en T11/T12. Falso: con el
+> binario canónico, que no emite aviso, `j93` falla igual.
+
+Journeys en rojo en el CI de Linux:
+
+```
+j42-kill-switch-versus-sdd-archive
+j63-disabled-failed-verification-unmanaged-remediation
+j93-stale-managed-assets-start-is-not-unknown
+j120-welcome-tui-runs-under-a-real-tty
+j121-rdd-tui-controls-global-mode
+j122-global-review-mode-from-non-git-cwd
+j127-customizable-install-rdd-choice
+j3043-opencode-managed-background-activation
+j3336-opencode-sdd-fresh-default-preflight
+j3500-preserved-external-opencode-sync
+```
+
+Cuatro más solo en Windows local: `j92`, `j96`, `j105`, `j116`.
+
+**Al menos una es un defecto de producto con contrato roto.** `j93` falla
+porque la parada `managed_assets_outdated` llega con `Continuation:<nil>`,
+cuando ese código de parada exige nombrar su comando de recuperación. Sin
+continuación, el agente se queda sin salida runnable, que es justamente lo que
+ese contrato existe para impedir.
+
+**Fuera del alcance de este saneamiento.** Son 10 journeys, cada una con su
+propia causa posible: es trabajo con entidad propia, no un fleco. Queda entre
+este saneamiento e INC-20.
+
 ## Siguiente paso
 
 T15 — cierre. `go build ./...` y `go vet ./...` limpios; `gofmt -l` sin señalar
