@@ -14,6 +14,15 @@ on:
     # 03:00 UTC daily — full Tier 1+2+3 across all platforms as a safety net
     - cron: "0 3 * * *"
 
+# Una ejecución nueva deja obsoleta a la anterior del mismo disparador sobre la
+# misma referencia, así que se cancela en lugar de encolarse detrás. El nombre
+# del evento forma parte de la clave para que un push no cancele la ejecución
+# diaria de seguridad ni un workflow_dispatch manual, que es la única vía de
+# re-ejecutar cuando el fichero del workflow ha cambiado.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go-format:
     name: Go Format

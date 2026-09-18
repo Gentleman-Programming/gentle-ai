@@ -30,6 +30,15 @@ on:
 permissions:
   contents: read
 
+# Una ejecución nueva deja obsoleta a la anterior del mismo disparador sobre la
+# misma referencia, así que se cancela en lugar de encolarse detrás. El nombre
+# del evento forma parte de la clave para que un push no cancele la ejecución
+# diaria de seguridad ni un workflow_dispatch manual, que es la única vía de
+# re-ejecutar cuando el fichero del workflow ha cambiado.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Coverage is identical to running the suite in one job -- every package runs
   # on every push and schedule -- but wall-clock is set by the slowest shard
