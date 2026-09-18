@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -30,9 +29,6 @@ func TestCodexAdapterReturnsNoBytesWhenUnavailable(t *testing.T) {
 }
 
 func TestCodexAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
 	promptPath := filepath.Join(t.TempDir(), "prompt")
 	argumentsPath := filepath.Join(t.TempDir(), "arguments")
 	t.Setenv(codexAdapterHelperEnvironment, "1")
@@ -82,9 +78,6 @@ func TestCodexAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 }
 
 func TestCodexAdapterConfiguresApprovedLoopbackProvider(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
 	t.Setenv(codexAdapterHelperEnvironment, "1")
 	t.Setenv(codexAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
 	t.Setenv(codexAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
