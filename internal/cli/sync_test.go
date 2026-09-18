@@ -2730,7 +2730,13 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	opencodeConfig := filepath.Join(home, ".config", "opencode", "opencode.json")
 	piMCP := filepath.Join(home, ".pi", "agent", "mcp.json")
 	statePath := state.Path(home)
+	// Deliberately off the state directory: the point is that state.json is a
+	// symlink pointing somewhere else. Since the rename of the state directory
+	// to .axiom, this target's parent no longer exists incidentally, so create it.
 	stateTarget := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.MkdirAll(filepath.Dir(stateTarget), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Rename(statePath, stateTarget); err != nil {
 		t.Fatal(err)
 	}
@@ -2872,7 +2878,17 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	if _, ok := agentsMap["review-validator"].(map[string]any); !ok {
 		t.Fatalf("sync did not add review-validator: %#v", agentsMap)
 	}
-	orchestrator := agentsMap["gentle-orchestrator"].(map[string]any)
+	// INC-11 renamed the managed orchestrator agent to `axiom-orchestrator`;
+	// upstream still ships `gentle-orchestrator`. Accept either, and report a
+	// missing agent instead of panicking on a nil type assertion.
+	orchestratorEntry, ok := agentsMap["axiom-orchestrator"]
+	if !ok {
+		orchestratorEntry = agentsMap["gentle-orchestrator"]
+	}
+	orchestrator, ok := orchestratorEntry.(map[string]any)
+	if !ok {
+		t.Fatalf("managed orchestrator agent absent from opencode.json agents: %#v", agentsMap)
+	}
 	permission := orchestrator["permission"].(map[string]any)
 	allowlist := permission["task"].(map[string]any)
 	if replacement, ok := allowlist["__replace__"].(map[string]any); ok {
@@ -3673,11 +3689,16 @@ func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t 
 	if strings.Contains(settingsText, "agent.sdd-orchestrator.model") {
 		t.Fatalf("external-single-active sync preserved stale sdd-orchestrator model assignment key")
 	}
-	if !strings.Contains(settingsText, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
-		t.Fatalf("external-single-active sync did not migrate binding text to gentle-orchestrator")
+	// INC-11 renamed the managed orchestrator agent to `axiom-orchestrator`;
+	// upstream still ships `gentle-orchestrator`. Either spelling satisfies the
+	// migration this asserts.
+	if !strings.Contains(settingsText, "Bind this to the dedicated `axiom-orchestrator` agent only.") &&
+		!strings.Contains(settingsText, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
+		t.Fatalf("external-single-active sync did not migrate binding text to the managed orchestrator")
 	}
-	if !strings.Contains(settingsText, "agent.gentle-orchestrator.model") {
-		t.Fatalf("external-single-active sync did not migrate model assignment key to gentle-orchestrator")
+	if !strings.Contains(settingsText, "agent.axiom-orchestrator.model") &&
+		!strings.Contains(settingsText, "agent.gentle-orchestrator.model") {
+		t.Fatalf("external-single-active sync did not migrate model assignment key to the managed orchestrator")
 	}
 	if strings.Contains(settingsText, "\"sdd-onboard-cheap\"") {
 		t.Fatalf("external-single-active should not auto-detect/regenerate suffixed profiles")
@@ -3796,7 +3817,12 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read synced OpenCode apply command: %v", err)
 	}
-	orchestrator := settings.Agent["gentle-orchestrator"].Prompt
+	// INC-11 renamed the managed orchestrator agent; accept either spelling.
+	orchestratorEntry, ok := settings.Agent["axiom-orchestrator"]
+	if !ok {
+		orchestratorEntry = settings.Agent["gentle-orchestrator"]
+	}
+	orchestrator := orchestratorEntry.Prompt
 	postApply := string(applyPayload)
 	canonicalStatus := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(model.AgentOpenCode) + " --next-transition"
 
@@ -3904,8 +3930,9 @@ func TestRunSyncWithSelection_IsIdempotent(t *testing.T) {
 		t.Fatalf("run 1: FilesChanged = 0, expected > 0")
 	}
 	firstSettings, _ := os.ReadFile(settingsPath)
-	if !bytes.Contains(firstSettings, []byte(`"default_agent": "gentle-orchestrator"`)) {
-		t.Fatalf("TUI sync did not overwrite default_agent: %s", firstSettings)
+	if !bytes.Contains(firstSettings, []byte(`"default_agent": "axiom-orchestrator"`)) &&
+		!bytes.Contains(firstSettings, []byte(`"default_agent": "gentle-orchestrator"`)) {
+		t.Fatalf("TUI sync did not overwrite default_agent to the managed orchestrator: %s", firstSettings)
 	}
 
 	// Run 2: nothing changed.
@@ -4673,8 +4700,9 @@ func TestRunSyncDoesNotOverridePersistedAssignmentsOnSecondSync(t *testing.T) {
 		t.Fatalf("RunSync(1) error = %v", err)
 	}
 	firstSettings, _ := os.ReadFile(settingsPath)
-	if !bytes.Contains(firstSettings, []byte(`"default_agent": "gentle-orchestrator"`)) {
-		t.Fatalf("CLI sync did not overwrite default_agent: %s", firstSettings)
+	if !bytes.Contains(firstSettings, []byte(`"default_agent": "axiom-orchestrator"`)) &&
+		!bytes.Contains(firstSettings, []byte(`"default_agent": "gentle-orchestrator"`)) {
+		t.Fatalf("CLI sync did not overwrite default_agent to the managed orchestrator: %s", firstSettings)
 	}
 
 	// Second sync — should still have the assignments.

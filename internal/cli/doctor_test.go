@@ -1052,7 +1052,9 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 
 Summary: 8 passed, 0 failed, 0 warnings
 Status:  healthy
-`, configPath, filepath.Join(homeDir, ".gentle-ai"))
+`, configPath, filepath.Join(homeDir, ".axiom"))
+	// The state directory is ".axiom" since the rename; doctor.go:640 is the
+	// producer of this path.
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}

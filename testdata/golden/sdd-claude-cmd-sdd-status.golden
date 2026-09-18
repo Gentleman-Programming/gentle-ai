@@ -14,7 +14,7 @@ CONTEXT:
 
 TASK:
 
-1. If the `gentle-ai` binary is available, run `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for every declared artifact store, including Engram. Consume native v2 unchanged as authoritative. If native resolution fails or is invalid, report it and stop; do not reconstruct status locally or call continue. If the binary is unavailable, read `~/.claude/skills/_shared/sdd-status-contract.md` for non-authoritative diagnostic guidance only. Do not fabricate native-shaped status, readiness, or mutation authority.
+1. If the `axiom` binary is available, run `axiom sdd status [change] --cwd <repo> --json --instructions` for every declared artifact store, including Engram. Consume native v2 unchanged as authoritative. If native resolution fails or is invalid, report it and stop; do not reconstruct status locally or call continue. If the binary is unavailable, read `~/.claude/skills/_shared/sdd-status-contract.md` for non-authoritative diagnostic guidance only. Do not fabricate native-shaped status, readiness, or mutation authority.
 2. Use the active selection returned by native status. If `$ARGUMENTS` is provided, require that exact identity; if native status requires selection, ask the user to choose and STOP. Do not guess or select from local artifact inspection.
 3. Inspect the declared artifact store and locators returned by native status. Do not hardcode Engram.
 4. Return structured status with:

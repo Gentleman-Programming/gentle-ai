@@ -23,11 +23,22 @@ import (
 // again. Each runtime keeps its own heading line, which is why codex may hold a
 // section at ## while the others hold it at ###.
 
+// The fork renamed the binary and flattened the verb, so the shipped assets
+// spell the status invocation `axiom sdd status`. Upstream still ships
+// `gentle-ai sdd-status`, and absorbing it must not reopen this contract:
+// either spelling satisfies it.
+func containsStatusContinuationInvocation(text string) bool {
+	return strings.Contains(text, "axiom sdd status [change] --cwd <repo> --json --instructions") ||
+		strings.Contains(text, "gentle-ai sdd-status [change] --cwd <repo> --json --instructions")
+}
+
 // Text contracts prove shipped instructions, not execution by any agent host.
 func assertStatusContinuationContract(t *testing.T, content string) {
 	t.Helper()
+	if !containsStatusContinuationInvocation(content) {
+		t.Errorf("missing status/continuation contract invocation (neither `axiom sdd status` nor `gentle-ai sdd-status` spelling)")
+	}
 	for _, want := range []string{
-		"gentle-ai sdd-status [change] --cwd <repo> --json --instructions",
 		"every declared artifact store, including Engram", "native v2",
 		"Inspection needs no execution preflight", "No recommendation is executed during inspection",
 		"Only explicit authorized continuation", "current human scope covers the selected change-directory marker",
