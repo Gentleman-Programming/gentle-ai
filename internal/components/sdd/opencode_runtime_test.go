@@ -28,7 +28,11 @@ func TestOpenCodePluginMajorSelection(t *testing.T) {
 			}
 			home := t.TempDir()
 			a := agent.NewAdapter()
-			result, err := installOpenCodePlugins(home, a)
+			assetDir, err := openCodePluginAssetDirectory(a.Agent())
+			var result InjectionResult
+			if err == nil {
+				result, err = installOpenCodePluginsDirectory(home, a, assetDir)
+			}
 			if version == "unknown" {
 				if err == nil || len(result.Files) != 0 {
 					t.Fatal("unknown runtime mutated plugins")

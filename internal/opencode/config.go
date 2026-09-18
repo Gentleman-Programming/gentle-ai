@@ -81,20 +81,6 @@ func ResolveRuntimeConfigForHome(homeDir, projectDir string) (ConfigSnapshot, er
 	return snapshot, err
 }
 
-// overlayConfigFields overlays local object fields without interpreting installer
-// directives such as __replace__; those keys are ordinary data in runtime reads.
-func overlayConfigFields(base, layer map[string]any) {
-	for key, value := range layer {
-		baseMap, baseOK := base[key].(map[string]any)
-		layerMap, layerOK := value.(map[string]any)
-		if baseOK && layerOK {
-			overlayConfigFields(baseMap, layerMap)
-		} else {
-			base[key] = value
-		}
-	}
-}
-
 // EffectiveSettingsPath returns the shared OpenCode settings write path.
 func EffectiveSettingsPath(homeDir, projectDir string) string {
 	snapshot, err := ResolveEffectiveConfigForHome(homeDir, projectDir)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 func TestOpenCodeTelemetryApprovedPriorAssetUpgrade(t *testing.T) {
@@ -202,7 +203,7 @@ func TestOpenCodeTelemetryManagedModeEquivalence(t *testing.T) {
 
 func TestOpenCodeTelemetryManagedModeLifecycle(t *testing.T) {
 	dir := t.TempDir()
-	changed, rollback, err := ReconcileWithRollback(dir)
+	changed, rollback, err := ReconcileForMajorWithRollback(dir, opencode.RuntimeV1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2409,16 +2409,9 @@ func removeLegacyOpenCodeReviewPlugin(pluginsDir string) (string, bool, error) {
 	return path, true, nil
 }
 
-// installOpenCodePlugins copies the OpenCode-compatible plugins that gentle-ai
+// installOpenCodePluginsDirectory copies the OpenCode-compatible plugins that gentle-ai
 // still manages by default. Native OpenCode subagents replace the legacy
 // background-agents plugin, so that legacy cleanup is scoped to OpenCode only.
-func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	assetDir, err := openCodePluginAssetDirectory(adapter.Agent())
-	if err != nil {
-		return InjectionResult{}, err
-	}
-	return installOpenCodePluginsDirectory(homeDir, adapter, assetDir)
-}
 func installOpenCodePluginsDirectory(homeDir string, adapter agents.Adapter, assetDir string) (InjectionResult, error) {
 	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")

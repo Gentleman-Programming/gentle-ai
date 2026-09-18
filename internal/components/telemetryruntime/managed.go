@@ -230,7 +230,7 @@ func CheckManaged(configDir string) error {
 // Reconcile installs or refreshes only this managed asset. Permission is checked
 // by the plugin at runtime, never by installation: disabled installs stay inert.
 func Reconcile(configDir string) ([]string, error) {
-	changed, _, err := ReconcileWithRollback(configDir)
+	changed, _, err := ReconcileForMajorWithRollback(configDir, opencode.RuntimeV1)
 	return changed, err
 }
 
@@ -266,14 +266,9 @@ func (f *guardedFile) restore() error {
 	return nil
 }
 
-// ReconcileWithRollback retains per-file journals for the outer lifecycle. The
-// caller must exclude this pair from unconditional snapshot restoration, even
+// ReconcileForMajorWithRollback retains per-file journals for the selected runtime.
+// The caller must exclude this pair from unconditional snapshot restoration, even
 // if reconcile fails or never runs. Safe members restore despite other conflicts.
-// ReconcileWithRollback is the explicit legacy V1 compatibility entrypoint.
-// Production lifecycle callers must use ReconcileForMajorWithRollback.
-func ReconcileWithRollback(configDir string) (changed []string, rollback func() error, err error) {
-	return ReconcileForMajorWithRollback(configDir, opencode.RuntimeV1)
-}
 func ReconcileForMajorWithRollback(configDir string, major opencode.RuntimeMajor) (changed []string, rollback func() error, err error) {
 	assetDir, err := major.PluginAssetDirectory()
 	if err != nil {
