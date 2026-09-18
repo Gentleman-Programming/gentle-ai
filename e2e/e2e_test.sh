@@ -265,7 +265,13 @@ test_preset_full_components() {
     assert_output_contains "$components_line" "permissions" "Full includes permissions"
     assert_output_contains "$components_line" "gga" "Full includes gga"
     assert_output_contains "$components_line" "claude-theme" "Full includes Claude Gentleman theme"
-    assert_output_contains "$components_line" "opencode-gentle-logo" "Full includes OpenCode Gentle logo"
+    # INC-09 (visual decoupling) dropped opencode-gentle-logo from
+    # installSafePresetVisualComponents() so presets stop polluting OpenCode
+    # home slots; the component still exists and stays explicitly installable.
+    # This is a deliberate fork divergence — upstream still ships it in the
+    # preset — so absorbing upstream must revisit this line, not this script's
+    # other logo checks.
+    assert_output_not_contains "$components_line" "opencode-gentle-logo" "Full excludes OpenCode Gentle logo (INC-09)"
 }
 
 test_dry_run_full_preset_persona_before_sdd() {
@@ -325,7 +331,9 @@ test_preset_no_legacy_theme_in_any_preset() {
         fi
     done
 
-    for component in claude-theme opencode-gentle-logo; do
+    # opencode-gentle-logo is deliberately absent since INC-09; see the
+    # exclusion note in test_dry_run_full_preset above.
+    for component in claude-theme; do
         if echo "$full_order_str" | tr ',' '\n' | grep -qx "$component"; then
             log_pass "Preset 'full-gentleman' includes safe visual component '$component'"
         else
@@ -503,7 +511,7 @@ test_cc_engram_injection() {
 
         # CLAUDE.md section
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:engram-protocol" "CLAUDE.md has engram-protocol section marker"
+        assert_file_contains_marker "$HOME/.claude/CLAUDE.md" "engram-protocol" "CLAUDE.md has engram-protocol section marker"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "mem_save" "CLAUDE.md has real Engram content (mem_save)"
         assert_file_size_min "$HOME/.claude/CLAUDE.md" 500 "CLAUDE.md has substantial content"
     else
@@ -517,7 +525,7 @@ test_cc_sdd_injection() {
 
     if $BINARY install --agent claude-code --component sdd --persona neutral 2>&1; then
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "CLAUDE.md has SDD section marker"
+        assert_file_contains_marker "$HOME/.claude/CLAUDE.md" "sdd-orchestrator" "CLAUDE.md has SDD section marker"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "sub-agent\|dependency\|orchestrator" "CLAUDE.md has real SDD content"
         assert_file_size_min "$HOME/.claude/CLAUDE.md" 500 "CLAUDE.md SDD section is substantial"
 
@@ -562,7 +570,7 @@ test_cc_persona_gentleman() {
 
     if $BINARY install --agent claude-code --component persona --persona gentleman 2>&1; then
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:persona" "CLAUDE.md has persona section marker"
+        assert_file_contains_marker "$HOME/.claude/CLAUDE.md" "persona" "CLAUDE.md has persona section marker"
         # Claude has an active output-style channel — the CLAUDE.md persona
         # section is now a residual (tooling directives + pointer only); tone
         # content lives exclusively in the output style (design.md Decision 1).
@@ -589,7 +597,7 @@ test_cc_persona_neutral() {
 
     if $BINARY install --agent claude-code --component persona --persona neutral 2>&1; then
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:persona" "CLAUDE.md has persona section marker"
+        assert_file_contains_marker "$HOME/.claude/CLAUDE.md" "persona" "CLAUDE.md has persona section marker"
         # Claude has an active output-style channel — the CLAUDE.md persona
         # section is now a residual; the mentor identity lives in the output
         # style (design.md Decision 1).
@@ -678,21 +686,19 @@ test_cc_skills_full() {
         # #3554: skills alone no longer pulls sdd. Full preset's skill catalog
         # is 13 foundation + judgment-day = 14 files; the 11 sdd-* phase
         # skills come only from the SDD component (not selected here).
-        assert_file_count "$skills_dir" "SKILL.md" 14 "Full preset (skills alone): 14 skill files"
+        assert_file_count "$skills_dir" "SKILL.md" 8 "Full preset (skills alone): 8 skill files"
         assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
         assert_file_exists "$skills_dir/skill-creator/SKILL.md" "skill-creator SKILL.md"
-        assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
-        assert_file_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation SKILL.md"
+        assert_file_not_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr NOT installed by default"
+        assert_file_not_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation NOT installed by default"
         assert_file_exists "$skills_dir/skill-registry/SKILL.md" "skill-registry SKILL.md"
 
         # Real content check
         assert_file_size_min "$skills_dir/go-testing/SKILL.md" 200 "go-testing skill has real content"
         assert_file_size_min "$skills_dir/skill-creator/SKILL.md" 200 "skill-creator skill has real content"
-        assert_file_size_min "$skills_dir/branch-pr/SKILL.md" 200 "branch-pr skill has real content"
-        assert_file_size_min "$skills_dir/issue-creation/SKILL.md" 200 "issue-creation skill has real content"
         assert_file_size_min "$skills_dir/skill-registry/SKILL.md" 200 "skill-registry skill has real content"
     else
         log_fail "skills (full) install command failed"
@@ -709,14 +715,14 @@ test_cc_skills_ecosystem() {
 
         # #3554: skills alone no longer pulls sdd. 13 foundation + judgment-day
         # = 14 files; the 11 sdd-* phase skills need the SDD component too.
-        assert_file_count "$skills_dir" "SKILL.md" 14 "Ecosystem preset (skills alone): 14 skill files"
+        assert_file_count "$skills_dir" "SKILL.md" 8 "Ecosystem preset (skills alone): 8 skill files"
         # SDD skills NOT present (skills has no hard dependency on sdd)
         assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         # Foundation skills present
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "Foundation skills present"
         assert_file_exists "$skills_dir/skill-creator/SKILL.md" "skill-creator present"
-        assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr present in ecosystem"
-        assert_file_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation present in ecosystem"
+        assert_file_not_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr NOT in ecosystem default"
+        assert_file_not_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation NOT in ecosystem default"
         # Stack-specific skills NOT present
         if [ -f "$skills_dir/react-19/SKILL.md" ]; then
             log_fail "Ecosystem preset should NOT include react-19"
@@ -736,7 +742,9 @@ test_cc_custom_skills_with_flag() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # The explicitly requested skills must be present
+        # The explicitly requested skills must be present. branch-pr is a
+        # contributor skill that no preset installs, but `--skills` resolution
+        # is exactly the escape hatch that still installs it.
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
 
@@ -838,8 +846,8 @@ test_cc_theme_injection() {
     if $BINARY install --agent claude-code --component theme --persona neutral 2>&1; then
         local settings="$HOME/.claude/settings.json"
         assert_file_exists "$settings" "Claude settings.json"
-        assert_file_contains "$settings" '"theme"' "Has theme key"
-        assert_file_contains "$settings" 'gentleman' "Has gentleman theme"
+        assert_file_not_contains "$settings" '"theme"' "REQ-09.2: theme component does not write the theme key"
+        assert_file_not_contains "$settings" '"theme": "gentleman"' "REQ-09.2: no theme selection is forced"
         assert_valid_json "$settings" "settings.json is valid JSON"
     else
         log_fail "theme install command failed"
@@ -864,7 +872,7 @@ test_oc_engram_injection() {
 
         # Fallback safety: AGENTS.md must include engram protocol section.
         assert_file_exists "$agents_md" "OpenCode AGENTS.md"
-        assert_file_contains "$agents_md" 'gentle-ai:engram-protocol' "AGENTS.md has engram-protocol section"
+        assert_file_contains_marker "$agents_md" "engram-protocol" "AGENTS.md has engram-protocol section"
         assert_file_contains "$agents_md" 'mem_save' "AGENTS.md has memory protocol content"
     else
         log_fail "OpenCode engram install command failed"
@@ -952,12 +960,12 @@ test_oc_skills_full() {
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 14 "Full preset (skills alone): 14 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 8 "Full preset (skills alone): 8 skill files"
         assert_file_not_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
-        assert_file_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr skill"
-        assert_file_exists "$skill_dir/issue-creation/SKILL.md" "issue-creation skill"
+        assert_file_not_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr NOT installed by default"
+        assert_file_not_exists "$skill_dir/issue-creation/SKILL.md" "issue-creation NOT installed by default"
         assert_file_size_min "$skill_dir/go-testing/SKILL.md" 200 "go-testing skill has real content"
     else
         log_fail "OpenCode skills (full) install command failed"
@@ -1053,8 +1061,8 @@ test_oc_theme_injection() {
     if $BINARY install --agent opencode --component theme --persona neutral 2>&1; then
         local settings="$HOME/.config/opencode/opencode.json"
         assert_file_exists "$settings" "OpenCode opencode.json"
-        assert_file_contains "$settings" '"theme"' "Has theme key"
-        assert_file_contains "$settings" 'gentleman' "Has gentleman theme"
+        assert_file_not_contains "$settings" '"theme"' "REQ-09.2: theme component does not write the theme key"
+        assert_file_not_contains "$settings" '"theme": "gentleman"' "REQ-09.2: no theme selection is forced"
         assert_valid_json "$settings" "opencode.json is valid JSON"
     else
         log_fail "OpenCode theme install command failed"
@@ -1078,8 +1086,8 @@ test_full_preset_claude_code() {
 
         # CLAUDE.md should have all 3 sections coexisting
         assert_file_exists "$claude_md" "CLAUDE.md exists"
-        assert_file_contains "$claude_md" "gentle-ai:sdd-orchestrator" "Has SDD section"
-        assert_file_contains "$claude_md" "gentle-ai:persona" "Has persona section"
+        assert_file_contains_marker "$claude_md" "sdd-orchestrator" "Has SDD section"
+        assert_file_contains_marker "$claude_md" "persona" "Has persona section"
 
         # No duplicate sections
         assert_no_duplicate_section "$claude_md" "sdd-orchestrator" "No duplicate SDD section"
@@ -1088,7 +1096,7 @@ test_full_preset_claude_code() {
         # settings.json should have permissions + theme
         assert_file_exists "$settings" "settings.json exists"
         assert_file_contains "$settings" '"permissions"' "Has permissions"
-        assert_file_contains "$settings" '"theme"' "Has theme"
+        assert_file_not_contains "$settings" '"theme"' "REQ-09.2: no theme key written"
         assert_valid_json "$settings" "settings.json is valid JSON"
 
         # MCP registration lives in the ~/.claude.json user registry, the only
@@ -1120,7 +1128,7 @@ test_full_preset_opencode() {
         # opencode.json should have all overlays merged
         assert_file_exists "$settings" "OpenCode opencode.json"
         assert_file_contains "$settings" '"permission"' "Has permission config"
-        assert_file_contains "$settings" '"theme"' "Has theme"
+        assert_file_not_contains "$settings" '"theme"' "REQ-09.2: no theme key written"
         assert_file_contains "$settings" '"mcp"' "Has MCP servers"
         assert_file_contains "$settings" '"context7"' "Has context7 MCP"
         assert_valid_json "$settings" "opencode.json is valid JSON"
@@ -1128,13 +1136,13 @@ test_full_preset_opencode() {
         # AGENTS.md for persona + engram (SDD orchestrator is in opencode.json for OpenCode, NOT AGENTS.md)
         assert_file_exists "$agents_md" "AGENTS.md exists"
         assert_file_contains "$agents_md" "Senior Architect" "Gentleman persona"
-        assert_file_contains "$agents_md" "gentle-ai:engram-protocol" "AGENTS.md has engram protocol"
+        assert_file_contains_marker "$agents_md" "engram-protocol" "AGENTS.md has engram protocol"
         assert_no_duplicate_section "$agents_md" "engram-protocol" "No duplicate engram section in AGENTS.md"
         # SDD orchestrator for OpenCode lives in opencode.json as an agent definition (not AGENTS.md)
-        assert_file_contains "$settings" '"gentle-orchestrator"' "opencode.json has gentle-orchestrator agent"
+        assert_file_matches "$settings" '"(axiom|gentle)-orchestrator"' "opencode.json has the managed orchestrator agent"
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "opencode.json does not have legacy base sdd-orchestrator agent"
         # AGENTS.md must NOT have a sdd-orchestrator HTML section (it's handled by opencode.json)
-        assert_file_not_contains "$agents_md" "<!-- gentle-ai:sdd-orchestrator -->" "AGENTS.md has no SDD section marker (opencode uses json agent)"
+        assert_file_not_contains_marker "$agents_md" "sdd-orchestrator" "AGENTS.md has no SDD section marker (opencode uses json agent)"
 
         # SDD commands
         assert_file_count_min "$HOME/.config/opencode/commands" "*.md" 7 "SDD command files"
@@ -1161,7 +1169,7 @@ test_minimal_preset_opencode_only_engram_no_persona() {
 
         # Minimal preset should NOT silently install persona.
         if [ -f "$agents_md" ]; then
-            assert_file_not_contains "$agents_md" "gentle-ai:persona" "No persona marker in minimal preset"
+            assert_file_not_contains_marker "$agents_md" "persona" "No persona marker in minimal preset"
             assert_file_not_contains "$agents_md" "Senior Architect" "No persona content in minimal preset"
         else
             log_pass "No AGENTS.md created by minimal preset (correct)"
@@ -1178,12 +1186,12 @@ test_minimal_preset_claude_only_engram() {
     if $BINARY install --agent claude-code --preset minimal --persona custom 2>&1; then
         # Engram should be installed (MCP + CLAUDE.md)
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:engram-protocol" "Engram protocol section"
+        assert_file_contains_marker "$HOME/.claude/CLAUDE.md" "engram-protocol" "Engram protocol section"
 
         # SDD should NOT be in CLAUDE.md
-        assert_file_not_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "No SDD in minimal"
+        assert_file_not_contains_marker "$HOME/.claude/CLAUDE.md" "sdd-orchestrator" "No SDD in minimal"
         # Persona should NOT be in CLAUDE.md
-        assert_file_not_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:persona" "No persona in minimal"
+        assert_file_not_contains_marker "$HOME/.claude/CLAUDE.md" "persona" "No persona in minimal"
         # No permissions settings.json
         if [ -f "$HOME/.claude/settings.json" ]; then
             assert_file_not_contains "$HOME/.claude/settings.json" '"permissions"' "No permissions in minimal"
@@ -1208,7 +1216,7 @@ test_ecosystem_both_agents() {
     if $BINARY install --agent claude-code --agent opencode --component sdd --component skills --component context7 --preset ecosystem-only --persona neutral 2>&1; then
         # Claude Code
         assert_file_exists "$HOME/.claude/CLAUDE.md" "Claude CLAUDE.md"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "Claude has SDD"
+        assert_file_contains_marker "$HOME/.claude/CLAUDE.md" "sdd-orchestrator" "Claude has SDD"
         assert_file_contains "$HOME/.claude.json" '"context7"' "Claude context7 MCP"
         assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "Claude skills"
 
@@ -1551,14 +1559,20 @@ test_edge_theme_not_in_presets() {
 
     if $BINARY install --agent claude-code --component theme --persona neutral 2>&1; then
         assert_file_exists "$HOME/.claude/settings.json" "Theme creates settings.json"
-        assert_file_contains "$HOME/.claude/settings.json" '"theme"' "Theme key present"
+        assert_file_not_contains "$HOME/.claude/settings.json" '"theme"' "REQ-09.2: theme-only install writes no theme key"
         # Routing and remote authorization are unconditional agent guidance,
         # not optional components. Require exactly those managed sections;
         # theme-only must not inject SDD, persona, or other components.
         if [ -f "$HOME/.claude/CLAUDE.md" ]; then
             local sections
-            sections=$(grep -o '<!-- gentle-ai:[a-z0-9-]* -->' "$HOME/.claude/CLAUDE.md" | sort -u | tr '\n' ' ')
-            if [ "$(printf '%s' "$sections" | xargs)" = "<!-- gentle-ai:agent-routing --> <!-- gentle-ai:remote-authorization -->" ]; then
+            # Compare bare section ids, not full markers: the fork renamed the
+            # namespace to `axiom:` and upstream still ships `gentle-ai:`, so
+            # matching one namespace alone would report every section missing.
+            # The set comparison stays exact — this is still "these two and no
+            # others".
+            sections=$(grep -Eo '<!-- (axiom|gentle-ai):[a-z0-9-]+ -->' "$HOME/.claude/CLAUDE.md" \
+                | sed -E 's/<!-- (axiom|gentle-ai):([a-z0-9-]+) -->/\2/' | sort -u | tr '\n' ' ')
+            if [ "$(printf '%s' "$sections" | xargs)" = "agent-routing remote-authorization" ]; then
                 log_pass "Theme-only: CLAUDE.md carries routing and remote authorization only"
             else
                 log_fail "Theme-only install wrote component sections: $sections"
@@ -1617,7 +1631,7 @@ test_edge_persona_switch_preserves_sections_opencode() {
 
     local agents_md="$HOME/.config/opencode/AGENTS.md"
     assert_file_exists "$agents_md" "AGENTS.md after full install"
-    assert_file_contains "$agents_md" "gentle-ai:engram-protocol" "Engram section present before switch"
+    assert_file_contains_marker "$agents_md" "engram-protocol" "Engram section present before switch"
 
     # Step 2: Switch to neutral persona
     $BINARY install --agent opencode --component persona --persona neutral 2>&1 || true
@@ -1625,7 +1639,7 @@ test_edge_persona_switch_preserves_sections_opencode() {
     # Step 3: Verify sections survived
     assert_file_contains "$agents_md" "Senior Architect" "Neutral persona present after switch"
     assert_file_not_contains "$agents_md" "Rioplatense" "Regional language removed after switch"
-    assert_file_contains "$agents_md" "gentle-ai:engram-protocol" "Engram section survived persona switch"
+    assert_file_contains_marker "$agents_md" "engram-protocol" "Engram section survived persona switch"
     assert_no_duplicate_section "$agents_md" "engram-protocol" "No duplicate engram after switch"
 }
 
@@ -1658,7 +1672,7 @@ test_edge_multiple_json_overlays() {
 
     local settings="$HOME/.config/opencode/opencode.json"
     assert_file_contains "$settings" '"permission"' "Permission config present after 3 merges"
-    assert_file_contains "$settings" '"theme"' "Theme present after 3 merges"
+    assert_file_not_contains "$settings" '"theme"' "REQ-09.2: no theme key after 3 merges"
     assert_file_contains "$settings" '"mcp"' "MCP servers present after 3 merges"
     assert_file_contains "$settings" '"context7"' "Context7 present after 3 merges"
     assert_valid_json "$settings" "Final merged JSON is valid"
@@ -1827,10 +1841,10 @@ test_windsurf_persona_and_sdd_content() {
         local rules="$HOME/.codeium/windsurf/memories/global_rules.md"
         assert_file_exists "$rules" "global_rules.md exists"
         assert_file_contains "$rules" "Senior Architect" "Persona injected"
-        assert_file_contains "$rules" "gentle-ai:sdd-orchestrator" "SDD orchestrator marker present"
+        assert_file_contains_marker "$rules" "sdd-orchestrator" "SDD orchestrator marker present"
         assert_file_contains "$rules" "skill_resolution" "SDD has skill_resolution field"
         assert_file_contains "$rules" "Engram Topic Key" "SDD has Engram Topic Key section"
-        assert_file_contains "$rules" "gentle-ai:engram-protocol" "Engram protocol marker present"
+        assert_file_contains_marker "$rules" "engram-protocol" "Engram protocol marker present"
         assert_file_size_min "$rules" 2000 "global_rules.md has substantial content"
     else
         log_fail "Windsurf persona+SDD install command failed"
@@ -1906,7 +1920,7 @@ test_integrity_sdd_orchestrator_in_opencode_json() {
     if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
         local settings="$HOME/.config/opencode/opencode.json"
         assert_file_exists "$settings" "opencode.json exists"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator agent"
+        assert_file_matches "$settings" '"(axiom|gentle)-orchestrator"' "Has the managed orchestrator agent"
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "Does not have legacy base sdd-orchestrator agent"
         assert_file_contains "$settings" '"agent"' "Has agent key"
         assert_valid_json "$settings" "opencode.json is valid JSON"
@@ -1990,7 +2004,7 @@ test_integrity_sdd_orchestrator_agent_structure() {
 
     if $BINARY install --agent opencode --component sdd --persona gentleman 2>&1; then
         local settings="$HOME/.config/opencode/opencode.json"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator"
+        assert_file_matches "$settings" '"(axiom|gentle)-orchestrator"' "Has the managed orchestrator"
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "Does not have legacy base sdd-orchestrator"
         assert_file_contains "$settings" '"mode"' "Agent has mode field"
         assert_file_contains "$settings" '"prompt"' "Agent has prompt field"
@@ -2020,7 +2034,7 @@ test_integrity_skills_plus_sdd_coexist() {
         assert_file_size_min "$skill_dir/_shared/persistence-contract.md" 50 "Persistence contract has content"
 
         # opencode.json should have gentle-orchestrator as the base coordinator
-        assert_file_contains "$HOME/.config/opencode/opencode.json" '"gentle-orchestrator"' "gentle-orchestrator present"
+        assert_file_matches "$HOME/.config/opencode/opencode.json" '"(axiom|gentle)-orchestrator"' "managed orchestrator present"
         assert_file_not_contains "$HOME/.config/opencode/opencode.json" '"sdd-orchestrator"' "legacy base sdd-orchestrator absent"
     else
         log_fail "SDD + skills coexistence install failed"
@@ -2039,7 +2053,7 @@ test_oc_sdd_multi_mode_injection() {
         local model_variants_plugin="$HOME/.config/opencode/plugins/model-variants.ts"
         assert_file_exists "$settings" "opencode.json exists"
         assert_valid_json "$settings" "opencode.json is valid JSON"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator agent"
+        assert_file_matches "$settings" '"(axiom|gentle)-orchestrator"' "Has the managed orchestrator agent"
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "Does not have legacy base sdd-orchestrator agent"
         assert_file_contains "$settings" '"sdd-apply"' "Has sdd-apply sub-agent"
         assert_file_contains "$settings" '"sdd-init"' "Has sdd-init sub-agent"
@@ -2068,7 +2082,7 @@ test_oc_sdd_single_mode_no_models() {
         local settings="$HOME/.config/opencode/opencode.json"
         assert_file_exists "$settings" "opencode.json exists"
         assert_valid_json "$settings" "opencode.json is valid JSON"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator agent"
+        assert_file_matches "$settings" '"(axiom|gentle)-orchestrator"' "Has the managed orchestrator agent"
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "Single mode: does not have legacy base sdd-orchestrator agent"
         assert_file_contains "$settings" '"sdd-apply"' "Single mode: has sdd-apply sub-agent"
         assert_file_not_contains "$settings" '"model"' "Single mode: no model overrides"
@@ -2086,7 +2100,7 @@ test_oc_sdd_default_mode_same_as_single() {
     if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
         local settings="$HOME/.config/opencode/opencode.json"
         assert_file_exists "$settings" "opencode.json exists"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator"
+        assert_file_matches "$settings" '"(axiom|gentle)-orchestrator"' "Has the managed orchestrator"
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "Default mode: does not have legacy base sdd-orchestrator"
         assert_file_contains "$settings" '"sdd-apply"' "Default mode: has sdd-apply sub-agent"
         assert_file_not_contains "$settings" '"model"' "Default mode: no model overrides"
