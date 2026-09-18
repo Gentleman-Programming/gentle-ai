@@ -114,13 +114,24 @@ func TestDelegatedWorkflowMutationContract(t *testing.T) {
 				t.Errorf("%s retains stale maintainer-only approval authority %q", path, stale)
 			}
 		}
-		if !strings.Contains(content, "canonical issue-creation workflow contract") {
-			t.Errorf("%s must route approval authority to the canonical issue-creation workflow contract", path)
-		}
 	}
-	for _, condition := range []string{"const hasException = labels.includes('size:exception');", "if (!labels.includes('status:approved')) {"} {
-		if !strings.Contains(string(workflow), condition) {
-			t.Errorf("pr-check workflow must retain enforcement condition %q", condition)
+	// La documentación sigue describiendo el contrato canónico de creación de
+	// issues, porque describe el flujo del upstream. El workflow ya no, y es
+	// deliberado: este repositorio tiene las issues deshabilitadas, así que la
+	// puerta issue-first no podía pasar nunca y se retiró.
+	if !strings.Contains(string(contributing), "canonical issue-creation workflow contract") {
+		t.Error("CONTRIBUTING.md must route approval authority to the canonical issue-creation workflow contract")
+	}
+	// La puerta de presupuesto de revisión sí sigue viva y debe seguir estándolo.
+	if condition := "const hasException = labels.includes('size:exception');"; !strings.Contains(string(workflow), condition) {
+		t.Errorf("pr-check workflow must retain enforcement condition %q", condition)
+	}
+	// Contrapartida de haber retirado la puerta: que la retirada sea completa y
+	// siga siéndolo. Una restauración a medias dejaría el workflow exigiendo una
+	// etiqueta sobre issues que aquí no existen, y ningún PR podría pasar.
+	for _, removed := range []string{"status:approved", "check-issue-reference", "check-issue-approved"} {
+		if strings.Contains(string(workflow), removed) {
+			t.Errorf("pr-check workflow vuelve a referenciar %q; las issues están deshabilitadas en este repositorio y esa puerta no puede satisfacerse", removed)
 		}
 	}
 }
