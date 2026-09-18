@@ -456,19 +456,28 @@ install_binary() {
     # Create install dir if needed
     mkdir -p "$install_dir"
 
-    # Install binary
-    info "Installing to ${install_dir}/${BINARY_NAME}..."
-    if cp "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
-        chmod +x "${install_dir}/${BINARY_NAME}"
+    # Atomic install: stage next to the destination, then rename in place.
+    # POSIX rename within one filesystem is atomic, so the previous binary
+    # either survives intact or is fully replaced — never half-written.
+    local staging="${install_dir}/${BINARY_NAME}.staging.$$"
+    local final="${install_dir}/${BINARY_NAME}"
+    trap 'rm -f -- "$staging" 2>/dev/null || true' EXIT TERM INT
+
+    info "Installing to ${final}..."
+    if install -m 0755 -- "${tmpdir}/${BINARY_NAME}" "$staging" 2>/dev/null; then
+        mv -f -- "$staging" "$final"
     elif command -v sudo &>/dev/null; then
         warn "Permission denied. Trying with sudo..."
-        sudo cp "${tmpdir}/${BINARY_NAME}" "${install_dir}/${BINARY_NAME}"
-        sudo chmod +x "${install_dir}/${BINARY_NAME}"
+        # Pass paths as positional args so $()/backtick substitutions in
+        # the destination path are not reinterpreted as commands.
+        sudo -- bash -c 'install -m 0755 -- "$1" "$2" && mv -f -- "$2" "$3"' _ "${tmpdir}/${BINARY_NAME}" "$staging" "$final"
     else
+        rm -f -- "$staging" 2>/dev/null || true
         fatal "Cannot write to ${install_dir}. Run with sudo or use --dir to specify a writable directory."
     fi
+    trap - EXIT TERM INT
 
-    success "Installed ${BINARY_NAME} to ${install_dir}/${BINARY_NAME}"
+    success "Installed ${BINARY_NAME} to ${final}"
 
     # Check if install dir is in PATH
     if [[ ":$PATH:" != *":${install_dir}:"* ]]; then
