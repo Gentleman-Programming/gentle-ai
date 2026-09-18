@@ -374,19 +374,19 @@ func main() {
 		os.Exit(runSDD(append([]string{"preflight-hook"}, os.Args[2:]...), os.Stdout, os.Stderr))
 
 	case "review":
-		os.Exit(runReview(os.Args[2:], os.Stdout, os.Stderr))
+		os.Exit(runReview(os.Args[2:], os.Stdout, os.Stderr, false))
 	case "review-start":
-		os.Exit(runReview(append([]string{"start"}, os.Args[2:]...), os.Stdout, os.Stderr))
+		os.Exit(runReview(append([]string{"start"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 	case "review-resume":
-		os.Exit(runReview(append([]string{"resume"}, os.Args[2:]...), os.Stdout, os.Stderr))
+		os.Exit(runReview(append([]string{"resume"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 	case "review-step":
-		os.Exit(runReview(append([]string{"step"}, os.Args[2:]...), os.Stdout, os.Stderr))
+		os.Exit(runReview(append([]string{"step"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 	case "review-bundle-export":
-		os.Exit(runReview(append([]string{"bundle-export"}, os.Args[2:]...), os.Stdout, os.Stderr))
+		os.Exit(runReview(append([]string{"bundle-export"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 	case "review-bundle-import":
-		os.Exit(runReview(append([]string{"bundle-import"}, os.Args[2:]...), os.Stdout, os.Stderr))
+		os.Exit(runReview(append([]string{"bundle-import"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 	case "review-validate":
-		os.Exit(runReview(append([]string{"validate"}, os.Args[2:]...), os.Stdout, os.Stderr))
+		os.Exit(runReview(append([]string{"validate"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 
 	default:
 		fmt.Printf("Error: comando '%s' no reconocido.\n\n", arg1)
@@ -1840,7 +1840,10 @@ func (a dashboardScaffolder) Scaffold(req odd.ScaffoldRequest) (odd.ScaffoldResu
 	return odd.ScaffoldResult{Name: resp.Name, Path: resp.Path}, nil
 }
 
-func runReview(args []string, stdout, stderr io.Writer) int {
+// runReview serves both `axiom review <subcommand>` and the flat
+// `axiom review-<verb>` aliases. flatAlias tells them apart: only the aliases
+// reach the standalone handlers; the subcommand form goes to the facade.
+func runReview(args []string, stdout, stderr io.Writer, flatAlias bool) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Fprintln(stdout, "Uso: axiom review <subcomando> [argumentos]")
 		fmt.Fprintln(stdout, "\nSubcomandos disponibles:")
@@ -1861,7 +1864,13 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	if len(args) >= 1 {
+	// Only the flat aliases (`axiom review-start`, `review-step`, …) map to the
+	// standalone handlers below. `axiom review <sub>` belongs to the facade,
+	// exactly as internal/app/app.go dispatches it: routing `review start`
+	// to cli.RunReviewStart bound the v2 atomic lifecycle to the legacy flat
+	// command, so a START handed back by `review status --next-transition`
+	// was rejected for a missing --policy-file it never names.
+	if flatAlias && len(args) >= 1 {
 		switch args[0] {
 		case "start":
 			if err := cli.RunReviewStart(args[1:], stdout); err != nil {
