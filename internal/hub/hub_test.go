@@ -383,4 +383,3 @@ func TestInteractiveRolesAndNonBlocking(t *testing.T) {
 		t.Errorf("esperado rol 'docs' con gate_policy advisory: %s", content)
 	}
 }
-

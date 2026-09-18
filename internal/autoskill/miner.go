@@ -21,11 +21,11 @@ func (m *Miner) MinePatterns(repoRoot string) ([]MiningProposal, error) {
 	// 1. Minería de Pruebas Tabulares en Go
 	if hasTableDrivenTests(repoRoot) {
 		proposals = append(proposals, MiningProposal{
-			Name:        "axiom-go-table-tests",
-			PatternID:   "pattern-table-tests",
-			Title:       "Convención de Pruebas Tabulares en Go (Table-Driven Tests)",
-			Description: "Estandarización de pruebas unitarias idiomáticas en Go mediante estructuras anónimas y subpruebas t.Run",
-			Trigger:     "Al crear o modificar suites de pruebas unitarias *_test.go en paquetes Go",
+			Name:          "axiom-go-table-tests",
+			PatternID:     "pattern-table-tests",
+			Title:         "Convención de Pruebas Tabulares en Go (Table-Driven Tests)",
+			Description:   "Estandarización de pruebas unitarias idiomáticas en Go mediante estructuras anónimas y subpruebas t.Run",
+			Trigger:       "Al crear o modificar suites de pruebas unitarias *_test.go en paquetes Go",
 			Justification: "Detectadas múltiples suites de pruebas unitarias estructuradas con tests := []struct y t.Run en el repositorio",
 			SkillMD: `# Convención de Pruebas Tabulares en Go (Table-Driven Tests)
 
@@ -81,11 +81,11 @@ Asegurar que todas las pruebas unitarias en Go mantengan alta legibilidad, cober
 	// 2. Minería de Encapsulación en Paquetes `internal/`
 	if hasInternalLayering(repoRoot) {
 		proposals = append(proposals, MiningProposal{
-			Name:        "axiom-internal-layering",
-			PatternID:   "pattern-internal-layering",
-			Title:       "Arquitectura y Encapsulación en Paquetes internal/",
-			Description: "Convención de diseño de módulos de dominio aislados en internal/ con separación types.go y service.go",
-			Trigger:     "Al añadir nuevos módulos, componentes o paquetes de dominio al runtime de Axiom",
+			Name:          "axiom-internal-layering",
+			PatternID:     "pattern-internal-layering",
+			Title:         "Arquitectura y Encapsulación en Paquetes internal/",
+			Description:   "Convención de diseño de módulos de dominio aislados en internal/ con separación types.go y service.go",
+			Trigger:       "Al añadir nuevos módulos, componentes o paquetes de dominio al runtime de Axiom",
 			Justification: "Detectada estructura modular canónica con paquetes desacoplados en internal/ (tipos, servicios y tests)",
 			SkillMD: `# Arquitectura y Encapsulación en Paquetes internal/
 
@@ -115,11 +115,11 @@ Garantizar la protección de la API interna del runtime de Axiom y mantener un a
 	// 3. Minería de Envoltorio Idiomático de Errores con %w
 	if hasIdiomaticErrorWrapping(repoRoot) {
 		proposals = append(proposals, MiningProposal{
-			Name:        "axiom-idiomatic-error-wrapping",
-			PatternID:   "pattern-error-wrapping",
-			Title:       "Manejo y Envoltorio Idiomático de Errores en Go (%w)",
-			Description: "Uso estricto de fmt.Errorf con el especificador %w para preservación de cadenas de error y errores centinela",
-			Trigger:     "Al capturar, propagar o formatear errores en cualquier paquete Go",
+			Name:          "axiom-idiomatic-error-wrapping",
+			PatternID:     "pattern-error-wrapping",
+			Title:         "Manejo y Envoltorio Idiomático de Errores en Go (%w)",
+			Description:   "Uso estricto de fmt.Errorf con el especificador %w para preservación de cadenas de error y errores centinela",
+			Trigger:       "Al capturar, propagar o formatear errores en cualquier paquete Go",
 			Justification: "Detectado uso recurrente del especificador %w en fmt.Errorf para preservación contextual de errores",
 			SkillMD: `# Manejo y Envoltorio Idiomático de Errores en Go (%w)
 

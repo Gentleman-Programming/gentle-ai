@@ -18,7 +18,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/odd"
 )
 
-
 func TestServiceWorkspace(t *testing.T) {
 	// Usamos la raíz del repositorio de Axiom (..)
 	svc := NewService("../..")
@@ -1020,6 +1019,3 @@ func TestODDEndpoints(t *testing.T) {
 		})
 	}
 }
-
-
-

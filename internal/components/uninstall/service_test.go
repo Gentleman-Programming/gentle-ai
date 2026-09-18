@@ -785,7 +785,7 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 		filepath.Join(homeDir, ".claude", "settings.json"):                     `{"theme":"active","outputStyle":"gentleman"}`,
 		filepath.Join(homeDir, ".claude", "CLAUDE.md"):                         "# persona\n",
 		filepath.Join(homeDir, ".claude", "output-styles", "gentleman.md"):     "# output style\n",
-		filepath.Join(homeDir, ".claude", "commands", "sdd-apply.md"):        "# SDD asset\n",
+		filepath.Join(homeDir, ".claude", "commands", "sdd-apply.md"):          "# SDD asset\n",
 		filepath.Join(homeDir, ".config", "opencode", "tui.json"):              `{"plugins":["./tui-plugins/gentle-logo.tsx"]}`,
 		filepath.Join(homeDir, ".config", "opencode", "themes", "custom.json"): `{"theme":"custom"}`,
 	}

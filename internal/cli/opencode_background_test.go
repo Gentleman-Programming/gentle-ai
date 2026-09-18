@@ -804,4 +804,3 @@ func TestResolveOpenCodeBackgroundCLI_Precedence(t *testing.T) {
 		t.Fatalf("axiom precedence failed: got %q, want %q", res.Effective, model.OpenCodeBackgroundOff)
 	}
 }
-

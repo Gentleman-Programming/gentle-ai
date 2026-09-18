@@ -29,10 +29,10 @@ const (
 
 // Constantes con los encabezados canónicos de las cinco secciones obligatorias en español.
 const (
-	HeaderExecutiveSummary    = "## 1. Resumen Ejecutivo"
-	HeaderArtifacts           = "## 2. Artefactos Modificados y Creados"
-	HeaderDecisions           = "## 3. Decisiones Técnicas y Acuerdos"
-	HeaderRisksAndBlockers    = "## 4. Riesgos, Bloqueos y Preguntas Abiertas"
+	HeaderExecutiveSummary   = "## 1. Resumen Ejecutivo"
+	HeaderArtifacts          = "## 2. Artefactos Modificados y Creados"
+	HeaderDecisions          = "## 3. Decisiones Técnicas y Acuerdos"
+	HeaderRisksAndBlockers   = "## 4. Riesgos, Bloqueos y Preguntas Abiertas"
 	HeaderDirectInstructions = "## 5. Instrucciones Directas para el Siguiente Rol"
 )
 

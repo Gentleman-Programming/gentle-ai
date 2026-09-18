@@ -870,4 +870,3 @@ func containsCodeGraphGuidance(text string) bool {
 func countCodeGraphGuidance(text string) int {
 	return strings.Count(text, "<!-- axiom:codegraph-guidance -->") + strings.Count(text, "<!-- gentle-ai:codegraph-guidance -->")
 }
-
