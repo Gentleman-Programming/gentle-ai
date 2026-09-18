@@ -118,6 +118,42 @@ func TestFrozenCandidateContextUsesImmutableTreesAndCanonicalManifest(t *testing
 	}
 }
 
+func TestFrozenCandidateContextMarksGeneratedSummaryPathsAtFreezeTime(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	for path, content := range map[string]string{
+		"testdata/golden/manifest.golden": "generated golden\n",
+		"frontend/pnpm-lock.yaml":         "lockfileVersion: '9.0'\n",
+		"internal/subject.go":             "package internal\n",
+	} {
+		writeSnapshotFile(t, repo, path, content)
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionWorkspace,
+		IntendedUntracked: []string{"frontend/pnpm-lock.yaml", "internal/subject.go", "testdata/golden/manifest.golden"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	frozen, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("FrozenCandidateContext() error = %v", err)
+	}
+	generated := make(map[string]bool, len(frozen.ChangedPathManifest))
+	for _, entry := range frozen.ChangedPathManifest {
+		generated[entry.Path] = entry.Generated
+	}
+	for path, want := range map[string]bool{
+		"testdata/golden/manifest.golden": true,
+		"frontend/pnpm-lock.yaml":         true,
+		"internal/subject.go":             false,
+	} {
+		if got := generated[path]; got != want {
+			t.Errorf("manifest Generated for %q = %t, want %t", path, got, want)
+		}
+	}
+}
+
 func TestFrozenCandidateContextMarksIntendedUntrackedAndSupportsEmptyCandidate(t *testing.T) {
 	requireSnapshotGit(t)
 	t.Run("intended untracked", func(t *testing.T) {

@@ -96,7 +96,8 @@
         "deleted": {"type": "boolean"},
         "type_changed": {"type": "boolean"},
         "mode_only": {"type": "boolean"},
-        "intended_untracked": {"type": "boolean"}
+        "intended_untracked": {"type": "boolean"},
+        "generated": {"type": "boolean"}
       }
     },
     "risk_reason": {

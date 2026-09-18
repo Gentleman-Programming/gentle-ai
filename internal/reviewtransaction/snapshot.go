@@ -623,6 +623,23 @@ func isGeneratedGoldenPath(logicalPath string) bool {
 	return strings.Contains(normalized, "/testdata/golden/") && strings.HasSuffix(normalized, ".golden")
 }
 
+// isGeneratedSummaryPath identifies frozen candidate paths whose patch hunks
+// are generated output rather than reviewer-authored evidence. It is
+// path-shape-only so freezing this classification never reads mutable files.
+func isGeneratedSummaryPath(logicalPath string) bool {
+	if isGeneratedGoldenPath(logicalPath) {
+		return true
+	}
+	normalized := filepath.ToSlash(logicalPath)
+	basename := normalized[strings.LastIndex(normalized, "/")+1:]
+	switch basename {
+	case "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum", "Cargo.lock", "bun.lockb", "poetry.lock", "composer.lock", "Gemfile.lock":
+		return true
+	default:
+		return false
+	}
+}
+
 func (builder SnapshotBuilder) repositoryRoot(ctx context.Context) (string, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {

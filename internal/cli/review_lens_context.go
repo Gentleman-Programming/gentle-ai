@@ -20,27 +20,35 @@ import (
 // answering partway through.
 const reviewLensContextTimeout = 120 * time.Second
 
-// reviewLensContextByteBudget bounds the immutable candidate evidence this
-// surface materializes for one lens. It is exactly the native per-command cap
-// every other immutable-diff read in this product already accepts
-// (reviewtransaction.MaxFrozenCandidateDiffBytes), rather than a fraction of
-// it: a smaller budget would refuse candidates whose risk-tier-counted changed
-// lines are small but whose manifest includes large regenerated or golden
-// files, which this surface materializes in full for every manifest path.
-//
-// It is enforced by outright refusal. Truncating would hand a reviewer a
-// partial view of the candidate while still letting it report a clean result,
-// which is the one failure this surface exists to make impossible.
-//
-// It is also the *only* bound this surface applies. A separate 32-entry cap
-// used to sit beside it, inherited unchanged from the deleted advisory-review
-// adapter's request validator, where it carried no rationale of its own. A
-// count is not a measure of what a reviewer's context costs: it refused 33
-// one-line files whose complete evidence was a few kilobytes while admitting
-// 32 files that filled this entire budget. Counting entries also made the
-// refusal unfixable rather than merely large, because path count is the one
-// property splitting a candidate barely changes (issue #3367).
+// reviewLensContextByteBudget remains the immutable Git read ceiling used by
+// provider-role payloads outside lens context materialization.
 const reviewLensContextByteBudget = reviewtransaction.MaxFrozenCandidateDiffBytes
+
+// runtimeLensBound declares the conservative evidence budget for each
+// reviewer model family. These limits protect provider-model context, not the
+// transport carrying the immutable block.
+func runtimeLensBound(runtimeAgent string) int {
+	switch runtimeAgent {
+	case "claude", "claude-code", "pi":
+		// Claude and Pi reviewer models need the smallest reserve for their
+		// provider-owned prompts and structured result envelopes.
+		return 512 * 1024
+	case "codex", "opencode", "gga":
+		// Codex, OpenCode, and GGA reviewer models retain a larger, but still
+		// conservative, reserve for their provider-owned context.
+		return 1 * 1024 * 1024
+	default:
+		// Historical records predate RuntimeAgent; preserve their 4 MiB behavior.
+		return reviewtransaction.MaxFrozenCandidateDiffBytes
+	}
+}
+
+// reviewLensContextBudget bounds one lens's complete immutable evidence. It
+// never raises the immutable Git read ceiling, and refusal remains preferable
+// to truncating evidence into a false-clean review.
+func reviewLensContextBudget(runtimeAgent string) int {
+	return min(reviewtransaction.MaxFrozenCandidateDiffBytes, runtimeLensBound(runtimeAgent))
+}
 
 // The two markers an installed agent definition also names are read from the
 // canonical constants both halves share, never respelled here: a reviewer
@@ -68,6 +76,7 @@ type reviewLensContextBinding struct {
 	Revision          string `json:"revision"`
 	RepositoryContext string `json:"repository_context"`
 	SubjectHash       string `json:"subject_hash"`
+	runtimeAgent      string
 }
 
 // reviewLensContextError is a typed, path-free refusal. Code is the first token
@@ -275,6 +284,7 @@ func reviewLensContextBudgetProbe(
 		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
 			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+			runtimeAgent: state.RuntimeAgent,
 		}, subject, frozen)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
@@ -418,6 +428,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 		Binding: reviewLensContextBinding{
 			Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
 			Revision: binding.Revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+			runtimeAgent: state.RuntimeAgent,
 		},
 		Subject: subject, Frozen: frozen, Inspector: inspector,
 	}, nil
@@ -463,7 +474,7 @@ func reviewLensContextBlock(
 	// The budget bounds the whole delivered block, not only the evidence: at
 	// this level the block IS the reviewer's prompt, so the instruction and the
 	// result schema are part of what has to fit.
-	budget := reviewLensContextByteBudget - block.Len()
+	budget := reviewLensContextBudget(binding.runtimeAgent) - block.Len()
 	consume := func(header, footer string, body []byte) error {
 		rendered := header + "\n" + string(bytes.TrimSpace(body)) + "\n" + footer + "\n"
 		budget -= len(rendered)
@@ -473,7 +484,7 @@ func reviewLensContextBlock(
 		block.WriteString(rendered)
 		return nil
 	}
-	instruction, err := reviewLensContextInstructionText(binding, len(frozen.ChangedPathManifest))
+	instruction, err := reviewLensContextInstructionText(binding, frozen.ChangedPathManifest)
 	if err != nil {
 		return nil, err
 	}
@@ -509,6 +520,9 @@ func reviewLensContextBlock(
 		if len(bytes.TrimSpace(payload)) == 0 && !entry.ModeOnly && !entry.Deleted {
 			return nil, reviewLensContextRefusal("lens_context_empty_patch", reviewLensContextEmptyPatchAction)
 		}
+		if entry.Generated {
+			payload = reviewLensContextGeneratedPatchSummary(payload)
+		}
 		if err := consume(fmt.Sprintf("%s %d %s", reviewLensContextPatch, index, entry.Path), reviewLensContextPatch+"_END", payload); err != nil {
 			return nil, err
 		}
@@ -526,14 +540,33 @@ func reviewLensContextBlock(
 // The lens mandate is read from the one canonical source every installed agent
 // definition also renders from, so a reviewer's charge never depends on which
 // surface launched it.
-func reviewLensContextInstructionText(binding reviewLensContextBinding, paths int) (string, error) {
+func reviewLensContextGeneratedPatchSummary(payload []byte) []byte {
+	var header bytes.Buffer
+	for _, line := range bytes.SplitAfter(payload, []byte{'\n'}) {
+		if bytes.HasPrefix(bytes.TrimRight(line, "\r\n"), []byte("@@")) {
+			break
+		}
+		header.Write(line)
+	}
+	summary := append([]byte(nil), bytes.TrimRight(header.Bytes(), "\r\n")...)
+	summary = append(summary, []byte("\nGENERATED SUMMARY: path frozen as generated; hunks omitted\n")...)
+	return summary
+}
+
+func reviewLensContextInstructionText(binding reviewLensContextBinding, manifest []reviewtransaction.ChangedPathManifestEntry) (string, error) {
 	title, focus, found := reviewtransaction.LensMandate(binding.Lens)
 	if !found {
 		return "", reviewLensContextRefusal("lens_context_lens_not_selected", reviewLensContextRefreshAction)
 	}
+	generated := 0
+	for _, entry := range manifest {
+		if entry.Generated {
+			generated++
+		}
+	}
 	return fmt.Sprintf(`You are the %s lens of one bounded Gentle AI review. %s
 
-Scope. The %s sections below are the complete and only view of this candidate: all %d changed paths are present in full, in the canonical manifest order carried by %s. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
+Scope. The %s sections below are the complete and only view of this candidate: every one of the %d changed paths is present in the canonical manifest order carried by %s. The %d manifest entries marked generated appear as summaries with identity and numstat only; their hunks are omitted, so you must not claim line-level inspection of a summarized path. All other paths are present in full. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
 
 Causality. Report only what this candidate caused. Give every BLOCKER or CRITICAL finding an evidence_class and a causal_disposition, and mark what the base already contained as pre-existing or base-only rather than as a blocker.
 
@@ -542,7 +575,7 @@ Return. Emit exactly one JSON object and nothing else: no prose before or after 
 Citations. Every finding location, and every path cited inside an evidence string or a proof_refs entry, must be a repository-relative path exactly as it appears in the changed-path manifest, optionally with :line or :start-end. Never cite absolute paths, bare file basenames without their directory, or non-path colon-number shapes such as host:port. Any token shaped like path:line is validated against the frozen repository, and one unknown path rejects the entire result. A finding whose causal_disposition is introduced, behavior-activated, or worsened must anchor its location entirely within lines this candidate changed: every line of a path:start-end span is validated as candidate-changed, one unchanged context line in the span rejects the entire result, and observations about unchanged code belong under pre-existing or base-only instead. When the candidate's own content contains a path-shaped literal that is not a real repository path (for example a traversal or fixture token inside a test), never reproduce that token in evidence or proof_refs: describe it in words and cite the manifest file and line that contain it.
 
 Honesty. If you could not inspect the candidate, set inspection.status to "unavailable" with a non-empty inspection.reason explaining why, and do not return a clean result: an access failure is not a completed inspection. Describing the failure only in evidence while leaving inspection.status as "completed" is a false completion: admission refuses it when the prose reports an inaccessible candidate, and otherwise cannot recover from it.`,
-		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader,
+		title, focus, reviewLensContextPatch, len(manifest), reviewLensContextContextHeader, generated,
 		reviewLensContextResultSchema, binding.SubjectHash, reviewLensContextBindingHeader), nil
 }
 

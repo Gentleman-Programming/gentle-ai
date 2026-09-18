@@ -85,6 +85,7 @@ type ChangedPathManifestEntry struct {
 	TypeChanged       bool                `json:"type_changed"`
 	ModeOnly          bool                `json:"mode_only"`
 	IntendedUntracked bool                `json:"intended_untracked"`
+	Generated         bool                `json:"generated,omitempty"`
 }
 
 // FrozenCandidateContext is the deterministic reviewer input derived only
@@ -249,6 +250,7 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 			Deleted: modes.status == CandidatePathDeleted, TypeChanged: modes.status == CandidatePathTypeChanged,
 			ModeOnly:          modes.status == CandidatePathModified && modes.oldObject == modes.newObject && modes.oldMode != modes.newMode,
 			IntendedUntracked: wasIntendedUntracked,
+			Generated:         isGeneratedSummaryPath(path),
 		}
 		if err := validateChangedPathManifestEntry(entry); err != nil {
 			return fail(err)
