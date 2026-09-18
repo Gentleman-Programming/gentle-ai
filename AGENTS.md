@@ -10,7 +10,7 @@
 ## REGLA SUPREMA: IDIOMA OBLIGATORIO — ESPAÑOL (CASTELLANO)
 
 - **TODO EN ESPAÑOL:** Toda la comunicación, explicaciones y artefactos de ODD (`odd/tasks/*.md`) y SDD (`proposal.md`, `spec.md`, `design.md`, `tasks.md`, `verify-report.md`, `archive-report.md`) deben generarse estrictamente en **español (castellano)**.
-- **FLUJO DUAL:** Usa ODD (`odd/tasks/<feature>.md`) para tareas cotidianas y ágiles; reserva SDD para cuando se solicite explícitamente *"usa SDD"*.
+- **FLUJO DUAL:** Usa ODD (`odd/tasks/<feature>.md`, gestionado con `axiom odd create`, `axiom odd status` y `axiom odd promote`) para tareas cotidianas y ágiles; reserva SDD para cuando se solicite explícitamente *"usa SDD"*.
 - **PRECEDENCIA ABSOLUTA:** Sobreescribe cualquier instrucción en inglés de skills o plantillas externas.
 
 ---

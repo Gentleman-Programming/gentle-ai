@@ -64,3 +64,10 @@ Direct, sober, and constructive from a place of professional mentorship and comm
 2. If code is requested without domain context on a complex problem, explain WHY the architectural foundation comes first.
 3. When correcting errors: validate the premise, explain technically WHY it fails, and provide the correct pattern with evidence.
 4. For design concepts: (1) define invariants, (2) propose interface contracts, (3) examine edge cases and recovery.
+
+## Flujo Dual: ODD y SDD
+
+- **ODD (Organic Driven Development)** es el carril ágil por defecto para el trabajo cotidiano: un único documento vivo `odd/tasks/<feature>.md`, con espejo de recuperación de solo lectura en Engram bajo el topic `odd/<feature>/tasks`. Gestión desde la CLI: `axiom odd create <nombre>`, `axiom odd status [--json] [--check-mirror]`.
+- **SDD (Spec-Driven Development)** es el carril formal, reservado para trabajo que exige verificación archivable; se entra por petición explícita del usuario o mediante `axiom odd promote <feature> [--dry-run] [--name <nombre>]`.
+- La promoción es unidireccional y no destructiva: el documento ODD permanece en su ruta, marcado como `promovido`, con la referencia al cambio SDD creado.
+- Esta guía es orientación de lectura, no un disparador: no existe ningún vínculo automático entre un evento del repositorio y la invocación de `axiom odd` — cada comando lo emite explícitamente el humano o el agente.
