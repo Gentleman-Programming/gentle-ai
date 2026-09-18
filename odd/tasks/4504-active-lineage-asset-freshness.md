@@ -73,8 +73,9 @@ Gentle AI issue #4504 item 5 reported a post-freeze managed-assets refusal with 
 - Independent verification: PASS for all six acceptance criteria; focused regression and provenance guard matrix passed, gofmt and diff checks passed, and no candidate-caused findings were reported.
 - Parent spot check: the exact focused regression passed again in 4.732s; `git diff --check` passed and repository scope remained the two Go files plus this task document.
 - Native risk assessment was unavailable because the native command returned empty output; policy treated the candidate as high risk and required the completed independent verification.
+- Work-unit commit: `6b5eeb0d672701ac9954a8bbb04b5cc3d862890f` (`fix(review): gate stale active capture status`).
 - Engram mirror: full document saved under `odd/4504-active-lineage-asset-freshness/tasks`, project `gentle-ai`. Readback is unavailable in the worker's tool set; save acknowledgements were observed.
 
 ## Next Step
 
-Await a user decision on commit/push/PR. Implementation and required functional checks are complete; no commit or native review is authorized.
+Run the authorized native review over the committed work unit, then push and open the authorized PR.
