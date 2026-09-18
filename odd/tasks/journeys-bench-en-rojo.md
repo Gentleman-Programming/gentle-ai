@@ -130,7 +130,7 @@ Causa de fondo: `.github/workflows/ci.yml` compila `./cmd/gentle-ai` —el shim 
 
 **Un solo cambio cierra 4 journeys.**
 
-#### Grupo C — secuela del renombrado · CORREGIDO, pendiente de que el CI lo confirme
+#### Grupo C — secuela del renombrado · CORREGIDO y CONFIRMADO en Linux
 
 `j3043` fallaba en CI con `open /tmp/.../home/.gentle-ai/bin`. Producción usa `.axiom/bin` (`internal/opencode/background.go:331`); la journey esperaba el directorio retirado.
 
@@ -146,8 +146,75 @@ Solo cambió el **directorio**: el marcador `gentle-ai:managed-opencode-launcher
 > | Windows local | la evidencia de activación (línea 37), antes de llegar |
 >
 > En Windows el install no emite `OpenCode background activation status: ready`, así que la journey muere antes del punto corregido. Tras el arreglo, el error local cambió de la línea 44 a la 37: prueba de que la 44 ya no bloquea, pero no de que la journey pase. **Solo el CI puede cerrarla.**
+>
+> **Superado el 2026-09-19.** Ya no hace falta el CI: con Docker Desktop instalado, el bench corre en Linux real en local. `j3043` pasa. Ver «Verificación en Linux local» más abajo.
 
-### Fase 2 — Corrección
+#### Grupo D — la misma secuela, en la clave del agente (`j3336`, `j3500`)
+
+Ambas leen el orquestrador de OpenCode bajo `agent["gentle-orchestrator"]`. El producto lo escribe bajo **`axiom-orchestrator`**: `internal/opencode/config.go:267-268` migra `sdd-orchestrator` y `gentle-orchestrator` a la clave nueva.
+
+Medido en contenedor, no inferido. **Todas las demás aserciones de `j3336` pasan** contra el prompt de `axiom-orchestrator` —las cinco exigidas presentes, las siete prohibidas ausentes—, así que el contrato del preflight está intacto: lo único que se movió fue la clave.
+
+`j3500` merecía una comprobación aparte, porque siembra bytes de usuario bajo la clave vieja: si el sync migrase la clave **perdiendo** los bytes, sería un defecto de producto real. No lo es. Tras el sync:
+
+```
+axiom-orchestrator : len=23893 prefijo=1 sufijo=1 marcadores=1+1 hybrid=1
+gentle-orchestrator: len=0
+```
+
+El producto migra la clave, **conserva los bytes externos exactos** y compone un único preflight canónico. La journey estaba en lo cierto sobre el contrato y equivocada sobre el nombre.
+
+Nota: los marcadores `<!-- gentle-ai:sdd-session-preflight -->` **siguen vigentes en producción** (`internal/components/sdd/session_preflight.go:11-12`). No se tocan; renombrarlos sería inventar un contrato.
+
+#### Grupo E — `j93` · **corrección de un diagnóstico previo**
+
+> **Lo que se afirmó antes era falso.** Se dijo que `j93` era «un defecto de producto puro: la parada `managed_assets_outdated` llega con `Continuation:<nil>`». Se dedujo de leer `Continuation:<nil>` en la salida sin comprobar el `Kind` que lo acompañaba. La medición real:
+>
+> ```
+> Kind:execute  ReasonCode:fresh_target_ready  Execute.Operation:review.start  Continuation:<nil>
+> ```
+>
+> **No hay parada.** El producto no detecta desfase alguno y va directo a `review.start`; `Continuation:<nil>` es simplemente un campo vacío de una transición `execute`, que es su forma normal. No hay defecto de contrato.
+
+La causa real es la **tercera instancia de la misma secuela de renombrado**. El fixture escribe el artefacto histórico en `~/.gentle-ai/state.json`, y el producto lee `~/.axiom/state.json`. La siembra cae al lado del fichero vivo, nadie la lee, y la journey medía una instalación impoluta en vez del desfase que existe para medir: **un falso verde disfrazado de fallo**.
+
+El renombrado es **parcial a propósito**, y eso importa para no arreglar de más. Medido tras un `sync` limpio:
+
+| Bajo `$HOME` | Directorio vivo |
+|---|---|
+| `state.json`, `bin/` | `.axiom` |
+| `telemetry.json`, `backups/` | `.gentle-ai` |
+
+Por eso `managedStatePath` sondea el fichero **existente** en vez de nombrar un directorio: el opt-in de revisión ya lo creó (`bench/runner.go:890`, antes de los fixtures), así que se escribe sobre el que el propio producto acaba de crear. Y por eso no se hace una sustitución en bloque de `.gentle-ai` en el corpus: `backups/` sigue ahí.
+
+> **Mina localizada, no desactivada.** Otros cuatro fixtures siembran `~/.gentle-ai/state.json` —`journeys_issue_3561.go:39`, `journeys_issue_3557.go:32`, `journeys_issue3766.go:20`, `journeys_edge.go:672`— y por tanto escriben en un fichero muerto. **Esas journeys están hoy en verde**, así que no se tocan aquí: reverdecen sin que su siembra surta efecto, lo que significa que pasan sin medir lo que declaran. Queda anotado como seguimiento, no como corrección silenciosa.
+
+#### Grupo F — `j97`, la journey número once que nadie había contado
+
+Aparece solo al reverdecer las diez. El paso «Run benchmark evidence» corre bajo `bash -e`: abortaba en la primera puerta `jq`, así que **las cuatro puertas siguientes nunca se habían ejecutado en este fork**. Con el corpus en verde, el paso avanza y falla en la cuarta.
+
+`j97` se ejecuta dos veces a propósito, y cada ejecución prueba lo contrario que la otra:
+
+| Binario | Veredicto exigido | Qué prueba |
+|---|---|---|
+| ordinario | `unsupported` | que un build sin el fixture **no fabrica un aprobado** |
+| `-tags bench_fixture` | `completed` | que el picker funciona de verdad |
+
+Fallaban las dos, por dos causas distintas y ambas reincidentes:
+
+**F1 — el verbo solo existía en el shim.** `bench-model-picker` se despacha en `internal/app/app.go:90`, y `cmd/axiom` nunca cae a `app.RunArgs`. **Cuarta instancia** del mismo defecto que ya obligó a restaurar `codegraph`, `telemetry` y `skill-registry`. El CI lo tapaba compilando el binario del fixture desde `./cmd/gentle-ai` (línea 142) — la misma referencia obsoleta que se corrigió en la línea 85 y no se propagó abajo.
+
+**F2 — el rehúse está en castellano.** `unsupportedPatterns` (`bench/classify.go:466`) son ocho expresiones en inglés. El fork responde:
+
+```
+Error: comando 'bench-model-picker' no reconocido.
+```
+
+Ninguna casa, así que `IsUnsupported` devuelve `false`, el `After` intenta parsear la ayuda como JSON y sale `invalid character 'E'`. **Tercera superficie** de la misma causa que los literales de TUI: INC-16 localizó la salida y el corpus quedó anclado al inglés.
+
+El comentario de esa lista dice que contar una superficie ausente como fallo de estado sería «a flattering lie». Aquí es esa misma mentira con el signo cambiado: se estaba contando como fallo de estado algo que el producto rechazaba por forma.
+
+> Tocar `IsUnsupported` puede reclasificar bloques de cualquier journey, así que no basta con volver a medir `j97`: se revalidó el corpus completo (70/0/0, idéntico) y los tests unitarios de `bench`.
 
 ### Fase 2 — Corrección, una causa por tarea
 
@@ -166,17 +233,33 @@ Las 10 journeys y su paso fallido, tal como los reporta el CI de Linux:
 | `j3336-opencode-sdd-fresh-default-preflight` | «public OpenCode SDD sync» |
 | `j3500-preserved-external-opencode-sync` | «public external OpenCode sync» |
 
-- [ ] **T3 · `j93` — defecto de contrato ya identificado.** La parada `managed_assets_outdated` llega con `Continuation:<nil>`. Ese código de parada **exige** nombrar su comando de recuperación; sin él el actor se queda sin salida runnable, que es justo lo que el contrato de paradas existe para impedir. Es el único diagnóstico ya hecho.
-- [ ] **T4 · Grupo TUI/PTY** (`j120`, `j121`, `j122`). Comparten superficie: renderizado bajo TTY real y conmutación de RDD desde la interfaz.
-- [ ] **T5 · Grupo sync de OpenCode** (`j3336`, `j3500`, posiblemente `j3043`).
-- [ ] **T6 · `j42` y `j63`**, ambas sobre la interacción entre el interruptor de RDD y el archivado SDD.
-- [ ] **T7 · `j127`**, instalador personalizable y orden de presentación de RDD.
+- [x] **T3 · `j93`.** No era defecto de contrato — ver la corrección del grupo E. El fixture siembra el estado sobre el fichero que el producto creó, resuelto con `managedStatePath`. Verde en Linux, y ahora ejecuta 3 comandos (STATUS → sync → STATUS reconciliado): mide el desfase de verdad.
+- [x] **T4 · Grupo TUI/PTY** (`j120`, `j121`, `j122`, `j127`). Dos causas encadenadas: el aviso del shim y, detrás, los literales de TUI que INC-16 localizó al castellano. `bench/tui_localized_markers.go` acepta ambos idiomas sin aseverar cuál se envía.
+- [x] **T5 · Grupo sync de OpenCode** (`j3336`, `j3500`, `j3043`). Misma secuela de renombrado en tres superficies: directorio del launcher, clave del agente y fichero de estado.
+- [x] **T6 · `j42` y `j63`.** Delta emitido sobre `openspec/specs/rdd-post-verify-review-offer/spec.md`: se retira la obligación positiva de ofrecer revisión, las prohibiciones siguen vigentes.
+- [x] **T7 · `j127`.** Cerrada por T4; no tenía causa propia.
 
 ### Fase 3 — Cierre
 
-- [ ] **T8 · Verificación.** Paso de bench en verde en el CI de Linux. Las 4 journeys que solo fallan en Windows quedan declaradas como ruido ambiental, no resueltas aquí.
+- [x] **T8 · Verificación.** Corpus completo en verde en Linux real, medido en local (ver abajo). Queda confirmarlo en el CI, que es el mismo entorno.
 
 ---
+
+## Verificación en Linux local (2026-09-19)
+
+Con Docker Desktop disponible, el bench deja de depender del CI. Esto importa metodológicamente: **cuatro journeys eran incomprobables en Windows** porque el PTY no existe, y el hábito de «solo el CI puede cerrarla» estaba convirtiendo cada iteración en un viaje de ida y vuelta de minutos.
+
+```bash
+docker run -d --name axiom-bench -v /c/repos/axiom:/repo \
+  -v axiom-gocache:/root/.cache/go-build -v axiom-gomod:/go/pkg/mod \
+  -w /repo golang:1.25 sleep infinity
+docker exec axiom-bench sh -c 'go build -trimpath -o /tmp/gentle-ai ./cmd/axiom && cd bench && go build -o /tmp/bench .'
+docker exec axiom-bench /tmp/bench run --binary /tmp/gentle-ai --out /tmp/r.json
+```
+
+Réplica exacta del paso «Run benchmark evidence»: mismo binario canónico, mismas banderas.
+
+**Medición de las 10 antes de tocar el grupo D y `j93`:** 7 completadas, 3 fallidas (`j93`, `j3336`, `j3500`). Es decir, el trío de PTY y `j3043` ya estaban cerrados y se estaba esperando al CI para saberlo.
 
 ## Criterios de aceptación
 
@@ -186,8 +269,10 @@ Las 10 journeys y su paso fallido, tal como los reporta el CI de Linux:
 
 ## Progreso
 
-**0/8.** Sin iniciar.
+**8/8.** Las 10 journeys en verde en Linux real.
+
+Balance de causas, que es el resultado que conviene retener: **ninguna journey estaba equivocada sobre su contrato**. Nueve de diez fallaban por el espacio de nombres retirado —binario, directorio, clave de agente, fichero de estado, idioma de la TUI— y una, el grupo A, porque el código contradecía una especificación viva y INC-18 no había emitido el delta que debía. Cero aserciones debilitadas.
 
 ## Siguiente paso
 
-T1 — ejecutar el bench con salida completa y agrupar las 10 por causa raíz.
+Confirmar en el CI y fusionar el PR #23.
