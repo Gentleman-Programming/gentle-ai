@@ -22,6 +22,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const wsNameEl = document.getElementById('ws-name');
   const wsTopologyEl = document.getElementById('ws-topology');
   const incrementsContainer = document.getElementById('increments-container');
+
+  // Carril Ágil ODD (INC-19)
+  let oddFeaturesData = [];
+  let currentODDFilter = 'all';
+  const oddContainer = document.getElementById('odd-container');
+  const btnNewODD = document.getElementById('btn-new-odd');
+  const btnCheckODDMirror = document.getElementById('btn-check-odd-mirror');
+
   const roleChangeSelect = document.getElementById('role-change-select');
   const rolesContainer = document.getElementById('roles-container');
   const barrierBanner = document.getElementById('barrier-result-card');
@@ -94,14 +102,46 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Filtro de Incrementos
-  document.querySelectorAll('.filter-btn').forEach(btn => {
+  // Acotado a #tab-increments: ahora que el carril ODD (INC-19) añade su
+  // propio grupo de .filter-btn en #tab-odd, un selector global mezclaría
+  // ambos grupos y desincronizaría currentFilter/currentODDFilter.
+  document.querySelectorAll('#tab-increments .filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('#tab-increments .filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentFilter = btn.getAttribute('data-filter');
       renderIncrements();
     });
   });
+
+  // Filtro de Documentos Vivos ODD (INC-19)
+  document.querySelectorAll('#tab-odd .filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#tab-odd .filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentODDFilter = btn.getAttribute('data-filter');
+      renderODDFeatures();
+    });
+  });
+
+  // Crear Documento Vivo ODD (INC-19)
+  if (btnNewODD) {
+    btnNewODD.addEventListener('click', async () => {
+      const name = (prompt('Nombre de la nueva feature ODD (kebab-case, ej. gestion-inventario):') || '').trim();
+      if (!name) return;
+      const kebabRegex = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+      if (!kebabRegex.test(name)) {
+        alert('El nombre debe seguir el formato kebab-case (solo minúsculas, números y guiones, ej. gestion-inventario).');
+        return;
+      }
+      await createODDFeature(name);
+    });
+  }
+
+  // Comprobar Espejo Engram de todos los documentos ODD cargados (INC-19)
+  if (btnCheckODDMirror) {
+    btnCheckODDMirror.addEventListener('click', () => checkODDMirror());
+  }
 
   // Botón Actualizar
   document.getElementById('btn-refresh').addEventListener('click', () => {
@@ -571,12 +611,18 @@ document.addEventListener('DOMContentLoaded', () => {
     await Promise.all([
       loadWorkspace(),
       loadIncrements(),
+      loadODD(),
       loadSkills(),
       loadSkillsInbox(),
       loadSemanticData(),
       loadLivingDocs(),
       loadEcosystem()
     ]);
+    // loadIncrements() y loadODD() corren en paralelo: ninguno garantiza
+    // terminar antes que el otro. Se repinta el tablero de incrementos una
+    // vez resueltos ambos para que la insignia «← Origen ODD» (INC-19,
+    // REQ-19.15) refleje el mapa completo, no una carrera parcial.
+    renderIncrements();
   }
 
   // 1. Cargar Workspace
@@ -714,10 +760,16 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // INC-19 (REQ-19.15): mapa cliente promoted_to → feature derivado del
+    // carril ODD ya cargado. No modifica /api/increments; solo cruza dos
+    // respuestas JSON ya presentes en el cliente.
+    const oddOrigin = oddOriginMap();
+
     filtered.forEach(inc => {
       const card = document.createElement('div');
       card.className = `inc-card ${inc.type}`;
       const isArchived = inc.type === 'archived';
+      const originFeature = oddOrigin[inc.name];
 
       card.innerHTML = `
         <div>
@@ -726,6 +778,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="card-badges">
               <span class="badge badge-${inc.type}">${isArchived ? 'Archivado' : 'Activo'}</span>
               <span class="badge badge-phase">${inc.phase}</span>
+              ${originFeature ? `<span class="lane-badge lane-badge--promoted" title="Promovido desde el documento vivo ODD: ${escapeHtml(originFeature)}">← Origen ODD</span>` : ''}
             </div>
           </div>
           <div class="progress-container">
@@ -793,6 +846,199 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       modalContent.innerHTML = `<div class="text-danger">Error: ${err.message}</div>`;
     }
+  }
+
+  // 2b. Carril Ágil ODD — documentos vivos, progreso y promoción a SDD (INC-19, REQ-19.13, REQ-19.15)
+
+  async function loadODD() {
+    if (!oddContainer) return;
+    try {
+      const res = await fetch('/api/odd');
+      if (!res.ok) throw new Error('Fallo al obtener documentos vivos ODD');
+      oddFeaturesData = await res.json() || [];
+      renderODDFeatures();
+      // Repinta también el tablero de incrementos: loadIncrements() y
+      // loadODD() corren en paralelo dentro de loadAllData() y ninguno
+      // garantiza terminar antes que el otro, así que la insignia
+      // «← Origen ODD» (REQ-19.15) solo queda correcta si CADA carga la
+      // repinta al terminar, sin depender de que las otras cargas
+      // concurrentes de loadAllData() (ajenas a este incremento) también
+      // resuelvan con éxito.
+      renderIncrements();
+    } catch (err) {
+      console.error(err);
+      oddContainer.innerHTML = '<div class="empty-state text-danger">Error al cargar documentos vivos ODD.</div>';
+    }
+  }
+
+  // changeNameFromPromotedTo extrae el nombre de directorio del cambio SDD
+  // desde promoted_to ("openspec/changes/<nombre>/"). inc.name en
+  // /api/increments es ese nombre desnudo, nunca la ruta completa: sin este
+  // recorte, el cruce con oddOriginMap no encuentra ninguna coincidencia.
+  function changeNameFromPromotedTo(promotedTo) {
+    if (!promotedTo) return '';
+    const trimmed = promotedTo.replace(/\/+$/, '');
+    const parts = trimmed.split('/');
+    return parts[parts.length - 1] || '';
+  }
+
+  // oddOriginMap deriva, sin tocar /api/increments, qué incremento SDD
+  // procede de qué feature ODD ya promovida. Único punto de cruce cliente
+  // entre ambos carriles (REQ-19.15).
+  function oddOriginMap() {
+    const map = {};
+    oddFeaturesData.forEach(f => {
+      const changeName = changeNameFromPromotedTo(f.promoted_to);
+      if (changeName) map[changeName] = f.feature;
+    });
+    return map;
+  }
+
+  function renderODDFeatures() {
+    if (!oddContainer) return;
+    oddContainer.innerHTML = '';
+
+    if (oddFeaturesData.length === 0) {
+      oddContainer.innerHTML = '<div class="empty-state">No hay documentos vivos ODD todavía. Crea el primero con «+ Nuevo documento ODD».</div>';
+      return;
+    }
+
+    const filtered = oddFeaturesData.filter(f => {
+      if (currentODDFilter === 'active') return f.status !== 'promovido';
+      if (currentODDFilter === 'promoted') return f.status === 'promovido';
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      oddContainer.innerHTML = '<div class="empty-state">No se encontraron documentos ODD para este filtro.</div>';
+      return;
+    }
+
+    filtered.forEach(f => {
+      const isPromoted = f.status === 'promovido';
+      const progress = f.progress || {};
+      const pct = progress.Percent || 0;
+
+      let mirrorBadge = '';
+      if (f.mirror && f.mirror.state) {
+        let mirrorModifier = 'mirror-state--unavailable';
+        if (f.mirror.state === 'sincronizado') mirrorModifier = 'mirror-state--synced';
+        else if (f.mirror.state === 'divergente') mirrorModifier = 'mirror-state--diverged';
+        mirrorBadge = `<span class="mirror-state ${mirrorModifier}" title="${escapeHtml(f.mirror.reason || '')}">${escapeHtml(f.mirror.state)}</span>`;
+      }
+
+      const card = document.createElement('div');
+      card.className = 'inc-card';
+
+      card.innerHTML = `
+        <div>
+          <div class="card-header">
+            <div class="card-title">${f.feature}</div>
+            <div class="card-badges">
+              <span class="lane-badge ${isPromoted ? 'lane-badge--promoted' : ''}">${isPromoted ? 'Promovido' : 'Activo'}</span>
+              ${mirrorBadge}
+            </div>
+          </div>
+          <div class="progress-container">
+            <div class="progress-info">
+              <span>Tareas: ${progress.Completed || 0}/${progress.Total || 0}</span>
+              <span>${pct}%</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-bar" style="width: ${pct}%"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="card-date">${f.path}</span>
+          ${isPromoted
+            ? '<button class="btn btn-secondary btn-odd-goto">→ Ir al cambio SDD</button>'
+            : '<button class="btn btn-primary btn-odd-promote">Promover a SDD</button>'}
+        </div>
+      `;
+
+      if (isPromoted) {
+        card.querySelector('.btn-odd-goto').addEventListener('click', () => focusIncrement(f.promoted_to));
+      } else {
+        card.querySelector('.btn-odd-promote').addEventListener('click', () => promoteODDFeature(f.feature));
+      }
+
+      oddContainer.appendChild(card);
+    });
+  }
+
+  async function createODDFeature(feature) {
+    try {
+      const res = await fetch('/api/odd', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feature })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al crear el documento vivo ODD');
+      await loadODD();
+    } catch (err) {
+      alert('Error al crear documento ODD: ' + err.message);
+    }
+  }
+
+  async function promoteODDFeature(feature) {
+    if (!confirm(`¿Confirmas que deseas promover "${feature}" a un cambio SDD? Se creará openspec/changes/${feature}/ y el documento vivo quedará marcado como promovido. Esta acción no se revierte automáticamente.`)) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/odd/promote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feature })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al promover el documento ODD');
+      await loadODD();
+      await loadIncrements();
+      if (data.warning) {
+        alert('Aviso: ' + data.warning);
+      }
+    } catch (err) {
+      alert('Error al promover: ' + err.message);
+    }
+  }
+
+  // checkODDMirror sondea, bajo acción deliberada del usuario, el espejo de
+  // recuperación en Engram de cada documento cargado. Nunca se invoca desde
+  // loadODD ni desde ningún ciclo de refresco automático [D-05].
+  async function checkODDMirror() {
+    if (!btnCheckODDMirror || oddFeaturesData.length === 0) return;
+    btnCheckODDMirror.disabled = true;
+    btnCheckODDMirror.textContent = '⏳ Comprobando...';
+    try {
+      await Promise.all(oddFeaturesData.map(async f => {
+        try {
+          const res = await fetch('/api/odd/check-mirror', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ feature: f.feature })
+          });
+          const data = await res.json();
+          f.mirror = res.ok ? data : { state: 'no disponible', reason: data.error || 'Error al comprobar el espejo' };
+        } catch (err) {
+          f.mirror = { state: 'no disponible', reason: err.message };
+        }
+      }));
+      renderODDFeatures();
+    } finally {
+      btnCheckODDMirror.disabled = false;
+      btnCheckODDMirror.textContent = '↻ Comprobar espejo';
+    }
+  }
+
+  // focusIncrement conmuta al carril SDD y abre el detalle del incremento
+  // promovido (REQ-19.15): la acción visible desde una feature ODD ya
+  // promovida hacia la vista del cambio SDD correspondiente.
+  function focusIncrement(name) {
+    const incTab = document.querySelector('.nav-tab[data-tab="tab-increments"]');
+    if (incTab) incTab.click();
+    openIncrementModal(name);
   }
 
   // 3. Cargar Roles y Barrera para un cambio
