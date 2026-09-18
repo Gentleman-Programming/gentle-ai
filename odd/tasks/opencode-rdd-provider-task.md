@@ -77,11 +77,27 @@ The user explicitly requested the fix. Work is isolated on branch `fix/opencode-
     - Authored change: 442 lines for ORPT-2, excluding the regenerated golden; 1,081 cumulative authored lines across ORPT-1 and ORPT-2.
     - Commit: `cbb0d61d815e386faa60921f12517da66a3c7f5a` (`fix(review): relay provider-owned OpenCode tasks`).
 
+- [x] **ORPT-3 — Preserve j75's Pi intended-untracked contract**
+  - Diagnose why the OpenCode V1 provider-task change breaks the Pi intended-untracked journey.
+  - Correct only the stale or over-broad contract assumption exposed by j75; do not change provider-task behavior or unrelated review flows.
+  - Acceptance: the driven `j75-intended-untracked-selection-executes-printed-start` journey completes while still exercising Pi and executing the exact printed START.
+  - Checks: focused driven j75 run; benchmark module tests; affected component/assets/cross-lane packages; formatting and diff checks.
+  - Evidence:
+    - Root cause: ORPT-1 intentionally advanced every negotiated v2 STATUS envelope from `status/v7` to `status/v8`, but the black-box bench corpus still pinned j75 and the shared capture-evidence assertion to the former current schema. Pi behavior and the intended-untracked transition were unchanged; only the corpus schema expectation was stale.
+    - RED: the focused driven j75 run failed on `initial Pi STATUS` because the product emitted `gentle-ai.review-integration.status/v8` while the journey required v7.
+    - GREEN: the same locally built harness/product run completed j75 with 3 commands, 0 blocks, and 0 model runs.
+    - REFACTOR: the bench constant and all current-schema assertions now name v8 explicitly; no product behavior changed.
+    - `go test ./... -count=1` from `bench/` passed in `5.505s`.
+    - `go test ./internal/components/sdd ./internal/assets ./scripts/crosslane -count=1` passed in `116.295s`, `6.536s`, and `0.758s` respectively.
+    - `go run ./internal/gofmtcheck` passed with no output.
+    - Rollback boundary: revert this work unit to restore the stale v7 bench expectation; native STATUS/provider-task behavior is unaffected.
+
 ## Progress
 
 - Exploration complete: the defect is the model-authored STATUS-row-to-JSON transformation, not the TypeScript relay or strict Go decoder.
 - Delivery decision: one PR with `size:exception`, explicitly authorized by the user.
 - ORPT-1 complete in commit `b37b0e36b2ecdcc21318acb1f225c3f1cf7bc8b2`.
 - ORPT-2 complete in commit `cbb0d61d815e386faa60921f12517da66a3c7f5a`.
+- ORPT-3 complete locally: the driven j75 assertion follows the ratified status/v8 contract without changing Pi or provider-task behavior.
 - Cumulative authored change: 1,081 lines across the two work units, excluding the regenerated golden; delivery remains one PR with maintainer-approved `size:exception`.
-- Next step: ordinary PR policy applies; push and PR creation still require separate authorization.
+- Next step: verify and deliver the ORPT-3 work-unit commit through ordinary PR policy; push and GitHub mutation remain outside this task's authorization.
