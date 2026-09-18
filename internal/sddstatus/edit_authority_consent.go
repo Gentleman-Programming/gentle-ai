@@ -55,7 +55,7 @@ func readChangeInstanceMarker(changeRoot string) (string, error) {
 			return "", fmt.Errorf("inspect change-instance marker: %w", legacyErr)
 		}
 		if !legacyInfo.Mode().IsRegular() {
-			return "", errors.New("change-instance marker must be a regular file")
+			return "", errors.New("change-instance marker must be a regular file") // refusal:by-design world-action: inspect and recover the legacy change-local marker before continuation
 		}
 		markerPath = legacyMarkerPath
 	} else if err != nil {
