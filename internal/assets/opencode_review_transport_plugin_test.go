@@ -244,10 +244,9 @@ console.log(JSON.stringify({ refused, output: after.output }))
 	}
 }
 
-// posixRelayFixture answers one start frame with a Go-materialized prompt and
-// one completion frame with a captured result, logging both inbound frames. It
-// also handles a leading `gentle-ai --version` probe so the binary handshake
-// can run without forcing every test to mock the probe separately.
+// posixRelayFixture answers one start frame with a Go-materialized prompt,
+// one completion frame with a captured result, and a leading `gentle-ai
+// --version` probe so the binary handshake can run without per-test mocking.
 const posixRelayFixture = `#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf '%s\n' "$$" >> "$GENTLE_AI_PROBE_LOG"
@@ -262,9 +261,8 @@ printf '%s\n' "$complete" >> "$GENTLE_AI_RELAY_LOG"
 printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"result","output":"captured"}'
 `
 
-// posixOldRelayFixture pretends to be a `gentle-ai` from a prior release: it
-// prints an older semver on `--version` and ignores any relay frames so a
-// path-skew refusal can short-circuit the spawn before reaching the relay.
+// posixOldRelayFixture pretends to be a pre-v1 `gentle-ai`: older semver on
+// `--version`, no relay frames, so a path-skew refusal short-circuits.
 const posixOldRelayFixture = `#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf '%s\n' "$$" >> "$GENTLE_AI_PROBE_LOG"
@@ -410,11 +408,9 @@ console.log(JSON.stringify({ output1: after1.output, output2: after2.output }))
 	}
 }
 
-// runOpenCodeTransportPluginHarnessWithMtimeBarrier mirrors the standard
-// harness but lets the test rewrite the bundled relay binary's mtime after
-// the first relay completes and before the second relay fires. The TS harness
-// writes GENTLE_AI_BARRIER between the two relays and waits for the +".go"
-// signal to read "touched" before proceeding.
+// runOpenCodeTransportPluginHarnessWithMtimeBarrier rewrites the bundled
+// relay binary's mtime between the two relays; the TS harness waits on
+// GENTLE_AI_BARRIER before proceeding.
 func runOpenCodeTransportPluginHarnessWithMtimeBarrier(t *testing.T, modules map[string]string, harness, relay string) (string, string, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -764,10 +760,8 @@ lines.on("line", (line) => {
 	}
 }
 
-// overridePATH replaces any PATH entries in parent with pathValue and appends
-// the harness log pointers. The harness needs to override PATH, not append
-// to it, because getenv(3) returns the first matching entry — appending
-// leaves the parent's PATH first and the controlled pathValue shadowed.
+// overridePATH replaces PATH with pathValue (appending would leave the
+// parent's PATH first since getenv(3) returns the first match).
 func overridePATH(parent []string, pathValue, logPath, probePath string) []string {
 	env := make([]string, 0, len(parent)+3)
 	for _, entry := range parent {
