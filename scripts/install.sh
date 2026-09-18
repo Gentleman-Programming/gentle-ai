@@ -456,7 +456,7 @@ install_binary() {
     # Create install dir if needed
     mkdir -p "$install_dir"
 
-    # Atomic install: stage next to the destination, then rename in place.
+    # Atomic install: stage next to the destination and rename in place.
     # POSIX rename within one filesystem is atomic, so the previous binary
     # either survives intact or is fully replaced — never half-written.
     local staging="${install_dir}/${BINARY_NAME}.staging.$$"
@@ -468,8 +468,7 @@ install_binary() {
         mv -f -- "$staging" "$final"
     elif command -v sudo &>/dev/null; then
         warn "Permission denied. Trying with sudo..."
-        # Pass paths as positional args so $()/backtick substitutions in
-        # the destination path are not reinterpreted as commands.
+        # Positional args so $()/backtick substitutions in the path are not commands.
         sudo -- bash -c 'install -m 0755 -- "$1" "$2" && mv -f -- "$2" "$3"' _ "${tmpdir}/${BINARY_NAME}" "$staging" "$final"
     else
         rm -f -- "$staging" 2>/dev/null || true
