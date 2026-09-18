@@ -289,6 +289,15 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 		if err := telemetrycollector.RunMaintenance(ctx, storage, time.Now(), retentionDays, runtimeDedupDays); err != nil {
 			logger.Error("daily maintenance failed", "error", err)
 		}
+		// Hand purged space back: truncate the WAL every run, VACUUM only
+		// when the file is mostly free pages. Logged every run so a WAL
+		// that never shrinks (a reader outside this process holding it,
+		// reported as busy) is visible in journalctl.
+		if report, err := storage.Compact(ctx); err != nil {
+			logger.Error("database compaction failed", "error", err)
+		} else {
+			logger.Info("database compacted", "page_count", report.PageCount, "free_pages", report.FreePages, "wal_frames", report.WALFrames, "vacuumed", report.Vacuumed, "busy", report.Busy)
+		}
 		// Derived from ctx (not WithoutCancel): a SIGTERM cancels an
 		// in-flight fetch immediately instead of running it to
 		// completion, and the bounded timeout caps the worst case even
