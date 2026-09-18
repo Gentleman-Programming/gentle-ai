@@ -88,6 +88,22 @@ func TestRenderProfileCreate_Step2_ShowsCreateAndSync(t *testing.T) {
 	}
 }
 
+func TestRenderProfileCreate_Step1_ReservesProfileFrameInViewport(t *testing.T) {
+	draft := model.Profile{Name: "compact"}
+	picker := screens.ModelPickerState{
+		ForProfile:   true,
+		AvailableIDs: []string{"openai"},
+		Viewport:     screens.ModelPickerViewport{Width: 80, Height: 14, ReservedRows: 7},
+	}
+	output := screens.RenderProfileCreate(1, draft, "", 0, "", false, nil, picker, 0)
+	if strings.Contains(output, "Role:") {
+		t.Fatalf("constrained profile picker rendered secondary guidance:\n%s", output)
+	}
+	if !strings.Contains(output, "gentle-orchestrator") {
+		t.Fatalf("profile picker lost its first row:\n%s", output)
+	}
+}
+
 func TestRenderProfileCreate_Step1_ShowsJDRowsAssignmentAndClearHelp(t *testing.T) {
 	draft := model.Profile{Name: "cheap"}
 	picker := screens.ModelPickerState{

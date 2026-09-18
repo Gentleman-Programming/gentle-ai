@@ -30,6 +30,46 @@ const (
 const maxVisibleItems = 10
 const maxVisiblePhaseRows = 16
 
+// visibleListStart keeps the focused row inside a scrollable list's adaptive viewport.
+func visibleListStart(cursor, scroll, itemCount, capacity int) int {
+	capacity = max(1, capacity)
+	maxStart := max(0, itemCount-capacity)
+	scroll = min(max(0, scroll), maxStart)
+	if cursor < scroll {
+		return cursor
+	}
+	if cursor >= scroll+capacity {
+		return min(cursor-capacity+1, maxStart)
+	}
+	return scroll
+}
+
+// ModelPickerViewport carries the terminal space available to a picker. Zero
+// dimensions retain the fixed legacy capacities for deterministic rendering.
+type ModelPickerViewport struct {
+	Width        int
+	Height       int
+	ReservedRows int
+}
+
+func (viewport ModelPickerViewport) ListCapacity() int {
+	if viewport.Height <= 0 {
+		return maxVisibleItems
+	}
+	return max(1, viewport.Height-viewport.ReservedRows-6)
+}
+
+func (viewport ModelPickerViewport) PhaseCapacity() int {
+	if viewport.Height <= 0 {
+		return maxVisiblePhaseRows
+	}
+	return max(1, viewport.Height-viewport.ReservedRows-9)
+}
+
+func (viewport ModelPickerViewport) showsGuidance() bool {
+	return viewport.Width >= 60 && viewport.PhaseCapacity() >= 5
+}
+
 // RuntimeCatalogDiscoveryMsg is delivered after OpenCode resolves project models.
 type RuntimeCatalogDiscoveryMsg struct {
 	RequestID  uint64
@@ -127,6 +167,7 @@ type ModelPickerState struct {
 	// When true, the row list still includes optional profile-scoped Judgment Day
 	// agents alongside SDD rows.
 	ForProfile bool
+	Viewport   ModelPickerViewport
 
 	catalogDiscover RuntimeCatalogDiscoverer
 }
@@ -290,6 +331,36 @@ func ModelPickerRowAt(state ModelPickerState, index int) (ModelPickerRow, bool) 
 	return rows[index], true
 }
 
+// ModelPickerGuidance describes the focused picker row without changing its
+// assignment semantics. Unknown agent IDs are runtime custom/native agents.
+func ModelPickerGuidance(row ModelPickerRow) string {
+	switch row.Kind {
+	case ModelPickerRowKindSetAllSDD:
+		return "Applies one model to all SDD phases."
+	case ModelPickerRowKindSetAllCustom:
+		return "Applies one model to all custom/native agents."
+	case ModelPickerRowKindSeparator:
+		return "Section divider; not selectable."
+	}
+	roles := map[string]string{
+		SDDOrchestratorPhase: "Coordinates the workflow and delegates work.",
+		"sdd-init":           "Initializes the change workflow.", "sdd-explore": "Maps the codebase and constraints.",
+		"sdd-research": "Researches supporting evidence.", "sdd-propose": "Frames the proposed change.",
+		"sdd-spec": "Defines behavioral requirements.", "sdd-design": "Designs the implementation.",
+		"sdd-tasks": "Breaks the work into tasks.", "sdd-apply": "Applies approved tasks.",
+		"sdd-verify": "Verifies the implemented change.", "sdd-archive": "Archives completed workflow artifacts.",
+		"sdd-onboard": "Guides workflow onboarding.", "jd-judge-a": "Independently reviews the change.",
+		"jd-judge-b": "Independently reviews the change.", "jd-fix-agent": "Applies bounded review corrections.",
+		"review-risk": "Reviews risk and security.", "review-resilience": "Reviews operational resilience.",
+		"review-readability": "Reviews clarity and maintainability.", "review-reliability": "Reviews testing and reliability.",
+		"review-refuter": "Challenges inferential review findings.", "review-validator": "Validates targeted corrections.",
+	}
+	if guidance, ok := roles[row.AgentID]; ok {
+		return guidance
+	}
+	return "A custom/native agent; assignment applies only to this agent."
+}
+
 // SeparatorRowIdx returns the index of the "--- Judgment Day ---" separator
 // row in ModelPickerRows(). Returns -1 if there are no JD phases (and thus
 // no separator). This is used by the TUI to skip the separator during
@@ -362,8 +433,8 @@ func handleProviderNav(key string, state *ModelPickerState) bool {
 	case "down", "j":
 		if state.ProviderCursor < len(entries)-1 {
 			state.ProviderCursor++
-			if state.ProviderCursor >= state.ProviderScroll+maxVisibleItems {
-				state.ProviderScroll = state.ProviderCursor - maxVisibleItems + 1
+			if state.ProviderCursor >= state.ProviderScroll+state.Viewport.ListCapacity() {
+				state.ProviderScroll = state.ProviderCursor - state.Viewport.ListCapacity() + 1
 			}
 		}
 		return true
@@ -402,8 +473,8 @@ func handleModelNav(
 	case "down", "j":
 		if state.ModelCursor < len(models)-1 {
 			state.ModelCursor++
-			if state.ModelCursor >= state.ModelScroll+maxVisibleItems {
-				state.ModelScroll = state.ModelCursor - maxVisibleItems + 1
+			if state.ModelCursor >= state.ModelScroll+state.Viewport.ListCapacity() {
+				state.ModelScroll = state.ModelCursor - state.Viewport.ListCapacity() + 1
 			}
 		}
 		return true, assignments
@@ -701,8 +772,8 @@ func handleEffortNav(
 	case "down", "j":
 		if state.EffortCursor < len(opts)-1 {
 			state.EffortCursor++
-			if state.EffortCursor >= state.EffortScroll+maxVisibleItems {
-				state.EffortScroll = state.EffortCursor - maxVisibleItems + 1
+			if state.EffortCursor >= state.EffortScroll+state.Viewport.ListCapacity() {
+				state.EffortScroll = state.EffortCursor - state.Viewport.ListCapacity() + 1
 			}
 		}
 	case "enter":
@@ -746,17 +817,15 @@ func renderEffortSelect(state ModelPickerState) string {
 
 	opts := effortOptionsFromLevels(state.SelectedModelEffortLevels)
 
-	end := state.EffortScroll + maxVisibleItems
-	if end > len(opts) {
-		end = len(opts)
-	}
+	start := visibleListStart(state.EffortCursor, state.EffortScroll, len(opts), state.Viewport.ListCapacity())
+	end := min(start+state.Viewport.ListCapacity(), len(opts))
 
-	if state.EffortScroll > 0 {
+	if start > 0 {
 		b.WriteString(styles.SubtextStyle.Render("  ↑ more"))
 		b.WriteString("\n")
 	}
 
-	for i := state.EffortScroll; i < end; i++ {
+	for i := start; i < end; i++ {
 		opt := opts[i]
 		focused := i == state.EffortCursor
 
@@ -842,14 +911,25 @@ func renderPhaseList(
 	}
 
 	b.WriteString(styles.SubtextStyle.Render("Current assignments:"))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	rows := ModelPickerRowsForState(state)
 	identityRows := ModelPickerRowsForStateWithIdentity(state)
+	if state.Viewport.showsGuidance() && cursor >= 0 && cursor < len(identityRows) {
+		b.WriteString(styles.SubtextStyle.Render("Role: " + ModelPickerGuidance(identityRows[cursor])))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+
+	capacity := state.Viewport.PhaseCapacity()
+	if state.Viewport.showsGuidance() {
+		capacity--
+	}
+	capacity = max(1, capacity)
 	start, end := 0, len(rows)
-	if len(rows) > maxVisiblePhaseRows {
-		start = max(0, min(cursor-maxVisiblePhaseRows+1, len(rows)-maxVisiblePhaseRows))
-		end = start + maxVisiblePhaseRows
+	if len(rows) > capacity {
+		start = max(0, min(cursor-capacity+1, len(rows)-capacity))
+		end = start + capacity
 	}
 	if start > 0 {
 		b.WriteString(styles.SubtextStyle.Render("  ↑ more assignments") + "\n")
@@ -936,17 +1016,15 @@ func renderProviderSelect(state ModelPickerState) string {
 
 	entries := ProviderEntries(state)
 
-	end := state.ProviderScroll + maxVisibleItems
-	if end > len(entries) {
-		end = len(entries)
-	}
+	start := visibleListStart(state.ProviderCursor, state.ProviderScroll, len(entries), state.Viewport.ListCapacity())
+	end := min(start+state.Viewport.ListCapacity(), len(entries))
 
-	if state.ProviderScroll > 0 {
+	if start > 0 {
 		b.WriteString(styles.SubtextStyle.Render("  ↑ more"))
 		b.WriteString("\n")
 	}
 
-	for i := state.ProviderScroll; i < end; i++ {
+	for i := start; i < end; i++ {
 		entry := entries[i]
 		label := fmt.Sprintf("%s (%d models)", entry.Name, entry.ModelCount)
 		focused := i == state.ProviderCursor
@@ -991,10 +1069,8 @@ func renderModelSelect(state ModelPickerState) string {
 	b.WriteString(styles.SubtextStyle.Render("Search: " + modelSearchDisplay(state.ModelSearch)))
 	b.WriteString("\n\n")
 
-	end := state.ModelScroll + maxVisibleItems
-	if end > len(models) {
-		end = len(models)
-	}
+	start := visibleListStart(state.ModelCursor, state.ModelScroll, len(models), state.Viewport.ListCapacity())
+	end := min(start+state.Viewport.ListCapacity(), len(models))
 
 	if len(models) == 0 {
 		b.WriteString(styles.WarningStyle.Render("  No models match your search."))
@@ -1003,12 +1079,12 @@ func renderModelSelect(state ModelPickerState) string {
 		return b.String()
 	}
 
-	if state.ModelScroll > 0 {
+	if start > 0 {
 		b.WriteString(styles.SubtextStyle.Render("  ↑ more"))
 		b.WriteString("\n")
 	}
 
-	for i := state.ModelScroll; i < end; i++ {
+	for i := start; i < end; i++ {
 		m := models[i]
 		label := m.Name
 		if m.Cost.Input > 0 || m.Cost.Output > 0 {
