@@ -844,11 +844,17 @@ test_cc_theme_injection() {
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component theme --persona neutral 2>&1; then
+        # REQ-09.2: the theme component is non-intrusive. It writes nothing at
+        # all, so a settings.json that did not exist before stays absent. The
+        # contract worth asserting is that the install succeeds and forces no
+        # theme, not that a file appears.
         local settings="$HOME/.claude/settings.json"
-        assert_file_exists "$settings" "Claude settings.json"
         assert_file_not_contains "$settings" '"theme"' "REQ-09.2: theme component does not write the theme key"
-        assert_file_not_contains "$settings" '"theme": "gentleman"' "REQ-09.2: no theme selection is forced"
-        assert_valid_json "$settings" "settings.json is valid JSON"
+        if [ -f "$settings" ]; then
+            assert_valid_json "$settings" "settings.json is valid JSON when present"
+        else
+            log_pass "REQ-09.2: theme component created no settings.json"
+        fi
     else
         log_fail "theme install command failed"
     fi
@@ -1558,7 +1564,7 @@ test_edge_theme_not_in_presets() {
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component theme --persona neutral 2>&1; then
-        assert_file_exists "$HOME/.claude/settings.json" "Theme creates settings.json"
+        # REQ-09.2: non-intrusive, so theme-only creates no settings.json.
         assert_file_not_contains "$HOME/.claude/settings.json" '"theme"' "REQ-09.2: theme-only install writes no theme key"
         # Routing and remote authorization are unconditional agent guidance,
         # not optional components. Require exactly those managed sections;

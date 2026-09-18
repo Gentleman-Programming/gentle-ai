@@ -4053,7 +4053,34 @@ func buildOrganicBinary(workspace string) (string, error) {
 	if err != nil || !info.Mode().IsRegular() {
 		return "", fmt.Errorf("built axiom binary %q is unusable: %v", path, err)
 	}
+	// Publish the same canonical binary under the retired name too. The
+	// harness puts this directory on PATH, and the shipped reviewer assets
+	// still spell the invocation `gentle-ai`, so an agent-launched reviewer
+	// resolves that name from PATH and fails with "Executable not found" when
+	// only `axiom` exists. Copying rather than building ./cmd/gentle-ai keeps
+	// both names on the canonical dispatcher, without the shim's stderr notice.
+	if err := copyOrganicBinary(path, filepath.Join(workspace, legacyOrganicBinaryName())); err != nil {
+		return "", err
+	}
 	return path, nil
+}
+
+func legacyOrganicBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "gentle-ai.exe"
+	}
+	return "gentle-ai"
+}
+
+func copyOrganicBinary(source, destination string) error {
+	payload, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read built binary %q: %w", source, err)
+	}
+	if err := os.WriteFile(destination, payload, 0o755); err != nil {
+		return fmt.Errorf("publish binary under the retired name %q: %w", destination, err)
+	}
+	return nil
 }
 
 func organicLines(prefix string, count int) string {

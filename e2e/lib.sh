@@ -465,11 +465,16 @@ assert_no_duplicate_section() {
         log_fail "Cannot check sections — file not found: $file"
         return 1
     fi
-    local marker="<!-- gentle-ai:${section_id} -->"
+    # Namespace-agnostic: the fork renamed the marker namespace to `axiom:` and
+    # upstream still ships `gentle-ai:`. Counting a single namespace would
+    # report zero here and, worse, would miss a genuine duplicate written in
+    # the other one.
+    local marker
+    marker="<!-- (axiom|gentle-ai):${section_id} -->"
     local count
     # `grep -c` prints "0" AND exits 1 on zero matches, so `|| echo 0` would
     # yield the two-line string "0\n0" and break the numeric comparisons below.
-    count=$(grep -c "$marker" "$file" 2>/dev/null || true)
+    count=$(grep -Ec "$marker" "$file" 2>/dev/null || true)
     count=${count:-0}
     if [ "$count" -eq 1 ]; then
         log_pass "$label"
