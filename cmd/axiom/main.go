@@ -388,6 +388,21 @@ func main() {
 	case "review-validate":
 		os.Exit(runReview(append([]string{"validate"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 
+	// These three existed only in internal/app, so they were reachable through
+	// the deprecated `gentle-ai` wrapper and not through the canonical binary.
+	// Nobody noticed because no CI step exercised cmd/axiom. `skill-registry`
+	// delegates to app because its implementation is unexported there.
+	case "codegraph":
+		os.Exit(runSimpleCommand(cli.RunCodeGraph, os.Args[2:], os.Stdout, os.Stderr))
+	case "telemetry":
+		os.Exit(runSimpleCommand(cli.RunTelemetry, os.Args[2:], os.Stdout, os.Stderr))
+	case "skill-registry":
+		os.Exit(runSimpleCommand(
+			func(args []string, stdout io.Writer) error {
+				return app.RunArgs(append([]string{"skill-registry"}, args...), stdout)
+			},
+			os.Args[2:], os.Stdout, os.Stderr))
+
 	default:
 		fmt.Printf("Error: comando '%s' no reconocido.\n\n", arg1)
 		printHelp()
@@ -1838,6 +1853,17 @@ func (a dashboardScaffolder) Scaffold(req odd.ScaffoldRequest) (odd.ScaffoldResu
 		return odd.ScaffoldResult{}, err
 	}
 	return odd.ScaffoldResult{Name: resp.Name, Path: resp.Path}, nil
+}
+
+// runSimpleCommand adapts a plain `func([]string, io.Writer) error` handler to
+// this dispatcher's exit-code convention, reporting the error on stderr the way
+// every other branch does.
+func runSimpleCommand(handler func([]string, io.Writer) error, args []string, stdout, stderr io.Writer) int {
+	if err := handler(args, stdout); err != nil {
+		fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // runReview serves both `axiom review <subcommand>` and the flat
