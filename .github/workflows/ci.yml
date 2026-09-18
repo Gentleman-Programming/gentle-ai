@@ -505,6 +505,21 @@ jobs:
       # and push/schedule already prove they fit the step budget on the same
       # runners. Do not reintroduce per-event tier selection here without
       # renaming the checks to state the reduced scope.
+      - name: Diagnose pinned OpenCode runtime before E2E
+        run: |
+          docker run --rm --pull=never --network none --entrypoint /bin/bash \
+            gentle-ai-e2e-${{ matrix.platform.name }}:ci -c '
+              set -u
+              export HOME=$(mktemp -d)
+              export XDG_CONFIG_HOME="$HOME/config" XDG_DATA_HOME="$HOME/data"
+              export XDG_CACHE_HOME="$HOME/cache" XDG_STATE_HOME="$HOME/state"
+              command -v opencode
+              opencode --version
+              result=$?
+              printf "opencode version exit=%s\n" "$result"
+              exit "$result"
+            '
+
       - name: Run E2E tests
         timeout-minutes: 30
         env:

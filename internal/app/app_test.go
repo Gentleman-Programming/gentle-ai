@@ -606,6 +606,11 @@ func TestTuiSyncSelectionPreservesCustomPermissionExclusion(t *testing.T) {
 // Components from state before applyOverrides sets Profiles, so without the
 // fix ComponentSDD is dropped and the profile write silently never runs.
 func TestTuiSyncProfilePersistsWhenSDDComponentMissingFromState(t *testing.T) {
+	oldVersionRunner := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersionRunner })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)

@@ -576,13 +576,14 @@ const (
 )
 
 type Model struct {
-	Screen         Screen
-	PreviousScreen Screen
-	Width          int
-	Height         int
-	Cursor         int
-	Version        string
-	SpinnerFrame   int
+	openCodePresentationMajor opencode.RuntimeMajor
+	Screen                    Screen
+	PreviousScreen            Screen
+	Width                     int
+	Height                    int
+	Cursor                    int
+	Version                   string
+	SpinnerFrame              int
 
 	Selection                      model.Selection
 	Detection                      system.DetectionResult
@@ -1013,11 +1014,14 @@ func (m Model) Init() tea.Cmd {
 		return AdvisoryMsg{Advisory: a}
 	}
 
-	return tea.Batch(updateCmd, advisoryCmd)
+	return tea.Batch(updateCmd, advisoryCmd, openCodePresentationCommand())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case openCodePresentationMsg:
+		m.openCodePresentationMajor = msg.major
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
@@ -1524,7 +1528,7 @@ func (m Model) View() string {
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
-		return screens.RenderAgents(m.Selection.Agents, m.Cursor)
+		return screens.RenderAgents(m.Selection.Agents, m.Cursor, m.openCodePresentationMajor)
 	case ScreenPersona:
 		return screens.RenderPersona(m.Selection.Persona, m.Cursor)
 	case ScreenPreset:
