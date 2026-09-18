@@ -28,6 +28,8 @@ internal/agents/pi/model_routing.go	selectPackageBin
 internal/agents/pi/model_routing.go	unsafeBinPath
 internal/agents/pi/model_routing.go	windowsDrivePath
 internal/agents/registry.go	Registry.CapabilityManifest
+internal/app/app.go	Run
+internal/app/version.go	ResolveVersion
 internal/catalog/agents.go	IsMVPAgent
 internal/catalog/agents.go	MVPAgents
 internal/cli/doctor.go	checkToolBinaries
@@ -63,6 +65,7 @@ internal/components/engram/inject.go	ensureAntigravitySettings
 internal/components/engram/inject.go	isAbsoluteEngramPath
 internal/components/engram/verify.go	CountVersionCallsForTest
 internal/components/engram/verify.go	SetVersionForTest
+internal/components/filemerge/section.go	ExtractManagedSection
 internal/components/filemerge/toml.go	RemoveTOMLTableKeys
 internal/components/filemerge/toml.go	UpsertCodexMCPServerBlock
 internal/components/gga/config.go	InjectionResult.FilesWritten
@@ -75,6 +78,11 @@ internal/components/sdd/inject.go	injectClaudeModelAssignments
 internal/components/sdd/inject.go	resolveClaudeModelAlias
 internal/components/sdd/read_assignments.go	ReadCurrentProfiles
 internal/components/telemetryruntime/managed.go	Reconcile
+internal/components/theme/inject.go	mergeJSONFile
+internal/dashboard/server.go	Server.Port
+internal/dashboard/server.go	Server.Router
+internal/handoff/mirror.go	ToEngramPayload
+internal/hub/init.go	buildAxiomYaml
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv
@@ -155,6 +163,8 @@ internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.Storage
 internal/reviewtransaction/repository_locator.go	ResolveHistoricalReviewRepositoryContextBinding
 internal/reviewtransaction/repository_locator.go	locatorPathStrictlyWithin
 internal/reviewtransaction/repository_locator.go	resolveReviewRepositoryDirectory
+internal/reviewtransaction/review_offer.go	OfferReviewAfterVerify
+internal/reviewtransaction/review_offer.go	readGlobalRDDModeForOffer
 internal/reviewtransaction/risk.go	deriveSemanticRiskSignals
 internal/reviewtransaction/snapshot.go	sanitizedGitEnvironment
 internal/reviewtransaction/snapshot.go	snapshotIdentity
@@ -219,6 +229,7 @@ internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutati
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
 internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
 internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
+internal/sddstatus/review_door.go	reviewOfferForVerify
 internal/sddstatus/status.go	RenderNativePhasePrompt
 internal/sddstatus/status.go	blockerReasons.forRoute
 internal/sddstatus/status.go	dependencyForPhase
@@ -230,6 +241,7 @@ internal/sddstatus/status.go	reportLineHasPassSignal
 internal/sddstatus/status.go	reportTextIsClearlyPassing
 internal/sddstatus/status.go	reportValueIsBenign
 internal/sddstatus/status.go	stripMarkdownSignal
+internal/semantic/detector.go	NewDetectorWithCustomHome
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew

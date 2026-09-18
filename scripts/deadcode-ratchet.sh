@@ -30,7 +30,15 @@ export LC_ALL=C
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 baseline="${repo_root}/.deadcode-baseline.txt"
-target="${DEADCODE_TARGET:-./cmd/gentle-ai}"
+# The canonical binary, not ./cmd/gentle-ai. That one is a deprecation shim
+# whose main() only forwards to app.RunArgs, so reachability measured from it
+# is reachability of the shim's forwarding path -- every fork-owned command
+# wired into cmd/axiom looks dead. Measured: 350 dead functions from the shim
+# against 277 from the canonical binary, and the 73 difference is pure
+# measurement artifact. The inherited baseline was generated upstream, where
+# ./cmd/gentle-ai WAS the product; nobody regenerated it here because this step
+# sat behind a benchmark step that sat behind a failing `go test`.
+target="${DEADCODE_TARGET:-./cmd/axiom}"
 tool="golang.org/x/tools/cmd/deadcode@v0.30.0"
 
 cd "${repo_root}"

@@ -216,6 +216,25 @@ El comentario de esa lista dice que contar una superficie ausente como fallo de 
 
 > Tocar `IsUnsupported` puede reclasificar bloques de cualquier journey, así que no basta con volver a medir `j97`: se revalidó el corpus completo (70/0/0, idéntico) y los tests unitarios de `bench`.
 
+#### Grupo G — el trinquete de código muerto, cuarta capa de la misma cebolla
+
+Con el bench en verde, el job `Unit Tests` avanza un paso más y descubre otro que **nunca se había ejecutado en este fork**: `go test` tapaba al bench, el bench tapaba al trinquete.
+
+`scripts/deadcode-ratchet.sh` analizaba `./cmd/gentle-ai`. **Cuarta referencia obsoleta al shim**, tras las líneas 85 y 142 del CI y el propio despacho de `cmd/axiom`. El shim solo reenvía a `app.RunArgs`, así que medir la alcanzabilidad desde él es medir la del reenvío: todo lo que el fork cableó en `cmd/axiom` parece muerto.
+
+Y la baseline se había generado **upstream** —sus tres últimos commits son anteriores a la bifurcación `266574b0`—, donde `./cmd/gentle-ai` sí era el producto.
+
+Medido antes de tocar nada:
+
+| Objetivo | Muertas | Nuevas vs. baseline |
+|---|---|---|
+| `./cmd/gentle-ai` (shim) | 350 | **85** |
+| `./cmd/axiom` (canónico) | 277 | **12** |
+
+**Cero entradas de la baseline dejan de estar muertas bajo el canónico.** Eso decide el cambio: la baseline heredada es un subconjunto estricto, así que apuntar al binario correcto **no afloja el trinquete**, solo deja de medir el programa equivocado. Las 73 de diferencia eran artefacto puro de medición.
+
+De las 12 restantes, tres son el residuo de INC-18 —`OfferReviewAfterVerify`, `readGlobalRDDModeForOffer`, `reviewOfferForVerify`—, que es exactamente lo que la enmienda del grupo A afirma por escrito: «`OfferReviewAfterVerify` retains no production caller». El trinquete lo confirma por su cuenta, desde el grafo de llamadas y sin haber leído la especificación. **Pertenecen al alcance destructivo de INC-20, no a este PR.** Se congelan con su motivo, que es la salida que el propio script prescribe.
+
 ### Fase 2 — Corrección, una causa por tarea
 
 Las 10 journeys y su paso fallido, tal como los reporta el CI de Linux:
