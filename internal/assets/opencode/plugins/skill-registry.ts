@@ -49,13 +49,22 @@ async function isProjectRoot(cwd: string): Promise<boolean> {
 }
 
 /**
- * Sanitize a working-directory string for inclusion in a shell example and
- * for safe single-line logging. `JSON.stringify` produces a POSIX-safe
- * double-quoted form (escapes control characters and shell metacharacters)
- * and never embeds a literal newline.
+ * Sanitize a working-directory string for safe single-line logging.
+ * `JSON.stringify` escapes control characters and never embeds a literal
+ * newline, which keeps every emitted line on one row.
  */
 function quoteCwd(cwd: string): string {
   return JSON.stringify(cwd)
+}
+
+/**
+ * Encode a working-directory string as a POSIX-shell literal argument.
+ * JSON.stringify is not POSIX-safe (double quotes leave $() and
+ * backtick substitution live); single quotes escape everything except
+ * themselves, which we encode via the canonical '\'' close/escape/open.
+ */
+function quoteCwdForShell(cwd: string): string {
+  return `'${cwd.replace(/'/g, "'\\''")}'`
 }
 
 function singleLine(s: string): string {
@@ -87,7 +96,7 @@ export function describeRefreshFailure(err: unknown, cwd: string): string {
     return singleLine(
       `[skill-registry] gentle-ai executable was not found on the PATH inherited by the OpenCode process; ` +
       `skipping the skill-registry refresh for ${cwdExample}. ` +
-      `Run \`gentle-ai skill-registry refresh --cwd ${cwdExample}\` from a shell where gentle-ai is installed, ` +
+      `Run \`gentle-ai skill-registry refresh --cwd ${quoteCwdForShell(cwd)}\` from a shell where gentle-ai is installed, ` +
       `then re-launch OpenCode in a session that inherits that PATH. ` +
       `Plugin stays best-effort and does not block startup.`,
     )
@@ -108,8 +117,19 @@ export function describeRefreshFailure(err: unknown, cwd: string): string {
 }
 
 export const SkillRegistryPlugin: Plugin = async (input) => {
+  // Resolve cwd in outer scope so the rejection handler below cannot
+  // throw ReferenceError when refreshSkillRegistry aborts before its
+  // own `cwd` is bound. A throwing worktree getter must also be caught
+  // here, otherwise it propagates synchronously out of the plugin.
+  let pluginCwd = "<unknown>"
+  try {
+    pluginCwd = input.worktree || input.directory || process.cwd()
+  } catch {
+    // cwd selection itself failed; keep "<unknown>".
+  }
+
   async function refreshSkillRegistry() {
-    const cwd = input.worktree || input.directory || process.cwd()
+    const cwd = pluginCwd
 
     if (!(await isProjectRoot(cwd))) {
       // Startup hooks must not scream: a non-project directory is a normal
@@ -131,9 +151,8 @@ export const SkillRegistryPlugin: Plugin = async (input) => {
 
   // Don't await — keep OpenCode startup responsive. The command is
   // fingerprint-cached, so normal startup stays cheap.
-  const outerCwd = input.worktree || input.directory || process.cwd()
   refreshSkillRegistry().catch((err) => {
-    console.error(describeRefreshFailure(err, outerCwd))
+    console.error(describeRefreshFailure(err, pluginCwd))
   })
 
   return {}
