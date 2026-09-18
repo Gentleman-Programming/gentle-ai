@@ -67,7 +67,7 @@ func TestRejectedTargetedValidatorCaptureRoutesEscalatedRecovery(t *testing.T) {
 		wantEscalation         bool
 	}{
 		{name: "v1", contract: ReviewIntegrationContractV1, schema: ReviewIntegrationStatusSchemaV2},
-		{name: "v2", contract: ReviewIntegrationContractV2, schema: ReviewIntegrationStatusSchemaV7, wantEscalation: true},
+		{name: "v2", contract: ReviewIntegrationContractV2, schema: ReviewIntegrationStatusSchemaV8, wantEscalation: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -91,7 +91,7 @@ func TestRejectedTargetedValidatorCaptureRoutesEscalatedRecovery(t *testing.T) {
 				t.Fatalf("status escalation = %#v, want present=%t", status.Escalation, tt.wantEscalation)
 			}
 			if tt.wantEscalation {
-				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), output.Bytes())
+				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v8.schema.json"), output.Bytes())
 			}
 		})
 	}

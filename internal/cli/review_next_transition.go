@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
@@ -516,7 +518,7 @@ func reviewRootActionForTransition(action reviewtransaction.TargetStatusAction, 
 
 func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, unachievable []reviewtransaction.CompactUnachievableLensAttempt, runtime ...model.AgentID) ReviewNextTransition {
 	providerRuntime := model.AgentID("")
-	if len(runtime) > 0 && (reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {
+	if len(runtime) > 0 && (runtime[0] == model.AgentOpenCode || reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {
 		providerRuntime = runtime[0]
 	}
 	captured := make(map[int]bool, len(artifacts))
@@ -546,7 +548,15 @@ func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLen
 	inputs := make([]ReviewTransitionInput, 0)
 	for order, lens := range selectedLenses {
 		if !captured[order] {
-			inputs = append(inputs, reviewCaptureInput(binding, lens, order, context, providerRuntime))
+			capture := reviewCaptureInput(binding, lens, order, context, providerRuntime)
+			if providerRuntime == model.AgentOpenCode {
+				task, err := newReviewLensProviderTask(capture.Arguments, capture.ArtifactSubject)
+				if err != nil {
+					return reviewStopTransition("captured_artifacts_unverifiable")
+				}
+				capture.ProviderTask = &task
+			}
+			inputs = append(inputs, capture)
 		}
 	}
 	if len(inputs) == 0 {
@@ -693,6 +703,35 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 		}
 	}
 	return input
+}
+
+// newReviewLensProviderTask produces the exact opaque Task input OpenCode V1
+// relays. The prompt is the same strict binding line the native transport
+// already admits, but Go now owns its JSON bytes instead of asking the model
+// to rename and serialize STATUS argument rows.
+func newReviewLensProviderTask(arguments []ReviewTransitionArgument, subject *reviewtransaction.ArtifactSubject) (ReviewProviderTask, error) {
+	values, err := reviewTransitionArgumentMap(arguments)
+	if err != nil || subject == nil || len(values) != 7 ||
+		values["lineage"] != subject.LineageID || values["expected-revision"] != subject.AuthorityRevision ||
+		values["target"] != subject.TargetIdentity || values["lens"] != subject.Lens || values["subject-hash"] != subject.SubjectHash ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(values["repository-context"]) != nil {
+		return ReviewProviderTask{}, errors.New("lens provider task binding is incomplete") // refusal:by-design world-action: only a complete native capture input may issue an OpenCode lens task
+	}
+	order, err := strconv.Atoi(values["order"])
+	if err != nil || order != subject.SelectedOrder {
+		return ReviewProviderTask{}, errors.New("lens provider task selected order is invalid") // refusal:by-design world-action: the opaque task must bind the exact selected slot
+	}
+	payload, err := json.Marshal(reviewLensContextBinding{
+		Lineage: values["lineage"], Target: values["target"], Lens: values["lens"], Order: order,
+		Revision: values["expected-revision"], RepositoryContext: values["repository-context"], SubjectHash: subject.SubjectHash,
+	})
+	if err != nil {
+		return ReviewProviderTask{}, err
+	}
+	return ReviewProviderTask{
+		Agent: values["lens"], Role: string(reviewerprovider.RoleLens),
+		Prompt: reviewLensContextBindingHeader + " " + string(payload),
+	}, nil
 }
 
 type reviewNextTransitionInput struct {
