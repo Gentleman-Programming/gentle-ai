@@ -238,6 +238,81 @@ assert_file_not_contains() {
     fi
 }
 
+# assert_file_matches FILE ERE LABEL
+# Like assert_file_contains, but ERE instead of BRE, so an assertion can accept
+# a set of spellings with an alternation. Use it where the fork renamed a
+# managed identifier and upstream still ships the old name.
+assert_file_matches() {
+    local file="$1"
+    local pattern="$2"
+    local label="${3:-$file matches '$pattern'}"
+    if [ ! -f "$file" ]; then
+        log_fail "Cannot check content — file not found: $file"
+        return 1
+    fi
+    if grep -Eq "$pattern" "$file"; then
+        log_pass "$label"
+        return 0
+    else
+        log_fail "Pattern NOT matched: '$pattern' in $file"
+        return 1
+    fi
+}
+
+# The fork renamed the managed section-marker namespace from `gentle-ai:` to
+# `axiom:`. Upstream still ships `gentle-ai:`, so marker assertions accept
+# either namespace and absorbing upstream does not reopen this contract.
+#
+# Use these instead of assert_file_contains with a hardcoded namespace: a
+# negative assertion written against one namespace alone passes vacuously once
+# the other namespace ships, which is a false green, not a check.
+#
+# SECTION_ID is the bare section id (e.g. `persona`), never the full marker.
+managed_marker_pattern() {
+    printf '<!-- /?(axiom|gentle-ai):%s -->' "$1"
+}
+
+# assert_file_contains_marker FILE SECTION_ID LABEL
+assert_file_contains_marker() {
+    local file="$1"
+    local section_id="$2"
+    local label="${3:-$file contains managed marker '$section_id'}"
+    local pattern
+    pattern="$(managed_marker_pattern "$section_id")"
+    if [ ! -f "$file" ]; then
+        log_fail "Cannot check content — file not found: $file"
+        return 1
+    fi
+    if grep -Eq "$pattern" "$file"; then
+        log_pass "$label"
+        return 0
+    else
+        log_fail "Managed marker NOT found: '$pattern' in $file"
+        return 1
+    fi
+}
+
+# assert_file_not_contains_marker FILE SECTION_ID LABEL
+assert_file_not_contains_marker() {
+    local file="$1"
+    local section_id="$2"
+    local label="${3:-$file does NOT contain managed marker '$section_id'}"
+    local pattern
+    pattern="$(managed_marker_pattern "$section_id")"
+    if [ ! -f "$file" ]; then
+        # File doesn't exist = marker not present. That's a pass.
+        log_pass "$label (file doesn't exist)"
+        return 0
+    fi
+    if grep -Eq "$pattern" "$file"; then
+        log_fail "Managed marker FOUND (unexpected): '$pattern' in $file"
+        return 1
+    else
+        log_pass "$label"
+        return 0
+    fi
+}
+
 # assert_file_size_min FILE BYTES LABEL
 # Checks that FILE is at least BYTES bytes.
 assert_file_size_min() {
@@ -390,11 +465,16 @@ assert_no_duplicate_section() {
         log_fail "Cannot check sections — file not found: $file"
         return 1
     fi
-    local marker="<!-- gentle-ai:${section_id} -->"
+    # Namespace-agnostic: the fork renamed the marker namespace to `axiom:` and
+    # upstream still ships `gentle-ai:`. Counting a single namespace would
+    # report zero here and, worse, would miss a genuine duplicate written in
+    # the other one.
+    local marker
+    marker="<!-- (axiom|gentle-ai):${section_id} -->"
     local count
     # `grep -c` prints "0" AND exits 1 on zero matches, so `|| echo 0` would
     # yield the two-line string "0\n0" and break the numeric comparisons below.
-    count=$(grep -c "$marker" "$file" 2>/dev/null || true)
+    count=$(grep -Ec "$marker" "$file" 2>/dev/null || true)
     count=${count:-0}
     if [ "$count" -eq 1 ]; then
         log_pass "$label"

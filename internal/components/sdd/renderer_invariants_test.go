@@ -10,9 +10,23 @@ import (
 )
 
 type orchestratorContractSection struct {
-	name      string
-	marker    string
+	name   string
+	marker string
+	// A sentinel holding "|" accepts any of its alternatives. The fork renamed
+	// the binary and flattened the verb, so a shipped invocation can read
+	// either `axiom sdd attempt acquire` or `gentle-ai sdd-attempt acquire`;
+	// absorbing upstream must not reopen this contract. No sentinel carries a
+	// literal "|", so the separator is unambiguous.
 	sentinels []string
+}
+
+func sectionBodyHasSentinel(sectionBody, sentinel string) bool {
+	for _, alternative := range strings.Split(sentinel, "|") {
+		if strings.Contains(sectionBody, alternative) {
+			return true
+		}
+	}
+	return false
 }
 
 // These are stable contract boundaries, not a snapshot of prompt prose. They
@@ -100,8 +114,8 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 		marker: "### Native Runtime Attempt Authority (MANDATORY)",
 		sentinels: []string{
 			"provider-owned Git-common-dir runtime ledger",
-			"sdd-attempt acquire",
-			"sdd-attempt settle",
+			"sdd attempt acquire|sdd-attempt acquire",
+			"sdd attempt settle|sdd-attempt settle",
 		},
 	},
 	{
@@ -187,7 +201,7 @@ func assertCurrentOpenCodeOrchestratorContract(t *testing.T, label string, conte
 					sentinel = strings.ReplaceAll(sentinel, phase, phase+"-"+profileName)
 				}
 			}
-			if !strings.Contains(sectionBody, sentinel) {
+			if !sectionBodyHasSentinel(sectionBody, sentinel) {
 				t.Errorf("%s %s section lost sentinel %q", label, section.name, sentinel)
 			}
 		}

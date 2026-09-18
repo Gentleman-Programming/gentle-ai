@@ -519,7 +519,18 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
 	// INC-10: Language Domain Contract updated for Axiom Spanish SDD artifacts. Deliberate, not drift.
 	// INC-11: Orchestrator agent renamed to axiom-orchestrator. Deliberate, not drift.
-	const want = "fdee23b479f8b1dd40590976bb2795e66f4d1bc95fb77a8265b028dc84b99219"
+	// The baseline is rederived for two deliberate causes, both audited against
+	// the assets that feed this hash (internal/assets/opencode/ and
+	// internal/assets/skills/_shared/) between efbf67f2, which set the previous
+	// baseline, and here:
+	//   1. The gentle-ai -> axiom rename reaching the shipped invocations
+	//      (`axiom sdd status|continue|attempt|task-result`), the ".axiom"
+	//      state directory, and AXIOM_TELEMETRY, which keeps GENTLE_AI_TELEMETRY
+	//      as a fallback.
+	//   2. INC-19 adds the "Flujo Dual: ODD y SDD" section to
+	//      internal/assets/opencode/persona-axiom.md, which Kilocode embeds.
+	// No other content moved. Deliberate, not drift.
+	const want = "03fe74e1aaf2d2e445f816e304b89e189a03fe23e4a00e95d36f19ed5ed23f86"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

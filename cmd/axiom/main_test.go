@@ -275,7 +275,7 @@ func TestRunReviewHelp(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			exitCode := runReview(tc.args, &stdout, &stderr)
+			exitCode := runReview(tc.args, &stdout, &stderr, false)
 			if exitCode != 0 {
 				t.Fatalf("se esperaba código 0 con %v, se obtuvo %d", tc.args, exitCode)
 			}
@@ -295,7 +295,7 @@ func TestRunReviewHelp(t *testing.T) {
 
 func TestRunReviewModeStatus(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	exitCode := runReview([]string{"mode", "status"}, &stdout, &stderr)
+	exitCode := runReview([]string{"mode", "status"}, &stdout, &stderr, false)
 	if exitCode != 0 {
 		t.Fatalf("se esperaba código 0 al consultar review mode status, se obtuvo %d:\nstderr: %s", exitCode, stderr.String())
 	}

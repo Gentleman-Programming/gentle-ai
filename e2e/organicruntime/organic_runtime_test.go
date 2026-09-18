@@ -4031,24 +4031,56 @@ func buildOrganicBinary(workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := "gentle-ai"
+	// Build the canonical binary, not ./cmd/gentle-ai. That one is a
+	// deprecation shim whose whole job is to print a notice to stderr on every
+	// invocation, which is correct for a human on the retired name and fatal
+	// here: several journeys assert that a silent transition writes nothing to
+	// stderr, and the shim's notice alone would fail them.
+	name := "axiom"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
 	path := filepath.Join(workspace, name)
 	ctx, cancel := context.WithTimeout(context.Background(), organicSetupTimeout)
 	defer cancel()
-	command := organicCommandContext(ctx, "go", "build", "-trimpath", "-o", path, "./cmd/gentle-ai")
+	command := organicCommandContext(ctx, "go", "build", "-trimpath", "-o", path, "./cmd/axiom")
 	command.Dir = moduleRoot
 	command.Env = os.Environ()
 	if output, err := command.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("build the gentle-ai test binary: %w\n%s", err, output)
+		return "", fmt.Errorf("build the axiom test binary: %w\n%s", err, output)
 	}
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", fmt.Errorf("built gentle-ai binary %q is unusable: %v", path, err)
+		return "", fmt.Errorf("built axiom binary %q is unusable: %v", path, err)
+	}
+	// Publish the same canonical binary under the retired name too. The
+	// harness puts this directory on PATH, and the shipped reviewer assets
+	// still spell the invocation `gentle-ai`, so an agent-launched reviewer
+	// resolves that name from PATH and fails with "Executable not found" when
+	// only `axiom` exists. Copying rather than building ./cmd/gentle-ai keeps
+	// both names on the canonical dispatcher, without the shim's stderr notice.
+	if err := copyOrganicBinary(path, filepath.Join(workspace, legacyOrganicBinaryName())); err != nil {
+		return "", err
 	}
 	return path, nil
+}
+
+func legacyOrganicBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "gentle-ai.exe"
+	}
+	return "gentle-ai"
+}
+
+func copyOrganicBinary(source, destination string) error {
+	payload, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read built binary %q: %w", source, err)
+	}
+	if err := os.WriteFile(destination, payload, 0o755); err != nil {
+		return fmt.Errorf("publish binary under the retired name %q: %w", destination, err)
+	}
+	return nil
 }
 
 func organicLines(prefix string, count int) string {

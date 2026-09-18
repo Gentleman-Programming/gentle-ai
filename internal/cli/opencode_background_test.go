@@ -181,8 +181,11 @@ func TestOpenCodeBackgroundStateIsOptionalAndLossless(t *testing.T) {
 		t.Fatalf("state round-trip = %#v, error = %v, want %#v", got, err, want)
 	}
 
+	// "legacy" here is the older state *schema* (no background_intent), not an
+	// older directory. Derive the directory from state.Path so the rename of
+	// the state directory cannot desynchronize the two again.
 	legacy := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(legacy, ".gentle-ai"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(state.Path(legacy)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(state.Path(legacy), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {

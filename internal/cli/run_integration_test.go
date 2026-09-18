@@ -112,7 +112,13 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 		t.Fatalf("pre-install config read error = %v, want absent", err)
 	}
 	statePath := state.Path(home)
+	// Deliberately off the state directory: the point is that state.json is a
+	// symlink pointing somewhere else. Since the rename of the state directory
+	// to .axiom, this target's parent no longer exists incidentally, so create it.
 	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Rename(statePath, target); err != nil {
 		t.Fatal(err)
 	}
@@ -2049,14 +2055,17 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 			orchestratorCount, content)
 	}
 
-	// 3. No duplicate gentle-ai marker blocks — each section's open marker
-	// must appear exactly once.
+	// 3. No duplicate managed marker blocks — each section's open marker must
+	// appear exactly once. The fork renamed the namespace to `axiom:` and
+	// upstream still ships `gentle-ai:`, so count both spellings: matching one
+	// alone would report zero and hide a genuine duplicate in the other.
 	for _, sectionID := range []string{"sdd-orchestrator", "engram-protocol"} {
-		openMarker := "<!-- gentle-ai:" + sectionID + " -->"
-		count := strings.Count(content, openMarker)
+		axiomMarker := "<!-- axiom:" + sectionID + " -->"
+		legacyMarker := "<!-- gentle-ai:" + sectionID + " -->"
+		count := strings.Count(content, axiomMarker) + strings.Count(content, legacyMarker)
 		if count != 1 {
-			t.Errorf("CLAUDE.md contains %d occurrences of marker %q, want exactly 1:\n%s",
-				count, openMarker, content)
+			t.Errorf("CLAUDE.md contains %d occurrences of marker %q/%q, want exactly 1:\n%s",
+				count, axiomMarker, legacyMarker, content)
 		}
 	}
 
@@ -2388,22 +2397,34 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 	// AFTER engram had already injected the engram-protocol marker, destroying
 	// the engram section. We verify persona + engram coexist.
 
-	// Engram protocol section must be present
-	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
+	// Engram protocol section must be present. The fork renamed the marker
+	// namespace to `axiom:` and upstream still ships `gentle-ai:`, so accept
+	// either spelling.
+	hasOpenMarker := strings.Contains(text, "<!-- axiom:engram-protocol -->") ||
+		strings.Contains(text, "<!-- gentle-ai:engram-protocol -->")
+	if !hasOpenMarker {
 		t.Error("AGENTS.md missing engram-protocol open marker (issue #121 regression: persona may have overwritten engram section)")
 	}
-	if !strings.Contains(text, "<!-- /gentle-ai:engram-protocol -->") {
+	hasCloseMarker := strings.Contains(text, "<!-- /axiom:engram-protocol -->") ||
+		strings.Contains(text, "<!-- /gentle-ai:engram-protocol -->")
+	if !hasCloseMarker {
 		t.Error("AGENTS.md missing engram-protocol close marker")
 	}
 
-	// Engram section must not be duplicated
-	marker := "<!-- gentle-ai:engram-protocol -->"
-	if count := strings.Count(text, marker); count != 1 {
-		t.Errorf("AGENTS.md contains %d occurrences of %q, want exactly 1 (no duplicates)", count, marker)
+	// Engram section must not be duplicated. Count both spellings: matching one
+	// alone would report zero and hide a genuine duplicate in the other.
+	axiomMarker := "<!-- axiom:engram-protocol -->"
+	legacyMarker := "<!-- gentle-ai:engram-protocol -->"
+	if count := strings.Count(text, axiomMarker) + strings.Count(text, legacyMarker); count != 1 {
+		t.Errorf("AGENTS.md contains %d occurrences of %q/%q, want exactly 1 (no duplicates)", count, axiomMarker, legacyMarker)
 	}
 
-	// AGENTS.md must NOT have sdd-orchestrator markers — OpenCode uses opencode.json overlay
-	if strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+	// AGENTS.md must NOT have sdd-orchestrator markers — OpenCode uses
+	// opencode.json overlay. Check both spellings: matching only the retired
+	// `gentle-ai:` namespace would make this pass vacuously, which is a false
+	// green rather than a check.
+	if strings.Contains(text, "<!-- axiom:sdd-orchestrator -->") ||
+		strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
 		t.Error("AGENTS.md should NOT have sdd-orchestrator marker — OpenCode uses opencode.json agent overlay")
 	}
 

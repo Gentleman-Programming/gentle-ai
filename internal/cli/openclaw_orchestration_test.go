@@ -62,6 +62,7 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 				agents:       []model.AgentID{model.AgentOpenClaw},
 				selection:    model.Selection{Persona: model.PersonaGentleman},
 				profile:      system.PlatformProfile{PackageManager: "brew"},
+				scope:        ScopeWorkspace,
 			}
 
 			if err := step.Run(); err != nil {
@@ -88,7 +89,7 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 	}
 }
 
-func TestComponentSyncStepOpenClawWorkspaceScopedInjections(t *testing.T) {
+func TestComponentSyncStepOpenClawGlobalInjections(t *testing.T) {
 	tests := []struct {
 		name      string
 		component model.ComponentID
@@ -96,19 +97,19 @@ func TestComponentSyncStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 		marker    string
 	}{
 		{
-			name:      "engram sync writes protocol to workspace AGENTS",
+			name:      "engram sync writes protocol to home AGENTS",
 			component: model.ComponentEngram,
 			fileName:  "AGENTS.md",
 			marker:    "<!-- gentle-ai:engram-protocol -->",
 		},
 		{
-			name:      "persona sync writes soul to workspace",
+			name:      "persona sync writes soul to home",
 			component: model.ComponentPersona,
 			fileName:  "SOUL.md",
 			marker:    "<!-- gentle-ai:persona -->",
 		},
 		{
-			name:      "sdd sync writes protocol to workspace AGENTS",
+			name:      "sdd sync writes protocol to home AGENTS",
 			component: model.ComponentSDD,
 			fileName:  "AGENTS.md",
 			marker:    "<!-- gentle-ai:sdd-orchestrator -->",
@@ -138,15 +139,15 @@ func TestComponentSyncStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 
 			workspaceFile := filepath.Join(workspace, tt.fileName)
 			homeFile := filepath.Join(home, tt.fileName)
-			body, err := os.ReadFile(workspaceFile)
+			body, err := os.ReadFile(homeFile)
 			if err != nil {
-				t.Fatalf("ReadFile(%q): %v", workspaceFile, err)
+				t.Fatalf("ReadFile(%q): %v", homeFile, err)
 			}
 			if !containsAnyOpenClawMarker(string(body), tt.marker) {
-				t.Fatalf("workspace file missing marker %q; got:\n%s", tt.marker, string(body))
+				t.Fatalf("home file missing marker %q", tt.marker)
 			}
-			if _, err := os.Stat(homeFile); !os.IsNotExist(err) {
-				t.Fatalf("OpenClaw sync must not write %q; stat err=%v", homeFile, err)
+			if _, err := os.Stat(workspaceFile); !os.IsNotExist(err) {
+				t.Fatalf("OpenClaw sync must not write %q; stat err=%v", workspaceFile, err)
 			}
 			if tt.component == model.ComponentEngram {
 				assertOpenClawEngramMCPInGlobalConfig(t, home)
@@ -156,72 +157,163 @@ func TestComponentSyncStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 	}
 }
 
-func TestInstallRuntimeOpenClawUsesConfiguredActiveWorkspace(t *testing.T) {
-	home := t.TempDir()
-	activeWorkspace := t.TempDir()
-	currentProject := t.TempDir()
-	writeOpenClawConfigWithWorkspace(t, home, activeWorkspace)
-	t.Chdir(currentProject)
-
-	restoreLookPath := cmdLookPath
-	t.Cleanup(func() { cmdLookPath = restoreLookPath })
-	cmdLookPath = func(name string) (string, error) {
-		return filepath.Join(home, "bin", name), nil
-	}
-
-	selection := model.Selection{
-		Agents:     []model.AgentID{model.AgentOpenClaw},
-		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD, model.ComponentEngram},
-		Persona:    model.PersonaGentleman,
-		StrictTDD:  true,
-	}
-	resolved := planner.ResolvedPlan{
-		Agents:            []model.AgentID{model.AgentOpenClaw},
-		OrderedComponents: selection.Components,
-	}
-	rt, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{PackageManager: "brew"})
-	if err != nil {
-		t.Fatalf("newInstallRuntime() error = %v", err)
-	}
-
-	for _, step := range rt.stagePlan().Apply {
-		if err := step.Run(); err != nil {
-			t.Fatalf("Run(%s) error = %v", step.ID(), err)
-		}
-	}
-
-	assertOpenClawInstructionsInWorkspace(t, activeWorkspace)
-	assertNoOpenClawInstructionsInCurrentProject(t, currentProject)
+func TestGlobalInstallKeepsAmbientProjectUnchanged(t *testing.T) {
+	testGlobalArtifactRoots(t, false)
 }
 
-func TestSyncRuntimeOpenClawUsesConfiguredActiveWorkspace(t *testing.T) {
-	home := t.TempDir()
-	activeWorkspace := t.TempDir()
-	currentProject := t.TempDir()
-	writeOpenClawConfigWithWorkspace(t, home, activeWorkspace)
-	t.Chdir(currentProject)
-
-	selection := model.Selection{
-		Agents:     []model.AgentID{model.AgentOpenClaw},
-		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD, model.ComponentEngram},
-		Persona:    model.PersonaGentleman,
-		StrictTDD:  true,
-	}
-	rt, err := newSyncRuntime(home, selection)
-	if err != nil {
-		t.Fatalf("newSyncRuntime() error = %v", err)
-	}
-	for _, step := range rt.stagePlan().Apply {
-		if err := step.Run(); err != nil {
-			t.Fatalf("Run(%s) error = %v", step.ID(), err)
-		}
-	}
-
-	assertOpenClawInstructionsInWorkspace(t, activeWorkspace)
-	assertNoOpenClawInstructionsInCurrentProject(t, currentProject)
+func TestGlobalSyncKeepsAmbientProjectUnchanged(t *testing.T) {
+	testGlobalArtifactRoots(t, true)
 }
 
-func TestRunSyncOpenClawSkillsUseConfiguredActiveWorkspace(t *testing.T) {
+func testGlobalArtifactRoots(t *testing.T, sync bool) {
+	t.Helper()
+	for _, config := range []string{"missing", "malformed", "empty", "configured"} {
+		t.Run(config, func(t *testing.T) {
+			home, workspace, project := t.TempDir(), t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			t.Chdir(project)
+			for _, root := range []string{project, workspace} {
+				mustWriteFile(t, filepath.Join(root, "go.mod"), []byte("module untouched\n"))
+			}
+			// Malformed runtime configuration must not affect unrelated artifact routing.
+			if config == "configured" {
+				writeOpenClawConfigWithWorkspace(t, home, workspace)
+			} else if config != "missing" {
+				body := `{}`
+				if config == "malformed" {
+					body = `{`
+				}
+				mustWriteFile(t, filepath.Join(home, ".openclaw", "openclaw.json"), []byte(body))
+			}
+			selection := model.Selection{
+				Agents:     []model.AgentID{model.AgentOpenClaw, model.AgentWindsurf, model.AgentPi},
+				Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD, model.ComponentSkills},
+				Skills:     []model.SkillID{model.SkillGoTesting},
+				Persona:    model.PersonaGentleman, StrictTDD: true,
+			}
+			if config != "malformed" {
+				selection.Components = append(selection.Components, model.ComponentEngram, model.ComponentContext7)
+				previous := cmdLookPath
+				t.Cleanup(func() { cmdLookPath = previous })
+				cmdLookPath = func(name string) (string, error) { return filepath.Join(home, "bin", name), nil }
+			}
+			if sync {
+				rt, err := newSyncRuntime(home, selection)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, step := range rt.stagePlan().Apply {
+					if err := step.Run(); err != nil {
+						t.Fatalf("%s: %v", step.ID(), err)
+					}
+				}
+			} else {
+				runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+			}
+			if config != "malformed" {
+				assertOpenClawEngramMCPInGlobalConfig(t, home)
+				assertOpenClawInstructionsInWorkspace(t, home)
+				if _, err := os.Stat(filepath.Join(home, ".codeium", "windsurf", "mcp_config.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if config == "configured" {
+				root := readJSONMap(t, filepath.Join(home, ".openclaw", "openclaw.json"))
+				defaults := objectAtOpenClawTest(t, objectAtOpenClawTest(t, root, "agents"), "defaults")
+				if defaults["workspace"] != workspace {
+					t.Fatalf("runtime workspace changed: %v", defaults)
+				}
+			}
+			for _, root := range []string{project, workspace} {
+				entries, err := os.ReadDir(root)
+				if err != nil || len(entries) != 1 || entries[0].Name() != "go.mod" {
+					t.Errorf("ambient root changed: %s: %v (%v)", root, entries, err)
+				}
+				if got := readTextFile(t, filepath.Join(root, "go.mod")); got != "module untouched\n" {
+					t.Errorf("ambient content changed: %q", got)
+				}
+			}
+			for _, path := range []string{"AGENTS.md", "SOUL.md", ".openclaw/skills/go-testing/SKILL.md", ".codeium/windsurf/memories/global_rules.md", ".codeium/windsurf/skills/go-testing/SKILL.md", ".pi/gentle-ai/persona.json"} {
+				if _, err := os.Stat(filepath.Join(home, path)); err != nil {
+					t.Errorf("missing global artifact %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestExplicitWorkspaceInstallOverridesOpenClawConfig(t *testing.T) {
+	home, configured, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(workspace)
+	mustWriteFile(t, filepath.Join(workspace, "go.mod"), []byte("module untouched\n"))
+	writeOpenClawConfigWithWorkspace(t, home, configured)
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenClaw, model.AgentWindsurf, model.AgentPi},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD, model.ComponentSkills},
+		Skills:     []model.SkillID{model.SkillGoTesting}, Persona: model.PersonaGentleman,
+	}
+	rt, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}, system.PlatformProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runInstallInjectionSteps(t, rt)
+	for _, path := range []string{"AGENTS.md", "SOUL.md", ".openclaw/skills/go-testing/SKILL.md", ".windsurf/workflows/sdd-new.md", ".pi/gentle-ai/persona.json"} {
+		if _, err := os.Stat(filepath.Join(workspace, path)); err != nil {
+			t.Errorf("missing workspace artifact %s: %v", path, err)
+		}
+		if _, err := os.Stat(filepath.Join(home, path)); !os.IsNotExist(err) {
+			t.Errorf("unexpected home artifact %s: %v", path, err)
+		}
+	}
+	entries, err := os.ReadDir(configured)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("configured workspace changed: %v (%v)", entries, err)
+	}
+}
+
+func TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd(t *testing.T) {
+	home, configured, project := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(project)
+	writeOpenClawConfigWithWorkspace(t, home, configured)
+	selection := model.Selection{
+		Agents:         []model.AgentID{model.AgentOpenClaw, model.AgentPi},
+		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph, model.CommunityToolRTK},
+	}
+	install := newTestInstallRuntime(t, home, selection)
+	sync, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if install.workspaceDir != cwd || sync.workspaceDir != cwd {
+		t.Fatalf("project tool cwd redirected: install=%s sync=%s want=%s", install.workspaceDir, sync.workspaceDir, cwd)
+	}
+	tools := 0
+	for _, step := range install.stagePlan().Apply {
+		switch step := step.(type) {
+		case communityToolInstallStep:
+			tools++
+			if step.workspaceDir != cwd {
+				t.Errorf("%s cwd = %s", step.ID(), step.workspaceDir)
+			}
+		case piCodeGraphReconcileStep:
+			tools++
+			if step.workspaceDir != cwd {
+				t.Errorf("Pi CodeGraph cwd = %s", step.workspaceDir)
+			}
+		}
+	}
+	if tools != 3 {
+		t.Fatalf("project tool steps = %d, want CodeGraph, RTK and Pi reconciliation", tools)
+	}
+}
+
+func TestRunSyncOpenClawSkillsUseGlobalRoot(t *testing.T) {
 	home := t.TempDir()
 	activeWorkspace := t.TempDir()
 	currentProject := t.TempDir()
@@ -248,14 +340,13 @@ func TestRunSyncOpenClawSkillsUseConfiguredActiveWorkspace(t *testing.T) {
 	}
 
 	for _, skillID := range skillIDs {
-		workspaceSkill := filepath.Join(activeWorkspace, ".openclaw", "skills", string(skillID), "SKILL.md")
-		if _, err := os.Stat(workspaceSkill); err != nil {
-			t.Errorf("configured OpenClaw workspace skill %q missing: %v", workspaceSkill, err)
-		}
-
 		homeSkill := filepath.Join(home, ".openclaw", "skills", string(skillID), "SKILL.md")
-		if _, err := os.Stat(homeSkill); !os.IsNotExist(err) {
-			t.Errorf("OpenClaw sync must not write home-root skill %q; stat err=%v", homeSkill, err)
+		if _, err := os.Stat(homeSkill); err != nil {
+			t.Errorf("global OpenClaw skill %q missing: %v", homeSkill, err)
+		}
+		workspaceSkill := filepath.Join(activeWorkspace, ".openclaw", "skills", string(skillID), "SKILL.md")
+		if _, err := os.Stat(workspaceSkill); !os.IsNotExist(err) {
+			t.Errorf("OpenClaw sync wrote configured workspace skill %q; stat err=%v", workspaceSkill, err)
 		}
 	}
 }
@@ -276,6 +367,9 @@ func quoteJSON(value string) string {
 	return `"` + strings.ReplaceAll(value, `\`, `\\`) + `"`
 }
 
+// containsAnyOpenClawMarker tolerates both the upstream "gentle-ai:" managed
+// markers and this fork's "axiom:" rebrand of the same markers, so ported
+// upstream assertions keep working regardless of which one an asset emits.
 func containsAnyOpenClawMarker(body, marker string) bool {
 	if strings.Contains(body, marker) {
 		return true
