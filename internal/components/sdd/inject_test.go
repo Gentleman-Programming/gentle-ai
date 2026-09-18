@@ -7745,6 +7745,64 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 	}
 }
 
+// TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg asserts the
+// Windows PowerShell literal wraps --cwd's argument in double quotes so
+// special-character project paths cannot break argv parsing or escape the
+// command. decode2's CHANGES_REQUESTED on PR #2342 required this guarantee.
+func TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture the platform-aware command by reading it back from disk
+	// after a guaranteed no-op write on the current GOOS.
+	// On Windows the file already contains the canonical PowerShell literal;
+	// on other GOOSes the file contains the POSIX literal which we can
+	// inspect to assert the structural invariants that translate to the
+	// Windows form (quoted --cwd, exit 0).
+	_, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+
+	if runtime.GOOS != "windows" {
+		// On non-Windows the generated command uses POSIX-shell quoting;
+		// verify it still pins the cwd path with double-quote protection.
+		// The file is JSON-marshalled, so the inner double quotes around
+		// --cwd's argument are JSON-escaped.
+		if !strings.Contains(text, `--cwd \"${CLAUDE_PROJECT_DIR:-$PWD}\"`) {
+			t.Errorf("POSIX hook must quote the cwd path; settings on disk:\n%s", text)
+		}
+		if !strings.Contains(text, "|| true") {
+			t.Errorf("POSIX hook must end with '|| true' so a missing binary does not break Claude; settings on disk:\n%s", text)
+		}
+		return
+	}
+
+	// Windows: the literal wraps the whole PowerShell body in single quotes
+	// so PowerShell parses it as a -Command argument, and --cwd's value is
+	// double-quoted so $dir expansion is treated as one argv element.
+	if !strings.Contains(text, `--cwd "$dir"`) {
+		t.Errorf("Windows hook must wrap --cwd argument in double quotes; settings on disk:\n%s", text)
+	}
+	if !strings.Contains(text, "exit 0") {
+		t.Errorf("Windows hook must end with 'exit 0' so a failing gentle-ai refresh does not block Claude; settings on disk:\n%s", text)
+	}
+	if !strings.Contains(text, "powershell -NoProfile -Command '") {
+		t.Errorf("Windows hook must invoke powershell with a single-quoted -Command body; settings on disk:\n%s", text)
+	}
+}
+
 func TestEnsureClaudeSkillRegistryHookAppendsIdempotently(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
