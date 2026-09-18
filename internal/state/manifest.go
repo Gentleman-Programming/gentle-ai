@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 )
 
 // ManifestSchema is the on-disk identity of the gentle-ai managed-assets
