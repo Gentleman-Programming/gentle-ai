@@ -32,11 +32,40 @@ func captureTransportClausesFor(agent model.AgentID) []string {
 			"never add `--input` to a returned token list",
 		}
 	}
+	if agent == model.AgentOpenCode {
+		return []string{
+			"copy `provider_task.agent` exactly as `subagent_type`",
+			"copy `provider_task.prompt` exactly as `prompt`",
+			"Do not parse, reconstruct, fence, or append text to either value",
+		}
+	}
 	return []string{
 		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
 		"one-line JSON assembled only from that input",
 		"`revision` from `expected-revision`",
 		"`subject_hash` from `artifact_subject.subject_hash`",
+	}
+}
+
+func TestOpenCodeReviewContractRelaysProviderOwnedLensTaskExactly(t *testing.T) {
+	rendered := boundedReviewContractFor(model.AgentOpenCode)
+	for _, want := range []string{
+		"copy `provider_task.agent` exactly as `subagent_type`",
+		"copy `provider_task.prompt` exactly as `prompt`",
+		"Do not parse, reconstruct, fence, or append text to either value",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("OpenCode review contract missing exact provider-task relay rule %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"one-line JSON assembled only from that input",
+		"`revision` from `expected-revision`",
+		"`subject_hash` from `artifact_subject.subject_hash`",
+	} {
+		if strings.Contains(rendered, forbidden) {
+			t.Errorf("OpenCode review contract still delegates binding construction %q", forbidden)
+		}
 	}
 }
 
@@ -394,10 +423,6 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 }
 
 func TestOpenCodeOrchestratorAddsOnlyOneConcurrentReviewerGroupContract(t *testing.T) {
-	const openCodeConcurrentReviewerGroupContract = "### OpenCode Concurrent Reviewer Group (MANDATORY)\n\n" +
-		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
-		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
-
 	const concurrentReviewerGroupContract = "### Concurrent Reviewer Group (MANDATORY)\n\n" +
 		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, launch every returned capture operation concurrently in provider order: start all without waiting between launches, then wait for every result. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
 		"Each launch runs only its own provider-issued `review.capture-result` argument tokens exactly as returned. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."

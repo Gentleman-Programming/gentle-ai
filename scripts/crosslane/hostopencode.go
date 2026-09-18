@@ -74,28 +74,13 @@ func (b *battery) runHostOpenCodeLane() {
 		b.fail(hostOpenCodeLane, "reviewer collect slot", "no review.capture-result collect input; "+firstLine(stderr))
 		return
 	}
-	args := argumentValues(input)
-
-	// The binding uses the Go-typed order (JSON number). The host-faithful
-	// string serialization is the deterministic lane's known-red
-	// (fix/opencode-host-binding); this lane isolates host-app behavior, not
-	// that serialization defect.
-	binding, err := json.Marshal(map[string]any{
-		"lineage":            args["lineage"],
-		"target":             args["target"],
-		"lens":               args["lens"],
-		"order":              0,
-		"revision":           args["expected-revision"],
-		"repository_context": args["repository-context"],
-		"subject_hash":       args["subject-hash"],
-	})
-	if err != nil {
-		b.fail(hostOpenCodeLane, "binding assembly", err.Error())
+	agent, prompt, ok := providerTask(input)
+	if !ok {
+		b.fail(hostOpenCodeLane, "reviewer collect slot", "review.capture-result input omitted its provider-owned task")
 		return
 	}
-	prompt := "GENTLE_AI_REVIEW_BINDING " + string(binding) + "\nReview this frozen candidate through the assigned lens."
 	message := "You are driving a review transport integration test. Call the task tool exactly once with " +
-		"subagent_type set to \"" + args["lens"] + "\" and the prompt argument set to EXACTLY the text between " +
+		"subagent_type set to \"" + agent + "\" and the prompt argument set to EXACTLY the text between " +
 		"the BEGIN and END marker lines below (marker lines excluded), byte for byte: preserve the JSON exactly " +
 		"as written, do not reformat, reorder, or add whitespace. After the task tool returns, reply with exactly: RELAY DONE\n" +
 		"BEGIN\n" + prompt + "\nEND\n"

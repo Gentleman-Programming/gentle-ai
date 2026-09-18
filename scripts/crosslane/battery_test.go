@@ -9,6 +9,38 @@ import (
 	"testing"
 )
 
+func TestOpenCodeHookHarnessRequiresExactProviderOwnedTask(t *testing.T) {
+	for _, forbidden := range []string{"binding_pairs", "Object.fromEntries", "config.body"} {
+		if strings.Contains(hookHarness, forbidden) {
+			t.Errorf("OpenCode hook harness still assembles a binding through %q", forbidden)
+		}
+	}
+	for _, want := range []string{"subagent: string", "prompt: string", "const prompt = config.prompt"} {
+		if !strings.Contains(hookHarness, want) {
+			t.Errorf("OpenCode hook harness missing exact provider-task relay shape %q", want)
+		}
+	}
+}
+
+func TestOpenCodeCrossLaneCopiesProviderTaskExactly(t *testing.T) {
+	wantAgent := "review-reliability"
+	wantPrompt := "GENTLE_AI_REVIEW_BINDING {\"order\":0}\nopaque body with `fences` and trailing spaces  "
+	input := map[string]any{"provider_task": map[string]any{"agent": wantAgent, "prompt": wantPrompt}}
+	agent, prompt, ok := providerTask(input)
+	if !ok || agent != wantAgent || prompt != wantPrompt {
+		t.Fatalf("provider task relay = %q/%q/%t, want byte-exact %q/%q/true", agent, prompt, ok, wantAgent, wantPrompt)
+	}
+	for _, incomplete := range []map[string]any{
+		{},
+		{"provider_task": map[string]any{"agent": wantAgent}},
+		{"provider_task": map[string]any{"prompt": wantPrompt}},
+	} {
+		if _, _, ok := providerTask(incomplete); ok {
+			t.Fatalf("incomplete provider task accepted: %#v", incomplete)
+		}
+	}
+}
+
 func TestPiReviewEnvironmentAllowlistAndLocators(t *testing.T) {
 	operatorHome := t.TempDir()
 	const operatorPath = "/operator/bin"

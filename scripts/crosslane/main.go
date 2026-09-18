@@ -5,7 +5,7 @@
 //
 //   - opencode lane: the REAL OpenCode transport plugin bytes
 //     (internal/assets/opencode/plugins/opencode-review-transport.ts) driven
-//     through a fresh Node Task-hook process with HOST-assembled binding frames,
+//     through a fresh Node Task-hook process with exact provider-owned tasks,
 //     against an immutable base tree and committed candidate. Covers the lens
 //     frame, correction closure re-entry, and validator role frame.
 //   - claude lane: one low-risk lifecycle ending in exact acknowledgement then authority burn and five
@@ -20,10 +20,8 @@
 //     against the published schemas in contracts/review-integration/.
 //     Any emitter/schema divergence fails the battery.
 //
-// The battery is intentionally honest: known-red checks (host binding frames
-// pending fix/opencode-host-binding, schema gaps) FAIL and are annotated,
-// because red at the exact seam where field defects escaped is the battery
-// proving its worth.
+// The battery is intentionally honest: a failure at a runtime or schema seam is
+// reported as FAIL rather than converted into a fallback pass.
 package main
 
 import (

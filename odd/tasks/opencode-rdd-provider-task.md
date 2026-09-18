@@ -51,23 +51,37 @@ The user explicitly requested the fix. Work is isolated on branch `fix/opencode-
   - Acceptance: focused tests prove STATUS emits byte-exact provider-owned lens tasks and rejects mutated task fields.
   - Checks: focused `internal/cli` tests; relevant schema/capabilities tests.
   - Evidence:
+    - Commit: `b37b0e36b2ecdcc21318acb1f225c3f1cf7bc8b2` (`fix(review): emit provider-owned OpenCode lens tasks`).
     - RED: `go test ./internal/cli -run '^TestOpenCodeV1StatusEmitsProviderOwnedLensTasks$' -count=1` failed because STATUS still emitted `gentle-ai.review-integration.status/v7` instead of v8.
     - GREEN: focused provider-task, mutation-refusal, runtime-preservation, capabilities/schema, legacy relay, and OpenCode V2 refusal tests passed.
     - `go vet ./...` passed.
     - `go test ./internal/cli -count=1` and `go test ./... -count=1` reached the package's 10-minute timeout in unrelated repository/Git process tests; the full run also reproduced pre-existing environment failures under `/var` lock paths and macOS Bash 3.2 release scripts. No ORPT-1-focused test failed.
     - Rollback boundary: revert this work-unit commit to remove status/v8, capabilities/v2.6, and OpenCode V1 lens `provider_task` emission without changing legacy transport admission or the TypeScript relay.
 
-- [ ] **ORPT-2 — Consume the opaque task and prove the organic lane**
+- [x] **ORPT-2 — Consume the opaque task and prove the organic lane**
   - Update the OpenCode orchestration contract to copy `provider_task.agent` and `provider_task.prompt` exactly.
   - Remove host-side binding construction from the OpenCode cross-lane path.
   - Preserve adapter-minimality guards and legacy admission coverage.
   - Acceptance: rendered contract contains no OpenCode model-authored binding construction; cross-lane proof uses the provider-owned task.
   - Checks: focused component/assets tests, cross-lane test/harness, `go test ./...`, `go vet ./...`.
-  - Evidence: pending.
+  - Evidence:
+    - RED: `go test ./internal/components/sdd ./scripts/crosslane -run '^(TestOpenCodeReviewContractRelaysProviderOwnedLensTaskExactly|TestOpenCodeHookHarnessRequiresExactProviderOwnedTask)$' -count=1` failed because the rendered contract still required model-authored binding JSON and the harness still assembled `binding_pairs` with `Object.fromEntries`.
+    - GREEN: the final focused contract, exact-copy, V2, concurrent-group, transport-selection, and prompt-cost tests passed in `0.429s` (`internal/components/sdd`) and `0.011s` (`scripts/crosslane`).
+    - `go test ./internal/components/sdd ./internal/assets ./scripts/crosslane -count=1` passed: `119.812s`, `5.929s`, and `0.702s` respectively.
+    - Adapter-minimality/legacy admission/OpenCode V2 checks passed: `go test ./internal/cli -run '^(TestOpenCodeV2TransportCapabilityUnavailable|TestOpenCodeV2TransportDeclarationCannotInheritV1|TestOpenCodeReviewTransportAdmitsContractShapedHostLensFrame|TestOpenCodeReviewTransportAdmitsHostLensFrameWithNumericOrderAndShuffledKeys|TestOpenCodeReviewTransportRefusesHostLensFrameValueTampering)$' -count=1` (`6.865s`).
+    - Built `./cmd/gentle-ai` to a local binary and ran `go run ./scripts/crosslane --binary /tmp/gentle-ai-orpt2`: all ten non-model OpenCode lifecycle checks passed, including exact lens/validator task relay, correction, acknowledgement, and legacy host-echo admission. The overall battery exited 1 only because the unrelated schema lane cannot resolve the historical relative `$id` in `intended-untracked-selection.schema.json`; three real-host subscription tiers were explicitly skipped by the default non-model run. An initial root-package build attempt failed with `no Go files`; the supported `./cmd/gentle-ai` build succeeded.
+    - The OpenCode golden was regenerated through its repository `-update` path, inspected, and passed without `-update`; `go test ./internal/components -count=1` passed in `6.061s`.
+    - `go vet ./...` passed.
+    - `go test ./... -count=1` failed after ten minutes in unrelated `internal/cli` Git process and `internal/reviewtransaction` lock waits, plus the pre-existing macOS `/var` authority-path and Bash 3.2 release-script incompatibilities. The run also found the expected OpenCode golden drift; it was regenerated and its package passed afterward.
+    - Rollback boundary: revert the second ORPT-2 work-unit commit to restore the prior orchestration prose and host-assembled cross-lane harness without removing ORPT-1 status/v8 or provider-task emission.
+    - Authored change: 442 lines for ORPT-2, excluding the regenerated golden; 1,081 cumulative authored lines across ORPT-1 and ORPT-2.
+    - Commit identity: reported in the handoff after commit; recording it in this already-committed ledger would require a separate bookkeeping commit.
 
 ## Progress
 
 - Exploration complete: the defect is the model-authored STATUS-row-to-JSON transformation, not the TypeScript relay or strict Go decoder.
 - Delivery decision: one PR with `size:exception`, explicitly authorized by the user.
-- ORPT-1 complete in one work-unit commit; the exact commit hash is reported in the handoff.
-- Next step: execute ORPT-2 without reopening ORPT-1 or changing its transport/schema boundary.
+- ORPT-1 complete in commit `b37b0e36b2ecdcc21318acb1f225c3f1cf7bc8b2`.
+- ORPT-2 complete in a separate work-unit commit; exact identity is reported in the handoff.
+- Cumulative authored change: 1,081 lines across the two work units, excluding the regenerated golden; delivery remains one PR with maintainer-approved `size:exception`.
+- Next step: parent bookkeeping may record the ORPT-2 commit identity without amending this work unit, then ordinary PR policy applies.
