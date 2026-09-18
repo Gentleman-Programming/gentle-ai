@@ -67,16 +67,28 @@ gga install
 | Go Testing | `go-testing` | Go testing patterns including Bubbletea TUI testing |
 | Skill Creator | `skill-creator` | Create new AI agent skills following the Agent Skills spec |
 | Skill Improver | `skill-improver` | Audit and improve existing skills against the repository style guide |
-| Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
-| Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
 | Skill Registry | `skill-registry` | Build an index of installed skills with triggers, scopes, and exact `SKILL.md` paths |
 | Chained PR | `chained-pr` | Plan and create reviewable stacked/chained pull requests |
 | Cognitive Doc Design | `cognitive-doc-design` | Write docs that reduce review and onboarding cognitive load |
-| Comment Writer | `comment-writer` | Draft warm, direct collaboration comments and review replies |
 | Work Unit Commits | `work-unit-commits` | Split implementation into reviewable work units |
-| RDD Defect Workflow | `rdd-defect-workflow` | Guide receipt-driven defect work with truthful evidence and authority boundaries |
 
 These foundation skills are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets.
+
+#### Contributor skills (not installed by default)
+
+These are this repository's own workflow skills. No preset installs them: they
+stay selectable from the TUI skill picker and through explicit `--skills`
+resolution. See `contributorSkills` in `internal/components/skills/presets.go`,
+which is the authority for this list.
+
+| Skill | ID | Description |
+|-------|-----|-------------|
+| Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
+| Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
+| Comment Writer | `comment-writer` | Draft warm, direct collaboration comments and review replies |
+| RDD Defect Workflow | `rdd-defect-workflow` | Guide receipt-driven defect work with truthful evidence and authority boundaries |
+| Gentle AI Bench | `gentle-ai-bench` | Benchmark harness for this repository |
+| Systemic Issue Triage | `systemic-issue-triage` | Triage recurring issues by systemic cause |
 
 ### Coding Skills (separate repository)
 
