@@ -10,12 +10,21 @@ Type=simple
 # timestamp when -dedup.minScrapeInterval is set; without it, re-running
 # the backfill (docs/telemetry-collector.md#victoriametrics) stores a
 # duplicate sample per point instead of being idempotent.
+#
+# -promscrape.maxScrapeSize raises the default 16 MiB response cap: the
+# collector's /metrics exposition grows with every distinct
+# host/agent/provider/model/effort combination it has observed since its
+# last restart and crossed 16 MiB in production on 2026-09-18, after which
+# every scrape failed and the runtime panels went silent. 64 MiB gives
+# headroom for the documented label vocabulary (see
+# docs/telemetry-collector.md#runtime-metrics-for-victoriametrics).
 ExecStart=/usr/local/bin/victoria-metrics \
 	-storageDataPath=/var/lib/victoria-metrics \
 	-retentionPeriod=100y \
 	-dedup.minScrapeInterval=1ms \
 	-httpListenAddr=127.0.0.1:8428 \
 	-promscrape.config=/etc/victoria-metrics/scrape.yaml \
+	-promscrape.maxScrapeSize=64MiB \
 	-selfScrapeInterval=0
 Restart=on-failure
 RestartSec=5s

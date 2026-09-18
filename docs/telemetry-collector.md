@@ -142,10 +142,21 @@ downstream by `increase()`/`rate()`), all carrying `host`:
 
 A label value is sanitized for the exposition format (`\`, `"`, and newline
 escaped) and an empty value renders as `unknown`; in practice every label
-already comes from a closed wire-contract vocabulary (see
+already comes from the wire contract (see
 [Runtime observations](#runtime-observations)), so this only matters if
 `RuntimeMetrics.Observe` is ever called from something other than a parsed,
 validated `telemetry.RuntimeEvent`.
+
+**Exposition size**: the registry is in memory and never evicts a series,
+so `/metrics` grows with every distinct `host`/`agent_kind`/`agent_class`/
+`provider`/`model`/`selected_effort` combination observed since the last
+collector restart. `provider` is any short lowercase label and `model` is
+any id matching the public family pattern (`NormalizeRuntimeModel`), so
+this vocabulary is bounded by convention, not by an enum: on 2026-09-18
+production reached 155 providers, 255 model ids and roughly 90,000
+exposition lines (17.5 MB), which is above VictoriaMetrics' default
+16 MiB scrape cap. The shipped unit therefore sets
+`-promscrape.maxScrapeSize=64MiB` (see [VictoriaMetrics](#victoriametrics)).
 
 **Cutover**: the default stays `sqlite` until the VictoriaMetrics deploy
 (`deploy/telemetry/`, not yet built — see the feature's task list) is
@@ -587,6 +598,17 @@ restart (an in-memory registry — see
 [Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics)),
 so every PromQL query against this data uses `increase()`/`rate()`, never
 the raw counter value, and a restart never shows up as a drop.
+
+**Scrape size cap**: the unit passes `-promscrape.maxScrapeSize=64MiB`
+because the collector's exposition exceeds VictoriaMetrics' default
+16 MiB cap once enough label combinations accumulate (see
+[Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics)).
+When a scrape is refused, `journalctl -u victoria-metrics` logs
+`the response from "http://127.0.0.1:18181/metrics" exceeds
+-promscrape.maxScrapeSize`, `GET /api/v1/targets` reports the target
+`down`, and every `increase()`-based panel reads 0 while the collector
+keeps accepting deliveries. Compare `curl -s http://127.0.0.1:18181/metrics | wc -c`
+against the flag before raising it further.
 
 **Backup**: `gentle-telemetry-backup` skips the VictoriaMetrics step
 silently when `victoria-metrics.service` is not installed/active. When it
