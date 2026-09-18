@@ -75,13 +75,13 @@ The user explicitly requested the fix. Work is isolated on branch `fix/opencode-
     - `go test ./... -count=1` failed after ten minutes in unrelated `internal/cli` Git process and `internal/reviewtransaction` lock waits, plus the pre-existing macOS `/var` authority-path and Bash 3.2 release-script incompatibilities. The run also found the expected OpenCode golden drift; it was regenerated and its package passed afterward.
     - Rollback boundary: revert the second ORPT-2 work-unit commit to restore the prior orchestration prose and host-assembled cross-lane harness without removing ORPT-1 status/v8 or provider-task emission.
     - Authored change: 442 lines for ORPT-2, excluding the regenerated golden; 1,081 cumulative authored lines across ORPT-1 and ORPT-2.
-    - Commit identity: reported in the handoff after commit; recording it in this already-committed ledger would require a separate bookkeeping commit.
+    - Commit: `cbb0d61d815e386faa60921f12517da66a3c7f5a` (`fix(review): relay provider-owned OpenCode tasks`).
 
 ## Progress
 
 - Exploration complete: the defect is the model-authored STATUS-row-to-JSON transformation, not the TypeScript relay or strict Go decoder.
 - Delivery decision: one PR with `size:exception`, explicitly authorized by the user.
 - ORPT-1 complete in commit `b37b0e36b2ecdcc21318acb1f225c3f1cf7bc8b2`.
-- ORPT-2 complete in a separate work-unit commit; exact identity is reported in the handoff.
+- ORPT-2 complete in commit `cbb0d61d815e386faa60921f12517da66a3c7f5a`.
 - Cumulative authored change: 1,081 lines across the two work units, excluding the regenerated golden; delivery remains one PR with maintainer-approved `size:exception`.
-- Next step: parent bookkeeping may record the ORPT-2 commit identity without amending this work unit, then ordinary PR policy applies.
+- Next step: ordinary PR policy applies; push and PR creation still require separate authorization.
