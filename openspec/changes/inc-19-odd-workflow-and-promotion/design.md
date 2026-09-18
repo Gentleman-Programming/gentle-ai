@@ -74,6 +74,27 @@ Esta forma no es una preferencia estética: es la **única** que evita un ciclo 
 
 ### D-01 — `internal/odd` es un paquete hoja; la promoción entra por un puerto
 
+> **Enmienda verificada durante la Fase 5 (implementación).** La ubicación del
+> adaptador que D-01 daba por supuesta **no compila**. D-01 usa correctamente la
+> arista preexistente `internal/dashboard → internal/cli`
+> (`internal/dashboard/service.go:19`) para descartar que `internal/odd` importe
+> `internal/dashboard`, pero **esa misma arista invalida también la alternativa
+> elegida**: con `dashboard → cli` ya presente, cualquier `cli → dashboard`
+> cierra un ciclo de dos nodos, con total independencia de `internal/odd`, que
+> sigue siendo hoja. El compilador lo rechaza con `import cycle not allowed`.
+>
+> **Resolución aplicada.** `cli.RunODDPromote` recibe
+> `newScaffolder func(root string) odd.Scaffolder` como parámetro explícito en
+> lugar de construirlo, de modo que `internal/cli` no importa
+> `internal/dashboard`. El adaptador concreto (`dashboardScaffolder`) vive en
+> `cmd/axiom/main.go`: a `package main` no lo importa nadie y ya dependía de
+> ambos paquetes. El contrato observable de la CLI (§5.7) es idéntico; solo
+> cambian la firma interna de Go y el fichero del adaptador.
+>
+> **Regla general derivada.** Cuando dos paquetes tienen una arista de
+> importación preexistente, la única ubicación segura para la arista inversa es
+> un paquete que nadie importe, no el paquete «más fino» que señale el diseño.
+
 **Elección.** `internal/odd` no importa ningún paquete de Axiom salvo `internal/multirole`. La creación del cambio SDD se expresa como una interfaz consumida por el dominio:
 
 ```go
