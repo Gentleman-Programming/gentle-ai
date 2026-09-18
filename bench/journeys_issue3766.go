@@ -84,7 +84,7 @@ func waitForReviewModeTTY(reader *bufio.Reader, required, also, third string, ne
 			return fmt.Errorf("read TUI before %q: %w; output: %q", required, err, screen.String())
 		}
 		screen.WriteByte(byteRead)
-		if strings.Contains(screen.String(), required) && strings.Contains(screen.String(), also) && strings.Contains(screen.String(), third) {
+		if screenShows(screen.String(), required) && screenShows(screen.String(), also) && screenShows(screen.String(), third) {
 			return next()
 		}
 	}

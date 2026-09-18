@@ -43,7 +43,7 @@ func welcomeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 			return fmt.Errorf("read Welcome TUI before its stable menu: %w; output: %q", err, screen.String())
 		}
 		screen.WriteByte(byteRead)
-		if strings.Contains(screen.String(), "Start installation") && strings.Contains(screen.String(), "q: quit") {
+		if screenShows(screen.String(), "Start installation") && screenShows(screen.String(), "q: quit") {
 			_, err := io.WriteString(writer, "q")
 			return err
 		}

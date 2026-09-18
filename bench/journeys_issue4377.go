@@ -145,7 +145,7 @@ func waitForIssue4377TTY(reader *bufio.Reader, required []string, next func() er
 		screen.WriteByte(byteRead)
 		allMatched := true
 		for _, text := range required {
-			if !strings.Contains(screen.String(), text) {
+			if !screenShows(screen.String(), text) {
 				allMatched = false
 				break
 			}
