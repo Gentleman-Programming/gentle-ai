@@ -75,23 +75,42 @@ Diagnóstico de las 10 journeys y corrección de lo que el diagnóstico demuestr
 
 | Grupo | Journeys | Causa | Veredicto |
 |---|---|---|---|
-| **A** | `j42`, `j63` | La oferta de review tras verify ya no se emite | **Escenario obsoleto** |
+| **A** | `j42`, `j63` | La oferta de review tras verify ya no se emite | **El código contradice una especificación viva** |
 | **B** | `j120`, `j121`, `j122`, `j127` | El aviso de deprecación del shim contamina la salida | **Defecto de arnés** |
 | **C** | `j3043` | Espera `.gentle-ai/bin`; producción usa `.axiom/bin` | **Escenario obsoleto** |
 | **D** | `j3336`, `j3500` | Preflight canónico de OpenCode | **Por diagnosticar** |
 | **E** | `j93` | Parada sin continuación | **Defecto de producto** |
 
-#### Grupo A — probado documentalmente
+#### Grupo A — el código contradice una especificación viva
+
+> **Corrección de un veredicto anterior.** Se clasificó primero como «escenario obsoleto», razonando que INC-18 había retirado la oferta a propósito y las journeys no se actualizaron. **Es incorrecto.** La journey cita una especificación viva, y esa especificación sigue vigente.
 
 `j42` falla con `reviewOffer = <nil>, want an available invitation`; `j63` con `re-enabled archive omitted its optional fresh-review offer: <nil>`.
 
-Ambas exigen un comportamiento que **INC-18 retiró a propósito**:
+**Lo que dice el código** (`internal/sddstatus/review_door.go:8`):
 
-- `internal/sddstatus/review_door.go:8` — *«SDD status no longer creates review offers or calls OfferReviewAfterVerify.»*
-- `design.md` de INC-18, línea 73 — *«Eliminación de llamadas activas a `OfferReviewAfterVerify`.»*
-- `OfferReviewAfterVerify` no tiene **ningún llamador de producción**.
+> *SDD status no longer creates review offers or calls OfferReviewAfterVerify.*
 
-**Cuarta instancia del patrón de absorción parcial de INC-18**: se cambió la producción y no se actualizaron las journeys que asertaban lo viejo. Invisible porque el paso de bench nunca corría.
+`OfferReviewAfterVerify` no tiene ningún llamador de producción, y el `design.md` de INC-18 (línea 73) lo declara como decisión deliberada.
+
+**Lo que dice la especificación viva** (`openspec/specs/rdd-post-verify-review-offer/spec.md`, vigente hoy):
+
+> *Define the sequence SDD MUST follow **per maintainer directive** (Engram decision #10123, 2026-08-02): apply → verify → offer RDD review → … → archive. **These are hard MUSTs, not defaults.***
+
+Y su requerimiento «Offer Occurs Strictly Post-Verify, Pre-Archive» exige explícitamente que la resolución de estado *«calls `OfferReviewAfterVerify` as the sole review entry point»*, nombrando `review_door.go`'s `reviewOfferForVerify` — la función que INC-18 vació.
+
+**INC-18 no emitió ningún delta sobre esa capacidad.** Verificado: cero menciones de `rdd-post-verify-review-offer` en todo el cambio archivado.
+
+**Quinta instancia del patrón de INC-18, y la más grave.** Las anteriores eran tests o documentación sin actualizar. Esta es **retirar un comportamiento que una especificación viva, confirmada por el mantenedor, declara obligatorio, sin emitir el delta que lo supersediera.** Las journeys no están obsoletas: aciertan.
+
+Matiz que conviene registrar: la misma especificación contiene el requerimiento «Kill-Switch-Off Is Structural Absence», que exige cero código de review en rutas SDD cuando el interruptor está apagado. La retirada de INC-18 **satisface ese requerimiento al máximo** (cero siempre) mientras **incumple el anterior**. Parece una sobreaplicación de un requerimiento a costa de otro del mismo documento.
+
+**No se corrige aquí: es decisión de producto.** Dos salidas, y no son equivalentes:
+
+| Salida | Qué implica |
+|---|---|
+| **(a) Restaurar la oferta** | Honra la spec y la directiva del mantenedor. Reintroduce código de review en la ruta SDD, que es justo lo que INC-18 quiso desacoplar. |
+| **(b) Emitir el delta** | Ratifica la retirada superseando `rdd-post-verify-review-offer`, y entonces sí se actualizan las journeys. Exige revisar la directiva del mantenedor de 2026-08-02. |
 
 #### Grupo B — el aviso de deprecación, probado por `j122`
 
@@ -111,9 +130,22 @@ Causa de fondo: `.github/workflows/ci.yml` compila `./cmd/gentle-ai` —el shim 
 
 **Un solo cambio cierra 4 journeys.**
 
-#### Grupo C — secuela del renombrado
+#### Grupo C — secuela del renombrado · CORREGIDO, pendiente de que el CI lo confirme
 
-`j3043`: `open /tmp/.../home/.gentle-ai/bin`. Producción usa `.axiom/bin` (`internal/opencode/background.go:331`). La journey espera el directorio viejo.
+`j3043` fallaba en CI con `open /tmp/.../home/.gentle-ai/bin`. Producción usa `.axiom/bin` (`internal/opencode/background.go:331`); la journey esperaba el directorio retirado.
+
+Solo cambió el **directorio**: el marcador `gentle-ai:managed-opencode-launcher/v1` sigue sin renombrar en producción, así que esa comprobación se deja como literal único.
+
+`bench` es un módulo Go aparte (`module github.com/gentleman-programming/gentle-ai/bench`) y **no puede importar `internal/opencode.BinDir`**, así que el helper `readManagedLauncher` sondea `.axiom/bin` primero y cae a `.gentle-ai/bin`, y nombra ambas rutas cuando no encuentra ninguna.
+
+> **Local no puede validarlo, y conviene saber por qué.** CI y Windows fallan en **aserciones distintas del mismo paso**:
+>
+> | Entorno | Falla en |
+> |---|---|
+> | CI Linux | la ruta del launcher (línea 44) — **lo corregido** |
+> | Windows local | la evidencia de activación (línea 37), antes de llegar |
+>
+> En Windows el install no emite `OpenCode background activation status: ready`, así que la journey muere antes del punto corregido. Tras el arreglo, el error local cambió de la línea 44 a la 37: prueba de que la 44 ya no bloquea, pero no de que la journey pase. **Solo el CI puede cerrarla.**
 
 ### Fase 2 — Corrección
 
