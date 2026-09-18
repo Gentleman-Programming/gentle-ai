@@ -150,7 +150,10 @@ func TestRuntimePurgeRollback(t *testing.T) {
 
 func TestRuntimeMaintenanceWithoutLegacyEvents(t *testing.T) {
 	// Existing policy performs date arithmetic without a special zero/negative
-	// sentinel. Preserve it rather than introducing runtime-only validation.
+	// sentinel for retentionDays. Preserve it rather than introducing
+	// runtime-only validation. The dedup window is a separate argument with
+	// its own lower bound (see TestRunMaintenance_RejectsNonPositiveDedupDays)
+	// and is clamped to retention, so it does not affect these counts.
 	for _, tc := range []struct{ days, cutoffDay int }{{2, 12}, {0, 14}, {-1, 15}} {
 		t.Run(fmt.Sprintf("days=%d", tc.days), func(t *testing.T) {
 			s := openTestStorage(t)
@@ -158,7 +161,7 @@ func TestRuntimeMaintenanceWithoutLegacyEvents(t *testing.T) {
 			cutoff := time.Date(2026, 6, tc.cutoffDay, 0, 0, 0, 0, time.UTC)
 			insertRetentionDelivery(t, s, 1, cutoff.Add(-time.Nanosecond))
 			insertRetentionDelivery(t, s, 2, cutoff)
-			if err := RunMaintenance(context.Background(), s, now, tc.days, tc.days); err != nil {
+			if err := RunMaintenance(context.Background(), s, now, tc.days, 1); err != nil {
 				t.Fatal(err)
 			}
 			assertRetentionCounts(t, s, 0, 1, 2)

@@ -343,8 +343,10 @@ func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff, dedupCutoff time.T
 	if err := tx.Commit(); err != nil {
 		return 0, errRuntimeStorage
 	}
+	// The raw purge is committed by now: a failure here is the identity
+	// trim's own, named with its cutoff, and the committed count still returns.
 	if _, err := purgeRuntimeDeliveryIDsOlderThan(ctx, s.db, dedupCutoff); err != nil {
-		return count, err
+		return count, fmt.Errorf("purge runtime delivery ids before %s: %w", dedupCutoff.UTC().Format(dayLayout), err)
 	}
 	return count, nil
 }

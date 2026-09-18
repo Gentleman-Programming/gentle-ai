@@ -115,6 +115,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("parse --runtime-store: %w", err)
 	}
+	if *runtimeDedupDays < 1 { // RunMaintenance refuses it too; fail at startup instead
+		return fmt.Errorf("parse --runtime-dedup-days: must be at least 1, got %d", *runtimeDedupDays)
+	}
 
 	if len(trustedProxyCIDRs) == 0 {
 		trustedProxyCIDRs = repeatableFlag{"127.0.0.0/8", "::1/128"} // matches Apache on loopback
@@ -151,6 +154,9 @@ func run() error {
 	}
 	if summaryToken == "" {
 		logger.Warn("no --summary-token-file provided: GET /v1/summary will reject every request")
+	}
+	if *runtimeDedupDays > *retentionDays {
+		logger.Warn("--runtime-dedup-days exceeds --retention-days; the retention value applies", "requested", *runtimeDedupDays, "effective", *retentionDays)
 	}
 
 	if dir := filepath.Dir(*dbPath); dir != "." {
@@ -293,10 +299,13 @@ func runMaintenanceLoop(ctx context.Context, storage *telemetrycollector.Storage
 		// when the file is mostly free pages. Logged every run so a WAL
 		// that never shrinks (a reader outside this process holding it,
 		// reported as busy) is visible in journalctl.
+		if ctx.Err() != nil { // shutdown overlapping a run: skip, not a compaction failure
+			return
+		}
 		if report, err := storage.Compact(ctx); err != nil {
 			logger.Error("database compaction failed", "error", err)
 		} else {
-			logger.Info("database compacted", "page_count", report.PageCount, "free_pages", report.FreePages, "wal_frames", report.WALFrames, "vacuumed", report.Vacuumed, "busy", report.Busy)
+			logger.Info("database compacted", "page_count", report.PageCount, "free_pages", report.FreePages, "wal_frames", report.WALFrames, "vacuumed", report.Vacuumed, "vacuum_deferred", report.VacuumDeferred, "busy", report.Busy)
 		}
 		// Derived from ctx (not WithoutCancel): a SIGTERM cancels an
 		// in-flight fetch immediately instead of running it to

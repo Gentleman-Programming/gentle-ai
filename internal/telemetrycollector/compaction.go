@@ -17,6 +17,12 @@ const compactFreePercent = 25
 // a small fixture.
 var compactMinPages int64 = 1024
 
+// compactMaxLivePages caps how much live data an unattended online VACUUM
+// may rewrite (131,072 pages of 4 KiB is 512 MiB, seconds of rewrite).
+// Above it the writer would be held long enough to lose deliveries, so
+// Compact defers and the operator vacuums offline. A var for tests.
+var compactMaxLivePages int64 = 131072
+
 // CompactionReport says what Compact did, for the maintenance log line.
 type CompactionReport struct {
 	// PageCount and FreePages describe the file before compaction.
@@ -31,18 +37,19 @@ type CompactionReport struct {
 	// Vacuumed is true when the free share crossed compactFreePercent and
 	// the file was rewritten.
 	Vacuumed bool
+	// VacuumDeferred is true when the free share qualified but the live
+	// data exceeds compactMaxLivePages, so the rewrite was left to an
+	// offline operator step.
+	VacuumDeferred bool
 }
 
-// Compact returns disk to the operating system after a purge. It always
-// checkpoints and truncates the WAL, so the sidecar stops growing between
-// maintenance runs (the collector holds the only writer and a checkpoint
-// only ever happens when SQLite's automatic one gets a chance, which a
-// steady stream of writes never gives it). It runs VACUUM only when at
-// least compactFreePercent of a file of at least compactMinPages pages is
-// free: VACUUM rewrites the whole file and holds the writer for the
-// duration, which is seconds on a compact file and minutes on a bloated
-// one, so the very first compaction of a bloated production file is done
-// offline by the operator, not here (see docs/telemetry-collector.md).
+// Compact returns disk to the operating system after a purge: it always
+// checkpoints the WAL (and truncates it when no outside reader holds it,
+// since the collector's steady write stream never lets SQLite's automatic
+// checkpoint run), and runs VACUUM only when at least compactFreePercent of
+// a file of at least compactMinPages pages is free AND the live data fits
+// under compactMaxLivePages; otherwise the rewrite is reported as deferred
+// for an offline operator step (see docs/telemetry-collector.md).
 func (s *Storage) Compact(ctx context.Context) (CompactionReport, error) {
 	var report CompactionReport
 	if err := s.db.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&report.PageCount); err != nil {
@@ -59,8 +66,10 @@ func (s *Storage) Compact(ctx context.Context) (CompactionReport, error) {
 	report.Busy, report.WALFrames = busy, frames
 
 	if report.PageCount >= compactMinPages && report.FreePages*100/report.PageCount >= compactFreePercent {
-		// VACUUM cannot run inside a transaction; the pool's single
-		// connection has none open here.
+		if report.PageCount-report.FreePages > compactMaxLivePages {
+			report.VacuumDeferred = true
+			return report, nil
+		}
 		if _, err := s.db.ExecContext(ctx, `VACUUM`); err != nil {
 			return report, fmt.Errorf("vacuum: %w", err)
 		}
@@ -76,17 +85,25 @@ func (s *Storage) Compact(ctx context.Context) (CompactionReport, error) {
 	return report, nil
 }
 
-// checkpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE) and reports
-// whether it was blocked by a reader and how many frames the WAL held.
+// checkpointTruncate backfills the WAL with a PASSIVE checkpoint, which
+// never waits on a reader, and only when every frame was backfilled runs
+// the TRUNCATE that resets the sidecar. A bare TRUNCATE would block for up
+// to busy_timeout while the open-data export or Grafana holds a read
+// transaction, with the maintenance goroutine holding the pool's single
+// connection and stalling ingest meanwhile.
 func (s *Storage) checkpointTruncate(ctx context.Context) (busy bool, frames int64, err error) {
 	var busyFlag, checkpointed int64
-	if err := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busyFlag, &frames, &checkpointed); err != nil {
-		return false, 0, fmt.Errorf("wal_checkpoint(TRUNCATE): %w", err)
+	if err := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`).Scan(&busyFlag, &frames, &checkpointed); err != nil {
+		return false, 0, fmt.Errorf("wal_checkpoint(PASSIVE): %w", err)
 	}
-	if frames < 0 {
-		// -1 means the database is not in WAL mode (never the case after
-		// OpenStorage, but the pragma defines it).
-		frames = 0
+	if frames < 0 { // not in WAL mode; never the case after OpenStorage
+		return false, 0, nil
 	}
-	return busyFlag != 0, frames, nil
+	if busyFlag != 0 || checkpointed < frames {
+		return true, frames, nil
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return false, frames, fmt.Errorf("wal_checkpoint(TRUNCATE): %w", err)
+	}
+	return false, frames, nil
 }

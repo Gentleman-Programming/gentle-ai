@@ -24,6 +24,9 @@ import (
 // exactly where this one left off, since lastRolledDay only ever reflects
 // committed days.
 func RunMaintenance(ctx context.Context, s *Storage, now time.Time, retentionDays, runtimeDedupDays int) error {
+	if runtimeDedupDays < 1 { // would purge every identity each run and disable replay rejection
+		return fmt.Errorf("runtime dedup days must be at least 1, got %d", runtimeDedupDays)
+	}
 	yesterday := truncateToDay(now.UTC()).AddDate(0, 0, -1)
 
 	start, err := s.rollupStartDay(ctx, yesterday)
@@ -47,7 +50,8 @@ func RunMaintenance(ctx context.Context, s *Storage, now time.Time, retentionDay
 		dedupCutoff = cutoff
 	}
 	if _, err := s.PurgeOlderThan(ctx, cutoff, dedupCutoff); err != nil {
-		return fmt.Errorf("purge events before %s: %w", cutoff.Format(dayLayout), err)
+		// PurgeOlderThan already names which purge failed and its cutoff.
+		return fmt.Errorf("purge: %w", err)
 	}
 
 	return nil

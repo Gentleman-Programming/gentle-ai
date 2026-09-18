@@ -112,3 +112,44 @@ func TestCompact_DenseOrSmallDatabaseIsNotVacuumed(t *testing.T) {
 		t.Fatalf("report = %+v, want the page count filled in", report)
 	}
 }
+
+// The VACUUM rule in both non-vacuum directions on a file above
+// compactMinPages: a dense one (free share under the threshold) is only
+// checkpointed, and a sparse one whose live data exceeds compactMaxLivePages
+// is left for the operator's offline VACUUM and reported as deferred.
+func TestCompact_LargeFileSkipsVacuumWhenDenseOrTooLive(t *testing.T) {
+	cutoff := time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name         string
+		keep         int64 // rows that survive the purge
+		maxLivePages int64
+		deferred     bool
+	}{
+		{name: "dense", keep: 2850, maxLivePages: 131072},
+		{name: "too live", keep: 200, maxLivePages: 4, deferred: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, path := openCompactionStorage(t)
+			prevMin, prevMax := compactMinPages, compactMaxLivePages
+			compactMinPages, compactMaxLivePages = 8, tc.maxLivePages
+			t.Cleanup(func() { compactMinPages, compactMaxLivePages = prevMin, prevMax })
+			for i := 0; i < 3000; i++ {
+				insertDeliveryIDAt(t, s, i, cutoff.Add(-time.Duration(i+1)*time.Second))
+			}
+			if _, err := s.PurgeOlderThan(context.Background(), cutoff, cutoff.Add(-time.Duration(tc.keep)*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			pages, free := pragmaInt(t, s, "page_count"), pragmaInt(t, s, "freelist_count")
+			if pages < compactMinPages || (free*100/pages >= compactFreePercent) != tc.deferred {
+				t.Fatalf("fixture: %d free of %d pages", free, pages)
+			}
+			report, err := s.Compact(context.Background())
+			if err != nil || report.Vacuumed || report.VacuumDeferred != tc.deferred {
+				t.Fatalf("Compact = %+v, %v; want Vacuumed=false VacuumDeferred=%v", report, err, tc.deferred)
+			}
+			if size := fileSize(t, path+"-wal"); size != 0 {
+				t.Fatalf("WAL size after Compact = %d, want 0", size)
+			}
+		})
+	}
+}

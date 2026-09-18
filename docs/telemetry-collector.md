@@ -251,24 +251,21 @@ the process last restarted:
    replay of its delivery can arrive; clients never retry, and the table
    grows by every accepted delivery (about a million rows a day in
    production), so ninety days of it would be a hundred million rows.
-4. Compacts the file: `PRAGMA wal_checkpoint(TRUNCATE)` every run, so the
-   WAL sidecar stops growing between runs (the collector's steady write
-   stream never gives SQLite's automatic checkpoint a chance), and `VACUUM`
-   only when at least 25% of a file of at least 1,024 pages is free. The
-   result is logged as `database compacted` with `page_count`,
-   `free_pages`, `wal_frames`, `vacuumed` and `busy`; `busy=true` means a
-   reader outside this process (Grafana, the open-data export) held the
-   WAL and the truncation waits for the next run.
+4. Compacts the file: a `PRAGMA wal_checkpoint(PASSIVE)` every run (it
+   never waits on a reader), followed by a `TRUNCATE` when every frame was
+   backfilled so the sidecar returns to zero bytes, and `VACUUM` only when
+   at least 25% of a file of at least 1,024 pages is free AND the live data
+   is at most 131,072 pages (512 MiB): the rewrite holds the single writer
+   and runtime clients never retry, so a larger one is never started
+   unattended. Logged as `database compacted` with `page_count`,
+   `free_pages`, `wal_frames`, `vacuumed`, `vacuum_deferred` (live data
+   over the cap) and `busy` (an outside reader held the WAL; truncation
+   waits for the next run).
 
-**First compaction of a bloated file**: `VACUUM` rewrites the whole
-database and holds the writer for the duration, seconds on a compact file
-but minutes on a bloated one, during which live deliveries fail as
-`storage_busy`. When a file is already mostly free pages (the
-`--runtime-store=metrics` cutover left 91% of a 1.4 GB file free), do the
-first `VACUUM` offline instead of letting the daily job do it online: stop
-`gentle-telemetry.service`, run `sqlite3 <db> 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'`
-as a user that may write the file, start the unit. The daily rule then
-only ever sees small deltas.
+When `vacuum_deferred=true` shows up in the journal, vacuum offline once:
+stop `gentle-telemetry.service`, run `sqlite3 <db> 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'`,
+start the unit. `--runtime-dedup-days` is refused below 1 and clamped to
+`--retention-days` with a startup warning.
 
 `rollups_daily` itself is never purged: it is the durable historical record
 once the raw rows behind it age out.
