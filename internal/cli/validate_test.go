@@ -71,3 +71,13 @@ func TestNormalizeInstallFlagsAcceptsSupportedAgent(t *testing.T) {
 		t.Fatalf("Selection.Agents = %v, want [claude-code]", input.Selection.Agents)
 	}
 }
+
+func TestNormalizeInstallFlagsAcceptsDevinDesktopAlias(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{Agents: []string{"devin-desktop"}}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v, want nil", err)
+	}
+	if len(input.Selection.Agents) != 1 || input.Selection.Agents[0] != model.AgentWindsurf {
+		t.Fatalf("Selection.Agents = %v, want [windsurf]", input.Selection.Agents)
+	}
+}
