@@ -30,6 +30,7 @@ Issue #4405 documents repeated reviews after terminal acknowledgement. Authority
 - `internal/reviewtransaction/compact_store*.go`
 - `internal/reviewtransaction/compact_burn.go`, `internal/reviewtransaction/compact_burn_test.go`
 - `internal/reviewtransaction/target_status*.go`, `internal/reviewtransaction/*terminal*.go`
+- `bench/journeys_atomic_review.go`, `bench/journeys_atomic_review_test.go` (j111 CI semantic correction only).
 - This feature document.
 
 ## Prerequisites
@@ -123,3 +124,23 @@ Observed checks:
 6. `git diff --check` passed (no output).
 
 Rollback boundary: the six golden updates, the cost pins/ceilings and explanatory comment, and this correction record. Runtime harness: N/A, generated-fixture synchronization only; no host-runtime behavior changed. Full `go test ./...` was not rerun locally. RDD-4 remains pending parent commit/review.
+
+## PR #4737 driven benchmark correction (#4405)
+
+CI's Go tests passed, but j111 still expected selectorless STATUS after burn to offer and execute a fresh START. #4405 deliberately makes the exact unchanged acknowledged target terminal instead; explicit START remains available only for an intentionally independent review.
+
+- Replaced j111's final restart helper with an authority-free `stop` / `target_already_acknowledged` assertion. It compares the target identity recorded before burn and rejects execute commands, collection inputs, or a continuation; it never executes START.
+- Updated the title, source, final step, and declaration assertions. Preserved canonical reviewer readback, acknowledgement burn, no reusable authority/receipt/evidence, and every unmanaged shipped gate. No journey or manifest/count pin was added or changed.
+- Strict TDD was not activated for this benchmark correction; the earlier implementation's TDD evidence remains unchanged.
+- Scoped stale-pin inspection covered j111 in `bench/journeys_atomic_review.go` and its declaration tests; the selectorless START helper in `bench/journeys_wave3.go` remains valid for the initial transaction and was not changed.
+
+Observed validation (all exit 0):
+
+1. From `bench/`: `go vet ./...` passed; `go test ./...` passed (4.763s).
+2. From `bench/`: `go build -o "$TMPDIR/gentle-ai-bench-4405" .` passed.
+3. From the repository root: `go build -trimpath -o "$TMPDIR/gentle-ai-4405" ./cmd/gentle-ai` passed.
+4. `"$TMPDIR/gentle-ai-bench-4405" run --binary "$TMPDIR/gentle-ai-4405" --only j111-approved-transaction-burns-and-shipped-gates-are-unmanaged --out "$TMPDIR/bench-4405.json"` passed: **1 completed, 0 unsupported, 0 failed**. Reported 26 commands and 8 out-of-band blocks, including expected acknowledgement refusals, unmanaged gates, and terminal STATUS. Reviewer results were synthesized; no model was called.
+5. `go run ./internal/gofmtcheck` passed (no output).
+6. `git diff --check` passed (no output).
+
+Rollback boundary: the j111 helper/declaration and its declaration tests, plus this correction record; no product behavior changes. Full corpus driven execution and the root Go suite were not rerun. Completion remains pending parent review and commit; this worker performed no commit, push, or GitHub mutation.

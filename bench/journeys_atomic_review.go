@@ -102,6 +102,14 @@ func startAtomicBurnFromSelectorlessStatus(r *journeyRun) error {
 	}
 	r.sandbox.Lineage = lineage
 	r.sandbox.Scratch[atomicBurnInitialKey] = lineage
+	status, err := readAtomicReviewStatus(r, lineage)
+	if err != nil {
+		return err
+	}
+	if status.TargetIdentity == "" {
+		return fmt.Errorf("initial transaction has no target identity")
+	}
+	r.sandbox.Scratch["atomic-burn-target-identity"] = status.TargetIdentity
 	return requireExplicitAtomicFourLensStatusFor(r, lineage)
 }
 
@@ -164,21 +172,27 @@ func requireAllUnmanagedShippedGates(r *journeyRun) error {
 	return nil
 }
 
-func requireAtomicBurnStartsNewTransaction(r *journeyRun) error {
-	burnedLineage := r.sandbox.Scratch[atomicBurnInitialKey]
-	if burnedLineage == "" {
-		return fmt.Errorf("atomic burn journey did not record the burned selectorless binding")
+func requireAtomicBurnSelectorlessStatusTerminal(r *journeyRun) error {
+	target := r.sandbox.Scratch["atomic-burn-target-identity"]
+	if r.sandbox.Scratch[atomicBurnInitialKey] == "" || target == "" {
+		return fmt.Errorf("atomic burn journey did not record the burned selectorless binding and target")
 	}
-	// The selectorless lineage is target-derived and may therefore repeat. The
-	// preceding selectorless STATUS must have no active authority, and the exact
-	// rendered START must answer created/reviewing, which proves this is a new
-	// compact transaction rather than reusable burned authority or inventory.
-	newLineage, err := startAtomicTransactionFromSelectorlessStatus(r)
+	// #4405 replaces the automatic post-burn START offer with terminal STATUS
+	// for the exact unchanged target. Explicit START is reserved for an
+	// intentionally independent review; this step must never execute it.
+	status, err := readAtomicReviewStatus(r, "")
 	if err != nil {
-		return fmt.Errorf("selectorless START after burn did not create a new transaction: %w", err)
+		return err
 	}
-	r.sandbox.Lineage = newLineage
-	return requireExplicitAtomicFourLensStatusFor(r, newLineage)
+	if status.TargetIdentity != target || status.NextTransition.Kind != "stop" ||
+		status.NextTransition.ReasonCode != "target_already_acknowledged" ||
+		status.Authority.LineageID != "" || status.Authority.State != "" || status.Authority.Revision != "" ||
+		status.NextTransition.Execute.Operation != "" || status.NextTransition.Execute.Command != "" ||
+		len(status.NextTransition.Execute.Arguments) != 0 || len(status.NextTransition.Collect.Inputs) != 0 ||
+		status.NextTransition.Continuation != nil {
+		return fmt.Errorf("selectorless STATUS after burn = %+v, want authority-free terminal target_already_acknowledged for %q without START", status, target)
+	}
+	return nil
 }
 
 func requireExplicitAtomicFourLensStatusFor(r *journeyRun, lineage string) error {
@@ -197,8 +211,8 @@ func requireExplicitAtomicFourLensStatusFor(r *journeyRun, lineage string) error
 func atomicReviewJourneys() []Journey {
 	return []Journey{{
 		ID:     "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-		Title:  "#3797/#4453: selectorless STATUS renders a printed START, and the last lens exposes every canonical reviewer result before acknowledgement",
-		Source: "#3797 compact binding and #4453 terminal readback expose the complete admitted selected-lens results before exact acknowledgement; delivery gates remain informational",
+		Title:  "#3797/#4453/#4405: initial printed START and canonical reviewer results end in acknowledgement; unchanged selectorless STATUS is terminal",
+		Source: "#3797 compact binding and #4453 terminal readback preserve canonical results before acknowledgement; #4405 replaces automatic post-burn START with target_already_acknowledged for the exact unchanged target. Explicit START is only for an intentionally independent review; delivery gates remain informational and unmanaged",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: high-risk candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
@@ -208,7 +222,7 @@ func atomicReviewJourneys() []Journey {
 				return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage)
 			}},
 			{Name: "all shipped gates are informational, non-deciding, and unmanaged", Requires: validateCapability, Composite: requireAllUnmanagedShippedGates},
-			{Name: "repeat the selectorless STATUS request and execute its printed START as a new transaction", Requires: atomicReviewStatusCapability, Composite: requireAtomicBurnStartsNewTransaction},
+			{Name: "repeat selectorless STATUS for the exact unchanged target: terminal STOP target_already_acknowledged without START", Requires: atomicReviewStatusCapability, Composite: requireAtomicBurnSelectorlessStatusTerminal},
 		},
 	}}
 }
