@@ -11,10 +11,9 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 // or result-schema semantics; Go remains the sole owner of all of those.
 const TRANSPORT_ISOLATION_SYSTEM = "Transport isolation: follow only the Go-materialized user prompt."
 
-// OpenCode's published event type for v1.18.10 omits `agent`, although the
-// runtime emits it for Task child sessions. Decode that runtime shape without
-// assuming either field exists, and retain compatibility with the official
-// child title emitted by that OpenCode release.
+// OpenCode v1.18.10's published event type omits `agent`, but the runtime
+// emits it for Task child sessions. Decode either shape; fall back to the
+// `title` suffix the official child title carries.
 function decodeReviewSessionID(info: unknown): string | undefined {
   if (info === null || typeof info !== "object" || Array.isArray(info)) return
   const id = Reflect.get(info, "id")
@@ -86,35 +85,23 @@ function taskKey(sessionID: string, callID: string, subagentType: string): strin
   return `${sessionID}:${callID}:${subagentType}`
 }
 
-// A refused relay must fail the Task loudly and never launch an unbound
-// child. Throwing from the before hook is the primary refusal; these two
-// projections keep the refusal authoritative even in a host runtime that
-// swallows hook errors and launches the Task anyway: the child receives only
-// this refusal prompt (never the semi-bound original), and the after hook
-// replaces the child's raw output with the typed transport refusal so an
-// unbound child's prose can never masquerade as a captured reviewer result.
+// A refused relay must fail the Task loudly even if the host swallows the
+// before hook's throw: the child receives only the refusal prompt, and the
+// after hook replaces raw output with a typed refusal so an unbound child
+// can never masquerade as a captured reviewer result.
 const RELAY_REFUSED_CODE = "opencode_review_transport_relay_refused"
 
 // Binary handshake (issue #3049): a stale PATH `gentle-ai` can answer the
-// relay spawn for a newer binary's authority without ever knowing the
-// provider-transport/v1 capability. Probe `gentle-ai --version` before the
-// relay spawn, refuse on skew or ENOENT, and cache by resolved path + mtime
-// so a mid-session upgrade or fresh session both re-probe. The two typed
-// codes route through the same refused-prompt / refused-output machinery so
-// a refused handshake still fails the Task loudly.
+// relay for a newer binary's authority without knowing the provider-transport/v1
+// capability. Probe `--version` before the relay spawn and refuse on skew or
+// ENOENT; cache by resolved path + mtime so an upgrade or fresh session
+// re-probes automatically.
 const BINARY_SKEW_CODE = "opencode_review_transport_binary_skew"
 const BINARY_UNAVAILABLE_CODE = "opencode_review_transport_binary_unavailable"
 
-// Version that shipped the `gentle-ai.provider-transport/v1` capability
-// baked into this plugin. A PATH binary reporting a strictly older semver
-// is refused with BINARY_SKEW_CODE before the relay spawn.
-//
-// NOTE(ardelperal/3731): the E2E organic-runtime test binary is built from the
-// PR commit without ldflags; its BuildInfo reports a pseudo-version rooted at
-// the most-recent tag on the branch ancestry (e.g. "2.0.0-<ts>-<hash>").
-// Lowered to "2.0.0" to allow the E2E binary to pass the handshake.
-// A binary genuinely older than provider-transport/v1 would have a lower
-// base semver and would still be refused.
+// Minimum semver a PATH `gentle-ai` must report to serve the relay; older
+// versions predate the provider-transport/v1 capability baked into this
+// plugin and are refused with BINARY_SKEW_CODE before the relay spawn.
 const MIN_GENTLE_AI_VERSION = "2.0.0"
 
 function relayRefusedReason(cause: unknown): string {
@@ -135,10 +122,9 @@ function relayRefusedOutput(reason: string): string {
 }
 
 // Resolve the PATH entry that `spawn("gentle-ai", ...)` would pick. Walking
-// PATH ourselves is the only way to get a stable cache key for the
-// mtime-based invalidation the spec requires. `statSync` follows symlinks
-// so a swap of the symlink target surfaces as an mtime drift on the same
-// path.
+// PATH ourselves gives a stable cache key for the mtime-based invalidation;
+// `statSync` follows symlinks so a swap of the symlink target surfaces as
+// an mtime drift on the same path.
 function resolveGentleAiPath(): { path: string; mtime: number } | null {
   const isWindows = process.platform === "win32"
   const extensions = isWindows ? [".exe", ".cmd", ".bat", ""] : [""]
@@ -179,11 +165,10 @@ function parseGentleAiVersion(stdout: string): string | undefined {
   return match?.[1]
 }
 
-// Compare two dot-separated semvers segment by segment: numeric segments
-// as integers, non-numeric segments lexicographically. Intentionally
-// narrower than full semver ordering because the contract is "PATH version
-// >= the version that shipped provider-transport/v1"; build-metadata and
-// pre-release precedence edge cases are out of scope for the refusal.
+// Compare two dot-separated semvers segment by segment; numeric as integers,
+// non-numeric lexicographically. Narrower than full semver ordering because
+// the contract is "PATH version >= the version that shipped provider-transport/v1";
+// build-metadata and pre-release edge cases are out of scope for refusal.
 function compareSemver(pathVersion: string, minVersion: string): number {
   const parts = (version: string) => version.split(/[.-]/).map((segment) => /^\d+$/.test(segment) ? Number(segment) : segment)
   const [left, right] = [parts(pathVersion), parts(minVersion)]
