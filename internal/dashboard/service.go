@@ -154,7 +154,6 @@ func (s *Service) GetWorkspace() (*WorkspaceDTO, error) {
 	}, nil
 }
 
-
 // GetIncrements escanea y lista los incrementos activos y archivados.
 func (s *Service) GetIncrements() ([]IncrementSummaryDTO, error) {
 	var list []IncrementSummaryDTO
@@ -289,13 +288,13 @@ func (s *Service) GetIncrementDetail(name string) (*IncrementDetailDTO, error) {
 	summary := s.inspectIncrement(path, filepath.Base(path), kind)
 
 	dto := &IncrementDetailDTO{
-		Summary:       summary,
-		HasProposal:   fileExists(filepath.Join(path, "proposal.md")),
-		HasSpec:       fileExists(filepath.Join(path, "spec.md")),
-		HasDesign:     fileExists(filepath.Join(path, "design.md")),
-		HasTasks:      fileExists(filepath.Join(path, "tasks.md")),
-		HasVerify:     fileExists(filepath.Join(path, "verify-report.md")),
-		HasArchive:    fileExists(filepath.Join(path, "archive-report.md")),
+		Summary:     summary,
+		HasProposal: fileExists(filepath.Join(path, "proposal.md")),
+		HasSpec:     fileExists(filepath.Join(path, "spec.md")),
+		HasDesign:   fileExists(filepath.Join(path, "design.md")),
+		HasTasks:    fileExists(filepath.Join(path, "tasks.md")),
+		HasVerify:   fileExists(filepath.Join(path, "verify-report.md")),
+		HasArchive:  fileExists(filepath.Join(path, "archive-report.md")),
 	}
 
 	if dto.HasProposal {
@@ -353,7 +352,6 @@ func (s *Service) GetRoleStatus(changeName string) (*multirole.BarrierReport, er
 
 	return multirole.EvaluateBarrier(path, changeName, roles)
 }
-
 
 // GetRoles retorna los roles definidos en axiom.yaml.
 func (s *Service) GetRoles() (map[string]RoleMeta, error) {
@@ -835,6 +833,10 @@ func (s *Service) CreateIncrement(req CreateIncrementRequest) (*CreateIncrementR
 4. Verificación formal y consolidación de documentación viva en archive.
 `, title, name, intent, name, name)
 
+	if strings.TrimSpace(req.ProposalBody) != "" {
+		proposalContent = req.ProposalBody // INC-19: bytes exactos del renderizador ODD, sin normalizar [D-02]
+	}
+
 	proposalPath := filepath.Join(activePath, "proposal.md")
 	if err := os.WriteFile(proposalPath, []byte(proposalContent), 0644); err != nil {
 		return nil, fmt.Errorf("error al escribir proposal.md: %w", err)
@@ -1282,6 +1284,3 @@ func (s *Service) GetModelAssignments() (*ModelAssignmentsDTO, error) {
 		Assignments:   assignments,
 	}, nil
 }
-
-
-

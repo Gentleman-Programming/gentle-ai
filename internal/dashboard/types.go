@@ -18,7 +18,6 @@ type WorkspaceDTO struct {
 	DetectedTech    interface{}         `json:"detected_tech,omitempty"`
 }
 
-
 // RoleMeta describe un rol dentro del espacio de trabajo.
 type RoleMeta struct {
 	Name         string   `json:"name"`
@@ -120,9 +119,10 @@ type MigrateCumulativeRequest struct {
 
 // CreateIncrementRequest define los parámetros para crear un nuevo incremento SDD.
 type CreateIncrementRequest struct {
-	Name   string `json:"name"`
-	Intent string `json:"intent"`
-	Type   string `json:"type,omitempty"` // "feature", "fix", "refactor", "architecture"
+	Name         string `json:"name"`
+	Intent       string `json:"intent"`
+	Type         string `json:"type,omitempty"`          // "feature", "fix", "refactor", "architecture"
+	ProposalBody string `json:"proposal_body,omitempty"` // INC-19: cuerpo ya renderizado (promoción ODD), sustituye la plantilla generada cuando no está vacío
 }
 
 // CreateIncrementResponse reporta el resultado de la creación de un incremento.
@@ -225,5 +225,3 @@ type ModelAssignmentsDTO struct {
 	ActivePersona string            `json:"active_persona"`
 	Assignments   []ModelConfigItem `json:"assignments"`
 }
-
-
