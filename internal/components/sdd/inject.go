@@ -1956,15 +1956,18 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 	}
 
-	// On Windows, prune the pre-fix POSIX literal before the canonical-existence
-	// early return so a settings file that already carries the canonical entry
-	// still gets the legacy cleaned up.
+	// On Windows, prune the pre-fix POSIX literal from the loaded settings.
+	// The pruning must reach disk before the canonical-existence early return
+	// below; otherwise a settings file that already carries the canonical
+	// entry would retain the legacy entry on disk (the in-memory prune would
+	// be discarded when the function returned without writing).
+	pruned := false
 	if runtime.GOOS == "windows" {
 		const legacy = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
-		pruneLegacyClaudeHook(root, legacy)
+		pruned = pruneLegacyClaudeHook(root, legacy)
 	}
 
-	if claudeHookExists(root, command) {
+	if !pruned && claudeHookExists(root, command) {
 		return false, nil
 	}
 
@@ -2229,22 +2232,21 @@ func claudeHookExists(root map[string]any, command string) bool {
 
 // pruneLegacyClaudeHook removes any inner-hook entry whose `command` matches
 // `legacy` from the UserPromptSubmit hook in root, mutating the structure
-// in place. Called from ensureClaudeSkillRegistryHook before the canonical-
-// existence early return so a settings file that already has the canonical
-// entry but still carries the legacy gets cleaned up.
-func pruneLegacyClaudeHook(root map[string]any, legacy string) {
+// in place. Returns true when at least one entry was dropped so the caller
+// can decide whether to persist the change.
+func pruneLegacyClaudeHook(root map[string]any, legacy string) (changed bool) {
 	hooksRaw, ok := root["hooks"].(map[string]any)
 	if !ok {
-		return
+		return false
 	}
 	const userPromptSubmit = "UserPromptSubmit"
 	upsRaw, ok := hooksRaw[userPromptSubmit]
 	if !ok {
-		return
+		return false
 	}
 	ups, ok := upsRaw.([]any)
 	if !ok {
-		return
+		return false
 	}
 	var pruned []any
 	for _, item := range ups {
@@ -2270,6 +2272,7 @@ func pruneLegacyClaudeHook(root map[string]any, legacy string) {
 			pruned = append(pruned, item)
 			continue
 		}
+		changed = true
 		if len(kept) == 0 {
 			// Drop the whole item. Falling through (not `return`) is what
 			// lets the post-loop `len(pruned) == 0` check delete the
@@ -2288,6 +2291,7 @@ func pruneLegacyClaudeHook(root map[string]any, legacy string) {
 	} else {
 		hooksRaw[userPromptSubmit] = pruned
 	}
+	return changed
 }
 
 func claudeHookListContains(hookEntries []any, command string) bool {
