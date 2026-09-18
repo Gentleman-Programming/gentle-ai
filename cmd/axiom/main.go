@@ -388,10 +388,11 @@ func main() {
 	case "review-validate":
 		os.Exit(runReview(append([]string{"validate"}, os.Args[2:]...), os.Stdout, os.Stderr, true))
 
-	// These three existed only in internal/app, so they were reachable through
+	// These four existed only in internal/app, so they were reachable through
 	// the deprecated `gentle-ai` wrapper and not through the canonical binary.
 	// Nobody noticed because no CI step exercised cmd/axiom. `skill-registry`
-	// delegates to app because its implementation is unexported there.
+	// and `bench-model-picker` delegate to app because their implementations
+	// are unexported there.
 	case "codegraph":
 		os.Exit(runSimpleCommand(cli.RunCodeGraph, os.Args[2:], os.Stdout, os.Stderr))
 	case "telemetry":
@@ -400,6 +401,16 @@ func main() {
 		os.Exit(runSimpleCommand(
 			func(args []string, stdout io.Writer) error {
 				return app.RunArgs(append([]string{"skill-registry"}, args...), stdout)
+			},
+			os.Args[2:], os.Stdout, os.Stderr))
+	// Only a build carrying `-tags bench_fixture` implements this verb; every
+	// other build falls through app's own switch and refuses it as an unknown
+	// command, which is what lets the benchmark report `unsupported` instead of
+	// fabricating a pass. Delegating preserves that distinction here too.
+	case "bench-model-picker":
+		os.Exit(runSimpleCommand(
+			func(args []string, stdout io.Writer) error {
+				return app.RunArgs(append([]string{"bench-model-picker"}, args...), stdout)
 			},
 			os.Args[2:], os.Stdout, os.Stderr))
 

@@ -474,6 +474,14 @@ var unsupportedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)unexpected [a-z ]+ argument "`),
 	regexp.MustCompile(`(?i)unknown [a-z-]+ "--`),
 	regexp.MustCompile(`(?i)^Error: unknown command`),
+	// INC-16 localized the CLI's refusals while upstream ships English. The
+	// canonical binary rejects an absent verb with `Error: comando 'x' no
+	// reconocido.` and an absent subcommand with `Error: subcomando 'x' no
+	// reconocido para <verb>.`; neither matches any English shape above, so a
+	// missing surface was being scored as a state failure -- this list's own
+	// flattering lie with the sign flipped. Accepting both languages keeps the
+	// corpus honest against either product without asserting which one ships.
+	regexp.MustCompile(`(?i)(sub)?comando '[^']*' no reconocido`),
 }
 
 // IsUnsupported reports whether the binary rejected the SHAPE of the command

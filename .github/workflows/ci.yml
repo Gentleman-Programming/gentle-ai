@@ -139,7 +139,9 @@ jobs:
               | ($matches | length == 1) and ($matches[0].status == "unsupported");
             unsupported_once("j97-opencode-custom-agent-model-picker-runtime")
           ' "$RUNNER_TEMP/bench-model-picker-untagged.json"
-          go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
+          # Canonical package, same reason as the build above: ./cmd/gentle-ai
+          # is the deprecation shim and its stderr notice reaches the journeys.
+          go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/axiom
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker.json"
           jq -e '
             def completed_once($id):
