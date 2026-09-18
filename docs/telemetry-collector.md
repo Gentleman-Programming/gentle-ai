@@ -241,7 +241,34 @@ the process last restarted:
 
 1. Rolls up **yesterday**'s events into `rollups_daily` (idempotent — safe
    to re-run after a crash or restart).
-2. Purges raw `events` rows older than `--retention-days` (default 90).
+2. Purges raw `events` rows and whole sqlite-mode runtime deliveries older
+   than `--retention-days` (default 90).
+3. Purges runtime delivery identities (`runtime_delivery_ids`, the
+   `--runtime-store=metrics` dedup table) older than `--runtime-dedup-days`
+   (default 2, never longer than `--retention-days`), in batches of 50,000
+   rows in short transactions so the purge never holds the single writer
+   for seconds. An identity only has to outlive the moments in which a
+   replay of its delivery can arrive; clients never retry, and the table
+   grows by every accepted delivery (about a million rows a day in
+   production), so ninety days of it would be a hundred million rows.
+4. Compacts the file: `PRAGMA wal_checkpoint(TRUNCATE)` every run, so the
+   WAL sidecar stops growing between runs (the collector's steady write
+   stream never gives SQLite's automatic checkpoint a chance), and `VACUUM`
+   only when at least 25% of a file of at least 1,024 pages is free. The
+   result is logged as `database compacted` with `page_count`,
+   `free_pages`, `wal_frames`, `vacuumed` and `busy`; `busy=true` means a
+   reader outside this process (Grafana, the open-data export) held the
+   WAL and the truncation waits for the next run.
+
+**First compaction of a bloated file**: `VACUUM` rewrites the whole
+database and holds the writer for the duration, seconds on a compact file
+but minutes on a bloated one, during which live deliveries fail as
+`storage_busy`. When a file is already mostly free pages (the
+`--runtime-store=metrics` cutover left 91% of a 1.4 GB file free), do the
+first `VACUUM` offline instead of letting the daily job do it online: stop
+`gentle-telemetry.service`, run `sqlite3 <db> 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'`
+as a user that may write the file, start the unit. The daily rule then
+only ever sees small deltas.
 
 `rollups_daily` itself is never purged: it is the durable historical record
 once the raw rows behind it age out.
@@ -348,6 +375,7 @@ address"`, with the header's value itself never logged.
 --db /var/lib/gentle-telemetry/events.sqlite              # SQLite file
 --summary-token-file <path>                               # bearer token for /v1/summary (local runs; systemd uses LoadCredential, see Token rotation)
 --retention-days 90                                        # raw event retention
+--runtime-dedup-days 2                                     # runtime delivery id retention (replay rejection), never longer than --retention-days
 --rate-limit-per-minute 60                                 # per-address budget on /v1/events
 --runtime-rate-limit-per-minute 600                         # per-address budget on /v1/runtime-events
 --runtime-store sqlite                                      # sqlite (default) | metrics | both — see Runtime metrics for VictoriaMetrics
