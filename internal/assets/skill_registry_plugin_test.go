@@ -131,3 +131,105 @@ console.log(JSON.stringify({
 		t.Errorf("binaryMissingUnsafeCwd must embed the unsafe cwd via JSON.stringify so shell metacharacters are not active: %q", result.BinaryMissingUnsafeCwd)
 	}
 }
+
+// TestSkillRegistryPluginShellSafeCwdEncoding verifies that the
+// suggested recovery command wraps the cwd in POSIX single quotes so
+// $() / backticks / double quotes are not re-interpreted by the user's
+// shell.
+func TestSkillRegistryPluginShellSafeCwdEncoding(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the harness uses POSIX shell semantics")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is unavailable")
+	}
+	source, err := Read("opencode/plugins/skill-registry.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/plugin.mts", []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const bt = "`" // mirror of the harness JS BT, used to build expected outputs
+	cases := map[string]string{
+		"dollarParen": "/tmp/$(printf INJECTED_DOLLAR_PAREN)/repo",
+		"backtick":    "/tmp/" + bt + "printf INJECTED_BACKTICK" + bt + "/repo",
+		"doubleQuote": `/tmp/he said "go"/repo`,
+		"singleQuote": "/tmp/he said 'go'/repo",
+	}
+	harnessLines := []string{
+		`import { describeRefreshFailure } from "./plugin.mts"`,
+		``,
+		`const errEnoentSpawn = Object.assign(new Error("spawn gentle-ai ENOENT"), {`,
+		`  code: "ENOENT", syscall: "spawn gentle-ai", path: "gentle-ai",`,
+		`})`,
+		``,
+		`// Each cwd must round-trip through a POSIX shell unchanged: $(),`,
+		`// backtick, and double-quote substitutions must NOT fire when a`,
+		`// user pastes the suggested recovery command.`,
+		`const BT = String.fromCharCode(96) // backtick`,
+		`const cases = {`,
+		`  dollarParen: "/tmp/$(printf INJECTED_DOLLAR_PAREN)/repo",`,
+		`  backtick:    "/tmp/" + BT + "printf INJECTED_BACKTICK" + BT + "/repo",`,
+		`  doubleQuote: '/tmp/he said "go"/repo',`,
+		`}`,
+		``,
+		`const out = {}`,
+		`for (const [name, cwd] of Object.entries(cases)) {`,
+		`  out[name] = describeRefreshFailure(errEnoentSpawn, cwd)`,
+		`}`,
+		`console.log(JSON.stringify(out))`,
+	}
+	harness := strings.Join(harnessLines, "\n") + "\n"
+	if err := os.WriteFile(root+"/harness.mts", []byte(harness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(node, "harness.mts")
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("skill-registry shell-safe harness failed: %v\n%s", err, output)
+	}
+	var result map[string]string
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode harness output %q: %v", output, err)
+	}
+
+	// Extract the cwd from the embedded recovery command. The cwd may
+	// itself contain backticks, so anchor on stable marker strings
+	// instead of parsing backtick-delimited substrings.
+	for label, got := range result {
+		if strings.ContainsAny(got, "\r\n") {
+			t.Errorf("%s must not embed a newline: %q", label, got)
+		}
+		const prefix = "Run `gentle-ai skill-registry refresh --cwd "
+		const suffix = "` from a shell where gentle-ai is installed"
+		match := strings.Index(got, prefix)
+		if match < 0 {
+			t.Fatalf("%s must include the suggested recovery command: %q", label, got)
+		}
+		after := match + len(prefix)
+		end := strings.Index(got[after:], suffix)
+		if end < 0 {
+			t.Fatalf("%s must include the suggested recovery command: %q", label, got)
+		}
+		embedded := got[after : after+end]
+
+		// Cwd must be POSIX single-quoted (so $(), backticks, double
+		// quotes are literal) and must NOT use legacy JSON double-quoted
+		// form (which leaves $(...) and backticks live).
+		if !strings.HasPrefix(embedded, "'") || !strings.HasSuffix(embedded, "'") {
+			t.Errorf("%s must wrap cwd in POSIX single quotes; got %q", label, embedded)
+		}
+		if strings.HasPrefix(embedded, "\"") && strings.HasSuffix(embedded, "\"") {
+			t.Errorf("%s must not use legacy JSON double-quoted cwd: %q", label, embedded)
+		}
+		// Cwds without embedded single quotes round-trip verbatim to the
+		// POSIX single-quoted form.
+		if embedded != "'"+cases[label]+"'" {
+			t.Errorf("%s embedded cwd mismatch: got %q", label, embedded)
+		}
+	}
+}
