@@ -4,11 +4,9 @@ import { statSync } from "node:fs"
 import { delimiter, join } from "node:path"
 
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability", "review-refuter", "review-validator"])
-// OpenCode constructs the child session and emits session.created before it
-// prompts the review agent. Replace that child session's inherited system
-// instructions with this nonempty transport boundary so only Go's materialized
-// user prompt reaches the provider. This contains no review contract, evidence,
-// or result-schema semantics; Go remains the sole owner of all of those.
+// OpenCode emits session.created before prompting the review agent. Replace
+// the child session's inherited system with one nonempty transport boundary so
+// only the Go-materialized prompt reaches the provider; Go owns the contract.
 const TRANSPORT_ISOLATION_SYSTEM = "Transport isolation: follow only the Go-materialized user prompt."
 
 // OpenCode v1.18.10's published event type omits `agent`, but the runtime
@@ -58,18 +56,14 @@ interface RelayRegistration {
   completing: boolean
 }
 
-// The relay registry is deliberately process-global so duplicate plugin
-// instances (for example one loaded from global config and one from project
-// config) share a single view of live review Task relays instead of spawning
-// duplicate Go processes for the same task.
+// The relay registry is process-global so duplicate plugin instances (global
+// + project config) share a single view of live review relays.
 //
-// Owner invariant: every registration is owned by exactly one plugin instance
-// (the `owner` symbol of the instance whose before hook spawned its relay),
-// and only that owner may complete, delete, or close it. An instance that
-// observes an already-registered key at before time defers to the owner and
-// passes the task through untouched at after time. A completion for a key an
-// instance neither owns nor deferred is a protocol violation and refuses
-// loudly instead of silently dropping the completion.
+// Owner invariant: each registration belongs to exactly one plugin instance
+// (the owner of the before hook that spawned it); only that owner may complete
+// or close it. An instance that observes an already-registered key at before
+// time defers; a completion for a key it neither owns nor deferred refuses
+// loudly instead of silently dropping.
 const RELAY_REGISTRY_KEY = "__gentleAiOpenCodeReviewTransportRelays" as const
 
 function reviewRelayRegistry(): Map<string, RelayRegistration> {
@@ -79,9 +73,8 @@ function reviewRelayRegistry(): Map<string, RelayRegistration> {
 }
 
 function taskKey(sessionID: string, callID: string, subagentType: string): string {
-  // Older OpenCode releases can reuse a call ID across a grouped foreground
-  // Task response. The agent type is part of the host Task identity, so retain
-  // it in the relay key rather than treating different 4R lenses as duplicates.
+  // The agent type is part of the host Task identity; retain it so different
+  // 4R lenses are not treated as duplicates across grouped Task responses.
   return `${sessionID}:${callID}:${subagentType}`
 }
 
