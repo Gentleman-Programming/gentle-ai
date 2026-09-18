@@ -75,7 +75,14 @@ jobs:
 
       - name: Run benchmark evidence
         run: |
-          go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
+          # Build the canonical binary, not ./cmd/gentle-ai. That one is a
+          # deprecation shim that writes a notice to stderr on every
+          # invocation, and the journeys read the product's own output:
+          # j122 parsed the notice's first letter as JSON ("invalid character
+          # 'A'"), and the TUI journeys captured it ahead of the menu they
+          # wait for. The file keeps the retired name because the corpus
+          # resolves the product by that name.
+          go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/axiom
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --out "$RUNNER_TEMP/bench-portable.json"
           jq -e '
             def completed_once($id):
