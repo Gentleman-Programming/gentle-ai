@@ -2,6 +2,8 @@ package tui
 
 import (
 	"errors"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -156,6 +158,33 @@ func TestNewModelProbesGitRepositoryOnce(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	if !m.InGitRepository {
 		t.Fatal("NewModel did not record the Git probe result")
+	}
+}
+
+// TestGitRepoProbeIgnoresInheritedRepositoryLocation keeps an ambient shell's
+// repository-location overrides from making an unrelated cwd appear to be a
+// Git worktree. It exercises the real Git command and is skipped for short
+// runs or hosts without Git.
+func TestGitRepoProbeIgnoresInheritedRepositoryLocation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires a real git executable")
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git executable is unavailable")
+	}
+
+	repo := t.TempDir()
+	if output, err := exec.Command(git, "init", "--quiet", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	outside := t.TempDir()
+	t.Setenv("GIT_DIR", filepath.Join(repo, ".git"))
+	t.Setenv("GIT_WORK_TREE", repo)
+	t.Setenv("GIT_COMMON_DIR", filepath.Join(repo, ".git"))
+
+	if gitRepoProbeFn(outside) {
+		t.Fatalf("Git probe treated unrelated cwd %q as a worktree through inherited repository overrides", outside)
 	}
 }
 
@@ -419,6 +448,7 @@ func TestReviewStoreResetResultIsNeverDropped(t *testing.T) {
 func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
+	m.InGitRepository = true
 	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
 		return settledStoreResetReport(), nil
 	}

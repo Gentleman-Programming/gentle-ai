@@ -105,12 +105,41 @@ var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
 
+// gitRepositoryLocationEnvironment lists inherited variables that can make
+// Git resolve a repository other than the command's working directory. The
+// welcome-menu probe must answer only whether its launched cwd is in a Git
+// worktree, not whether an ambient shell happened to target one elsewhere.
+var gitRepositoryLocationEnvironment = map[string]struct{}{
+	"GIT_CEILING_DIRECTORIES":         {},
+	"GIT_COMMON_DIR":                  {},
+	"GIT_DIR":                         {},
+	"GIT_DISCOVERY_ACROSS_FILESYSTEM": {},
+	"GIT_IMPLICIT_WORK_TREE":          {},
+	"GIT_PREFIX":                      {},
+	"GIT_WORK_TREE":                   {},
+}
+
+// gitRepoProbeEnvironment removes Git repository-location overrides while
+// preserving ordinary process environment variables needed to start Git.
+func gitRepoProbeEnvironment(environment []string) []string {
+	result := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, overridden := gitRepositoryLocationEnvironment[strings.ToUpper(name)]; !overridden {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
 // gitRepoProbeFn reports whether cwd resolves to a Git worktree. It is a
-// package-level variable so tests can stub it without spawning real git
-// processes. It backs the welcome menu's "Reset review store" precondition.
+// package-level variable so tests can stub it without spawning real Git
+// processes. It ignores ambient repository-location overrides so it backs the
+// welcome menu's "Reset review store" precondition for cwd alone.
 var gitRepoProbeFn = func(cwd string) bool {
 	cmd := execCommandFn("git", "rev-parse", "--is-inside-work-tree")
 	cmd.Dir = cwd
+	cmd.Env = gitRepoProbeEnvironment(os.Environ())
 	out, err := cmd.Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
