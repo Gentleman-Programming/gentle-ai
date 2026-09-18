@@ -10,6 +10,11 @@ import (
 
 const issue3500ExternalPrompt = "EXTERNAL_3500_PREFIX\nKeep these external policy bytes exactly.\nEXTERNAL_3500_SUFFIX"
 
+// issue3500SeedExternalOpenCodePrompt seeds the retired `gentle-orchestrator`
+// key on purpose: `sync` migrates it to the current key and must carry these
+// external bytes across untouched, so seeding the old name proves preservation
+// across the rename as well as across the sync. The assertions read the result
+// back under either key.
 func issue3500SeedExternalOpenCodePrompt(sandbox *Sandbox) error {
 	path := filepath.Join(sandbox.Home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -36,7 +41,8 @@ func issue3500PreservedPrompt(sandbox *Sandbox) (string, error) {
 	if err := json.Unmarshal(content, &settings); err != nil {
 		return "", err
 	}
-	return settings.Agent["gentle-orchestrator"].Prompt, nil
+	entry, _ := orchestratorEntry(settings.Agent)
+	return entry.Prompt, nil
 }
 
 func issue3500AssertFirstSync(sandbox *Sandbox, observation Observation) error {

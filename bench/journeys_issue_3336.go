@@ -12,7 +12,8 @@ func issue3336AssertGeneratedPrompt(s *Sandbox, observation Observation) error {
 	var settings map[string]any
 	parseErr := json.Unmarshal(content, &settings)
 	agents, _ := settings["agent"].(map[string]any)
-	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
+	entry, _ := orchestratorEntry(agents)
+	orchestrator, _ := entry.(map[string]any)
 	prompt, shapeOK := orchestrator["prompt"].(string)
 	if observation.ExitCode != 0 || readErr != nil || parseErr != nil || !shapeOK || strings.Count(prompt, "<!-- gentle-ai:sdd-session-preflight -->") != 1 || strings.Count(prompt, "<!-- /gentle-ai:sdd-session-preflight -->") != 1 || !strings.Contains(prompt, "1. **Pace**") || !strings.Contains(prompt, "2. **Artifacts**") || !strings.Contains(prompt, "3. **PR strategy**") || !strings.Contains(prompt, "Both -> `hybrid`") || !strings.Contains(prompt, "fixed at 400 changed lines") || strings.Contains(prompt, "Both -> `both`") || strings.Contains(prompt, "4. **Review policy**") || strings.Contains(prompt, "Review: 400 lines") || strings.Contains(prompt, "800 lines") || strings.Contains(prompt, ", Other") || strings.Contains(prompt, "Other ->") || strings.Contains(prompt, "custom review budget") {
 		return fmt.Errorf("sync failed or generated prompt violated canonical preflight")
