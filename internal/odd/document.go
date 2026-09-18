@@ -98,6 +98,13 @@ type FeatureSummary struct {
 	PromotedAt string                     `json:"promoted_at,omitempty"`
 	Progress   multirole.RoleTaskProgress `json:"progress"`
 	Warnings   []string                   `json:"warnings,omitempty"`
+	// Mirror es el resultado de comparar este documento contra su espejo de
+	// recuperación en Engram (REQ-19.4, REQ-19.7). Es nil salvo que quien
+	// construya el resumen haya invocado explícitamente CheckMirror para
+	// esta feature: axiom odd status sólo lo puebla bajo --check-mirror, y
+	// Scan nunca lo puebla por sí mismo. Extensión aditiva sobre la forma
+	// original de este tipo: no altera ningún campo existente.
+	Mirror *MirrorReport `json:"mirror,omitempty"`
 }
 
 // StatusReport agrega el resultado de `axiom odd status`: el listado
