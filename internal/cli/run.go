@@ -1259,8 +1259,8 @@ func (s rollbackRestoreStep) Rollback() error {
 //
 // homeDir is always included. workspaceDir is included too when set and
 // distinct from homeDir: componentInjectionDirScoped resolves most
-// component targets there under ScopeWorkspace, and OpenClaw resolves its
-// workspace independent of --scope entirely (resolveOpenClawWorkspaceDir).
+// component targets there under ScopeWorkspace, while project tools retain
+// their cwd independently of agent artifact scope.
 // Both values are exactly what backupTargets/syncBackupTargets used to
 // compute what this run actually snapshotted, so allowing rollback to
 // write within them is not wider than what this run could already do.
@@ -2536,9 +2536,13 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			if p := adapter.SettingsPath(homeDir); p != "" {
-				paths = append(paths, p)
-			}
+			// No managed path. Per REQ-09.2 this component is non-intrusive:
+			// theme.Inject writes nothing and preserves whatever theme the
+			// developer already chose. Declaring the agent's settings file
+			// here made post-apply verification require a file the component
+			// never creates, so `install --component theme` exited non-zero on
+			// any machine without a pre-existing settings file. A component
+			// that writes nothing must not claim a required file.
 		case model.ComponentClaudeTheme:
 			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
 		case model.ComponentOpenCodeGentleLogo:
