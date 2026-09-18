@@ -112,6 +112,108 @@ func TestRunSDDStatusInvalidFlag(t *testing.T) {
 	}
 }
 
+// TestRunODDHelp cubre la frontera T-8 de la matriz de amenazas del diseño
+// (enrutamiento de subcomandos de CLI) para "axiom odd": sin argumentos,
+// --help y -h.
+func TestRunODDHelp(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"flag --help", []string{"--help"}},
+		{"flag -h", []string{"-h"}},
+		{"sin argumentos", []string{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exitCode := runODD(tc.args, &stdout, &stderr)
+
+			out := stdout.String()
+			if len(tc.args) == 0 {
+				if exitCode != 1 {
+					t.Fatalf("se esperaba código 1 sin argumentos, se obtuvo %d", exitCode)
+				}
+			} else {
+				if exitCode != 0 {
+					t.Fatalf("se esperaba código 0 con %v, se obtuvo %d", tc.args, exitCode)
+				}
+			}
+
+			if !strings.Contains(out, "Uso: axiom odd <subcomando>") {
+				t.Fatalf("la salida no contiene el uso esperado:\n%s", out)
+			}
+			for _, sub := range []string{"create", "status"} {
+				if !strings.Contains(out, sub) {
+					t.Fatalf("la ayuda de odd no documenta el subcomando %q:\n%s", sub, out)
+				}
+			}
+		})
+	}
+}
+
+// TestRunODDUnknownSubcommand cubre "odd inexistente" (frontera T-8): un
+// subcomando no reconocido, incluido "promote" (todavía sin cablear hasta la
+// Fase 5), devuelve exit 1 con un mensaje explícito.
+func TestRunODDUnknownSubcommand(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"subcomando inexistente", []string{"subcomando-inexistente"}},
+		{"promote todavía no cableado en esta rebanada", []string{"promote", "demo"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exitCode := runODD(tc.args, &stdout, &stderr)
+			if exitCode != 1 {
+				t.Fatalf("se esperaba código 1 para %v, se obtuvo %d", tc.args, exitCode)
+			}
+			errOut := stderr.String()
+			if !strings.Contains(errOut, "no reconocido para odd") {
+				t.Fatalf("stderr no contiene el mensaje de error esperado:\n%s", errOut)
+			}
+		})
+	}
+}
+
+// TestRunODDCreateAndStatusDispatch confirma que runODD enruta de verdad
+// "create" y "status" hacia cli.RunODDCreate y cli.RunODDStatus (frontera
+// T-8): una tabla de opciones que compila pero no enruta a su manejador real
+// es exactamente el fallo que ya existe en la TUI (D-12 del diseño) y que
+// este incremento no debe reproducir en la CLI.
+func TestRunODDCreateAndStatusDispatch(t *testing.T) {
+	root := t.TempDir()
+
+	var createOut, createErr bytes.Buffer
+	if code := runODD([]string{"create", "gestion-inventario", "--cwd", root}, &createOut, &createErr); code != 0 {
+		t.Fatalf("runODD create falló con código %d: %s", code, createErr.String())
+	}
+	if !strings.Contains(createOut.String(), "odd/tasks/gestion-inventario.md") {
+		t.Fatalf("runODD create no reenvió la salida real de cli.RunODDCreate: %q", createOut.String())
+	}
+
+	var statusOut, statusErr bytes.Buffer
+	if code := runODD([]string{"status", "--cwd", root}, &statusOut, &statusErr); code != 0 {
+		t.Fatalf("runODD status falló con código %d: %s", code, statusErr.String())
+	}
+	if !strings.Contains(statusOut.String(), "gestion-inventario") {
+		t.Fatalf("runODD status no reenvió la salida real de cli.RunODDStatus: %q", statusOut.String())
+	}
+
+	var jsonOut, jsonErr bytes.Buffer
+	if code := runODD([]string{"status", "--cwd", root, "--json"}, &jsonOut, &jsonErr); code != 0 {
+		t.Fatalf("runODD status --json falló con código %d: %s", code, jsonErr.String())
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(jsonOut.Bytes(), &data); err != nil {
+		t.Fatalf("runODD status --json no produjo JSON válido: %v\nsalida: %s", err, jsonOut.String())
+	}
+}
+
 func TestRunReviewHelp(t *testing.T) {
 	tests := []struct {
 		name string
