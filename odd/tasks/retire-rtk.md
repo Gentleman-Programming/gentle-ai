@@ -67,11 +67,35 @@ A complete retirement is safer and easier to understand than a partially disable
   - Checks: status/diff inventory, untracked inventory, corrected repository-wide RTK scan, formatting, candidate-causal affected tests, `go vet ./...`, and explicit broad-suite limitations.
   - Evidence: final verdict `PASS-WITH-LIMITATION`. All 13 candidate-causal commands passed: diff check, 21-path inventory, corrected RTK scan, formatting, focused vet, Community Tool tests (17.686s), CLI tests (7.641s), model tests (0.267s), state tests (0.280s), TUI tests (0.205s), TUI screen tests (0.467s), documentation scan, and final status. No active RTK references remain; generic Community Tools and CodeGraph remain tested and documented. The monolithic CLI timeout class reproduces on clean base; other broad-suite failures remain outside changed surfaces and unattributed. The parent spot-check reran `git diff --check` successfully and confirmed the expected candidate status.
 
-- [ ] **T-04 — Close the work unit and record review/delivery evidence**
+- [x] **T-04 — Close the work unit and record review/delivery evidence**
   - Route: parent orchestration plus native assessment/review when an authorized commit or PR-slice candidate exists.
   - Outcome: verification evidence, authored line count, rollback boundary, review outcome, and commit identity are recorded.
   - Checks: work-unit checklist; no commit, push, PR, label, or merge without separate authorization.
-  - Evidence: T-03 passed with documented limitations. Awaiting explicit user authorization for the atomic work-unit commit; native candidate assessment/review and any push or PR remain pending and separately gated.
+  - Evidence: the user authorized and Git created atomic work-unit commit `c6987cbcbb4e78599ea5ac163d2a851a9a134f18` (`refactor(community-tools): retire RTK integration`). Native assessment classified the committed range from `9ec0cf443622f20fe511815ff5a83088c7467bff` as high risk because `internal/cli/run.go` crosses a process boundary. The required independent post-commit verifier returned `PASS-WITH-LIMITATION`: all 14 commands passed against exact HEAD and the exact 22-path range. Native review lineage `review-a7f645c28ac89f24` ran all four high-tier lenses, approved the committed candidate, and its acknowledgement was consumed at revision `sha256:30f1b8e7be92ccbb4d2fd1fd83cd04f0586994def59732043d080d9b30b8e68d`; authority is burned. Two informational findings remain separate later work: `R2-dead-agent-scope` and `R4-orphaned-rtk-upgrade`. Push, PR, labels, and merge remain separately gated.
+
+- [x] **T-05 — Create the RTK retirement issue**
+  - Route: issue-creation workflow against `github.com/Gentleman-Programming/gentle-ai`.
+  - Outcome: publish the user-confirmed Feature Request titled `refactor(community-tools)!: retire RTK integration` with the exact form body and create-time labels `enhancement` and `status:needs-review`.
+  - Checks: open-and-closed duplicate search; exact form validation; explicit pre-flight affirmations; privacy scan; one create attempt; target-host readback.
+  - Evidence: the user selected `Other`, affirmed both required checkboxes, and confirmed the exact draft. The first publication preflight stopped before `gh issue create` because the Python Windows alias was unavailable. The later create attempt produced issue #4763 but lost its local identity output and published an empty body because of a Windows temp-path namespace mismatch. After the user explicitly authorized repair of exact target `github.com/Gentleman-Programming/gentle-ai#4763`, one bounded body update and target-host readback returned `confirmed`: https://github.com/Gentleman-Programming/gentle-ai/issues/4763 is OPEN, body-exact, and retains `enhancement` plus `status:needs-review`.
+
+- [x] **T-05A — Resolve the uncertain issue identity**
+  - Route: human-provided target-host observation.
+  - Outcome: establish either the exact created issue number/URL or authoritative confirmation that no issue exists.
+  - Checks: validate any supplied issue identity against `github.com/Gentleman-Programming/gentle-ai` before continuing.
+  - Evidence: the user explicitly authorized an exact-title `gh` lookup. It resolved one issue, #4763; readback showed the expected title and empty body. The authorized repair then confirmed the exact body and preserved labels/state, resolving the uncertainty.
+
+- [x] **T-06 — Approve the RTK retirement issue**
+  - Route: protected-label workflow for exact target `github.com/Gentleman-Programming/gentle-ai#4763`.
+  - Outcome: replace `status:needs-review` with `status:approved` while preserving unrelated labels and state.
+  - Checks: direct exact user authorization; authenticated actor identity; target-host `MAINTAIN` or `ADMIN`; existing-label discovery; exact pre-read; one atomic mutation; exact post-read.
+  - Evidence: the user authorized the exact protected-label action. Authenticated actor `dnlrsls` had `MAINTAIN`. One atomic mutation returned `confirmed`; issue #4763 remains OPEN with labels `enhancement` and `status:approved`.
+
+- [ ] **T-07 — Publish the RTK retirement pull request**
+  - Route: branch/PR workflow with the accepted single-PR `size:exception` strategy.
+  - Outcome: commit final progress evidence, push HEAD to fork ref `refactor/retire-rtk`, and open a PR to `Gentleman-Programming/gentle-ai:main` linked with `Closes #4763` and declared `type:breaking-change`.
+  - Checks: exact issue approval readback; no existing remote branch/PR; Conventional Commit; no co-author trailer; full PR template; documented 1,809-line size-exception rationale; target-host PR readback.
+  - Evidence: issue #4763 is OPEN with `status:approved`; no fork branch or matching PR exists. The user explicitly authorized the exact evidence commit, push, and PR creation. PR label mutations remain separately gated until the PR number exists.
 
 ## Acceptance Criteria
 
@@ -92,8 +116,14 @@ A complete retirement is safer and easier to understand than a partially disable
 - Exhaustive sharding covered all 1,571 CLI tests and 81 non-CLI packages but exposed a broadly red, environment-sensitive baseline rather than a bounded RTK signal.
 - T-03B completed with no coverage gap or correction: every surviving changed behavior maps to existing generic Community Tool, CodeGraph, model/state, or TUI tests.
 - T-03 completed with `PASS-WITH-LIMITATION`; every candidate-causal command passed and broad baseline failures are preserved separately.
-- T-04 is awaiting explicit commit authorization.
-- No source writes, commits, pushes, PRs, labels, or merges have been performed in this resumed session.
+- Atomic commit `c6987cbcbb4e78599ea5ac163d2a851a9a134f18` was created with the verified 22-path candidate and the configured GitHub no-reply identity.
+- Native committed-range assessment is high risk; required independent post-commit verification passed with the documented broad-suite limitations.
+- Native review of the exact committed range approved after all four lenses; the acknowledgement was consumed and authority burned.
+- T-04 is complete. The user then authorized creation of a new retirement issue as the PR prerequisite.
+- T-05 and T-05A are complete: issue #4763 exists with the confirmed form body.
+- T-06 is complete: issue #4763 is OPEN with `enhancement` and protected label `status:approved`.
+- T-07 PR publication is in progress under the user's exact commit/push/create authorization.
+- No pushes, PRs, or merges have been performed yet in this resumed session.
 
 ## Verification Evidence
 
@@ -107,7 +137,11 @@ A complete retirement is safer and easier to understand than a partially disable
 - Exhaustive sharded verification: `FAIL`; all eight CLI shards reproduced review timeout behavior, while unrelated SDD status, update, OpenCode, app, and review-transaction packages reported assertions, Git ownership/configuration failures, or timeouts. The candidate remained unchanged.
 - Candidate-causal changed-function/test mapping: complete with no coverage gap; broad failures do not intersect the changed RTK retirement surfaces.
 - Final focused verification: `PASS-WITH-LIMITATION`; all 13 commands passed, no active RTK references remain, and CodeGraph/generic Community Tools remain covered.
-- Parent spot check: `git diff --check` passed; status still contains exactly the 21 tracked candidate paths plus `odd/`.
+- Parent spot check: `git diff --check` passed; pre-commit status contained exactly the 21 tracked candidate paths plus `odd/`.
+- Work-unit commit: `c6987cbcbb4e78599ea5ac163d2a851a9a134f18`; 22 paths, 141 additions, 1,668 deletions.
+- Native assessment: high risk due to the `internal/cli/run.go` process boundary; independent post-commit verifier required.
+- Independent post-commit verifier: `PASS-WITH-LIMITATION`; all 14 commands passed, HEAD and the 22-path committed range matched exactly, RTK scan was clean, and only `odd/tasks/retire-rtk.md` was modified afterward.
+- Native committed-range review: approved by risk, resilience, readability, and reliability lenses; acknowledgement consumed for lineage `review-a7f645c28ac89f24`. Informational findings `R2-dead-agent-scope` and `R4-orphaned-rtk-upgrade` did not open corrections.
 
 ## Rollback Boundary
 
@@ -115,4 +149,4 @@ Revert the atomic candidate paths listed by `git diff --name-status` plus this f
 
 ## Next Step
 
-Obtain the user's explicit decision on creating the atomic work-unit commit. If authorized, commit only the verified candidate and progress artifact, then assess/review that exact committed range before any separately authorized delivery.
+Create the authorized final progress-evidence commit, push HEAD to fork ref `refactor/retire-rtk`, and open the upstream PR linked with `Closes #4763`. After exact PR readback, request separate authorization for `type:breaking-change` and protected `size:exception`; never merge.
