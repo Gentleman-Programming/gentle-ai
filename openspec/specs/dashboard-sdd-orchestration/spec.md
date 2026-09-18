@@ -13,9 +13,13 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 Permite a desarrolladores y agentes gobernar el flujo de trabajo Spec-Driven Development de forma interactiva y visual desde el servidor local embebido.
 
 ### Requirement: Creación de Incrementos y Andamiaje SDD vía API (REQ-15.1)
-El servidor HTTP local DEBE exponer el endpoint `POST /api/increments` para recibir peticiones de creación de un nuevo incremento. La petición DEBE incluir el nombre del cambio (`name`, en formato kebab-case), el propósito o intención (`intent`) y opcionalmente el tipo de cambio (`type`). El servidor DEBE validar que el nombre no contenga caracteres inválidos ni coincida con un cambio existente en `openspec/changes/` o `openspec/changes/archive/`. Al validarse, el servidor DEBE crear el directorio del cambio y generar un archivo `proposal.md` canónico redactado en español castellano.
+
+El servidor HTTP local DEBE exponer el endpoint `POST /api/increments` para recibir peticiones de creación de un nuevo incremento. La petición DEBE incluir el nombre del cambio (`name`, en formato kebab-case), el propósito o intención (`intent`), opcionalmente el tipo de cambio (`type`), y opcionalmente un cuerpo de propuesta ya renderizado (`proposal_body`) que sustituye el contenido de la plantilla generada por defecto. El servidor DEBE validar que el nombre no contenga caracteres inválidos ni coincida con un cambio existente en `openspec/changes/` o `openspec/changes/archive/`. Al validarse, el servidor DEBE crear el directorio del cambio y generar el archivo `proposal.md`: si se aportó `proposal_body` con contenido no vacío, DEBE escribir ese contenido de forma literal; si no se aportó o está vacío, DEBE generar la plantilla canónica vigente redactada en español castellano, byte a byte idéntica a la que producía antes de admitir este campo.
+
+(Previamente: el endpoint aceptaba únicamente `name`, `intent` y `type`, y siempre generaba la plantilla canónica incrustada sin posibilidad de sustituir su contenido.)
 
 #### Scenario: Creación exitosa de un nuevo incremento con plantilla en español
+
 - **DADO** el servidor HTTP del Dashboard Web activo en un workspace Axiom
 - **CUANDO** se envía una petición `POST /api/increments` con el cuerpo JSON:
   ```json
@@ -31,11 +35,26 @@ El servidor HTTP local DEBE exponer el endpoint `POST /api/increments` para reci
 - **Y** se genera el archivo `openspec/changes/nuevo-modulo-auth/proposal.md` conteniendo el título en español, el propósito y las secciones canónicas de alcance y capacidades
 
 #### Scenario: Rechazo de creación ante nombre inválido o colisión
+
 - **DADO** un workspace con un incremento existente denominado `auth-core`
 - **CUANDO** se envía una petición `POST /api/increments` con `"name": "auth-core"` o `"name": "Nombre Con Espacios!"`
 - **ENTONCES** el servidor responde con código de estado HTTP `400 Bad Request`
 - **Y** la respuesta JSON contiene un mensaje de error descriptivo en `"error"`
 - **Y** no se altera el sistema de archivos
+
+#### Scenario: Creación de incremento con cuerpo de propuesta ya renderizado
+
+- **DADO** el servidor HTTP del Dashboard Web activo
+- **CUANDO** se envía una petición `POST /api/increments` con `"name": "gestion-inventario"`, un `"intent"` descriptivo y un campo `"proposal_body"` que contiene un documento de propuesta ya redactado, por ejemplo sembrado por `axiom odd promote`
+- **ENTONCES** el servidor responde con código de estado HTTP `201 Created`
+- **Y** `openspec/changes/gestion-inventario/proposal.md` contiene exactamente el contenido de `proposal_body`, sin sustituirlo por la plantilla generada por defecto
+
+#### Scenario: Ausencia de cuerpo sembrado preserva la plantilla vigente
+
+- **DADO** el servidor HTTP del Dashboard Web activo
+- **CUANDO** se envía una petición `POST /api/increments` sin el campo `proposal_body`, igual que antes de admitir este campo
+- **ENTONCES** el `proposal.md` generado es byte a byte idéntico al que el servidor producía antes de admitir `proposal_body`
+- **Y** el comportamiento observable de `axiom change create` y de `POST /api/increments` permanece sin cambios para las peticiones que no aportan `proposal_body`
 
 ---
 

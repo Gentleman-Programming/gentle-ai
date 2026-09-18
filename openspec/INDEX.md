@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-16 21:45:00 UTC
-> **Total Dominios:** 45 | **Total Requerimientos:** 306 | **Total Escenarios BDD:** 489
+> **Última Sincronización:** 2026-09-18 09:45:00 UTC
+> **Total Dominios:** 49 | **Total Requerimientos:** 321 | **Total Escenarios BDD:** 524
 
 ---
 
@@ -23,6 +23,10 @@
 | `local-web-dashboard` | Especificación Viva: Servidor HTTP Local Embebido y Dashboard Web | 8 | 15 | [Ver Spec](specs/local-web-dashboard/spec.md) |
 | `multi-project-hub` | Especificación Viva: Hub Multi-Proyecto, Selector Dinámico en Dashboard Web y CLI axiom init (INC-08) | 6 | 10 | [Ver Spec](specs/multi-project-hub/spec.md) |
 | `multi-role-fan-out` | Especificación Viva: Despliegue Multi-Rol y Barrera de Sincronización en SDD | 8 | 13 | [Ver Spec](specs/multi-role-fan-out/spec.md) |
+| `odd-cli-commands` | Especificación de Requerimientos: Comandos CLI para ODD (INC-19) | 4 | 10 | [Ver Spec](specs/odd-cli-commands/spec.md) |
+| `odd-living-document` | Especificación de Requerimientos: Documento Vivo ODD y Espejo de Recuperación en Engram (INC-19) | 4 | 8 | [Ver Spec](specs/odd-living-document/spec.md) |
+| `odd-sdd-promotion` | Especificación de Requerimientos: Promoción de Documentos ODD a Propuestas SDD (INC-19) | 4 | 9 | [Ver Spec](specs/odd-sdd-promotion/spec.md) |
+| `odd-ui-integration` | Especificación de Requerimientos: Integración de ODD en Dashboard Web y TUI (INC-19) | 3 | 6 | [Ver Spec](specs/odd-ui-integration/spec.md) |
 | `orchestrator-commands-markers` | Especificación de Requerimientos: axiom-orchestrator y Comandos Slash Canónicos (INC-11) | 4 | 5 | [Ver Spec](specs/orchestrator-commands-markers/spec.md) |
 | `organic-agent-trigger-rules` | Organic Agent Routing Projection | 12 | 17 | [Ver Spec](specs/organic-agent-trigger-rules/spec.md) |
 | `persona-behavior-contract` | persona-behavior-contract Specification | 17 | 32 | [Ver Spec](specs/persona-behavior-contract/spec.md) |
@@ -172,6 +176,8 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-15.1]** Creación de Incrementos y Andamiaje SDD vía API
   - *Escenario BDD:* Creación exitosa de un nuevo incremento con plantilla en español
   - *Escenario BDD:* Rechazo de creación ante nombre inválido o colisión
+  - *Escenario BDD:* Creación de incremento con cuerpo de propuesta ya renderizado
+  - *Escenario BDD:* Ausencia de cuerpo sembrado preserva la plantilla vigente
 - **[REQ-15.2]** Ejecución y Avance de Fase SDD vía API
   - *Escenario BDD:* Avance de fase exitoso con captura de acción autorizada
   - *Escenario BDD:* Rechazo de avance para un cambio inexistente
@@ -354,6 +360,82 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-3.3]** Subcomando axiom role barrier
   - *Escenario BDD:* Barrera aprobada en terminal con advertencia diferida
   - *Escenario BDD:* Barrera denegada en terminal por bloqueo
+
+### Dominio: `odd-cli-commands` — Especificación de Requerimientos: Comandos CLI para ODD (INC-19)
+
+<!-- Especificación Viva generada a partir de '2026-09-18-inc-19-odd-workflow-and-promotion' -->
+
+**Archivo:** [`specs/odd-cli-commands/spec.md`](specs/odd-cli-commands/spec.md)
+
+- **[REQ-19.5]** Subcomando axiom odd create
+  - *Escenario BDD:* Creación exitosa desde la CLI
+  - *Escenario BDD:* Nombre inválido o en colisión rechazado desde la CLI
+- **[REQ-19.6]** Subcomando axiom odd status con Salida en Texto y JSON
+  - *Escenario BDD:* Consulta de estado en texto legible
+  - *Escenario BDD:* Consulta de estado en formato estructurado
+- **[REQ-19.7]** Bandera --check-mirror en axiom odd status
+  - *Escenario BDD:* Estado por defecto no invoca el espejo
+  - *Escenario BDD:* --check-mirror informa divergencia explícita
+  - *Escenario BDD:* Engram no disponible no altera el código de salida
+- **[REQ-19.8]** Subcomando axiom odd promote: Banderas y Presencia en la Ayuda
+  - *Escenario BDD:* --dry-run previsualiza sin escribir
+  - *Escenario BDD:* --name sobrescribe el nombre de cambio derivado
+  - *Escenario BDD:* El grupo odd aparece en la ayuda de la CLI
+
+### Dominio: `odd-living-document` — Especificación de Requerimientos: Documento Vivo ODD y Espejo de Recuperación en Engram (INC-19)
+
+<!-- Especificación Viva generada a partir de '2026-09-18-inc-19-odd-workflow-and-promotion' -->
+
+**Archivo:** [`specs/odd-living-document/spec.md`](specs/odd-living-document/spec.md)
+
+- **[REQ-19.1]** Estructura Canónica del Documento Vivo ODD
+  - *Escenario BDD:* Creación de un documento vivo nuevo con las doce secciones
+  - *Escenario BDD:* Un documento existente conserva su estructura al actualizarse
+- **[REQ-19.2]** Identidad Estable de Feature y Ubicación del Fichero
+  - *Escenario BDD:* Nombre de feature válido crea el fichero en la ruta esperada
+  - *Escenario BDD:* Colisión de nombre de feature rechazada de forma explícita
+- **[REQ-19.3]** Identificadores Estables de Tarea y Derivación de Progreso
+  - *Escenario BDD:* El progreso se deriva contando casillas marcadas
+  - *Escenario BDD:* Reordenar el checklist conserva los identificadores de tarea
+- **[REQ-19.4]** Contrato del Espejo de Recuperación en Engram y Política de Divergencia
+  - *Escenario BDD:* El fichero manda cuando el espejo está disponible pero difiere
+  - *Escenario BDD:* Engram no disponible degrada el espejo sin bloquear ni fallar
+
+### Dominio: `odd-sdd-promotion` — Especificación de Requerimientos: Promoción de Documentos ODD a Propuestas SDD (INC-19)
+
+<!-- Especificación Viva generada a partir de '2026-09-18-inc-19-odd-workflow-and-promotion' -->
+
+**Archivo:** [`specs/odd-sdd-promotion/spec.md`](specs/odd-sdd-promotion/spec.md)
+
+- **[REQ-19.9]** Mapeo Determinista de Documento ODD a Propuesta SDD
+  - *Escenario BDD:* Promoción exitosa siembra la propuesta con el mapeo completo
+  - *Escenario BDD:* Ausencia de evidencia de verificación no se fabrica en el mapeo
+- **[REQ-19.10]** Validación de Nombre y Colisión al Promover
+  - *Escenario BDD:* Colisión con un cambio SDD activo rechazada
+  - *Escenario BDD:* Nombre de feature inválido como nombre de cambio rechazado
+- **[REQ-19.11]** Prohibición de Fabricar Contenido de Especificación al Promover
+  - *Escenario BDD:* La sección de Capacidades queda marcada, no inventada
+  - *Escenario BDD:* El checklist con lenguaje técnico no se reinterpreta como capacidades
+- **[REQ-19.12]** Estado del Documento ODD tras la Promoción
+  - *Escenario BDD:* El documento se conserva y se marca como promovido
+  - *Escenario BDD:* Segunda promoción del mismo documento rechazada
+  - *Escenario BDD:* axiom odd status refleja el documento promovido como cerrado
+
+### Dominio: `odd-ui-integration` — Especificación de Requerimientos: Integración de ODD en Dashboard Web y TUI (INC-19)
+
+<!-- Especificación Viva generada a partir de '2026-09-18-inc-19-odd-workflow-and-promotion' -->
+
+**Archivo:** [`specs/odd-ui-integration/spec.md`](specs/odd-ui-integration/spec.md)
+
+- **[REQ-19.13]** Exposición del Estado ODD en el Dashboard Web
+  - *Escenario BDD:* Listado de documentos vivos con su progreso en el Dashboard
+  - *Escenario BDD:* Sin documentos vivos, el Dashboard informa un estado vacío claro
+- **[REQ-19.14]** Exposición del Estado ODD en la TUI
+  - *Escenario BDD:* Consulta del estado ODD desde la TUI
+  - *Escenario BDD:* Sin documentos vivos, la TUI informa un estado vacío claro
+- **[REQ-19.15]** Conmutación Visible entre Carril ODD y Carril SDD
+  - *Escenario BDD:* Salto desde un documento ODD promovido a su cambio SDD
+  - *Escenario BDD:* Conmutación entre carriles desde cualquiera de las dos interfaces
 
 ### Dominio: `orchestrator-commands-markers` — Especificación de Requerimientos: axiom-orchestrator y Comandos Slash Canónicos (INC-11)
 

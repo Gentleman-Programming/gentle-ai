@@ -548,4 +548,53 @@ func TestRunChangeCreate_ValidationAndCollision(t *testing.T) {
 	}
 }
 
+// TestPrintHelpAnunciaElGrupoODD cubre el escenario de REQ-19.8 que exige que
+// el grupo `axiom odd` completo figure en la salida de `axiom --help`, es
+// decir, en printHelp(), y no solo en la ayuda propia de runODD.
+//
+// La verificación del incremento dejó este escenario comprobado únicamente a
+// mano: TestRunODDHelp ejercita `axiom odd --help`, que es otra superficie.
+//
+// printHelp escribe directamente en os.Stdout con fmt.Print, sin escritor
+// inyectable, así que la salida se captura con un pipe. El extremo de lectura
+// se drena en una goroutine lanzada ANTES de invocar printHelp: en Windows el
+// búfer del pipe anónimo es lo bastante pequeño como para que la escritura de
+// la ayuda (unos 4,5 KB) bloquee indefinidamente si nadie lee en paralelo.
+// Leer después de escribir cuelga el test hasta el timeout de go test.
+func TestPrintHelpAnunciaElGrupoODD(t *testing.T) {
+	original := os.Stdout
+	lectura, escritura, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("no se pudo crear el pipe de captura: %v", err)
+	}
+	t.Cleanup(func() { os.Stdout = original })
 
+	capturada := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(lectura)
+		capturada <- buf.String()
+	}()
+
+	os.Stdout = escritura
+	printHelp()
+	os.Stdout = original
+	if closeErr := escritura.Close(); closeErr != nil {
+		t.Fatalf("no se pudo cerrar el extremo de escritura: %v", closeErr)
+	}
+
+	ayuda := <-capturada
+
+	for _, subcomando := range []string{"odd create", "odd status", "odd promote"} {
+		if !strings.Contains(ayuda, subcomando) {
+			t.Errorf("printHelp() no anuncia %q; REQ-19.8 exige los tres subcomandos del grupo odd", subcomando)
+		}
+	}
+
+	// El sufijo se añadió mientras promote estaba anunciado pero sin enrutar y
+	// se retiró al cablearlo. Anunciar un comando que el despachador rechaza
+	// sería incoherente en cualquier estado publicado.
+	if strings.Contains(ayuda, "aun no disponible") {
+		t.Error("printHelp() marca todavía un subcomando como no disponible; el grupo odd está cableado por completo")
+	}
+}
