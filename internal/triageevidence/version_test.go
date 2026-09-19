@@ -27,6 +27,7 @@ func TestParseReportedVersionBuckets(t *testing.T) {
 		{name: "latest", raw: "latest", channel: ChannelUnknown},
 		{name: "empty", raw: "  ", channel: ChannelUnknown},
 		{name: "partial no patch", raw: "3", channel: ChannelUnknown},
+		{name: "overflow digit run never panics", raw: "99999999999999999999.0.0", channel: ChannelUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
