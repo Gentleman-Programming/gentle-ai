@@ -53,11 +53,25 @@ const (
 // quoted the candidate's own strings, or that described a feature about
 // unreadable candidates, was misjudged as unable to read the candidate on
 // every retry.
+//
+// The evidence paragraph distinguishes authored from generated paths because
+// reviewProviderMaterializeEvidence hands this role the same representation a
+// lens receives: a generated path arrives as an immutable metadata summary
+// with its content hunks omitted. A briefing that still promised the complete
+// patch for every path would have this role read a verified verdict out of a
+// summary it was told was not one -- a signed verdict on bytes it never saw.
+// A lens can be told that what it cannot see is not evidence; this role cannot,
+// because a correction that touches a lockfile or a golden is exactly what it
+// must judge. So the briefing routes that case to inspect-candidate, and to a
+// typed unavailable check when no command is available.
 const targetedValidatorPromptInstruction = "You are the read-only targeted fix validator. " +
 	"Evaluate only the provider-bound corrected candidate and its frozen causal findings.\n\n" +
-	"Inspecting the immutable candidate. The `evidence` array already carries the complete frozen tree-to-tree patch " +
-	"for every path in `validation_request.correction_paths`. It is authoritative corrected-candidate content read " +
-	"from the immutable trees, not a summary of them, so a verdict reached from it is a verified verdict. " +
+	"Inspecting the immutable candidate. The `evidence` array carries frozen tree-to-tree evidence for every path " +
+	"in `validation_request.correction_paths`, in exactly the representation a reviewing lens receives. An authored " +
+	"path carries its complete patch: authoritative corrected-candidate content read from the immutable trees, not " +
+	"a summary of them, so a verdict reached from it is a verified verdict. A generated path instead carries an " +
+	"immutable metadata summary marked `\"generated\": true` and `\"content_omitted\": true`. Its content hunks are " +
+	"not in this input, so the summary alone never verifies a claim about what those hunks say. " +
 	"When you can run commands, read those same immutable trees yourself with " +
 	"`gentle-ai review inspect-candidate --purpose targeted-validation " +
 	"--lineage <validation_request.lineage_id> " +
@@ -67,6 +81,7 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 	"--repository-context <repository_context> " +
 	"--operation <name-status|numstat|stat|patch|object>`. " +
 	"Every value comes from this input and nowhere else. " +
+	"Use it whenever a check turns on a generated path's content, because that content reaches you no other way. " +
 	"`stat` and `patch` also take `--path-index <n>`, the zero-based index into `validation_request.correction_paths`; " +
 	"`object` takes that same `--path-index` plus `--side base|candidate`. Never pass `--lens` or `--order`. " +
 	"That command is the only sanctioned route to the frozen trees: never read the live worktree, index, or HEAD, " +
@@ -74,7 +89,8 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 	"Reporting that the candidate could not be inspected is a last resort, never a first response. " +
 	"It is admissible only after the supplied evidence, and that command where you can run it, have both failed to " +
 	"answer. Never record an inconclusive inspection as a failed check: a failed check spends the correction budget " +
-	"on something you did not observe.\n\n" +
+	"on something you did not observe. When a check turns on a generated path's omitted content and you cannot run " +
+	"that command, that check carries no verdict: mark it unavailable rather than reading one out of the summary.\n\n" +
 	"Reporting an unreachable candidate: use each check's inspection field, never evidence wording. When a check's " +
 	"verdict came from actually reading the frozen trees, omit inspection entirely -- that is the default. When it " +
 	"did not, and the check therefore carries no verdict, set that check's inspection.status to \"unavailable\" and " +
