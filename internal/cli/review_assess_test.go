@@ -151,7 +151,7 @@ func assertReviewAssessNextTransition(t *testing.T, transition *ReviewAssessment
 		if argument.Token != "--"+argument.Name+"="+argument.Value {
 			t.Fatalf("next_transition argument %#v is not its literal --name=value token", argument)
 		}
-		tokens = append(tokens, argument.Token)
+		tokens = append(tokens, reviewTransitionShellWord(argument.Token))
 	}
 	if want := "gentle-ai " + strings.Join(tokens, " "); transition.Command != want {
 		t.Fatalf("next_transition command = %q, want %q", transition.Command, want)
@@ -299,7 +299,7 @@ func TestReviewAssessHumanReadableOutputNamesDueTransition(t *testing.T) {
 		t.Fatalf("review assess: %v\n%s", err, output.String())
 	}
 	rendered := output.String()
-	wantLine := fmt.Sprintf("review due: yes (high_risk) -> gentle-ai review status --cwd=%s --contract=%s --next-transition=true", repo, ReviewIntegrationContractV2)
+	wantLine := fmt.Sprintf("review due: yes (high_risk) -> gentle-ai review status %s --contract=%s --next-transition=true", reviewTransitionShellWord("--cwd="+repo), ReviewIntegrationContractV2)
 	if !strings.Contains(rendered, wantLine) {
 		t.Fatalf("human-readable review assess output = %q, want it to contain %q", rendered, wantLine)
 	}
