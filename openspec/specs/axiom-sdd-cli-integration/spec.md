@@ -29,14 +29,22 @@ El binario `axiom` DEBE soportar `axiom sdd continue [change]` para ejecutar el 
 - **CUANDO** se ejecuta `axiom sdd continue <change>`
 - **ENTONCES** la salida emite la instrucción correspondiente a la siguiente fase autorizada (`sdd-tasks` o `sdd-apply`)
 
-### Requirement: Subcomando axiom sdd attempt (REQ-13.3)
-El binario `axiom` DEBE soportar las operaciones `acquire` y `settle` del libro mayor de intentos de ejecución (`axiom sdd attempt acquire` y `axiom sdd attempt settle`).
+### Requirement: Subcomando axiom sdd attempt tras la retirada de la gobernanza de presupuesto (REQ-13.3)
+El binario `axiom` NO DEBE soportar las operaciones `acquire` y `settle` del libro mayor de intentos de ejecución bajo `axiom sdd attempt`, siguiendo la retirada de la gobernanza de *attempts* absorbida de upstream (commit `18fa04fb`). El binario `axiom` DEBE conservar sin cambio de comportamiento la operación `axiom sdd attempt grant`, que registra la autoridad de edición por raíz (`--root`) para el cambio activo.
 
-#### Scenario: Reserva y liquidación de presupuesto de ejecución
-- **DADO** un cambio en fase `sdd-apply`
-- **CUANDO** se invoca `axiom sdd attempt acquire --change <change> ...`
-- **ENTONCES** retorna el token de sesión con estado `proceed`
-- **Y** tras la ejecución, `axiom sdd attempt settle --token <token> ...` registra el resultado de forma determinista
+(Previamente: el binario `axiom` DEBÍA soportar las operaciones `acquire` y `settle` del libro mayor de intentos de ejecución, `axiom sdd attempt acquire` y `axiom sdd attempt settle`.)
+
+#### Scenario: acquire y settle dejan de estar disponibles
+- **DADO** un cambio en fase `sdd-apply` tras absorber la tanda F4
+- **CUANDO** se invoca `axiom sdd attempt acquire --change <cambio> ...` o `axiom sdd attempt settle --token <token> ...`
+- **ENTONCES** el binario rechaza la operación como no reconocida
+- **Y** no retorna ningún token de sesión ni registra ningún resultado de presupuesto
+
+#### Scenario: grant sigue emitiendo autoridad de edición sin cambios
+- **DADO** un cambio activo con raíces de edición pendientes de autorizar
+- **CUANDO** se invoca `axiom sdd attempt grant --root <ruta> --change-instance <token> --request-id <id> --actor <actor> --reason <motivo>`
+- **ENTONCES** el sistema registra la autoridad de edición para esa raíz
+- **Y** el comportamiento de `grant` no cambia respecto al contrato vigente antes de esta absorción
 
 ---
 
