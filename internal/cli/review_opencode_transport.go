@@ -626,6 +626,13 @@ func openCodeTransportCompletionHostOutput(envelope openCodeTransportEnvelope) (
 	return decodeOpenCodeTaskHostOutput([]byte(*envelope.Output))
 }
 
+// decodeOpenCodeTaskHostOutput extracts the reviewer payload from the host's
+// Task result. The host renders a Task as
+// [<task id state>, summary?, <task_result>|<task_error>, text, ...].join("\n"),
+// so the wrapper is parsed by shape: the optional host-owned summary line is
+// tolerated, and a completed Task with an empty result, an error state, and
+// any state that cannot carry a capturable result here are each named instead
+// of being reported as a malformed wrapper.
 func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 	if len(raw) > openCodeTaskHostOutputLimit {
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_truncated"}
@@ -648,10 +655,11 @@ func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 	body := trimmed[openingEnd+1:]
 	// The host prints an optional host-owned <summary>...</summary> line
 	// between the opening tag and the result element; it is host metadata and
-	// never part of the reviewer payload.
+	// never part of the reviewer payload. Its grammar is the shipped one: one
+	// non-empty line without markup or line breaks.
 	if after, found := bytes.CutPrefix(body, []byte("\n<summary>")); found {
 		summaryEnd := bytes.Index(after, []byte("</summary>"))
-		if summaryEnd < 0 {
+		if summaryEnd <= 0 || bytes.ContainsAny(after[:summaryEnd], "<>\r\n") {
 			return nil, &openCodeTaskOutputError{Code: "opencode_task_output_malformed"}
 		}
 		body = after[summaryEnd+len("</summary>"):]
@@ -680,18 +688,24 @@ func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 }
 
 // openCodeTaskState reads the host-owned state attribute from a rendered Task
-// opening tag.
+// opening tag. Only an attribute named exactly `state` is admitted, so a
+// prefixed attribute such as data-state never changes the outcome.
 func openCodeTaskState(openingTag []byte) (string, bool) {
-	index := bytes.Index(openingTag, []byte(`state="`))
-	if index < 0 {
-		return "", false
+	for index := 0; index < len(openingTag); index++ {
+		if index > 0 && openingTag[index-1] != ' ' {
+			continue
+		}
+		rest, found := bytes.CutPrefix(openingTag[index:], []byte(`state="`))
+		if !found {
+			continue
+		}
+		end := bytes.IndexByte(rest, '"')
+		if end < 0 || (len(rest) > end+1 && rest[end+1] != ' ' && rest[end+1] != '>') {
+			return "", false
+		}
+		return string(rest[:end]), true
 	}
-	rest := openingTag[index+len(`state="`):]
-	end := bytes.IndexByte(rest, '"')
-	if end < 0 {
-		return "", false
-	}
-	return string(rest[:end]), true
+	return "", false
 }
 
 // openCodeTaskResultBody extracts the <task_result> body the host rendered
@@ -721,6 +735,8 @@ func openCodeTaskResultBody(body []byte) ([]byte, error) {
 	return result, nil
 }
 
+// boundedOpenCodeTaskPayload refuses a reviewer payload above the native
+// artifact limit; the relay never truncates reviewer bytes.
 func boundedOpenCodeTaskPayload(payload []byte) ([]byte, error) {
 	if len(payload) > reviewResultArtifactLimit {
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_truncated"}
