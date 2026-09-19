@@ -267,6 +267,26 @@ assert_file_matches() {
 # negative assertion written against one namespace alone passes vacuously once
 # the other namespace ships, which is a false green, not a check.
 #
+# The same split applies to the install state roots under $HOME. INC-20 made
+# every production writer resolve the backup root through `internal/backup`,
+# which writes `.axiom/backups`; upstream still writes `.gentle-ai/backups`.
+#
+# These assertions read the output of a real `$BINARY install`, so naming one
+# root literally ties them to whichever product wrote it. Worse, they count
+# directories: a literal that no writer fills any more does not fail loudly, it
+# reports zero and fails for a reason that has nothing to do with backups.
+#
+# The Go guard `TestUserStateRootsResolveThroughOwningPackage` cannot cover this
+# file — it parses Go ASTs, and a shell literal is invisible to it. That is why
+# the audit that found 18 Go assertion sites missed these five.
+#
+# find_backup_snapshots prints every snapshot directory under either root, one
+# per line, newest last. Callers keep using `wc -l` and `tail -1` unchanged.
+find_backup_snapshots() {
+    find "$HOME/.axiom/backups" "$HOME/.gentle-ai/backups" \
+        -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort
+}
+
 # SECTION_ID is the bare section id (e.g. `persona`), never the full marker.
 managed_marker_pattern() {
     printf '<!-- /?(axiom|gentle-ai):%s -->' "$1"
