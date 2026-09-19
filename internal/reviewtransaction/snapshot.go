@@ -403,6 +403,11 @@ func (builder SnapshotBuilder) ValidateLiveSnapshot(ctx context.Context, expecte
 	if err != nil {
 		return fmt.Errorf("rebuild live snapshot target: %w", err)
 	}
+	// The live tree is freshly rebuilt, but reviewer representation is part of
+	// the frozen authority. Carry the validated expected interpretation across
+	// this content comparison instead of rejecting a legacy authority whose
+	// content still matches its live target exactly.
+	live.GeneratedPathInterpretation = expected.GeneratedPathInterpretation
 	if live.UnbornHead != expected.UnbornHead || !snapshotsEqual(live, expected) {
 		return fmt.Errorf("live repository snapshot no longer matches frozen target: expected %s, got %s", expected.Identity, live.Identity)
 	}
@@ -526,6 +531,11 @@ func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot S
 	if err != nil {
 		return err
 	}
+	// Same carry-over as live snapshot validation: invalidation asks whether
+	// the repository still matches the authority's content, and a legacy
+	// authority must stay invalidatable rather than be stranded by a
+	// representation discriminator no live rebuild can reproduce.
+	live.GeneratedPathInterpretation = snapshot.GeneratedPathInterpretation
 	if !snapshotsEqual(live, snapshot) {
 		return fmt.Errorf("live repository snapshot no longer matches the reviewing authority: expected %s, got %s", snapshot.Identity, live.Identity)
 	}
