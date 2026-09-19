@@ -12,7 +12,33 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+// canonicalBinaryPath is the product's own build target. Every build,
+// workflow and ratchet target in the repository must resolve through this
+// path, never through deprecatedShimPath [D-04].
+const canonicalBinaryPath = "./cmd/axiom"
+
+// deprecatedShimPath is named so this guard family can reject its
+// reappearance as a BUILD TARGET, not so production code invokes it.
+// cmd/gentle-ai/main.go itself stays as the deprecation pass-through into
+// app.RunArgs that D2.4 requires; only its use as a build target elsewhere
+// is disallowed.
+const deprecatedShimPath = "./cmd/gentle-ai"
+
+// repositoryRoot resolves the repository root from cmd/axiom, where every
+// test in this file runs. Shared so the five assertions of this guard
+// family never duplicate this resolution [D-04, task 3.9].
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	return repoRoot
+}
 
 // backupRootLiteralDirectories are the two spellings of the backup root
 // directory segment. A filepath.Join call outside the owning internal/backup
@@ -78,10 +104,7 @@ const backupRootOwningPackageDir = "internal/backup"
 // sites to nine. Phase F0.b then migrated all nine to the canonical
 // accessors, so this assertion now runs unskipped and green.
 func TestUserStateRootsResolveThroughOwningPackage(t *testing.T) {
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
+	repoRoot := repositoryRoot(t)
 
 	violations, err := backupRootLiteralViolations(repoRoot)
 	if err != nil {
@@ -226,4 +249,46 @@ func stringLiteralValue(expr ast.Expr) (string, bool) {
 		return "", false
 	}
 	return value, true
+}
+
+// goreleaserBuildTarget is the subset of a .goreleaser.yaml builds[] entry
+// this guard cares about: enough to confirm the canonical binary is one of
+// the published artifacts, and nothing about signing, archives or brews.
+type goreleaserBuildTarget struct {
+	ID     string `yaml:"id"`
+	Main   string `yaml:"main"`
+	Binary string `yaml:"binary"`
+}
+
+// goreleaserConfig is the subset of .goreleaser.yaml this guard parses.
+type goreleaserConfig struct {
+	Builds []goreleaserBuildTarget `yaml:"builds"`
+}
+
+// TestReleaseArtifactBuildsCanonicalBinary fails until .goreleaser.yaml
+// publishes a build whose main package is canonicalBinaryPath under the
+// "axiom" binary name [D-04, D-08]. Phase F0.a and F0.b ran this guard
+// before it existed; this phase (F0.c1) adds it RED (only
+// main: ./cmd/gentle-ai published) and turns it GREEN by splitting
+// .goreleaser.yaml's single build into the two D2.4 requires.
+func TestReleaseArtifactBuildsCanonicalBinary(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+	path := filepath.Join(repoRoot, ".goreleaser.yaml")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	var config goreleaserConfig
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	for _, build := range config.Builds {
+		if build.Main == canonicalBinaryPath && build.Binary == "axiom" {
+			return
+		}
+	}
+	t.Errorf("%s: no builds[] entry publishes main: %s with binary: axiom", path, canonicalBinaryPath)
 }

@@ -550,7 +550,7 @@ func validateSnapshotFile(root, artifactPath string, markerTime time.Time) error
 }
 
 const expectedGoReleaserYAML = `version: 2
-project_name: gentle-ai
+project_name: axiom
 before:
   hooks:
     - go run ./internal/providercontractbundlecmd generate --out .goreleaser-provider-contract
@@ -558,7 +558,26 @@ before:
     - mkdir -p .goreleaser-provenance
     - go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2
 builds:
-  - main: ./cmd/gentle-ai
+  - id: axiom
+    main: ./cmd/axiom
+    binary: axiom
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X main.version={{ .Version }}
+        -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+  - id: gentle-ai-deprecated
+    main: ./cmd/gentle-ai
     binary: gentle-ai
     env:
       - CGO_ENABLED=0
