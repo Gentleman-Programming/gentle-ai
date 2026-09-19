@@ -408,6 +408,226 @@ func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t 
 	}
 }
 
+// writeGeneratedSummaryCandidateFixture builds a candidate that mixes
+// recognized generated paths (a modified dependency lockfile, an added
+// lockfile, and a testdata golden) with one ordinary authored path, so the
+// generated-summary behavior and the kept-patch behavior are observable in one
+// reviewer block.
+func writeGeneratedSummaryCandidateFixture(t *testing.T, repo string) {
+	t.Helper()
+	base := strings.Repeat("base dependency line\n", 100)
+	writeReviewStartCandidate(t, repo, "go.sum", base, 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "base generated lockfile")
+	writeReviewStartCandidate(t, repo, "go.sum", base+"new dependency line\n", 0o644)
+	writeReviewStartCandidate(t, repo, "web/package-lock.json", strings.Repeat("package-lock line\n", 200), 0o644)
+	writeReviewStartCandidate(t, repo, "internal/render/testdata/golden/rendered.golden", "generated golden bytes\n", 0o644)
+	writeReviewStartCandidate(t, repo, "internal/auth/token.go", "package auth\n\nfunc Token() string { return \"candidate\" }\n", 0o644)
+}
+
+// runGeneratedSummaryLensContext starts one negotiated review over the
+// generated-summary fixture and emits the finished reviewer block.
+func runGeneratedSummaryLensContext(t *testing.T, repo, lineage string) string {
+	t.Helper()
+	started := runNegotiatedReviewStart(t, repo, lineage)
+	if len(started.SelectedLenses) == 0 {
+		t.Fatal("generated-summary fixture selected no lenses")
+	}
+	argv := []string{
+		"--cwd", repo,
+		"--repository-context", started.RepositoryContext.Handle,
+		"--lineage", started.LineageID,
+		"--target", started.RepositoryContext.TargetIdentity,
+		"--expected-revision", started.RepositoryContext.Revision,
+	}
+	return lensContextBlock(t, argv, started.SelectedLenses[0])
+}
+
+// lensContextPreflight decodes the capture-context line of a reviewer block.
+func lensContextPreflight(t *testing.T, block string) map[string]any {
+	t.Helper()
+	lines := strings.SplitN(block, "\n", 3)
+	if len(lines) < 2 || !strings.HasPrefix(lines[1], "GENTLE_AI_REVIEW_CONTEXT ") {
+		t.Fatalf("block is missing the capture context line:\n%s", block)
+	}
+	var preflight map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "GENTLE_AI_REVIEW_CONTEXT ")), &preflight); err != nil {
+		t.Fatalf("capture context is not one-line JSON: %v", err)
+	}
+	return preflight
+}
+
+// lensContextManifestIndex recovers a path's canonical manifest index from the
+// block's own capture context, so assertions never hardcode an order.
+func lensContextManifestIndex(t *testing.T, block, path string) int {
+	t.Helper()
+	manifest, _ := lensContextPreflight(t, block)["changed_path_manifest"].([]any)
+	for index, raw := range manifest {
+		if entry, _ := raw.(map[string]any); entry["path"] == path {
+			return index
+		}
+	}
+	t.Fatalf("changed-path manifest is missing %q:\n%s", path, block)
+	return -1
+}
+
+// lensContextGeneratedSection extracts one generated-summary section by path.
+func lensContextGeneratedSection(block, path string) (string, bool) {
+	for _, line := range strings.Split(block, "\n") {
+		if !strings.HasPrefix(line, "GENTLE_AI_REVIEW_GENERATED ") || !strings.HasSuffix(line, " "+path) {
+			continue
+		}
+		_, after, found := strings.Cut(block, "\n"+line+"\n")
+		if !found {
+			return "", false
+		}
+		body, _, found := strings.Cut(after, "\nGENTLE_AI_REVIEW_GENERATED_END\n")
+		return body, found
+	}
+	return "", false
+}
+
+type generatedSummaryMetadata struct {
+	Path           string `json:"path"`
+	Status         string `json:"status"`
+	Additions      int    `json:"additions"`
+	Deletions      int    `json:"deletions"`
+	OldObjectID    string `json:"old_object_id"`
+	NewObjectID    string `json:"new_object_id"`
+	ContentOmitted bool   `json:"content_omitted"`
+}
+
+type generatedSummaryExpectation struct {
+	path               string
+	status             string
+	additions          int
+	deletions          int
+	requireNewObjectID bool
+}
+
+// assertGeneratedSummary keeps the shared generated-path metadata and omission
+// checks together; callers still choose whether an added/modified path needs a
+// new object identifier.
+func assertGeneratedSummary(t *testing.T, block string, want generatedSummaryExpectation) {
+	t.Helper()
+	section, ok := lensContextGeneratedSection(block, want.path)
+	if !ok {
+		t.Fatalf("block carries no generated summary for %q:\n%s", want.path, block)
+	}
+	summaryLine, _, _ := strings.Cut(section, "\n")
+	var summary generatedSummaryMetadata
+	if err := json.Unmarshal([]byte(summaryLine), &summary); err != nil {
+		t.Fatalf("generated summary for %q is not one-line JSON: %v\n%s", want.path, err, section)
+	}
+	if summary.Path != want.path || summary.Status != want.status || summary.Additions != want.additions || summary.Deletions != want.deletions {
+		t.Fatalf("generated summary metadata = %+v, want %q %q +%d/-%d", summary, want.path, want.status, want.additions, want.deletions)
+	}
+	if len(summary.OldObjectID) != 40 && len(summary.OldObjectID) != 64 {
+		t.Fatalf("generated summary carries no full old object identifier: %q", summary.OldObjectID)
+	}
+	if want.requireNewObjectID && len(summary.NewObjectID) != 40 && len(summary.NewObjectID) != 64 {
+		t.Fatalf("generated summary carries no full new object identifier: %q", summary.NewObjectID)
+	}
+	if !summary.ContentOmitted {
+		t.Fatalf("generated summary does not disclose omitted content: %+v", summary)
+	}
+	if !strings.Contains(section, "did not receive and did not examine") {
+		t.Fatalf("generated summary omits the disclosure that hunks were not examined:\n%s", section)
+	}
+	if strings.Contains(block, fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d %s\n", lensContextManifestIndex(t, block, want.path), want.path)) {
+		t.Fatalf("block still carries the full patch for generated path %q", want.path)
+	}
+}
+
+// TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches is the
+// #4680 T1 behavior: recognized generated paths (existing testdata goldens and
+// the explicit dependency-lockfile basenames) reach the reviewer as a truthful
+// metadata summary -- path, status, numstat, object identifiers, and an
+// explicit omitted-content disclosure -- instead of their full patch, while
+// ordinary authored paths keep their complete evidence in full.
+func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeGeneratedSummaryCandidateFixture(t, repo)
+	block := runGeneratedSummaryLensContext(t, repo, "generated-summary")
+
+	for _, test := range []struct {
+		path      string
+		status    string
+		additions int
+		deletions int
+	}{
+		{path: "go.sum", status: "M", additions: 1, deletions: 0},
+		{path: "web/package-lock.json", status: "A", additions: 200, deletions: 0},
+		{path: "internal/render/testdata/golden/rendered.golden", status: "A", additions: 1, deletions: 0},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			assertGeneratedSummary(t, block, generatedSummaryExpectation{
+				path: test.path, status: test.status, additions: test.additions, deletions: test.deletions,
+				requireNewObjectID: true,
+			})
+		})
+	}
+
+	// The ordinary authored path keeps its complete patch.
+	if !strings.Contains(block, fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d internal/auth/token.go\n", lensContextManifestIndex(t, block, "internal/auth/token.go"))) ||
+		!strings.Contains(block, "+func Token() string") {
+		t.Fatalf("ordinary authored path lost its full patch:\n%s", block)
+	}
+
+	// The changed-path manifest itself carries the immutable classification.
+	for _, raw := range lensContextPreflight(t, block)["changed_path_manifest"].([]any) {
+		entry, _ := raw.(map[string]any)
+		path, _ := entry["path"].(string)
+		wantGenerated := path != "internal/auth/token.go"
+		generated, _ := entry["generated"].(bool)
+		if generated != wantGenerated {
+			t.Fatalf("manifest entry %q generated flag = %v, want %t", path, entry["generated"], wantGenerated)
+		}
+	}
+
+	// The reviewer instruction must disclose the omission instead of claiming
+	// full patch coverage over the whole candidate.
+	instruction, found := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
+	if !found {
+		t.Fatalf("block carries no reviewer instruction:\n%s", block)
+	}
+	if !strings.Contains(instruction, "generated") || !strings.Contains(instruction, "content hunks") {
+		t.Fatalf("instruction does not disclose generated-summary evidence:\n%s", instruction)
+	}
+	if strings.Contains(instruction, "changed paths are present in full") {
+		t.Fatalf("instruction still claims full patch coverage over summarized generated paths:\n%s", instruction)
+	}
+}
+
+// TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatches
+// preserves the safety property: a deleted lockfile is still important evidence
+// and keeps its summary with status and object identifiers, while files whose
+// basename merely resembles a recognized one (go.mod, yarn.lock.example) stay
+// authored evidence with their complete patches.
+func TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatches(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	base := strings.Repeat("yarn dependency line\n", 80)
+	writeReviewStartCandidate(t, repo, "yarn.lock", base, 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "base yarn lockfile")
+	runReviewCLIGit(t, repo, "rm", "-q", "--", "yarn.lock")
+	writeReviewStartCandidate(t, repo, "tools/go.mod", "module example.com/tools\n\ngo 1.22\n", 0o644)
+	writeReviewStartCandidate(t, repo, "docs/yarn.lock.example", "# authored example, not a lockfile\n", 0o644)
+	block := runGeneratedSummaryLensContext(t, repo, "generated-summary-deletion")
+
+	assertGeneratedSummary(t, block, generatedSummaryExpectation{
+		path: "yarn.lock", status: "D", deletions: 80,
+	})
+	for _, path := range []string{"tools/go.mod", "docs/yarn.lock.example"} {
+		if _, summarized := lensContextGeneratedSection(block, path); summarized {
+			t.Fatalf("near-miss %q was summarized as generated", path)
+		}
+		if !strings.Contains(block, fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d %s\n", lensContextManifestIndex(t, block, path), path)) {
+			t.Fatalf("near-miss %q lost its full patch:\n%s", path, block)
+		}
+	}
+}
+
 // TestReviewLensContextAfterCollectionClosesNamesTheFindingsSurface is issue
 // #4019: once the last lens capture closes collection to correction_required,
 // the CURRENT repository-context handle is genuinely bound to the live

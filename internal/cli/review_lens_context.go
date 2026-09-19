@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,8 +16,9 @@ import (
 )
 
 // reviewLensContextTimeout bounds the whole assembly, not one read. The surface
-// performs two discovery reads plus one patch read per changed path, and a
-// reviewer that never launches is the correct outcome when the repository stops
+// performs two discovery reads plus one patch read per authored path; generated
+// paths use immutable metadata from discovery. A reviewer that never launches
+// is the correct outcome when the repository stops
 // answering partway through.
 const reviewLensContextTimeout = 120 * time.Second
 
@@ -25,8 +27,9 @@ const reviewLensContextTimeout = 120 * time.Second
 // every other immutable-diff read in this product already accepts
 // (reviewtransaction.MaxFrozenCandidateDiffBytes), rather than a fraction of
 // it: a smaller budget would refuse candidates whose risk-tier-counted changed
-// lines are small but whose manifest includes large regenerated or golden
-// files, which this surface materializes in full for every manifest path.
+// lines are small but whose manifest includes many generated or golden paths,
+// whose deterministic metadata summaries still belong in the complete review
+// context alongside authored patches.
 //
 // It is enforced by outright refusal. Truncating would hand a reviewer a
 // partial view of the candidate while still letting it report a clean result,
@@ -55,6 +58,7 @@ const (
 	reviewLensContextInstruction   = "GENTLE_AI_REVIEW_INSTRUCTION"
 	reviewLensContextResultSchema  = "GENTLE_AI_REVIEW_RESULT_SCHEMA"
 	reviewLensContextPatch         = "GENTLE_AI_REVIEW_PATCH"
+	reviewLensContextGenerated     = "GENTLE_AI_REVIEW_GENERATED"
 )
 
 // reviewLensContextBinding is the machine data a relaying orchestrator used to
@@ -440,6 +444,103 @@ func reviewLensContextSelectedOrder(selected []string, lens string) (int, error)
 	return first, nil
 }
 
+type reviewLensContextNumstatEntry struct {
+	additions int
+	deletions int
+	binary    bool
+}
+
+type reviewLensContextGeneratedSummary struct {
+	Path              string                                `json:"path"`
+	Status            reviewtransaction.CandidatePathStatus `json:"status"`
+	Additions         int                                   `json:"additions"`
+	Deletions         int                                   `json:"deletions"`
+	OldMode           string                                `json:"old_mode"`
+	NewMode           string                                `json:"new_mode"`
+	Deleted           bool                                  `json:"deleted"`
+	TypeChanged       bool                                  `json:"type_changed"`
+	ModeOnly          bool                                  `json:"mode_only"`
+	IntendedUntracked bool                                  `json:"intended_untracked"`
+	Binary            bool                                  `json:"binary"`
+	OldObjectID       string                                `json:"old_object_id"`
+	NewObjectID       string                                `json:"new_object_id"`
+	Generated         bool                                  `json:"generated"`
+	ContentOmitted    bool                                  `json:"content_omitted"`
+	Disclosure        string                                `json:"content_disclosure"`
+}
+
+func reviewLensContextParseNumstat(payload []byte, manifest []reviewtransaction.ChangedPathManifestEntry) (map[string]reviewLensContextNumstatEntry, error) {
+	expected := make(map[string]struct{}, len(manifest))
+	for _, entry := range manifest {
+		expected[entry.Path] = struct{}{}
+	}
+	stats := make(map[string]reviewLensContextNumstatEntry, len(manifest))
+	for _, line := range strings.Split(strings.TrimSuffix(string(payload), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("immutable numstat metadata is malformed: %q", line) // refusal:by-design world-action: numstat bytes come from Go's own frozen-tree inspection, so a malformed line is a native inspection defect no command can repair
+		}
+		path := fields[2]
+		if strings.HasPrefix(path, `"`) {
+			decoded, err := strconv.Unquote(path)
+			if err != nil {
+				return nil, fmt.Errorf("decode immutable numstat path %q: %w", path, err)
+			}
+			path = decoded
+		}
+		if _, ok := expected[path]; !ok {
+			return nil, fmt.Errorf("immutable numstat metadata names unexpected path %q", path) // refusal:by-design world-action: numstat output and the frozen manifest both come from Go's own inspection; a disagreement is a native inspection defect requiring a code fix
+		}
+		if _, duplicate := stats[path]; duplicate {
+			return nil, fmt.Errorf("immutable numstat metadata repeats path %q", path) // refusal:by-design world-action: numstat output is Go's own frozen-tree read; a repeated path is a native inspection defect requiring a code fix
+		}
+		stat := reviewLensContextNumstatEntry{}
+		if fields[0] == "-" || fields[1] == "-" {
+			if fields[0] != "-" || fields[1] != "-" {
+				return nil, fmt.Errorf("immutable numstat metadata has incomplete binary counts for %q", path) // refusal:by-design world-action: binary numstat counts come from Go's own frozen-tree read; an incomplete pair is a native inspection defect requiring a code fix
+			}
+			stat.binary = true
+		} else {
+			var err error
+			stat.additions, err = strconv.Atoi(fields[0])
+			if err != nil || stat.additions < 0 {
+				return nil, fmt.Errorf("immutable numstat additions for %q are invalid", path) // refusal:by-design world-action: addition counts come from Go's own frozen-tree read; a negative or unparsable count is a native inspection defect requiring a code fix
+			}
+			stat.deletions, err = strconv.Atoi(fields[1])
+			if err != nil || stat.deletions < 0 {
+				return nil, fmt.Errorf("immutable numstat deletions for %q are invalid", path) // refusal:by-design world-action: deletion counts come from Go's own frozen-tree read; a negative or unparsable count is a native inspection defect requiring a code fix
+			}
+		}
+		stats[path] = stat
+	}
+	if len(stats) != len(expected) {
+		return nil, fmt.Errorf("immutable numstat metadata covers %d paths, want %d", len(stats), len(expected)) // refusal:by-design world-action: numstat output and the frozen manifest both come from Go's own inspection; partial coverage is a native inspection defect requiring a code fix
+	}
+	return stats, nil
+}
+
+func reviewLensContextGeneratedSummaryFor(index int, entry reviewtransaction.ChangedPathManifestEntry, frozen reviewtransaction.FrozenCandidateContext, stats map[string]reviewLensContextNumstatEntry) ([]byte, error) {
+	oldObjectID, newObjectID, ok := frozen.CandidatePathObjectIDs(index)
+	if !ok {
+		return nil, errors.New("generated path has no immutable blob identities") // refusal:by-design world-action: generated summaries derive from blob identities Go itself froze; missing identities are a native inspection defect requiring a code fix
+	}
+	stat, ok := stats[entry.Path]
+	if !ok {
+		return nil, errors.New("generated path has no immutable numstat metadata") // refusal:by-design world-action: generated summaries derive from numstat Go itself read; a missing entry is a native inspection defect requiring a code fix
+	}
+	summary := reviewLensContextGeneratedSummary{
+		Path: entry.Path, Status: entry.Status, Additions: stat.additions, Deletions: stat.deletions,
+		OldMode: entry.OldMode, NewMode: entry.NewMode, Deleted: entry.Deleted, TypeChanged: entry.TypeChanged,
+		ModeOnly: entry.ModeOnly, IntendedUntracked: entry.IntendedUntracked, Binary: stat.binary,
+		OldObjectID: oldObjectID, NewObjectID: newObjectID, Generated: true, ContentOmitted: true,
+		Disclosure: "the reviewer did not receive and did not examine content hunks; blob IDs identify bytes, not their correctness",
+	}
+	return json.Marshal(summary)
+}
+
 func reviewLensContextBlock(
 	ctx context.Context, deps reviewLensContextDeps, inspector reviewLensCandidateInspector,
 	binding reviewLensContextBinding, subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
@@ -483,6 +584,7 @@ func reviewLensContextBlock(
 	if err := consume(reviewLensContextResultSchema, reviewLensContextResultSchema+"_END", []byte(reviewtransaction.ReviewerResultSchema)); err != nil {
 		return nil, err
 	}
+	var numstats map[string]reviewLensContextNumstatEntry
 	for _, discovery := range []struct{ header, operation string }{
 		{header: reviewLensContextNameStatus, operation: "name-status"},
 		{header: reviewLensContextNumstat, operation: "numstat"},
@@ -491,11 +593,27 @@ func reviewLensContextBlock(
 		if err != nil {
 			return nil, reviewLensContextInspectionFailure(ctx, err)
 		}
+		if discovery.operation == "numstat" {
+			numstats, err = reviewLensContextParseNumstat(payload, frozen.ChangedPathManifest)
+			if err != nil {
+				return nil, reviewLensContextInspectionFailure(ctx, err)
+			}
+		}
 		if err := consume(discovery.header, discovery.header+"_END", payload); err != nil {
 			return nil, err
 		}
 	}
 	for index, entry := range frozen.ChangedPathManifest {
+		if entry.Generated {
+			payload, err := reviewLensContextGeneratedSummaryFor(index, entry, frozen, numstats)
+			if err != nil {
+				return nil, reviewLensContextInspectionFailure(ctx, err)
+			}
+			if err := consume(fmt.Sprintf("%s %d %s", reviewLensContextGenerated, index, entry.Path), reviewLensContextGenerated+"_END", payload); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		payload, err := deps.inspect(ctx, inspector, "patch", index, "")
 		if err != nil {
 			return nil, reviewLensContextInspectionFailure(ctx, err)
@@ -533,7 +651,7 @@ func reviewLensContextInstructionText(binding reviewLensContextBinding, paths in
 	}
 	return fmt.Sprintf(`You are the %s lens of one bounded Gentle AI review. %s
 
-Scope. The %s sections below are the complete and only view of this candidate: all %d changed paths are present in full, in the canonical manifest order carried by %s. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
+Scope. The %s sections below are the complete and only view of this candidate: all %d changed paths are represented in the canonical manifest order carried by %s. Authored paths carry full immutable patches; generated paths carry immutable metadata summaries without content hunks. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
 
 Causality. Report only what this candidate caused. Give every BLOCKER or CRITICAL finding an evidence_class and a causal_disposition, and mark what the base already contained as pre-existing or base-only rather than as a blocker.
 
