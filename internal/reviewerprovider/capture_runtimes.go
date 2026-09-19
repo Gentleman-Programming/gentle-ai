@@ -2,6 +2,34 @@ package reviewerprovider
 
 import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
 
+// ApprovedRuntimeContextBudget is the provider-owned cap on the complete
+// reviewer context one runtime is handed for a single capture: the whole
+// materialized lens block, wrappers and result schema included. It is a
+// conservative policy cap agreed for every runtime the contract admits,
+// independent of the unchanged native per-command Git diff ceiling, and it is
+// policy rather than a measured model-capacity guarantee: no runtime here is
+// being told what it can hold, only what this product will ask it to hold.
+const ApprovedRuntimeContextBudget = 200 << 10
+
+// RuntimeContextBudget reports the approved complete reviewer-context budget
+// for one runtime identity. Every registered runtime currently shares the
+// same approved cap; that equality is the decided policy, not a model
+// guarantee, so a future per-runtime cap specializes the registered case
+// below instead of widening it. An identity the contract does not register --
+// including the empty identity a manual, non-agent review carries -- fails
+// closed: it never receives a larger budget than a supported one, and whether
+// an unknown identity may act at all stays with the existing runtime
+// validation paths (negotiated START's immutable-transport admission, adapter
+// resolution), which this function does not replace.
+func RuntimeContextBudget(agent model.AgentID) int {
+	if RegisteredRuntime(agent) {
+		return ApprovedRuntimeContextBudget
+	}
+	// Fail closed: an unknown runtime identity earns the same conservative
+	// cap, never a larger one.
+	return ApprovedRuntimeContextBudget
+}
+
 // CapturesInProcess reports whether this runtime's compiled transport runs the
 // reviewer itself, inside the capture command, rather than relying on a host or
 // a caller to carry the reviewer's evidence to it.

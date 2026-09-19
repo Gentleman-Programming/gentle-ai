@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -44,6 +46,25 @@ const reviewLensContextTimeout = 120 * time.Second
 // refusal unfixable rather than merely large, because path count is the one
 // property splitting a candidate barely changes (issue #3367).
 const reviewLensContextByteBudget = reviewtransaction.MaxFrozenCandidateDiffBytes
+
+// reviewLensContextRuntimeBudget returns the effective immutable-candidate
+// evidence budget for one runtime identity: the smaller of the unchanged
+// native per-command Git diff ceiling above and the provider-declared
+// per-runtime context budget. The Git ceiling stays the aggregate bound it
+// always was; the runtime cap is the additional conservative provider policy
+// on the complete block a runtime is asked to hold, so a candidate that fits
+// the repository's own bound is still refused when the runtime that must hold
+// it would receive more than the approved context. The runtime identity
+// travels from the authoritative state START froze (state.RuntimeAgent); an
+// unknown or absent identity fails closed to the same approved cap, never a
+// larger budget.
+func reviewLensContextRuntimeBudget(runtime string) int {
+	ceiling := reviewLensContextByteBudget
+	if runtimeBudget := reviewerprovider.RuntimeContextBudget(model.AgentID(runtime)); runtimeBudget < ceiling {
+		return runtimeBudget
+	}
+	return ceiling
+}
 
 // The two markers an installed agent definition also names are read from the
 // canonical constants both halves share, never respelled here: a reviewer
@@ -222,7 +243,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	defer func() {
 		payload, err = reviewLensContextCleanup(ctx, payload, err, func() error { return deps.close(authority.Inspector) })
 	}()
-	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
+	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen, authority.RuntimeAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +300,7 @@ func reviewLensContextBudgetProbe(
 		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
 			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
-		}, subject, frozen)
+		}, subject, frozen, state.RuntimeAgent)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
 			return reviewLensContextOverBudget, nil
@@ -358,11 +379,12 @@ var reviewLensContextStartBudgetReason = reviewPreflightReason{
 // resolveReviewLensAuthority is the only place that turns an opaque repository
 // context and a lens name into native authority.
 type reviewLensAuthority struct {
-	Store     reviewtransaction.CompactStore
-	Binding   reviewLensContextBinding
-	Subject   reviewtransaction.ArtifactSubject
-	Frozen    reviewtransaction.FrozenCandidateContext
-	Inspector reviewLensCandidateInspector
+	Store        reviewtransaction.CompactStore
+	Binding      reviewLensContextBinding
+	Subject      reviewtransaction.ArtifactSubject
+	Frozen       reviewtransaction.FrozenCandidateContext
+	Inspector    reviewLensCandidateInspector
+	RuntimeAgent string
 }
 
 // resolveReviewLensAuthority recovers the exact lineage, target, revision,
@@ -423,7 +445,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 			Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
 			Revision: binding.Revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
 		},
-		Subject: subject, Frozen: frozen, Inspector: inspector,
+		Subject: subject, Frozen: frozen, Inspector: inspector, RuntimeAgent: state.RuntimeAgent,
 	}, nil
 }
 
@@ -541,9 +563,17 @@ func reviewLensContextGeneratedSummaryFor(index int, entry reviewtransaction.Cha
 	return json.Marshal(summary)
 }
 
+// reviewLensContextBlock materializes the complete reviewer block for one
+// lens slot. The runtime identity is the one START froze into the authority
+// (state.RuntimeAgent): the budget it selects is a property of the reviewer
+// that will hold the block, so every surface that materializes a block for
+// the same authority -- START's probe, STATUS's classification, and the lens
+// materialization itself -- must pass the same value and therefore reach the
+// same refusal.
 func reviewLensContextBlock(
 	ctx context.Context, deps reviewLensContextDeps, inspector reviewLensCandidateInspector,
 	binding reviewLensContextBinding, subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
+	runtime string,
 ) ([]byte, error) {
 	// RepositoryRoot stays empty: this block is produced only for an opaque
 	// binding, and a reviewer transcript never carries a provider path.
@@ -563,8 +593,9 @@ func reviewLensContextBlock(
 
 	// The budget bounds the whole delivered block, not only the evidence: at
 	// this level the block IS the reviewer's prompt, so the instruction and the
-	// result schema are part of what has to fit.
-	budget := reviewLensContextByteBudget - block.Len()
+	// result schema are part of what has to fit. It is the effective budget for
+	// the runtime that will hold this block, never the Git ceiling alone.
+	budget := reviewLensContextRuntimeBudget(runtime) - block.Len()
 	consume := func(header, footer string, body []byte) error {
 		rendered := header + "\n" + string(bytes.TrimSpace(body)) + "\n" + footer + "\n"
 		budget -= len(rendered)

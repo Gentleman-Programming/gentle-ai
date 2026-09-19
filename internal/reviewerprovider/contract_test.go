@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+// TestRuntimeBudgetLeavesContractResultLimitsUnchanged pins the output side of
+// the byte policy: the runtime-context cap is an input budget owned by the
+// runtime declaration, and it must never shrink Contract.ResultLimit, which
+// owns the raw provider OUTPUT admission limit for every role.
+func TestRuntimeBudgetLeavesContractResultLimitsUnchanged(t *testing.T) {
+	for _, contract := range Contracts() {
+		if contract.ResultLimit != 4<<20 {
+			t.Fatalf("provider role %q ResultLimit = %d, want the unchanged %d byte output limit", contract.Role, contract.ResultLimit, 4<<20)
+		}
+	}
+}
+
 func TestTargetedValidatorContractDefinesPassedPolarity(t *testing.T) {
 	contract, err := ContractFor(RoleTargetedValidator)
 	if err != nil {
