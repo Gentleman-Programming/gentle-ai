@@ -1276,7 +1276,7 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentOpenCodeGentleLogo:
-		if len(s.agents) > 0 && !containsAgent(s.agents, model.AgentOpenCode) {
+		if !containsAgent(s.agents, model.AgentOpenCode) {
 			return nil
 		}
 		res, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo)

@@ -19,9 +19,9 @@ func TestOpenCodeV2LogoSkippedWithoutWrites(t *testing.T) {
 	home := t.TempDir()
 	changed := []string{}
 	for _, step := range []pipeline.Step{
-		componentApplyStep{id: "logo", component: model.ComponentOpenCodeGentleLogo, homeDir: home},
+		componentApplyStep{id: "logo", component: model.ComponentOpenCodeGentleLogo, homeDir: home, agents: []model.AgentID{model.AgentOpenCode}},
 		openCodePluginInstallStep{id: "plugin-logo", plugin: model.OpenCodePluginGentleLogo, homeDir: home},
-		componentSyncStep{id: "sync-logo", component: model.ComponentOpenCodeGentleLogo, homeDir: home, changedFiles: &changed},
+		componentSyncStep{id: "sync-logo", component: model.ComponentOpenCodeGentleLogo, homeDir: home, agents: []model.AgentID{model.AgentOpenCode}, changedFiles: &changed},
 	} {
 		result := (pipeline.Runner{}).Run(pipeline.StageApply, []pipeline.Step{step})
 		if !result.Success || result.Err != nil || len(result.Steps) != 1 || result.Steps[0].Status != pipeline.StepStatusSkipped {
