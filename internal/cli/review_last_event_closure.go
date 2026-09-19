@@ -42,14 +42,9 @@ func reviewApprovedAcknowledgementTransition(repo string, acknowledgement review
 	}, nil).Execute
 }
 
-// RunReviewAcknowledgeApproved executes the one v2-local acknowledgement
-// continuation. It intentionally returns no independent result: ambiguous
-// delivery is resolved by rerunning the STATUS transition against authority.
-// reviewAcknowledgedSchema names the one typed answer the burn prints. The
-// acknowledgement is the most consequential step of the lifecycle, and until
-// #3946 it succeeded in silence: a caller could only infer the burn from a
-// later STATUS offering a fresh START. Every sibling terminal command already
-// returns its own envelope, so this one does too.
+// reviewAcknowledgedSchema names the terminal answer the burn prints. Consumers
+// use this envelope directly; no post-burn STATUS is required. Later incidental
+// STATUS calls can recognize the consumed target but cannot replay authority.
 const reviewAcknowledgedSchema = "gentle-ai.review-acknowledged/v1"
 
 type reviewAcknowledgedResult struct {

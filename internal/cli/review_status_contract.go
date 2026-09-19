@@ -104,16 +104,8 @@ type ReviewTargetStatusResult struct {
 	repositoryRoot    string
 	rddMode           reviewtransaction.RDDModeStatus
 	rddModeResolved   bool
-	// derivedCommittedRange is the executable base-diff status a selectorless
-	// STATUS derived from the remote default branch's unique merge-base when
-	// the fresh workspace candidate froze zero paths (issue #4412). Its
-	// presence turns the otherwise-unroutable base_ref collect into the
-	// committed-range START the working `--base-ref --committed-only` STATUS
-	// path already publishes; validateNextTransitionTargets validates the
-	// emitted execute against this exact derived status.
-	derivedCommittedRange *ReviewTargetStatusResult
 	// committedRangeBaseRef, when non-empty, is the base *commit* STATUS
-	// derived for a set derivedCommittedRange. reviewStartArguments prefers it
+	// derived for its effective candidate. reviewStartArguments prefers it
 	// over Projection.BaseTree for a base-diff projection so the emitted START
 	// discloses the exact merge-base commit STATUS resolved (never the tree
 	// object the derived snapshot froze), letting the caller see and override
@@ -488,7 +480,8 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// nothing governs, so nothing decides) while still listing those
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
+		terminalConsumed := result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -761,6 +754,12 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			}
 			return nil
 		}
+		if result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable {
+			if result.Authority != nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "target_already_acknowledged" {
+				return errors.New("consumed target lacks an authority-free terminal STOP") // refusal:by-design world-action: only a provider code fix can reconcile an internally inconsistent consumed-target envelope
+			}
+			return nil
+		}
 		// #3299, #4170: a stale managed-asset digest stops a fresh target
 		// before any START is offered, regardless of its Action or
 		// projection kind -- the skew is orthogonal to what the candidate
@@ -800,22 +799,6 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(result.Projection.Paths) == 0 {
 			if result.NextTransition.Kind == reviewNextTransitionCollect && result.NextTransition.ReasonCode == "intended_untracked_selection_required" {
 				return result.validateIntendedUntrackedSelectionTransition()
-			}
-			// Issue #4412: when STATUS resolved the remote default branch's
-			// unique merge-base it offers the executable committed-range START
-			// the `--base-ref --committed-only` STATUS path already publishes,
-			// instead of the unroutable base_ref collect. Validating that
-			// execute against the exact derived base-diff status that produced
-			// it still refuses a hand-edited base-ref, target, evidence token,
-			// or committed-only flag.
-			if result.NextTransition.Kind == reviewNextTransitionExecute {
-				if result.derivedCommittedRange == nil {
-					// refusal:by-design world-action: only a provider code fix can render a committed-range execute without the derived base-diff status that proves its scope
-					return errors.New("fresh empty workspace target lacks a base-ref collection transition")
-				}
-				derived := *result.derivedCommittedRange
-				derived.NextTransition = result.NextTransition
-				return derived.validateStartNextTransition()
 			}
 			if result.NextTransition.Kind != reviewNextTransitionCollect || result.NextTransition.ReasonCode != "empty_candidate_base_ref_required" ||
 				result.NextTransition.Collect == nil || len(result.NextTransition.Collect.Inputs) != 1 {

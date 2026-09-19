@@ -154,7 +154,7 @@ func AcknowledgeApprovedCompactAuthority(ctx context.Context, repo, lineageID, t
 	if !validCompactAcknowledgementToken(token) {
 		return errors.New("approved acknowledgement token is malformed") // refusal:by-design operator-knowledge: use the exact opaque token returned by the pending acknowledgement
 	}
-	base, _, err := reviewAuthorityRoot(ctx, repo)
+	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return err
 	}
@@ -201,6 +201,12 @@ func AcknowledgeApprovedCompactAuthority(ctx context.Context, repo, lineageID, t
 	}
 	if subtle.ConstantTimeCompare([]byte(record.State.ApprovedAckToken), []byte(token)) != 1 {
 		return errors.New("approved acknowledgement token does not match active compact authority") // refusal:by-design operator-knowledge: use the exact opaque token returned by the pending acknowledgement
+	}
+	// Publish the inert fact before deletion: a crash after the irreversible
+	// burn must not lose deduplication evidence. While the directory remains,
+	// readers ignore the fact and the pending acknowledgement still owns it.
+	if err := prepareCompactTerminalConsumption(base, root, record); err != nil {
+		return fmt.Errorf("prepare terminal consumption evidence: %w", err)
 	}
 	return burnApprovedCompactAuthorityLocked(base, lineageID, store)
 }

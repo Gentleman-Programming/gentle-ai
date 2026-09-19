@@ -76,9 +76,8 @@ func derivedCommittedRangeStatus() *ReviewTargetStatusResult {
 // disclose the derived base commit and committed-only=true, and it never carries
 // the empty workspace target.
 func TestNegotiatedStatusDerivesCommittedRangeStartForEmptyWorkspaceCandidate(t *testing.T) {
-	status := emptyWorkspaceCandidateStatus()
 	derived := derivedCommittedRangeStatus()
-	status.derivedCommittedRange = derived
+	status := *derived
 
 	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 
@@ -101,8 +100,8 @@ func TestNegotiatedStatusDerivesCommittedRangeStartForEmptyWorkspaceCandidate(t 
 	if arguments["target"] != derived.TargetIdentity {
 		t.Fatalf("derived START target = %q, want the base-diff identity %q", arguments["target"], derived.TargetIdentity)
 	}
-	if arguments["target"] == status.TargetIdentity {
-		t.Fatalf("derived START carried the empty workspace target %q", status.TargetIdentity)
+	if arguments["target"] != status.TargetIdentity {
+		t.Fatalf("derived START differs from the effective STATUS target %q", status.TargetIdentity)
 	}
 	if got.Execute.Binding.TargetIdentity != derived.TargetIdentity {
 		t.Fatalf("derived START binding target = %q, want %q", got.Execute.Binding.TargetIdentity, derived.TargetIdentity)
@@ -175,8 +174,7 @@ func TestNegotiatedEmptyCandidateCollectionSatisfiesStatusTargetValidation(t *te
 // zero-path workspace branch, so status-target validation must accept it while
 // still refusing every malformed variant of both forms.
 func TestNegotiatedDerivedCommittedRangeSatisfiesStatusTargetValidation(t *testing.T) {
-	result := emptyWorkspaceCandidateStatus()
-	result.derivedCommittedRange = derivedCommittedRangeStatus()
+	result := *derivedCommittedRangeStatus()
 	result.NextTransition = &ReviewNextTransition{}
 	*result.NextTransition = newReviewNextTransition(result, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 
@@ -260,9 +258,9 @@ func TestNegotiatedDerivedCommittedRangeRejectsMalformedStatusTarget(t *testing.
 		mutate func(*ReviewTargetStatusResult)
 	}{
 		{
-			name: "execute without the derived committed range",
+			name: "execute paired with the empty workspace projection",
 			mutate: func(result *ReviewTargetStatusResult) {
-				result.derivedCommittedRange = nil
+				result.Projection = emptyWorkspaceCandidateStatus().Projection
 			},
 		},
 		{
@@ -293,8 +291,7 @@ func TestNegotiatedDerivedCommittedRangeRejectsMalformedStatusTarget(t *testing.
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := emptyWorkspaceCandidateStatus()
-			result.derivedCommittedRange = derivedCommittedRangeStatus()
+			result := *derivedCommittedRangeStatus()
 			result.NextTransition = &ReviewNextTransition{}
 			*result.NextTransition = newReviewNextTransition(result, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-candidate"})
 			tt.mutate(&result)
@@ -384,8 +381,8 @@ func TestNegotiatedStatusDerivedCommittedRangePayloadValidatesAgainstPublishedSc
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
-	if status.Projection.Kind != reviewtransaction.TargetCurrentChanges || len(status.Projection.Paths) != 0 {
-		t.Fatalf("envelope projection = %#v, want the classified empty workspace candidate", status.Projection)
+	if status.Projection.Kind != reviewtransaction.TargetBaseDiff || len(status.Projection.Paths) == 0 {
+		t.Fatalf("envelope projection = %#v, want the effective committed-range candidate", status.Projection)
 	}
 	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
 		status.NextTransition.ReasonCode != "fresh_target_ready" || status.NextTransition.Execute == nil {
@@ -394,6 +391,9 @@ func TestNegotiatedStatusDerivedCommittedRangePayloadValidatesAgainstPublishedSc
 	arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if arguments["target"] != status.TargetIdentity || status.NextTransition.Execute.Binding.TargetIdentity != status.TargetIdentity {
+		t.Fatalf("STATUS identity %q differs from START: %#v", status.TargetIdentity, arguments)
 	}
 	if arguments["base-ref"] != expectedBase {
 		t.Fatalf("derived base-ref = %q, want the remote default branch merge-base %q", arguments["base-ref"], expectedBase)
