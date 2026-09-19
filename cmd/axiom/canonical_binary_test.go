@@ -292,3 +292,71 @@ func TestReleaseArtifactBuildsCanonicalBinary(t *testing.T) {
 	}
 	t.Errorf("%s: no builds[] entry publishes main: %s with binary: axiom", path, canonicalBinaryPath)
 }
+
+// buildTargetException documents why one specific workflow file is allowed
+// to keep naming deprecatedShimPath as a build target. The exceptions list
+// TestWorkflowsBuildCanonicalBinary consults is empty for this phase: F0.c1's
+// audit found no legitimate site that still needs to build the deprecated
+// shim as its own target.
+type buildTargetException struct {
+	File   string // repository-relative path, forward slashes
+	Reason string // why the shim is correct here; never empty
+}
+
+// workflowBuildTargetExceptions is the written-reason allowlist
+// TestWorkflowsBuildCanonicalBinary consults.
+var workflowBuildTargetExceptions = []buildTargetException{}
+
+// TestWorkflowsBuildCanonicalBinary rejects any non-comment line under
+// .github/workflows/*.yml that names deprecatedShimPath, unless its file is
+// listed in workflowBuildTargetExceptions with a written reason [D-04].
+// Comment lines that merely explain why the shim is wrong here (for example
+// ci.yml's "Build the canonical binary, not ./cmd/gentle-ai" notes above the
+// job's own ./cmd/axiom builds) are not build targets and are excluded, so
+// this guard does not force an exception entry for explanatory prose.
+func TestWorkflowsBuildCanonicalBinary(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+	pattern := filepath.Join(repoRoot, ".github", "workflows", "*.yml")
+
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		t.Fatalf("glob %s: %v", pattern, err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("no workflow files matched %s", pattern)
+	}
+
+	exceptionsByFile := make(map[string]string, len(workflowBuildTargetExceptions))
+	for _, exception := range workflowBuildTargetExceptions {
+		if exception.Reason == "" {
+			t.Fatalf("exception for %s has no written reason", exception.File)
+		}
+		exceptionsByFile[exception.File] = exception.Reason
+	}
+
+	for _, match := range matches {
+		relPath, err := filepath.Rel(repoRoot, match)
+		if err != nil {
+			t.Fatalf("resolve relative path for %s: %v", match, err)
+		}
+		relSlash := filepath.ToSlash(relPath)
+		if _, excepted := exceptionsByFile[relSlash]; excepted {
+			continue
+		}
+
+		content, err := os.ReadFile(match)
+		if err != nil {
+			t.Fatalf("read %s: %v", relSlash, err)
+		}
+
+		for i, line := range strings.Split(string(content), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if strings.Contains(line, deprecatedShimPath) {
+				t.Errorf("%s:%d: names %s as a build target; the canonical binary is %s, or add a written exception to workflowBuildTargetExceptions", relSlash, i+1, deprecatedShimPath, canonicalBinaryPath)
+			}
+		}
+	}
+}

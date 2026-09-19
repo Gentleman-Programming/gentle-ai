@@ -261,9 +261,16 @@ jobs:
           go test -v ./internal/reviewtransaction -count=1 -run $selector
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Canonical package, same reason as the "Run benchmark evidence" step:
+      # ./cmd/gentle-ai is the deprecation shim, and these release-blocker
+      # tests read the product's own behavior. The output keeps the retired
+      # "gentle-ai.exe" name: nothing downstream (GENTLE_AI_TEST_BINARY below,
+      # the Defender exclusion above) needs it renamed, and this repository's
+      # own precedent for this exact kind of switch (ci.yml's benchmark
+      # steps) is to keep the artifact name and change only the build target.
       - name: Build native test binary
         shell: pwsh
-        run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/gentle-ai
+        run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/axiom
 
       - name: Run Windows release-blocker tests
         shell: pwsh
