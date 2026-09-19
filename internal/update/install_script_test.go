@@ -2,10 +2,12 @@ package update
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -137,9 +139,9 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 
 	script := string(content)
 	for _, want := range []string{
-		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
-		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
-		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v3\"",
+		`Add-GoEnvPattern -Name "GONOSUMDB" -Pattern $module`,
+		`Add-GoEnvPattern -Name "GOPRIVATE" -Pattern $module`,
+		`Add-GoEnvPattern -Name "GONOPROXY" -Pattern $module`,
 		"& go install $goPackage",
 	} {
 		if !strings.Contains(script, want) {
@@ -180,11 +182,253 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 	}
 }
 
+func TestWindowsInstallScriptGoChannels(t *testing.T) {
+	for _, major := range []string{"", "3", "4", "5", "12"} {
+		for _, channel := range []string{"stable", "beta", "nightly"} {
+			t.Run(channel+"/v"+major, func(t *testing.T) {
+				module, tag := "github.com/gentleman-programming/gentle-ai", "v1.2.3"
+				if major != "" {
+					module += "/v" + major
+					tag = "v" + major + ".2.3"
+				}
+				mod := "// leading comment\n\nmodule \"" + module + "\" // trailing comment\n\ngo 1.99.0\n"
+				calls, output, err := runPowerShellInstallerFixture(t, channel, module, tag, strings.Repeat("a", 40), mod, "", major == "")
+				if err != nil {
+					t.Fatalf("installer failed: %v\n%s\n%s", err, output, calls)
+				}
+				version, endpoint, env := tag, "releases/latest", "|github.com/acme/*|"+module
+				if channel != "stable" {
+					version, endpoint, env = strings.Repeat("a", 40), "commits/main", module+"|"+module+",github.com/acme/*|"+module
+				}
+				for _, want := range []string{
+					"resolve https://api.github.com/repos/Gentleman-Programming/gentle-ai/" + endpoint,
+					"metadata https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/" + version + "/go.mod",
+					"install " + module + "/cmd/gentle-ai@" + version, "env " + env,
+					"parser local|off|",
+				} {
+					if !strings.Contains(calls, want+"\n") {
+						t.Errorf("missing %q in calls:\n%s", want, calls)
+					}
+				}
+				for _, prefix := range []string{"resolve ", "metadata ", "install ", "parser "} {
+					if strings.Count(calls, prefix) != 1 {
+						t.Errorf("expected one %q:\n%s", prefix, calls)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestWindowsInstallScriptGoFailures(t *testing.T) {
+	const module = "github.com/gentleman-programming/gentle-ai/v5"
+	for _, tt := range []struct{ name, channel, tag, sha, mod, fail string }{
+		{name: "missing release", channel: "stable", tag: " "},
+		{name: "malformed release", channel: "stable", tag: "v5.2.3/../../main"},
+		{name: "missing sha", sha: " "}, {name: "malformed sha", sha: "main"},
+		{name: "release HTTP failure", channel: "stable", fail: "resolve"},
+		{name: "commit HTTP failure", fail: "resolve"}, {name: "metadata HTTP failure", fail: "metadata"},
+		{name: "missing module", mod: "go 1.25.10\n"},
+		{name: "duplicate module", mod: "module " + module + "\nmodule " + module + "\n"},
+		{name: "malformed module", mod: "module \"unterminated\n"},
+		{name: "lookalike repository", mod: "module github.com/gentleman-programming/gentle-ai-extra/v5\n"},
+		{name: "regex lookalike", mod: "module githubXcom/gentleman-programming/gentle-ai/v5\n"},
+		{name: "wrong case", mod: "module github.com/Gentleman-Programming/gentle-ai/v5\n"},
+		{name: "trailing segment", mod: "module " + module + "/extra\n"},
+		{name: "noncanonical major", mod: "module github.com/gentleman-programming/gentle-ai/v05\n"},
+		{name: "v1 suffix", mod: "module github.com/gentleman-programming/gentle-ai/v1\n"},
+		{name: "parser exit failure", fail: "parser"}, {name: "install exit failure", fail: "install"},
+		{name: "parser failure with absent env", fail: "parser"},
+		{name: "binary hold", fail: "binary"}, {name: "insecure hold", fail: "insecure"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.channel == "" {
+				tt.channel = "beta"
+			}
+			if tt.tag == "" {
+				tt.tag = "v5.2.3"
+			}
+			if tt.sha == "" {
+				tt.sha = strings.Repeat("a", 40)
+			}
+			if tt.mod == "" {
+				tt.mod = "module " + module + "\ngo 1.99.0\n"
+			}
+			calls, output, err := runPowerShellInstallerFixture(t, tt.channel, module, tt.tag, tt.sha, tt.mod, tt.fail, tt.name == "parser failure with absent env")
+			if err == nil {
+				t.Fatalf("unexpected success:\n%s\n%s", output, calls)
+			}
+			want := 0
+			if tt.fail == "install" {
+				want = 1
+			}
+			if strings.Count(calls, "install ") != want {
+				t.Errorf("unexpected installs:\n%s", calls)
+			}
+			if (tt.fail == "binary" || tt.fail == "insecure") && (strings.Contains(calls, "resolve ") || strings.Contains(calls, "metadata ")) {
+				t.Errorf("distribution hold made HTTP calls:\n%s", calls)
+			}
+		})
+	}
+}
+
+// Native PowerShell doubles run the unchanged whole-script entrypoint. Only Go's
+// offline metadata parser is real; no install, application, or HTTP request runs.
+func runPowerShellInstallerFixture(t *testing.T, channel, module, tag, sha, mod, fail string, absent bool) (string, string, error) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("PowerShell subprocess fixture")
+	}
+	var shell string
+	names := []string{"pwsh"}
+	if runtime.GOOS == "windows" {
+		names = []string{"powershell", "pwsh"}
+	}
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil {
+			shell = path
+			break
+		}
+	}
+	if shell == "" {
+		t.Skip("PowerShell is unavailable")
+	}
+	root := t.TempDir()
+	tmp := filepath.Join(root, "tmp")
+	for _, dir := range []string{tmp, filepath.Join(root, "telemetry")} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(name, text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("module", mod)
+	write("calls", "")
+	write("tmp/unrelated", "preserve")
+	write("telemetry/mode", "off")
+	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goName := "go"
+	if runtime.GOOS == "windows" {
+		goName += ".exe"
+	}
+	config, err := json.Marshal(map[string]any{"Channel": channel, "Module": module, "Tag": tag, "SHA": sha, "Fail": fail, "Absent": absent, "Script": script, "Go": filepath.Join(runtime.GOROOT(), "bin", goName)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("config.json", string(config))
+	write("fixture.ps1", `
+$ErrorActionPreference = 'Stop'
+$cfg = Get-Content -LiteralPath (Join-Path $env:FIXTURE 'config.json') -Raw | ConvertFrom-Json
+function Log([string]$Text) { Add-Content -LiteralPath (Join-Path $env:FIXTURE 'calls') -Value $Text -Encoding UTF8 }
+function Parser-State {
+    $values = foreach ($name in @('GOTOOLCHAIN','GOWORK','GOFLAGS')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($null -eq $value) { '<absent>' } else { $value }
+    }
+    $values -join '|'
+}
+foreach ($name in @('GOTOOLCHAIN','GOWORK','GOFLAGS')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+if (-not $cfg.Absent) { $env:GOTOOLCHAIN = 'auto'; $env:GOWORK = '/missing-workspace'; $env:GOFLAGS = '-mod=vendor' }
+Remove-Item Env:GONOSUMDB -ErrorAction SilentlyContinue
+$env:GOPRIVATE = 'github.com/acme/*'; $env:GONOPROXY = $cfg.Module
+function chcp { if (($args -join ' ') -ne '65001') { throw 'unexpected chcp' } }
+function Invoke-RestMethod {
+    param([string]$Uri)
+    Log ('resolve ' + $Uri)
+    if ($cfg.Fail -eq 'resolve') { throw 'fixture HTTP failure' }
+    switch -CaseSensitive ($Uri) {
+        'https://api.github.com/repos/Gentleman-Programming/gentle-ai/releases/latest' { return @{tag_name=$cfg.Tag} }
+        'https://api.github.com/repos/Gentleman-Programming/gentle-ai/commits/main' {
+            $sha = $cfg.SHA
+            if ($script:resolved) { $sha = 'b' * 40 }
+            $script:resolved = $true
+            return @{sha=$sha}
+        }
+        default { throw ('unexpected HTTP: ' + $Uri) }
+    }
+}
+function Invoke-WebRequest {
+    param([string]$Uri, [switch]$UseBasicParsing, [string]$OutFile)
+    Log ('metadata ' + $Uri)
+    if (-not $UseBasicParsing -or -not $OutFile -or $Uri -cnotmatch '\Ahttps://raw\.githubusercontent\.com/Gentleman-Programming/gentle-ai/[^/]+/go\.mod\z') { throw 'unexpected metadata request' }
+    if ($cfg.Fail -eq 'metadata') { throw 'fixture download failure' }
+    Copy-Item -LiteralPath (Join-Path $env:FIXTURE 'module') -Destination $OutFile
+}
+function go {
+    $global:LASTEXITCODE = 0
+    switch ($args[0]) {
+        'mod' {
+            if ($args.Count -ne 4 -or $args[1] -ne 'edit' -or $args[2] -ne '-json') { throw 'unexpected parser' }
+            Log ('parser ' + $env:GOTOOLCHAIN + '|' + $env:GOWORK + '|' + $env:GOFLAGS)
+            if ($env:GOTOOLCHAIN -ne 'local' -or $env:GOWORK -ne 'off' -or $env:GOFLAGS) { throw 'parser is not offline' }
+            if ($cfg.Fail -eq 'parser') { $global:LASTEXITCODE = 1; return '{"Module":{"Path":"github.com/gentleman-programming/gentle-ai/v5"}}' }
+            & $cfg.Go @args
+            $global:LASTEXITCODE = $LASTEXITCODE
+        }
+        'install' {
+            if ($args.Count -ne 2) { throw 'unexpected install arguments' }
+            Log ('install ' + $args[1]); Log ('env ' + $env:GONOSUMDB + '|' + $env:GOPRIVATE + '|' + $env:GONOPROXY)
+            Log ('install-state ' + (Parser-State))
+            if ($cfg.Fail -eq 'install') { $global:LASTEXITCODE = 1 }
+        }
+        'env' {
+            if ($args.Count -ne 2 -or $args[1] -ne 'GOBIN') { throw 'unexpected go env' }
+            Join-Path $env:FIXTURE 'bin'
+        }
+        default { throw 'unexpected Go operation' }
+    }
+}
+$options = @{ Method='go'; Channel=$cfg.Channel }
+if ($cfg.Fail -eq 'binary') { $options.Method = 'binary' }
+if ($cfg.Fail -eq 'insecure') { $options.Insecure = $true }
+try { & $cfg.Script @options; exit $LASTEXITCODE }
+finally { Log ('final-state ' + (Parser-State)) }
+`)
+	cmd := exec.Command(shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", filepath.Join(root, "fixture.ps1"))
+	// Preserve only OS process essentials, never credentials or Go/user configuration.
+	for _, name := range []string{"SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"} {
+		if value, ok := os.LookupEnv(name); ok {
+			cmd.Env = append(cmd.Env, name+"="+value)
+		}
+	}
+	cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(shell), "HOME="+root, "USERPROFILE="+root, "TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp, "FIXTURE="+root, "GOPROXY=off", "GOSUMDB=off", "GOENV=off", "TEST_TELEMETRY_DIR="+filepath.Join(root, "telemetry"))
+	out, runErr := cmd.CombinedOutput()
+	data, err := os.ReadFile(filepath.Join(root, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.ReplaceAll(strings.TrimPrefix(string(data), "\ufeff"), "\r\n", "\n")
+	state := "auto|/missing-workspace|-mod=vendor"
+	if absent {
+		state = "<absent>|<absent>|<absent>"
+	}
+	if !strings.Contains(calls, "final-state "+state+"\n") {
+		t.Errorf("parser environment was not restored:\n%s\n%s", calls, out)
+	}
+	if strings.Contains(calls, "install ") && !strings.Contains(calls, "install-state "+state+"\n") {
+		t.Errorf("install inherited parser overrides:\n%s", calls)
+	}
+	entries, err := os.ReadDir(tmp)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "unrelated" {
+		t.Errorf("metadata cleanup: %v, %v", entries, err)
+	}
+	if sentinel, err := os.ReadFile(filepath.Join(tmp, "unrelated")); err != nil || string(sentinel) != "preserve" {
+		t.Errorf("cleanup changed unrelated sentinel: %q, %v", sentinel, err)
+	}
+	return calls, string(out), runErr
+}
+
 // TestInstallScriptsGoInstallPackageMatchesModuleMajor guards the install
-// scripts against the regression that shipped in v3.0.1: both scripts build
-// the `go install` package by interpolation, so a module-major migration
-// that rewrites the literal module string misses them. The expected major
-// is derived from go.mod so the next migration fails here first.
+// scripts against the regression that shipped in v3.0.1. Check source contracts
+// and exercise the dynamic installer with repository metadata. Derive the
+// expected major from go.mod to cover future module migrations.
 func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
@@ -202,7 +446,7 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		pattern string
 	}{
 		{"install.sh", `local go_package="github.com/${owner_lc}/${GITHUB_REPO}/` + major + `/cmd/${BINARY_NAME}@${version}"`},
-		{"install.ps1", `$goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/` + major + `/cmd/$BINARY_NAME@$version"`},
+		{"install.ps1", `$goPackage = "$module/cmd/$BINARY_NAME@$version"`},
 	}
 	stale := regexp.MustCompile(`/v[0-9]+/cmd/`)
 	for _, tc := range cases {
@@ -213,6 +457,19 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		text := string(content)
 		if !strings.Contains(text, tc.pattern) {
 			t.Errorf("scripts/%s must build the go install package on the %s module: missing %q", tc.script, major, tc.pattern)
+		}
+		if tc.script == "install.ps1" {
+			t.Run(tc.script, func(t *testing.T) {
+				module, sha := "github.com/gentleman-programming/gentle-ai/"+major, strings.Repeat("a", 40)
+				calls, output, err := runPowerShellInstallerFixture(t, "beta", module, "", sha, string(goMod), "", false)
+				if err != nil {
+					t.Fatalf("installer failed: %v\n%s\n%s", err, output, calls)
+				}
+				want := "install " + module + "/cmd/gentle-ai@" + sha + "\n"
+				if !strings.Contains(calls, want) || strings.Count(calls, "install ") != 1 {
+					t.Errorf("scripts/%s must install the module declared in go.mod: want %q, calls:\n%s", tc.script, want, calls)
+				}
+			})
 		}
 		for _, hit := range stale.FindAllString(text, -1) {
 			if hit != "/"+major+"/cmd/" {
