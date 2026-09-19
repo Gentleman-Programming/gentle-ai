@@ -390,25 +390,44 @@ func TestNegotiatedStartRuntimeBudgetRefusesOverBudgetFrozenPolicy(t *testing.T)
 	}
 }
 
-// TestRecoveredOverBudgetLineageStopsTypedAndKeepsItsExit answers the one
+// TestRecoveredOverBudgetLineageStopsTypedAndArrivesWithItsExitIntact answers
 // question this issue's guard cannot answer on its own: `review recover` mints
 // a successor authority from a new snapshot with new lenses, and it runs no
 // budget check (the START guard has exactly one call site,
 // review_facade.go:2193). So recover really can create a REVIEWING authority
 // for a candidate no runtime can carry.
 //
-// That is not the dead-end this issue closes, and the difference is the exit,
-// not the refusal. The #4680 shape is: authority frozen, a lens result already
-// persisted, compactPristineReviewing therefore false, `review invalidate`
-// gone, every capture failing forever. A recovered lineage lands at the next
-// generation with zero admitted role results, so it stays pristine and keeps
-// its non-destructive exit, and STATUS classifies it with the same typed stop
-// rather than reoffering a slot nothing can fill.
+// That is not the dead-end this issue closes AT THE MOMENT IT ARRIVES, and the
+// difference is the exit, not the refusal. The #4680 shape is: authority
+// frozen, a lens result already persisted, compactPristineReviewing therefore
+// false, `review invalidate` gone, every capture failing forever. A recovered
+// lineage lands at the next generation with zero admitted role results, so on
+// arrival it is pristine and `review invalidate` accepts it, and STATUS
+// classifies it with the same typed stop rather than reoffering a slot nothing
+// can fill.
+//
+// What this test proves is exactly that arrival, and NOT an invariant. Two
+// conditions hold here and are enforced nowhere, so the exit is losable:
+//
+//   - Nothing is captured in between. RunReviewCaptureResult is dispatched
+//     straight from runReviewCommand and never consults this budget guard,
+//     whose only production call site is STATUS (review_facade.go:1287). A
+//     hand-built --input result admits on an over-budget candidate, and the
+//     admitted result makes compactPristineReviewing false — the #4680
+//     dead-end, reached on a recovered lineage.
+//   - The worktree does not move. `review invalidate` also runs
+//     rebuildCurrentSnapshotEvidence (compact_store.go:1691), so a pristine
+//     zero-result lineage whose tree drifted cannot be invalidated at all. An
+//     over-budget candidate is a large change the author keeps editing, which
+//     makes that the ordinary case rather than the exotic one.
+//
+// Both are tracked separately. Naming them here keeps the guarantee this test
+// actually carries — an exit on arrival — from being read as a durable one.
 //
 // This is written as execution rather than prose on purpose: the claim "recover
 // is out of scope" is only worth as much as the exit it depends on, and that
 // exit is a behavior, not a comment.
-func TestRecoveredOverBudgetLineageStopsTypedAndKeepsItsExit(t *testing.T) {
+func TestRecoveredOverBudgetLineageStopsTypedAndArrivesWithItsExitIntact(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, baseRef, predecessor := escalatedCurrentChangesRecoveryFixture(t, "recover-over-budget")
 
@@ -472,12 +491,13 @@ func TestRecoveredOverBudgetLineageStopsTypedAndKeepsItsExit(t *testing.T) {
 		t.Fatalf("recovered over-budget lineage next transition = %+v, want a typed budget stop", parsed.NextTransition)
 	}
 
-	// The exit. This is what keeps recover out of the dead-end class.
+	// The exit, on arrival. This is what keeps a freshly recovered lineage out
+	// of the dead-end class; see the conditions named above for what loses it.
 	var invalidated bytes.Buffer
 	if err := RunReview([]string{
 		"invalidate", "--cwd", repo, "--lineage", "recover-over-budget-successor",
 		"--expected-revision", record.Revision, "--reason", "candidate cannot fit the runtime budget",
 	}, &invalidated); err != nil {
-		t.Fatalf("the recovered over-budget lineage has no non-destructive exit, which makes it the same dead-end this issue closes: %v\n%s", err, invalidated.String())
+		t.Fatalf("the recovered over-budget lineage arrived without a non-destructive exit, which makes it the same dead-end this issue closes: %v\n%s", err, invalidated.String())
 	}
 }

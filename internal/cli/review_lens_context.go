@@ -352,11 +352,20 @@ func reviewLensContextBudgetProbe(
 // its own (the START guard has exactly one call site, review_facade.go:2193).
 // So this classifies live lineages on the current build, not only ones an
 // older build left behind, and it is a real guard rather than an upgrade-path
-// defence. A recovered over-budget lineage is not the dead-end this issue
-// closes: it lands with no admitted role results, so compactPristineReviewing
-// holds and `review invalidate` remains available.
-// TestRecoveredOverBudgetLineageStopsTypedAndKeepsItsExit proves that by
-// execution.
+// defence. A recovered over-budget lineage does not ARRIVE as the dead-end
+// this issue closes: it lands with no admitted role results, so
+// compactPristineReviewing holds and `review invalidate` accepts it.
+// TestRecoveredOverBudgetLineageStopsTypedAndArrivesWithItsExitIntact proves
+// that by execution.
+//
+// That exit is not an invariant, and nothing here enforces it. Two separately
+// tracked paths lose it: a direct `review capture-result --input`, which never
+// consults this guard (its only production call site is STATUS) and whose
+// admitted result makes compactPristineReviewing false; and a drifted
+// worktree, because `review invalidate` also rebuilds current-snapshot
+// evidence and refuses when the live tree no longer matches. Read the
+// guarantee as "the exit is there when the lineage arrives", never as "the
+// exit cannot be lost".
 func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
 	// An undecided probe is deliberately NOT refused here. A candidate whose
 	// diff exceeds the native Git ceiling reaches this surface as an assembly
