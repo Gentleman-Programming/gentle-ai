@@ -360,3 +360,103 @@ func TestWorkflowsBuildCanonicalBinary(t *testing.T) {
 		}
 	}
 }
+
+// canonicalDispatchVerbs parses file with go/parser and returns the string
+// literals used as case values in its first top-level switch statement --
+// the dispatch switch on the first CLI argument in both cmd/axiom/main.go's
+// main() and internal/app.RunArgs. It stops descending as soon as that
+// switch is found, so a subcommand's own nested switch (for example
+// "project"'s list/switch/add/remove in main.go) is never mistaken for the
+// top-level dispatch switch.
+func canonicalDispatchVerbs(t *testing.T, file string) map[string]struct{} {
+	t.Helper()
+
+	source, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+
+	fileSet := token.NewFileSet()
+	tree, err := parser.ParseFile(fileSet, file, source, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+
+	verbs := make(map[string]struct{})
+	found := false
+	ast.Inspect(tree, func(node ast.Node) bool {
+		if found {
+			return false
+		}
+		switchStmt, ok := node.(*ast.SwitchStmt)
+		if !ok {
+			return true
+		}
+		found = true
+		for _, stmt := range switchStmt.Body.List {
+			caseClause, ok := stmt.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
+			for _, expr := range caseClause.List {
+				if value, ok := stringLiteralValue(expr); ok {
+					verbs[value] = struct{}{}
+				}
+			}
+		}
+		return false
+	})
+	if !found {
+		t.Fatalf("%s: no top-level switch statement found", file)
+	}
+
+	return verbs
+}
+
+// TestAppDispatchIsSubsetOfCanonicalDispatch is the root assertion of the
+// canonical-binary guard family [D-04]: every verb reachable through the
+// deprecated internal/app.RunArgs dispatch switch MUST also be reachable
+// through cmd/axiom/main.go's own dispatch switch. This is the guard that
+// would have caught codegraph, telemetry, skill-registry and
+// bench-model-picker existing only in internal/app before this increment.
+//
+// Characterization test (task 3.5): the four verbs above were already
+// rewired into cmd/axiom/main.go before this phase started (main.go:396-415),
+// so this assertion is expected to pass the first time it runs, not to go
+// through a RED step.
+func TestAppDispatchIsSubsetOfCanonicalDispatch(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+
+	appVerbs := canonicalDispatchVerbs(t, filepath.Join(repoRoot, "internal", "app", "app.go"))
+	axiomVerbs := canonicalDispatchVerbs(t, filepath.Join(repoRoot, "cmd", "axiom", "main.go"))
+
+	for verb := range appVerbs {
+		if _, ok := axiomVerbs[verb]; !ok {
+			t.Errorf("verb %q is reachable through the deprecated cmd/gentle-ai shim (internal/app.RunArgs) but not through the canonical cmd/axiom binary", verb)
+		}
+	}
+}
+
+// TestDeadcodeRatchetTargetsCanonicalBinary fixes
+// scripts/deadcode-ratchet.sh's default DEADCODE_TARGET so the dead-code
+// ratchet measures reachability from the canonical binary, not the
+// deprecated shim [D-04].
+//
+// Characterization test (task 3.6): the target was already corrected to
+// ./cmd/axiom before this increment started (scripts/deadcode-ratchet.sh:41),
+// so this assertion is expected to pass the first time it runs. It turns
+// that fact into evidence instead of an unverified assumption.
+func TestDeadcodeRatchetTargetsCanonicalBinary(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+	path := filepath.Join(repoRoot, "scripts", "deadcode-ratchet.sh")
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	want := `target="${DEADCODE_TARGET:-` + canonicalBinaryPath + `}"`
+	if !strings.Contains(string(content), want) {
+		t.Errorf("%s: does not default DEADCODE_TARGET to %s (want to contain %q)", path, canonicalBinaryPath, want)
+	}
+}
