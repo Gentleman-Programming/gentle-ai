@@ -144,9 +144,21 @@ Verificado para evitar deltas espurios en la fase de especificación:
 |---|---|
 | `visual-decoupling` (REQ-09.1 a REQ-09.4) | Rige estética, presets y rutas de instrucciones. La identidad de distribución opera sobre instalador, release y protocolo: superficies disjuntas. Además V4 y V5 son no-reversibles. |
 | `workspace-topology` (REQ-1.1 identidad y versión) | Fija el comportamiento de `axiom --version`, no la procedencia del artefacto distribuido. |
-| `axiom-user-state-and-env` | `~/.axiom` y la precedencia `AXIOM_*` son estado de usuario, no contrato de distribución. |
+| ~~`axiom-user-state-and-env`~~ | ~~`~/.axiom` y la precedencia `AXIOM_*` son estado de usuario, no contrato de distribución.~~ **Retirada de esta tabla el 2026-09-19: la exclusión era por categoría, no por medición.** Ver la nota siguiente. |
 | `tui-spanish-localization`, `persona-behavior-contract` | Protegidas por V6. Ninguna tanda las toca. |
 | `living-documentation` | El registro de absorción es un documento de repositorio, no una especificación viva indexada. |
+
+> **Corrección de esta tabla (2026-09-19).** La cabecera dice «Verificado». Para `axiom-user-state-and-env` no lo estaba: se excluyó razonando que el estado de usuario **no es** contrato de distribución, y esa es una exclusión por categoría, no una medición. La superficie no estaba sana.
+>
+> Medido: `internal/backup/manifest.go:170-186` declara `~/.axiom/backups` raíz canónica de **todos** los respaldos y etiqueta `~/.gentle-ai/backups` como heredada. Los tres lectores lo respetan. Los **cinco** escritores de producción resuelven la raíz por literal en vez de por la función del paquete, y **no coinciden entre sí**: `internal/cli/sync.go:509`, `internal/cli/run.go:709`, `internal/update/upgrade/executor.go:488` y `:514` e `internal/components/uninstall/service.go:178` escriben la heredada; `internal/dashboard/service.go:1190` (dentro de `CreateBackup`) escribe la canónica, pero también por literal — acierta por coincidencia, no por diseño.
+>
+> El estado de respaldos del usuario queda partido **por superficie, no por versión**: `axiom sync` lo deja en una raíz y la Web UI en la otra. Y `cmd/axiom/main.go:141` le nombra al usuario `~/.axiom/backups/`, donde cuatro de los cinco escritores no escriben.
+>
+> La suite no podía verlo: **18 aserciones en 9 ficheros** repiten el literal heredado y **ninguna** el vigente. El test no anula la comprobación, la copia.
+>
+> Queda cubierto por REQ-20.13 y REQ-20.14 bajo `axiom-distribution-identity`. Se ubica ahí, y no en `axiom-user-state-and-env`, porque la **causa** es la migración de identidad —los lectores se migraron y los escritores no—; el síntoma funcional es aguas abajo de ella. La reserva razonada de la fase de especificación sobre esta ubicación queda registrada, no descartada.
+>
+> **Lo que esta corrección deja apuntado por encima del caso concreto:** «no requiere delta» y «no pertenece a esta categoría» no son la misma afirmación, y solo la primera exige haber mirado. Una tabla que las mezcla bajo el rótulo «Verificado» produce exactamente el punto ciego que INC-18 dejó y que este incremento existe para cerrar.
 
 ---
 
