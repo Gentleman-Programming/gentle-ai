@@ -42,12 +42,9 @@ func staleManagedAssetState(sandbox *Sandbox) error {
 		return fmt.Errorf("historical managed asset state copy differs from its fixture")
 	}
 	// The predecessor artifact is the whole install state, and it predates the
-	// kill switch, so copying it over the journey's opted-in state.json takes
-	// receipt-driven development back off. Opt in again the same way the runner
-	// did — through the product's own command, which leaves the stale digest
-	// exactly as this fixture wrote it. Without this the journey would measure
-	// a review-disabled STATUS instead of the stale-asset refusal it exists to
-	// measure.
+	// kill switch, so copying it clears the journey's explicit global ON opinion.
+	// Restore the declared precondition through the same product command as the
+	// runner, preserving the stale digest rather than relying on default ON.
 	return optIntoReviewMode(sandbox)
 }
 

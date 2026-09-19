@@ -18,14 +18,14 @@ func issue4377Journeys() []Journey {
 		ID:     "j127-customizable-install-rdd-choice",
 		Review: reviewUntouched,
 		Title:  "#4377: customizable installation explains, revises, and summarizes the deferred RDD choice",
-		Source: "#4377 requires an opt-in global RDD choice before final installation confirmation without mutating a cancelled installation",
+		Source: "#4377 requires a deferred global RDD choice before final installation confirmation without mutating a cancelled installation",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: update-check cooldown in the sandbox HOME", Fixture: issue3766UpdateCooldownFixture},
 			{Name: "fixture: detected Claude configuration", Fixture: func(sandbox *Sandbox) error {
 				return sandbox.write(filepath.Join(sandbox.Home, ".claude", "settings.json"), "{}\n")
 			}},
-			{Name: "customizable installer presents RDD before review and permits revision", Composite: func(run *journeyRun) error {
+			{Name: "customizable installer presents default ON before review and permits opting out", Composite: func(run *journeyRun) error {
 				observation, err := run.runTTY(nil, false, issue4377TTYExchange)
 				if err != nil {
 					return err
@@ -33,7 +33,7 @@ func issue4377Journeys() []Journey {
 				if observation.ExitCode != 0 {
 					return fmt.Errorf("customizable installer TUI exited %d: %s", observation.ExitCode, strings.TrimSpace(observation.Stderr))
 				}
-				return issue4377CancelledModeIsOff(run.sandbox)
+				return issue4377CancelledModeInheritsDefault(run.sandbox)
 			}},
 		},
 	}}
@@ -78,15 +78,16 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 								}
 								return waitForIssue4377TTY(reader, []string{
 									"Receipt-Driven Development",
-									"Would you like to enable RDD?",
+									"RDD is ON by default. You can opt out.",
 									"Disable RDD",
+									"No global RDD preference is configured.",
 								}, func() error {
-									// The fresh install default is RDD OFF. Choose Enable RDD, then
-									// return from final confirmation and revise to OFF.
-									if _, err := io.WriteString(writer, "\x1b[A\r"); err != nil {
+									// Confirm default ON, then return and explicitly opt out.
+									// Cancelling must persist neither selection.
+									if _, err := io.WriteString(writer, "\r"); err != nil {
 										return err
 									}
-									return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development  RDD ON"}, func() error {
+									return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD ON"}, func() error {
 										if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
 											return err
 										}
@@ -94,7 +95,7 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 											if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
 												return err
 											}
-											return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development  RDD OFF"}, func() error {
+											return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD OFF"}, func() error {
 												_, err := io.WriteString(writer, "q")
 												return err
 											})
@@ -114,9 +115,9 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 	})
 }
 
-// issue4377CancelledModeIsOff is deliberately black-box: status is the public
-// read-only projection, so the journey does not inspect persistence files.
-func issue4377CancelledModeIsOff(sandbox *Sandbox) error {
+// issue4377CancelledModeInheritsDefault is deliberately black-box: status is
+// read-only, and both sources must remain unset after cancelling the choice.
+func issue4377CancelledModeInheritsDefault(sandbox *Sandbox) error {
 	observation := sandbox.readBack("review", "mode", "status", "--cwd", sandbox.Repo, "--json")
 	var result struct {
 		Operation string `json:"operation"`
@@ -134,9 +135,9 @@ func issue4377CancelledModeIsOff(sandbox *Sandbox) error {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
 		return fmt.Errorf("parse review mode status after cancellation: %w", err)
 	}
-	if result.Operation != "status" || result.Scope != "both" || result.Status.Effective != "off" ||
+	if result.Operation != "status" || result.Scope != "both" || result.Status.Effective != "on" ||
 		result.Status.Source != "default" || result.Status.Global != "" || result.Status.CloneLocal != "" {
-		return fmt.Errorf("cancelled review mode = operation=%q scope=%q effective=%q source=%q global=%q clone=%q, want status/both/off/default and unset sources", result.Operation, result.Scope, result.Status.Effective, result.Status.Source, result.Status.Global, result.Status.CloneLocal)
+		return fmt.Errorf("cancelled review mode = operation=%q scope=%q effective=%q source=%q global=%q clone=%q, want status/both/on/default and unset sources", result.Operation, result.Scope, result.Status.Effective, result.Status.Source, result.Status.Global, result.Status.CloneLocal)
 	}
 	return nil
 }

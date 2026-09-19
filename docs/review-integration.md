@@ -4,9 +4,9 @@
 
 `gentle-ai.review-integration/v2` coordinates one immutable review transaction at a time. Go owns the candidate snapshot, review admission, correction boundary, terminal burn, and all provider-facing bindings. Claude Code, OpenCode, Codex, and Pi transport provider-issued work; no runtime adapter decides review or delivery.
 
-## RDD starts off
+## RDD defaults to ON
 
-RDD is opt-in. Until a user enables it with `gentle-ai review mode enable --scope global`, review does not govern the candidate and delivery follows ordinary repository policy. Disabling returns to that state. Enabling revalidates the current candidate; it never resumes stale authority.
+RDD is on by default and opt-out. With no configured preference, status reports `effective: on, source: default` without saving a user decision. Explicit global or clone-local OFF wins; use `gentle-ai review mode disable` to opt out. Automation must not toggle the mode or persist a preference on the user's behalf. Candidate consent is separate, and delivery always follows ordinary repository policy. Enabling revalidates the current candidate; it never resumes stale authority.
 
 ## Quick path
 

@@ -463,12 +463,12 @@ appending to that slice.
 
 ### Every journey declares its review precondition
 
-Receipt-driven development is opt-in, and the sandbox `HOME` each journey runs
-under is a fresh install, so a journey gets no review by standing still.
-`Journey.Review` says what the runner does about that, and it is **mandatory** —
+Receipt-driven development defaults to ON in a fresh sandbox `HOME`.
+Lifecycle journeys still explicitly enable it rather than depending on that default.
+`Journey.Review` declares this setup and is **mandatory** —
 `validateCorpus` fails the whole run on a journey that does not declare one.
 
-- `reviewOptedIn` — before the journey's first step, the runner opts in the way
+- `reviewOptedIn` — before the journey's first step, the runner enables review as
   a user does: `gentle-ai review mode enable --scope global`, run from a
   throwaway checkout of its own, then read back. The journey fails if the
   product does not report the switch on. It is sandbox setup, not operator work,
@@ -478,6 +478,8 @@ under is a fresh install, so a journey gets no review by standing still.
   journey whose subject IS the switch (`j03-kill-switch` drives it itself,
   `j31-nonsense-mode-value` authors the record under test) and for one that has
   nothing to do with reviews (`j2138`, `j3043`, `j97` install agents).
+  Untouched means ON/default on a fresh install; journeys requiring OFF must
+  explicitly disable it.
 
 The declaration is mandatory because the alternative already cost us once: the
 corpus measured the review lifecycle only because the product's default happened

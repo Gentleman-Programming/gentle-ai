@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 740" width="1240" height="740" role="img" aria-labelledby="rddTitle rddDesc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
   <title id="rddTitle">How RDD checks a finished change</title>
-  <desc id="rddDesc">Receipt-Driven Development is opt-in and off by default. First the exact change is frozen to a lineage, revision and target. Then a read-only risk assessment decides the depth: passive gets a structural readback with zero reviewer lenses, medium gets one focused lens, high gets the canonical 4R — Risk, Resilience, Readability and Reliability — in parallel. At most one bounded correction is allowed. One exact acknowledgement closes the transaction and burns the authority. Delivery stays human-owned: a review never commits, pushes or opens a pull request.</desc>
+  <desc id="rddDesc">Receipt-Driven Development is opt-out and on by default. First the exact change is frozen to a lineage, revision and target. Then a read-only risk assessment decides the depth: passive gets a structural readback with zero reviewer lenses, medium gets one focused lens, high gets the canonical 4R — Risk, Resilience, Readability and Reliability — in parallel. At most one bounded correction is allowed. One exact acknowledgement closes the transaction and burns the authority. Delivery stays human-owned: a review never commits, pushes or opens a pull request.</desc>
 
   <defs>
     <radialGradient id="rddAmbient" cx="12%" cy="0%" r="70%">
@@ -16,7 +16,7 @@
   <text x="40" y="58" font-size="27" font-weight="700" fill="#F7ECF2">RDD &#8212; checked at the right depth</text>
   <text x="41" y="88" font-size="14.5" fill="#A88E9B">The change is frozen first, then its own risk decides how hard it gets reviewed.</text>
   <rect x="962" y="38" width="238" height="34" rx="17" fill="#2C1F27" stroke="#4A3540"/>
-  <text x="1081" y="60" font-size="12.5" text-anchor="middle" fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">opt-in &#183; off by default</text>
+  <text x="1081" y="60" font-size="12.5" text-anchor="middle" fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">opt-out &#183; on by default</text>
 
   <!-- stage labels -->
   <text x="40" y="160" font-size="12" font-weight="700" letter-spacing="2" fill="#D7A0B8"><tspan fill="#F095C8" opacity="0.5">01 </tspan>FREEZE</text>

@@ -14,10 +14,11 @@ Receipt-Driven Development (RDD) reviews a finished candidate without taking own
 
 ## Atomic transaction lifecycle
 
-**The switch is a switch, and it starts off.** RDD is opt-in: until someone runs
-`gentle-ai review mode enable --scope global`, it does not govern the candidate.
-Nothing blocks or gates delivery; ordinary repository policy applies. `gentle-ai
-review mode disable` returns to that state. Enabling RDD revalidates the current
+**The switch is user-owned, and defaults to ON.** RDD is opt-out: unset state
+reports `on` decided by `default`, without persisting a preference. Explicit
+global or clone-local OFF wins. Automation never toggles the mode automatically.
+Use `gentle-ai review mode disable` to opt out; ordinary repository policy
+always governs delivery. Enabling RDD revalidates the current
 candidate instead of resuming stale obligations.
 
 ```text
@@ -84,9 +85,9 @@ flowchart TD
     B -->|"4+ file exploration<br/>or 2+ non-trivial writes"| D["Delegated direct<br/>(one bounded worker)"]
     C --> E["Implementation + tests"]
     D --> E
-    E --> F{"RDD enabled?<br/>(user-owned, opt-in)"}
-    F -->|"off (default)"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
-    F -->|"on (explicitly enabled)"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
+    E --> F{"RDD enabled?<br/>(user-owned, opt-out)"}
+    F -->|"off (explicit)"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
+    F -->|"on (default or explicitly enabled)"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
     G --> H{"Risk frozen<br/>at START"}
     H -->|"low"| I["Structural readback<br/>0 lenses · silent"]
     H -->|"medium"| J["1 focus lens<br/>+ consent"]

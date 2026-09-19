@@ -688,14 +688,10 @@ type Step struct {
 // ReviewPrecondition is a journey's declared receipt-driven-development
 // starting state, and every journey must declare one.
 //
-// Receipt-driven development is opt-in: a fresh install has the switch off, and
-// the sandbox HOME every journey runs under IS a fresh install. So a journey
-// whose subject is the review lifecycle no longer gets a review by standing
-// still — it has to opt in the way a user does. Leaving that to whatever the
-// product's default happens to be is what this type exists to stop: the corpus
-// once measured the lifecycle only because the default happened to say yes, and
-// the day the default changed those journeys did not fail, they quietly
-// measured a different flow.
+// Receipt-driven development defaults to ON in a fresh sandbox HOME. Lifecycle
+// journeys still explicitly enable it through the product command so their
+// preconditions do not depend on a changing product default. Journeys testing
+// the default or the switch itself leave it untouched and own their setup.
 //
 // The declaration is what the RUNNER does with the switch, because that is the
 // part the harness can verify. It is not a prediction about what the product's
@@ -713,9 +709,9 @@ const (
 	// only ever assert "off".
 	reviewOptedIn ReviewPrecondition = "opted-in"
 	// reviewUntouched runs no mode command at all. The journey either drives
-	// the switch itself (its subject IS the switch) or its subject is what
-	// happens with reviews off, and a runner that reached in first would be
-	// overwriting the state under test.
+	// the switch itself (its subject IS the switch) or tests the unset default.
+	// It must explicitly disable reviews when OFF is its required state;
+	// untouched does not imply OFF.
 	reviewUntouched ReviewPrecondition = "untouched"
 )
 

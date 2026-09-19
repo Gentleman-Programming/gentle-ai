@@ -47,7 +47,7 @@ One `odd/tasks/<feature-name>.md` holds objective/problem/why, scope/constraints
 
 Before implementation or resume, the parent reads both copies, reconciles current evidence, and forwards the locator and relevant context; workers read the document before edits. Unavailable memory leaves explicit pending synchronization, not invented success. [ODD details](usage.md#organic-driven-development-odd) cover conflicts and partial progress.
 
-TDD mode, source, and exact runner come from existing configuration or explicit user choice and are forwarded to workers, then refreshed on resume. Tests existing does not enable TDD. Enabled means observed RED → GREEN → REFACTOR; disabled still requires functional checks. RDD is separate, opt-in, and user-owned at deliverable boundaries.
+TDD mode, source, and exact runner come from existing configuration or explicit user choice and are forwarded to workers, then refreshed on resume. Tests existing does not enable TDD. Enabled means observed RED → GREEN → REFACTOR; disabled still requires functional checks. RDD is separate, on by default, opt-out, and user-owned at deliverable boundaries.
 
 ### When to choose SDD instead
 
@@ -119,7 +119,7 @@ The orchestrator must stop acting as a monolithic executor when complexity appea
 
 - **4-file rule**: reading 4+ files to understand a flow means delegate exploration or run an exploration phase.
 - **Multi-file write rule**: touching 2+ non-trivial files means use one writer or require fresh review before completion.
-- **PR rule**: review can provide fresh evidence for a commit, push, or PR, but it never authorizes delivery. Receipt-driven development is opt-in with `gentle-ai review mode enable --scope global`; whether it is on or off, ordinary repository policy decides delivery.
+- **PR rule**: review can provide fresh evidence for a commit, push, or PR, but it never authorizes delivery. Receipt-driven development is on by default; opt out with `gentle-ai review mode disable`. Explicit global or clone-local OFF choices are preserved, and whether it is on or off, ordinary repository policy decides delivery.
 - **Incident rule**: after wrong cwd, worktree/git accident, merge recovery, confusing test command, or environment workaround, run a fresh audit before continuing.
 - **Long-session rule**: after roughly 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits with growing complexity, pause and delegate, re-plan, or justify why not.
 - **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents when the agent platform supports it.
