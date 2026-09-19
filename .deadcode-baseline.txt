@@ -51,9 +51,6 @@ internal/cli/sync.go	syncComponentPaths
 internal/cli/sync.go	syncPersonaPaths
 internal/components/communitytool/pi_codegraph.go	ValidatePiCodeGraphRoot
 internal/components/communitytool/pi_codegraph.go	verifyPiMCP
-internal/components/communitytool/rtk_acquire.go	acquireRTKCandidate
-internal/components/communitytool/rtk_acquire.go	extractRTKExecutable
-internal/components/communitytool/rtk_acquire.go	rtkArchiveExecutable
 internal/components/communitytool/tool.go	CodeGraphCommands
 internal/components/communitytool/tool.go	CodeGraphCommandsForDetector
 internal/components/engram/download.go	downloadAndExtractTarGz

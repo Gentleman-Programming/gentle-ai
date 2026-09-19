@@ -2628,7 +2628,7 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 		want      bool
 	}{
 		{name: "explicit selected", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"codegraph"}}, want: true},
-		{name: "explicit none", persisted: state.InstallState{CommunityToolsConfigured: true}},
+		{name: "unknown persisted value", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"unknown"}}},
 		{name: "legacy managed marker", persisted: state.InstallState{}, want: true},
 	}
 	for _, test := range tests {
@@ -2637,6 +2637,9 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 			restorePersistedCommunityTools(home, &selection, test.persisted)
 			if got := selection.HasCommunityTool(model.CommunityToolCodeGraph); got != test.want {
 				t.Fatalf("CodeGraph selected = %t, want %t", got, test.want)
+			}
+			if !test.want && len(selection.CommunityTools) != 0 {
+				t.Fatalf("community tools = %v, want unknown values ignored", selection.CommunityTools)
 			}
 		})
 	}

@@ -279,7 +279,7 @@ func TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd(t *testing.T) {
 	writeOpenClawConfigWithWorkspace(t, home, configured)
 	selection := model.Selection{
 		Agents:         []model.AgentID{model.AgentOpenClaw, model.AgentPi},
-		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph, model.CommunityToolRTK},
+		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
 	install := newTestInstallRuntime(t, home, selection)
 	sync, err := newSyncRuntime(home, selection)
@@ -308,8 +308,8 @@ func TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd(t *testing.T) {
 			}
 		}
 	}
-	if tools != 3 {
-		t.Fatalf("project tool steps = %d, want CodeGraph, RTK and Pi reconciliation", tools)
+	if tools != 2 {
+		t.Fatalf("project tool steps = %d, want CodeGraph and Pi reconciliation", tools)
 	}
 }
 

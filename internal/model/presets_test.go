@@ -48,9 +48,6 @@ func TestExistingPresetsDoNotImplyCommunityTools(t *testing.T) {
 			if len(selection.CommunityTools) != 0 {
 				t.Fatalf("preset %q community tools = %v, want none", preset, selection.CommunityTools)
 			}
-			if selection.HasCommunityTool(CommunityToolRTK) {
-				t.Fatalf("preset %q implies RTK", preset)
-			}
 		})
 	}
 }
