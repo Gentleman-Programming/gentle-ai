@@ -1598,6 +1598,48 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	}
 }
 
+// TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected ensures that when
+// ComponentOpenCodeGentleLogo is in state, but OpenCode is not selected (e.g. only
+// Claude Code is selected), sync does not touch OpenCode directories or fail (issue #1212).
+func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"claude-code"},
+		SelectionConfigured: true,
+		Components: []model.ComponentID{
+			model.ComponentOpenCodeGentleLogo,
+		},
+		Persona: "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	result, err := RunSync([]string{"--agents", "claude-code"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if _, err := os.Stat(opencodeDir); !os.IsNotExist(err) {
+		t.Fatalf("expected OpenCode config dir %q to not exist, err: %v", opencodeDir, err)
+	}
+
+	for _, p := range result.ChangedFiles {
+		if strings.Contains(p, "opencode") {
+			t.Fatalf("unexpected opencode path in ChangedFiles: %s", p)
+		}
+	}
+}
+
 // TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent
 // reproduces issue #1440: when the persisted selection lacks the SDD component
 // but managed OpenCode plugins are already installed on disk, `gentle-ai sync`
