@@ -54,6 +54,18 @@ func TestRenderMarkdownEscapesHostileContent(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownDoesNotAllowUntrustedStructure(t *testing.T) {
+	out := RenderMarkdown(Report{Items: []ReportItem{{
+		Issue:   Issue{Number: 1, Title: "safe\n## injected heading\n[x](https://evil.example)"},
+		Verdict: Verdict{Outcome: OutcomeInsufficientEvidence, Reasons: []string{"reason\n- injected list\n![image](https://evil.example)"}},
+	}}})
+	for _, forbidden := range []string{"\n## injected heading", "[x](https://evil.example)", "![image](https://evil.example)", "\n- injected list"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("untrusted markdown introduced structure %q in %q", forbidden, out)
+		}
+	}
+}
+
 func TestRenderMarkdownStructure(t *testing.T) {
 	latest := ParseReportedVersion("v3.4.0")
 	issue := Issue{Number: 42, Title: "TUI crash", Body: "### Gentle AI Version\n\nv3.4.0\n\nEvery time: panic: boom\n"}
@@ -114,10 +126,10 @@ func TestRenderMarkdownDeterministicAndSorted(t *testing.T) {
 }
 
 func TestEscLinkSchemePolicy(t *testing.T) {
-	if got := escLink("https://example.com/a"); got != "[https://example.com/a](https://example.com/a)" {
+	if got := escLink("https://example.com/a_(b)"); got != "[https://example.com/a_\\(b\\)](<https://example.com/a_(b)>)" {
 		t.Errorf("https URL rendered %q", got)
 	}
-	if got := escLink("javascript:alert(1)"); got != "javascript:alert(1)" {
+	if got := escLink("javascript:alert(1)"); got != "javascript:alert\\(1\\)" {
 		t.Errorf("javascript URL rendered %q, want plain escaped text only", got)
 	}
 }

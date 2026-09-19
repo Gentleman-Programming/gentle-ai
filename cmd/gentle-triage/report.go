@@ -41,6 +41,8 @@ func buildReport(ctx context.Context, client *githubClient, owner, repo string, 
 	if err != nil {
 		// A missing release list leaves LatestStable unknown and release
 		// matching off, but the issue evidence still reports.
+		report.Warnings = append(report.Warnings,
+			fmt.Sprintf("release fetch failed: %v; latest-stable and release-match evidence unavailable", err))
 		releases = nil
 	}
 	report.LatestStable = latestStableRelease(releases)
@@ -49,16 +51,19 @@ func buildReport(ctx context.Context, client *githubClient, owner, repo string, 
 		item := triageevidence.ReportItem{Issue: i}
 		item.Evidence = triageevidence.ExtractEvidence(i.Body)
 
-		related, relatedErr := searchRelatedFor(ctx, client, owner, repo, i, releases, b)
+		related, searchUnavailable, relatedErr := searchRelatedFor(ctx, client, owner, repo, i, releases, b)
 		item.Verdict = triageevidence.Classify(triageevidence.ClassificationInput{
 			Issue:        i,
 			Evidence:     item.Evidence,
 			LatestStable: report.LatestStable,
 			Related:      related,
 		})
-		if relatedErr != nil {
+		if searchUnavailable {
 			item.Verdict.Reasons = append(item.Verdict.Reasons,
-				"related search failed: evidence unavailable (bounded budget or API error)")
+				"related evidence unavailable: bounded search budget exhausted")
+		} else if relatedErr != nil {
+			item.Verdict.Reasons = append(item.Verdict.Reasons,
+				"related search failed: evidence unavailable (API error)")
 		}
 		report.Items = append(report.Items, item)
 	}
@@ -73,6 +78,9 @@ func selectIssues(ctx context.Context, client *githubClient, owner, repo string,
 	var out []triageevidence.Issue
 	add := func(issues []apiIssue) {
 		for _, a := range issues {
+			if a.PullRequest != nil {
+				continue
+			}
 			if len(out) >= b.MaxIssues {
 				return
 			}
@@ -100,7 +108,7 @@ func selectIssues(ctx context.Context, client *githubClient, owner, repo string,
 		if len(out) >= b.MaxIssues {
 			break
 		}
-		if hasLifecycleLabel(a) {
+		if a.PullRequest != nil || hasLifecycleLabel(a) {
 			continue
 		}
 		out = append(out, toIssue(a))
@@ -163,18 +171,18 @@ func searchRelatedFor(
 	issue triageevidence.Issue,
 	releases []apiRelease,
 	b bounds,
-) ([]triageevidence.RelatedChange, error) {
+) ([]triageevidence.RelatedChange, bool, error) {
 	var related []triageevidence.RelatedChange
 	keywords := triageevidence.Keywords(issue.Title, "", 5, 4)
 	if len(keywords) == 0 {
-		return related, nil
+		return related, false, nil
 	}
 	items, called, err := client.searchRelated(owner, repo, strings.Join(keywords, " "), b.MaxRelated)
 	if err != nil {
-		return related, err
+		return related, false, err
 	}
-	if !called { // budget exhausted: candidates are absent, not failed
-		return related, nil
+	if !called {
+		return related, true, nil
 	}
 	for _, item := range items {
 		if item.Number == issue.Number {
@@ -234,5 +242,5 @@ func searchRelatedFor(
 		}
 		return related[i].Number < related[j].Number
 	})
-	return related, nil
+	return related, false, nil
 }

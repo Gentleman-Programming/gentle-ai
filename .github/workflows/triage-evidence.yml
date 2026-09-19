@@ -53,13 +53,17 @@ jobs:
       - name: Generate triage evidence report
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_MAX_ISSUES: ${{ inputs.max-issues }}
+          INPUT_MAX_SEARCHES: ${{ inputs.max-searches }}
+          INPUT_GENERATED_AT: ${{ inputs.generated-at }}
         run: |
           set -euo pipefail
           go run ./cmd/gentle-triage \
-            --repo "${{ inputs.repo }}" \
-            --max-issues "${{ inputs.max-issues }}" \
-            --max-searches "${{ inputs.max-searches }}" \
-            --generated-at "${{ inputs.generated-at }}" \
+            --repo "$INPUT_REPO" \
+            --max-issues "$INPUT_MAX_ISSUES" \
+            --max-searches "$INPUT_MAX_SEARCHES" \
+            --generated-at "$INPUT_GENERATED_AT" \
             --output "$RUNNER_TEMP/triage-evidence.md"
 
       - name: Upload evidence artifact

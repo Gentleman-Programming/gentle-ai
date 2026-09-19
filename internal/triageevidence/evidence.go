@@ -100,10 +100,14 @@ func normalizeHeading(h string) string {
 }
 
 func sectionValue(sections map[string]string, key string) string {
-	for k, v := range sections {
-		if strings.Contains(k, key) {
-			return v
-		}
+	if value, ok := sections[key]; ok {
+		return value
+	}
+	// The maintained template calls this field "AI Agent / Client" while the
+	// report model calls it Agent. Preserve that one documented alias in a fixed
+	// order rather than accepting arbitrary overlapping headings.
+	if key == "ai agent" {
+		return sections["ai agent / client"]
 	}
 	return ""
 }
@@ -128,7 +132,7 @@ var (
 	// error/exit shapes. Built as interpreted strings because raw strings cannot
 	// safely carry backticks or the \$ escape.
 	logsRe = regexp.MustCompile(
-		"(?m)(^```|" +
+		"(?mi)(^```|" +
 			"`\\$ |" + // literal "`$ " (backtick-quoted command)
 			"\\$ [a-z0-9_./-]+ |" + // literal "$ cmd "
 			"error[:：]|failed(?: to)? |exit code|exited with code|panic: )",

@@ -48,14 +48,19 @@ func defaultBounds() bounds {
 
 // apiIssue mirrors the subset of the issues API the pipeline needs.
 type apiIssue struct {
-	Number    int        `json:"number"`
-	Title     string     `json:"title"`
-	Body      string     `json:"body"`
-	State     string     `json:"state"`
-	CreatedAt string     `json:"created_at"`
-	HTMLURL   string     `json:"html_url"`
-	Labels    []apiLabel `json:"labels"`
+	Number      int             `json:"number"`
+	Title       string          `json:"title"`
+	Body        string          `json:"body"`
+	State       string          `json:"state"`
+	CreatedAt   string          `json:"created_at"`
+	HTMLURL     string          `json:"html_url"`
+	Labels      []apiLabel      `json:"labels"`
+	PullRequest *apiPullRequest `json:"pull_request"`
 }
+
+// apiPullRequest is the marker the issues endpoint includes only for pull
+// requests. Its presence excludes the record from an issue-report cohort.
+type apiPullRequest struct{}
 
 type apiLabel struct {
 	Name string `json:"name"`
@@ -145,16 +150,21 @@ func (c *githubClient) listOpenIssues(owner, repo, label string, b bounds) ([]ap
 	return out, nil
 }
 
-// listReleases pages the releases endpoint up to maxPages pages.
+// listReleases pages the releases endpoint up to maxPages pages, retaining no
+// more than MaxReleases even when an API page is larger than the remaining cap.
 func (c *githubClient) listReleases(owner, repo string, b bounds) ([]apiRelease, error) {
 	var out []apiRelease
-	for page := 1; page <= b.MaxPages; page++ {
+	for page := 1; page <= b.MaxPages && len(out) < b.MaxReleases; page++ {
 		var items []apiRelease
 		if err := c.getJSON(releaseListURL(c.baseURL, owner, repo, b.PerPage, page), &items); err != nil {
 			return nil, err
 		}
+		remaining := b.MaxReleases - len(out)
+		if len(items) > remaining {
+			items = items[:remaining]
+		}
 		out = append(out, items...)
-		if len(items) < b.PerPage {
+		if len(out) >= b.MaxReleases || len(items) < b.PerPage {
 			break
 		}
 	}
@@ -218,9 +228,6 @@ func (c *githubClient) getJSONOnce(rawURL string, dst any) error {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("github api %s (status %d)", rawURL, resp.StatusCode)
-	}
-	if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining == "0" {
-		return errRateLimited
 	}
 	return decodeJSON(resp.Body, dst)
 }
