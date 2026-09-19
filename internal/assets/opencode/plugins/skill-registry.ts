@@ -5,6 +5,11 @@
  * Codex and Claude Code use native startup hooks for the same command. OpenCode
  * loads plugins at startup, so this plugin provides the equivalent behavior
  * without depending on shell interpolation or command-file parse-time cwd.
+ *
+ * Failure policy (issue #2971): the plugin is best-effort and must never
+ * block OpenCode startup. When the refresh command fails, we emit one
+ * actionable single line that distinguishes a missing binary from an
+ * unreachable working directory, instead of a raw Node `ENOENT` stack.
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
@@ -43,9 +48,88 @@ async function isProjectRoot(cwd: string): Promise<boolean> {
   return false
 }
 
+/**
+ * Sanitize a working-directory string for safe single-line logging.
+ * `JSON.stringify` escapes control characters and never embeds a literal
+ * newline, which keeps every emitted line on one row.
+ */
+function quoteCwd(cwd: string): string {
+  return JSON.stringify(cwd)
+}
+
+/**
+ * Encode a working-directory string as a POSIX-shell literal argument.
+ * JSON.stringify is not POSIX-safe (double quotes leave $() and
+ * backtick substitution live); single quotes escape everything except
+ * themselves, which we encode via the canonical '\'' close/escape/open.
+ */
+function quoteCwdForShell(cwd: string): string {
+  return `'${cwd.replace(/'/g, "'\\''")}'`
+}
+
+function singleLine(s: string): string {
+  return s.replace(/[\r\n]+/g, " ")
+}
+
+/**
+ * Classify an `execFileAsync` failure for `gentle-ai skill-registry refresh`
+ * into a single actionable log line.
+ *
+ * - `ENOENT` from a `spawn gentle-ai` syscall: the binary was not on the
+ *   OpenCode process PATH. Emit one line that names the missing binary and
+ *   the manual continuation command.
+ * - `ENOENT` from any other syscall (typically `access`/`stat` on the
+ *   working directory): the working directory itself is invalid. Emit one
+ *   line that names the cwd rather than falsely blaming the binary.
+ * - Anything else: emit one line that includes the error code (when
+ *   available) and message, without printing the Node stack object.
+ *
+ * Exported so the Go-side test fixture can drive the string-generation
+ * logic through a Node subprocess without going through OpenCode's plugin
+ * loader.
+ */
+export function describeRefreshFailure(err: unknown, cwd: string): string {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code
+  const syscall = (err as NodeJS.ErrnoException | undefined)?.syscall
+  const cwdExample = quoteCwd(cwd)
+  if (code === "ENOENT" && (!syscall || syscall.startsWith("spawn"))) {
+    return singleLine(
+      `[skill-registry] gentle-ai executable was not found on the PATH inherited by the OpenCode process; ` +
+      `skipping the skill-registry refresh for ${cwdExample}. ` +
+      `Run \`gentle-ai skill-registry refresh --cwd ${quoteCwdForShell(cwd)}\` from a shell where gentle-ai is installed, ` +
+      `then re-launch OpenCode in a session that inherits that PATH. ` +
+      `Plugin stays best-effort and does not block startup.`,
+    )
+  }
+  if (code === "ENOENT") {
+    return singleLine(
+      `[skill-registry] gentle-ai skill-registry refresh could not access the working directory ${cwdExample}: ` +
+      `ENOENT reached execFile (syscall=${syscall ?? "unknown"}). ` +
+      `Verify the directory exists and is reachable from the OpenCode process. ` +
+      `Plugin stays best-effort and does not block startup.`,
+    )
+  }
+  const safeMessage = err instanceof Error ? err.message : String(err)
+  const codeTag = code ? ` code=${code}` : ""
+  return singleLine(
+    `[skill-registry] refresh failed for ${cwdExample}${codeTag}: ${safeMessage}`,
+  )
+}
+
 export const SkillRegistryPlugin: Plugin = async (input) => {
+  // Resolve cwd in outer scope so the rejection handler below cannot
+  // throw ReferenceError when refreshSkillRegistry aborts before its
+  // own `cwd` is bound. A throwing worktree getter must also be caught
+  // here, otherwise it propagates synchronously out of the plugin.
+  let pluginCwd = "<unknown>"
+  try {
+    pluginCwd = input.worktree || input.directory || process.cwd()
+  } catch {
+    // cwd selection itself failed; keep "<unknown>".
+  }
+
   async function refreshSkillRegistry() {
-    const cwd = input.worktree || input.directory || process.cwd()
+    const cwd = pluginCwd
 
     if (!(await isProjectRoot(cwd))) {
       // Startup hooks must not scream: a non-project directory is a normal
@@ -62,14 +146,14 @@ export const SkillRegistryPlugin: Plugin = async (input) => {
         { timeout: 30_000 },
       )
     } catch (err) {
-      console.error("[skill-registry] refresh failed:", err)
+      console.error(describeRefreshFailure(err, cwd))
     }
   }
 
   // Don't await — keep OpenCode startup responsive. The command is
   // fingerprint-cached, so normal startup stays cheap.
   refreshSkillRegistry().catch((err) => {
-    console.error("[skill-registry] unexpected refresh error:", err)
+    console.error(describeRefreshFailure(err, pluginCwd))
   })
 
   return {}
