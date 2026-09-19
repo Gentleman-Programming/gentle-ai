@@ -85,6 +85,12 @@ type ChangedPathManifestEntry struct {
 	TypeChanged       bool                `json:"type_changed"`
 	ModeOnly          bool                `json:"mode_only"`
 	IntendedUntracked bool                `json:"intended_untracked"`
+	Generated         bool                `json:"generated,omitempty"`
+}
+
+type frozenCandidatePathObjectIDs struct {
+	oldObjectID string
+	newObjectID string
 }
 
 // FrozenCandidateContext is the deterministic reviewer input derived only
@@ -111,6 +117,11 @@ type FrozenCandidateContext struct {
 	// pair fell back to the conservative --no-renames read.
 	RenamePairingDegraded bool
 	repositoryRoot        string
+	// pathObjectIDs carries the full immutable blob identities parsed from the
+	// same raw tree diff that built ChangedPathManifest. It is provider-only
+	// metadata used when a generated path is summarized without reading hunks;
+	// keeping it out of the manifest preserves historical manifest digests.
+	pathObjectIDs []frozenCandidatePathObjectIDs
 }
 
 type PreparedCandidateInspector struct {
@@ -214,6 +225,7 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 		"--raw",
 		"-z",
 		"--full-index",
+		"--abbrev=64",
 		"--no-renames",
 		"--no-ext-diff",
 		"--no-textconv",
@@ -238,6 +250,8 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 		intended[path] = struct{}{}
 	}
 	manifest := make([]ChangedPathManifestEntry, 0, len(snapshot.Paths))
+	pathObjectIDs := make([]frozenCandidatePathObjectIDs, 0, len(snapshot.Paths))
+	useGeneratedSummaries := snapshot.GeneratedPathInterpretation == GeneratedPathInterpretationSummaryV1
 	for _, path := range snapshot.Paths {
 		modes, ok := modesByPath[path]
 		if !ok {
@@ -248,12 +262,13 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 			Path: path, Status: modes.status, OldMode: modes.oldMode, NewMode: modes.newMode,
 			Deleted: modes.status == CandidatePathDeleted, TypeChanged: modes.status == CandidatePathTypeChanged,
 			ModeOnly:          modes.status == CandidatePathModified && modes.oldObject == modes.newObject && modes.oldMode != modes.newMode,
-			IntendedUntracked: wasIntendedUntracked,
+			IntendedUntracked: wasIntendedUntracked, Generated: useGeneratedSummaries && isGeneratedCandidatePath(path),
 		}
 		if err := validateChangedPathManifestEntry(entry); err != nil {
 			return fail(err)
 		}
 		manifest = append(manifest, entry)
+		pathObjectIDs = append(pathObjectIDs, frozenCandidatePathObjectIDs{oldObjectID: modes.oldObject, newObjectID: modes.newObject})
 	}
 	// Rename pairing is computed exactly once for THIS inspector's own
 	// preparation, via the single canonical derivation (frozenRenamePairs)
@@ -271,6 +286,7 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 			BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
 			ChangedPathManifest: manifest, repositoryRoot: repo,
 			RenamePairs: renamePairs, RenamePairingDegraded: renameDegraded,
+			pathObjectIDs: pathObjectIDs,
 		},
 		isolation: isolation, attributesFile: attributesFile, cleanup: cleanup,
 		renamePartners: renamePartners,
@@ -306,7 +322,22 @@ func (inspector *PreparedCandidateInspector) FrozenCandidateContext() FrozenCand
 	// inspector.frozen unless cloned here, which would let a caller mutating
 	// the returned value corrupt this inspector's own recorded pairing.
 	frozen.RenamePairs = maps.Clone(frozen.RenamePairs)
+	frozen.pathObjectIDs = append([]frozenCandidatePathObjectIDs(nil), inspector.frozen.pathObjectIDs...)
 	return frozen
+}
+
+// CandidatePathObjectIDs returns the full immutable blob identities for one
+// canonical manifest index. A context constructed from a historical or
+// hand-written manifest may not have this provider-only metadata.
+func (frozen FrozenCandidateContext) CandidatePathObjectIDs(pathIndex int) (oldObjectID, newObjectID string, ok bool) {
+	if pathIndex < 0 || pathIndex >= len(frozen.pathObjectIDs) || pathIndex >= len(frozen.ChangedPathManifest) {
+		return "", "", false
+	}
+	ids := frozen.pathObjectIDs[pathIndex]
+	if ids.oldObjectID == "" || ids.newObjectID == "" {
+		return "", "", false
+	}
+	return ids.oldObjectID, ids.newObjectID, true
 }
 
 // Inspect renders one bounded view selected only by canonical manifest index.
@@ -395,6 +426,19 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 	inspector.inspectionCache[cacheKey] = bytes.Clone(payload)
 	inspector.inspectionMu.Unlock()
 	return payload, nil
+}
+
+func isGeneratedCandidatePath(logicalPath string) bool {
+	if isGeneratedGoldenPath(logicalPath) {
+		return true
+	}
+	base := filepath.Base(filepath.FromSlash(strings.TrimPrefix(filepath.ToSlash(logicalPath), "./")))
+	switch base {
+	case "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "go.sum", "Cargo.lock":
+		return true
+	default:
+		return false
+	}
 }
 
 func (inspector *PreparedCandidateInspector) Close() error {

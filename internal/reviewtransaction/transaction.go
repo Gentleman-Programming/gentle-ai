@@ -1101,7 +1101,7 @@ func pristineReviewing(transaction Transaction) bool {
 	if transaction.State != StateReviewing || transaction.LedgerHash != "" || transaction.LedgerFindingsHash != "" ||
 		transaction.EvidenceHash != "" ||
 		transaction.Release != nil || transaction.FailedEvidenceRevision != "" || transaction.FixDeltaHash != EmptyFixDeltaHash ||
-		!snapshotsEqual(transaction.Snapshot, Snapshot{Kind: transaction.Snapshot.Kind, BaseTree: transaction.BaseTree, CandidateTree: transaction.InitialReviewTree, PathsDigest: transaction.PathsDigest, IntendedUntracked: transaction.Snapshot.IntendedUntracked, IntendedUntrackedProof: transaction.Snapshot.IntendedUntrackedProof, LedgerIDs: transaction.Snapshot.LedgerIDs, Paths: transaction.Snapshot.Paths, Identity: transaction.Snapshot.Identity}) ||
+		!snapshotsEqual(transaction.Snapshot, Snapshot{Kind: transaction.Snapshot.Kind, GeneratedPathInterpretation: transaction.Snapshot.GeneratedPathInterpretation, BaseTree: transaction.BaseTree, CandidateTree: transaction.InitialReviewTree, PathsDigest: transaction.PathsDigest, IntendedUntracked: transaction.Snapshot.IntendedUntracked, IntendedUntrackedProof: transaction.Snapshot.IntendedUntrackedProof, LedgerIDs: transaction.Snapshot.LedgerIDs, Paths: transaction.Snapshot.Paths, Identity: transaction.Snapshot.Identity}) ||
 		transaction.FinalCandidateTree != transaction.InitialReviewTree || len(transaction.LensResults) != 0 || len(transaction.Findings) != 0 ||
 		len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 ||
 		len(transaction.FixCausedFindings) != 0 || len(transaction.FollowUps) != 0 ||

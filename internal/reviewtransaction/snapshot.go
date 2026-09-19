@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,12 @@ const (
 
 	ProjectionWorkspace Projection = "workspace"
 	ProjectionStaged    Projection = "staged"
+
+	// GeneratedPathInterpretationSummaryV1 identifies the current generated-path
+	// policy. An empty value is the historical representation: the frozen
+	// inspector must not summarize any path for an authority that predates this
+	// field.
+	GeneratedPathInterpretationSummaryV1 = "generated-summary/v1"
 )
 
 type Target struct {
@@ -56,17 +63,49 @@ func CanonicalTarget(target Target) Target {
 }
 
 type Snapshot struct {
-	Kind                   TargetKind `json:"kind"`
-	Projection             Projection `json:"projection,omitempty"`
-	UnbornHead             bool       `json:"unborn_head,omitempty"`
-	BaseTree               string     `json:"base_tree"`
-	CandidateTree          string     `json:"candidate_tree"`
-	PathsDigest            string     `json:"paths_digest"`
-	IntendedUntracked      []string   `json:"intended_untracked"`
-	IntendedUntrackedProof string     `json:"intended_untracked_proof"`
-	LedgerIDs              []string   `json:"ledger_ids,omitempty"`
-	Paths                  []string   `json:"paths"`
-	Identity               string     `json:"identity"`
+	Kind       TargetKind `json:"kind"`
+	Projection Projection `json:"projection,omitempty"`
+	UnbornHead bool       `json:"unborn_head,omitempty"`
+	// GeneratedPathInterpretation is deliberately outside Snapshot.Identity:
+	// the identity names candidate content, while this field freezes how a
+	// reviewer may represent that content. Empty is the legacy no-summary
+	// interpretation; fresh snapshots carry the current version explicitly.
+	GeneratedPathInterpretation string   `json:"generated_path_interpretation,omitempty"`
+	BaseTree                    string   `json:"base_tree"`
+	CandidateTree               string   `json:"candidate_tree"`
+	PathsDigest                 string   `json:"paths_digest"`
+	IntendedUntracked           []string `json:"intended_untracked"`
+	IntendedUntrackedProof      string   `json:"intended_untracked_proof"`
+	LedgerIDs                   []string `json:"ledger_ids,omitempty"`
+	Paths                       []string `json:"paths"`
+	Identity                    string   `json:"identity"`
+}
+
+// UnmarshalJSON validates the closed interpretation discriminator at the
+// authority boundary. Keeping this check on Snapshot makes a persisted unknown
+// version fail closed even when a caller only loads authority and has not yet
+// prepared reviewer context; the inner strict decoder also preserves the
+// repository's usual unknown-field behavior.
+func (snapshot *Snapshot) UnmarshalJSON(payload []byte) error {
+	type snapshotJSON Snapshot
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var decoded snapshotJSON
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values in snapshot") // refusal:by-design world-action: a snapshot payload with trailing JSON values is corrupt stored authority no review command can make trustworthy
+		}
+		return err
+	}
+	if err := validateGeneratedPathInterpretation(decoded.GeneratedPathInterpretation); err != nil {
+		return err
+	}
+	*snapshot = Snapshot(decoded)
+	return nil
 }
 
 type SnapshotBuilder struct {
@@ -215,7 +254,7 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 	identity := snapshotIdentityForProjection(target.Kind, projection, baseTree, candidateTree, pathsDigest, untrackedProof, intended, ledgerIDs)
 	return Snapshot{
 		Kind: target.Kind, Projection: projection, BaseTree: baseTree, CandidateTree: candidateTree,
-		UnbornHead:  builder.unbornHead,
+		UnbornHead: builder.unbornHead, GeneratedPathInterpretation: GeneratedPathInterpretationSummaryV1,
 		PathsDigest: pathsDigest, IntendedUntracked: intended,
 		IntendedUntrackedProof: untrackedProof, LedgerIDs: ledgerIDs,
 		Paths: paths, Identity: identity,
@@ -279,6 +318,9 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 
 // ValidateEvidence binds snapshot metadata to repository object evidence.
 func (builder SnapshotBuilder) ValidateEvidence(ctx context.Context, snapshot Snapshot) error {
+	if err := validateGeneratedPathInterpretation(snapshot.GeneratedPathInterpretation); err != nil {
+		return err
+	}
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {
 		return err
@@ -1686,6 +1728,15 @@ func canonicalProjection(projection Projection) (Projection, error) {
 		return ProjectionStaged, nil
 	default:
 		return "", fmt.Errorf("unsupported projection %q", projection)
+	}
+}
+
+func validateGeneratedPathInterpretation(interpretation string) error {
+	switch interpretation {
+	case "", GeneratedPathInterpretationSummaryV1:
+		return nil
+	default:
+		return fmt.Errorf("unsupported generated path interpretation %q", interpretation) // refusal:by-design world-action: an unrecognized persisted discriminator means the authority was written outside this build's vocabulary; no command can reinterpret immutable stored bytes
 	}
 }
 

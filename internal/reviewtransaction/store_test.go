@@ -17,6 +17,18 @@ import (
 	"time"
 )
 
+func TestSnapshotEqualityRejectsGeneratedPathInterpretationMutation(t *testing.T) {
+	snapshot := Snapshot{GeneratedPathInterpretation: GeneratedPathInterpretationSummaryV1}
+	changed := snapshot
+	changed.GeneratedPathInterpretation = ""
+	if SnapshotsEqualExact(snapshot, changed) {
+		t.Fatal("SnapshotsEqualExact() ignored generated-path interpretation mutation")
+	}
+	if snapshotsEqual(snapshot, changed) {
+		t.Fatal("snapshotsEqual() ignored generated-path interpretation mutation")
+	}
+}
+
 func TestWriteAtomicPropagatesParentDirectorySyncFailure(t *testing.T) {
 	originalGOOS := reviewRuntimeGOOS
 	originalSync := syncReviewDirectory
