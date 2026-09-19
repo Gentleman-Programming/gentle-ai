@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -278,6 +279,65 @@ func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing
 	current, loadErr := store.Load()
 	if loadErr != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
 		t.Fatalf("stalled pi execution mutated compact authority: %#v, %v", current, loadErr)
+	}
+}
+
+// TestReviewCaptureRefuterMaterializeRefusesCompletePromptOverRuntimeBudget
+// pins the complete-prompt half of the approved runtime input policy: the
+// evidence loop bounds raw patch bytes, but serializing the request into the
+// role prompt JSON-escapes every content byte (one raw quote character
+// doubles) and adds the instruction and result schema wrappers, so a request
+// whose raw evidence fits the budget can still produce a complete prompt over
+// the same approved cap. Materialization must refuse with the typed budget
+// refusal before any adapter is invoked, and the refusal must name the
+// split-candidate resolution.
+func TestReviewCaptureRefuterMaterializeRefusesCompletePromptOverRuntimeBudget(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	// Raw patch bytes stay under the evidence budget; JSON escaping doubles
+	// every quote character, so the serialized prompt cannot fit.
+	writeReviewStartCandidate(t, repo, "runtime-budget-quotes.txt", strings.Repeat(`"`, 180_000)+"\n", 0o644)
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens := record.State.SelectedLenses[0]
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "runtime-budget-quotes.txt:1", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"runtime-budget-quotes.txt:1 candidate-specific proof"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+		CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	captureErr := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", input,
+	}, &bytes.Buffer{})
+	var captureRefusal *reviewLensContextError
+	if captureErr != nil && (!errors.As(captureErr, &captureRefusal) || captureRefusal.Code != "lens_context_budget_exceeded") {
+		t.Fatal(captureErr)
+	}
+	updated, loadErr := store.Load()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	record = updated
+	// The closure that renders the refuter collect input materializes the
+	// refuter request too, so the capture step may already carry the refusal;
+	// the explicit materialization call must carry it regardless.
+	_, err = reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	var refusal *reviewLensContextError
+	if !errors.As(err, &refusal) || refusal.Code != "lens_context_budget_exceeded" {
+		t.Fatalf("complete refuter prompt over the approved runtime cap materialized without the typed budget refusal: %v", err)
+	}
+	if !strings.Contains(refusal.Error(), "split the candidate") {
+		t.Fatalf("budget refusal does not name the split-candidate resolution: %v", refusal)
 	}
 }
 

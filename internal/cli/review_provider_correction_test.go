@@ -258,13 +258,122 @@ func TestProviderCaptureSkipsCorrectionOverBudgetAndClassifiesAsRefused(t *testi
 		return []byte("raw reviewer output"), nil
 	})
 
-	_, _, err := reviewProviderCaptureRetry(context.Background(), adapter, invocation, admit, preserve, continuation, nil)
+	_, _, err := reviewProviderCaptureRetry(context.Background(), adapter, invocation, string(model.AgentClaudeCode), admit, preserve, continuation, nil)
 	var refused *reviewProviderCaptureRefusedError
 	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "preserved-clause") {
 		t.Fatalf("over-budget error is not a classified refusal carrying the preserved clause: %v", err)
 	}
 	if reviewCalls != 1 {
 		t.Fatalf("adapter invocations = %d, want exactly 1 (no corrective re-invocation)", reviewCalls)
+	}
+}
+
+// TestProviderCaptureSkipsCorrectiveRetryAtTheRuntimeBudgetBoundary pins the
+// corrective-prompt bound to the approved runtime cap at cap+1: the original
+// prompt fits, the first admission fails, and appending the Go-owned feedback
+// section pushes the complete corrective prompt exactly one byte over the cap
+// the runtime START froze. The corrective re-invocation must then be skipped
+// before the adapter runs again, with the first rejection preserved and the
+// failure classified as a capture refusal that names its continuation.
+func TestProviderCaptureSkipsCorrectiveRetryAtTheRuntimeBudgetBoundary(t *testing.T) {
+	original := []byte("original prompt")
+	framing := len(reviewProviderCorrectivePrompt(original, errors.New(""))) - len(original)
+	admission := errors.New(strings.Repeat("x", reviewRuntimeBudgetTestCapBytes-len(original)-framing+1))
+	prompts := &[][]byte{}
+	adapter := providerTestAdapterFunc(func(_ context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+		*prompts = append(*prompts, invocation.Prompt())
+		if len(*prompts) > 1 {
+			t.Errorf("adapter received a corrective invocation whose prompt is over the runtime budget (%d bytes)", len(invocation.Prompt()))
+		}
+		return []byte("rejected raw"), nil
+	})
+	admit := func(_ context.Context, _ []byte) (string, error) { return "", admission }
+	preserve := func(_ context.Context, _ int, _ error, _ []byte) string { return "preserved-clause" }
+	continuation := func() string { return "gentle-ai review status --next-transition" }
+
+	_, raw, err := reviewProviderCaptureRetry(context.Background(), adapter, reviewerprovider.NewInvocation(original), string(model.AgentClaudeCode), admit, preserve, continuation, nil)
+	var refused *reviewProviderCaptureRefusedError
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "preserved-clause") {
+		t.Fatalf("corrective prompt one byte over the runtime cap must skip the re-invocation as a classified refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "corrective re-invocation was skipped") || !strings.Contains(err.Error(), continuation()) {
+		t.Fatalf("skip refusal does not name the skip reason and its continuation: %v", err)
+	}
+	if len(*prompts) != 1 {
+		t.Fatalf("adapter invocations = %d, want exactly 1 (the corrective prompt was over the runtime budget)", len(*prompts))
+	}
+	if !bytes.Equal(raw, []byte("rejected raw")) {
+		t.Fatalf("rejected first payload was not returned for preservation: %q", raw)
+	}
+}
+
+// TestProviderCaptureCorrectiveRetryRunsAtTheRuntimeBudgetCap is the positive
+// boundary: a corrective prompt of exactly the approved cap is still handed to
+// the runtime, and no prompt the adapter receives is ever over it.
+func TestProviderCaptureCorrectiveRetryRunsAtTheRuntimeBudgetCap(t *testing.T) {
+	original := []byte("original prompt")
+	framing := len(reviewProviderCorrectivePrompt(original, errors.New(""))) - len(original)
+	admission := errors.New(strings.Repeat("x", reviewRuntimeBudgetTestCapBytes-len(original)-framing))
+	prompts := &[][]byte{}
+	adapter := providerTestAdapterFunc(func(_ context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+		*prompts = append(*prompts, invocation.Prompt())
+		if len(invocation.Prompt()) > reviewRuntimeBudgetTestCapBytes {
+			t.Errorf("adapter received a %d byte prompt, over the %d byte runtime cap", len(invocation.Prompt()), reviewRuntimeBudgetTestCapBytes)
+		}
+		return []byte("rejected raw"), nil
+	})
+	admit := func(_ context.Context, _ []byte) (string, error) {
+		if len(*prompts) == 1 {
+			return "", admission
+		}
+		return "admitted", nil
+	}
+	preserve := func(_ context.Context, _ int, _ error, _ []byte) string { return "preserved-clause" }
+	continuation := func() string { return "gentle-ai review status --next-transition" }
+
+	admitted, _, err := reviewProviderCaptureRetry(context.Background(), adapter, reviewerprovider.NewInvocation(original), string(model.AgentClaudeCode), admit, preserve, continuation, nil)
+	if err != nil || admitted != "admitted" {
+		t.Fatalf("corrective prompt at exactly the runtime cap was retried: %v", err)
+	}
+	if len(*prompts) != 2 {
+		t.Fatalf("adapter invocations = %d, want exactly 2 (first attempt plus the corrective retry)", len(*prompts))
+	}
+	if got := len((*prompts)[1]); got != reviewRuntimeBudgetTestCapBytes {
+		t.Fatalf("corrective prompt = %d bytes, want exactly the %d byte runtime cap", got, reviewRuntimeBudgetTestCapBytes)
+	}
+}
+
+// TestProviderCaptureNonRetryableErrorSkipsCorrectionBeforeTheBudgetCheck
+// keeps the targeted-validator predicate ordering: a non-retryable admission
+// error (the inconclusive sentinel) returns the raw result immediately,
+// without a corrective invocation, without preservation, and without the
+// skipped-correction refusal classification -- even when the corrective
+// prompt would sit far over the runtime cap.
+func TestProviderCaptureNonRetryableErrorSkipsCorrectionBeforeTheBudgetCheck(t *testing.T) {
+	admission := errors.New(strings.Repeat("x", reviewRuntimeBudgetTestCapBytes))
+	prompts := &[][]byte{}
+	adapter := providerTestAdapterFunc(func(_ context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+		*prompts = append(*prompts, invocation.Prompt())
+		return []byte("rejected raw"), nil
+	})
+	admit := func(_ context.Context, _ []byte) (string, error) { return "", admission }
+	preserve := func(_ context.Context, _ int, _ error, _ []byte) string {
+		t.Fatal("a non-retryable admission error must not be preserved as a corrective attempt")
+		return ""
+	}
+	continuation := func() string { return "gentle-ai review status --next-transition" }
+	nonRetryable := reviewProviderCaptureRetryable(func(error) bool { return false })
+
+	_, raw, err := reviewProviderCaptureRetry(context.Background(), adapter, reviewerprovider.NewInvocation([]byte("original prompt")), string(model.AgentClaudeCode), admit, preserve, continuation, nonRetryable)
+	var refused *reviewProviderCaptureRefusedError
+	if !errors.Is(err, admission) || errors.As(err, &refused) {
+		t.Fatalf("non-retryable admission error = %v, want the plain admission error without skip classification", err)
+	}
+	if len(*prompts) != 1 {
+		t.Fatalf("adapter invocations = %d, want exactly 1 (no corrective re-invocation)", len(*prompts))
+	}
+	if !bytes.Equal(raw, []byte("rejected raw")) {
+		t.Fatalf("rejected first payload was not returned: %q", raw)
 	}
 }
 

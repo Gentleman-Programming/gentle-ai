@@ -117,7 +117,7 @@ func (err *reviewProviderCaptureRefusedError) Unwrap() error { return err.cause 
 // bytes, and on an admission failure invokes it once more with feedback. A
 // transport failure is not an admission failure and is returned as is.
 func reviewProviderCaptureWithOneCorrection(ctx context.Context, capture reviewProviderCapture, invocation reviewerprovider.Invocation) (reviewProviderAdmittedResult, []byte, error) {
-	return reviewProviderCaptureRetry(ctx, capture.adapter, invocation, capture.admit, capture.preserve, capture.continuation, nil)
+	return reviewProviderCaptureRetry(ctx, capture.adapter, invocation, capture.state.RuntimeAgent, capture.admit, capture.preserve, capture.continuation, nil)
 }
 
 // reviewProviderCaptureRetryable reports whether an admission failure should
@@ -136,11 +136,15 @@ type reviewProviderCaptureRetryable func(error) bool
 // preserved outside the authority store. It is parameterized by the role's
 // admitted result type so the lens, refuter, and targeted validator roles can
 // each keep their own native admission and durable-capture logic while
-// sharing exactly this retry shape.
+// sharing exactly this retry shape. The runtime is the identity START froze
+// into the authority (state.RuntimeAgent): the corrective prompt is the
+// complete prompt that runtime would hold next, so the same approved runtime
+// input ceiling that bounded the first prompt bounds the corrective one too.
 func reviewProviderCaptureRetry[T any](
 	ctx context.Context,
 	adapter reviewerprovider.Adapter,
 	invocation reviewerprovider.Invocation,
+	runtime string,
 	admit func(ctx context.Context, raw []byte) (T, error),
 	preserve func(ctx context.Context, attempt int, admission error, raw []byte) string,
 	continuation func() string,
@@ -160,7 +164,7 @@ func reviewProviderCaptureRetry[T any](
 	}
 	firstClause := preserve(ctx, 1, firstErr, raw)
 	corrective := reviewProviderCorrectivePrompt(invocation.Prompt(), firstErr)
-	if len(corrective) > reviewLensContextByteBudget {
+	if len(corrective) > reviewLensContextRuntimeBudget(runtime) {
 		return zero, raw, &reviewProviderCaptureRefusedError{cause: fmt.Errorf("%w%s; the corrective re-invocation was skipped because its prompt exceeds the native reviewer context budget; re-query %s and run the reoffered capture", firstErr, firstClause, continuation())}
 	}
 	correctiveRaw, err := adapter.Review(ctx, reviewerprovider.NewInvocation(corrective))

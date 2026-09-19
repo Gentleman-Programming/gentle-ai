@@ -149,7 +149,7 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 	if err != nil {
 		return reviewProviderRefuterRequest{}, err
 	}
-	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, state.InitialSnapshot)
+	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, state.RuntimeAgent, state.InitialSnapshot)
 	if err != nil {
 		return reviewProviderRefuterRequest{}, err
 	}
@@ -163,7 +163,7 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 		Claims                                                                []reviewtransaction.RefuterClaim
 		Evidence                                                              []reviewProviderEvidence
 	}{request.Schema, request.LineageID, request.AuthorityVersion, request.TargetIdentity, request.SnapshotIdentity, request.Claims, request.Evidence})
-	prompt, err := reviewProviderRolePrompt(contract, request)
+	prompt, err := reviewProviderRolePrompt(contract, request, state.RuntimeAgent)
 	if err != nil {
 		return reviewProviderRefuterRequest{}, err
 	}
@@ -303,14 +303,14 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
-	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, correction)
+	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, state.RuntimeAgent, correction)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
 	providerRequest := reviewProviderTargetedValidatorRequest{
 		ValidationRequest: request, FixDeltaHash: fixDeltaHash, RepositoryContext: repositoryContext, Evidence: evidence,
 	}
-	prompt, err := reviewProviderRolePrompt(contract, providerRequest)
+	prompt, err := reviewProviderRolePrompt(contract, providerRequest, state.RuntimeAgent)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
@@ -318,7 +318,16 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 	return providerRequest, nil
 }
 
-func reviewProviderMaterializeEvidence(ctx context.Context, repo string, snapshot reviewtransaction.Snapshot) ([]reviewProviderEvidence, error) {
+// reviewProviderMaterializeEvidence materializes the complete frozen
+// tree-to-tree patch per changed path for one provider role request. The
+// aggregate budget is the effective runtime-context budget for the runtime
+// START froze this authority to, not the raw Git ceiling: the refuter and
+// validator hold the same complete evidence as a lens, so the same approved
+// runtime cap bounds what they are handed. The 32-entry cap that used to sit
+// above it measured the wrong thing and is gone (issue #3367); the complete
+// serialized role prompt stays separately bounded in reviewProviderRolePrompt
+// by the same runtime input ceiling plus the contract's output limit.
+func reviewProviderMaterializeEvidence(ctx context.Context, repo, runtime string, snapshot reviewtransaction.Snapshot) ([]reviewProviderEvidence, error) {
 	deps := reviewLensContextDependencies()
 	inspector, err := deps.prepare(reviewtransaction.SnapshotBuilder{Repo: repo}, ctx, snapshot)
 	if err != nil {
@@ -326,10 +335,7 @@ func reviewProviderMaterializeEvidence(ctx context.Context, repo string, snapsho
 	}
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
-	// The aggregate byte budget is the whole bound. The 32-entry cap that used
-	// to sit above it measured the wrong thing and is gone (issue #3367); this
-	// role request is additionally bounded by its contract's prompt limit.
-	budget := reviewLensContextByteBudget
+	budget := reviewLensContextRuntimeBudget(runtime)
 	evidence := make([]reviewProviderEvidence, 0, len(frozen.ChangedPathManifest))
 	for index, entry := range frozen.ChangedPathManifest {
 		payload, err := deps.inspect(ctx, inspector, "patch", index, "")
@@ -348,7 +354,17 @@ func reviewProviderMaterializeEvidence(ctx context.Context, repo string, snapsho
 	return evidence, nil
 }
 
-func reviewProviderRolePrompt(contract reviewProviderRoleContract, request any) ([]byte, error) {
+// reviewProviderRolePrompt serializes one provider role request into the
+// complete prompt a runtime is asked to hold. Two independent bounds apply,
+// and they are deliberately not conflated: the runtime input ceiling is the
+// effective runtime-context budget for the runtime START froze this authority
+// to, applied to the COMPLETE serialized prompt -- the evidence loop bounds
+// raw patch bytes, but JSON escaping grows every content byte and the
+// instruction, policy, and result-schema wrappers add the rest, so only the
+// finished prompt is the value the approved input cap actually bounds --
+// while contract.ResultLimit stays the unchanged native per-invocation output
+// limit. Both refuse before any adapter invocation; neither ever truncates.
+func reviewProviderRolePrompt(contract reviewProviderRoleContract, request any, runtime string) ([]byte, error) {
 	if contract.PromptInstruction == "" {
 		return nil, fmt.Errorf("provider role %q has no non-lens prompt", contract.Role) // refusal:by-design world-action: every provider role needs an explicit native prompt
 	}
@@ -364,6 +380,9 @@ func reviewProviderRolePrompt(contract reviewProviderRoleContract, request any) 
 		instruction += "\n\nFrozen policy:\n" + targeted.ValidationRequest.PolicyContent
 	}
 	prompt := []byte(fmt.Sprintf("%s\n\nInput:\n%s\n\nOutput schema:\n%s", instruction, payload, contract.ResultSchema))
+	if len(prompt) > reviewLensContextRuntimeBudget(runtime) {
+		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextBudgetAction)
+	}
 	if len(prompt) > contract.ResultLimit {
 		return nil, fmt.Errorf("provider %s prompt exceeds the native %d byte limit", contract.Role, contract.ResultLimit) // refusal:by-design operator-knowledge: provider evidence is never truncated; split the candidate
 	}

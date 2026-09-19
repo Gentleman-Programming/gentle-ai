@@ -334,7 +334,7 @@ func reviewProviderCaptureRefuterWithOneCorrection(ctx context.Context, binding 
 	}
 	continuation := func() string { return reviewProviderCaptureContinuation(binding.runtime, state.LineageID) }
 
-	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, admit, preserve, continuation, nil)
+	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, state.RuntimeAgent, admit, preserve, continuation, nil)
 	if err != nil {
 		var refused *reviewProviderCaptureRefusedError
 		if errors.As(err, &refused) {
@@ -377,7 +377,7 @@ func reviewProviderCaptureValidationWithOneCorrection(ctx context.Context, bindi
 	continuation := func() string { return reviewProviderCaptureContinuation(binding.runtime, state.LineageID) }
 	retryable := func(err error) bool { return !errors.Is(err, errReviewTargetedValidationInconclusive) }
 
-	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, admit, preserve, continuation, retryable)
+	captured, raw, err := reviewProviderCaptureRetry(ctx, adapter, request.Invocation, state.RuntimeAgent, admit, preserve, continuation, retryable)
 	if err != nil {
 		if errors.Is(err, errReviewTargetedValidationInconclusive) {
 			if _, ledgerErr := store.RecordInconclusiveTargetedValidatorAttempt(ctx, request.ValidationRequest, facadePayloadHash(raw)); ledgerErr != nil {
