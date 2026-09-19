@@ -20,6 +20,9 @@ import (
 )
 
 func TestOpenCodeReviewTransportFinalLensClosesAndBurnsThroughSharedGoReducer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
@@ -49,6 +52,9 @@ func TestOpenCodeReviewTransportFinalLensClosesAndBurnsThroughSharedGoReducer(t 
 }
 
 func TestOpenCodeReviewTransportLensMaterializationCarriesOnlyGoIssuedBytes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	repo, _, _, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
@@ -74,6 +80,9 @@ func TestOpenCodeReviewTransportLensMaterializationCarriesOnlyGoIssuedBytes(t *t
 }
 
 func TestOpenCodeReviewTransportLeavesNoContextEmissionSidecar(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
@@ -91,6 +100,9 @@ func TestOpenCodeReviewTransportLeavesNoContextEmissionSidecar(t *testing.T) {
 }
 
 func TestOpenCodeReviewTransportResolvesARegisteredTargetWorktreeFromTheHost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	target, _, store, record := newArtifactReview(t, false)
 	host := filepath.Join(t.TempDir(), "opencode-host")
@@ -111,6 +123,9 @@ func TestOpenCodeReviewTransportResolvesARegisteredTargetWorktreeFromTheHost(t *
 }
 
 func TestOpenCodeReviewTransportRefusesAnUnrelatedHostAndReoffersTargetSlots(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	target, started, store, record := newArtifactReview(t, false)
 	host := initReviewCLIRepo(t)
@@ -139,6 +154,9 @@ func TestOpenCodeReviewTransportRefusesAnUnrelatedHostAndReoffersTargetSlots(t *
 }
 
 func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	repo, _, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
 	raw := admittedReviewerPayloadForTest(t, repo, record, lens, 0)
@@ -160,6 +178,9 @@ func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutat
 }
 
 func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLaunch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	for _, test := range []struct {
 		name   string
@@ -220,6 +241,9 @@ func TestOpenCodeReviewTransportRefusesNonCanonicalProviderTaskBeforeProviderLau
 }
 
 func TestOpenCodeReviewTransportRefusesCanonicalTaskAuthorityMismatchesBeforeProviderLaunch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	targetedValidatorFixture := func(t *testing.T) (string, string, ReviewProviderTask) {
 		t.Helper()
@@ -369,6 +393,9 @@ func openCodeTargetedValidatorAgainstReviewContextTask(t *testing.T) (string, st
 }
 
 func TestOpenCodeReviewTransportUsesHostControlledProviderLifetimeAndBoundedTrailingClosure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	originalTrailingClosureTimeout := openCodeTransportTrailingClosureTimeout
 	t.Cleanup(func() { openCodeTransportTrailingClosureTimeout = originalTrailingClosureTimeout })
@@ -419,6 +446,9 @@ func TestOpenCodeReviewTransportUsesHostControlledProviderLifetimeAndBoundedTrai
 }
 
 func TestOpenCodeReviewTransportSessionFailuresDoNotMutateAuthority(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	originalTrailingClosureTimeout := openCodeTransportTrailingClosureTimeout
 	t.Cleanup(func() { openCodeTransportTrailingClosureTimeout = originalTrailingClosureTimeout })
@@ -483,6 +513,9 @@ func TestOpenCodeReviewTransportTimedOutReadDoesNotLeaveAGoroutine(t *testing.T)
 }
 
 func TestOpenCodeReviewTransportRefuterClosesThroughSharedGoReducer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, false)
 	reviewer := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
@@ -543,6 +576,9 @@ func TestOpenCodeReviewTransportRefuterClosesThroughSharedGoReducer(t *testing.T
 }
 
 func TestOpenCodeReviewTransportValidatorClosesThroughSharedGoReducer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
@@ -575,6 +611,9 @@ func TestOpenCodeReviewTransportValidatorClosesThroughSharedGoReducer(t *testing
 }
 
 func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	for _, test := range []struct{ name string }{
 		{name: "secondary completion before primary completion"},
@@ -643,6 +682,9 @@ func TestOpenCodeReviewTransportPassesThroughReinterceptedProviderTask(t *testin
 }
 
 func TestOpenCodeReviewTransportRefusesUnavailableAuthorityAtStartOrCompletion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	for _, test := range []struct {
 		name           string
 		beforeStart    func(*testing.T, string)
@@ -722,6 +764,9 @@ func TestOpenCodeTaskHostOutputPreservesPayloadBytesAndFailsClosed(t *testing.T)
 		{name: "empty summary", raw: "<task id=\"opaque\" state=\"completed\">\n<summary></summary>\n<task_result>\n" + payload + "\n</task_result>\n</task>", code: "opencode_task_output_malformed"},
 		{name: "backgrounded task", raw: "<task id=\"opaque\" state=\"running\">\n<summary>Background task started</summary>\n<task_result>\nThe task is working in the background.\n</task_result>\n</task>", code: "opencode_task_not_completed"},
 		{name: "errored task", raw: "<task id=\"opaque\" state=\"error\">\n<summary>Background task failed: description</summary>\n<task_error>\nboom\n</task_error>\n</task>", code: "opencode_task_error"},
+		{name: "duplicate state attribute", raw: "<task id=\"opaque\" state=\"completed\" state=\"running\">\n<task_result>\n" + payload + "\n</task_result>\n</task>", code: "opencode_task_output_malformed"},
+		{name: "partial running frame", raw: "<task id=\"opaque\" state=\"running\">", code: "opencode_task_output_truncated"},
+		{name: "partial error frame", raw: "<task id=\"opaque\" state=\"error\">\n<task_error>\nboom", code: "opencode_task_output_truncated"},
 		{name: "short task prefix", raw: "<task", code: "opencode_task_output_malformed"},
 		{name: "unterminated task", raw: "<task id=\"opaque\" state=\"completed\">\n<task_result>\n{", code: "opencode_task_output_truncated"},
 		{name: "nested task", raw: "<task id=\"opaque\" state=\"completed\">\n<task_result>\n<task id=\"nested\" state=\"completed\">\n</task>\n</task_result>\n</task>", code: "opencode_task_output_malformed"},
@@ -915,6 +960,9 @@ func mustArtifactSubject(t *testing.T, repo string, record reviewtransaction.Com
 }
 
 func TestOpenCodeReviewTransportCompletionWithoutOutputFailsClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
 	task := openCodeTargetedValidatorTask(t, repo, lineage)
@@ -960,6 +1008,9 @@ func TestOpenCodeReviewTransportCompletionWithoutOutputFailsClosed(t *testing.T)
 }
 
 func TestOpenCodeReviewTransportBoundsCompletionWaitForSilentlyDeadHost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
 	reviewEnabledHome(t)
 	original := openCodeTransportCompletionSafetyBound
 	t.Cleanup(func() { openCodeTransportCompletionSafetyBound = original })

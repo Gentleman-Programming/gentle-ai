@@ -666,9 +666,15 @@ func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 	}
 	switch state {
 	case "error":
+		// The frame must still be a complete wrapper: a partial error frame
+		// refuses as truncated or malformed instead of being reported as a
+		// real host outcome.
+		if _, err := openCodeTaskElementBody(body, "task_error"); err != nil {
+			return nil, err
+		}
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_error"}
 	case "completed":
-		result, err := openCodeTaskResultBody(body)
+		result, err := openCodeTaskElementBody(body, "task_result")
 		if err != nil {
 			return nil, err
 		}
@@ -681,43 +687,48 @@ func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 		}
 		return boundedOpenCodeTaskPayload(result)
 	default:
-		// Any other state (for example a Task promoted to the background)
-		// never carries a capturable result through this relay.
+		// Any other state (for example a Task promoted to the background) never
+		// carries a capturable result through this relay, but its wrapper must
+		// still be complete before the state is reported.
+		if _, err := openCodeTaskElementBody(body, "task_result"); err != nil {
+			return nil, err
+		}
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_not_completed"}
 	}
 }
 
 // openCodeTaskState reads the host-owned state attribute from a rendered Task
 // opening tag. Only an attribute named exactly `state` is admitted, so a
-// prefixed attribute such as data-state never changes the outcome.
+// prefixed attribute such as data-state never changes the outcome, and a
+// duplicate state attribute refuses the whole tag as malformed.
 func openCodeTaskState(openingTag []byte) (string, bool) {
+	state, found := "", false
 	for index := 0; index < len(openingTag); index++ {
 		if index > 0 && openingTag[index-1] != ' ' {
 			continue
 		}
-		rest, found := bytes.CutPrefix(openingTag[index:], []byte(`state="`))
-		if !found {
+		rest, ok := bytes.CutPrefix(openingTag[index:], []byte(`state="`))
+		if !ok {
 			continue
 		}
 		end := bytes.IndexByte(rest, '"')
 		if end < 0 || (len(rest) > end+1 && rest[end+1] != ' ' && rest[end+1] != '>') {
 			return "", false
 		}
-		return string(rest[:end]), true
+		if found {
+			return "", false
+		}
+		state, found = string(rest[:end]), true
 	}
-	return "", false
+	return state, found
 }
 
-// openCodeTaskResultBody extracts the <task_result> body the host rendered
-// inside a completed Task. A structurally broken wrapper refuses as malformed,
+// openCodeTaskElementBody extracts the single element body the host rendered
+// inside a Task frame. A structurally broken wrapper refuses as malformed,
 // while a partially received wrapper refuses as truncated.
-func openCodeTaskResultBody(body []byte) ([]byte, error) {
-	const (
-		resultOpen  = "<task_result>"
-		resultClose = "</task_result>"
-	)
-	prefix := []byte("\n" + resultOpen + "\n")
-	suffix := []byte("\n" + resultClose + "\n</task>")
+func openCodeTaskElementBody(body []byte, element string) ([]byte, error) {
+	prefix := []byte("\n<" + element + ">\n")
+	suffix := []byte("\n</" + element + ">\n</task>")
 	if !bytes.HasPrefix(body, prefix) || !bytes.HasSuffix(body, suffix) {
 		content := body
 		if bytes.HasPrefix(content, prefix) {
