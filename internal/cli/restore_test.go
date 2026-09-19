@@ -16,7 +16,7 @@ import (
 func setupRestoreHome(t *testing.T, count int) string {
 	t.Helper()
 	home := t.TempDir()
-	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	backupRoot := backup.LegacyBackupRootFor(home)
 
 	for i := 0; i < count; i++ {
 		id := fmt.Sprintf("backup-%03d", i)
@@ -90,6 +90,41 @@ func TestRunRestore_ListEmptyShowsNoBackupsMessage(t *testing.T) {
 	output := out.String()
 	if !strings.Contains(strings.ToLower(output), "no backup") {
 		t.Errorf("expected 'no backup' message when empty; got:\n%s", output)
+	}
+}
+
+// TestRunRestoreListFindsCanonicalRootBackup verifies that `restore --list`
+// discovers a backup seeded under the canonical root (~/.axiom/backups), not
+// only the legacy one. Amendment (2026-09-19, tasks.md Fase 2, 2.a):
+// listBackupsFromDir previously read only the legacy root, so migrating the
+// writers to backup.BackupRootFor without also migrating this reader would
+// have made every new backup invisible to `restore --list`.
+func TestRunRestoreListFindsCanonicalRootBackup(t *testing.T) {
+	home := t.TempDir()
+	restoreHomeDir(t, home)
+
+	dir := filepath.Join(backup.BackupRootFor(home), "canonical-001")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", dir, err)
+	}
+	m := backup.Manifest{
+		ID:        "canonical-001",
+		CreatedAt: time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC),
+		RootDir:   dir,
+		Source:    backup.BackupSourceSync,
+		Entries:   []backup.ManifestEntry{},
+	}
+	if err := backup.WriteManifest(filepath.Join(dir, backup.ManifestFilename), m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	var out strings.Builder
+	if err := RunRestore([]string{"--list"}, &out); err != nil {
+		t.Fatalf("RunRestore(--list) error = %v", err)
+	}
+
+	if !strings.Contains(out.String(), "canonical-001") {
+		t.Errorf("--list did not find canonical-root backup; got:\n%s", out.String())
 	}
 }
 

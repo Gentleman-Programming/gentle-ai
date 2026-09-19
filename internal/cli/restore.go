@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
@@ -186,27 +187,44 @@ func promptRestoreConfirm(manifest backup.Manifest, stdin io.Reader, stdout io.W
 	return strings.EqualFold(answer, "yes"), nil
 }
 
-// listBackupsFromDir reads and sorts backups from the given homeDir.
-// It is equivalent to app.ListBackups but operates on an explicit homeDir,
-// keeping the cli package independent from the app package.
+// listBackupsFromDir reads and sorts backups from the given homeDir,
+// scanning every root backup.BackupRoots reports (canonical first, then the
+// legacy fallback [D-12]) and de-duplicating by manifest ID so a
+// canonical-root backup wins over a legacy one sharing the same ID. It is
+// equivalent to app.ListBackups but operates on an explicit homeDir, keeping
+// the cli package independent from the app package.
+//
+// Amendment (2026-09-19, tasks.md Fase 2, 2.a): this previously read only
+// the legacy root via a hand-rolled homeDir+"/.gentle-ai/backups" literal.
+// Migrating the writers to backup.BackupRootFor without also migrating this
+// reader would have made every new backup invisible to `restore --list` and
+// `RunRestore` — a silent functional regression introduced by this same
+// phase.
 func listBackupsFromDir(homeDir string) []backup.Manifest {
-	backupRoot := backupRootDir(homeDir)
-	entries, err := os.ReadDir(backupRoot)
-	if err != nil {
-		return nil
-	}
+	manifests := make([]backup.Manifest, 0)
+	seenIDs := make(map[string]struct{})
 
-	manifests := make([]backup.Manifest, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		manifestPath := fmt.Sprintf("%s/%s/%s", backupRoot, entry.Name(), backup.ManifestFilename)
-		m, err := backup.ReadManifest(manifestPath)
+	for _, backupRoot := range backup.BackupRoots(homeDir) {
+		entries, err := os.ReadDir(backupRoot)
 		if err != nil {
 			continue
 		}
-		manifests = append(manifests, m)
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			manifestPath := filepath.Join(backupRoot, entry.Name(), backup.ManifestFilename)
+			m, err := backup.ReadManifest(manifestPath)
+			if err != nil {
+				continue
+			}
+			if _, exists := seenIDs[m.ID]; exists {
+				continue
+			}
+			seenIDs[m.ID] = struct{}{}
+			manifests = append(manifests, m)
+		}
 	}
 
 	// Sort newest-first.
@@ -219,11 +237,6 @@ func listBackupsFromDir(homeDir string) []backup.Manifest {
 	}
 
 	return manifests
-}
-
-// backupRootDir returns the path to the backup directory under homeDir.
-func backupRootDir(homeDir string) string {
-	return homeDir + "/.gentle-ai/backups"
 }
 
 // defaultRestorer returns the standard backup.RestoreService.Restore function.

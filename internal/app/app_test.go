@@ -36,7 +36,7 @@ import (
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.
 func TestListBackupsNewestFirst(t *testing.T) {
 	home := t.TempDir()
-	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	backupRoot := backup.LegacyBackupRootFor(home)
 
 	older := backup.Manifest{
 		ID:        "older",
@@ -84,7 +84,7 @@ func TestListBackupsNewestFirst(t *testing.T) {
 // with Source metadata intact, so display labels can use the source field.
 func TestListBackupsWithSourceMetadata(t *testing.T) {
 	home := t.TempDir()
-	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	backupRoot := backup.LegacyBackupRootFor(home)
 
 	m := backup.Manifest{
 		ID:          "test-with-source",
@@ -148,7 +148,7 @@ func TestRunArgsRestoreListIsDispatched(t *testing.T) {
 // through app.RunArgs.
 func TestRunArgsRestoreByIDWithYes(t *testing.T) {
 	home := t.TempDir()
-	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	backupRoot := backup.LegacyBackupRootFor(home)
 
 	// Create a backup with a real file entry so restore can succeed.
 	sourceFile := filepath.Join(home, "config.md")
@@ -180,6 +180,21 @@ func TestRunArgsRestoreByIDWithYes(t *testing.T) {
 
 	setupMockHome(t, home)
 
+	// Integration evidence for [D-12]: a legacy-root backup must still be
+	// discoverable through ListBackups before this increment's writer
+	// migration is exercised anywhere else in this test — the dual-root read
+	// contract from INC-12 is unaffected by REQ-20.13/REQ-20.14.
+	found := false
+	for _, listed := range ListBackups() {
+		if listed.ID == m.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ListBackups() did not resolve legacy-root backup %q — dual-root read contract [D-12] broken", m.ID)
+	}
+
 	var buf bytes.Buffer
 	err := RunArgs([]string{"restore", "test-backup-001", "--yes"}, &buf)
 	if err != nil {
@@ -189,6 +204,15 @@ func TestRunArgsRestoreByIDWithYes(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(strings.ToLower(out), "restor") {
 		t.Errorf("restore output should confirm restoration; got:\n%s", out)
+	}
+
+	// Integration evidence for [D-12]: backup.DeleteBackup must still remove
+	// a legacy-root backup after this increment's writer migration.
+	if err := backup.DeleteBackup(m); err != nil {
+		t.Fatalf("DeleteBackup() on legacy-root backup %q error = %v", m.ID, err)
+	}
+	if _, statErr := os.Stat(snapshotDir); !os.IsNotExist(statErr) {
+		t.Fatalf("DeleteBackup() did not remove legacy-root backup directory %q: %v", snapshotDir, statErr)
 	}
 }
 
@@ -495,7 +519,7 @@ func TestRunArgsDispatchesReviewModeBeforePlatformValidation(t *testing.T) {
 func TestListBackupsFallsBackGracefullyForOldManifests(t *testing.T) {
 	_ = fmt.Sprintf // Ensure fmt is used.
 	home := t.TempDir()
-	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	backupRoot := backup.LegacyBackupRootFor(home)
 
 	// Write a manifest with no Source/Description.
 	m := backup.Manifest{

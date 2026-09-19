@@ -1094,10 +1094,7 @@ func ListBackups() []backup.Manifest {
 		return nil
 	}
 
-	roots := []string{
-		filepath.Join(homeDir, ".axiom", "backups"),
-		filepath.Join(homeDir, ".gentle-ai", "backups"),
-	}
+	roots := backup.BackupRoots(homeDir)
 
 	manifests := make([]backup.Manifest, 0)
 	seenIDs := make(map[string]struct{})

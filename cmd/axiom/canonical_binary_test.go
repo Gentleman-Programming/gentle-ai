@@ -31,6 +31,21 @@ var backupRootLiteralDirectories = map[string]bool{
 // root. It is the concrete instance REQ-20.13/REQ-20.14 name.
 const backupRootLiteralStateSubdirectory = "backups"
 
+// backupRootLiteralFragments are the two full path fragments that spell out
+// a backup root end to end within a single string literal token. REQ-20.14's
+// 2026-09-19 amendment widened the guard beyond filepath.Join: string
+// concatenation (internal/cli/restore.go built its root as
+// homeDir+"/.gentle-ai/backups"), an fmt.Sprintf format string, and a fully
+// spelled-out literal assignment all carry the offending directory and its
+// "backups" state subdirectory inside ONE *ast.BasicLit, unlike
+// filepath.Join's split arguments. Scanning every string literal in a file
+// for these fragments — regardless of the expression that contains the
+// literal — catches all three additional forms with one check.
+var backupRootLiteralFragments = []string{
+	".axiom/" + backupRootLiteralStateSubdirectory,
+	".gentle-ai/" + backupRootLiteralStateSubdirectory,
+}
+
 // backupRootOwningPackageDir is the single package allowed to spell out the
 // backup root literals: it is their owning package. The exceptions list has
 // exactly one entry [D-04].
@@ -39,19 +54,29 @@ const backupRootOwningPackageDir = "internal/backup"
 // TestUserStateRootsResolveThroughOwningPackage is the fifth assertion of the
 // canonical-binary guard family [D-04]. It walks every production (non-test)
 // Go file under internal/, excluding internal/backup (its owning package),
-// and fails when a filepath.Join call spells out the backup root as a
+// and fails when production code spells out the backup root as a
 // ".axiom"/".gentle-ai" literal immediately followed by the "backups" state
-// subdirectory literal instead of resolving it through
+// subdirectory literal — via filepath.Join, string concatenation, an
+// fmt.Sprintf format string, or a single fully-spelled-out literal — instead
+// of resolving it through
 // backup.BackupRootFor/backup.LegacyBackupRootFor/backup.BackupRoots.
 //
-// Phase F0.a (inc-20-upstream-reconciliation) ran this guard for real and
-// observed it fail, listing every production site that still spells the
-// literal out [D-03]; that RED transcript is recorded in the phase report.
-// Because this chain ships to main with every PR (stacked-to-main), a
-// declared-red assertion here would break CI for every PR stacked on top of
-// this one. So this test self-skips, naming the detected violation count,
-// until Phase F0.b migrates every site to the canonical accessors and
-// removes the skip as its first RED step.
+// Phase F0.a (inc-20-upstream-reconciliation) ran this guard for real,
+// scoped to the filepath.Join form only, and observed it fail, listing every
+// production site that still spelled the literal out that way [D-03]; that
+// RED transcript is recorded in the phase report. Because this chain ships
+// to main with every PR (stacked-to-main), a declared-red assertion there
+// would have broken CI for every PR stacked on top of it, so Phase F0.a
+// shipped this test self-skipped.
+//
+// Phase F0.b (this phase) removed that skip as its first RED step, then
+// extended detection to the string-concatenation form before migrating
+// anything (REQ-20.14 amendment, 2026-09-19): internal/cli/restore.go built
+// the legacy root by concatenating homeDir with a literal
+// "/.gentle-ai/backups" suffix, a form the filepath.Join-only detector could
+// not see. That extension raised the observed violation count from eight
+// sites to nine. Phase F0.b then migrated all nine to the canonical
+// accessors, so this assertion now runs unskipped and green.
 func TestUserStateRootsResolveThroughOwningPackage(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
@@ -63,23 +88,23 @@ func TestUserStateRootsResolveThroughOwningPackage(t *testing.T) {
 		t.Fatalf("scan internal/**/*.go for backup root literals: %v", err)
 	}
 
-	t.Skipf("%d backup root literal site(s) detected outside %s (design D-03/D-04, REQ-20.13/REQ-20.14); Phase F0.b (inc-20-upstream-reconciliation) migrates every one of them to backup.BackupRootFor/backup.LegacyBackupRootFor/backup.BackupRoots and removes this skip as its first RED step", len(violations), backupRootOwningPackageDir)
-
 	for _, violation := range violations {
 		t.Errorf("%s: production code outside %s must resolve the backup root through backup.BackupRootFor/backup.LegacyBackupRootFor/backup.BackupRoots, not the literal %q", violation.position, backupRootOwningPackageDir, violation.literal)
 	}
 }
 
-// backupRootLiteralViolation records one filepath.Join argument pair that
-// spells out a backup root literal outside its owning package.
+// backupRootLiteralViolation records one site that spells out a backup root
+// literal outside its owning package, whether via a filepath.Join argument
+// pair or a single string literal already carrying the full path fragment.
 type backupRootLiteralViolation struct {
 	position string
 	literal  string
 }
 
 // backupRootLiteralViolations walks internal/**/*.go production files under
-// repoRoot, excluding backupRootOwningPackageDir, and returns every
-// filepath.Join call that spells out a backup root literal.
+// repoRoot, excluding backupRootOwningPackageDir, and returns every site
+// that spells out a backup root literal via filepath.Join, string
+// concatenation, fmt.Sprintf, or a fully spelled-out literal.
 func backupRootLiteralViolations(repoRoot string) ([]backupRootLiteralViolation, error) {
 	internalRoot := filepath.Join(repoRoot, "internal")
 	var violations []backupRootLiteralViolation
@@ -127,29 +152,51 @@ func backupRootLiteralViolations(repoRoot string) ([]backupRootLiteralViolation,
 	return violations, nil
 }
 
-// backupRootLiteralViolationsInFile inspects a single parsed file for
-// filepath.Join calls whose arguments spell out a backup root literal.
+// backupRootLiteralViolationsInFile inspects a single parsed file for two
+// independent violation shapes: a filepath.Join call whose adjacent
+// arguments spell out a backup root literal (directory, then "backups" as
+// separate arguments), and any single string literal that already spells
+// out a full backupRootLiteralFragments entry on its own — which is how the
+// concatenation (x + "/.gentle-ai/backups"), fmt.Sprintf
+// ("%s/.gentle-ai/backups"), and fully-spelled-out-literal forms all carry
+// the offending path, regardless of the surrounding expression.
 func backupRootLiteralViolationsInFile(fileSet *token.FileSet, tree *ast.File) []backupRootLiteralViolation {
 	var violations []backupRootLiteralViolation
 
 	ast.Inspect(tree, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok || !isFilepathJoinCall(call) {
-			return true
-		}
-		for i := 0; i+1 < len(call.Args); i++ {
-			directory, ok := stringLiteralValue(call.Args[i])
-			if !ok || !backupRootLiteralDirectories[directory] {
-				continue
+		switch n := node.(type) {
+		case *ast.CallExpr:
+			if !isFilepathJoinCall(n) {
+				return true
 			}
-			subdirectory, ok := stringLiteralValue(call.Args[i+1])
-			if !ok || subdirectory != backupRootLiteralStateSubdirectory {
-				continue
+			for i := 0; i+1 < len(n.Args); i++ {
+				directory, ok := stringLiteralValue(n.Args[i])
+				if !ok || !backupRootLiteralDirectories[directory] {
+					continue
+				}
+				subdirectory, ok := stringLiteralValue(n.Args[i+1])
+				if !ok || subdirectory != backupRootLiteralStateSubdirectory {
+					continue
+				}
+				violations = append(violations, backupRootLiteralViolation{
+					position: fileSet.Position(n.Args[i].Pos()).String(),
+					literal:  directory + "/" + subdirectory,
+				})
 			}
-			violations = append(violations, backupRootLiteralViolation{
-				position: fileSet.Position(call.Args[i].Pos()).String(),
-				literal:  directory + "/" + subdirectory,
-			})
+		case *ast.BasicLit:
+			value, ok := stringLiteralValue(n)
+			if !ok {
+				return true
+			}
+			for _, fragment := range backupRootLiteralFragments {
+				if strings.Contains(value, fragment) {
+					violations = append(violations, backupRootLiteralViolation{
+						position: fileSet.Position(n.Pos()).String(),
+						literal:  fragment,
+					})
+					break
+				}
+			}
 		}
 		return true
 	})
