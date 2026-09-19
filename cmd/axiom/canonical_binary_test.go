@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -85,7 +86,7 @@ func backupRootLiteralViolations(repoRoot string) ([]backupRootLiteralViolation,
 
 	walkErr := filepath.WalkDir(internalRoot, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return fmt.Errorf("walk %s: %w", path, err)
 		}
 		if entry.IsDir() {
 			return nil
@@ -96,7 +97,7 @@ func backupRootLiteralViolations(repoRoot string) ([]backupRootLiteralViolation,
 
 		relPath, err := filepath.Rel(repoRoot, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("resolve relative path for %s: %w", path, err)
 		}
 		relSlash := filepath.ToSlash(relPath)
 
@@ -106,13 +107,13 @@ func backupRootLiteralViolations(repoRoot string) ([]backupRootLiteralViolation,
 
 		source, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("read %s: %w", relSlash, err)
 		}
 
 		fileSet := token.NewFileSet()
 		tree, err := parser.ParseFile(fileSet, relSlash, source, 0)
 		if err != nil {
-			return err
+			return fmt.Errorf("parse %s: %w", relSlash, err)
 		}
 
 		violations = append(violations, backupRootLiteralViolationsInFile(fileSet, tree)...)
