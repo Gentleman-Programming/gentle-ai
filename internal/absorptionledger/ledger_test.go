@@ -211,13 +211,15 @@ func TestUpstreamAbsorptionLedgerRealDocumentIsInternallyCoherent(t *testing.T) 
 
 // TestUpstreamAbsorptionLedgerCoversDeclaredUniverseAtClose confirms D-06
 // regla 1: el total de filas reales del registro es exactamente el universo
-// declarado en su cabecera. Es el ÚNICO fallo aceptado en `go test ./...`
-// desde la Fase 5 hasta el cierre de la Fase 16 (regla 3 de "Reglas de
-// Comprobación y Alcance" de tasks.md); la Fase 16 retira el t.Skipf de
-// abajo como su primer paso.
+// declarado en su cabecera. Permanece saltado desde la Fase 5 hasta la
+// Fase 17 (regla 3 de "Reglas de Comprobación y Alcance" de tasks.md); la
+// tarea 17.7 borra la línea t.Skipf de abajo, y esa retirada es lo que
+// convierte un registro incompleto en un fallo duro al cerrar.
+//
+// El mensaje del Skip calcula las cifras en vez de codificarlas: cada tanda
+// de absorción añade filas, y un recuento literal aquí quedaría falso desde
+// la primera de ellas.
 func TestUpstreamAbsorptionLedgerCoversDeclaredUniverseAtClose(t *testing.T) {
-	t.Skipf("Fase 16 (F7) retira este Skip al cerrar el registro: 0 de 91 filas reales hoy frente al universo declarado en la cabecera de docs/upstream-absorption-ledger.md (medido 2026-09-19, 266574b0..82a6de96 sin merges). Es el único fallo aceptado en `go test ./...` hasta entonces.")
-
 	raw := readRealLedger(t)
 	ledger, err := Parse(raw)
 	if err != nil && !errors.Is(err, ErrUniverseMismatch) {
@@ -226,6 +228,8 @@ func TestUpstreamAbsorptionLedgerCoversDeclaredUniverseAtClose(t *testing.T) {
 	if ledger == nil {
 		t.Fatalf("Parse() devolvió un Ledger nulo")
 	}
+	t.Skipf("La tarea 17.7 retira este Skip al cerrar el registro: %d de %d filas reales hoy frente al universo declarado en la cabecera de docs/upstream-absorption-ledger.md (medido 2026-09-19, 266574b0..82a6de96 sin merges).", len(ledger.Rows), ledger.Universe)
+
 	if len(ledger.Rows) != ledger.Universe {
 		t.Fatalf("el registro declara un universo de %d commits pero solo tiene %d filas reales", ledger.Universe, len(ledger.Rows))
 	}

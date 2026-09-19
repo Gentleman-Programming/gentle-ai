@@ -27,10 +27,10 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 0 |
+| `absorbido` | 19 |
 | `descartado-deliberadamente` | 0 |
 | `revertido` | 0 |
-| **Total** | **0 (= universo declarado en la cabecera: 91)** |
+| **Total** | **19 (= universo declarado en la cabecera: 91)** |
 
 ## F0 — Identidad de distribución, artefacto de release y cobertura del binario real
 
@@ -56,11 +56,31 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |
 |---|---|---|---|---|
+| `b6308292` | fix(telemetry): run the collector in WAL, anchor maintenance to UTC midnight, and report busy storage (#4718) | `absorbido` | `37670801` (rama `inc-20/pr7-absorcion-upstream`) | Import `gentle-ai/v3` en `runtime_storage.go` reconciliado a mano a `/v2`; la Fase 17 lo reescribirá con el resto del árbol. Colisión no listada entre los cinco SHAs candidatos de la nota cruzada D-01. |
+| `eae8fadd` | fix(telemetry): key the rate limiter on a parsed address, budget runtime separately, and paginate GitHub downloads (#4724) | `absorbido` | `6c5c2bb5` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `c09b1a34` | feat(telemetry): expose runtime telemetry as Prometheus counters | `absorbido` | `1a64eb9a` (rama `inc-20/pr7-absorcion-upstream`) | Imports `gentle-ai/v3` en `metrics.go` y `metrics_test.go` reconciliados a mano a `/v2` conforme a la nota cruzada D-01; la Fase 17 los reescribirá. |
+| `e0445434` | feat(telemetry): add a runtime-store mode that skips raw rows behind delivery-id dedup | `absorbido` | `f7274597` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `6d4ef5ba` | docs(telemetry): document the runtime metrics exposition and the runtime-store flag | `absorbido` | `a4a320f2` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `133c6dfb` | feat(telemetry): install VictoriaMetrics with the deploy kit and provision its Grafana datasource | `absorbido` | `465bfffb` (rama `inc-20/pr7-absorcion-upstream`) | Colisión con el renombrado de unidades de la Fase 4 (V1): upstream parchea `gentle-telemetry-backup` y `.test.sh`; los hunks se aplicaron sobre `axiom-telemetry-backup*` y `install.sh` conservó las líneas de identidad Axiom. Rutas de máquina (`/usr/local/bin/gentle-telemetry`, `$GENTLE_TELEMETRY_*`) intactas por decisión de la Fase 4. |
+| `a60b541b` | feat(telemetry): add a VictoriaMetrics backfill for the raw runtime tables | `absorbido` | `a77001f4` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `ca27a09c` | feat(telemetry): move the runtime dashboard panels to VictoriaMetrics | `absorbido` | `daa58bbe` (rama `inc-20/pr7-absorcion-upstream`) | Aplicó sin conflicto pese a tocar el dashboard y `runtime_dashboard_test.go` a la vez; identidad Axiom del dashboard verificada explícitamente (título, fila y descripciones) antes de aceptar el auto-merge. `uid` `gentle-ai-usage` y datasource `gentle-telemetry-sqlite` preservados como contratos de máquina. |
+| `68ed179f` | feat(telemetry): select the runtime store from an environment file the installer writes | `absorbido` | `fa417b26` (rama `inc-20/pr7-absorcion-upstream`) | Colisión con el renombrado de la Fase 4 (V1): upstream parchea `gentle-telemetry.service`; el hunk se aplicó sobre `axiom-telemetry.service` y `install.sh` conservó `systemctl enable --now axiom-telemetry.service`. |
+| `0fc3845b` | fix(telemetry): stream the VictoriaMetrics backfill and arm metrics mode only after a healthy install | `absorbido` | `24dfde4b` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `4ed6238e` | fix(telemetry): allow mincore in the VictoriaMetrics unit syscall filter (#4733) | `absorbido` | `977a4e8f` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `7f112eac` | fix(telemetry): install the Prometheus plugin and hand the Grafana plugins directory to grafana (#4735) | `absorbido` | `b583bae7` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `70ac39de` | fix(telemetry): deduplicate VictoriaMetrics samples and always release the backup snapshot (#4740) | `absorbido` | `71e7690a` (rama `inc-20/pr7-absorcion-upstream`) | Colisión con el renombrado de la Fase 4 (V1) en `axiom-telemetry-backup` y su `.test.sh`; resuelta tomando la sustancia de upstream sobre la grafía Axiom. |
+| `9dc5fc7a` | fix(telemetry): archive the VictoriaMetrics snapshot data instead of its symlinks (#4742) | `absorbido` | `5d9ffeb8` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `1933540e` | fix(telemetry): raise the VictoriaMetrics scrape size cap for the collector exposition | `absorbido` | `000bf6b0` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `4251bd8f` | fix(telemetry): give runtime delivery ids their own short retention and purge them in batches | `absorbido` | `6f81d2de` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `56cad8c0` | feat(telemetry): truncate the WAL and vacuum the database after the daily purge | `absorbido` | `54a89a1d` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `96d442d0` | docs(telemetry): describe the dedup retention, the daily compaction and the offline first vacuum | `absorbido` | `f35bd185` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `99ae347f` | fix(telemetry): bound the online vacuum, checkpoint passively and validate the dedup window | `absorbido` | `a1ace3ae` (rama `inc-20/pr7-absorcion-upstream`) | — |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
+| — | Ninguno | Los 34 ficheros derivados de los 19 commits aparecen todos en el diff de la tanda; no hay ninguna ausencia que justificar. |
 
 ## F3 — Reviewer y parsing de OpenCode
 
