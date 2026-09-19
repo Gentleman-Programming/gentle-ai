@@ -425,11 +425,10 @@ func TestRecreatedChangeNameDoesNotInheritGrantedRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if granted.ApplyState != ApplyBlocked || granted.NextRecommended != "resolve-blockers" ||
-		!strings.Contains(strings.Join(granted.BlockedReasons, "\n"), "blocked(cross_common_dir_runtime_target)") {
-		t.Fatalf("post-grant status = %q/%q with reasons %v, want topology block",
-			granted.ApplyState, granted.NextRecommended, granted.BlockedReasons)
+	if granted.ApplyState != ApplyReady || granted.NextRecommended != "apply" || len(granted.BlockedReasons) != 0 {
+		t.Fatalf("post-grant status = %q/%q reasons %v, want ready/apply without attempt topology governance", granted.ApplyState, granted.NextRecommended, granted.BlockedReasons)
 	}
+
 	if !reflect.DeepEqual(granted.ActionContext.AllowedEditRoots, []string{planning, wantA}) {
 		t.Fatalf("AllowedEditRoots = %v, want [%s %s]", granted.ActionContext.AllowedEditRoots, planning, wantA)
 	}

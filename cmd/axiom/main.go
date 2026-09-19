@@ -89,8 +89,7 @@ COMANDOS DE GOBERNANZA Y WORKSPACE:
   archive coldstart    Sintetiza una especificación viva inicial a partir de un cambio archivado
   sdd status           Consulta el estado de fases y artefactos de un cambio SDD (--json, --instructions)
   sdd continue         Calcula y emite la siguiente acción autorizada del despachador SDD
-  sdd attempt          Gestiona el presupuesto y libro mayor de intentos de ejecución (acquire/settle)
-  sdd verify-validate  Valida un reporte de verificación contra las especificaciones activas
+  sdd attempt          Registra la autoridad de edición por raíz para el cambio activo (grant)
   sdd archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas
   odd create           Crea un documento vivo ODD para una nueva feature del carril ágil
   odd status           Consulta el progreso de los documentos vivos ODD (--json, --check-mirror)
@@ -364,8 +363,6 @@ func main() {
 		os.Exit(runSDD(append([]string{"continue"}, os.Args[2:]...), os.Stdout, os.Stderr))
 	case "sdd-attempt":
 		os.Exit(runSDD(append([]string{"attempt"}, os.Args[2:]...), os.Stdout, os.Stderr))
-	case "sdd-verify-validate":
-		os.Exit(runSDD(append([]string{"verify-validate"}, os.Args[2:]...), os.Stdout, os.Stderr))
 	case "sdd-archive-compose":
 		os.Exit(runSDD(append([]string{"archive-compose"}, os.Args[2:]...), os.Stdout, os.Stderr))
 	case "sdd-task-result":
@@ -1740,8 +1737,7 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "\nSubcomandos disponibles:")
 		fmt.Fprintln(stdout, "  status           Consulta el estado de fases y artefactos de un cambio SDD (--json, --instructions)")
 		fmt.Fprintln(stdout, "  continue         Calcula y emite la siguiente acción autorizada del despachador SDD")
-		fmt.Fprintln(stdout, "  attempt          Gestiona el presupuesto y libro mayor de intentos de ejecución (acquire/settle)")
-		fmt.Fprintln(stdout, "  verify-validate  Valida un reporte de verificación contra las especificaciones activas")
+		fmt.Fprintln(stdout, "  attempt          Registra la autoridad de edición por raíz para el cambio activo (grant)")
 		fmt.Fprintln(stdout, "  archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas")
 		fmt.Fprintln(stdout, "  task-result      Valida y extrae el resultado tipado de una fase delegada")
 		fmt.Fprintln(stdout, "  preflight-hook   Ejecuta el hook previo de verificación SDD")
@@ -1761,9 +1757,7 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 	case "continue":
 		err = cli.RunSDDContinue(subArgs, stdout)
 	case "attempt":
-		err = cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(subArgs), stdout)
-	case "verify-validate":
-		err = cli.RunSDDVerifyValidate(subArgs, stdout)
+		err = cli.RunSDDAttempt(subArgs, stdout)
 	case "archive-compose":
 		err = cli.RunSDDArchiveCompose(subArgs, stdout)
 	case "task-result":
@@ -1771,7 +1765,7 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 	case "preflight-hook":
 		err = cli.RunSDDPreflightHook(subArgs, stdout)
 	default:
-		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, verify-validate, archive-compose, task-result, preflight-hook\n", subCmd)
+		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, archive-compose, task-result, preflight-hook\n", subCmd)
 		return 1
 	}
 
@@ -1826,8 +1820,8 @@ func runODD(args []string, stdout, stderr io.Writer) int {
 // dashboard.Service.CreateIncrement bajo root para "axiom odd promote"
 // [D-01, D-07]. Vive en package main -- no en internal/cli, como planteaba
 // el diseño (§5.5, §5.8) -- porque internal/dashboard/service.go:19 ya
-// importa internal/cli (para RunSDDContinue, RunSDDVerifyValidate,
-// RunDoctor y RunRestore): si internal/cli importara internal/dashboard
+// importa internal/cli (para RunSDDContinue, RunDoctor y RunRestore):
+// si internal/cli importara internal/dashboard
 // para construir este adaptador, el grafo cerraría el ciclo
 // cli → dashboard → cli, con independencia total de internal/odd, que
 // sigue siendo una hoja del árbol de dependencias sin este cambio.

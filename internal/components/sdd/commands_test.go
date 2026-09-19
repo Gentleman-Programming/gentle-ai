@@ -88,13 +88,17 @@ func assertOpenCodeResearchCollectorBoundary(t *testing.T, research map[string]a
 	prompt, _ := research["prompt"].(string)
 	for _, required := range []string{
 		"output-only evidence collector",
-		"validates and persists the returned envelope through the selected store route",
+		"The orchestrator supplies code context and handles any authorized persistence.",
+		"Research remains optional, including after selection.",
+		"Missing request IDs, revisions or store metadata are not admission barriers.",
+		"actually available and authorized external tools",
+		"primary sources", "contradictions", "freshness",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("research prompt missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"persist blocked recovery state", "Persist `gentle-ai.sdd-research/v1`", "In hybrid mode, write identical bytes"} {
+	for _, forbidden := range []string{"persist blocked recovery state", "gentle-ai.sdd-research-capability/v1", "supplies the immutable request ID", "proposal_ready", "In hybrid mode, write identical bytes"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("research prompt retains child persistence duty %q", forbidden)
 		}
@@ -110,7 +114,15 @@ func TestOpenCodeResearchCollectorPromptOwnershipInDefaultAndMultiModes(t *testi
 				t.Fatalf("Inject(%s): %v", mode, err)
 			}
 			research := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))["sdd-research"].(map[string]any)
-			research["prompt"] = assets.MustRead("skills/sdd-research/SKILL.md")
+			promptPath := filepath.Join(opencodeAdapter().SkillsDir(home), "sdd-research", "SKILL.md")
+			if mode == model.SDDModeMulti {
+				promptPath = filepath.Join(SharedPromptDir(home), "sdd-research.md")
+			}
+			prompt, err := os.ReadFile(promptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			research["prompt"] = string(prompt)
 			assertOpenCodeResearchCollectorBoundary(t, research)
 		})
 	}
@@ -140,7 +152,7 @@ func TestNamedProfileResearchCollectorMatchesDefaultBoundary(t *testing.T) {
 
 func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *testing.T) {
 	command := assets.MustRead("opencode/commands/sdd-research.md")
-	for _, required := range []string{"agent: axiom-orchestrator", "hidden `sdd-research` sub-agent", "SDD Session Preflight must already be complete"} {
+	for _, required := range []string{"agent: axiom-orchestrator", "hidden `sdd-research` sub-agent", "Research remains optional, including after selection."} {
 		if !strings.Contains(command, required) {
 			t.Fatalf("OpenCode research command missing %q", required)
 		}
@@ -181,9 +193,9 @@ func TestOpenCodeResearchCommandHasExplicitTaskPermissionAndDefaultDenial(t *tes
 				prompt = assets.MustRead("skills/sdd-research/SKILL.md")
 			}
 			for _, required := range []string{
-				"Evidence grants: documentation=[]; open-web=[].",
-				"Persistence tools are not evidence grants.",
-				"Unsupported or undeclared classes deny admission and emit no claims.",
+				"actually available and authorized external tools",
+				"denies web access",
+				"without bypassing permissions",
 			} {
 				if !strings.Contains(prompt, required) {
 					t.Fatalf("%s research prompt missing %q", path, required)

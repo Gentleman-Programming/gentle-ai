@@ -36,52 +36,24 @@ Engram uses `topic_key`-based upserts. Re-running a phase for the same change **
 |------|-----------|----------|---------------|
 | `engram` | Engram | Engram | Never |
 | `openspec` | Filesystem | Filesystem | Yes |
-| `hybrid` | Engram (primary) + Filesystem (fallback) | Both | Yes |
+| `hybrid` | Resolved artifact locators | Both | Yes |
 | `none` | Orchestrator prompt context | Nowhere | Never |
 
 ### Hybrid Mode
 
-Persists every artifact to BOTH Engram and OpenSpec simultaneously:
-- Engram: cross-session recovery, compaction survival, deterministic search
-- OpenSpec: human-readable files, version-controllable artifacts
+Use the declared `artifactStore` and resolved `artifactPaths` from the orchestrator, as defined in `sdd-phase-common.md`. Read each resolved locator, not an Engram-first or filesystem fallback. Never silently substitute another store's copy.
 
-Write to Engram (per `engram-convention.md`) AND to filesystem (per `openspec-convention.md`) for every artifact.
+Attempt both declared writes, following the Engram and OpenSpec conventions, and read back each successful write. Hybrid writes are not atomic: preserve successful writes, report any failed or unavailable mirror as partial, and name the outstanding locator. Do not claim synchronization or roll back valid progress. Preserve both versions of a genuine content conflict; ask only when it affects the next decision.
 
-Read priority: Engram first; fall back to filesystem if Engram returns no results.
-Write behavior: both writes MUST succeed for the operation to be complete.
-Token cost warning: hybrid consumes MORE tokens per operation. Use only when you need both cross-session persistence AND local file artifacts.
+### Optional research notes
 
-### Research reconciliation
+The output-only collector returns findings to the orchestrator. Persist useful research notes only through the selected store or an explicit request; `none` can return them inline. No research revision, readiness matrix or cross-store equality check admits proposal work. Report failed writes honestly and retain available progress; do not invent a successful mirror or overwrite conflicting historical research/preproposal data. Resolve a genuine content conflict only when it affects the next decision.
 
-The orchestrator validates the returned collector envelope and persists it through the selected store route. For selected research, readiness follows the selected artifact-store mode: `openspec` validates only OpenSpec; `engram` validates only Engram; `hybrid` writes and reads both stores with identical revision and bytes; `none` cannot make selected research ready.
+## Recovery (Orchestrator)
 
-For hybrid `gentle-ai.sdd-preproposal/v1`, retain pre-write intent and canonical desired content before any write. On one-sided failure, never derive content from either surviving store: use the retained values to write a new positive revision to both stores, then read and compare both before readiness. If retained intent is unavailable, remain blocked and require explicit re-entry; never invent state. A matching restart restores the request and evidence references.
+Recover from native status and the actual artifacts at its resolved locators, including full `mem_get_observation` content for topic keys. Existing `state.yaml` and `sdd/{change-name}/state` snapshots are optional recovery hints, not required per-phase writes or a second state authority. Missing or stale snapshots do not replace actual task progress or archive closure. Preserve existing snapshots, including `dependsOn` metadata, and historical artifacts.
 
-For selected research, apply this closed readiness matrix:
-
-| Mode | Outcome | Evidence | Required persistence/readback | Decisions | Ready |
-|---|---|---|---|---|---|
-| openspec | done | valid | OpenSpec success and readback | confirmed | yes |
-| engram | done | valid | Engram success and readback | confirmed | yes |
-| hybrid | done | valid | OpenSpec and Engram success; same revision and bytes on readback | confirmed | yes |
-| none | done | valid | no store | any | no |
-| any | partial | any | any | any | no |
-| any | blocked | any | any | any | no |
-| any | done | missing or invalid | any | any | no |
-| hybrid | done | valid | failed, missing, unequal, or divergent store | any | no |
-
-## State Persistence (Orchestrator)
-
-The orchestrator persists DAG state after each phase transition to enable SDD recovery after compaction.
-
-| Mode | Persist State | Recover State |
-|------|--------------|---------------|
-| `engram` | `mem_save(topic_key: "sdd/{change-name}/state", capture_prompt: false*)` | `mem_search("sdd/*/state")` → `mem_get_observation(id)` |
-| `openspec` | Write `openspec/changes/{change-name}/state.yaml` | Read `openspec/changes/{change-name}/state.yaml` |
-| `hybrid` | Both: `mem_save` AND write `state.yaml` | Engram first; filesystem fallback |
-| `none` | Not possible — warn user | Not possible |
-
-*For state automated artifacts, set `capture_prompt: false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
+READ-MERGE-WRITE cumulative tasks and apply-progress: retrieve the full current artifact, preserve prior completed and unrelated work, merge this batch, then persist and read back the full result.
 
 ## Common Rules
 
@@ -90,13 +62,11 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 - `openspec` → write files ONLY to paths defined in `openspec-convention.md`
 - `hybrid` → persist to BOTH Engram AND filesystem; follow both conventions
 - NEVER force `openspec/` creation unless orchestrator explicitly passed `openspec` or `hybrid`
-- If unsure which mode to use, default to `none`
+- If the declared store or a required locator is unresolved, report it; do not select another store.
 
-### Verify-report admission
+### Optional verification reports
 
-Build a complete `verify-report` in memory as exact candidate bytes. Count authoritative requirements and scenarios, then run `gentle-ai sdd-verify-validate` on those bytes before any OpenSpec or Engram write.
-
-If admission fails or the validator is unavailable, STOP with zero persistence calls. Do not create, truncate, delete, or overwrite any prior `verify-report`. On success, persist the same candidate bytes for the selected mode; hybrid preflights once before both writes. A valid `fail` report must be persisted because validity and archive readiness are separate decisions.
+Persist requested diagnostics in the selected store. No report validator or attestation is required. Missing or failed verification never gates archive. Preserve historical report content and findings; archive summarizes their provenance rather than rewriting them as current passing evidence.
 
 ## Sub-Agent Context Rules
 
@@ -112,7 +82,7 @@ Why this split:
 - Orchestrator reads for non-SDD: it knows what context is relevant; sub-agents doing their own searches waste tokens on irrelevant results
 - Sub-agents read for SDD: SDD artifacts are large; inlining them in the orchestrator prompt would consume the entire context window
 - Artifact-producing SDD sub-agents write: they have the complete detail on what happened; nuance is lost by the time results flow back to the orchestrator
-- The output-only SDD research collector returns evidence without persistence so the orchestrator can apply the selected-store and hybrid-readiness gate
+- The output-only SDD research collector returns evidence without persistence so the orchestrator can handle any authorized persistence without a research-readiness gate
 
 ## Orchestrator Prompt Instructions for Sub-Agents
 
@@ -125,41 +95,17 @@ If you make important discoveries, decisions, or fix bugs, you MUST save them to
 Do NOT return without saving what you learned. This is how the team builds persistent knowledge across sessions.
 ```
 
-SDD (artifact-producing phase with dependencies):
+SDD (artifact-producing phases):
 ```
-Artifact store mode: {engram|openspec|hybrid|none}
-Read these artifacts before starting (search returns truncated previews):
-  mem_search(query: "sdd/{change-name}/{type}", project: "{project}") → get ID
-  mem_get_observation(id: {id}) → full content (REQUIRED)
-
-PERSISTENCE (MANDATORY — do NOT skip):
-After completing your work, you MUST call:
-  mem_save(
-    title: "sdd/{change-name}/{artifact-type}",
-    topic_key: "sdd/{change-name}/{artifact-type}",
-    type: "architecture",
-    project: "{project}",
-    capture_prompt: false,
-    content: "{your full artifact markdown}"
-  )
-If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
-```
-
-SDD (artifact-producing phase with no dependencies):
-```
-Artifact store mode: {engram|openspec|hybrid|none}
-
-PERSISTENCE (MANDATORY — do NOT skip):
-After completing your work, you MUST call:
-  mem_save(
-    title: "sdd/{change-name}/{artifact-type}",
-    topic_key: "sdd/{change-name}/{artifact-type}",
-    type: "architecture",
-    project: "{project}",
-    capture_prompt: false,
-    content: "{your full artifact markdown}"
-  )
-If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
+Artifact store: {declared artifactStore}
+Artifact locators: {resolved artifactPaths and output locators}
+Read required dependencies at those locators; topic keys require project-scoped
+mem_search followed by full mem_get_observation, never a search preview.
+Persist the full artifact through the declared store as in sdd-phase-common.md:
+files for openspec, canonical topic keys for engram, both for hybrid, inline for none.
+Read back writes and return their actual locators and outcomes. Report partial
+persistence honestly; never force an Engram write for openspec or none.
+Preserve prior progress with READ-MERGE-WRITE rather than replacing a batch history.
 ```
 
 For SDD artifacts, `capture_prompt: false` is explicit and mandatory when the Engram tool schema supports it. Engram v1.15.3 defaults `capture_prompt` to true for normal human/proactive saves, but automated pipeline artifacts must not capture the user's prompt. Do not infer this from `type` because SDD artifacts and real human architecture decisions both use `architecture`. If an older schema rejects or does not expose `capture_prompt`, omit it rather than failing.

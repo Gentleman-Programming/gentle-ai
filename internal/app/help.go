@@ -22,9 +22,8 @@ COMMANDS
                Print native SDD phase status for orchestrators
   sdd-continue [change]
                Print native SDD dispatcher routing output
-  sdd-attempt <acquire|settle> --cwd <repo> --change <change>
-               Run bounded normal orchestration without exposing runtime history
-  sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
+  sdd-attempt grant --cwd <repo> --change <change>
+               Record explicitly authorized edit roots for one change instance
                Validate exact verification-report bytes without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
@@ -66,8 +65,6 @@ COMPATIBILITY COMMANDS
   review-validate --cwd <repo> --receipt <path> (--request <path> | --lineage <id> --gate <gate>)
                Validate read-only legacy v1 authority; ordinary repository policy decides delivery
                Bundle, policy, ledger, fix-delta, evidence, CI, and release flags are compatibility inputs
-  sdd-attempt <status|begin|finish|reset|repair> --cwd <repo> --change <change>
-               Diagnose or explicitly recover the full native runtime-attempt ledger
   update       Check for available updates
   upgrade      Apply updates to managed tools
   telemetry <status|enable|disable|preview|trigger> [--json]

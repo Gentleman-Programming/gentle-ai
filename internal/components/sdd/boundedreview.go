@@ -178,14 +178,7 @@ func selectReviewerCaptureTransport(contract string, agent model.AgentID) string
 }
 
 func researchLifecycleContract() string {
-	source := assets.MustRead("skills/_shared/research-lifecycle.md")
-	start := strings.Index(source, "<!-- research-lifecycle-gate:start -->")
-	end := strings.Index(source, "<!-- research-lifecycle-gate:end -->")
-	if start < 0 || end < start {
-		return ""
-	}
-	start += len("<!-- research-lifecycle-gate:start -->")
-	return strings.TrimSpace(source[start:end])
+	return strings.TrimSpace(assets.MustRead("skills/_shared/research-lifecycle.md"))
 }
 
 // renderBoundedReviewAsset resolves one embedded asset into the exact bytes a

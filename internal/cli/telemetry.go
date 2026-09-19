@@ -388,19 +388,6 @@ func telemetryRecordReviewOutcome(kind string) {
 	telemetryTriggerQuiet(homeDir)
 }
 
-// telemetryRecordSDDPhaseRun increments sdd_phase_runs when a `sdd-attempt
-// finish|settle` completes successfully, then opportunistically triggers a
-// send for the same reason telemetryRecordReviewOutcome does.
-func telemetryRecordSDDPhaseRun() {
-	defer func() { _ = recover() }()
-	homeDir, ok := telemetryEnabledHomeDir()
-	if !ok {
-		return
-	}
-	_ = telemetry.IncrementSDDPhaseRuns(homeDir)
-	telemetryTriggerQuiet(homeDir)
-}
-
 // runTelemetryTriggerCommand runs exactly the opportunistic path a
 // successful install/update/sync runs internally, for hosts (e.g. Gentle Pi)
 // that otherwise never call gentle-ai through any of those three. It always

@@ -889,7 +889,6 @@ func (s *Service) VerifyIncrement(name string) (*IncrementActionResponse, error)
 	if name == "" {
 		return nil, fmt.Errorf("el nombre del incremento es obligatorio")
 	}
-	root := s.getRootPath()
 	targetPath, kind, err := s.FindIncrementPath(name)
 	if err != nil || kind != "active" {
 		return nil, fmt.Errorf("el incremento %q no existe como cambio activo", name)
@@ -906,24 +905,15 @@ func (s *Service) VerifyIncrement(name string) (*IncrementActionResponse, error)
 		}, nil
 	}
 
-	var stdout bytes.Buffer
-	runErr := cli.RunSDDVerifyValidate([]string{"--report", verifyFile, "--cwd", root}, &stdout)
-	outStr := stdout.String()
-	if runErr != nil && outStr == "" {
-		outStr = runErr.Error()
-	}
-
-	errMsg := ""
-	if runErr != nil {
-		errMsg = runErr.Error()
-	}
-
+	// La absorción de upstream (INC-20 F4, commit 62ce74b7) retira el
+	// subcomando "sdd verify-validate": la verificación pasa a ser opcional
+	// e informativa y deja de ser una compuerta independiente de archive.
 	return &IncrementActionResponse{
-		Success:    runErr == nil,
+		Success:    true,
 		ChangeName: name,
 		Action:     "sdd-verify-validate",
-		Output:     outStr,
-		Error:      errMsg,
+		Output:     "verify-report.md existe. La validación formal contra especificaciones ya no es una compuerta independiente de archive tras la absorción de upstream (verificación opcional, sin atestación).",
+		Error:      "",
 	}, nil
 }
 

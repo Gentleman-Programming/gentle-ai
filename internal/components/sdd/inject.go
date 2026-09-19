@@ -977,7 +977,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 func renderClaudeSessionPreflight() (string, error) {
 	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
-	return projectSDDSessionPreflightWithTool(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
+	return projectSDDSessionPreflightWithTool(substituteSharedOrchestratorSections(content), "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
 }
 
 // Preparation is read-only. A template composer panic must not escape after a
@@ -1424,13 +1424,12 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 }
 
 func ensurePreservedOpenCodeResearchLifecycle(prompt string) string {
-	if strings.Contains(prompt, "<!-- gentle-ai:sdd-research-lifecycle -->") && strings.Contains(prompt, researchLifecycleContract()) {
-		return prompt
-	}
+	// Older generated prompts embedded this managed gate as one unmarked line.
+	// Replace that exact legacy shape without deleting unrelated user questions.
 	lines := strings.Split(prompt, "\n")
 	kept := lines[:0]
 	for _, line := range lines {
-		if strings.Contains(line, "Before the `sdd-propose` phase in interactive mode") || strings.Contains(line, "proposal question round") {
+		if strings.HasPrefix(line, "### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research`") {
 			continue
 		}
 		kept = append(kept, line)
@@ -2031,9 +2030,13 @@ func ensureClaudeSDDPreflightHook(settingsPath string, agentID model.AgentID) (b
 
 	command := fmt.Sprintf("gentle-ai sdd-preflight-hook --agent %s", agentID)
 	changed := false
-	// Claude Code hook commands are callable by model-started processes and do
-	// not carry authenticated caller provenance. Install only the fail-closed
-	// dispatch guard; never install a hook that claims to mint authority.
+	// The guard derives parent-confirmed SDD preflight authority at dispatch
+	// time directly from the session transcript the hook runner supplies on
+	// stdin (transcript_path and session_id). A model-started copy of this
+	// hook command cannot influence the real dispatch, because Claude Code
+	// only honors the output of the hook invocation it started itself, and
+	// that invocation's stdin is runner-supplied. No hook mints or persists
+	// authority; install only this single fail-closed PreToolUse(Agent) entry.
 	for _, hook := range []struct{ key, matcher string }{
 		{key: "PreToolUse", matcher: "Agent"},
 	} {

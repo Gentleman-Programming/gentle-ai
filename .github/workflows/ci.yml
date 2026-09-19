@@ -131,6 +131,13 @@ jobs:
           # Transition axis (#2829): sequences of ordinary operations, which is
           # how #2830 shipped. #2830 now refuses the second consecutive rescope
           # before publication, so every transition journey must complete.
+          #
+          # INC-20 F4 note (2026-09-20): upstream's #4612 reduces this axis to
+          # a single tr09 journey because it retires SDD attempt transitions
+          # from bench/. bench/ is out of scope for this fork's F4 absorption
+          # (forbidden path, REQ-20.4) and was not touched, so it still emits
+          # the full 11-journey transition set; this assertion stays matched
+          # to that unchanged bench/ output instead of upstream's reduced one.
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis transition --out "$RUNNER_TEMP/bench-transition.json"
           jq -e '
             def completed_once($id):

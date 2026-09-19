@@ -98,7 +98,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - MCP servers configured as plugins in `~/.claude/mcp/`
 - Output styles in `~/.claude/output-styles/`
 - System prompt via markdown sections in `~/.claude/CLAUDE.md`
-- Managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry; `SessionStart` and `Stop` maintain the review reminder baseline. Claude hook commands do not expose authenticated caller provenance, so Gentle AI installs only a fail-closed `PreToolUse(Agent)` SDD guard: SDD phases must continue inline rather than claiming runtime-backed child authority. Uninstall also removes stale preflight producer hooks from earlier installations.
+- Managed hooks in `~/.claude/settings.json`: `UserPromptSubmit` refreshes the skill registry; `SessionStart` and `Stop` maintain the review reminder baseline. The `PreToolUse(Agent)` SDD guard reads the parent-confirmed grouped `AskUserQuestion` preflight from the session transcript the hook runner supplies, prepends the canonical `## SDD Session Preflight` block to every packaged `sdd-*` phase dispatch, and refuses missing, child-session, model-authored, malformed, or unanswered authority. The guard cannot detect a transcript file deliberately edited through a shell, so it defeats prompt shortcuts, not adversarial forgery. Uninstall also removes stale preflight producer hooks from earlier installations.
 
 ### OpenCode
 

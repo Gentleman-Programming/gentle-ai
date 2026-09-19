@@ -48,7 +48,7 @@ func TestRunSDDHelp(t *testing.T) {
 			if !strings.Contains(out, "Uso: axiom sdd <subcomando>") {
 				t.Fatalf("la salida no contiene el uso esperado:\n%s", out)
 			}
-			expectedSubcmds := []string{"status", "continue", "attempt", "verify-validate", "archive-compose", "task-result", "preflight-hook"}
+			expectedSubcmds := []string{"status", "continue", "attempt", "archive-compose", "task-result", "preflight-hook"}
 			for _, sub := range expectedSubcmds {
 				if !strings.Contains(out, sub) {
 					t.Fatalf("la ayuda de sdd no documenta el subcomando %q:\n%s", sub, out)

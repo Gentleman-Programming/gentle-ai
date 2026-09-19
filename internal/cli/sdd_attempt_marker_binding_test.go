@@ -62,7 +62,7 @@ func TestSDDAttemptRefusesRecreatedMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Revision != before.Revision || len(after.Attempts) != len(before.Attempts) || len(after.GrantedRoots) != len(before.GrantedRoots) {
+	if after.Revision != before.Revision || len(after.GrantedRoots) != len(before.GrantedRoots) {
 		t.Fatalf("stale grant mutated authority: before=%#v after=%#v", before, after)
 	}
 	if before.Revision == "" {

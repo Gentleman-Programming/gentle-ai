@@ -126,14 +126,11 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Approval awaits acknowledgement in B; exact acknowledgement burns B only, and A remains untouched",
 		"review lifecycle stops",
 		"Unsupported runtimes remain unavailable",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"immediately after `sdd-explore`",
-		"selected research is `done` or research is unselected",
-		"product decisions are `confirmed`",
-		"evidence references are valid",
-		"one lossless grouped prompt",
-		"persist the pending state before prompting",
-		"STOP without invoking `sdd-propose`",
+		"### Optional Research and Product Discovery",
+		"Research remains optional, including after selection.",
+		"Ask one focused product question at a time and wait for the answer",
+		"Missing, partial, unavailable or divergent research metadata does not block proposal work.",
+		"Pause only work dependent on an unresolved product decision or unsafe missing evidence",
 	}...)
 }
 
@@ -755,8 +752,8 @@ func TestOpenCodeAndClaudeArchiveInstructionsDoNotGateOnReviewAuthority(t *testi
 		t.Run(path, func(t *testing.T) {
 			content := assets.MustRead(path)
 			for _, required := range []string{
-				"`reviewOffer` is optional and never an archive or delivery gate",
-				"Archive reads only task completion and independent verification",
+				"SDD never offers or launches RDD.",
+				"an explicit archive request may close unfinished work without a verification certificate",
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("%s missing archive non-gate rule %q", path, required)
@@ -803,4 +800,18 @@ func parseAuthorityFirstRows(t *testing.T, content string) []authorityFirstRow {
 		})
 	}
 	return rows
+}
+
+func TestSDDPhaseCommandsNeverInviteReview(t *testing.T) {
+	for _, path := range []string{
+		"opencode/commands/sdd-apply.md", "opencode/commands/sdd-verify.md", "opencode/commands/sdd-archive.md",
+		"claude/commands/sdd-apply.md", "claude/commands/sdd-verify.md", "claude/commands/sdd-archive.md",
+	} {
+		content := assets.MustRead(path)
+		for _, forbidden := range []string{"reviewOffer", "gentle-ai review start", "may present and run"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s retains review invitation %q", path, forbidden)
+			}
+		}
+	}
 }

@@ -67,7 +67,7 @@ Available subagents (all installed in `~/.cursor/agents/`):
 | `sdd-verify` | `sdd-verify.md` | Validate implementation against specs |
 | `sdd-archive` | `sdd-archive.md` | Sync delta specs and archive completed change |
 
-Each subagent runs in its own context window and returns a **structured result**. Collect the result, update DAG state, and present the summary to the user before triggering the next phase.
+Each subagent runs in its own context window and returns a **structured result**. Collect the result, read back persisted artifacts, and present the summary to the user before triggering the next phase.
 
 ### Language Domain Contract
 
@@ -229,10 +229,6 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 **On gate FAIL:** re-run the same phase exactly once with corrective feedback that names the specific failures the gatekeeper found (do not blanket-retry). Re-run the gate on the new result. If it passes, continue the chain. If it fails again, STOP the automatic chain and surface a report to the user naming the phase, what the gatekeeper caught, both attempts, and the recommended fix. Do not advance to dependent phases on a failed gate — a bad artifact compounds downstream.
 
 The gatekeeper runs in addition to the Review Workload Guard and the Mandatory Delegation Triggers; it never relaxes them and never auto-marks anything reviewed in engram.
-
-### Native Runtime Attempt Authority (MANDATORY)
-
-{{GENTLE_AI_SDD_SECTION:Native Runtime Attempt Authority (MANDATORY)}}
 
 ### Artifact Store Mode
 

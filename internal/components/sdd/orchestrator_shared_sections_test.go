@@ -8,6 +8,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -101,7 +102,6 @@ func TestRegisteredAgentsRenderStatusContinuationContract(t *testing.T) {
 
 var sharedOrchestratorSectionNames = []string{
 	"Native SDD Dispatcher Guard",
-	"Native Runtime Attempt Authority (MANDATORY)",
 	"Language Domain Contract",
 	"Dependency Graph",
 	"Recovery Rule",
@@ -186,27 +186,25 @@ func TestEveryRuntimeRendersTheSharedSections(t *testing.T) {
 // exactly like the RDD-off path -- never to a lower bar than RDD off.
 func TestDelegatedVerificationGateDeclinedReviewFallbackRenders(t *testing.T) {
 	const fallbackPhrase = "the native review reaches a terminal outcome for this candidate"
+	const sddBoundary = "SDD never offers or launches RDD"
 
 	for _, name := range []string{
 		"Delegated Verification Gate (MANDATORY)",
 		"Delegated Verification Gate (Reduced Form)",
 	} {
-		if body := sharedOrchestratorSection(name); !strings.Contains(body, fallbackPhrase) {
-			t.Errorf("shared section %q canonical body does not carry %q", name, fallbackPhrase)
+		if body := sharedOrchestratorSection(name); !strings.Contains(body, fallbackPhrase) || !strings.Contains(body, sddBoundary) {
+			t.Errorf("shared section %q canonical body lacks the SDD boundary or %q", name, fallbackPhrase)
 		}
 	}
 
-	for _, agent := range []model.AgentID{
-		model.AgentOpenCode, model.AgentCursor, model.AgentGeminiCLI, model.AgentQwenCode,
-		model.AgentHermes, model.AgentKimi, model.AgentWindsurf, model.AgentCodex,
-		model.AgentClaudeCode, model.AgentKiroIDE, model.AgentAntigravity, model.AgentVSCodeCopilot,
-	} {
+	for _, entry := range catalog.AllAgents() {
+		agent := entry.ID
 		rendered := renderSDDOrchestratorAsset(agent)
 		if !strings.Contains(rendered, "Delegated Verification Gate") {
 			continue // a runtime that never carries either form keeps not carrying it
 		}
-		if !strings.Contains(rendered, fallbackPhrase) {
-			t.Errorf("%s renders a Delegated Verification Gate section without the declined-review fallback phrase", agent)
+		if !strings.Contains(rendered, fallbackPhrase) || !strings.Contains(rendered, sddBoundary) {
+			t.Errorf("%s renders a Delegated Verification Gate section without the SDD exclusion or non-SDD declined-review fallback", agent)
 		}
 	}
 }

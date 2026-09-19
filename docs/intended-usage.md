@@ -184,7 +184,7 @@ You never need this diagram to use SDD -- the agent drives the phases. It is her
 flowchart TD
     A["User: sdd-new / sdd-explore<br/>(gentle-sdd-* in Claude Code)"] --> B["Explore<br/>investigate codebase and approaches"]
     B --> BR{"External research<br/>selected?"}
-    BR -->|"yes"| BX["Research<br/>auditable external evidence<br/>exact grant · source mappings"]
+    BR -->|"yes"| BX["Research<br/>optional source-backed findings<br/>authorized tools · honest limitations"]
     BR -->|"no"| C["Propose<br/>intent · scope · approach"]
     BX --> C
     C --> D{"User approves<br/>the proposal?"}
@@ -192,31 +192,17 @@ flowchart TD
     D -->|"yes"| E["Spec<br/>requirements + scenarios"]
     E --> F["Design<br/>architecture decisions"]
     F --> G["Tasks<br/>ordered deliverable checklist"]
-    G --> H["Apply<br/>sub-agent implements against specs<br/>(sdd-attempt acquire/settle · CAS · budgets)"]
-    H --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
-    Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle"]
-    Q -->|"fails"| H
-    Q -.->|"optional, informational"| I["RDD review offer"]
-
-    subgraph RDD["RDD — same machine as the organic route"]
-        I --> J{"Risk"}
-        J -->|"low"| K["Structural readback"]
-        J -->|"medium / high"| L["1 lens or 4R + consent"]
-        L --> M{"Severe findings?"}
-        M -->|"yes"| N["One bounded correction<br/>+ fix validator"]
-        M -->|"no"| O["Review outcome: approved<br/>(informational)"]
-        K --> O
-        N -->|"validates"| O
-        N -->|"fails"| P["Escalated → recover"]
-        O --> AK["review.acknowledge-approved<br/>only the exact acknowledgement<br/>burns/closes the lineage"]
-    end
-
+    G --> H["Apply<br/>sub-agent implements against specs"]
+    H --> V{"Optional verification<br/>requested?"}
+    V -->|"yes"| Q["Verify<br/>report findings and missing evidence honestly"]
+    V -->|"no"| W{"Implementation complete?"}
+    Q --> W
+    W -->|"no"| H
+    W -->|"yes"| R["Archive<br/>preserve task truth · safe spec merge"]
     R --> S["Ordinary repository policy"]
     S --> T["Commit → Push → PR"]
 
-    style O fill:#2D4F67,color:#fff
-    style P fill:#B8860B,color:#fff
     style T fill:#2D4F67,color:#fff
 ```
 
-SDD status v2 runtime state is independent from review. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.
+SDD never offers, launches, or consumes RDD. Completed implementation proceeds directly to archive; verification is optional; standalone organic RDD remains separate. No review binding, receipt or gate controls SDD Archive or delivery; ordinary repository policy remains authoritative.

@@ -221,17 +221,10 @@ func TestSDDEditAuthorityConsentGrantLoop(t *testing.T) {
 	// binary, verbatim.
 	runConsentInvocation(t, environment, planning, grantInvocation)
 
-	// Post-grant status: the grant clears edit authority and projects its roots,
-	// but must block before any apply actor can acquire against a foreign Git
-	// common directory. A grant authorizes edits; it does not supply candidate
-	// accounting for an independent repository.
+	// Explicit permission clears the edit-root block without attempt topology governance.
 	granted, grantedPayload := consentStatus(t, environment, planning, change)
-	if granted.ApplyState != "blocked" || granted.NextRecommended != "resolve-blockers" {
-		t.Fatalf("post-grant status did not block runtime actor launch: %s", grantedPayload)
-	}
-	reasons := strings.Join(granted.BlockedReasons, "\n")
-	if strings.Contains(reasons, "edit_authority_missing") || !strings.Contains(reasons, "blocked(cross_common_dir_runtime_target)") {
-		t.Fatalf("post-grant status did not replace edit authority with the topology blocker: %s", grantedPayload)
+	if granted.ApplyState != "ready" || granted.NextRecommended != "apply" || len(granted.BlockedReasons) != 0 {
+		t.Fatalf("authorized edit roots did not permit apply: %s", grantedPayload)
 	}
 	wantRoots := []string{planning, wantA, wantB}
 	if len(granted.ActionContext.AllowedEditRoots) != len(wantRoots) {

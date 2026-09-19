@@ -75,11 +75,13 @@
 # count=20 is the reporter's own reproduction bar (docs/testing guide, Flow 22);
 # the original failure had no data-race report (filesystem race), so the plain
 # high-count run is the reproduction and the race run is the memory-safety net.
-./internal/sddstatus TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal count=20      # the #1850 repro at the reporter's iteration count
-./internal/sddstatus TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal count=3 race  # guide Flow 22 step 3: -race -count=3
-./internal/sddstatus TestRuntimeLedgerCASAllowsOnlyOneConcurrentBudgetReset race      # sibling first-use CAS surface of the same store
-./internal/sddstatus TestRuntimeLedgerLockContentionPreservesTheNonMutationProof race # 21d93207: loser of the lock reports typed contention, proves non-mutation
-./internal/sddstatus TestRuntimeLedgerMutationContentionIsNotDoubleWrapped race       # the reclassification boundary must not widen
+# #4612 retires attempt/reset operations, not the shared grant store's safety.
+# Exercise the same fresh-store contention through the surviving grant API.
+./internal/sddstatus TestEditGrantCASAndLockPermitOnlyOneConcurrentWriter count=20
+./internal/sddstatus TestEditGrantCASAndLockPermitOnlyOneConcurrentWriter count=3 race
+./internal/sddstatus TestEditGrantRejectsStaleCASWithoutPublishing race
+./internal/sddstatus TestEditGrantLockContentionPreservesTheNonMutationProof race
+./internal/sddstatus TestEditGrantMutationContentionIsNotDoubleWrapped race
 
 # --- #1872: RAR plan-authority lock convoy (fixed by 6457a4a8) ----------------
 # Reproduced ONLY on Darwin: the critical section costs hundreds of ms there

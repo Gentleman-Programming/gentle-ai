@@ -1097,7 +1097,7 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 				"Read the configured models from `opencode.json`",
 				"Always collect this preflight with the `question` tool",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
-				"### Research and Pre-Proposal Gate (MANDATORY)",
+				"### Optional Research and Product Discovery",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",
 				"otherwise emit the complete choice through the plain chat or terminal fallback and STOP",
 			} {
@@ -1375,8 +1375,8 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"confirmed pre-proposal handoff",
+		"### Optional Research and Product Discovery",
+		"unresolved product decision",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
 		"fully mandatory",
 		"Bounded read rule",
@@ -1871,8 +1871,8 @@ Map answers to canonical values: A1/Interactive -> interactive.
 		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"confirmed pre-proposal handoff",
+		"### Optional Research and Product Discovery",
+		"unresolved product decision",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated partial prompt content %q", wanted)
@@ -1966,8 +1966,8 @@ Hard gate rules:
 		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"confirmed pre-proposal handoff",
+		"### Optional Research and Product Discovery",
+		"unresolved product decision",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing refreshed preserved prompt content %q", wanted)

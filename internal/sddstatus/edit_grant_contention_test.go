@@ -10,14 +10,14 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// TestRuntimeLedgerLockContentionPreservesTheNonMutationProof pins the 1861
-// boundary for the SDD runtime ledger. Both callers of acquireLock refuse
+// TestEditGrantLockContentionPreservesTheNonMutationProof pins the 1861
+// boundary for the surviving edit-grant store. Grant acquires its lock
 // strictly before commitRecordLocked, so a refusal at acquisition wrote
 // nothing. The mapped sentinel must therefore keep the underlying contention
 // error in its chain instead of flattening it into prose: without that proof a
 // caller can only report an unknown mutation outcome, which tells it retry is
 // unsafe for an operation that provably never started.
-func TestRuntimeLedgerLockContentionPreservesTheNonMutationProof(t *testing.T) {
+func TestEditGrantLockContentionPreservesTheNonMutationProof(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	store, err := OpenRuntimeStore(context.Background(), repo, "contention-change")
 	if err != nil {
@@ -46,18 +46,14 @@ func TestRuntimeLedgerLockContentionPreservesTheNonMutationProof(t *testing.T) {
 	}
 }
 
-// TestRuntimeLedgerMutationContentionIsNotDoubleWrapped keeps the mapped
+// TestEditGrantMutationContentionIsNotDoubleWrapped keeps the mapped
 // refusal readable. mutate carried a second re-wrap of the already-mapped
 // error. It was unreachable only because the first mapping flattened
 // ErrConcurrentUpdate out of the chain; the moment that chain is preserved the
 // re-wrap fires and duplicates the sentinel prefix, so it is removed with the
 // flattening rather than after it.
-func TestRuntimeLedgerMutationContentionIsNotDoubleWrapped(t *testing.T) {
-	repo := initRuntimeLedgerRepo(t)
-	store, err := OpenRuntimeStore(context.Background(), repo, "contention-mutate")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestEditGrantMutationContentionIsNotDoubleWrapped(t *testing.T) {
+	store, request := grantTestStore(t)
 	if err := store.ensureDirectories(); err != nil {
 		t.Fatal(err)
 	}
@@ -67,13 +63,13 @@ func TestRuntimeLedgerMutationContentionIsNotDoubleWrapped(t *testing.T) {
 	}
 	defer func() { _ = held.Release() }()
 
-	_, mutateErr := store.mutate(context.Background(), "", "contention-request", "contention-digest",
-		func(runtimeReplay) (runtimeRecord, error) {
-			t.Fatal("contended mutate reached its record builder")
-			return runtimeRecord{}, nil
-		})
+	_, mutateErr := store.Grant(context.Background(), request)
 	if !errors.Is(mutateErr, ErrRuntimeConcurrentUpdate) || !errors.Is(mutateErr, reviewtransaction.ErrStoreLockContended) {
 		t.Fatalf("contended runtime ledger mutation = %v, want a mapped contention refusal with its proof intact", mutateErr)
+	}
+	status, err := store.Status()
+	if err != nil || status.Revision != "" || len(status.GrantedRoots) != 0 || countRuntimeRecords(t, store.Dir) != 0 {
+		t.Fatalf("contended grant published authority: %#v, err=%v", status, err)
 	}
 	prefix := ErrRuntimeConcurrentUpdate.Error()
 	if strings.Count(mutateErr.Error(), prefix) != 1 {

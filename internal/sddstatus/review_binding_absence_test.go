@@ -1,15 +1,20 @@
 package sddstatus
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"testing"
 )
 
 func TestReviewBindingCodecDeclarationsRemoved(t *testing.T) {
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, "review_binding.go", nil, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
 	if err != nil {
 		t.Fatalf("parse review_binding.go: %v", err)
 	}
@@ -37,15 +42,11 @@ func TestReviewBindingCodecDeclarationsRemoved(t *testing.T) {
 		"ReviewBinding", "parseBinding", "bindingBytes", "bindingDigest", "bindingHash", "bindingPath", "reviewBindingViolation",
 		"reviewBindingSchema", "reviewBindingChange", "reviewBindingLineage", "reviewBindingHash",
 		"validReviewBindingChange", "validReviewBindingLineage",
+		"resolveBindingChangeRoot", "bindingChangeRoots", "canonicalBindingPath", "pathWithinBindingRoot",
 	} {
 		if declared[name] {
 			t.Errorf("review_binding.go still declares removed provider codec symbol %q", name)
 		}
 	}
 
-	for _, name := range []string{"resolveBindingChangeRoot", "bindingChangeRoots", "canonicalBindingPath", "pathWithinBindingRoot"} {
-		if !declared[name] {
-			t.Errorf("review_binding.go no longer declares retained authority-free path helper %q", name)
-		}
-	}
 }

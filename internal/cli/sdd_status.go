@@ -9,7 +9,6 @@ import (
 )
 
 // RunSDDStatus is the CLI entry point for `gentle-ai sdd-status [change]`.
-// In INC-18, SDD status is fully decoupled from RDD kill switches.
 func RunSDDStatus(args []string, stdout io.Writer) error {
 	parsed, err := sddstatus.ParseCommandArgs(args)
 	if err != nil {

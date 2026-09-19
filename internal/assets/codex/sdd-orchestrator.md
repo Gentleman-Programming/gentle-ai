@@ -333,10 +333,6 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 
 The gatekeeper runs in addition to the Review Workload Guard and the Mandatory Delegation Triggers; it never relaxes them and never auto-marks anything reviewed in engram.
 
-### Native Runtime Attempt Authority (MANDATORY)
-
-{{GENTLE_AI_SDD_SECTION:Native Runtime Attempt Authority (MANDATORY)}}
-
 ### Artifact Store Mode
 
 When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, also ask which artifact store they want:

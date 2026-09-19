@@ -4,7 +4,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -16,34 +15,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
-
-func TestRunSDDAttemptSettleIgnoresUnsafeRDDModeAuthority(t *testing.T) {
-	reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	const change = "unsafe-rar-mode"
-	disableReviewForClone(t, repo)
-	started, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "unsafe-mode-acquire", 2))
-	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
-	if err != nil {
-		t.Fatal(err)
-	}
-	privateRARDir := filepath.Join(repo, ".git", "gentle-ai", "review-mode", "rar-authority", "v1")
-	if err := os.Chmod(privateRARDir, 0o755); err != nil {
-		t.Fatalf("make private RAR directory unsafe: %v", err)
-	}
-	defer os.Chmod(privateRARDir, 0o700)
-	rarBefore := snapshotRuntimeAuthorityFiles(t, privateRARDir)
-	completed, _ := runCompactSDDAttempt(t, compactSettleArgs(repo, change, started.Token, "unsafe-mode-settle", "passed"))
-	if completed.State != "complete" {
-		t.Fatalf("unsafe RDD metadata changed SDD settlement = %#v", completed)
-	}
-	if rarAfter := snapshotRuntimeAuthorityFiles(t, privateRARDir); !reflect.DeepEqual(rarBefore, rarAfter) {
-		t.Fatalf("SDD settlement touched unsafe RDD authority\nbefore=%v\nafter=%v", rarBefore, rarAfter)
-	}
-	if status, err := store.Status(); err != nil || !status.Complete {
-		t.Fatalf("settled runtime status = %#v err=%v", status, err)
-	}
-}
 
 func TestUnsafeDisabledRARModeKeepsStatusReadOnlyAndValidationRefused(t *testing.T) {
 	for _, command := range []struct {
@@ -70,7 +41,7 @@ func TestUnsafeDisabledRARModeKeepsStatusReadOnlyAndValidationRefused(t *testing
 			wantRepair := (&reviewModeUnsafePathError{Path: privateRARDir, Directory: true}).repairCommand()
 			if command.name == "sdd-status" {
 				var status sddstatus.Status
-				if err != nil || json.Unmarshal(output.Bytes(), &status) != nil || status.SchemaName != sddstatus.SchemaName || status.SchemaVersion != 2 || status.ReviewOffer != nil || strings.Contains(output.String(), wantRepair) {
+				if err != nil || json.Unmarshal(output.Bytes(), &status) != nil || status.SchemaName != sddstatus.SchemaName || status.SchemaVersion != 2 || strings.Contains(output.String(), wantRepair) {
 					t.Fatalf("read-only status fabricated review authority or repair: %v %s", err, output.String())
 				}
 			} else if err == nil || !strings.Contains(err.Error(), wantRepair) || output.Len() != 0 {

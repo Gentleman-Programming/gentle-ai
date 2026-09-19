@@ -517,6 +517,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// falling back to a lossless blocking prompt when all three groups are
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
+	// same shared session preflight body, so the hash moved. Deliberate, not drift.
 	// INC-10: Language Domain Contract updated for Axiom Spanish SDD artifacts. Deliberate, not drift.
 	// INC-11: Orchestrator agent renamed to axiom-orchestrator. Deliberate, not drift.
 	// The baseline is rederived for two deliberate causes, both audited against
@@ -529,8 +530,17 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	//      as a fallback.
 	//   2. INC-19 adds the "Flujo Dual: ODD y SDD" section to
 	//      internal/assets/opencode/persona-axiom.md, which Kilocode embeds.
-	// No other content moved. Deliberate, not drift.
-	const want = "03fe74e1aaf2d2e445f816e304b89e189a03fe23e4a00e95d36f19ed5ed23f86"
+	// INC-20 F4 rederives this baseline again, absorbing upstream's own reasons
+	// for the same shared session preflight body moving, on top of Axiom's own
+	// branding (which upstream's hash below does not carry):
+	// #4612 excludes SDD from the shared RDD gate and removes its command offer.
+	// Kilocode inherits those OpenCode prompt changes, not native RDD capability.
+	// #4612 also removes the shared mandatory SDD attempt protocol.
+	// Root3 makes verification optional in the shared dispatcher/dependency graph.
+	// Root4b replaces shared research admission prose; Kilocode permissions stay unchanged.
+	// Root4c scopes research above the generic gate; Kilocode inherits only that shared prose.
+	// No other content moved beyond the above. Deliberate, not drift.
+	const want = "770f9320edcac11c31cfd23a9a77f2dc985413238cf35ae291c40f2c9918d136"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
