@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
@@ -272,7 +273,14 @@ func TestWindowsCompatibilityTransactionRefusesRootParentAndNestedJunctions(t *t
 			if content, readErr := os.ReadFile(pluginPath); readErr != nil || string(content) != "stale" {
 				t.Fatalf("plugin refresh ran after compatibility refusal: content=%q error=%v", content, readErr)
 			}
-			if _, statErr := os.Stat(filepath.Join(home, ".gentle-ai", "backups")); !os.IsNotExist(statErr) {
+			// Amendment (2026-09-19, tasks.md Fase 2, 2.11/2.12): reapointed
+			// from the legacy root to the canonical one. A negative-control
+			// probe — seeding backup.BackupRootFor(home) here while this
+			// assertion still pointed at the legacy root — proved the prior
+			// form could never fail: it watched a directory no writer
+			// creates anymore [D-12]. Reapointing restored the assertion's
+			// ability to fail for the reason it was written for.
+			if _, statErr := os.Stat(backup.BackupRootFor(home)); !os.IsNotExist(statErr) {
 				t.Fatalf("backup started after compatibility refusal: %v", statErr)
 			}
 		})

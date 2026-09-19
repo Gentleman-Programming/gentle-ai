@@ -128,7 +128,13 @@ func TestRunSyncDryRunMatchesZeroAgentCompatibilityRefresh(t *testing.T) {
 	if err != nil || dryRun.NoOp || !slices.ContainsFunc(dryRun.Plan.Apply, func(step pipeline.Step) bool { return step.ID() == "sync:compatibility-skills-refresh" }) {
 		t.Fatalf("compatibility refresh plan missing without agents: no-op=%t, err=%v", dryRun.NoOp, err)
 	}
-	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	// Amendment (2026-09-19, tasks.md Fase 2, 2.9/2.10): reapointed from the
+	// legacy root to the canonical one. A negative-control probe — seeding
+	// backup.BackupRootFor(home) here while this assertion still pointed at
+	// the legacy root — proved the prior form could never fail: it watched a
+	// directory no writer creates anymore [D-12]. Reapointing restored the
+	// assertion's ability to fail for the reason it was written for.
+	backupRoot := backup.BackupRootFor(home)
 	if _, statErr := os.Stat(backupRoot); !os.IsNotExist(statErr) {
 		t.Fatalf("agentless compatibility dry-run created backup root %q: %v", backupRoot, statErr)
 	}

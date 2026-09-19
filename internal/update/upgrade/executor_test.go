@@ -889,8 +889,11 @@ func TestExecute_UpgradeBackupManifestHasUpgradeMetadata(t *testing.T) {
 		t.Fatalf("BackupID is empty — backup must be created")
 	}
 
-	// Find the backup manifest on disk and verify its metadata.
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	// Find the backup manifest on disk and verify its metadata. Execute's
+	// snapshot writer resolves the canonical root via backup.BackupRootFor
+	// (REQ-20.13/REQ-20.14); this must track that accessor rather than
+	// re-type its literal, or it silently stops seeing what Execute wrote.
+	backupRoot := backup.BackupRootFor(homeDir)
 	entries, err := os.ReadDir(backupRoot)
 	if err != nil {
 		t.Fatalf("ReadDir backups: %v", err)

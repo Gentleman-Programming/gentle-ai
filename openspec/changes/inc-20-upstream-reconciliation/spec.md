@@ -323,6 +323,25 @@ El sistema DEBE mantener una prueba automatizada que analice los ficheros de pro
 - **CUANDO** se ejecuta `go test ./...`
 - **ENTONCES** la guarda pasa sin señalar ningún literal
 
+**Enmienda (Fase 1 de F0.a, 2026-09-19): la guarda no puede limitarse a `filepath.Join`.** La redacción original nombraba ese patrón, y la implementación de la Fase 1 lo siguió al pie de la letra. Al ejecutarla en rojo destapó ocho sitios en seis ficheros —y **uno más que no vio**:
+
+```go
+// internal/cli/restore.go:225
+return homeDir + "/.gentle-ai/backups"
+```
+
+`backupRootDir` construye la raíz heredada por **concatenación de cadenas**, con separador codificado a mano. Ninguna auditoría basada en `filepath.Join` la detecta, ni la guarda ni la tabla de ficheros del diseño. Y solo lee la raíz heredada: en cuanto los escritores migren, `axiom restore --list` y `RunRestore` dejarán de ver los respaldos nuevos. Es una regresión funcional silenciosa, no una omisión cosmética.
+
+Por tanto, la obligación de este requerimiento se amplía: la guarda DEBE detectar **cualquier** forma sintáctica de construir una raíz de estado de usuario fuera del paquete que la posee —`filepath.Join`, concatenación con `+`, `fmt.Sprintf`, literal completo— y no solo la invocación de `filepath.Join`. El primer escenario se lee en adelante con esa extensión.
+
+`internal/cli` ya figura entre los paquetes vigilados, así que el alcance de la guarda no cambia: cambia lo que sabe reconocer dentro de él.
+
+#### Scenario: La guarda detecta la concatenación de cadenas
+
+- **DADO** un fichero de producción vigilado que construye la raíz como `homeDir + "/.gentle-ai/backups"` en lugar de invocar la función canónica
+- **CUANDO** se ejecuta `go test ./...`
+- **ENTONCES** la guarda falla y nombra ese fichero y esa línea, igual que haría con un `filepath.Join`
+
 ---
 
 ## 3. Capacidad: `axiom-binary-ci-coverage`

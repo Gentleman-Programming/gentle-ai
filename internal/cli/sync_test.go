@@ -1864,7 +1864,7 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 			}
 		}
 	}
-	backups, err := os.ReadDir(filepath.Join(home, ".gentle-ai", "backups"))
+	backups, err := os.ReadDir(backup.BackupRootFor(home))
 	if err != nil {
 		t.Fatal(err)
 	}

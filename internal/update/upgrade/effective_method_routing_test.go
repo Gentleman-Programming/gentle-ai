@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
@@ -255,7 +256,7 @@ func TestGentleAIUpgradeWindowsPreservesResolvedAppDataDestination(t *testing.T)
 	if report.BackupID != "" || report.BackupWarning != "" {
 		t.Errorf("manual fallback created a backup result: %#v", report)
 	}
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := backup.LegacyBackupRootFor(homeDir)
 	if _, err := os.Stat(backupRoot); !os.IsNotExist(err) {
 		t.Errorf("manual fallback created or pruned backup tree %s: %v", backupRoot, err)
 	}
@@ -400,7 +401,7 @@ func TestGentleAIUpgradeWindowsRefusesUnresolvedGoProvenance(t *testing.T) {
 			if report.BackupID != "" || report.BackupWarning != "" {
 				t.Errorf("manual fallback created a backup result: %#v", report)
 			}
-			backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+			backupRoot := backup.LegacyBackupRootFor(homeDir)
 			if _, err := os.Stat(backupRoot); !os.IsNotExist(err) {
 				t.Errorf("manual fallback created or pruned backup tree %s: %v", backupRoot, err)
 			}

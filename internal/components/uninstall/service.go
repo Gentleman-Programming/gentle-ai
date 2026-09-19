@@ -175,7 +175,7 @@ func NewService(homeDir, workspaceDir, appVersion string) (*Service, error) {
 		return nil, fmt.Errorf("create adapter registry: %w", err)
 	}
 
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := backup.BackupRootFor(homeDir)
 	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create backup root %q: %w", backupRoot, err)
 	}

@@ -138,7 +138,7 @@ func isTerminal(fd uintptr) bool {
 func runBackup(args []string, stdout io.Writer) {
 	manifests := app.ListBackups()
 	if len(manifests) == 0 {
-		fmt.Fprintln(stdout, "No hay respaldos registrados en ~/.axiom/backups/")
+		fmt.Fprintln(stdout, "No hay respaldos registrados en ~/.axiom/backups/ ni en ~/.gentle-ai/backups/")
 		return
 	}
 	fmt.Fprintf(stdout, "Respaldos registrados (%d):\n", len(manifests))

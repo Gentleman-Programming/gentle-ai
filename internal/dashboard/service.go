@@ -1187,7 +1187,7 @@ func (s *Service) CreateBackup(description string) (*BackupItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("obtener directorio de usuario: %w", err)
 	}
-	backupRoot := filepath.Join(home, ".axiom", "backups")
+	backupRoot := backup.BackupRootFor(home)
 	_ = os.MkdirAll(backupRoot, 0o755)
 
 	snapshotID := time.Now().UTC().Format("20060102150405.000000000")

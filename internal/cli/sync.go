@@ -506,7 +506,7 @@ type syncRuntime struct {
 }
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := backup.BackupRootFor(homeDir)
 	workspaceDir, _ := os.Getwd()
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, selection.Components, selection)
 	if err != nil {

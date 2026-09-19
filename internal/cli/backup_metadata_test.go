@@ -32,7 +32,7 @@ func TestPrepareBackupStep_InstallWritesMetadataToManifest(t *testing.T) {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 
-	snapshotDir := filepath.Join(home, ".gentle-ai", "backups",
+	snapshotDir := filepath.Join(backup.LegacyBackupRootFor(home),
 		time.Now().UTC().Format("20060102150405.000000000"))
 	state := &runtimeState{}
 
@@ -89,7 +89,7 @@ func TestPrepareBackupStep_SyncWritesMetadataToManifest(t *testing.T) {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 
-	snapshotDir := filepath.Join(home, ".gentle-ai", "backups",
+	snapshotDir := filepath.Join(backup.LegacyBackupRootFor(home),
 		time.Now().UTC().Format("20060102150405.000000001"))
 	state := &runtimeState{}
 
@@ -136,7 +136,7 @@ func TestPrepareBackupStep_NoMetadataWhenSourceEmpty(t *testing.T) {
 		t.Fatalf("WriteFile config: %v", err)
 	}
 
-	snapshotDir := filepath.Join(home, ".gentle-ai", "backups",
+	snapshotDir := filepath.Join(backup.LegacyBackupRootFor(home),
 		time.Now().UTC().Format("20060102150405.000000002"))
 	state := &runtimeState{}
 
