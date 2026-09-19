@@ -1,6 +1,6 @@
 # OpenCode compatibility
 
-Gentle AI selects integrations from the detected OpenCode major version. It does
+Axiom selects integrations from the detected OpenCode major version. It does
 not silently migrate an existing installation. Unknown, unsupported or ambiguous
 version evidence refuses incompatible writes rather than assuming V2.
 
