@@ -641,7 +641,19 @@ func reviewLensContextBlock(
 	// this level the block IS the reviewer's prompt, so the instruction and the
 	// result schema are part of what has to fit. It is the effective budget for
 	// the runtime that will hold this block, never the Git ceiling alone.
-	budget := reviewLensContextRuntimeBudget(runtime) - block.Len()
+	//
+	// Three things are therefore charged before the first section is consumed:
+	// the header lines already written (block.Len()), and the terminator line
+	// written after the last section, which is reserved here precisely because
+	// it is written after the accounting. Reserving it is what makes the claim
+	// above true rather than approximate: without it, a block that filled the
+	// budget exactly was delivered one terminator over the runtime cap. That
+	// was never a dead end -- the START admission probe and the materialization
+	// both run through this same function, so they always agreed and nothing
+	// was admitted that later failed -- but the comment promised a bound the
+	// arithmetic did not keep.
+	terminator := reviewLensContextTerminator + "\n"
+	budget := reviewLensContextRuntimeBudget(runtime) - block.Len() - len(terminator)
 	consume := func(header, footer string, body []byte) error {
 		rendered := header + "\n" + string(bytes.TrimSpace(body)) + "\n" + footer + "\n"
 		budget -= len(rendered)
@@ -708,7 +720,8 @@ func reviewLensContextBlock(
 			return nil, err
 		}
 	}
-	block.WriteString(reviewLensContextTerminator + "\n")
+	// Reserved above, so this write can never take the block past the budget.
+	block.WriteString(terminator)
 	return block.Bytes(), nil
 }
 

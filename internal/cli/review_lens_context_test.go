@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -1085,4 +1086,90 @@ func replaceArgValue(args []string, name, value string) []string {
 		replaced[index+1] = value
 	}
 	return replaced
+}
+
+// lensContextBudgetInspector is the smallest inspector that lets
+// reviewLensContextBlock be exercised against an exact byte boundary: the
+// frozen trees are irrelevant to the accounting, only the sizes are.
+type lensContextBudgetInspector struct {
+	frozen reviewtransaction.FrozenCandidateContext
+}
+
+func (inspector lensContextBudgetInspector) FrozenCandidateContext() reviewtransaction.FrozenCandidateContext {
+	return inspector.frozen
+}
+
+func (inspector lensContextBudgetInspector) Inspect(context.Context, string, int, string) ([]byte, error) {
+	return nil, nil
+}
+
+func (inspector lensContextBudgetInspector) Close() error { return nil }
+
+// TestLensContextBlockOnTheCapStaysWithinTheCap pins the accounting claim the
+// function's own comment makes: the budget bounds the WHOLE delivered block.
+// The terminator is written after the last section is consumed, so unless its
+// bytes are reserved up front the largest admitted block overshoots the
+// approved runtime budget by exactly the terminator's length. The overshoot is
+// derived from reviewLensContextTerminator, never spelled as a number.
+func TestLensContextBlockOnTheCapStaysWithinTheCap(t *testing.T) {
+	runtime := string(model.AgentClaudeCode)
+	budget := reviewLensContextRuntimeBudget(runtime)
+	frozen := reviewtransaction.FrozenCandidateContext{
+		BaseTree:      "sha256:base",
+		CandidateTree: "sha256:candidate",
+		ChangedPathManifest: []reviewtransaction.ChangedPathManifestEntry{
+			{Path: "alpha.go"},
+		},
+	}
+	deps := reviewLensContextDeps{
+		inspect: func(_ context.Context, _ reviewLensCandidateInspector, operation string, _ int, _ string) ([]byte, error) {
+			switch operation {
+			case "name-status":
+				return []byte("M\talpha.go\n"), nil
+			case "numstat":
+				return []byte("1\t0\talpha.go\n"), nil
+			default:
+				return nil, fmt.Errorf("unexpected inspection %q", operation)
+			}
+		},
+	}
+	binding := reviewLensContextBinding{
+		Lineage: "lineage", Target: "sha256:target", Lens: "review-reliability", Order: 0,
+		Revision: "sha256:revision", RepositoryContext: "rctx2_handle", SubjectHash: "sha256:subject",
+	}
+	build := func(patchBytes int) ([]byte, error) {
+		patch := []byte("+" + strings.Repeat("a", patchBytes-1))
+		scoped := deps
+		scoped.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, index int, side string) ([]byte, error) {
+			if operation == "patch" {
+				return patch, nil
+			}
+			return deps.inspect(ctx, inspector, operation, index, side)
+		}
+		return reviewLensContextBlock(t.Context(), scoped, lensContextBudgetInspector{frozen: frozen},
+			binding, reviewtransaction.ArtifactSubject{SubjectHash: "sha256:subject"}, frozen, runtime)
+	}
+
+	// The largest patch this block still admits puts the block exactly on the
+	// cap the budget arithmetic believes it enforces.
+	low, high := 1, budget
+	for low < high {
+		probe := (low + high + 1) / 2
+		if _, err := build(probe); err != nil {
+			high = probe - 1
+			continue
+		}
+		low = probe
+	}
+	block, err := build(low)
+	if err != nil {
+		t.Fatalf("the largest admitted candidate was refused at %d patch bytes: %v", low, err)
+	}
+	if !bytes.HasSuffix(block, []byte(reviewLensContextTerminator+"\n")) {
+		t.Fatalf("delivered block does not end with the terminator the budget has to account for")
+	}
+	if len(block) > budget {
+		t.Fatalf("a block landing exactly on the cap was delivered at %d bytes, %d over the %d byte runtime budget: the terminator (%d bytes with its newline) is written after the accounting and is never charged",
+			len(block), len(block)-budget, budget, len(reviewLensContextTerminator)+1)
+	}
 }
