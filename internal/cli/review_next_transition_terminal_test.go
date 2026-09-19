@@ -17,7 +17,7 @@ func derivedRangeTerminalStatus(t *testing.T, repo string) ReviewTargetStatusRes
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), output.Bytes())
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v8.schema.json"), output.Bytes())
 	return status
 }
 

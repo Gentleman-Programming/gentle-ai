@@ -831,8 +831,13 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// and the shipped contract has to name it. Deliberate, not drift; the
 		// ceilings move by the same amount to preserve each row's existing
 		// absolute margin on this fork's own lineage.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_325, maxCharacters: 19_344},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_684, maxCharacters: 37_281},
+		// #4765 relays provider-owned OpenCode lens tasks and ORPT-2 removes
+		// host-side binding assembly from the OpenCode contract; measured
+		// directly (see RED below) rather than composed by hand, and the
+		// ceilings move by the same net delta to preserve each row's existing
+		// absolute margin on this fork's own lineage.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_095, maxCharacters: 19_114},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_454, maxCharacters: 37_051},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

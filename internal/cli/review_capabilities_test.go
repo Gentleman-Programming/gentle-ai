@@ -116,12 +116,9 @@ func TestReviewCapabilitiesV23ArtifactRemainsReadable(t *testing.T) {
 	}
 }
 
-// TestReviewCapabilitiesV25AdvertisementIsCurrent pins issue #4040's
-// capabilities bump (design decision 5): the live v2 advertisement moves from
-// v2.4 to v2.5 to advertise status/v7 (the unconditional top-level
-// eligible_untracked_inventory field), following this repo's own precedent
-// that growing the advertised schema set forces a capabilities minor bump.
-func TestReviewCapabilitiesV25AdvertisementIsCurrent(t *testing.T) {
+// TestReviewCapabilitiesV26AdvertisementIsCurrent pins the additive v2.6
+// surface that advertises provider-owned OpenCode lens tasks through status/v8.
+func TestReviewCapabilitiesV26AdvertisementIsCurrent(t *testing.T) {
 	var output bytes.Buffer
 	if err := RunReview([]string{"capabilities", "--contract", ReviewIntegrationContractV2}, &output); err != nil {
 		t.Fatal(err)
@@ -130,14 +127,14 @@ func TestReviewCapabilitiesV25AdvertisementIsCurrent(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Schema != ReviewIntegrationCapabilitiesSchemaV25 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 5}) ||
+	if got.Schema != ReviewIntegrationCapabilitiesSchemaV26 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 6}) ||
 		!slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV5) || !slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV6) ||
-		!slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV7) ||
+		!slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV7) || !slices.Contains(got.Schemas, ReviewIntegrationStatusSchemaV8) ||
 		!slices.Contains(got.Schemas, "gentle-ai.review-intended-untracked-selection/v1") || !slices.Contains(got.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(got.Schemas, ReviewIntegrationConsentSchemaV3) ||
-		slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV23) || slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV24) {
+		slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV23) || slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV24) || slices.Contains(got.Schemas, ReviewIntegrationCapabilitiesSchemaV25) {
 		t.Fatalf("current v2 capabilities advertisement = %#v", got)
 	}
-	validateReviewCapabilitiesSchema(t, "capabilities-v2.5.schema.json", ReviewIntegrationCapabilitiesSchemaIDV25, output.Bytes())
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.6.schema.json", ReviewIntegrationCapabilitiesSchemaIDV26, output.Bytes())
 }
 
 func TestReviewCapabilitiesV22ArtifactRemainsReadable(t *testing.T) {
@@ -245,7 +242,7 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nativeGit ReviewCapabilitiesResult
-	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV25 {
+	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV26 {
 		t.Fatalf("native Git capabilities = %#v, %v", nativeGit, err)
 	}
 	entries, readErr := os.ReadDir(outside)

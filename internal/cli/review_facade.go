@@ -1427,7 +1427,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// allowlisted downstream. The registered Tier C statements remain
 			// in review_narration.go as the human-surface vocabulary source.
 		}
-		// v7 is emitted unconditionally for contract v2 (design decision 4):
+		// The current status schema is emitted unconditionally for contract v2:
 		// newReviewTargetStatusResultForContract already resolved
 		// result.Schema from the ReviewIntegrationStatusSchema alias, so no
 		// per-request bump is needed here anymore.

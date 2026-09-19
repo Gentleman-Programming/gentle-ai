@@ -1335,7 +1335,7 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 	if status.Escalation == nil || status.Escalation.Cause != "targeted_validator_rejected" || !reflect.DeepEqual(status.Escalation.FindingIDs, terminal.Escalation.FindingIDs) {
 		t.Fatalf("STATUS escalation = %#v, want matching closure escalation %#v", status.Escalation, terminal.Escalation)
 	}
-	statusSchema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
+	statusSchema := compileWholeNativeStatusSchema(t, "status-v8.schema.json")
 	validatePublishedReviewSchema(t, statusSchema, statusOutput.Bytes())
 	statusDocument := decodeJSONObjectCopy(t, statusOutput.Bytes())
 	delete(statusDocument, "escalation")

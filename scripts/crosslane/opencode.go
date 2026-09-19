@@ -32,16 +32,15 @@ type harnessResult struct {
 }
 
 type harnessCase struct {
-	Name         string   `json:"name"`
-	Subagent     string   `json:"subagent"`
-	BindingPairs [][2]any `json:"binding_pairs,omitempty"`
-	Body         string   `json:"body,omitempty"`
-	Prompt       string   `json:"prompt,omitempty"`
-	TaskOutput   string   `json:"task_output"`
-	SkipAfter    bool     `json:"skip_after,omitempty"`
+	Name       string `json:"name"`
+	Directory  string `json:"-"`
+	Subagent   string `json:"subagent"`
+	Prompt     string `json:"prompt"`
+	TaskOutput string `json:"task_output"`
+	SkipAfter  bool   `json:"skip_after,omitempty"`
 }
 
-// runOpenCodeLane drives the real plugin bytes through host-assembled binding
+// runOpenCodeLane drives the real plugin bytes through provider-owned Task
 // frames against the committed-only issue scenario: immutable base tree,
 // committed medium candidate, terminal correction closure, and its exact
 // status_continuation before the bounded correction/validator path continues.
@@ -53,7 +52,7 @@ func (b *battery) runOpenCodeLane() {
 		return
 	}
 
-	// Reviewer collect slot: this is where the host assembles the binding.
+	// Reviewer collect slot: the host relays the provider-owned Task unchanged.
 	statusDoc, stderr, _ := b.status(repo, "opencode")
 	input := collectInput(statusDoc)
 	if input == nil || input["capture_operation"] != "review.capture-result" {
@@ -61,7 +60,12 @@ func (b *battery) runOpenCodeLane() {
 		return
 	}
 	args := argumentValues(input)
-	node, err := b.prepareHookHarness(repo)
+	lensAgent, lensPrompt, ok := providerTask(input)
+	if !ok {
+		b.fail(openCodeLane, "reviewer collect slot", "review.capture-result input omitted its provider-owned task")
+		return
+	}
+	node, err := b.prepareHookHarness()
 	if err != nil {
 		b.fail(openCodeLane, "hook harness setup", err.Error())
 		return
@@ -91,80 +95,27 @@ func (b *battery) runOpenCodeLane() {
 		return
 	}
 
-	// Host-faithful lens frame: the binding values come verbatim from the
-	// collect input arguments, exactly as the orchestration contract tells a
-	// host to assemble them. The provider delivers order as the string "0",
-	// so a faithful host serializes "order":"0".
-	hostPairs := [][2]any{
-		{"lineage", args["lineage"]},
-		{"target", args["target"]},
-		{"lens", args["lens"]},
-		{"order", args["order"]},
-		{"revision", args["expected-revision"]},
-		{"repository_context", args["repository-context"]},
-		{"subject_hash", args["subject-hash"]},
-	}
-	hostCase := harnessCase{
-		Name:         "lens-host-faithful",
-		Subagent:     args["lens"],
-		BindingPairs: hostPairs,
-		Body:         "Review this frozen candidate through the assigned lens.",
-		TaskOutput:   string(reviewerJSON),
-	}
-	hostResult, err := b.runHookCase(node, hostCase)
-	lensCaptured := false
+	result, err := b.runHookCase(node, harnessCase{
+		Name: "lens-provider-owned", Directory: repo, Subagent: lensAgent, Prompt: lensPrompt, TaskOutput: string(reviewerJSON),
+	})
 	var lensClosure map[string]any
 	switch {
 	case err != nil:
-		b.fail(openCodeLane, "lens frame: host-assembled", err.Error())
-	case hostResult.AfterOK:
-		lensClosure = b.record("result-artifact", []byte(hostResult.Output))
-		if !admittedCapture(lensClosure) {
-			b.fail(openCodeLane, "lens frame: host-assembled", "completion did not round-trip an admitted terminal capture")
-			return
-		}
-		lensCaptured = true
-		b.pass(openCodeLane, "lens frame: host-assembled", "host-serialized binding accepted end to end (fix merged)")
-		b.skip(openCodeLane, "lens frame: Go-typed control", "host frame already captured the slot; control unnecessary")
-	case strings.Contains(hostResult.Error, bindingInvalid):
-		b.fail(openCodeLane, "lens frame: host-assembled",
-			"known-red pending fix/opencode-host-binding: Go transport rejects the host-serialized binding (order delivered as collect-argument string): "+firstLine(hostResult.Error))
-	default:
-		b.fail(openCodeLane, "lens frame: host-assembled", "unexpected failure: "+firstLine(hostResult.Error))
+		b.fail(openCodeLane, "lens frame: provider-owned", err.Error())
+		return
+	case !result.AfterOK:
+		b.fail(openCodeLane, "lens frame: provider-owned", firstLine(result.Error))
+		return
+	case !strings.HasPrefix(result.ChildPrompt, "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION "):
+		b.fail(openCodeLane, "lens frame: provider-owned", "child prompt is not the Go-issued materialization")
+		return
 	}
-
-	if !lensCaptured {
-		// Go-typed control: identical binding but with order as a JSON number.
-		// Proves the slot itself is healthy, isolating the failure above to
-		// the host serialization.
-		goPairs := append([][2]any(nil), hostPairs...)
-		goPairs[3] = [2]any{"order", 0}
-		controlResult, err := b.runHookCase(node, harnessCase{
-			Name:         "lens-go-typed",
-			Subagent:     args["lens"],
-			BindingPairs: goPairs,
-			Body:         "Review this frozen candidate through the assigned lens.",
-			TaskOutput:   string(reviewerJSON),
-		})
-		switch {
-		case err != nil:
-			b.fail(openCodeLane, "lens frame: Go-typed control", err.Error())
-			return
-		case !controlResult.AfterOK:
-			b.fail(openCodeLane, "lens frame: Go-typed control", firstLine(controlResult.Error))
-			return
-		case !strings.HasPrefix(controlResult.ChildPrompt, "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION "):
-			b.fail(openCodeLane, "lens frame: Go-typed control", "child prompt is not the Go-issued materialization")
-			return
-		default:
-			lensClosure = b.record("result-artifact", []byte(controlResult.Output))
-			if !admittedCapture(lensClosure) {
-				b.fail(openCodeLane, "lens frame: Go-typed control", "completion did not round-trip a completed result artifact")
-				return
-			}
-			b.pass(openCodeLane, "lens frame: Go-typed control", "session started, child received Go-canonical bytes, completion round-tripped")
-		}
+	lensClosure = b.record("result-artifact", []byte(result.Output))
+	if !admittedCapture(lensClosure) {
+		b.fail(openCodeLane, "lens frame: provider-owned", "completion did not round-trip an admitted terminal capture")
+		return
 	}
+	b.pass(openCodeLane, "lens frame: provider-owned", "exact provider task materialized and captured end to end")
 
 	// Correction flow to reach a live validator role slot.
 	if !b.driveCorrectionToValidation(repo, base, lensClosure) {
@@ -177,9 +128,9 @@ func (b *battery) runOpenCodeLane() {
 		b.fail(openCodeLane, "validator role slot", fmt.Sprintf("no provider role collect input; %s", firstLine(stderr)))
 		return
 	}
-	providerPrompt := getString(input, "provider_task", "prompt")
+	providerAgent, providerPrompt, providerTaskOK := providerTask(input)
 	validationRequest := getMap(statusDoc, "validation_request")
-	if providerPrompt == "" || validationRequest == nil {
+	if !providerTaskOK || validationRequest == nil {
 		b.fail(openCodeLane, "validator role slot", "provider task prompt or validation request missing from status")
 		return
 	}
@@ -209,7 +160,8 @@ func (b *battery) runOpenCodeLane() {
 	// stays open for the frames below.
 	probe, err := b.runHookCase(node, harnessCase{
 		Name:       "validator-inspection-recipe",
-		Subagent:   "review-validator",
+		Directory:  repo,
+		Subagent:   providerAgent,
 		Prompt:     providerPrompt,
 		TaskOutput: "probe: no verdict submitted",
 	})
@@ -248,7 +200,8 @@ func (b *battery) runOpenCodeLane() {
 	}
 	switch refused, err := b.runHookCase(node, harnessCase{
 		Name:       "validator-inconclusive",
-		Subagent:   "review-validator",
+		Directory:  repo,
+		Subagent:   providerAgent,
 		Prompt:     providerPrompt,
 		TaskOutput: string(inconclusiveJSON),
 	}); {
@@ -271,64 +224,23 @@ func (b *battery) runOpenCodeLane() {
 		b.pass(openCodeLane, "validator frame: inconclusive refused", "uninspected-candidate verdict refused and the validation stayed retryable")
 	}
 
-	// Host-serialized role frame: same semantic binding, re-serialized by the
-	// host (sorted keys). The Go transport currently requires the byte-exact
-	// provider-issued prompt.
-	hostRolePrompt, err := reserializeBindingLine(providerPrompt)
+	exact, err := b.runHookCase(node, harnessCase{
+		Name: "validator-provider-owned", Directory: repo, Subagent: providerAgent, Prompt: providerPrompt, TaskOutput: string(validatorJSON),
+	})
 	if err != nil {
-		b.fail(openCodeLane, "validator frame: host-serialized", err.Error())
+		b.fail(openCodeLane, "validator frame: provider-owned", err.Error())
 		return
 	}
-	validatorCaptured := false
-	var validationClosure map[string]any
-	hostRole, err := b.runHookCase(node, harnessCase{
-		Name:       "validator-host-serialized",
-		Subagent:   "review-validator",
-		Prompt:     hostRolePrompt,
-		TaskOutput: string(validatorJSON),
-	})
-	switch {
-	case err != nil:
-		b.fail(openCodeLane, "validator frame: host-serialized", err.Error())
-	case hostRole.AfterOK:
-		validatorCaptured = true
-		validationClosure = b.record("provider-role", []byte(hostRole.Output))
-		if !admittedCapture(validationClosure) {
-			b.fail(openCodeLane, "validator frame: host-serialized", "role completion did not report an admitted validator capture")
-			return
-		}
-		b.pass(openCodeLane, "validator frame: host-serialized", "host-serialized role binding accepted end to end (fix merged)")
-		b.skip(openCodeLane, "validator frame: exact relay control", "host frame already captured the slot; control unnecessary")
-	case strings.Contains(hostRole.Error, bindingInvalid):
-		b.fail(openCodeLane, "validator frame: host-serialized",
-			"known-red pending fix/opencode-host-binding: Go transport requires byte-exact provider prompt; host re-serialization refused: "+firstLine(hostRole.Error))
-	default:
-		b.fail(openCodeLane, "validator frame: host-serialized", "unexpected failure: "+firstLine(hostRole.Error))
+	if !exact.AfterOK {
+		b.fail(openCodeLane, "validator frame: provider-owned", firstLine(exact.Error))
+		return
 	}
-
-	if !validatorCaptured {
-		exact, err := b.runHookCase(node, harnessCase{
-			Name:       "validator-exact-relay",
-			Subagent:   "review-validator",
-			Prompt:     providerPrompt,
-			TaskOutput: string(validatorJSON),
-		})
-		switch {
-		case err != nil:
-			b.fail(openCodeLane, "validator frame: exact relay control", err.Error())
-			return
-		case !exact.AfterOK:
-			b.fail(openCodeLane, "validator frame: exact relay control", firstLine(exact.Error))
-			return
-		default:
-			validationClosure = b.record("provider-role", []byte(exact.Output))
-			if !admittedCapture(validationClosure) {
-				b.fail(openCodeLane, "validator frame: exact relay control", "role completion did not report an admitted validator capture")
-				return
-			}
-			b.pass(openCodeLane, "validator frame: exact relay control", "exact Go-issued role prompt round-tripped and captured")
-		}
+	validationClosure := b.record("provider-role", []byte(exact.Output))
+	if !admittedCapture(validationClosure) {
+		b.fail(openCodeLane, "validator frame: provider-owned", "role completion did not report an admitted validator capture")
+		return
 	}
+	b.pass(openCodeLane, "validator frame: provider-owned", "exact provider task round-tripped and captured")
 
 	if operationState(validationClosure) != "approved" {
 		b.fail(openCodeLane, "correction lifecycle approved", fmt.Sprintf("terminal state = %q, want approved", operationState(validationClosure)))
@@ -357,7 +269,7 @@ func (b *battery) driveCorrectionToValidation(repo, fixedBase string, closure ma
 	}
 	tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"value": "2"})
 	planArgs := append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)
-	plan, stderr, code := b.runJSON("operation", b.workRoot, planArgs...)
+	plan, stderr, code := b.runJSON("operation", repo, planArgs...)
 	if code != 0 || operationState(plan) != "correction_required" {
 		b.fail(openCodeLane, "correction: plan forecast", fmt.Sprintf("exit=%d state=%q %s", code, operationState(plan), firstLine(stderr)))
 		return false
@@ -381,7 +293,7 @@ func (b *battery) driveCorrectionToValidation(repo, fixedBase string, closure ma
 // prepareHookHarness materializes the node harness directory: the REAL plugin
 // bytes, the hook emulator, and a PATH shim so the plugin's spawn("gentle-ai")
 // resolves to the binary under test.
-func (b *battery) prepareHookHarness(repo string) (string, error) {
+func (b *battery) prepareHookHarness() (string, error) {
 	if _, err := exec.LookPath("node"); err != nil {
 		return "", fmt.Errorf("node is unavailable: %w", err)
 	}
@@ -403,7 +315,6 @@ func (b *battery) prepareHookHarness(repo string) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "bin", "gentle-ai"), []byte(shim), 0o755); err != nil {
 		return "", err
 	}
-	_ = repo
 	return dir, nil
 }
 
@@ -477,6 +388,9 @@ func (b *battery) checkValidatorInspectionRecipe(repo, childPrompt string) {
 }
 
 func (b *battery) runHookCase(harnessDir string, c harnessCase) (harnessResult, error) {
+	if c.Directory == "" {
+		return harnessResult{}, fmt.Errorf("hook harness case %q has no provider-bound working directory", c.Name)
+	}
 	configPath := filepath.Join(harnessDir, c.Name+".case.json")
 	payload, err := json.Marshal(c)
 	if err != nil {
@@ -485,8 +399,8 @@ func (b *battery) runHookCase(harnessDir string, c harnessCase) (harnessResult, 
 	if err := os.WriteFile(configPath, payload, 0o644); err != nil {
 		return harnessResult{}, err
 	}
-	command := exec.Command("node", "harness.mts", configPath)
-	command.Dir = harnessDir
+	command := exec.Command("node", filepath.Join(harnessDir, "harness.mts"), configPath)
+	command.Dir = c.Directory
 	// The harness spawns gentle-ai itself, so it has to inherit the battery's
 	// sandbox HOME too. Without it the transport child resolves the operator's
 	// own review mode instead of the battery's, and on any machine that never
@@ -527,30 +441,15 @@ func grantedInvocation(consent map[string]any) string {
 	return ""
 }
 
-// reserializeBindingLine re-serializes the role binding line of a Go-issued
-// provider task prompt with the host's own JSON encoding (sorted keys),
-// preserving the binding semantics byte-for-byte at the field level.
-func reserializeBindingLine(prompt string) (string, error) {
-	line, rest, hasRest := strings.Cut(prompt, "\n")
-	const header = "GENTLE_AI_REVIEW_PROVIDER_TASK "
-	encoded, found := strings.CutPrefix(line, header)
-	if !found {
-		return "", fmt.Errorf("provider task prompt has no role binding header")
+// providerTask returns the exact opaque Task fields Go published on one
+// collect input. The cross-lane host must not infer either field from arguments
+// or artifact metadata.
+func providerTask(input map[string]any) (agent, prompt string, ok bool) {
+	task := getMap(input, "provider_task")
+	if task == nil {
+		return "", "", false
 	}
-	var binding map[string]any
-	if err := json.Unmarshal([]byte(encoded), &binding); err != nil {
-		return "", fmt.Errorf("decode role binding: %w", err)
-	}
-	reserialized, err := json.Marshal(binding) // Go maps marshal with sorted keys
-	if err != nil {
-		return "", err
-	}
-	if string(reserialized) == encoded {
-		return "", fmt.Errorf("re-serialized role binding is byte-identical; perturbation void")
-	}
-	out := header + string(reserialized)
-	if hasRest {
-		out += "\n" + rest
-	}
-	return out, nil
+	agent, _ = task["agent"].(string)
+	prompt, _ = task["prompt"].(string)
+	return agent, prompt, agent != "" && prompt != ""
 }

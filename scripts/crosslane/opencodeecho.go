@@ -44,7 +44,7 @@ func (b *battery) runOpenCodeHostEchoScenario(node string) {
 		return
 	}
 
-	args, ok := b.openCodeMediumLensSlot(repo)
+	args, agent, prompt, ok := b.openCodeMediumLensSlot(repo)
 	if !ok {
 		return
 	}
@@ -59,21 +59,13 @@ func (b *battery) runOpenCodeHostEchoScenario(node string) {
 		return
 	}
 
-	// Phase one: the contract-shaped host frame. The Task never executes, so
+	// Phase one: the provider-owned host frame. The Task never executes, so
 	// the relay is disposed and the slot stays open, exactly as in the field.
 	issue, err := b.runHookCase(node, harnessCase{
-		Name:     "echo-issue",
-		Subagent: args["lens"],
-		BindingPairs: [][2]any{
-			{"lineage", args["lineage"]},
-			{"target", args["target"]},
-			{"lens", args["lens"]},
-			{"order", args["order"]},
-			{"revision", args["expected-revision"]},
-			{"repository_context", args["repository-context"]},
-			{"subject_hash", args["subject-hash"]},
-		},
-		Body:       "Review this frozen candidate through the assigned lens.",
+		Name:       "echo-issue",
+		Directory:  repo,
+		Subagent:   agent,
+		Prompt:     prompt,
 		TaskOutput: string(reviewerJSON),
 		SkipAfter:  true,
 	})
@@ -94,7 +86,7 @@ func (b *battery) runOpenCodeHostEchoScenario(node string) {
 		return
 	}
 	replay, err := b.runHookCase(node, harnessCase{
-		Name: "echo-replay", Subagent: args["lens"], Prompt: echoed, TaskOutput: string(reviewerJSON),
+		Name: "echo-replay", Directory: repo, Subagent: agent, Prompt: echoed, TaskOutput: string(reviewerJSON),
 	})
 	switch {
 	case err != nil:
@@ -143,13 +135,13 @@ func hostEchoedMaterialization(materialized string) (string, bool) {
 }
 
 // openCodeMediumLensSlot walks consent, start, and status for one scratch
-// repository and returns the reviewer collect arguments.
-func (b *battery) openCodeMediumLensSlot(repo string) (map[string]string, bool) {
+// repository and returns the reviewer collect arguments plus its opaque task.
+func (b *battery) openCodeMediumLensSlot(repo string) (map[string]string, string, string, bool) {
 	statusDoc, stderr, code := b.status(repo, "opencode")
 	target := getString(statusDoc, "target_identity")
 	if target == "" {
 		b.fail(openCodeLane, openCodeEchoStep, fmt.Sprintf("negotiated status exit=%d %s", code, firstLine(stderr)))
-		return nil, false
+		return nil, "", "", false
 	}
 	consent, stderr, _ := b.runJSON("consent", repo,
 		"review", "start", "--contract", reviewContract, "--cwd", repo,
@@ -157,23 +149,28 @@ func (b *battery) openCodeMediumLensSlot(repo string) (map[string]string, bool) 
 	granted := grantedInvocation(consent)
 	if granted == "" {
 		b.fail(openCodeLane, openCodeEchoStep, "no granted choice invocation in envelope; "+firstLine(stderr))
-		return nil, false
+		return nil, "", "", false
 	}
 	startDoc, stderr, code := b.runCommandLine("start", repo, granted)
 	if code != 0 || getString(startDoc, "state") != "reviewing" {
 		b.fail(openCodeLane, openCodeEchoStep, fmt.Sprintf("consent granted start exit=%d state=%q %s",
 			code, getString(startDoc, "state"), firstLine(stderr)))
-		return nil, false
+		return nil, "", "", false
 	}
 	if err := b.rememberStarted(repo, target, startDoc); err != nil {
 		b.fail(openCodeLane, openCodeEchoStep, err.Error())
-		return nil, false
+		return nil, "", "", false
 	}
 	statusDoc, stderr, _ = b.status(repo, "opencode")
 	input := collectInput(statusDoc)
 	if input == nil || input["capture_operation"] != "review.capture-result" {
 		b.fail(openCodeLane, openCodeEchoStep, "no review.capture-result collect input; "+firstLine(stderr))
-		return nil, false
+		return nil, "", "", false
 	}
-	return argumentValues(input), true
+	agent, prompt, ok := providerTask(input)
+	if !ok {
+		b.fail(openCodeLane, openCodeEchoStep, "review.capture-result input omitted its provider-owned task")
+		return nil, "", "", false
+	}
+	return argumentValues(input), agent, prompt, true
 }

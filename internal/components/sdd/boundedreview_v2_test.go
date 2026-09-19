@@ -18,7 +18,7 @@ func TestOpenCodeV2ReviewToolRendering(t *testing.T) {
 	if !strings.HasPrefix(got, "OpenCode V2 review transport is unavailable") {
 		t.Fatal("V2 staging does not disclose unavailable capability")
 	}
-	if strings.Contains(got, "`subagent_type`") || !strings.Contains(got, "`subagent` tool-call") || !strings.Contains(got, "exact lens as `agent`") {
+	if strings.Contains(got, "`subagent_type`") || !strings.Contains(got, "`subagent` tool-call") || !strings.Contains(got, "copy `provider_task.agent` exactly as `agent`") {
 		t.Fatal("V2 renders V1 tool inputs")
 	}
 }
