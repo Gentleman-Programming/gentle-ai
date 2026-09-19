@@ -1,6 +1,7 @@
 # Registro de absorción upstream — Axiom
 
-> **Medido el:** 2026-09-19 · **Ancestro común:** `266574b0` · **Techo congelado:** `v3.4.0` = `82a6de96ca6e1cb4f6bf603fe0c08ef1c2039833`
+> **Medido el:** 2026-09-19 · **Ancestro común:** `266574b0` · **`upstream/main`:** `82a6de96ca6e1cb4f6bf603fe0c08ef1c2039833`
+> **Techo congelado:** etiqueta `v3.4.0` de upstream, que es exactamente el `upstream/main` de arriba (decisión D4: no se re-mide)
 > **Universo:** 91 commits de `266574b0..upstream/main` **sin merges**
 > **Comando:** `git rev-list --count --no-merges 266574b0..upstream/main`
 
