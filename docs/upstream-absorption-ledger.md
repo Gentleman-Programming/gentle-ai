@@ -27,10 +27,10 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 46 |
+| `absorbido` | 59 |
 | `descartado-deliberadamente` | 2 |
 | `revertido` | 0 |
-| **Total** | **48 (= universo declarado en la cabecera: 91)** |
+| **Total** | **61 (= universo declarado en la cabecera: 91)** |
 
 ## F0 — Identidad de distribución, artefacto de release y cobertura del binario real
 
@@ -129,11 +129,27 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |
 |---|---|---|---|---|
+| `6aa37bba` | fix(sdd): report the ledger's remediation revision from status | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito de forma equivalente, no aplicado como parche: el subsistema de remediación que corregía (`runtime_compact.go`) se retira íntegro en `18fa04fb`/`62ce74b7`, así que no queda superficie viva que reportar. |
+| `762cddb8` | fix(sdd): treat a budget-exceeded pass as the chain's unremediated attempt | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito de forma equivalente: `runtime_compact.go` y su test de presupuesto no sobreviven a `18fa04fb`. |
+| `b8f83adc` | fix(sdd): decide the remediation pointer by chain equality before shape | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito de forma equivalente: el test de igualdad de cadena de remediación no existe ni en el fork ni en el árbol final de upstream. |
+| `b55dd6b8` | fix(sdd): derive Claude Code SDD dispatch authority from the session transcript | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: el comportamiento se incorpora a `sdd_preflight_hook.go` e `inject.go` por fusión a tres vías. |
+| `e0774e05` | refactor(sdd)!: remove RDD from the SDD lifecycle | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: `status.go` y `status_v2.go` pierden `ReviewOffer`/`ReviewDisabled`; `review_door.go` y `review_offer.go` retirados íntegros. Retira RDD del ciclo SDD (decisión D7). |
+| `18fa04fb` | refactor(sdd)!: retire attempt governance and preserve edit grants | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: `internal/cli/sdd_attempt.go` pasa de 737 a 85 líneas conservando **exactamente `grant`**, conforme a la tarea 8.3 y al delta firme de REQ-13.3. `acquire` y `settle` dejan de publicarse (decisión D7). |
+| `6377d352` | fix(sdd): remove retired helpers and repair platform checks | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Re-derivado en la misma pasada que `18fa04fb`: limpieza de huérfanos de esa misma retirada. |
+| `62ce74b7` | refactor(sdd)!: make verification optional and archive without attestation | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: `verification.go` (730 líneas) retirado íntegro, `resolveDependencies` simplificado, `sdd_verify_validate.go` retirado. La verificación pasa a opcional y el archivo deja de exigir atestación. |
+| `15cbbde4` | refactor(sdd): retire unused research capability package | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: `internal/agents/researchcapability` retirado íntegro (tarea 8.8), cero consumidores confirmado antes y después. |
+| `ba3ed690` | refactor(sdd)!: replace research admission with optional investigation | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: delta firme de `sdd-research` (tarea 8.7) más el test de investigación opcional. |
+| `f6703634` | fix(sdd): scope optional research above the phase gatekeeper | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Re-derivado en la misma pasada que `ba3ed690`. |
+| `87d7e65d` | fix(sdd): preserve planning detail without arbitrary artifact caps | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: test de detalle de planificación portado. |
+| `67188f78` | fix(sdd): recover from resolved artifacts without duplicate state | `absorbido` | `000b6f03`, `24f24838` (rama `inc-20/pr7-absorcion-upstream`) | Reescrito, no aplicado como parche: test de recuperación de artefactos resueltos portado. |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
+| `bench/**` (33) | Sí | Ruta prohibida D-10. Módulo Go independiente sin `go.work`, fuera de la cobertura de verificación. Consecuencia registrada: `.github/workflows/ci.yml` **conserva** los 11 journeys `tr*` en vez de adoptar la reducción a 1 de upstream, porque `bench/` sigue intacto y seguiría emitiendo el conjunto completo. |
+| `runtime_chain_failed_attempt_budget_test.go`, `runtime_remediation_pointer_equality_test.go`, `status_remediation_chain_revision_test.go` (3) | Sí | Nombres transitorios dentro de la propia secuencia de upstream: no existen ni en el fork ni en `67188f78`. Cero acción necesaria. |
+| Resto de los 259 ficheros en alcance | No | Presentes en el diff: 170 adoptados verbatim (fork sin divergencia previa), 68 fusionados a tres vías (32 conflictos resueltos a mano), 17 materializados nuevos, 1 borrado tras revisar su divergencia (`internal/sddstatus/review_door.go`, sin superficie viva). |
 
 ## F5 — CLI y community-tools RTK
 
