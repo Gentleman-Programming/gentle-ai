@@ -3,9 +3,22 @@ package absorptionledger
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// readRealLedger reads the actual docs/upstream-absorption-ledger.md the
+// repository ships, as opposed to a synthetic fixture.
+func readRealLedger(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "upstream-absorption-ledger.md"))
+	if err != nil {
+		t.Fatalf("no se pudo leer docs/upstream-absorption-ledger.md: %v", err)
+	}
+	return raw
+}
 
 // fixtureRow is the raw, string-typed shape of one ledger row as it would
 // appear in Markdown, deliberately untyped against State so a test case can
@@ -147,5 +160,73 @@ func TestParseLedgerFixtures(t *testing.T) {
 				t.Fatalf("Parse() error = %v, se esperaba que envolviera %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestUpstreamAbsorptionLedgerRealDocumentIsInternallyCoherent parses the
+// real, still-incomplete ledger and confirms rules 2-6 of D-06: every state
+// is recognized, every non-absorbed row carries a reason, the declared
+// per-state counts match the real rows, no phase-section heading repeats or
+// falls outside F0..F7, and no sha repeats. Rule 1 (the ledger covers its
+// declared universe) is deliberately NOT asserted here — it is the one
+// known-incomplete condition this test tolerates, verified on its own by
+// TestUpstreamAbsorptionLedgerCoversDeclaredUniverseAtClose. This test must
+// already pass against the empty skeleton docs/upstream-absorption-ledger.md
+// ships with: 0 declared rows match 0 real rows for every state.
+func TestUpstreamAbsorptionLedgerRealDocumentIsInternallyCoherent(t *testing.T) {
+	raw := readRealLedger(t)
+	ledger, err := Parse(raw)
+	if ledger == nil {
+		t.Fatalf("Parse() devolvió un Ledger nulo")
+	}
+
+	for _, sentinel := range []error{ErrUnknownState, ErrMissingReason, ErrCountMismatch, ErrDuplicateSHA} {
+		if errors.Is(err, sentinel) {
+			t.Fatalf("el registro real viola una regla de coherencia inesperada (%v); error completo: %v", sentinel, err)
+		}
+	}
+	if err != nil && !errors.Is(err, ErrUniverseMismatch) {
+		t.Fatalf("error inesperado más allá de la incompletitud del universo: %v", err)
+	}
+
+	// D-06 regla 5: ninguna cabecera de sección de tanda se repite y todas
+	// pertenecen a F0..F7. Parse no lo afirma con un centinela propio (el
+	// esbozo del diseño no define uno para esta regla); se comprueba aquí
+	// directamente sobre el texto, reutilizando el mismo patrón que Parse.
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		m := phaseHeadingPattern.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		if seen[m[1]] {
+			t.Fatalf("cabecera de sección de tanda repetida: %q", m[1])
+		}
+		seen[m[1]] = true
+	}
+	if len(seen) != 8 {
+		t.Fatalf("se esperaban 8 secciones de tanda (F0..F7), se encontraron %d", len(seen))
+	}
+}
+
+// TestUpstreamAbsorptionLedgerCoversDeclaredUniverseAtClose confirms D-06
+// regla 1: el total de filas reales del registro es exactamente el universo
+// declarado en su cabecera. Es el ÚNICO fallo aceptado en `go test ./...`
+// desde la Fase 5 hasta el cierre de la Fase 16 (regla 3 de "Reglas de
+// Comprobación y Alcance" de tasks.md); la Fase 16 retira el t.Skipf de
+// abajo como su primer paso.
+func TestUpstreamAbsorptionLedgerCoversDeclaredUniverseAtClose(t *testing.T) {
+	t.Skipf("Fase 16 (F7) retira este Skip al cerrar el registro: 0 de 91 filas reales hoy frente al universo declarado en la cabecera de docs/upstream-absorption-ledger.md (medido 2026-09-19, 266574b0..82a6de96 sin merges). Es el único fallo aceptado en `go test ./...` hasta entonces.")
+
+	raw := readRealLedger(t)
+	ledger, err := Parse(raw)
+	if err != nil && !errors.Is(err, ErrUniverseMismatch) {
+		t.Fatalf("error inesperado al parsear el registro real: %v", err)
+	}
+	if ledger == nil {
+		t.Fatalf("Parse() devolvió un Ledger nulo")
+	}
+	if len(ledger.Rows) != ledger.Universe {
+		t.Fatalf("el registro declara un universo de %d commits pero solo tiene %d filas reales", ledger.Universe, len(ledger.Rows))
 	}
 }
