@@ -149,6 +149,20 @@ Aditivo puro: ningún llamador de producción cambia todavía. Deja el árbol ve
 
 Depende de la Fase 1 (usa `BackupRootFor`, `BackupRoots`). Cierra el rojo declarado de la tarea 1.10.
 
+> **Ampliación de alcance (2026-09-19), derivada de la ejecución de la Fase 1.** Esta fase incorpora dos trabajos que su redacción original no contemplaba, ambos por el mismo hallazgo.
+>
+> **2.a — `internal/cli/restore.go:224-226` entra en el alcance.** `backupRootDir` construye la raíz heredada por **concatenación de cadenas** con separador codificado a mano:
+>
+> ```go
+> return homeDir + "/.gentle-ai/backups"
+> ```
+>
+> No aparece en la tabla de ficheros del diseño ni en las tareas 2.1-2.15 porque la auditoría que las produjo buscaba `filepath.Join`. Solo lee la raíz heredada, así que **migrar los escritores sin tocarla haría que `axiom restore --list` y `RunRestore` dejasen de ver los respaldos nuevos**: una regresión funcional silenciosa introducida por esta misma fase. Debe resolver por `backup.BackupRoots(home)`, con test que siembre un respaldo en la raíz canónica y compruebe que `--list` lo encuentra.
+>
+> **2.b — La guarda debe reconocer la concatenación.** REQ-20.14 lleva una enmienda fechada hoy que amplía su obligación a cualquier forma sintáctica —`filepath.Join`, `+`, `fmt.Sprintf`, literal completo—, no solo la invocación de `filepath.Join`. Extender la guarda **antes** de migrar, y comprobar que en rojo nombra ahora nueve sitios y no ocho. Una guarda que no ve la forma que el código realmente usa no previene la recaída: la documenta.
+>
+> **Primer paso RED de esta fase:** quitar el `t.Skipf` que la Fase 1 dejó en `TestUserStateRootsResolveThroughOwningPackage`.
+
 > **Nota heredada del ajuste de la Fase 1 (2026-09-19):** la tarea 1.10 no dejó la guarda en rojo declarado; la dejó **en verde con `t.Skipf`** (ver su anotación de ajuste). El primer paso RED de esta fase, antes de la tarea 2.1, es **quitar ese `t.Skipf`** de `TestUserStateRootsResolveThroughOwningPackage` en `cmd/axiom/canonical_binary_test.go` y ejecutar `go test ./cmd/axiom/... -run TestUserStateRootsResolveThroughOwningPackage -v`, observando el mismo rojo que la Fase 1 capturó (8 sitios en 6 ficheros). Solo entonces empieza la migración de las tareas 2.1 en adelante.
 
 - [ ] 2.1 [GREEN] `internal/cli/sync.go:509`: sustituir `filepath.Join(homeDir, ".gentle-ai", "backups")` por `backup.BackupRootFor(homeDir)`.
