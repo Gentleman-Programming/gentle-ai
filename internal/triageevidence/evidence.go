@@ -38,7 +38,7 @@ func (e Evidence) HasReproductionEvidence() bool {
 func ExtractEvidence(body string) Evidence {
 	sections := splitSections(body)
 	e := Evidence{
-		Version:      ParseReportedVersion(sectionValue(sections, "gentle ai version")),
+		Version:      ParseReportedVersion(firstLine(sectionValue(sections, "gentle ai version"))),
 		OS:           sectionValue(sections, "operating system"),
 		Agent:        sectionValue(sections, "ai agent"),
 		AffectedArea: sectionValue(sections, "affected area"),
@@ -47,6 +47,18 @@ func ExtractEvidence(body string) Evidence {
 	e.HasLogsOrCommands = hasLogsOrCommands(body)
 	e.StatesReproducibility = reproducibilityRe.MatchString(body)
 	return e
+}
+
+// firstLine takes the first non-empty line of a section value: the template's
+// version field is a single-line input, and trailing prose (e.g. a missing
+// later heading in a hand-edited report) must not leak into the parsed version.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // headingRe matches the template's markdown headings: "### Gentle AI Version",
