@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -386,5 +387,97 @@ func TestNegotiatedStartRuntimeBudgetRefusesOverBudgetFrozenPolicy(t *testing.T)
 	}
 	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
 		t.Fatalf("over-budget frozen policy START persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+}
+
+// TestRecoveredOverBudgetLineageStopsTypedAndKeepsItsExit answers the one
+// question this issue's guard cannot answer on its own: `review recover` mints
+// a successor authority from a new snapshot with new lenses, and it runs no
+// budget check (the START guard has exactly one call site,
+// review_facade.go:2193). So recover really can create a REVIEWING authority
+// for a candidate no runtime can carry.
+//
+// That is not the dead-end this issue closes, and the difference is the exit,
+// not the refusal. The #4680 shape is: authority frozen, a lens result already
+// persisted, compactPristineReviewing therefore false, `review invalidate`
+// gone, every capture failing forever. A recovered lineage lands at the next
+// generation with zero admitted role results, so it stays pristine and keeps
+// its non-destructive exit, and STATUS classifies it with the same typed stop
+// rather than reoffering a slot nothing can fill.
+//
+// This is written as execution rather than prose on purpose: the claim "recover
+// is out of scope" is only worth as much as the exit it depends on, and that
+// exit is a behavior, not a comment.
+func TestRecoveredOverBudgetLineageStopsTypedAndKeepsItsExit(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, baseRef, predecessor := escalatedCurrentChangesRecoveryFixture(t, "recover-over-budget")
+
+	// Push the successor scope far past the 200 KiB runtime cap while staying
+	// under the Git ceiling, so the budget is what classifies it.
+	if err := os.WriteFile(filepath.Join(repo, "huge.txt"),
+		[]byte(strings.Repeat("runtime budget evidence line\n", 14_000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "huge.txt")
+	runReviewCLIGit(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "oversized successor scope")
+
+	successorIdentity := reviewRecoverBaseDiffSuccessorIdentity(t, repo, baseRef)
+	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision, successorIdentity,
+		"maintainer", "recover into oversized scope")
+
+	var recovered bytes.Buffer
+	if err := RunReviewRecover([]string{
+		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "recover-over-budget-successor",
+		"--disposition", "escalated", "--reason", "recover into oversized scope", "--actor", "maintainer",
+		"--base-ref", baseRef, "--committed-only", "--maintainer-authorization", authorization,
+	}, &recovered); err != nil {
+		t.Fatalf("recover refused the oversized successor: %v\nIf recover ever grows its own budget refusal, this test documents the behavior that changed.", err)
+	}
+
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "recover-over-budget-successor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateReviewing {
+		t.Fatalf("recovered successor state = %q, want reviewing", record.State.State)
+	}
+	if len(record.State.AdmittedRoleResults) != 0 {
+		t.Fatalf("recovered successor already carries %d admitted role results, so it is not pristine and the exit below is not guaranteed", len(record.State.AdmittedRoleResults))
+	}
+
+	// STATUS must classify it deterministically instead of reoffering a slot
+	// nothing can fill.
+	var status bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", "recover-over-budget-successor", "--next-transition",
+	}, &status); err != nil {
+		t.Fatalf("status on the recovered over-budget lineage failed: %v\n%s", err, status.String())
+	}
+	var parsed struct {
+		NextTransition struct {
+			Kind       string `json:"kind"`
+			ReasonCode string `json:"reason_code"`
+		} `json:"next_transition"`
+	}
+	if err := json.Unmarshal(status.Bytes(), &parsed); err != nil {
+		t.Fatalf("decode status: %v\n%s", err, status.String())
+	}
+	if parsed.NextTransition.Kind != "stop" || parsed.NextTransition.ReasonCode != "lens_context_budget_exceeded" {
+		t.Fatalf("recovered over-budget lineage next transition = %+v, want a typed budget stop", parsed.NextTransition)
+	}
+
+	// The exit. This is what keeps recover out of the dead-end class.
+	var invalidated bytes.Buffer
+	if err := RunReview([]string{
+		"invalidate", "--cwd", repo, "--lineage", "recover-over-budget-successor",
+		"--expected-revision", record.Revision, "--reason", "candidate cannot fit the runtime budget",
+	}, &invalidated); err != nil {
+		t.Fatalf("the recovered over-budget lineage has no non-destructive exit, which makes it the same dead-end this issue closes: %v\n%s", err, invalidated.String())
 	}
 }

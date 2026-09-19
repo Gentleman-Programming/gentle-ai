@@ -346,10 +346,17 @@ func reviewLensContextBudgetProbe(
 // this keeps offering re-runs the same assembly against the same frozen trees
 // and refuses with its own typed, refreshable cause.
 //
-// Since START refuses an unrepresentable candidate before persisting anything,
-// the only lineages this can still classify as exhausted are ones an older
-// build created, so it stays as the upgrade path's defence rather than the
-// primary guard.
+// START refuses an unrepresentable candidate before persisting anything, but
+// it is not the only surface that creates authority: `review recover` mints a
+// successor from a new snapshot with new lenses and runs no budget check of
+// its own (the START guard has exactly one call site, review_facade.go:2193).
+// So this classifies live lineages on the current build, not only ones an
+// older build left behind, and it is a real guard rather than an upgrade-path
+// defence. A recovered over-budget lineage is not the dead-end this issue
+// closes: it lands with no admitted role results, so compactPristineReviewing
+// holds and `review invalidate` remains available.
+// TestRecoveredOverBudgetLineageStopsTypedAndKeepsItsExit proves that by
+// execution.
 func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
 	// An undecided probe is deliberately NOT refused here. A candidate whose
 	// diff exceeds the native Git ceiling reaches this surface as an assembly
