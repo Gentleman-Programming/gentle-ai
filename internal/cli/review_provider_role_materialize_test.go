@@ -789,3 +789,47 @@ func TestRefuterRequestCarriesTheFindingClaimText(t *testing.T) {
 		t.Fatalf("refuter request omits the finding's claim text; the refuter can only return inconclusive:\n%s", prompt.String())
 	}
 }
+
+// START admits a candidate by proving the lens block assembles, and the lens
+// block summarizes generated paths. The refuter and the targeted validator
+// answer only findings a lens issued, and a lens is told that anything it
+// cannot see is not evidence, so no lens finding can ever cite generated
+// content. Materializing that content for them would let START admit a
+// candidate whose refuter evidence no runtime can hold: the unexecutable
+// lineage #3367 closed and #4680 reopened by a different door.
+func TestReviewProviderMaterializeEvidenceSummarizesGeneratedPaths(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeGeneratedSummaryCandidateFixture(t, repo)
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := reviewProviderMaterializeEvidence(context.Background(), repo, "claude-code", snapshot)
+	if err != nil {
+		t.Fatalf("materialize evidence: %v", err)
+	}
+	byPath := make(map[string]string, len(evidence))
+	for _, item := range evidence {
+		byPath[item.Path] = item.Content
+	}
+	for _, generated := range []string{"go.sum", "web/package-lock.json", "internal/render/testdata/golden/rendered.golden"} {
+		content, ok := byPath[generated]
+		if !ok {
+			t.Fatalf("generated path %q is missing from refuter evidence", generated)
+		}
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(content), &summary); err != nil {
+			t.Fatalf("generated path %q carries content hunks instead of a metadata summary: %v\n%s", generated, err, content)
+		}
+		if summary["generated"] != true || summary["content_omitted"] != true {
+			t.Fatalf("generated path %q summary is not marked generated and omitted: %s", generated, content)
+		}
+	}
+	authored, ok := byPath["internal/auth/token.go"]
+	if !ok || !strings.Contains(authored, "+func Token() string") {
+		t.Fatalf("authored path lost its complete patch: %q", authored)
+	}
+}

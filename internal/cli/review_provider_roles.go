@@ -318,12 +318,20 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 	return providerRequest, nil
 }
 
-// reviewProviderMaterializeEvidence materializes the complete frozen
-// tree-to-tree patch per changed path for one provider role request. The
-// aggregate budget is the effective runtime-context budget for the runtime
-// START froze this authority to, not the raw Git ceiling: the refuter and
-// validator hold the same complete evidence as a lens, so the same approved
-// runtime cap bounds what they are handed. The 32-entry cap that used to sit
+// reviewProviderMaterializeEvidence materializes the frozen tree-to-tree
+// evidence per changed path for one provider role request, in exactly the
+// representation a lens receives: authored paths carry their complete patch
+// and generated paths carry their immutable metadata summary. The aggregate
+// budget is the effective runtime-context budget for the runtime START froze
+// this authority to, not the raw Git ceiling: the refuter and validator hold
+// the same evidence as a lens, so the same approved runtime cap bounds what
+// they are handed. That equality is what lets START admit a candidate by
+// proving the lens block alone assembles. Materializing content here that a
+// lens never receives would freeze authority for a candidate whose refuter
+// evidence no runtime can hold, which is the unexecutable lineage #3367
+// closed; a refuter answers only findings a lens issued, and a lens is told
+// that anything it cannot see is not evidence, so no finding it must refute
+// can cite omitted generated content. The 32-entry cap that used to sit
 // above it measured the wrong thing and is gone (issue #3367); the complete
 // serialized role prompt stays separately bounded in reviewProviderRolePrompt
 // by the same runtime input ceiling plus the contract's output limit.
@@ -336,8 +344,28 @@ func reviewProviderMaterializeEvidence(ctx context.Context, repo, runtime string
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
 	budget := reviewLensContextRuntimeBudget(runtime)
+	rawNumstat, err := deps.inspect(ctx, inspector, "numstat", -1, "")
+	if err != nil {
+		return nil, reviewLensContextInspectionFailure(ctx, err)
+	}
+	numstats, err := reviewLensContextParseNumstat(rawNumstat, frozen.ChangedPathManifest)
+	if err != nil {
+		return nil, reviewLensContextInspectionFailure(ctx, err)
+	}
 	evidence := make([]reviewProviderEvidence, 0, len(frozen.ChangedPathManifest))
 	for index, entry := range frozen.ChangedPathManifest {
+		if entry.Generated {
+			summary, err := reviewLensContextGeneratedSummaryFor(index, entry, frozen, numstats)
+			if err != nil {
+				return nil, reviewLensContextInspectionFailure(ctx, err)
+			}
+			budget -= len(entry.Path) + len(summary)
+			if budget < 0 {
+				return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextBudgetAction)
+			}
+			evidence = append(evidence, reviewProviderEvidence{Path: entry.Path, Content: string(summary)})
+			continue
+		}
 		payload, err := deps.inspect(ctx, inspector, "patch", index, "")
 		if err != nil {
 			return nil, reviewLensContextInspectionFailure(ctx, err)
