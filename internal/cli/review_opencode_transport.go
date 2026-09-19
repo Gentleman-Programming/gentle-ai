@@ -669,7 +669,7 @@ func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 		// The frame must still be a complete wrapper: a partial error frame
 		// refuses as truncated or malformed instead of being reported as a
 		// real host outcome.
-		if _, err := openCodeTaskElementBody(body, "task_error"); err != nil {
+		if err := openCodeTaskNonCompletedBody(body, "task_error"); err != nil {
 			return nil, err
 		}
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_error"}
@@ -690,7 +690,7 @@ func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 		// Any other state (for example a Task promoted to the background) never
 		// carries a capturable result through this relay, but its wrapper must
 		// still be complete before the state is reported.
-		if _, err := openCodeTaskElementBody(body, "task_result"); err != nil {
+		if err := openCodeTaskNonCompletedBody(body, "task_result"); err != nil {
 			return nil, err
 		}
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_not_completed"}
@@ -721,6 +721,19 @@ func openCodeTaskState(openingTag []byte) (string, bool) {
 		state, found = string(rest[:end]), true
 	}
 	return state, found
+}
+
+// openCodeTaskNonCompletedBody validates the body of an error or non-completed
+// Task frame. The host renders either one outcome element (task_error for an
+// error state, task_result otherwise) or the bare closing frame, so both
+// complete shapes are admitted; a partial frame keeps its truncated or
+// malformed classification.
+func openCodeTaskNonCompletedBody(body []byte, element string) error {
+	if bytes.Equal(body, []byte("\n</task>")) {
+		return nil
+	}
+	_, err := openCodeTaskElementBody(body, element)
+	return err
 }
 
 // openCodeTaskElementBody extracts the single element body the host rendered

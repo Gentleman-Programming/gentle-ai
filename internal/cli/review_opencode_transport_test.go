@@ -763,6 +763,8 @@ func TestOpenCodeTaskHostOutputPreservesPayloadBytesAndFailsClosed(t *testing.T)
 		{name: "summary with markup", raw: "<task id=\"opaque\" state=\"completed\">\n<summary>host <b>summary</b></summary>\n<task_result>\n" + payload + "\n</task_result>\n</task>", code: "opencode_task_output_malformed"},
 		{name: "empty summary", raw: "<task id=\"opaque\" state=\"completed\">\n<summary></summary>\n<task_result>\n" + payload + "\n</task_result>\n</task>", code: "opencode_task_output_malformed"},
 		{name: "backgrounded task", raw: "<task id=\"opaque\" state=\"running\">\n<summary>Background task started</summary>\n<task_result>\nThe task is working in the background.\n</task_result>\n</task>", code: "opencode_task_not_completed"},
+		{name: "backgrounded task without result element", raw: "<task id=\"opaque\" state=\"running\">\n<summary>Background task started: description</summary>\n</task>", code: "opencode_task_not_completed"},
+		{name: "errored task without error element", raw: "<task id=\"opaque\" state=\"error\">\n<summary>Background task failed: description</summary>\n</task>", code: "opencode_task_error"},
 		{name: "errored task", raw: "<task id=\"opaque\" state=\"error\">\n<summary>Background task failed: description</summary>\n<task_error>\nboom\n</task_error>\n</task>", code: "opencode_task_error"},
 		{name: "duplicate state attribute", raw: "<task id=\"opaque\" state=\"completed\" state=\"running\">\n<task_result>\n" + payload + "\n</task_result>\n</task>", code: "opencode_task_output_malformed"},
 		{name: "partial running frame", raw: "<task id=\"opaque\" state=\"running\">", code: "opencode_task_output_truncated"},
