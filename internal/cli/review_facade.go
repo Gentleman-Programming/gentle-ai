@@ -1567,6 +1567,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	actor := flags.String("actor", "", "recovery actor")
 	projectionFlag := flags.String("projection", "", "successor projection: workspace or staged (default: predecessor projection)")
 	authorization := flags.String("maintainer-authorization", "", "exact LF-only gentle-ai.review-recovery-authorization/v1 binding: predecessor_lineage, predecessor_revision, target_identity, optional native successor_lineage, actor, reason")
+	authorizationFile := flags.String("maintainer-authorization-file", "", "file containing exact LF-only gentle-ai.review-recovery-authorization/v1 binding (- for stdin)")
 	policySource := flags.String("policy", "", "optional review policy file")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
@@ -1590,13 +1591,23 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" || strings.TrimSpace(*successor) == "" || strings.TrimSpace(*disposition) == "" {
 		return errors.New("review recover requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, and --disposition")
 	}
+	if reviewFlagWasProvided(flags, "maintainer-authorization") && reviewFlagWasProvided(flags, "maintainer-authorization-file") {
+		return errors.New("--maintainer-authorization and --maintainer-authorization-file are mutually exclusive") // refusal:by-design operator-knowledge: only one maintainer authorization input source may be supplied
+	}
 	// Self-derived recovery (organic-dx Duty 2): absence of
 	// --maintainer-authorization, not its value, is what triggers
 	// derivation, so an explicitly-supplied wrong binding never reaches
 	// this branch and still refuses downstream exactly as before
 	// self-derivation existed (reviewFlagWasProvided is a flags.Visit
 	// presence check, not an empty-value check).
-	authorizationProvided := reviewFlagWasProvided(flags, "maintainer-authorization")
+	authorizationProvided := reviewFlagWasProvided(flags, "maintainer-authorization") || reviewFlagWasProvided(flags, "maintainer-authorization-file")
+	if reviewFlagWasProvided(flags, "maintainer-authorization-file") {
+		raw, err := readFacadeBytes(*authorizationFile)
+		if err != nil {
+			return fmt.Errorf("read maintainer authorization file: %w", err)
+		}
+		*authorization = strings.TrimRight(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\r\n")
+	}
 	if authorizationProvided && (strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "") {
 		return errors.New("review recover requires --reason and --actor when --maintainer-authorization is supplied")
 	}
@@ -2428,6 +2439,7 @@ func validateReviewTransitionSelectorFlagCounts(args []string, operation string)
 			"actor":                         reviewIntegrationValueFlag,
 			"projection":                    reviewIntegrationValueFlag,
 			"maintainer-authorization":      reviewIntegrationValueFlag,
+			"maintainer-authorization-file": reviewIntegrationValueFlag,
 			"policy":                        reviewIntegrationValueFlag,
 			"focus":                         reviewIntegrationValueFlag,
 			"base-ref":                      reviewIntegrationValueFlag,

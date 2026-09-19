@@ -3,6 +3,7 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -384,6 +385,26 @@ func TestCompactRecoverySuppliedAuthorizationBinds(t *testing.T) {
 				t.Fatalf("compactRecoverySuppliedAuthorizationBinds(%q) = %t, want %t", tt.authorization, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCompactRecoveryAuthorizationInexactErrorFormat(t *testing.T) {
+	err := compactRecoveryAuthorizationError(Snapshot{Projection: ProjectionWorkspace, Identity: "sha256:target123"}, "invalid")
+	if !errors.Is(err, ErrCompactRecoveryAuthorizationInexact) {
+		t.Fatalf("errors.Is(err, ErrCompactRecoveryAuthorizationInexact) = false, want true")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "escalated recovery requires an exact maintainer authorization binding") {
+		t.Errorf("error message missing base prefix: %q", msg)
+	}
+	if !strings.Contains(msg, compactRecoveryAuthorizationSchema) {
+		t.Errorf("error message missing schema: %q", msg)
+	}
+	if !strings.Contains(msg, "key=value") {
+		t.Errorf("error message missing key=value mention: %q", msg)
+	}
+	if !strings.Contains(msg, "projection=workspace") || !strings.Contains(msg, "target_identity=sha256:target123") {
+		t.Errorf("error message missing projection or target identity: %q", msg)
 	}
 }
 
