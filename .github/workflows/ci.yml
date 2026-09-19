@@ -152,9 +152,9 @@ jobs:
 
       # Informative window -- cmd/axiom coverage (INC-20 F0, opened 2026-09-19)
       #
-      # Blocking: init, change, workspace, handoff, role, skill, semantic,
-      # archive, ui, and odd (kept blocking until this increment's Phase 11
-      # retires the verb) in their help or no-argument form -- the exclusive
+      # Blocking: init, project, change, workspace, handoff, role, skill,
+      # semantic, archive, ui, and odd (blocking until this increment's Phase
+      # 11 retires it) in their help or no-argument form -- the exclusive
       # surface axiom-distribution-identity's build-identity contract touches
       # (REQ-20.15). This is additional to, and does not replace, the
       # "Run benchmark evidence" step above: that step already builds and
