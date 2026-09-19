@@ -825,8 +825,14 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// characters per row on top of upstream's baseline; preserved here on top of
 		// the INC-11 marker savings). Preserve the existing absolute ceiling margins
 		// (19 and 1,597 characters) established on this fork's own lineage.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_092, maxCharacters: 19_111},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_451, maxCharacters: 37_048},
+		// #4680 adds the correction_context_budget_exceeded continuation row
+		// (+233 characters per row): the correction stage now has a stop of its
+		// own whose exit is `gentle-ai review abandon`, not a smaller candidate,
+		// and the shipped contract has to name it. Deliberate, not drift; the
+		// ceilings move by the same amount to preserve each row's existing
+		// absolute margin on this fork's own lineage.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_325, maxCharacters: 19_344},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_684, maxCharacters: 37_281},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

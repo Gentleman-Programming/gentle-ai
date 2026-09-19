@@ -200,7 +200,7 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	}
 	request, err := reviewProviderNewRefuterRequest(ctx, binding.root, store.Dir, state, state.CapturePhaseRevision)
 	if err != nil {
-		return reviewPreflightError(err)
+		return reviewProviderCaptureBudgetRefusal(err)
 	}
 	if binding.materialize {
 		// Raw bytes: no JSON envelope, no trailing newline, nothing captured.
@@ -269,7 +269,7 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 	}
 	request, err := reviewProviderNewTargetedValidatorRequest(ctx, binding.root, state, state.CapturePhaseRevision, correction)
 	if err != nil {
-		return reviewPreflightError(err)
+		return reviewCorrectionContextBudgetRefusal(ctx, binding.root, state.LineageID, err)
 	}
 	if request.ValidationRequest.CorrectionTargetIdentity != binding.target {
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("review capture-validation target does not match the frozen correction target identity; refresh the binding with gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition"))

@@ -308,6 +308,20 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 		}
 		return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: reviewApprovedAcknowledgementTransition(status.repositoryRoot, acknowledgement)}
 	}
+	// The correction-stage gate follows the captured_artifacts_unverifiable
+	// precedent below, which already extends past reviewing with
+	// `|| input.ValidationRequest != nil`, and it is deliberately ordered
+	// AHEAD of it. The same deterministic budget refusal also surfaces as an
+	// unreadable validator slot on this path, and reporting it as unverifiable
+	// captured evidence would send the operator to inspect a store that is
+	// perfectly intact. The refusal is about what cannot be assembled, and its
+	// continuation is a release rather than a smaller candidate, so it carries
+	// its own code (#4680).
+	if input.CorrectionContextBudgetExceeded &&
+		(status.Authority.State == reviewtransaction.StateCorrectionRequired ||
+			status.Authority.State == reviewtransaction.StateValidating || input.ValidationRequest != nil) {
+		return reviewStopTransition("correction_context_budget_exceeded")
+	}
 	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
@@ -716,6 +730,7 @@ type reviewNextTransitionInput struct {
 	RDDMode                                        reviewtransaction.RDDModeStatus
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
+	CorrectionContextBudgetExceeded                bool
 	// UnachievableLensAttempts carries every bound host declaration the
 	// active reviewing phase currently holds (issue #3442), so
 	// reviewMissingCaptureTransition can stop re-offering a slot a host
@@ -1281,6 +1296,8 @@ func reviewReasonDescription(reason string) string {
 		return "Committed base-diff has no paths; empty-root bootstrap is required"
 	case "lens_context_budget_exceeded":
 		return "Frozen reviewer context exceeds the native evidence budget"
+	case reviewCorrectionContextBudgetCode:
+		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
 	case "missing_authority_binding":

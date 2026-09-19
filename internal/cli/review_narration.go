@@ -127,6 +127,16 @@ var reviewStopReasonNarration = map[string]string{
 	"empty_base_diff_bootstrap_required": "This selected committed base has no changes to review. " +
 		"If you are following the authorized first-publication bootstrap, a maintainer must first insert an empty root below the content commit. " +
 		"Then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition --base-ref <empty-root> --committed-only`.",
+	// The correction-stage sibling is rendered, not literal:
+	// reviewCorrectionContextBudgetAction fills the concrete release with the
+	// values InspectCompactPristineAbandonment publishes for the real
+	// authority, exactly as the escalation entry above renders its template
+	// with live numbers. The sample below pins the fixed English around those
+	// slots, and it uses the eligible branch because that is the branch that
+	// has to carry a runnable command.
+	reviewCorrectionContextBudgetCode: reviewCorrectionContextBudgetAction(
+		reviewtransaction.CompactAbandonEligibility{Eligible: true, Revision: "<revision>", SnapshotIdentity: "<target>"},
+		"<repo>", "<id>"),
 	"lens_context_budget_exceeded": "This frozen candidate cannot fit complete reviewer evidence without truncation, so this review stops before an inspection result. " +
 		"Reduce the candidate scope or target identity, then run `gentle-ai review start` for that new candidate; or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"managed_assets_outdated": "This installation's reviewer assets no longer match this version of Gentle AI, so this review stops before it starts. " +

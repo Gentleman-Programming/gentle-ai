@@ -1211,6 +1211,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			capturedProviderTargetedValidatorInconclusive := false
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
+			correctionContextBudgetExceeded := false
 			var unachievableLensAttempts []reviewtransaction.CompactUnachievableLensAttempt
 			var artifactErr error
 			if native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
@@ -1256,6 +1257,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							} else {
 								validationRequest = &request
 								result.ValidationRequest = validationRequest
+								// The correction-stage sibling of the lens probe
+								// below (:1287): the validator request STATUS just
+								// built is not what the validator is finally handed
+								// -- that assembly adds the corrected snapshot's
+								// materialized evidence and the unbounded finding
+								// text -- so only assembling it for real answers
+								// whether this offer can be satisfied (#4680).
+								correctionContextBudgetExceeded = reviewCorrectionContextBudgetExhausted(ctx, root, record.State, record.State.CapturePhaseRevision)
 							}
 						}
 						if artifactErr == nil && *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
@@ -1393,14 +1402,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					return fmt.Errorf("select STATUS atomic START lineage: %w", err)
 				}
 			}
-			if lensContextBudgetExceeded {
+			if lensContextBudgetExceeded || correctionContextBudgetExceeded {
 				result.Action = reviewtransaction.TargetStatusActionStop
 				result.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 				if *actionEligibility {
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, UnachievableLensAttempts: unachievableLensAttempts}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, CorrectionContextBudgetExceeded: correctionContextBudgetExceeded, UnachievableLensAttempts: unachievableLensAttempts}
 			var transition ReviewNextTransition
 			transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
 			result.NextTransition = &transition

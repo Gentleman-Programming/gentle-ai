@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -499,5 +500,215 @@ func TestRecoveredOverBudgetLineageStopsTypedAndArrivesWithItsExitIntact(t *test
 		"--expected-revision", record.Revision, "--reason", "candidate cannot fit the runtime budget",
 	}, &invalidated); err != nil {
 		t.Fatalf("the recovered over-budget lineage arrived without a non-destructive exit, which makes it the same dead-end this issue closes: %v\n%s", err, invalidated.String())
+	}
+}
+
+// driveReviewToOpenTargetedValidationWithCorrection is
+// driveReviewToOpenTargetedValidation's parameterized sibling: same drive to
+// an open forecasted correction, but the corrected content is supplied by the
+// caller so one fixture can produce both a correction whose validator request
+// fits the runtime budget and one whose request cannot.
+//
+// The asymmetry is the whole #4680 shape and is deliberate here: START froze a
+// two-line candidate and measured it, and the correction written afterwards is
+// what the targeted validator's evidence is materialized from. Nothing START
+// could have measured predicts it.
+func driveReviewToOpenTargetedValidationWithCorrection(t *testing.T, lineage, correctedAlpha string) (repo string, record reviewtransaction.CompactRecord) {
+	t.Helper()
+	repo = initReviewCLIRepo(t)
+	for name, content := range map[string]string{
+		"alpha.go": "package candidate\n\nfunc Alpha() int { return 1 }\n",
+		"beta.go":  "package candidate\n\nfunc Beta() int { return 2 }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReviewCLIGit(t, repo, "add", "alpha.go", "beta.go")
+
+	var startOut bytes.Buffer
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", lineage, "--projection", "staged",
+	}), &startOut); err != nil {
+		t.Fatalf("start: %v\n%s", err, startOut.String())
+	}
+	started := decodeNegotiatedReviewStart(t, startOut.Bytes())
+	captureStarted := ReviewFacadeStartResult{
+		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity,
+		SelectedLenses: started.SelectedLenses,
+	}
+	for index := range started.SelectedLenses {
+		findings := []facadeFinding{}
+		if index == 0 {
+			findings = []facadeFinding{{
+				Location: "alpha.go:3", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
+				ProofRefs:     []string{"exact changed hunk", "reproduced candidate failure"},
+				EvidenceClass: "deterministic", CausalDisposition: "introduced",
+			}}
+		}
+		captureCLIReviewerResultWithFindings(t, repo, captureStarted, index, findings, &bytes.Buffer{})
+	}
+	captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, 2)
+
+	if err := os.WriteFile(filepath.Join(repo, "alpha.go"), []byte(correctedAlpha), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "alpha.go")
+
+	_, record, err := discoverCompactFacadeReview(context.Background(), repo, started.LineageID, false)
+	if err != nil {
+		t.Fatalf("discover open correction authority: %v", err)
+	}
+	if record.State.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("fixture state = %q, want correction_required", record.State.State)
+	}
+	return repo, record
+}
+
+// The two corrections below are the #4680 asymmetry made concrete. START froze
+// and measured a two-line candidate and admitted it honestly; what the
+// targeted validator is finally handed is materialized from the CORRECTED
+// snapshot instead, which no START-time probe measured. Both corrections
+// change the same single line, so both stay inside the forecasted correction
+// budget -- only their byte volume differs, which is exactly the property the
+// correction-line budget does not bound.
+const reviewCorrectionBudgetInBudgetCorrection = "package candidate\n\nfunc Alpha() int { return 10 }\n"
+
+func reviewCorrectionBudgetOverBudgetCorrection(t *testing.T) string {
+	t.Helper()
+	corrected := "package candidate\n\nfunc Alpha() int { return 10 } // " +
+		strings.Repeat("correction evidence no runtime can be asked to hold ", 6_000) + "\n"
+	if len(corrected) <= reviewRuntimeBudgetTestCapBytes || len(corrected) >= reviewRuntimeBudgetTestCeilingBytes {
+		t.Fatalf("over-budget correction is %d bytes; it must sit over the %d byte runtime cap and under the %d byte Git ceiling", len(corrected), reviewRuntimeBudgetTestCapBytes, reviewRuntimeBudgetTestCeilingBytes)
+	}
+	return corrected
+}
+
+// TestOverBudgetCorrectionStopsTypedInsteadOfReofferingTargetedValidation is
+// the #4680 defect itself, by execution. START admitted a two-line candidate
+// honestly; the correction written afterwards makes the targeted validator
+// request unassemblable. Before this change STATUS kept returning
+// targeted_validation_required forever while `review capture-validation`
+// answered with untyped prose, so the one exit that still works was never
+// named.
+func TestOverBudgetCorrectionStopsTypedInsteadOfReofferingTargetedValidation(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, record := driveReviewToOpenTargetedValidationWithCorrection(t,
+		"correction-budget-over", reviewCorrectionBudgetOverBudgetCorrection(t))
+
+	var status bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", record.State.LineageID, "--next-transition", "--projection", "staged",
+		"--agent", string(model.AgentClaudeCode),
+	}, &status); err != nil {
+		t.Fatalf("status on the over-budget correction failed: %v\n%s", err, status.String())
+	}
+	var parsed struct {
+		NextTransition struct {
+			Kind       string `json:"kind"`
+			ReasonCode string `json:"reason_code"`
+		} `json:"next_transition"`
+	}
+	if err := json.Unmarshal(status.Bytes(), &parsed); err != nil {
+		t.Fatalf("decode status: %v\n%s", err, status.String())
+	}
+	if parsed.NextTransition.Kind != "stop" || parsed.NextTransition.ReasonCode != reviewCorrectionContextBudgetCode {
+		t.Fatalf("over-budget correction next transition = %+v, want a typed correction budget stop instead of a targeted validation offer", parsed.NextTransition)
+	}
+}
+
+// TestOverBudgetCorrectionNamesAbandonAndTheLineageIsActuallyAbandonable
+// proves the continuation this stop names is the one that works. The
+// narration is checked against the real eligibility probe, and then the real
+// `review abandon` is executed with its real maintainer authorization: a
+// named exit that a live authority refuses is the same dead end with better
+// prose.
+func TestOverBudgetCorrectionNamesAbandonAndTheLineageIsActuallyAbandonable(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, record := driveReviewToOpenTargetedValidationWithCorrection(t,
+		"correction-budget-abandon", reviewCorrectionBudgetOverBudgetCorrection(t))
+	lineage := record.State.LineageID
+
+	statement := reviewStopReasonNarration[reviewCorrectionContextBudgetCode]
+	for _, want := range []string{"gentle-ai review abandon", "cannot fit the runtime context budget"} {
+		if !strings.Contains(statement, want) {
+			t.Fatalf("correction budget narration does not name %q: %q", want, statement)
+		}
+	}
+
+	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(context.Background(), repo, lineage)
+	if err != nil || !eligibility.Eligible {
+		t.Fatalf("over-budget correction abandonment eligibility = %#v, %v; the stop names an exit the authority refuses", eligibility, err)
+	}
+	rendered := reviewCorrectionContextBudgetAction(eligibility, repo, lineage)
+	if !strings.Contains(rendered, eligibility.Revision) || !strings.Contains(rendered, lineage) {
+		t.Fatalf("rendered correction budget exit does not carry the concrete values the operator would otherwise look up: %q", rendered)
+	}
+
+	var abandoned bytes.Buffer
+	if err := RunReview([]string{
+		"abandon", "--cwd", repo, "--lineage", lineage,
+		"--expected-revision", eligibility.Revision,
+		"--reason", reviewtransaction.CompactAbandonReasonOperatorDisposition, "--actor", "maintainer@example.com",
+		"--maintainer-authorization", reviewtransaction.RenderCompactAbandonAuthorization(
+			lineage, eligibility.Revision, eligibility.SnapshotIdentity, "maintainer@example.com",
+			reviewtransaction.CompactAbandonReasonOperatorDisposition, eligibility.DiscardedWork),
+	}, &abandoned); err != nil {
+		t.Fatalf("the exit this stop names was refused by the real operation: %v\n%s", err, abandoned.String())
+	}
+}
+
+// TestOverBudgetCorrectionKeepsInvalidateRefusing documents which exit is the
+// real one. `review invalidate` refuses here because lens results are already
+// admitted, so compactPristineReviewing is false. That protection is
+// deliberate and is NOT widened by this change; the point of the new stop is
+// that it stops naming a continuation that cannot work.
+func TestOverBudgetCorrectionKeepsInvalidateRefusing(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, record := driveReviewToOpenTargetedValidationWithCorrection(t,
+		"correction-budget-invalidate", reviewCorrectionBudgetOverBudgetCorrection(t))
+
+	var invalidated bytes.Buffer
+	err := RunReview([]string{
+		"invalidate", "--cwd", repo, "--lineage", record.State.LineageID,
+		"--expected-revision", record.Revision, "--reason", "candidate cannot fit the runtime budget",
+	}, &invalidated)
+	if err == nil {
+		t.Fatalf("invalidate accepted a lineage with admitted lens results; that protection must stay:\n%s", invalidated.String())
+	}
+}
+
+// TestCorrectionWithinBudgetStillOffersTargetedValidation is the positive
+// control: the probe must classify, not refuse. A correction whose validator
+// request assembles keeps its ordinary targeted validation offer.
+func TestCorrectionWithinBudgetStillOffersTargetedValidation(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, record := driveReviewToOpenTargetedValidationWithCorrection(t,
+		"correction-budget-under", reviewCorrectionBudgetInBudgetCorrection)
+
+	var status bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", record.State.LineageID, "--next-transition", "--projection", "staged",
+		"--agent", string(model.AgentClaudeCode),
+	}, &status); err != nil {
+		t.Fatalf("status on the in-budget correction failed: %v\n%s", err, status.String())
+	}
+	var parsed struct {
+		NextTransition struct {
+			Kind       string `json:"kind"`
+			ReasonCode string `json:"reason_code"`
+		} `json:"next_transition"`
+	}
+	if err := json.Unmarshal(status.Bytes(), &parsed); err != nil {
+		t.Fatalf("decode status: %v\n%s", err, status.String())
+	}
+	if parsed.NextTransition.ReasonCode == reviewCorrectionContextBudgetCode {
+		t.Fatalf("the correction budget probe refused a correction that fits: %+v", parsed.NextTransition)
+	}
+	if parsed.NextTransition.Kind != "collect" || parsed.NextTransition.ReasonCode != "targeted_validation_required" {
+		t.Fatalf("in-budget correction next transition = %+v, want targeted_validation_required", parsed.NextTransition)
 	}
 }
