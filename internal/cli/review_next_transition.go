@@ -36,7 +36,7 @@ type ReviewNextTransition struct {
 	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
 	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
-	Continuation      *ReviewManagedAssetsContinuation         `json:"continuation,omitempty"`
+	Continuation      *ReviewStopContinuation                  `json:"continuation,omitempty"`
 	// UnachievableLensSlots is a pointer-to-slice, exactly like
 	// ReviewTransitionExecution.SelectorArguments, so ReviewNextTransition
 	// stays a comparable struct (== / != against a zero value) for the
@@ -322,7 +322,7 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 	if input.CorrectionContextBudgetExceeded &&
 		(status.Authority.State == reviewtransaction.StateCorrectionRequired ||
 			status.Authority.State == reviewtransaction.StateValidating || input.ValidationRequest != nil) {
-		return reviewStopTransition("correction_context_budget_exceeded")
+		return reviewCorrectionContextBudgetStopTransition(status.repositoryRoot, input.RuntimeAgent, input.CorrectionReleaseEligibility)
 	}
 	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
@@ -834,6 +834,12 @@ type reviewNextTransitionInput struct {
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
 	CorrectionContextBudgetExceeded                bool
+	// CorrectionReleaseEligibility is the read-only abandonment prediction
+	// taken beside the correction budget probe, so the stop it produces can
+	// name the release concretely instead of leaving a caller to recover it
+	// from prose. Nil means the prediction was never taken or failed, and the
+	// stop then names nothing rather than a command that may be refused.
+	CorrectionReleaseEligibility *reviewtransaction.CompactAbandonEligibility
 	// UnachievableLensAttempts carries every bound host declaration the
 	// active reviewing phase currently holds (issue #3442), so
 	// reviewMissingCaptureTransition can stop re-offering a slot a host
@@ -1372,6 +1378,20 @@ func reviewStopTransition(reason string) ReviewNextTransition {
 func reviewManagedAssetsStopTransition(agent model.AgentID, staleAssets []string) ReviewNextTransition {
 	transition := reviewStopTransition("managed_assets_outdated")
 	transition.Continuation = managedAssetsContinuation(string(agent), staleAssets)
+	return transition
+}
+
+// reviewCorrectionContextBudgetStopTransition follows the managed-assets
+// precedent above for the one other stop that has a runnable follow-up: the
+// release this refusal requires travels with the stop, because the shipped Pi
+// ledger row points at the stop's continuation and the Pi facade contract may
+// not name the raw `gentle-ai review ` route itself.
+func reviewCorrectionContextBudgetStopTransition(repo string, agent model.AgentID, eligibility *reviewtransaction.CompactAbandonEligibility) ReviewNextTransition {
+	// The literal mirrors reviewManagedAssetsStopTransition: the shipped
+	// stop-reason registries are proven against the codes this file emits
+	// literally.
+	transition := reviewStopTransition("correction_context_budget_exceeded")
+	transition.Continuation = reviewCorrectionReleaseContinuation(repo, string(agent), eligibility)
 	return transition
 }
 

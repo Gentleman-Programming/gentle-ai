@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -148,3 +149,38 @@ func reviewCorrectionContextBudgetAction(eligibility reviewtransaction.CompactAb
 // rendering opens with: what exceeded the budget, and that retrying cannot
 // change it.
 const reviewCorrectionContextBudgetPreamble = "This candidate's correction evidence plus its recorded findings cannot fit the runtime context budget, and that evidence is never truncated, so no retry of this targeted validation can succeed."
+
+// reviewCorrectionReleaseContinuation renders the one runnable follow-up a
+// correction_context_budget_exceeded stop can offer, following the
+// managed-assets precedent: the stop itself carries the exact command, so no
+// caller has to recover it from prose.
+//
+// It exists because the Pi facade contract may not name a raw
+// `gentle-ai review ` route at all (validPiFacadeLifecycle), so the shipped Pi
+// ledger row's "the release command the stop's `continuation` names" is the
+// only channel through which that route can reach a Pi maintainer.
+//
+// The command is the FLAGLESS abandon form, deliberately. The complete
+// abandonment needs an actor and an eight-line maintainer binding that no
+// producer may invent, and a printed command carrying placeholders for them
+// would break the rule that a named command runs exactly as printed. The
+// flagless form does run exactly as printed, and its refusal prints the
+// binding template plus where every remaining value is read.
+//
+// Where eligibility says the authority cannot be released, this returns
+// nothing rather than naming a command the live operation would refuse --
+// the same honesty reviewCorrectionContextBudgetAction already keeps in its
+// prose. A stop with no continuation is the truthful "ask a maintainer" case.
+func reviewCorrectionReleaseContinuation(repo, agent string, eligibility *reviewtransaction.CompactAbandonEligibility) *ReviewStopContinuation {
+	repo = strings.TrimSpace(repo)
+	if repo == "" || eligibility == nil || !eligibility.Eligible {
+		return nil
+	}
+	return &ReviewStopContinuation{
+		Operation: "abandon",
+		Command:   managedAssetsContinuationExecutable() + " review abandon --cwd " + reviewTransitionShellWord(repo),
+		Agent:     strings.TrimSpace(agent),
+		Detail: "Runs the release this stop requires. Printed flagless on purpose: it refuses with the exact binding template and names where every remaining value is read (" +
+			"--lineage, --expected-revision, --actor, --reason and the eight-line --maintainer-authorization), which no producer may invent on a maintainer's behalf.",
+	}
+}

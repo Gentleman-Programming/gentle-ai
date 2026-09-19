@@ -187,23 +187,30 @@ type ReviewIntegrationFailure struct {
 	// Continuation is the one candidate-preserving runnable follow-up a
 	// managed_assets_outdated refusal can offer (#3299, #4170): the exact
 	// `gentle-ai sync` invocation that reconciles the recorded digest. It is
-	// additive and only ever set for that one refusal code.
-	Continuation *ReviewManagedAssetsContinuation `json:"continuation,omitempty"`
+	// additive and, on THIS envelope, only ever set for that one refusal code;
+	// the release continuation the type also carries travels on a STATUS stop,
+	// never here.
+	Continuation *ReviewStopContinuation `json:"continuation,omitempty"`
 }
 
-// ReviewManagedAssetsContinuation names the sync invocation that resolves a
-// managed_assets_outdated refusal without abandoning the frozen candidate.
-// Command is the literally runnable command line, bound to the same runtime
-// agent the blocked operation was asked for. When this process can identify its
-// executable, the token is anchored to that binary (#4434). The final bare
-// `gentle-ai` compatibility fallback is not an exact executable identity and
-// may resolve through PATH. StaleAssets carries the stale recorded digest when
-// it is known.
-type ReviewManagedAssetsContinuation struct {
+// ReviewStopContinuation names the one literally runnable follow-up a stop
+// that has one can carry, so no caller has to recover it from prose. Two
+// operations use it: `sync`, which resolves a managed_assets_outdated refusal
+// without abandoning the frozen candidate, and `abandon`, the release a
+// correction_context_budget_exceeded stop requires. Command is the runnable
+// command line, bound to the same runtime agent the blocked operation was
+// asked for. When this process can identify its executable, the token is
+// anchored to that binary (#4434). The final bare `gentle-ai` compatibility
+// fallback is not an exact executable identity and may resolve through PATH.
+// StaleAssets carries the stale recorded digest when it is known. Detail is
+// set only where the command is a preparatory step rather than the whole
+// operation, and then it says plainly what running it produces.
+type ReviewStopContinuation struct {
 	Operation   string   `json:"operation"`
 	Command     string   `json:"command"`
 	Agent       string   `json:"agent,omitempty"`
 	StaleAssets []string `json:"stale_assets,omitempty"`
+	Detail      string   `json:"detail,omitempty"`
 }
 
 // managedAssetsContinuationCommandPattern is the executable-identity half of
@@ -294,14 +301,14 @@ func managedAssetsArgvZeroIdentity(path string) bool {
 // anchored to the invoking executable (#4434) and bound to the runtime agent
 // the blocked STATUS or START was asked for. An empty agent (no runtime
 // declared) produces the command without one instead of guessing it.
-func managedAssetsContinuation(agent string, staleAssets []string) *ReviewManagedAssetsContinuation {
+func managedAssetsContinuation(agent string, staleAssets []string) *ReviewStopContinuation {
 	agent = strings.TrimSpace(agent)
 	executable := managedAssetsContinuationExecutable()
 	command := executable + " sync"
 	if agent != "" {
 		command = executable + " sync --agent " + agent
 	}
-	continuation := &ReviewManagedAssetsContinuation{Operation: "sync", Command: command, Agent: agent}
+	continuation := &ReviewStopContinuation{Operation: "sync", Command: command, Agent: agent}
 	if len(staleAssets) > 0 {
 		continuation.StaleAssets = append([]string{}, staleAssets...)
 	}
@@ -531,7 +538,7 @@ type reviewIntegrationPreflightError struct {
 	// is a static classification shared by every occurrence of a code, while
 	// the continuation names the exact runnable command for THIS occurrence
 	// (bound to the agent this specific blocked call was asked for).
-	continuation *ReviewManagedAssetsContinuation
+	continuation *ReviewStopContinuation
 }
 
 func (err *reviewIntegrationPreflightError) Error() string { return err.cause.Error() }
@@ -570,7 +577,7 @@ func reviewPreflightRefusal(reason reviewPreflightReason, err error) error {
 // START's own preflight failure names the same runnable sync as STATUS's
 // stop transition instead of leaving the caller to infer it from prose
 // (#3299, #4170).
-func reviewPreflightRefusalWithContinuation(reason reviewPreflightReason, err error, continuation *ReviewManagedAssetsContinuation) error {
+func reviewPreflightRefusalWithContinuation(reason reviewPreflightReason, err error, continuation *ReviewStopContinuation) error {
 	if err == nil {
 		return nil
 	}
@@ -1521,10 +1528,40 @@ func validManagedAssetsContinuationCommand(command string) bool {
 	return err == nil && matched
 }
 
+// correctionReleaseContinuationCommandPattern is the release half of the
+// stop continuation contract, shaped exactly like the sync one: the same
+// executable-identity alternatives, then the fixed `review abandon --cwd`
+// route and one repository token in any of the same quoting forms. The
+// flagless form is the whole pattern on purpose -- a continuation carrying
+// invented actor or authorization values would not run as printed.
+const correctionReleaseContinuationCommandPattern = `^(?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'\\'')*') review abandon --cwd (?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'\\'')*')$`
+
+// validateCorrectionReleaseContinuation is the strict contract for the
+// correction_context_budget_exceeded release continuation (#4680). Detail is
+// required: the named command prepares the release rather than performing it,
+// and a caller handed the command without that statement would reasonably
+// read a refusal as a failure.
+func validateCorrectionReleaseContinuation(continuation *ReviewStopContinuation) error {
+	if continuation == nil || continuation.Operation != "abandon" || strings.TrimSpace(continuation.Detail) == "" {
+		return errors.New("invalid correction release continuation") // refusal:by-design world-action: a malformed provider continuation is a construction bug; only corrected producer code can emit a valid one
+	}
+	if strings.ContainsAny(continuation.Command, "\r\n") {
+		return errors.New("correction release continuation command is not a single line") // refusal:by-design world-action: continuation commands are always one line; only corrected producer code can emit one
+	}
+	matched, err := regexp.MatchString(correctionReleaseContinuationCommandPattern, continuation.Command)
+	if err != nil || !matched {
+		return errors.New("invalid correction release continuation command") // refusal:by-design world-action: a continuation whose command is not an executable-anchored `review abandon --cwd` invocation was built wrong; only a code fix produces a valid one
+	}
+	if len(continuation.StaleAssets) != 0 {
+		return errors.New("correction release continuation carries managed-asset evidence") // refusal:by-design world-action: stale-asset evidence belongs to the sync continuation only; only corrected producer code can drop it here
+	}
+	return nil
+}
+
 // validateManagedAssetsContinuation is the shared strict contract for the
 // managed-assets continuation emitted by FAILURE and STATUS. Its command and
 // structured agent must describe the same single sync invocation.
-func validateManagedAssetsContinuation(continuation *ReviewManagedAssetsContinuation) error {
+func validateManagedAssetsContinuation(continuation *ReviewStopContinuation) error {
 	if continuation == nil || continuation.Operation != "sync" || !validManagedAssetsContinuationCommand(continuation.Command) {
 		return errors.New("invalid managed-assets continuation command") // refusal:by-design world-action: a malformed provider continuation is a construction bug; only corrected producer code can emit a valid command
 	}

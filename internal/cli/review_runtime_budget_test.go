@@ -712,3 +712,91 @@ func TestCorrectionWithinBudgetStillOffersTargetedValidation(t *testing.T) {
 		t.Fatalf("in-budget correction next transition = %+v, want targeted_validation_required", parsed.NextTransition)
 	}
 }
+
+// TestOverBudgetCorrectionStopCarriesTheReleaseContinuation closes the Pi dead
+// end. The shipped Pi ledger row for correction_context_budget_exceeded tells
+// the maintainer to run "the release command the stop's `continuation` names",
+// and the Pi facade contract may not name a raw `gentle-ai review ` route at
+// all, so the continuation is the only channel that route can travel. This
+// asserts the stop actually carries it, that the command is the executable
+// -anchored abandon route bound to this repository, and that it is runnable
+// exactly as printed -- the flagless form whose refusal prints the binding
+// template every remaining value is read from.
+func TestOverBudgetCorrectionStopCarriesTheReleaseContinuation(t *testing.T) {
+	reviewEnabledHome(t)
+	// Pi is eligible for immutable receipt-review transport only while its
+	// host relay contract is exported; the gentle-pi host exports it on every
+	// invocation it relays.
+	t.Setenv("GENTLE_PI_REVIEW_RELAY_CONTRACT", "gentle-pi.review-relay/v1")
+	repo, record := driveReviewToOpenTargetedValidationWithCorrection(t,
+		"correction-budget-continuation", reviewCorrectionBudgetOverBudgetCorrection(t))
+
+	var status bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", record.State.LineageID, "--next-transition", "--projection", "staged",
+		"--agent", string(model.AgentPi),
+	}, &status); err != nil {
+		t.Fatalf("status on the over-budget correction failed: %v\n%s", err, status.String())
+	}
+	var parsed struct {
+		NextTransition struct {
+			Kind         string `json:"kind"`
+			ReasonCode   string `json:"reason_code"`
+			Continuation *struct {
+				Operation string `json:"operation"`
+				Command   string `json:"command"`
+				Agent     string `json:"agent"`
+				Detail    string `json:"detail"`
+			} `json:"continuation"`
+		} `json:"next_transition"`
+	}
+	if err := json.Unmarshal(status.Bytes(), &parsed); err != nil {
+		t.Fatalf("decode status: %v\n%s", err, status.String())
+	}
+	if parsed.NextTransition.ReasonCode != reviewCorrectionContextBudgetCode {
+		t.Fatalf("next transition = %+v, want the correction budget stop", parsed.NextTransition)
+	}
+	continuation := parsed.NextTransition.Continuation
+	if continuation == nil {
+		t.Fatalf("the correction budget stop carries no continuation, so a Pi maintainer following the shipped ledger row has no release command to run:\n%s", status.String())
+	}
+	if continuation.Operation != "abandon" {
+		t.Fatalf("continuation operation = %q, want abandon", continuation.Operation)
+	}
+	if continuation.Agent != string(model.AgentPi) {
+		t.Fatalf("continuation agent = %q, want the runtime STATUS was asked for", continuation.Agent)
+	}
+	wantCommand := managedAssetsContinuationExecutable() + " review abandon --cwd " + reviewTransitionShellWord(repo)
+	if continuation.Command != wantCommand {
+		t.Fatalf("continuation command = %q, want %q", continuation.Command, wantCommand)
+	}
+	if !strings.Contains(continuation.Detail, "binding template") {
+		t.Fatalf("continuation detail does not say what running the command produces: %q", continuation.Detail)
+	}
+
+	// Runnable exactly as printed: the flagless form refuses with the binding
+	// template rather than silently doing nothing.
+	var template bytes.Buffer
+	err := RunReview([]string{"abandon", "--cwd", repo}, &template)
+	if err == nil {
+		t.Fatalf("the named release command did not print the binding template:\n%s", template.String())
+	}
+	if !strings.Contains(err.Error(), "--maintainer-authorization") {
+		t.Fatalf("the named release command is not the binding-template step the continuation claims: %v", err)
+	}
+}
+
+// TestCorrectionBudgetStopOmitsTheContinuationWhenReleaseIsRefused preserves
+// the honesty property the narration already has: where the authority is not
+// eligible for abandonment, no command is named at all, because an unrunnable
+// command is worse than an honest "ask a maintainer".
+func TestCorrectionBudgetStopOmitsTheContinuationWhenReleaseIsRefused(t *testing.T) {
+	ineligible := reviewtransaction.CompactAbandonEligibility{}
+	if continuation := reviewCorrectionReleaseContinuation("/repo", "pi", &ineligible); continuation != nil {
+		t.Fatalf("an ineligible authority was handed a release command that would be refused: %+v", continuation)
+	}
+	if continuation := reviewCorrectionReleaseContinuation("/repo", "pi", nil); continuation != nil {
+		t.Fatalf("an unprobed authority was handed a release command: %+v", continuation)
+	}
+}

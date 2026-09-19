@@ -772,20 +772,33 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
 	}
-	// #3299, #4170: the continuation is the one and only signal for a stale
-	// managed-asset digest. Attaching it to any other transition -- an
-	// execute the caller would run alongside a sync it was never told about,
-	// or a stop for an unrelated reason -- would let a caller read two
-	// disagreeing exits out of one envelope. Checked once here, ahead of
-	// every applicability branch below, so no later branch can reintroduce
-	// the gap by omission.
-	if result.NextTransition.Continuation != nil &&
-		!(result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "managed_assets_outdated") {
-		return errors.New("next_transition.continuation is valid only on a managed_assets_outdated stop") // refusal:by-design world-action: a producer that attaches this continuation to any other transition built a malformed envelope and requires a code fix, not an operator command
-	}
+	// #3299, #4170: the continuation is the runnable follow-up of exactly the
+	// two stops that have one -- a stale managed-asset digest, and the #4680
+	// correction budget release. Attaching it to any other transition -- an
+	// execute the caller would run alongside a command it was never told
+	// about, or a stop for an unrelated reason -- would let a caller read two
+	// disagreeing exits out of one envelope. Each code's own shape is checked
+	// by its own validator, so neither can borrow the other's. Checked once
+	// here, ahead of every applicability branch below, so no later branch can
+	// reintroduce the gap by omission.
 	if continuation := result.NextTransition.Continuation; continuation != nil {
-		if err := validateManagedAssetsContinuation(continuation); err != nil {
-			return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
+		if result.NextTransition.Kind != reviewNextTransitionStop {
+			return errors.New("next_transition.continuation is valid only on a stop") // refusal:by-design world-action: a producer that attaches this continuation to an execute or collect built a malformed envelope and requires a code fix, not an operator command
+		}
+		switch result.NextTransition.ReasonCode {
+		case "managed_assets_outdated":
+			if err := validateManagedAssetsContinuation(continuation); err != nil {
+				return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
+			}
+		case reviewCorrectionContextBudgetCode:
+			// #4680: the release route may not appear in the Pi facade
+			// contract's prose, so the stop is the only channel carrying it.
+			// Its shape is checked as strictly as the sync one.
+			if err := validateCorrectionReleaseContinuation(continuation); err != nil {
+				return fmt.Errorf("invalid correction release STATUS continuation: %w", err)
+			}
+		default:
+			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated or correction_context_budget_exceeded stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
 		}
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
