@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -168,5 +170,111 @@ func TestNegotiatedStartRuntimeBudgetAdmitsCandidateUnder200KiB(t *testing.T) {
 	}
 	if block := output.Len(); block == 0 || block > reviewRuntimeBudgetTestCapBytes {
 		t.Fatalf("under-runtime-budget block = %d bytes, want a complete block inside the %d byte runtime cap", block, reviewRuntimeBudgetTestCapBytes)
+	}
+}
+
+// writeRuntimeBudgetManyPathCandidate reproduces the shape #4680 reported: a
+// candidate whose individual paths are all small and whose aggregate reviewer
+// context sits between the runtime cap and the Git ceiling.
+func writeRuntimeBudgetManyPathCandidate(t *testing.T, repo string, paths int) int64 {
+	t.Helper()
+	var total int64
+	body := strings.Repeat("runtime budget evidence line\n", 200)
+	// The reported candidate was mostly plain-text planning files with a
+	// handful of code paths, and that code is what earns a lens plan at all:
+	// an entirely non-executable candidate is classified low and never
+	// materializes reviewer context.
+	for index := range paths {
+		name := fmt.Sprintf("docs/plan-%02d.md", index)
+		if index < 13 {
+			name = fmt.Sprintf("internal/plan%02d/plan.go", index)
+		}
+		writeReviewStartCandidate(t, repo, name, body, 0o644)
+		info, err := os.Stat(filepath.Join(repo, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += info.Size()
+	}
+	if total <= int64(reviewRuntimeBudgetTestCapBytes) || total >= int64(reviewRuntimeBudgetTestCeilingBytes) {
+		t.Fatalf("many-path fixture is %d bytes across %d paths; it must sit over the %d byte runtime cap and under the %d byte Git ceiling", total, paths, reviewRuntimeBudgetTestCapBytes, reviewRuntimeBudgetTestCeilingBytes)
+	}
+	return total
+}
+
+// The reported candidate was 84 paths of ordinary text, no single one of them
+// large. A per-path bound would admit it and strand the lineage exactly as
+// #4680 describes, so the aggregate bound must refuse it before START
+// persists anything.
+func TestNegotiatedStartRuntimeBudgetRefusesManySmallPathsInAggregate(t *testing.T) {
+	home := reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeRuntimeBudgetManyPathCandidate(t, repo, 84)
+	authorityRoot := reviewCLIAuthorityRoot(t, repo)
+	authorityBefore := snapshotAuthorityTree(t, authorityRoot)
+	homeBefore := readLegacyAuthorityTree(t, home)
+
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", "runtime-budget-many-paths",
+	}), &output)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("many-small-path START error = %v\n%s", err, output.String())
+	}
+	var failure *ReviewIntegrationFailureError
+	if !errors.As(err, &failure) {
+		t.Fatalf("many-small-path START did not emit a typed negotiated failure: %T", err)
+	}
+	if failure.Failure.MutationOutcome != ReviewMutationNotStarted || failure.Failure.Phase != "preflight" {
+		t.Fatalf("many-small-path START envelope does not report a refusal that wrote nothing: %#v", failure.Failure)
+	}
+	if after := snapshotAuthorityTree(t, authorityRoot); authorityBefore != after {
+		t.Fatalf("many-small-path START changed authority storage before create:\nbefore:\n%s\nafter:\n%s", authorityBefore, after)
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("many-small-path START persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+}
+
+// A candidate dominated by generated content is admitted on metadata
+// summaries, so every later role must be materializable from those same
+// summaries. If refuter evidence still read the complete lockfile patch, this
+// candidate would pass START and then dead-end with authority already frozen,
+// which is the unexecutable lineage #3367 closed and #4680 reopened.
+func TestNegotiatedStartAdmitsGeneratedDominatedCandidateEveryRoleCanMaterialize(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	lockfile := strings.Repeat("example.com/module v1.2.3 h1:0000000000000000000000000000000000000000000=\n", 5_000)
+	writeReviewStartCandidate(t, repo, "go.sum", lockfile, 0o644)
+	writeReviewStartCandidate(t, repo, "internal/auth/token.go", "package auth\n\nfunc Token() string { return \"candidate\" }\n", 0o644)
+	info, err := os.Stat(filepath.Join(repo, "go.sum"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() <= int64(reviewRuntimeBudgetTestCapBytes) {
+		t.Fatalf("generated fixture is %d bytes; its raw content must exceed the %d byte runtime cap for this test to mean anything", info.Size(), reviewRuntimeBudgetTestCapBytes)
+	}
+
+	started := runNegotiatedReviewStart(t, repo, "runtime-budget-generated")
+	if len(started.SelectedLenses) == 0 {
+		t.Fatal("generated-dominated candidate selected no lenses")
+	}
+
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := reviewProviderMaterializeEvidence(context.Background(), repo, "claude-code", snapshot)
+	if err != nil {
+		t.Fatalf("START admitted a candidate whose refuter evidence cannot be materialized: %v", err)
+	}
+	var total int
+	for _, item := range evidence {
+		total += len(item.Path) + len(item.Content)
+	}
+	if total > reviewRuntimeBudgetTestCapBytes {
+		t.Fatalf("refuter evidence is %d bytes, over the %d byte runtime cap START admitted on", total, reviewRuntimeBudgetTestCapBytes)
 	}
 }
