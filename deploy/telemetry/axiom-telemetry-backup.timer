@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the gentle-telemetry backup nightly
+Description=Run the Axiom telemetry backup nightly
 
 [Timer]
 OnCalendar=*-*-* 03:30:00

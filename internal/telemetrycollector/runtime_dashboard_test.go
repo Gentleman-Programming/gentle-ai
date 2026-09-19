@@ -40,7 +40,7 @@ func TestRuntimeDashboard(t *testing.T) {
 	if err := json.Unmarshal(data, &dashboard); err != nil {
 		t.Fatal(err)
 	}
-	if dashboard.UID != "gentle-ai-usage" || dashboard.Title != "Gentle AI — Usage" {
+	if dashboard.UID != "gentle-ai-usage" || dashboard.Title != "Axiom — Usage" {
 		t.Fatalf("dashboard identity changed: %q %q", dashboard.UID, dashboard.Title)
 	}
 	if dashboard.Timezone != "browser" || dashboard.Refresh != "1m" || dashboard.Time.From != "now-7d" || dashboard.Time.To != "now" {
@@ -63,10 +63,10 @@ func TestRuntimeDashboard(t *testing.T) {
 		{"Growth", "Daily active installs", "timeseries"},
 		{"Growth", "Daily new installs", "timeseries"},
 		{"Growth", "Cumulative unique installs", "timeseries"},
-		{"Where Gentle AI runs", "Agent adoption", "barchart"},
-		{"Where Gentle AI runs", "Component adoption", "barchart"},
-		{"Where Gentle AI runs", "OS and architecture", "barchart"},
-		{"Where Gentle AI runs", "Version adoption", "barchart"},
+		{"Where Axiom runs", "Agent adoption", "barchart"},
+		{"Where Axiom runs", "Component adoption", "barchart"},
+		{"Where Axiom runs", "OS and architecture", "barchart"},
+		{"Where Axiom runs", "Version adoption", "barchart"},
 		{"Live activity", "Deliveries, last 15 min", "stat"},
 		{"Live activity", "Responses, last 15 min", "stat"},
 		{"Live activity", "Tokens processed, last 15 min", "stat"},
@@ -325,7 +325,7 @@ func TestRuntimeDashboard(t *testing.T) {
 				t.Errorf("active-user panel %q must use its fixed nanosecond wall-clock window", panel.Title)
 			}
 		}
-		if panel.Title == "Active users, last 24h" && panel.Description != "Installs that opened a Gentle AI session in the last 24 hours; each install reports at most once per day, so shorter windows undercount." {
+		if panel.Title == "Active users, last 24h" && panel.Description != "Installs that opened an Axiom session in the last 24 hours; each install reports at most once per day, so shorter windows undercount." {
 			t.Error("24-hour active-user panel must explain opportunistic daily reporting")
 		}
 		if panel.Title == "Deliveries, last 15 min" || panel.Title == "Responses, last 15 min" || panel.Title == "Tokens processed, last 15 min" || panel.Title == "Hosts active, last 15 min" {

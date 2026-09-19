@@ -113,10 +113,13 @@ func (b *battery) statusEnv(repo, agent string, env []string) (map[string]any, s
 }
 
 // runCommandLineEnv mirrors runCommandLine over runEnv with the product's
-// quoting-aware splitter. Structured closures use runTransitionExecution instead.
+// quoting-aware splitter. Structured closures use runTransitionExecution
+// instead. Accepts either the canonical "axiom" name or the preserved
+// "gentle-ai" alias a provider might print (D-03/D2.4 dual tolerance on
+// read), current name evaluated first.
 func (b *battery) runCommandLineEnv(source, dir string, env []string, command string) (map[string]any, string, int) {
 	words, err := cli.SplitPrintedCommandWords(command)
-	if err != nil || len(words) < 2 || words[0] != "gentle-ai" {
+	if err != nil || len(words) < 2 || (words[0] != "axiom" && words[0] != "gentle-ai") {
 		return nil, fmt.Sprintf("unexpected provider command %q", command), 1
 	}
 	return b.runJSONEnv(source, dir, env, words[1:]...)

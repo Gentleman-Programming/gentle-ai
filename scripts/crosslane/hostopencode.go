@@ -228,19 +228,23 @@ func openCodeSandboxGentleEnvironment(sandboxHome string) []string {
 
 // openCodeSandboxSessionEnvironment is the complete environment for the real
 // OpenCode session process itself: sandbox HOME, no autoupdate, and a PATH
-// whose first entry resolves `gentle-ai` to the binary under test.
+// whose first entry resolves both `axiom` and `gentle-ai` to the binary
+// under test.
 func openCodeSandboxSessionEnvironment(sandboxHome, shimPath string) []string {
 	return mergeEnvironment(append(openCodeSandboxGentleEnvironment(sandboxHome),
 		"OPENCODE_DISABLE_AUTOUPDATE=1", "PATH="+shimPath))
 }
 
-// hostShimPath builds a PATH whose first entry resolves `gentle-ai` to the
-// binary under test, so the real plugin's transport spawn hits it.
+// hostShimPath builds a PATH whose first entry resolves both `axiom` and
+// `gentle-ai` to the binary under test, so a real plugin or agent spawning
+// either name (D2.4 keeps the `gentle-ai` alias alive) hits it.
 func (b *battery) hostShimPath() string {
 	shimDir := filepath.Join(b.workRoot, "host-shim-bin")
 	if err := os.MkdirAll(shimDir, 0o755); err == nil {
 		shim := "#!/bin/sh\nexec \"" + b.binary + "\" \"$@\"\n"
-		_ = os.WriteFile(filepath.Join(shimDir, "gentle-ai"), []byte(shim), 0o755)
+		for _, name := range []string{"axiom", "gentle-ai"} {
+			_ = os.WriteFile(filepath.Join(shimDir, name), []byte(shim), 0o755)
+		}
 	}
 	return shimDir + string(os.PathListSeparator) + os.Getenv("PATH")
 }

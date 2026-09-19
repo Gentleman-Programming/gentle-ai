@@ -1,8 +1,8 @@
 {
   "uid": "gentle-ai-usage",
-  "title": "Gentle AI — Usage",
+  "title": "Axiom — Usage",
   "tags": [
-    "gentle-ai",
+    "axiom",
     "telemetry"
   ],
   "timezone": "browser",
@@ -31,7 +31,7 @@
     {
       "id": 551,
       "title": "Active users, last 24h",
-      "description": "Installs that opened a Gentle AI session in the last 24 hours; each install reports at most once per day, so shorter windows undercount.",
+      "description": "Installs that opened an Axiom session in the last 24 hours; each install reports at most once per day, so shorter windows undercount.",
       "type": "stat",
       "gridPos": {
         "x": 0,
@@ -782,7 +782,7 @@
     },
     {
       "id": 300,
-      "title": "Where Gentle AI runs",
+      "title": "Where Axiom runs",
       "type": "row",
       "collapsed": false,
       "panels": [],
@@ -840,7 +840,7 @@
     {
       "id": 302,
       "title": "Component adoption",
-      "description": "Install counts by enabled Gentle AI component on the latest completed rollup day.",
+      "description": "Install counts by enabled Axiom component on the latest completed rollup day.",
       "type": "barchart",
       "gridPos": {
         "x": 6,
@@ -928,7 +928,7 @@
     {
       "id": 304,
       "title": "Version adoption",
-      "description": "Top ten reported Gentle AI versions on the latest completed rollup day.",
+      "description": "Top ten reported Axiom versions on the latest completed rollup day.",
       "type": "barchart",
       "gridPos": {
         "x": 18,

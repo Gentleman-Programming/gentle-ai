@@ -121,3 +121,49 @@ func TestCommittedMediumCandidateFailsWhenBaseWriteFails(t *testing.T) {
 		t.Fatalf("base write failure = %#v, want committed process base FAIL", failure)
 	}
 }
+
+// TestRunCommandLineAcceptsAxiomAndGentleAI confirms battery.runCommandLine
+// tolerates a provider-printed command prefixed by either the canonical
+// "axiom" name or the preserved "gentle-ai" alias (D-03/D2.4 dual tolerance
+// on the read side), never rejecting either with "unexpected provider
+// command" before attempting execution.
+func TestRunCommandLineAcceptsAxiomAndGentleAI(t *testing.T) {
+	for _, prefix := range []string{"axiom", "gentle-ai"} {
+		t.Run(prefix, func(t *testing.T) {
+			b := &battery{binary: filepath.Join(t.TempDir(), "missing-binary")}
+			_, stderr, _ := b.runCommandLine("test", t.TempDir(), prefix+" review status")
+			if strings.Contains(stderr, "unexpected provider command") {
+				t.Fatalf("runCommandLine(%q) rejected a supported prefix: %s", prefix, stderr)
+			}
+		})
+	}
+}
+
+// TestRunCommandLineEnvAcceptsAxiomAndGentleAI mirrors
+// TestRunCommandLineAcceptsAxiomAndGentleAI for host.go's runCommandLineEnv.
+func TestRunCommandLineEnvAcceptsAxiomAndGentleAI(t *testing.T) {
+	for _, prefix := range []string{"axiom", "gentle-ai"} {
+		t.Run(prefix, func(t *testing.T) {
+			b := &battery{binary: filepath.Join(t.TempDir(), "missing-binary")}
+			_, stderr, _ := b.runCommandLineEnv("test", t.TempDir(), nil, prefix+" review status")
+			if strings.Contains(stderr, "unexpected provider command") {
+				t.Fatalf("runCommandLineEnv(%q) rejected a supported prefix: %s", prefix, stderr)
+			}
+		})
+	}
+}
+
+// TestHostShimPathResolvesAxiomAndGentleAI confirms the PATH shim the host
+// OpenCode lane plants resolves both `axiom` and `gentle-ai`, so a real
+// plugin or agent spawning either name reaches the binary under test while
+// D2.4 keeps the `gentle-ai` alias alive.
+func TestHostShimPathResolvesAxiomAndGentleAI(t *testing.T) {
+	b := &battery{workRoot: t.TempDir(), binary: "binary-under-test"}
+	pathEnv := b.hostShimPath()
+	shimDir := strings.SplitN(pathEnv, string(os.PathListSeparator), 2)[0]
+	for _, name := range []string{"axiom", "gentle-ai"} {
+		if _, err := os.Stat(filepath.Join(shimDir, name)); err != nil {
+			t.Fatalf("expected shim %q under %q: %v", name, shimDir, err)
+		}
+	}
+}

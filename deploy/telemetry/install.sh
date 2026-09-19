@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs and starts the gentle-telemetry collector on an AlmaLinux/RHEL 9
+# Installs and starts the Axiom telemetry collector on an AlmaLinux/RHEL 9
 # VPS (cPanel/WHM + Apache, not Caddy): the binary, systemd units (service,
 # backup service, backup timer), and — with --domain — a rendered Apache
 # vhost template for the operator to append by hand.
@@ -48,7 +48,7 @@ APACHE_INCLUDE_FILE="/etc/apache2/conf.d/includes/post_virtualhost_global.conf"
 RENDERED_VHOST="/root/telemetry-vhost.conf.rendered"
 GRAFANA_INI="/etc/grafana/grafana.ini"
 GRAFANA_PROVISIONING_DIR="/etc/grafana/provisioning"
-GRAFANA_DASHBOARD_DIR="${GRAFANA_PROVISIONING_DIR}/dashboards/gentle-ai"
+GRAFANA_DASHBOARD_DIR="${GRAFANA_PROVISIONING_DIR}/dashboards/axiom"
 GRAFANA_ADMIN_PASSWORD_FILE="/etc/grafana/admin-password"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -181,7 +181,7 @@ else
 fi
 
 # sqlite3 (the CLI, not a Go dependency: the binary itself is cgo-free and
-# self-contained) is required by gentle-telemetry-backup.service's
+# self-contained) is required by axiom-telemetry-backup.service's
 # `sqlite3 .backup` snapshot step.
 if ! command -v sqlite3 >/dev/null 2>&1; then
 	dnf install -y sqlite
@@ -192,7 +192,7 @@ if ! command -v rclone >/dev/null 2>&1; then
 fi
 
 # create_telemetry_user idempotently creates the static system user/group
-# gentle-telemetry.service runs as. A static user (rather than systemd's
+# axiom-telemetry.service runs as. A static user (rather than systemd's
 # DynamicUser) gives Grafana a stable, grantable path: DynamicUser would
 # materialize StateDirectory under /var/lib/private/<name> with a symlink
 # at STATE_DIR, and granting Grafana search access on /var/lib/private
@@ -287,19 +287,19 @@ EOF
 	printf 'wrote a placeholder %s/backup.env - set GENTLE_TELEMETRY_BACKUP_REMOTE before enabling the backup timer\n' "${CONFIG_DIR}"
 fi
 
-install -m 0644 "${SCRIPT_DIR}/gentle-telemetry.service" "${UNIT_DIR}/gentle-telemetry.service"
-install -m 0755 "${SCRIPT_DIR}/gentle-telemetry-backup" /usr/local/bin/gentle-telemetry-backup
-install -m 0644 "${SCRIPT_DIR}/gentle-telemetry-backup.service" "${UNIT_DIR}/gentle-telemetry-backup.service"
-install -m 0644 "${SCRIPT_DIR}/gentle-telemetry-backup.timer" "${UNIT_DIR}/gentle-telemetry-backup.timer"
+install -m 0644 "${SCRIPT_DIR}/axiom-telemetry.service" "${UNIT_DIR}/axiom-telemetry.service"
+install -m 0755 "${SCRIPT_DIR}/axiom-telemetry-backup" /usr/local/bin/axiom-telemetry-backup
+install -m 0644 "${SCRIPT_DIR}/axiom-telemetry-backup.service" "${UNIT_DIR}/axiom-telemetry-backup.service"
+install -m 0644 "${SCRIPT_DIR}/axiom-telemetry-backup.timer" "${UNIT_DIR}/axiom-telemetry-backup.timer"
 
 systemctl daemon-reload
-systemctl enable --now gentle-telemetry.service
+systemctl enable --now axiom-telemetry.service
 
 if grep -q '^GENTLE_TELEMETRY_BACKUP_REMOTE=.\+' "${CONFIG_DIR}/backup.env"; then
-	systemctl enable --now gentle-telemetry-backup.timer
+	systemctl enable --now axiom-telemetry-backup.timer
 else
-	printf 'skipping gentle-telemetry-backup.timer: set GENTLE_TELEMETRY_BACKUP_REMOTE in %s/backup.env, then run:\n' "${CONFIG_DIR}"
-	printf '  systemctl enable --now gentle-telemetry-backup.timer\n'
+	printf 'skipping axiom-telemetry-backup.timer: set GENTLE_TELEMETRY_BACKUP_REMOTE in %s/backup.env, then run:\n' "${CONFIG_DIR}"
+	printf '  systemctl enable --now axiom-telemetry-backup.timer\n'
 fi
 
 # set_ini_kv upserts key = value under [section] in an ini file, creating
@@ -410,14 +410,14 @@ EOF
 		umask 0022
 	fi
 	chmod 0600 "${GRAFANA_ADMIN_PASSWORD_FILE}"
-	set_ini_kv "${GRAFANA_INI}" security admin_user gentle
+	set_ini_kv "${GRAFANA_INI}" security admin_user axiom
 	set_ini_kv "${GRAFANA_INI}" security admin_password "$(cat "${GRAFANA_ADMIN_PASSWORD_FILE}")"
 	set_ini_kv "${GRAFANA_INI}" security disable_gravatar true
 	set_ini_kv "${GRAFANA_INI}" auth.anonymous enabled false
 	set_ini_kv "${GRAFANA_INI}" users allow_sign_up false
 
 	# The collector runs SQLite in journal_mode=DELETE (see storage.go),
-	# not WAL: gentle-telemetry.service already serializes all of its own
+	# not WAL: axiom-telemetry.service already serializes all of its own
 	# reads and writes through a single connection, so WAL's concurrent-
 	# reader benefit is moot for the collector itself, and dropping it
 	# avoids ever creating -wal/-shm sidecar files. That leaves only one
@@ -440,7 +440,7 @@ EOF
 
 	systemctl daemon-reload
 	systemctl enable --now grafana-server
-	printf 'Grafana admin password: %s (root-only 0600); admin_user is "gentle". Change it via Administration -> Users if this is a first install.\n' "${GRAFANA_ADMIN_PASSWORD_FILE}"
+	printf 'Grafana admin password: %s (root-only 0600); admin_user is "axiom". Change it via Administration -> Users if this is a first install.\n' "${GRAFANA_ADMIN_PASSWORD_FILE}"
 	printf 'Grafana installed; it will be reachable at /grafana/ once the vhost blocks below are applied. Panel guide: docs/telemetry-collector.md#grafana-dashboards.\n'
 }
 
@@ -528,5 +528,5 @@ Next steps (not run by this script), in order:
 
      curl -I https://${print_domain}/healthz
 
-done. gentle-telemetry is listening on 127.0.0.1:18181 (see ${UNIT_DIR}/gentle-telemetry.service).
+done. The Axiom telemetry collector is listening on 127.0.0.1:18181 (see ${UNIT_DIR}/axiom-telemetry.service).
 EOF

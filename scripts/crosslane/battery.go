@@ -269,9 +269,12 @@ func (b *battery) admitStatusScope(repo string, doc map[string]any) error {
 // runCommandLine executes a provider-rendered command with the product's
 // quoting-aware splitter. Transition closures use runTransitionExecution instead,
 // because their operation and ordered argument tokens are already structured.
+// Accepts either the canonical "axiom" name or the preserved "gentle-ai"
+// alias a provider might print (D-03/D2.4 dual tolerance on read), current
+// name evaluated first.
 func (b *battery) runCommandLine(source, dir, command string) (map[string]any, string, int) {
 	words, err := cli.SplitPrintedCommandWords(command)
-	if err != nil || len(words) < 2 || words[0] != "gentle-ai" {
+	if err != nil || len(words) < 2 || (words[0] != "axiom" && words[0] != "gentle-ai") {
 		return nil, fmt.Sprintf("unexpected provider command %q", command), 1
 	}
 	return b.runJSON(source, dir, words[1:]...)
