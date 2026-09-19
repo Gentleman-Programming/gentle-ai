@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -20,16 +21,20 @@ var lifecycleLabels = []string{
 // buildReport fetches, classifies, and mounts the report. Every step respects
 // the bounds: paged fetches, per-issue related searches behind a whole-run
 // search budget, and release matching only against the already-bounded release
-// list. Errors on individual fetches surface as per-issue reasons
-// ("evidence unavailable"), never as a partial artifact with missing rows.
+// list. Failures degrade into report-level warnings and per-issue unavailable
+// evidence — never into an aborted run with no artifact (see docs).
 func buildReport(ctx context.Context, client *githubClient, owner, repo string, b bounds, generatedAt string) (triageevidence.Report, error) {
 	if err := ctx.Err(); err != nil {
 		return triageevidence.Report{}, err
 	}
 
-	selected, err := selectIssues(ctx, client, owner, repo, b)
-	if err != nil {
-		return triageevidence.Report{}, err
+	selected, fetchErr := selectIssues(ctx, client, owner, repo, b)
+	report := triageevidence.Report{
+		Repository:  owner + "/" + repo,
+		GeneratedAt: generatedAt,
+	}
+	if fetchErr != nil {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("issues fetch failed: %v; the report covers the %d issues that were readable", fetchErr, len(selected)))
 	}
 
 	releases, err := client.listReleases(owner, repo, b)
@@ -38,13 +43,7 @@ func buildReport(ctx context.Context, client *githubClient, owner, repo string, 
 		// matching off, but the issue evidence still reports.
 		releases = nil
 	}
-	latest := latestStableRelease(releases)
-
-	report := triageevidence.Report{
-		Repository:   owner + "/" + repo,
-		GeneratedAt:  generatedAt,
-		LatestStable: latest,
-	}
+	report.LatestStable = latestStableRelease(releases)
 
 	for _, i := range selected {
 		item := triageevidence.ReportItem{Issue: i}
@@ -54,7 +53,7 @@ func buildReport(ctx context.Context, client *githubClient, owner, repo string, 
 		item.Verdict = triageevidence.Classify(triageevidence.ClassificationInput{
 			Issue:        i,
 			Evidence:     item.Evidence,
-			LatestStable: latest,
+			LatestStable: report.LatestStable,
 			Related:      related,
 		})
 		if relatedErr != nil {
@@ -67,7 +66,9 @@ func buildReport(ctx context.Context, client *githubClient, owner, repo string, 
 }
 
 // selectIssues fills the report with the bounded needs-review population first,
-// then open issues carrying no lifecycle label at all.
+// then open issues carrying no lifecycle label at all. A failed list returns
+// the readable half plus the error; buildReport turns it into a warning so a
+// degraded run still publishes a partial report.
 func selectIssues(ctx context.Context, client *githubClient, owner, repo string, b bounds) ([]triageevidence.Issue, error) {
 	var out []triageevidence.Issue
 	add := func(issues []apiIssue) {
@@ -84,7 +85,7 @@ func selectIssues(ctx context.Context, client *githubClient, owner, repo string,
 	}
 	needsReview, err := client.listOpenIssues(owner, repo, "status:needs-review", b)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	add(needsReview)
 	if len(out) >= b.MaxIssues {
@@ -93,7 +94,7 @@ func selectIssues(ctx context.Context, client *githubClient, owner, repo string,
 
 	everyone, err := client.listOpenIssues(owner, repo, "", b)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	for _, a := range everyone {
 		if len(out) >= b.MaxIssues {
@@ -180,15 +181,22 @@ func searchRelatedFor(
 			continue // a search hit cannot be the report itself
 		}
 		kind := triageevidence.RelatedIssue
+		state := item.State
 		if item.PullRequest != nil {
 			kind = triageevidence.RelatedPR
+			// The search/issues API keeps merged PRs at state "closed" and
+			// records the merge in merged_at. Reading merged_at is the only
+			// faithful way to know a PR landed; state alone cannot say.
+			if item.PullRequest.MergedAt != "" {
+				state = "merged"
+			}
 		}
 		related = append(related, triageevidence.RelatedChange{
 			Kind:   kind,
 			Number: item.Number,
 			Title:  item.Title,
 			URL:    item.HTMLURL,
-			State:  item.State,
+			State:  state,
 		})
 		if len(related) >= b.MaxRelated {
 			break

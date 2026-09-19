@@ -13,11 +13,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -68,14 +70,22 @@ type apiRelease struct {
 	Published string `json:"published_at"`
 }
 
-// apiSearchItem mirrors search/issues results, where a pull_request object is
-// present exactly for PRs.
+// apiSearchItem mirrors search/issues results. GitHub reports a merged PR with
+// state "closed" and records the merge in pull_request.merged_at; an open PR
+// has state "open" and no merged_at. The pipeline must read merged_at, never
+// infer from state alone.
 type apiSearchItem struct {
-	Number      int       `json:"number"`
-	Title       string    `json:"title"`
-	State       string    `json:"state"`
-	HTMLURL     string    `json:"html_url"`
-	PullRequest *struct{} `json:"pull_request"`
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	State       string     `json:"state"`
+	HTMLURL     string     `json:"html_url"`
+	PullRequest *prDetails `json:"pull_request"`
+}
+
+// prDetails is the pull_request object search/issues attaches to PR results.
+// MergedAt is empty for open PRs.
+type prDetails struct {
+	MergedAt string `json:"merged_at"`
 }
 
 type apiSearchResponse struct {
@@ -166,10 +176,29 @@ func (c *githubClient) searchRelated(owner, repo, query string, max int) ([]apiS
 	return resp.Items, true, nil
 }
 
-// getJSON issues one GET and decodes a JSON response. Non-2xx responses report
-// only the status; the body is never surfaced, so an API error can never leak
-// issue content into the artifact.
+// getJSON issues one GET and decodes a JSON response, with one bounded retry
+// for transient listener refusals (429 or 5xx). Non-2xx responses report only
+// the status; permanent failure returns an error the caller turns into
+// unavailable evidence, never a crash.
 func (c *githubClient) getJSON(rawURL string, dst any) error {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		err = c.getJSONOnce(rawURL, dst)
+		if err == nil || !isTransientFailure(err) {
+			return err
+		}
+	}
+	return err
+}
+
+func isTransientFailure(err error) bool {
+	return errors.Is(err, errRateLimited) || strings.Contains(err.Error(), "status 5")
+}
+
+func (c *githubClient) getJSONOnce(rawURL string, dst any) error {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err

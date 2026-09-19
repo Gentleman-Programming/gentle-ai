@@ -18,7 +18,10 @@ type Report struct {
 	Repository string
 	// GeneratedAt is pinned by the caller (workflow run start) so output stays
 	// deterministic for unchanged evidence between the report and its reruns.
-	GeneratedAt  string
+	GeneratedAt string
+	// Warnings carry run-level degradation facts (e.g. an issues fetch that
+	// failed); rendered in the header so a partial population is visible.
+	Warnings     []string
 	LatestStable ReportedVersion
 	Items        []ReportItem
 }
@@ -75,7 +78,14 @@ func RenderMarkdown(r Report) string {
 	if len(items) > MaxReportItems {
 		b.WriteString(" (rendered " + strconv.Itoa(MaxReportItems) + "; truncated)")
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	if len(r.Warnings) > 0 {
+		b.WriteString("\n- Run warnings (degraded evidence, never absent evidence):\n")
+		for _, w := range r.Warnings {
+			b.WriteString("  - " + esc(w) + "\n")
+		}
+	}
+	b.WriteString("\n")
 
 	b.WriteString("## Summary\n\n")
 	b.WriteString("| Outcome | Count |\n|---|---|\n")

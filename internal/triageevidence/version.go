@@ -1,7 +1,6 @@
 package triageevidence
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -118,22 +117,27 @@ func sign(n int) int {
 var versionPattern = regexp.MustCompile(`\b(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?\b`)
 
 // ParseReportedVersion reads a version string the way a maintainer would: it
-// strips the common product prefixes ("gentle-ai", a leading "v", "version",
-// "public release source"), takes the first X.Y.Z triplet, and buckets the
-// remainder. "build from main" style reports are recognized as ChannelMain.
+// strips common product prefixes, takes the first X.Y.Z triplet, and buckets
+// the remainder. Input is untrusted issue text, so parsing is total: a digit
+// run that overflows int64 falls back to ChannelUnknown instead of panicking.
 func ParseReportedVersion(raw string) ReportedVersion {
 	out := ReportedVersion{Raw: strings.TrimSpace(raw)}
 	normalized := normalizeVersionText(out.Raw)
 	if matched := versionPattern.FindStringSubmatch(normalized); matched != nil {
-		out.Channel = ChannelStable
-		out.Major = mustAtoi(matched[1])
-		out.Minor = mustAtoi(matched[2])
-		out.Patch = mustAtoi(matched[3])
-		out.Pre = matched[4]
-		if out.Pre != "" {
-			out.Channel = ChannelPrerelease
+		major, ok1 := parseSegment(matched[1])
+		minor, ok2 := parseSegment(matched[2])
+		patch, ok3 := parseSegment(matched[3])
+		if ok1 && ok2 && ok3 {
+			out.Channel = ChannelStable
+			out.Major = major
+			out.Minor = minor
+			out.Patch = patch
+			out.Pre = matched[4]
+			if out.Pre != "" {
+				out.Channel = ChannelPrerelease
+			}
+			return out
 		}
-		return out
 	}
 	if strings.Contains(normalized, "main") {
 		out.Channel = ChannelMain
@@ -163,11 +167,9 @@ func normalizeVersionText(raw string) string {
 	return s
 }
 
-func mustAtoi(s string) int {
+// parseSegment reads one \d+ capture; overflow means "not a credible version
+// segment" and the caller falls back to ChannelUnknown.
+func parseSegment(s string) (int, bool) {
 	n, err := strconv.Atoi(s)
-	if err != nil {
-		// Unreachable for a \d+ capture; keep the signature total.
-		panic(fmt.Sprintf("triageevidence: non-digit captured as %q", s))
-	}
-	return n
+	return n, err == nil
 }

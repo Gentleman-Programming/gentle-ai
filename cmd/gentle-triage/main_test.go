@@ -50,9 +50,12 @@ func fixtureReleases() []apiRelease {
 }
 
 func fixtureSearch(relOnly bool) apiSearchResponse {
+	// Realistic search/issues shapes: merged PRs arrive with state "closed" and
+	// pull_request.merged_at set; open PRs have state "open" and no merged_at.
 	items := []apiSearchItem{
 		{Number: 90, Title: "TUI crash elsewhere", State: "open", HTMLURL: "https://example.com/issues/90"},
-		{Number: 91, Title: "PR fixing TUI", State: "merged", HTMLURL: "https://example.com/pulls/91", PullRequest: &struct{}{}},
+		{Number: 91, Title: "PR fixing TUI", State: "closed", HTMLURL: "https://example.com/pulls/91", PullRequest: &prDetails{MergedAt: "2026-09-01T00:00:00Z"}},
+		{Number: 92, Title: "WIP PR touching TUI", State: "open", HTMLURL: "https://example.com/pulls/92", PullRequest: &prDetails{}},
 	}
 	if relOnly {
 		items = items[:0]
@@ -120,13 +123,61 @@ func TestBuildReportSelectsAndClassifies(t *testing.T) {
 		byNumber[it.Issue.Number] = it
 	}
 	if got := byNumber[10].Verdict.Outcome; got != triageevidence.OutcomeRelatedChangeFound {
-		t.Errorf("issue 10 outcome = %s, want related-change-found (merged PR hit)", got)
+		t.Errorf("issue 10 outcome = %s, want related-change-found (merged-at PR hit)", got)
+	}
+	if merged := strings.Join(byNumber[10].Verdict.Reasons, " "); !strings.Contains(merged, "already landed") {
+		t.Errorf("issue 10 reasons %q do not cite a landed change (merged_at must map to a released PR)", merged)
 	}
 	if got := byNumber[11].Verdict.Outcome; got != triageevidence.OutcomeRetestRequested {
 		t.Errorf("issue 11 outcome = %s, want retest-requested (2.4.0 < 3.4.0)", got)
 	}
 	if got := byNumber[12].Verdict.Outcome; got != triageevidence.OutcomeInsufficientEvidence {
 		t.Errorf("issue 12 outcome = %s, want insufficient-evidence (unknown version, no repro)", got)
+	}
+}
+
+// newDegradeServer wires a server whose issues endpoint is caller-controlled
+// and whose releases endpoint always succeeds — the shared fixture for the
+// degradation and retry tests.
+func newDegradeServer(t *testing.T, issuesHandler func(w http.ResponseWriter, r *http.Request)) *githubClient {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/o/r/issues", issuesHandler)
+	mux.HandleFunc("/repos/o/r/releases", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "60")
+		_ = json.NewEncoder(w).Encode(fixtureReleases())
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return &githubClient{baseURL: srv.URL, http: srv.Client(), maxSearches: 5}
+}
+
+func TestBuildReportIssuesFetchFailureDegrades(t *testing.T) {
+	client := newDegradeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	report, err := buildReport(t.Context(), client, "o", "r", defaultBounds(), "")
+	if err != nil || len(report.Warnings) == 0 || len(report.Items) != 0 {
+		t.Fatalf("degraded run must warn and not abort (err=%v warnings=%d items=%d)", err, len(report.Warnings), len(report.Items))
+	}
+	if out := triageevidence.RenderMarkdown(report); !strings.Contains(out, "Run warnings") {
+		t.Error("rendered report missing warnings section")
+	}
+}
+
+func TestBuildReportRetriesTransientFailure(t *testing.T) {
+	tries := 0
+	client := newDegradeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		tries++
+		if tries == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("X-RateLimit-Remaining", "60")
+		_ = json.NewEncoder(w).Encode(fixtureIssues()[:1])
+	})
+	report, err := buildReport(t.Context(), client, "o", "r", defaultBounds(), "")
+	if err != nil || tries < 3 || len(report.Items) == 0 {
+		t.Fatalf("transient 500 must retry and recover (err=%v tries=%d items=%d)", err, tries, len(report.Items))
 	}
 }
 
