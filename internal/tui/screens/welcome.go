@@ -28,7 +28,11 @@ type WelcomeAdvisory struct {
 // profileCount is used to show a badge with the current profile count.
 // When hasEngines is false, "Create your own Agent" is shown as disabled
 // (labelled "(no agents)") to signal that no supported AI engine is installed.
-func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
+// When inGitRepo is false, "Reset review store" is shown as disabled
+// (labelled "(requires a Git repository)") to signal the repository-scoped
+// precondition the action needs; the row still renders so the entry stays
+// discoverable and the navigation no-ops on it.
+func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -39,6 +43,11 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	agentLabel := "Create your own Agent"
 	if !hasEngines {
 		agentLabel = "Create your own Agent (no agents)"
+	}
+
+	resetLabel := "Reset review store"
+	if !inGitRepo {
+		resetLabel = "Reset review store (requires a Git repository)"
 	}
 
 	opts := []string{
@@ -65,7 +74,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	}
 
 	opts = append(opts, "Manage backups")
-	opts = append(opts, "Reset review store")
+	opts = append(opts, resetLabel)
 	opts = append(opts, "Receipt-Driven Development")
 	opts = append(opts, "Managed uninstall")
 	opts = append(opts, "Community Tools/Plugins")
@@ -74,15 +83,15 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	return opts
 }
 
-func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) string {
-	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, 0)
+func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool) string {
+	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, inGitRepo, 0)
 }
 
-func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int) string {
-	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, width, 0, WelcomeAdvisory{})
+func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool, width int) string {
+	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, inGitRepo, width, 0, WelcomeAdvisory{})
 }
 
-func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
+func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool, width int, height int, advisory WelcomeAdvisory) string {
 	render := func(includeLogo, includeOptional, compact bool) string {
 		var b strings.Builder
 
@@ -119,7 +128,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		} else {
 			b.WriteString("\n\n")
 		}
-		options := WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines)
+		options := WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, inGitRepo)
 		if compact {
 			b.WriteString(renderWelcomeOptions(options, cursor, width))
 		} else {
