@@ -150,6 +150,82 @@ jobs:
             completed_once("j97-opencode-custom-agent-model-picker-runtime")
           ' "$RUNNER_TEMP/bench-model-picker.json"
 
+      # Informative window -- cmd/axiom coverage (INC-20 F0, opened 2026-09-19)
+      #
+      # Blocking: init, change, workspace, handoff, role, skill, semantic,
+      # archive, ui, and odd (kept blocking until this increment's Phase 11
+      # retires the verb) in their help or no-argument form -- the exclusive
+      # surface axiom-distribution-identity's build-identity contract touches
+      # (REQ-20.15). This is additional to, and does not replace, the
+      # "Run benchmark evidence" step above: that step already builds and
+      # exercises cmd/axiom, but only through journeys shared with upstream's
+      # review/SDD lifecycle, none of which invoke this exclusive surface.
+      #
+      # init and ui use --help instead of the no-argument form: their
+      # no-argument form is NOT inert, confirmed empirically in an isolated
+      # directory while building this step, not assumed from reading the
+      # source. `axiom init` with no arguments really scaffolds axiom.yaml,
+      # openspec/specs/, openspec/changes/ and .axiom/inbox/skills/ under the
+      # current directory (runInit -> hub.Initializer.Init). `axiom ui` with
+      # no arguments starts a real HTTP server that blocks
+      # (runUI -> dashboard.Server.ListenAndServe). Only their help form is
+      # safe to run in a single foreground command. The trailing
+      # `git status --porcelain` check is a second, independent guard: any
+      # verb above that mutates the checkout fails this step loudly instead
+      # of the mutation silently landing.
+      #
+      # Red surface inventoried on this date: none yet -- this step has not
+      # run in CI before this phase. Per design.md open question O-4, the
+      # inventory is written the first time the step actually runs and
+      # surfaces something, not invented ahead of that run.
+      #
+      # Successor: INC-21 (docs/ROADMAP.md). This window does not grow: any
+      # new symptom belongs to the successor, not to this list.
+      - name: Smoke the canonical binary surface
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/axiom-canonical-smoke" ./cmd/axiom
+          bin="$RUNNER_TEMP/axiom-canonical-smoke"
+          notice="'gentle-ai' está deprecado"
+
+          smoke() {
+            local label="$1" want_exit="$2"
+            shift 2
+            local err_file got_exit
+            err_file="$(mktemp)"
+            got_exit=0
+            "$bin" "$@" >/dev/null 2>"$err_file" || got_exit=$?
+            if [ "$got_exit" -ne "$want_exit" ]; then
+              echo "FAIL: axiom $label exited $got_exit, want $want_exit" >&2
+              cat "$err_file" >&2
+              rm -f "$err_file"
+              exit 1
+            fi
+            if grep -qF "$notice" "$err_file"; then
+              echo "FAIL: axiom $label emitted the cmd/gentle-ai deprecation notice on stderr" >&2
+              cat "$err_file" >&2
+              rm -f "$err_file"
+              exit 1
+            fi
+            rm -f "$err_file"
+          }
+
+          smoke "change"      1 change
+          smoke "workspace"   1 workspace
+          smoke "handoff"     1 handoff
+          smoke "role"        1 role
+          smoke "skill"       1 skill
+          smoke "semantic"    1 semantic
+          smoke "archive"     1 archive
+          smoke "odd"         1 odd
+          smoke "init --help" 0 init --help
+          smoke "ui --help"   0 ui --help
+
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "FAIL: the canonical binary smoke left the checkout dirty:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
       # Lives in this job, not the format job, because only Unit Tests is a
       # required status check on main. A guard that cannot block a merge is
       # decoration.
