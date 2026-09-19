@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -210,6 +211,77 @@ func TestNegotiatedStatusReportsManagedAssetsOutdatedBeforeOfferingStart(t *test
 		converged.NextTransition.ReasonCode != "fresh_target_ready" || converged.NextTransition.Execute == nil ||
 		converged.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("converged managed assets STATUS transition = %#v", converged.NextTransition)
+	}
+}
+
+// Bound STATUS must suspend capture offers without changing their authority,
+// then resume the exact same slot after the advertised sync converges.
+func TestNegotiatedBoundStatusResumesSameCaptureAfterManagedAssetsConverge(t *testing.T) {
+	for _, phase := range []string{"reviewer", "targeted-validator"} {
+		t.Run(phase, func(t *testing.T) {
+			home := reviewEnabledHome(t)
+			var repo, lineage string
+			if phase == "reviewer" {
+				candidate, _, _, record := newArtifactReview(t, false)
+				repo, lineage = candidate, record.State.LineageID
+			} else {
+				repo, lineage, _ = providerCorrectionReadyWithoutVerificationEvidence(t)
+			}
+			store, before, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
+			requireManagedAssetProvenanceNoError(t, err)
+			status := func() ReviewTargetStatusResult {
+				t.Helper()
+				var output bytes.Buffer
+				err := RunReview([]string{"status", "--cwd", repo, "--lineage", lineage,
+					"--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition"}, &output)
+				requireManagedAssetProvenanceNoError(t, err)
+				var result ReviewTargetStatusResult
+				decodeStrictReviewJSON(t, output.Bytes(), &result)
+				requireManagedAssetProvenanceNoError(t, result.Validate())
+				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), output.Bytes())
+				return result
+			}
+			initial := status()
+			if initial.NextTransition == nil || initial.NextTransition.Collect == nil ||
+				len(initial.NextTransition.Collect.Inputs) == 0 {
+				t.Fatalf("initial STATUS did not offer a capture: %#v", initial.NextTransition)
+			}
+			capture := initial.NextTransition.Collect.Inputs[0]
+			if capture.ProviderTask == nil && capture.ArtifactSubject == nil {
+				t.Fatalf("initial STATUS did not offer a provider-bound capture: %#v", initial.NextTransition)
+			}
+			staleManagedReviewerAssets(t, home)
+			stale := status()
+			transition := stale.NextTransition
+			if transition == nil || transition.Kind != reviewNextTransitionStop || transition.ReasonCode != "managed_assets_outdated" ||
+				transition.Execute != nil || transition.Collect != nil || transition.CorrectionRequest != nil || transition.UnachievableLensSlots != nil {
+				t.Fatalf("stale bound STATUS must offer only stop/managed_assets_outdated: %#v", transition)
+			}
+			continuation := transition.Continuation
+			if continuation == nil || continuation.Operation != "sync" || continuation.Agent != "opencode" ||
+				continuation.Command != managedAssetsTestContinuationCommand(t, "opencode") ||
+				!reflect.DeepEqual(continuation.StaleAssets, []string{"sha256:stale"}) {
+				t.Fatalf("stale bound STATUS continuation = %#v", continuation)
+			}
+			if !reflect.DeepEqual(initial.Authority, stale.Authority) || initial.TargetIdentity != stale.TargetIdentity {
+				t.Fatal("stale STATUS changed authority or target")
+			}
+			assertOpenCodeRelayAuthorityUnchanged(t, repo, lineage, store, before)
+
+			// Execute only the advertised continuation against the test-managed home.
+			argv := splitContinuationCommand(continuation.Command)
+			run := exec.Command(argv[0], argv[1:]...)
+			run.Env = append(os.Environ(), "GENTLE_AI_TEST_CLI_STANDIN=1")
+			if output, err := run.CombinedOutput(); err != nil {
+				t.Fatalf("advertised sync failed: %v\n%s", err, output)
+			}
+			converged := status()
+			if !reflect.DeepEqual(initial.NextTransition, converged.NextTransition) ||
+				!reflect.DeepEqual(initial.Authority, converged.Authority) || initial.TargetIdentity != converged.TargetIdentity {
+				t.Fatal("converged STATUS did not resume the identical authority and capture slot")
+			}
+			assertOpenCodeRelayAuthorityUnchanged(t, repo, lineage, store, before)
+		})
 	}
 }
 

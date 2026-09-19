@@ -194,6 +194,23 @@ type ReviewTransitionArtifact struct {
 }
 
 func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
+	transition := resolveReviewNextTransition(status, selectedLenses, artifacts, artifactErr, input)
+	// Gate only active capture offers; recovery, acknowledgement, and existing
+	// stops retain their routing. Freshness never changes the bound authority.
+	if status.Applicability == reviewtransaction.TargetApplicabilityCurrent && status.Authority != nil && transition.Collect != nil {
+		for _, capture := range transition.Collect.Inputs {
+			if _, native := reviewNativeCaptureVerb(capture.CaptureOperation); native || capture.ProviderTask != nil {
+				if provenance := checkManagedReviewerAssets(); provenance.stale() {
+					return reviewManagedAssetsStopTransition(input.RuntimeAgent, provenance.staleAssetIdentities())
+				}
+				break
+			}
+		}
+	}
+	return transition
+}
+
+func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
 	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		switch status.Applicability {
 		case reviewtransaction.TargetApplicabilityUnrelated:
