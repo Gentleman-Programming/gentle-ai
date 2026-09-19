@@ -31,8 +31,10 @@ const ReviewIntegrationStatusSchemaV7 = "gentle-ai.review-integration.status/v7"
 const ReviewIntegrationStatusSchemaIDV7 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v7.schema.json"
 const ReviewIntegrationStatusSchemaV8 = "gentle-ai.review-integration.status/v8"
 const ReviewIntegrationStatusSchemaIDV8 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v8.schema.json"
-const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV8
-const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV8
+const ReviewIntegrationStatusSchemaV9 = "gentle-ai.review-integration.status/v9"
+const ReviewIntegrationStatusSchemaIDV9 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v9.schema.json"
+const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV9
+const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV9
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -238,7 +240,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
 	}
-	if native.Escalation != nil && (schema == ReviewIntegrationStatusSchemaV7 || schema == ReviewIntegrationStatusSchemaV8) {
+	if native.Escalation != nil && (schema == ReviewIntegrationStatusSchemaV7 || schema == ReviewIntegrationStatusSchemaV8 || schema == ReviewIntegrationStatusSchemaV9) {
 		result.Escalation = native.Escalation
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
@@ -329,7 +331,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 
 func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8) && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -531,10 +533,10 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	default:
 		return errors.New("unsupported review status recovery disposition")
 	}
-	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 {
+	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
 		return errors.New("status escalation requires review status schema v7") // refusal:by-design world-action: only the provider can omit escalation from a pre-v7 envelope or publish the v7 identity that defines it
 	}
-	escalationRequired := (result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8) && result.Authority != nil &&
+	escalationRequired := (result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9) && result.Authority != nil &&
 		result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.State == reviewtransaction.StateEscalated
 	if escalationRequired != (result.Escalation != nil) {
 		return errors.New("status escalation must match escalated authority") // refusal:by-design world-action: only the provider can project canonical escalation evidence for a v7 compact authority
@@ -568,7 +570,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 {
+	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	for _, input := range transition.Collect.Inputs {
@@ -583,7 +585,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return err
 		}
 		if input.CaptureOperation == reviewCaptureResultCaptureOperation {
-			if result.Schema != ReviewIntegrationStatusSchemaV8 {
+			if result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
 				return errors.New("pre-v8 negotiated status contains a lens provider task") // refusal:by-design world-action: only status/v8 may publish provider-owned lens tasks
 			}
 			if err := validateReviewLensProviderTaskInput(input, arguments); err != nil {
@@ -591,7 +593,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			}
 			continue
 		}
-		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 {
+		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
 			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
 		}
 		if err := validateReviewProviderTaskInput(input, arguments); err != nil {
@@ -644,13 +646,30 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
 		}
 		if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
-			// The pi host-relay form: a self-contained executable vector with
-			// no submission descriptor; bind it here to this exact authority
-			// and its frozen validation request.
+			// Two forms share this capture operation. The compiled --execute
+			// form is a self-contained executable vector with no submission
+			// descriptor; the pi host-relay form is only the read-only
+			// --materialize prelude, and its submission descriptor -- the
+			// same binding tokens with the raw result substituted into
+			// --input -- is what actually advances authority (#4611).
 			arguments, err := reviewTransitionArgumentMap(input.Arguments)
-			if err != nil || result.Authority == nil || result.ValidationRequest == nil || input.Submission != nil ||
-				(!reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) && !reviewProviderCaptureRuntime(model.AgentID(arguments["agent"]))) ||
-				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
+			if err != nil || result.Authority == nil || result.ValidationRequest == nil {
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			runtime := model.AgentID(arguments["agent"])
+			switch {
+			case reviewProviderCaptureRuntime(runtime):
+				if input.Submission != nil {
+					return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+				}
+			case reviewProviderHostRelayMaterializeRuntime(runtime):
+				if input.Submission == nil {
+					return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+				}
+			default:
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
 				arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity ||
 				arguments["request-hash"] != result.ValidationRequest.RequestHash {
 				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
@@ -730,7 +749,7 @@ func validateReviewLensProviderTaskInput(input ReviewTransitionInput, arguments 
 }
 
 func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
-	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8) || result.Authority == nil || result.ValidationRequest == nil ||
+	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9) || result.Authority == nil || result.ValidationRequest == nil ||
 		input.Name != reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
 		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
 		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
@@ -1221,7 +1240,8 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == reviewCaptureCorrectionPlanOperation || input.CaptureOperation == "review.capture-result" || input.CaptureOperation == "external.select_intended_untracked"
+			submissionAllowed := input.CaptureOperation == reviewCaptureCorrectionPlanOperation || input.CaptureOperation == "review.capture-result" || input.CaptureOperation == "external.select_intended_untracked" ||
+				input.CaptureOperation == reviewCaptureRefuterCaptureOperation || input.CaptureOperation == reviewCaptureValidationCaptureOperation
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -1310,12 +1330,18 @@ func (transition ReviewNextTransition) Validate() error {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
 			}
 			if input.CaptureOperation == reviewCaptureRefuterCaptureOperation || input.CaptureOperation == reviewCaptureValidationCaptureOperation {
-				// A pi host-relay role capture input is a self-contained
-				// executable vector: exactly the binding arguments plus
-				// --agent and --execute=true. Go materializes the role
-				// request, spawns its own locked-down pi process, and admits
-				// the raw bytes, so no submission descriptor may exist for a
-				// caller to author a verdict through.
+				// Two forms share these capture operations. The compiled
+				// --execute form is a self-contained executable vector:
+				// exactly the binding arguments plus --agent and
+				// --execute=true, with no submission descriptor -- Go
+				// materializes the role request, runs its own compiled
+				// adapter in process, and admits the raw bytes. The pi
+				// host-relay form carries the same binding arguments plus
+				// --agent and --materialize=true as a read-only prelude, and
+				// its submission descriptor -- the same binding tokens with
+				// the raw provider result substituted into --input -- is what
+				// actually advances authority; Go never spawns anything for
+				// this role (#4611).
 				providerRuntime := model.AgentID(arguments["agent"])
 				argumentCount, schema := 6, reviewRefuterSchemaID
 				if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
@@ -1332,10 +1358,33 @@ func (transition ReviewNextTransition) Validate() error {
 					return errors.New("provider validation capture transition lacks its frozen request binding") // refusal:by-design world-action: only STATUS can bind the frozen correction request
 				}
 				if input.Schema != schema ||
-					(!reviewProviderHostRelayMaterializeRuntime(providerRuntime) && !reviewProviderCaptureRuntime(providerRuntime)) || arguments["execute"] != "true" ||
 					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
-					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
-					input.Submission != nil {
+					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+				switch {
+				case reviewProviderCaptureRuntime(providerRuntime):
+					if arguments["execute"] != "true" || input.Submission != nil {
+						return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+				case reviewProviderHostRelayMaterializeRuntime(providerRuntime):
+					if arguments["materialize"] != "true" {
+						return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+					// The submission repeats every binding token INCLUDING
+					// --agent and drops only the read-only --materialize
+					// prelude selector.
+					expected := make([]string, 0, len(input.Arguments))
+					for _, argument := range input.Arguments {
+						if argument.Name != "materialize" {
+							expected = append(expected, reviewTransitionArgumentToken(argument))
+						}
+					}
+					expected = append(expected, "--input="+reviewSubmissionValuePlaceholder)
+					if input.Submission == nil || !reflect.DeepEqual(input.Submission.ArgumentTokens, expected) {
+						return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+				default:
 					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
 				}
 			}
@@ -1416,6 +1465,9 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	if submission.OperationToken == "status" {
 		return submission.validateIntendedUntrackedSelection()
 	}
+	if submission.OperationToken == "capture-refuter" || submission.OperationToken == "capture-validation" {
+		return submission.validateProviderRoleCapture()
+	}
 	return errors.New("submission descriptor operation is unsupported") // refusal:by-design world-action: only result capture and correction-plan capture remain public submissions
 }
 
@@ -1456,6 +1508,50 @@ func (submission ReviewTransitionSubmission) validateCaptureResult() error {
 		submission.Value.Schema != reviewReviewerSchemaID || submission.Value.Minimum != 0 ||
 		submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
 		return errors.New("reviewer result submission descriptor value is invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domain
+	}
+	return nil
+}
+
+// validateProviderRoleCapture is the pi host-relay non-lens role submission
+// (#4611): binding tokens only, with the raw provider result substituted
+// into --input. The refuter batch binds lineage/revision/target/
+// repository-context and the identified host-relay runtime; the targeted
+// validator additionally binds the frozen validation request hash.
+func (submission ReviewTransitionSubmission) validateProviderRoleCapture() error {
+	expected, slot, schema := 6, reviewProviderRoleInputName(reviewerprovider.RoleRefuter), reviewRefuterSchemaID
+	if submission.OperationToken == "capture-validation" {
+		expected, slot, schema = 7, reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator), reviewValidatorSchemaID
+	}
+	if submission.Value == nil || len(submission.Values) != 0 || len(submission.ArgumentTokens) != expected ||
+		submission.Value.SubstitutionLocation != expected-1 {
+		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+	}
+	for _, token := range submission.ArgumentTokens {
+		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
+		}
+	}
+	tokens := submission.ArgumentTokens
+	if !strings.HasPrefix(tokens[0], "--lineage=") || !validReviewIntegrationLineage(strings.TrimPrefix(tokens[0], "--lineage=")) ||
+		!strings.HasPrefix(tokens[1], "--expected-revision=") || !validReviewCapabilitySHA256(strings.TrimPrefix(tokens[1], "--expected-revision=")) ||
+		!strings.HasPrefix(tokens[2], "--target=") || !validReviewCapabilitySHA256(strings.TrimPrefix(tokens[2], "--target=")) ||
+		!strings.HasPrefix(tokens[3], "--repository-context=") ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(strings.TrimPrefix(tokens[3], "--repository-context=")) != nil {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
+	}
+	if submission.OperationToken == "capture-validation" &&
+		(!strings.HasPrefix(tokens[4], "--request-hash=") || !validReviewCapabilitySHA256(strings.TrimPrefix(tokens[4], "--request-hash="))) {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
+	}
+	if !strings.HasPrefix(tokens[expected-2], "--agent=") ||
+		!reviewProviderHostRelayMaterializeRuntime(model.AgentID(strings.TrimPrefix(tokens[expected-2], "--agent="))) {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can bind the identified host-relay runtime
+	}
+	if tokens[expected-1] != "--input="+reviewSubmissionValuePlaceholder ||
+		submission.Value.Slot != slot || submission.Value.Domain != "artifact_path_or_stdin" ||
+		submission.Value.Schema != schema || submission.Value.Minimum != 0 ||
+		submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
+		return errors.New("provider role capture submission descriptor value is invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domain
 	}
 	return nil
 }

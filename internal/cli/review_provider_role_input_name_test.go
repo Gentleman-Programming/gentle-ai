@@ -43,7 +43,7 @@ func TestProviderRoleCollectInputNamesObeyPublishedPattern(t *testing.T) {
 	}
 
 	validation := &reviewtransaction.TargetedValidationRequest{RequestHash: "sha256:" + strings.Repeat("d", 64)}
-	relay, err := reviewProviderHostRelayRoleInput(binding, reviewerprovider.RoleTargetedValidator, model.AgentPi, validation)
+	relay, err := reviewProviderRoleMaterializeSubmissionInput(binding, reviewerprovider.RoleTargetedValidator, model.AgentPi, validation)
 	if err != nil {
 		t.Fatal(err)
 	}

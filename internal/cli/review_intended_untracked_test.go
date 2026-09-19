@@ -174,7 +174,7 @@ func TestIntendedUntrackedSelectionSubmissionExecutesSelectedStatusThenPrintedSt
 	}
 	var selected ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &selected)
-	if selected.Schema != ReviewIntegrationStatusSchemaV8 || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
+	if selected.Schema != ReviewIntegrationStatusSchemaV9 || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("selected STATUS = %#v", selected)
 	}
 	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, selected.NextTransition.Execute.Command))

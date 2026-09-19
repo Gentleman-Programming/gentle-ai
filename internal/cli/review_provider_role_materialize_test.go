@@ -5,17 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
@@ -134,87 +129,15 @@ func TestLastCleanReviewerCaptureNeverStrandsARefuterSlot(t *testing.T) {
 	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
 }
 
-// overrideProviderRoleHostAdapter substitutes the Go-owned pi spawn seam with
-// a fake transport for one test.
-func overrideProviderRoleHostAdapter(t *testing.T, adapter reviewerprovider.Adapter) {
-	t.Helper()
-	previous := reviewProviderRoleHostAdapter
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) { return adapter, nil }
-}
-
-type controlledDeadlineContext struct {
-	context.Context
-	done chan struct{}
-	once sync.Once
-	mu   sync.RWMutex
-	err  error
-}
-
-func (ctx *controlledDeadlineContext) Done() <-chan struct{} { return ctx.done }
-
-func (ctx *controlledDeadlineContext) Err() error {
-	ctx.mu.RLock()
-	defer ctx.mu.RUnlock()
-	return ctx.err
-}
-
-func (ctx *controlledDeadlineContext) expire(err error) {
-	ctx.once.Do(func() {
-		ctx.mu.Lock()
-		ctx.err = err
-		ctx.mu.Unlock()
-		close(ctx.done)
-	})
-}
-
-type deadlineAfterReadyAdapter struct {
-	adapter   reviewerprovider.Adapter
-	readyPath string
-}
-
-type providerReviewResult struct {
-	raw []byte
-	err error
-}
-
-func (adapter deadlineAfterReadyAdapter) Review(ctx context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
-	controlled := &controlledDeadlineContext{Context: ctx, done: make(chan struct{})}
-	results := make(chan providerReviewResult, 1)
-	go func() {
-		raw, err := adapter.adapter.Review(controlled, invocation)
-		results <- providerReviewResult{raw: raw, err: err}
-	}()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	lifeline := time.NewTimer(5 * time.Second)
-	defer lifeline.Stop()
-	for {
-		select {
-		case result := <-results:
-			return result.raw, result.err
-		case <-ticker.C:
-			if _, err := os.Stat(adapter.readyPath); err == nil {
-				controlled.expire(context.DeadlineExceeded)
-				returnResult := <-results
-				return returnResult.raw, returnResult.err
-			}
-		case <-ctx.Done():
-			controlled.expire(ctx.Err())
-			returnResult := <-results
-			return returnResult.raw, returnResult.err
-		case <-lifeline.C:
-			controlled.expire(context.Canceled)
-			returnResult := <-results
-			return returnResult.raw, fmt.Errorf("fake pi did not signal readiness: %w", returnResult.err)
-		}
-	}
-}
-
-func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *testing.T) {
+// TestReviewCaptureRefuterExecuteIsHostMediatedForPi is #4611: Go no longer
+// spawns a pi process for the refuter role. --execute is refused for the pi
+// runtime exactly as --materialize is refused for a compiled runtime, naming
+// the STATUS-issued --materialize operation and the --input submission it
+// feeds.
+func TestReviewCaptureRefuterExecuteIsHostMediatedForPi(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	repo, store, record, handle := piRefuterReview(t)
+	repo, _, record, handle := piRefuterReview(t)
 	binding := piRefuterBinding(repo, record, handle)
 	// An execution without the identified host-relay runtime is refused; the
 	// gate is symmetric with the materialize form.
@@ -222,48 +145,23 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *test
 		t.Fatalf("agent-free refuter execution refusal = %v", err)
 	}
 	execute := append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--execute=true")
-	assertRoutedPiCapture(t, repo, reviewerprovider.RoleRefuter, piRefuterRawResult(t, repo, store, record), execute)
-	var output bytes.Buffer
-	if err := RunReview(execute, &output); err != nil {
-		t.Fatal(err)
-	}
-	var terminal reviewLastEventClosureResult
-	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
-	if terminal.Schema != reviewLastEventClosureSchema || terminal.Operation != reviewCaptureRefuterCaptureOperation ||
-		terminal.LineageID != record.State.LineageID || terminal.State != reviewtransaction.StateCorrectionRequired {
-		t.Fatalf("refuter capture closure = %#v", terminal)
-	}
-	final, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, captured := final.State.AdmittedRoleResult(reviewtransaction.CompactRoleRefuter, record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity, request.RequestHash); !captured {
-		t.Fatal("refuter submission did not merge an in-record role value")
-	}
-	if final.State.State != reviewtransaction.StateCorrectionRequired {
-		t.Fatalf("terminal state = %q, want corroborated blocking finding to require correction", final.State.State)
+	err := RunReview(execute, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "host-mediated") || !strings.Contains(err.Error(), "--materialize") || !strings.Contains(err.Error(), "--input") {
+		t.Fatalf("pi refuter --execute refusal = %v", err)
 	}
 }
 
 // TestReviewCaptureRefuterInputSubmitsHostRunResultAndClosesTheSlot is T1
 // (issue #4611): the host materializes the refuter prompt itself, runs its own
 // reviewer on it out of process, and submits only the raw bytes through
-// --input. Go never spawns anything for this submission -- the poisoned
-// adapter override fails the test if the retired PiAdapter seam is invoked --
-// and admission and closure land exactly where --execute already lands them.
+// --input. Go never spawns anything for this submission -- the Go-owned pi
+// spawn seam no longer exists in this binary -- and admission and closure
+// land exactly where --execute used to land them for a compiled runtime.
 func TestReviewCaptureRefuterInputSubmitsHostRunResultAndClosesTheSlot(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
 	binding := piRefuterBinding(repo, record, handle)
-	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-		t.Fatal("review capture-refuter --input must not invoke any provider adapter")
-		return nil, nil
-	}))
 	input := filepath.Join(t.TempDir(), "refuter-result.json")
 	if err := os.WriteFile(input, piRefuterRawResult(t, repo, store, record), 0o600); err != nil {
 		t.Fatal(err)
@@ -300,10 +198,6 @@ func TestReviewCaptureRefuterInputDashReadsStdin(t *testing.T) {
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
 	binding := piRefuterBinding(repo, record, handle)
-	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-		t.Fatal("review capture-refuter --input - must not invoke any provider adapter")
-		return nil, nil
-	}))
 	r, w, pipeErr := os.Pipe()
 	if pipeErr != nil {
 		t.Fatal(pipeErr)
@@ -339,10 +233,6 @@ func TestReviewCaptureRefuterInputRefusesMissingEmptyOrUnadmittableBytesWithoutS
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, store, record, handle := piRefuterReview(t)
 	binding := piRefuterBinding(repo, record, handle)
-	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-		t.Fatal("review capture-refuter --input must not invoke any provider adapter")
-		return nil, nil
-	}))
 
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", missing), io.Discard); err == nil || !strings.Contains(err.Error(), "read provider refuter result") {
@@ -406,10 +296,6 @@ func TestReviewCaptureValidationInputSubmitsHostRunResultAndCloses(t *testing.T)
 		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 	}
-	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-		t.Fatal("review capture-validation --input must not invoke any provider adapter")
-		return nil, nil
-	}))
 	input := filepath.Join(t.TempDir(), "validation-result.json")
 	if err := os.WriteFile(input, providerTargetedValidationPayload(t, request), 0o600); err != nil {
 		t.Fatal(err)
@@ -426,39 +312,6 @@ func TestReviewCaptureValidationInputSubmitsHostRunResultAndCloses(t *testing.T)
 		t.Fatalf("validation --input closure = %#v", closure)
 	}
 	assertApprovedCompactAuthorityBurned(t, store, lineage)
-}
-
-// TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture stalls a
-// real spawned fake pi (its grandchild holds the inherited stdout pipe) past
-// the shrunken deadline: typed refusal, untouched slot, no hang.
-func TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture(t *testing.T) {
-	reviewEnabledHome(t)
-	if goruntime.GOOS == "windows" {
-		t.Skip("the stalled fake pi is a POSIX shell script")
-	}
-	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	repo, store, record, handle := piRefuterReview(t)
-	previous := reviewProviderRoleCaptureTimeout
-	t.Cleanup(func() { reviewProviderRoleCaptureTimeout = previous })
-	reviewProviderRoleCaptureTimeout = 10 * time.Second
-	ready := filepath.Join(t.TempDir(), "pi-ready")
-	stalled := filepath.Join(t.TempDir(), "stalled-pi")
-	if err := os.WriteFile(stalled, []byte("#!/bin/sh\n: > "+strconv.Quote(ready)+"\nexec sleep 10\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	realPi := &reviewerprovider.PiAdapter{LookPath: func(string) (string, error) { return stalled, nil }}
-	overrideProviderRoleHostAdapter(t, deadlineAfterReadyAdapter{adapter: realPi, readyPath: ready})
-	err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", string(model.AgentPi), "--execute=true"), io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "pi reviewer transport failed") || !strings.Contains(err.Error(), "context deadline exceeded") {
-		t.Fatalf("stalled pi deadline refusal = %v", err)
-	}
-	if _, readinessErr := os.Stat(ready); readinessErr != nil {
-		t.Fatalf("fake pi did not announce readiness before deadline: %v", readinessErr)
-	}
-	current, loadErr := store.Load()
-	if loadErr != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
-		t.Fatalf("stalled pi execution mutated compact authority: %#v, %v", current, loadErr)
-	}
 }
 
 // TestReviewCaptureRefuterMaterializeRefusesCompletePromptOverRuntimeBudget
@@ -601,9 +454,10 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			argv: slices.Clone(fakeBinding),
 			want: "either --materialize",
 		},
-		// The execute form is gated exactly like the materialize form: the
-		// Go-owned adversarial spawn runs only for the identified host-relay
-		// runtime, never for an unidentified or compiled caller.
+		// The execute form now runs only the compiled Go-owned adapter: it
+		// requires an identified runtime, and it is refused for every runtime
+		// that is not compiled -- including the pi host relay, which is
+		// host-mediated instead (#4611).
 		{
 			name: "execution without agent", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--execute=true"),
@@ -623,6 +477,15 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			name: "execution from opencode", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--execute=true"),
 			want: "invalid_request",
+		},
+		{
+			// Go never spawns a process for the pi host relay: --execute is
+			// refused exactly as --materialize is refused for a compiled
+			// runtime, naming the STATUS-issued --materialize operation and
+			// the --input submission it feeds.
+			name: "execution from pi runtime is host-mediated", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--execute=true"),
+			want: "host-mediated",
 		},
 		{
 			// Same as the materialize case above: the fake binding is
@@ -715,9 +578,11 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 	if input.CaptureOperation != "review.capture-refuter" || input.Name != "provider_refuter" || input.Schema != reviewRefuterSchemaID || input.ProviderTask != nil {
 		t.Fatalf("pi host relay refuter input = %#v", input)
 	}
-	// The rendered vector is self-contained and name-based: every token is
-	// re-derived from the input's own arguments, and no submission descriptor
-	// exists for a caller to author a verdict through.
+	// The rendered vector is only the read-only materialize prelude: every
+	// prelude token is re-derived from the input's own arguments, and the
+	// submission descriptor -- the same binding tokens with the raw provider
+	// result substituted into --input -- is what actually advances authority.
+	// Go never spawns a process for this role (#4611).
 	tokens := map[string]string{}
 	for _, argument := range input.Arguments {
 		if argument.Token != reviewTransitionArgumentToken(argument) {
@@ -725,8 +590,23 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 		}
 		tokens[argument.Name] = argument.Token
 	}
-	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["execute"] != "--execute=true" || input.Submission != nil {
-		t.Fatalf("pi host relay refuter arguments = %#v, submission = %#v", input.Arguments, input.Submission)
+	if tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" || tokens["execute"] != "" {
+		t.Fatalf("pi host relay refuter arguments = %#v", input.Arguments)
+	}
+	wantSubmissionTokens := make([]string, 0, len(input.Arguments))
+	for _, argument := range input.Arguments {
+		if argument.Name == "materialize" {
+			continue
+		}
+		wantSubmissionTokens = append(wantSubmissionTokens, argument.Token)
+	}
+	wantSubmissionTokens = append(wantSubmissionTokens, "--input="+reviewSubmissionValuePlaceholder)
+	if input.Submission == nil || input.Submission.OperationToken != "capture-refuter" ||
+		!slices.Equal(input.Submission.ArgumentTokens, wantSubmissionTokens) || len(input.Submission.Values) != 0 ||
+		input.Submission.Value == nil || input.Submission.Value.Slot != "provider_refuter" ||
+		input.Submission.Value.Domain != "artifact_path_or_stdin" || input.Submission.Value.Schema != reviewRefuterSchemaID ||
+		input.Submission.Value.SubstitutionLocation != len(wantSubmissionTokens)-1 {
+		t.Fatalf("pi host relay refuter submission = %#v, want tokens %v", input.Submission, wantSubmissionTokens)
 	}
 
 	// The OpenCode rendering stays byte-identical: a Go-issued provider task,
@@ -753,14 +633,31 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 		t.Fatalf("OpenCode refuter rendering changed: %#v", opencodeInput)
 	}
 
-	// The rendered transition is executable exactly as issued: the vector
-	// itself materializes, spawns the Go-owned pi process, and admits.
-	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: piRefuterRawResult(t, repo, store, record)})
-	execute := []string{"capture-refuter", "--cwd=" + repo}
+	// The rendered transition is executable exactly as issued: the
+	// materialize prelude prints the exact Go-materialized prompt, and
+	// substituting the submission descriptor's {{value}} slot with a raw
+	// host-run result submits it through --input. Go never spawns anything.
+	materialize := []string{"capture-refuter", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
-		execute = append(execute, argument.Token)
+		materialize = append(materialize, argument.Token)
 	}
-	if err := RunReview(execute, &bytes.Buffer{}); err != nil {
+	var materialized bytes.Buffer
+	if err := RunReview(materialize, &materialized); err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(materialized.Bytes(), request.Invocation.Prompt()) {
+		t.Fatal("STATUS-rendered materialize prelude diverged from the Go-materialized refuter request")
+	}
+	resultFile := writeReviewCLIRawInput(t, piRefuterRawResult(t, repo, store, record))
+	submit := append([]string{input.Submission.OperationToken, "--cwd", repo}, input.Submission.ArgumentTokens...)
+	for index := range submit {
+		submit[index] = strings.ReplaceAll(submit[index], reviewSubmissionValuePlaceholder, resultFile)
+	}
+	if err := RunReview(submit, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	final, err := store.Load()
@@ -776,7 +673,7 @@ func TestNegotiatedStatusRendersPiHostRelayRefuterCollectInput(t *testing.T) {
 	}
 }
 
-func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
+func TestReviewCaptureValidationMaterializesSubmitsAndCloses(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
@@ -818,20 +715,31 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 		tokens[argument.Name] = argument.Token
 	}
 	if arguments["request-hash"] != request.RequestHash || arguments["target"] != request.CorrectionTargetIdentity ||
-		tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["execute"] != "--execute=true" || input.Submission != nil {
-		t.Fatalf("pi host relay validation arguments = %#v, submission = %#v", input.Arguments, input.Submission)
+		tokens["agent"] != "--agent="+string(model.AgentPi) || tokens["materialize"] != "--materialize=true" || tokens["execute"] != "" {
+		t.Fatalf("pi host relay validation arguments = %#v", input.Arguments)
+	}
+	wantSubmissionTokens := make([]string, 0, len(input.Arguments))
+	for _, argument := range input.Arguments {
+		if argument.Name == "materialize" {
+			continue
+		}
+		wantSubmissionTokens = append(wantSubmissionTokens, argument.Token)
+	}
+	wantSubmissionTokens = append(wantSubmissionTokens, "--input="+reviewSubmissionValuePlaceholder)
+	if input.Submission == nil || input.Submission.OperationToken != "capture-validation" ||
+		!slices.Equal(input.Submission.ArgumentTokens, wantSubmissionTokens) || len(input.Submission.Values) != 0 ||
+		input.Submission.Value == nil || input.Submission.Value.Slot != "provider_targeted_validator" ||
+		input.Submission.Value.Domain != "artifact_path_or_stdin" || input.Submission.Value.Schema != reviewValidatorSchemaID ||
+		input.Submission.Value.SubstitutionLocation != len(wantSubmissionTokens)-1 {
+		t.Fatalf("pi host relay validation submission = %#v, want tokens %v", input.Submission, wantSubmissionTokens)
 	}
 
 	// Materialize form of the same rendered binding: idempotent,
 	// byte-identical to the Go-materialized validator request, slot-free.
 	prelude := []string{"capture-validation", "--cwd=" + repo}
 	for _, argument := range input.Arguments {
-		if argument.Name == "execute" {
-			continue
-		}
 		prelude = append(prelude, argument.Token)
 	}
-	prelude = append(prelude, "--materialize=true")
 	var first bytes.Buffer
 	if err := RunReview(slices.Clone(prelude), &first); err != nil {
 		t.Fatal(err)
@@ -859,15 +767,16 @@ func TestReviewCaptureValidationMaterializesExecutesAndCloses(t *testing.T) {
 		t.Fatalf("validator materialize mutated compact authority: %#v, %v", current, err)
 	}
 
-	// Execution: the rendered vector spawns the Go-owned pi transport and the
-	// raw bytes close the bounded correction on their terminal capture.
-	execute := []string{"capture-validation", "--cwd=" + repo}
-	for _, argument := range input.Arguments {
-		execute = append(execute, argument.Token)
+	// Submission: substituting the descriptor's {{value}} slot with a raw
+	// host-run result submits it through --input and closes the bounded
+	// correction on its terminal capture. Go never spawns anything.
+	resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, request))
+	submit := append([]string{input.Submission.OperationToken, "--cwd", repo}, input.Submission.ArgumentTokens...)
+	for index := range submit {
+		submit[index] = strings.ReplaceAll(submit[index], reviewSubmissionValuePlaceholder, resultFile)
 	}
-	assertRoutedPiCapture(t, repo, reviewerprovider.RoleTargetedValidator, providerTargetedValidationPayload(t, request), execute)
 	var captured bytes.Buffer
-	if err := RunReview(execute, &captured); err != nil {
+	if err := RunReview(submit, &captured); err != nil {
 		t.Fatal(err)
 	}
 	var closure reviewLastEventClosureResult
@@ -957,6 +866,33 @@ func TestNegotiatedStatusOffersCurrentValidationCaptureForOtherRuntimes(t *testi
 		task == nil || task.Agent != "review-validator" || task.Role != string(reviewerprovider.RoleTargetedValidator) ||
 		!strings.HasPrefix(task.Prompt, reviewProviderTaskBindingHeader+" ") {
 		t.Fatalf("OpenCode validation rendering changed: %#v", opencodeInput)
+	}
+
+	// pi is host-mediated: the collection input carries the materialize
+	// prelude plus a submission descriptor, never --execute (#4611).
+	var pi bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+		"--agent", string(model.AgentPi), "--next-transition",
+	}, &pi); err != nil {
+		t.Fatal(err)
+	}
+	var piStatus ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, pi.Bytes(), &piStatus)
+	if piStatus.NextTransition == nil || piStatus.NextTransition.ReasonCode != "targeted_validation_required" ||
+		piStatus.NextTransition.Collect == nil || len(piStatus.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("pi validation transition changed: %#v", piStatus.NextTransition)
+	}
+	piInput := piStatus.NextTransition.Collect.Inputs[0]
+	piArguments := map[string]string{}
+	for _, argument := range piInput.Arguments {
+		piArguments[argument.Name] = argument.Token
+	}
+	if piInput.CaptureOperation != reviewCaptureValidationCaptureOperation || piInput.ValidationRequest == nil ||
+		piArguments["materialize"] != "--materialize=true" || piArguments["execute"] != "" || piInput.Submission == nil ||
+		piInput.Submission.OperationToken != "capture-validation" || piInput.Submission.Value == nil ||
+		piInput.Submission.Value.Domain != "artifact_path_or_stdin" || piInput.Submission.Value.Schema != reviewValidatorSchemaID {
+		t.Fatalf("pi validation rendering = %#v, submission = %#v", piInput, piInput.Submission)
 	}
 }
 

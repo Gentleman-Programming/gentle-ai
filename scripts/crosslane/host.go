@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -152,6 +154,111 @@ func hasArgument(input map[string]any, name string) bool {
 	return false
 }
 
+// authoredRoleVerdict materializes the exact Go-issued non-lens provider role
+// request for a host-relay collect input, then authors a minimal admissible
+// verdict from it instead of relaying it through a model (#4611: Go never
+// spawns pi for these roles, so there is nothing left for the battery to
+// spawn either). The battery's only model relay path (runPiRelaySlot,
+// through gentle-pi's installed review-host-relay.ts) is built for the lens
+// role only; teaching it the two non-lens roles belongs to gentle-pi's own
+// in-process completion work (this feature's sibling PR under
+// inprocess-reviewer-completion.md), not this cross-lane harness. The
+// refuter and validator verdicts this produces are authored test fixtures,
+// not real adversarial or acceptance judgments -- they exist only to prove
+// the submission and admission mechanism, the same role this battery's other
+// authored fixtures (e.g. hostPiCorrectedModule) already play.
+func (b *battery) authoredRoleVerdict(lane, repo string, env []string, input map[string]any) (string, bool) {
+	fail := func(note string) (string, bool) { b.fail(lane, "author role verdict", note); return "", false }
+	operation := strings.TrimPrefix(getString(input, "capture_operation"), "review.")
+	prompt, stderr, code := b.runEnv(repo, env, append([]string{"review", operation}, argumentTokens(input)...)...)
+	if code != 0 || strings.TrimSpace(prompt) == "" {
+		return fail(fmt.Sprintf("materialize %s request exit=%d %s", operation, code, firstLine(stderr)))
+	}
+	switch getString(input, "submission", "value", "slot") {
+	case "provider_targeted_validator":
+		values := argumentValues(input)
+		if values["request-hash"] == "" || values["target"] == "" {
+			return fail("targeted-validator collect input omitted its binding arguments")
+		}
+		payload, err := json.Marshal(map[string]any{
+			"targeted_validation_request_hash": values["request-hash"],
+			"correction_target_identity":       values["target"],
+			"original_criteria":                map[string]any{"passed": true, "evidence": []string{"crosslane authored fixture verdict: original acceptance criteria re-ran and passed"}},
+			"correction_regression":            map[string]any{"passed": true, "evidence": []string{"crosslane authored fixture verdict: no regression introduced"}},
+			"follow_ups":                       []any{},
+		})
+		if err != nil {
+			return fail(err.Error())
+		}
+		return string(payload), true
+	case "provider_refuter":
+		request, err := hostPiRoleRequestPayload(prompt)
+		if err != nil {
+			return fail(err.Error())
+		}
+		requestHash, _ := request["request_hash"].(string)
+		claims, _ := request["claims"].([]any)
+		results := make([]map[string]any, 0, len(claims))
+		for _, raw := range claims {
+			claim, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if findingID, _ := claim["finding_id"].(string); findingID != "" {
+				results = append(results, map[string]any{
+					"finding_id": findingID, "outcome": "inconclusive",
+					"proof_refs": []string{"crosslane authored fixture verdict: no independent reproduction attempted"},
+				})
+			}
+		}
+		if requestHash == "" || len(results) == 0 {
+			return fail(fmt.Sprintf("materialized refuter request carried no request_hash or claims: %s", firstLine(prompt)))
+		}
+		payload, err := json.Marshal(map[string]any{"refuter_request_hash": requestHash, "results": results})
+		if err != nil {
+			return fail(err.Error())
+		}
+		return string(payload), true
+	default:
+		return fail(fmt.Sprintf("unsupported provider role submission slot %q", getString(input, "submission", "value", "slot")))
+	}
+}
+
+// hostPiRoleRequestPayload extracts the JSON "Input:" section a Go-issued
+// non-lens role prompt embeds between its instruction and its output schema,
+// mirroring the delimiter the product's own materialization uses
+// (reviewProviderRoleTaskRequest: "%s\n\nInput:\n%s\n\nOutput schema:\n%s").
+func hostPiRoleRequestPayload(prompt string) (map[string]any, error) {
+	_, after, found := strings.Cut(prompt, "\n\nInput:\n")
+	if !found {
+		return nil, fmt.Errorf("materialized role prompt carries no Input section")
+	}
+	body, _, found := strings.Cut(after, "\n\nOutput schema:\n")
+	if !found {
+		return nil, fmt.Errorf("materialized role prompt carries no Output schema section")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return nil, fmt.Errorf("decode materialized role request: %w", err)
+	}
+	return payload, nil
+}
+
+// submitRoleVerdict writes an authored role verdict to a scratch file outside
+// the reviewed repository (the frozen candidate must never gain an untracked
+// file it did not intend) and submits it through the collect input's
+// rendered submission descriptor, substituting its {{value}} slot with that
+// file's path exactly as a real host-relay runtime would after running its
+// own reviewer out of process.
+func (b *battery) submitRoleVerdict(lane, repo string, env []string, input map[string]any, verdict string) (map[string]any, string, int) {
+	path := filepath.Join(b.workRoot, "host-pi-role-verdict.json")
+	if err := os.WriteFile(path, []byte(verdict), 0o644); err != nil {
+		return nil, err.Error(), 1
+	}
+	tokens := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"value": path})
+	return b.runJSONEnv("role-submit", repo, env, append([]string{"review", getString(input, "submission", "operation_token")}, tokens...)...)
+}
+
 func (b *battery) hostNegotiatedStart(lane, repo, agent string, env []string, risk string) bool {
 	statusDoc, stderr, code := b.statusEnv(repo, agent, env)
 	command := getString(statusDoc, "next_transition", "execute", "command")
@@ -283,11 +390,28 @@ func (b *battery) hostFollowToReceipt(lane, repo, agent string, env []string) {
 					return
 				}
 			case "review.capture-refuter", "review.capture-validation":
-				// The provider-rendered argv carries --execute: Go itself spawns
-				// the real locked-down pi role process on the materialized request.
-				b.noteHostCost(lane, "1 Go-owned pi role process run ("+operation+")")
-				roleDoc, roleStderr, code := b.runJSONEnv("provider-role", repo, env,
-					append([]string{"review", strings.TrimPrefix(operation, "review.")}, argumentTokens(input)...)...)
+				var roleDoc map[string]any
+				var roleStderr string
+				var code int
+				if hasArgument(input, "materialize") && getMap(input, "submission") != nil {
+					// pi is host-mediated: Go never spawns a process for this
+					// role (#4611). The battery materializes the exact
+					// Go-issued request itself and submits an authored
+					// fixture verdict through --input (authoredRoleVerdict).
+					verdict, ok := b.authoredRoleVerdict(lane, repo, env, input)
+					if !ok {
+						return
+					}
+					b.noteHostCost(lane, "0 model runs (authored fixture verdict, "+operation+", pi host relay #4611)")
+					roleDoc, roleStderr, code = b.submitRoleVerdict(lane, repo, env, input, verdict)
+				} else {
+					// The provider-rendered argv carries --execute: Go itself
+					// spawns the real locked-down compiled adapter process on
+					// the materialized request.
+					b.noteHostCost(lane, "1 Go-owned "+agent+" role process run ("+operation+")")
+					roleDoc, roleStderr, code = b.runJSONEnv("provider-role", repo, env,
+						append([]string{"review", strings.TrimPrefix(operation, "review.")}, argumentTokens(input)...)...)
+				}
 				if code != 0 || !admittedCapture(roleDoc) {
 					b.fail(lane, check, fmt.Sprintf("%s exit=%d state=%q %s", operation, code, operationState(roleDoc), firstLine(roleStderr)))
 					return

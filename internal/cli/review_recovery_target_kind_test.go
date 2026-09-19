@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -249,17 +248,13 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 		t.Fatal(err)
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return failedPayload, nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	failedResultFile := writeReviewCLIRawInput(t, failedPayload)
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
 		"--expected-revision", open.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
-		"--agent", "pi", "--execute=true",
+		"--agent", "pi", "--input", failedResultFile,
 	}, io.Discard); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v", err)
 	}
@@ -326,17 +321,13 @@ func escalatedBaseDiffRecoveryFixture(t *testing.T, repo, lineage, baseRef strin
 		t.Fatal(err)
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return failedPayload, nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	failedResultFile := writeReviewCLIRawInput(t, failedPayload)
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
 		"--expected-revision", open.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
-		"--agent", "pi", "--execute=true",
+		"--agent", "pi", "--input", failedResultFile,
 	}, io.Discard); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v", err)
 	}

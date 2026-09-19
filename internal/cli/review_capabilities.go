@@ -317,6 +317,10 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		}
 		// issue #4040: status/v7 publishes eligible_untracked_inventory
 		// unconditionally at the STATUS top level (design decision 5).
+		// The published capabilities-v2.6.schema.json advertisement is a
+		// closed enum (issue #4765's shipped surface); status/v9 (#4611) is
+		// additive to the status contract but is not yet advertised through
+		// capabilities, which stays its own separately versioned contract.
 		result.Schemas = append(result.Schemas, ReviewIntegrationStatusSchemaV6, ReviewIntegrationConsentSchemaV3, reviewIntendedUntrackedSelectionSchema, ReviewIntegrationStatusSchemaV7, ReviewIntegrationStatusSchemaV8)
 		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
 			Name: "provider_bound_native_git_context", Supported: true,

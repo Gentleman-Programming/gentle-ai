@@ -19,8 +19,8 @@ func TestOpenCodeV1StatusEmitsProviderOwnedLensTasks(t *testing.T) {
 	repo, _, _, record := newArtifactReview(t, true)
 
 	status, raw := openCodeLensTaskStatus(t, repo, record.State.LineageID)
-	if status.Schema != "gentle-ai.review-integration.status/v8" {
-		t.Fatalf("STATUS schema = %q, want v8", status.Schema)
+	if status.Schema != "gentle-ai.review-integration.status/v9" {
+		t.Fatalf("STATUS schema = %q, want v9", status.Schema)
 	}
 	if status.NextTransition == nil || status.NextTransition.Collect == nil ||
 		status.NextTransition.ReasonCode != "reviewer_results_required" {
@@ -60,7 +60,7 @@ func TestOpenCodeV1StatusEmitsProviderOwnedLensTasks(t *testing.T) {
 	if err := status.Validate(); err != nil {
 		t.Fatalf("provider-owned lens STATUS validation: %v", err)
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v8.schema.json"), raw)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), raw)
 }
 
 func TestOpenCodeV1StatusRejectsMutatedLensProviderTasks(t *testing.T) {
@@ -154,7 +154,7 @@ func TestLensProviderTasksAreOpenCodeV1Only(t *testing.T) {
 			if err := status.Validate(); err != nil {
 				t.Fatalf("%s STATUS validation: %v", runtime, err)
 			}
-			validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v8.schema.json"), output.Bytes())
+			validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
 			for _, input := range status.NextTransition.Collect.Inputs {
 				if input.ProviderTask != nil {
 					t.Fatalf("%s input gained OpenCode provider task: %#v", runtime, input)

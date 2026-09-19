@@ -404,7 +404,7 @@ func TestNegotiatedStatusDerivedCommittedRangePayloadValidatesAgainstPublishedSc
 	if arguments["base-ref"] == status.Projection.BaseTree {
 		t.Fatalf("derived base-ref=%q disclosed the tree object instead of the derived commit", arguments["base-ref"])
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v8.schema.json"), output.Bytes())
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
 }
 
 // crissCrossReviewRepo builds a repository with two merge commits that share
@@ -501,7 +501,7 @@ func TestNegotiatedStatusAmbiguousCommittedRangeFallsBackToCollect(t *testing.T)
 			if status.NextTransition.Execute != nil {
 				t.Fatalf("ambiguous committed range offered an executable START: %#v", status.NextTransition.Execute)
 			}
-			validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v8.schema.json"), output.Bytes())
+			validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
 		})
 	}
 }

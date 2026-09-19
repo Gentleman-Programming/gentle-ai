@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -25,23 +24,6 @@ type reviewProviderRoleCaptureArtifact struct {
 	TargetIdentity string `json:"target_identity"`
 	Role           string `json:"role"`
 	Captured       bool   `json:"captured"`
-}
-
-// reviewProviderRoleHostAdapter is the one seam through which role capture
-// spawns the Go-owned pi process. Tests substitute a fake transport here; the
-// lens path keeps its host-mediated refusal in reviewProviderAdapterFor.
-var reviewProviderRoleHostAdapter = func(role reviewerprovider.Role, root string) (reviewerprovider.Adapter, error) {
-	key := "review-refuter"
-	if role == reviewerprovider.RoleTargetedValidator {
-		key = "review-validator"
-	}
-	route, err := pi.ResolveReviewRouting(root, key)
-	if err != nil {
-		return nil, err
-	}
-	adapter := reviewerprovider.NewPiAdapter()
-	adapter.Model, adapter.Thinking = route.Model, route.Thinking
-	return adapter, nil
 }
 
 // reviewProviderRoleCaptureTimeout bounds one role capture operation so a full
@@ -150,6 +132,9 @@ func parseReviewProviderRoleCapture(command string, args []string, stdout io.Wri
 	if reviewProviderCaptureRuntime(binding.runtime) && binding.input != "" {
 		return nil, reviewPreflightError(fmt.Errorf("review %s --input is unavailable for %q: its compiled Go adapter executes the provider contract directly; rerun `gentle-ai review %s` with the same binding and --execute", command, binding.runtime, command))
 	}
+	if reviewProviderHostRelayMaterializeRuntime(binding.runtime) && binding.execute {
+		return nil, reviewPreflightError(fmt.Errorf("review %s --execute is unavailable for %q: it is host-mediated; run the STATUS-issued `--materialize` operation and submit the host result through `--input`", command, binding.runtime)) // refusal:by-design world-action: Go never spawns a process for a host-relay runtime; the host materializes, runs its own reviewer, and submits the raw result
+	}
 	if !reviewProviderCaptureRuntime(binding.runtime) && reviewCaptureBoundRuntimeCapability(binding.runtime).Transport != reviewImmutableTransportPiHostRelay {
 		return nil, reviewPreflightError(fmt.Errorf("review %s provider runtime %q has no Go-owned role capture contract", command, binding.runtime)) // refusal:by-design world-action: only compiled adapters and the Pi host relay collect non-lens provider roles
 	}
@@ -232,27 +217,18 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 			return err
 		}
 	} else {
-		var raw []byte
-		if binding.input != "" {
-			// The host already materialized this exact request, ran its own
-			// reviewer on it, and hands back only the raw result: no adapter
-			// is invoked here, and no retry is granted. Unadmittable bytes are
-			// a typed refusal that leaves the slot open for STATUS to reoffer,
-			// exactly like a malformed in-process capture.
-			raw, err = readFacadeBytes(binding.input)
-			if err != nil {
-				return reviewPreflightError(fmt.Errorf("read provider refuter result: %w", err))
-			}
-		} else {
-			adapter, routingErr := reviewProviderRoleHostAdapter(reviewerprovider.RoleRefuter, binding.root)
-			if routingErr != nil {
-				return reviewPreflightError(routingErr)
-			}
-			var hostErr error
-			raw, hostErr = adapter.Review(ctx, request.Invocation)
-			if hostErr != nil {
-				return reviewPreflightError(fmt.Errorf("invoke provider refuter: %w", hostErr))
-			}
+		// binding.input is guaranteed non-empty here: --execute is refused for
+		// every host-relay runtime at parse time
+		// (parseReviewProviderRoleCapture), and reviewProviderCaptureRuntime
+		// already routed every compiled runtime through the branch above. Go
+		// never spawns a process for this role (#4611): the host already
+		// materialized this exact request, ran its own reviewer on it out of
+		// process, and hands back only the raw result. Unadmittable bytes are
+		// a typed refusal that leaves the slot open for STATUS to reoffer,
+		// exactly like a malformed in-process capture.
+		raw, readErr := readFacadeBytes(binding.input)
+		if readErr != nil {
+			return reviewPreflightError(fmt.Errorf("read provider refuter result: %w", readErr))
 		}
 		if _, err := reviewProviderCaptureRefuterRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw); err != nil {
 			return reviewPreflightError(err)
@@ -323,28 +299,17 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 		}
 		return encodeReviewJSON(stdout, closure)
 	}
-	var raw []byte
-	if binding.input != "" {
-		// The host already materialized this exact request, ran its own
-		// reviewer on it, and hands back only the raw result: no adapter is
-		// invoked here, and no retry is granted. Unadmittable bytes are a
-		// typed refusal that leaves the slot open for STATUS to reoffer,
-		// exactly like a malformed in-process capture.
-		var readErr error
-		raw, readErr = readFacadeBytes(binding.input)
-		if readErr != nil {
-			return reviewPreflightError(fmt.Errorf("read provider targeted validator result: %w", readErr))
-		}
-	} else {
-		adapter, routingErr := reviewProviderRoleHostAdapter(reviewerprovider.RoleTargetedValidator, binding.root)
-		if routingErr != nil {
-			return reviewPreflightError(routingErr)
-		}
-		var hostErr error
-		raw, hostErr = adapter.Review(ctx, request.Invocation)
-		if hostErr != nil {
-			return reviewPreflightError(fmt.Errorf("invoke provider targeted validator: %w", hostErr))
-		}
+	// binding.input is guaranteed non-empty here: --execute is refused for
+	// every host-relay runtime at parse time (parseReviewProviderRoleCapture),
+	// and reviewProviderCaptureRuntime already routed every compiled runtime
+	// through the branch above. Go never spawns a process for this role
+	// (#4611): the host already materialized this exact request, ran its own
+	// reviewer on it out of process, and hands back only the raw result.
+	// Unadmittable bytes are a typed refusal that leaves the slot open for
+	// STATUS to reoffer, exactly like a malformed in-process capture.
+	raw, readErr := readFacadeBytes(binding.input)
+	if readErr != nil {
+		return reviewPreflightError(fmt.Errorf("read provider targeted validator result: %w", readErr))
 	}
 	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(ctx, binding.root, store, state, state.CapturePhaseRevision, raw)
 	if err != nil {

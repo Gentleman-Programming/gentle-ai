@@ -407,13 +407,9 @@ func TestTargetedValidatorCaptureRequiresNoVerificationEvidenceAndLeavesNoStrand
 		t.Fatal(err)
 	}
 
-	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return providerTargetedValidationPayload(t, request), nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, request))
 
 	var terminalOutput bytes.Buffer
 	if err := RunReviewCaptureValidation([]string{
@@ -423,7 +419,7 @@ func TestTargetedValidatorCaptureRequiresNoVerificationEvidenceAndLeavesNoStrand
 		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
-		"--execute=true",
+		"--input", resultFile,
 	}, &terminalOutput); err != nil {
 		t.Fatalf("capture targeted validator without repository verification evidence: %v\n%s", err, terminalOutput.String())
 	}
@@ -501,20 +497,16 @@ func TestTargetedValidationCaptureClosesWithoutVerificationEvidence(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return providerTargetedValidationPayload(t, request), nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, request))
 	var terminalOutput bytes.Buffer
 	if err := RunReview([]string{
 		"capture-validation", "--cwd", repo, "--lineage", lineage,
 		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
-		"--request-hash", request.RequestHash, "--agent", string(model.AgentPi), "--execute=true",
+		"--request-hash", request.RequestHash, "--agent", string(model.AgentPi), "--input", resultFile,
 	}, &terminalOutput); err != nil {
-		t.Fatalf("execute targeted validation capture: %v\n%s", err, terminalOutput.String())
+		t.Fatalf("submit targeted validation capture: %v\n%s", err, terminalOutput.String())
 	}
 	var terminal reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, terminalOutput.Bytes(), &terminal)
@@ -536,17 +528,13 @@ func TestConcurrentAndReplayedTargetedValidatorCaptureHasOneCloser(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return providerTargetedValidationPayload(t, request), nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture, even concurrently.
+	resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, request))
 	args := []string{
 		"--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
 		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
-		"--agent", string(model.AgentPi), "--execute=true",
+		"--agent", string(model.AgentPi), "--input", resultFile,
 	}
 
 	const attempts = 8
@@ -629,13 +617,9 @@ func TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize(t *testing
 		t.Fatal(err)
 	}
 
-	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return providerTargetedValidationPayload(t, request), nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, request))
 
 	var terminalOutput bytes.Buffer
 	if err := RunReviewCaptureValidation([]string{
@@ -645,7 +629,7 @@ func TestTargetedValidatorCaptureIssuesAcknowledgementWithoutFinalize(t *testing
 		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
-		"--execute=true",
+		"--input", resultFile,
 	}, &terminalOutput); err != nil {
 		t.Fatalf("capture targeted validator: %v\n%s", err, terminalOutput.String())
 	}
@@ -852,13 +836,9 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return failedPayload, nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	failedResultFile := writeReviewCLIRawInput(t, failedPayload)
 
 	var terminalOutput bytes.Buffer
 	if err := RunReviewCaptureValidation([]string{
@@ -868,7 +848,7 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
-		"--execute=true",
+		"--input", failedResultFile,
 	}, &terminalOutput); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v\n%s", err, terminalOutput.String())
 	}
@@ -900,7 +880,7 @@ func TestTargetedValidatorCaptureEscalatesRejectedCorrectionWithoutFinalize(t *t
 		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
-		"--execute=true",
+		"--input", failedResultFile,
 	}, &replayOutput); err != nil {
 		t.Fatalf("replay rejected targeted validator: %v\\n%s", err, replayOutput.String())
 	}
@@ -1237,10 +1217,12 @@ func TestRefuterCaptureInconclusiveRoutesToCorrectionRequiredWithoutEscalating(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	overrideProviderRoleHostAdapter(t, providerTestAdapter{raw: inconclusive})
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	inconclusiveFile := writeReviewCLIRawInput(t, inconclusive)
 
 	var output bytes.Buffer
-	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", "pi", "--execute=true"), &output); err != nil {
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", "pi", "--input", inconclusiveFile), &output); err != nil {
 		t.Fatalf("capture refuter inconclusive: %v\n%s", err, output.String())
 	}
 
@@ -1285,13 +1267,9 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	originalAdapter := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return failedPayload, nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = originalAdapter })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	failedResultFile := writeReviewCLIRawInput(t, failedPayload)
 
 	var terminalOutput bytes.Buffer
 	if err := RunReviewCaptureValidation([]string{
@@ -1301,7 +1279,7 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 		"--expected-revision", record.State.CapturePhaseRevision,
 		"--request-hash", request.RequestHash,
 		"--agent", string(model.AgentPi),
-		"--execute=true",
+		"--input", failedResultFile,
 	}, &terminalOutput); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v\n%s", err, terminalOutput.String())
 	}
@@ -1335,7 +1313,7 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 	if status.Escalation == nil || status.Escalation.Cause != "targeted_validator_rejected" || !reflect.DeepEqual(status.Escalation.FindingIDs, terminal.Escalation.FindingIDs) {
 		t.Fatalf("STATUS escalation = %#v, want matching closure escalation %#v", status.Escalation, terminal.Escalation)
 	}
-	statusSchema := compileWholeNativeStatusSchema(t, "status-v8.schema.json")
+	statusSchema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
 	validatePublishedReviewSchema(t, statusSchema, statusOutput.Bytes())
 	statusDocument := decodeJSONObjectCopy(t, statusOutput.Bytes())
 	delete(statusDocument, "escalation")
