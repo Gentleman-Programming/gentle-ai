@@ -1,10 +1,14 @@
 # Registro de absorción upstream — Axiom
 
-> **Medido el:** 2026-09-19 · **Ancestro común:** `266574b0` · **`upstream/main`:** `82a6de96ca6e1cb4f6bf603fe0c08ef1c2039833`
+> **Medido el:** 2026-09-19 · **Ancestro común:** `266574b0` · **Techo congelado:** `v3.4.0` = `82a6de96ca6e1cb4f6bf603fe0c08ef1c2039833`
 > **Universo:** 91 commits de `266574b0..upstream/main` **sin merges**
 > **Comando:** `git rev-list --count --no-merges 266574b0..upstream/main`
 
 > **Nota de alcance — universo congelado, no vivo.** 91 es el número de commits sin merge entre `266574b0` y `82a6de96` (`upstream/main` en el instante de abrir este registro), congelado a esa fecha y a ese `sha`, no un valor que se reconsulta en cada lectura. La propuesta había medido 55 el 2026-09-18 (`proposal.md:71,195,471`); el diseño remidió el universo el 2026-09-19 y obtuvo 87 **con** merges (`design.md` §10, "Estado de las mediciones" y §10.1), y acotó la cifra real sin merges en el intervalo `[55, 65]` **sin fijarla**, precisamente para que la apertura de este registro la resolviera con el comando exacto de arriba. El valor final, 91, se obtuvo tras la publicación de `v3.4.0` de upstream esa misma jornada (etiqueta fechada 2026-09-19, en la punta de `upstream/main` en el momento de medir). Todo commit que upstream publique después de `82a6de96` pertenece a un incremento de reconciliación futuro, no a `inc-20-upstream-reconciliation`.
+
+> **Decisión de producto D4 — el techo es `v3.4.0` y no se mueve.** El universo de este incremento se cierra en la etiqueta `v3.4.0` de upstream (`82a6de96`), y esa frontera **no se re-mide** aunque upstream siga publicando mientras las rebanadas restantes aterrizan. El motivo es de terminación, no de comodidad: un universo que se reconsulta en cada fase nunca se cierra, porque upstream avanza más rápido de lo que se absorbe — la propia historia de esta cabecera lo demuestra, con el conteo pasando de 55 a 91 en una sola jornada. Absorber un blanco móvil es un trabajo sin criterio de fin.
+>
+> En consecuencia: ninguna tanda de este incremento incorpora commits posteriores a `82a6de96`, y una tanda que los encuentre en su derivación los deja fuera con motivo escrito en su sub-tabla, no los absorbe «de paso». La integración de versiones posteriores a `v3.4.0` se aborda con un flujo propio, a diseñar **una vez Axiom esté terminado**; ese flujo es trabajo futuro y no pertenece a `inc-20-upstream-reconciliation`.
 
 ## Reglas de aceptación
 
