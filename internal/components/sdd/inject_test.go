@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -7743,6 +7745,64 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 	}
 }
 
+// TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg asserts the
+// Windows PowerShell literal wraps --cwd's argument in double quotes so
+// special-character project paths cannot break argv parsing or escape the
+// command. decode2's CHANGES_REQUESTED on PR #2342 required this guarantee.
+func TestEnsureClaudeSkillRegistryHookWindowsCommandQuotesCwdArg(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture the platform-aware command by reading it back from disk
+	// after a guaranteed no-op write on the current GOOS.
+	// On Windows the file already contains the canonical PowerShell literal;
+	// on other GOOSes the file contains the POSIX literal which we can
+	// inspect to assert the structural invariants that translate to the
+	// Windows form (quoted --cwd, exit 0).
+	_, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+
+	if runtime.GOOS != "windows" {
+		// On non-Windows the generated command uses POSIX-shell quoting;
+		// verify it still pins the cwd path with double-quote protection.
+		// The file is JSON-marshalled, so the inner double quotes around
+		// --cwd's argument are JSON-escaped.
+		if !strings.Contains(text, `--cwd \"${CLAUDE_PROJECT_DIR:-$PWD}\"`) {
+			t.Errorf("POSIX hook must quote the cwd path; settings on disk:\n%s", text)
+		}
+		if !strings.Contains(text, "|| true") {
+			t.Errorf("POSIX hook must end with '|| true' so a missing binary does not break Claude; settings on disk:\n%s", text)
+		}
+		return
+	}
+
+	// Windows: the literal wraps the whole PowerShell body in single quotes
+	// so PowerShell parses it as a -Command argument, and --cwd's value is
+	// double-quoted so $dir expansion is treated as one argv element.
+	if !strings.Contains(text, `--cwd "$dir"`) {
+		t.Errorf("Windows hook must wrap --cwd argument in double quotes; settings on disk:\n%s", text)
+	}
+	if !strings.Contains(text, "exit 0") {
+		t.Errorf("Windows hook must end with 'exit 0' so a failing gentle-ai refresh does not block Claude; settings on disk:\n%s", text)
+	}
+	if !strings.Contains(text, "powershell -NoProfile -Command '") {
+		t.Errorf("Windows hook must invoke powershell with a single-quoted -Command body; settings on disk:\n%s", text)
+	}
+}
+
 func TestEnsureClaudeSkillRegistryHookAppendsIdempotently(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
@@ -7850,6 +7910,257 @@ func TestEnsureClaudeSkillRegistryHookRejectsUnexpectedHookSchema(t *testing.T) 
 	}
 	if string(after) != string(original) {
 		t.Fatalf("settings were modified: %q", after)
+	}
+}
+
+// TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand asserts the
+// UserPromptSubmit command literal is platform-aware: PowerShell on Windows,
+// POSIX elsewhere. The literal is recomputed inside the test so the test
+// and production are independent.
+func TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("first call changed = false, want true")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotRoot map[string]any
+	if err := json.Unmarshal(data, &gotRoot); err != nil {
+		t.Fatalf("settings.json is not valid JSON: %v", err)
+	}
+
+	var wantCmd string
+	if runtime.GOOS == "windows" {
+		wantCmd = `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
+	} else {
+		wantCmd = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	}
+
+	hooks, ok := gotRoot["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing or wrong shape: %v", gotRoot["hooks"])
+	}
+	ups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok || len(ups) == 0 {
+		t.Fatalf("UserPromptSubmit missing or empty: %v", hooks["UserPromptSubmit"])
+	}
+	entry, ok := ups[0].(map[string]any)
+	if !ok {
+		t.Fatalf("UserPromptSubmit[0] wrong shape: %T", ups[0])
+	}
+	inner, ok := entry["hooks"].([]any)
+	if !ok || len(inner) == 0 {
+		t.Fatalf("entry.hooks missing or empty")
+	}
+	cmd, _ := inner[0].(map[string]any)["command"].(string)
+	if cmd != wantCmd {
+		t.Errorf("command mismatch for GOOS=%s:\n  want: %s\n  got:  %s", runtime.GOOS, wantCmd, cmd)
+	}
+}
+
+// TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand is the Windows
+// migration: a settings.json with the pre-fix POSIX literal gets replaced by
+// the canonical PowerShell literal without leaving a duplicate. Skipped on
+// non-Windows where the legacy IS the canonical.
+func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only test; non-Windows has no legacy-vs-canonical drift")
+	}
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyCmd := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	canonicalCmd := `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
+	initial := fmt.Sprintf(`{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": %q}
+        ]
+      }
+    ]
+  }
+}`, legacyCmd)
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() with legacy entry error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true (legacy POSIX replaced with canonical PowerShell)")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotRoot map[string]any
+	if err := json.Unmarshal(data, &gotRoot); err != nil {
+		t.Fatalf("settings.json is not valid JSON after migration: %v\n%s", err, data)
+	}
+	hooks, ok := gotRoot["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing or wrong shape after migration: %v", gotRoot["hooks"])
+	}
+	ups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok {
+		t.Fatalf("UserPromptSubmit missing after migration: %v", hooks["UserPromptSubmit"])
+	}
+	var legacyCount, canonicalCount int
+	for _, item := range ups {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		innerHooks, ok := itemMap["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, h := range innerHooks {
+			hMap, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := hMap["command"].(string)
+			switch cmd {
+			case legacyCmd:
+				legacyCount++
+			case canonicalCmd:
+				canonicalCount++
+			}
+		}
+	}
+	if legacyCount != 0 {
+		t.Errorf("legacy POSIX literal still present %d time(s) after migration:\n%s", legacyCount, data)
+	}
+	if canonicalCount != 1 {
+		t.Errorf("canonical PowerShell literal count = %d, want 1 after migration:\n%s", canonicalCount, data)
+	}
+}
+
+// TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists is
+// the Windows-only regression for the persistence defect flagged by decode2:
+// a settings file that already carries the canonical entry but still has the
+// pre-fix POSIX literal must have the legacy stripped on disk, not just in
+// memory. Without this, the canonical-existence early return would discard
+// the in-memory prune and both hooks would remain.
+func TestEnsureClaudeSkillRegistryHookPersistsLegacyPruneWhenCanonicalExists(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only test; non-Windows has no legacy-vs-canonical drift")
+	}
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyCmd := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	canonicalCmd := `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
+	initial := fmt.Sprintf(`{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": %q},
+          {"type": "command", "command": %q}
+        ]
+      }
+    ]
+  }
+}`, legacyCmd, canonicalCmd)
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() with both literals error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true (legacy POSIX must be stripped even when canonical already present)")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotRoot map[string]any
+	if err := json.Unmarshal(data, &gotRoot); err != nil {
+		t.Fatalf("settings.json is not valid JSON after migration: %v\n%s", err, data)
+	}
+	hooks, ok := gotRoot["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing or wrong shape: %v", gotRoot["hooks"])
+	}
+	ups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok {
+		t.Fatalf("UserPromptSubmit missing: %v", hooks["UserPromptSubmit"])
+	}
+	var legacyCount, canonicalCount int
+	for _, item := range ups {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		innerHooks, ok := itemMap["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, h := range innerHooks {
+			hMap, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := hMap["command"].(string)
+			switch cmd {
+			case legacyCmd:
+				legacyCount++
+			case canonicalCmd:
+				canonicalCount++
+			}
+		}
+	}
+	if legacyCount != 0 {
+		t.Errorf("legacy POSIX literal still present %d time(s) after prune; settings on disk:\n%s", legacyCount, data)
+	}
+	if canonicalCount != 1 {
+		t.Errorf("canonical PowerShell literal count = %d, want 1; settings on disk:\n%s", canonicalCount, data)
+	}
+
+	// Idempotence: a second call must not re-write the file (no change)
+	// and must leave the canonical as the sole entry.
+	changed2, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("second ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	if changed2 {
+		t.Error("second call changed = true, want false (after legacy prune + canonical exists)")
+	}
+	data2, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, data2) {
+		t.Errorf("second call rewrote the file:\n%s\n---\n%s", data, data2)
 	}
 }
 
@@ -8008,6 +8319,178 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 		if !strings.Contains(text, matcher) {
 			t.Fatalf("Claude settings.json missing SDD preflight hook %s:\n%s", matcher, text)
 		}
+	}
+}
+
+// TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars
+// exercises the canonical Windows hook command against a fake gentle-ai on
+// PATH with a CLAUDE_PROJECT_DIR that contains spaces, an apostrophe, and
+// a path-traversal segment.
+//
+// CI caveat: this test runs on pwsh (PowerShell Core 7.x) under Linux, not
+// Windows PowerShell 5.1 where the original bug was filed. PS 5.1 and pwsh
+// 7.x have different argument-parsing rules (notably $ expansion inside
+// double-quoted strings, backtick escaping). The canonical literal avoids
+// PS-5.1-only constructs (no ${VAR:-DEFAULT}, no || true), so pwsh coverage
+// is a sanity check, not a proof of PS 5.1 correctness. Skipped when pwsh
+// is unavailable, or on Windows hosts without /bin/sh.
+
+// TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem verifies that when
+// an outer UserPromptSubmit entry contains the legacy literal alongside a
+// non-legacy sibling, only the legacy entry is removed.
+func TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem(t *testing.T) {
+	legacy := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	keeper := `some-other-tool --flag value`
+	root := map[string]any{
+		"hooks": map[string]any{
+			"UserPromptSubmit": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": legacy},
+						map[string]any{"type": "command", "command": keeper},
+					},
+				},
+			},
+		},
+	}
+
+	pruneLegacyClaudeHook(root, legacy)
+
+	hooks := root["hooks"].(map[string]any)
+	ups := hooks["UserPromptSubmit"].([]any)
+	if len(ups) != 1 {
+		t.Fatalf("UserPromptSubmit entry count = %d, want 1 (entry must survive prune of one inner hook): %v", len(ups), ups)
+	}
+	item := ups[0].(map[string]any)
+	inner := item["hooks"].([]any)
+	if len(inner) != 1 {
+		t.Fatalf("inner hook count = %d, want 1 (only the legacy must be removed): %v", len(inner), inner)
+	}
+	gotCmd, _ := inner[0].(map[string]any)["command"].(string)
+	if gotCmd != keeper {
+		t.Errorf("surviving inner hook command = %q, want %q", gotCmd, keeper)
+	}
+}
+
+// TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned pins
+// the edge case where every inner hook matches the legacy literal: the prune
+// deletes the UserPromptSubmit key entirely.
+func TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned(t *testing.T) {
+	legacy := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	root := map[string]any{
+		"hooks": map[string]any{
+			"UserPromptSubmit": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": legacy},
+					},
+				},
+			},
+		},
+	}
+
+	pruneLegacyClaudeHook(root, legacy)
+
+	hooks, ok := root["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing after prune: %v", root["hooks"])
+	}
+	if _, present := hooks["UserPromptSubmit"]; present {
+		t.Errorf("UserPromptSubmit key still present after pruning its only entry; want deleted: %v", hooks["UserPromptSubmit"])
+	}
+}
+
+func TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars(t *testing.T) {
+	pwshPath, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh (PowerShell Core) is not installed; cannot exercise the PowerShell command literal")
+	}
+	if runtime.GOOS == "windows" {
+		// The fake gentle-ai below uses POSIX /bin/sh; skip on Windows hosts
+		// without git-bash or WSL.
+		if _, statErr := os.Stat("/bin/sh"); statErr != nil {
+			t.Skip("/bin/sh not available on this Windows host; cannot run the fake gentle-ai")
+		}
+	}
+
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeLogPath := filepath.Join(root, "fake-gentle-ai.log")
+	fakeScript := `#!/bin/sh
+{
+  echo "argc=$#"
+  i=0
+  for a in "$@"; do
+    i=$((i+1))
+    printf 'argv[%d]=%s\n' "$i" "$a"
+  done
+  echo "CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR-<unset>}"
+  echo "PWD=$PWD"
+} > "$FAKE_LOG"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "gentle-ai"), []byte(fakeScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	projectDir := filepath.Join(root, "Weird Path", "John's project", "..", "John's project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	settingsPath := filepath.Join(root, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canonicalCmd := `if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0`
+	settingsJSON := fmt.Sprintf(`{"hooks":{"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"powershell -NoProfile -Command '%s'"}]}]}}`, canonicalCmd)
+	if err := os.WriteFile(settingsPath, []byte(settingsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pwshCmd := exec.Command(pwshPath, "-NoProfile", "-Command", canonicalCmd)
+	pwshCmd.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_LOG="+fakeLogPath,
+		"CLAUDE_PROJECT_DIR="+projectDir,
+	)
+	pwshOutput, err := pwshCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pwsh -NoProfile -Command <canonical> failed: %v\n%s", err, pwshOutput)
+	}
+
+	logBytes, err := os.ReadFile(fakeLogPath)
+	if err != nil {
+		t.Fatalf("fake gentle-ai log not written: %v\npwsh output:\n%s", err, pwshOutput)
+	}
+	log := string(logBytes)
+
+	if !strings.Contains(log, "argc=") || !strings.Contains(log, "argv[1]=skill-registry") {
+		t.Fatalf("fake gentle-ai was not invoked with the expected argv:\n%s\npwsh output:\n%s", log, pwshOutput)
+	}
+	if !strings.Contains(log, "argv[2]=refresh") {
+		t.Fatalf("missing argv[2]=refresh:\n%s", log)
+	}
+	if !strings.Contains(log, "argv[3]=--quiet") {
+		t.Fatalf("missing argv[3]=--quiet:\n%s", log)
+	}
+	if !strings.Contains(log, "argv[4]=--no-gitignore") {
+		t.Fatalf("missing argv[4]=--no-gitignore:\n%s", log)
+	}
+	if !strings.Contains(log, "argv[5]=--cwd") {
+		t.Fatalf("missing argv[5]=--cwd:\n%s", log)
+	}
+	wantCwdArg := fmt.Sprintf("argv[6]=%s", projectDir)
+	if !strings.Contains(log, wantCwdArg) {
+		t.Fatalf("missing %q in argv (special-character CLAUDE_PROJECT_DIR did not survive argument reconstruction):\nlog:\n%s\npwsh output:\n%s", wantCwdArg, log, pwshOutput)
+	}
+	if !strings.Contains(log, fmt.Sprintf("CLAUDE_PROJECT_DIR=%s", projectDir)) {
+		t.Fatalf("CLAUDE_PROJECT_DIR not propagated into the fake:\n%s", log)
 	}
 }
 
