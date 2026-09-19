@@ -167,13 +167,42 @@ func ReadManifest(path string) (Manifest, error) {
 	return manifest, nil
 }
 
+// BackupRootFor returns the canonical backup root directory
+// (<home>/.axiom/backups) for the given home directory. It is the single
+// owning accessor for the canonical backup root literal: production code
+// outside this package MUST resolve the backup root through this function
+// (or BackupRootFn) instead of constructing the path with its own
+// filepath.Join literal.
+func BackupRootFor(home string) string {
+	return filepath.Join(home, ".axiom", "backups")
+}
+
 // backupRoot returns the expected parent directory for all backups (~/.axiom/backups).
 func backupRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".axiom", "backups"), nil
+	return BackupRootFor(home), nil
+}
+
+// LegacyBackupRootFor returns the legacy backup root directory
+// (<home>/.gentle-ai/backups) for the given home directory. It is the single
+// owning accessor for the legacy backup root literal, kept for the
+// permanent read-side compatibility fallback [D-03, D-12]: it is never used
+// to create new backups, only to keep resolving ones created before the
+// canonical root existed.
+func LegacyBackupRootFor(home string) string {
+	return filepath.Join(home, ".gentle-ai", "backups")
+}
+
+// BackupRoots returns every backup root that a reader must scan for the
+// given home directory, canonical root first: [BackupRootFor(home),
+// LegacyBackupRootFor(home)]. Order is part of the contract — it lets a
+// caller such as ListBackups prefer a canonical-root backup over a legacy
+// one when both exist for the same identifier.
+func BackupRoots(home string) []string {
+	return []string{BackupRootFor(home), LegacyBackupRootFor(home)}
 }
 
 // legacyBackupRoot returns the legacy parent directory for Gentle AI backups (~/.gentle-ai/backups).
@@ -182,12 +211,15 @@ func legacyBackupRoot() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".gentle-ai", "backups"), nil
+	return LegacyBackupRootFor(home), nil
 }
 
 // BackupRootFn is the function used to resolve the backup root directory.
-// Package-level var for testability — swapped in tests to use a temp directory.
-// Exported so tests in other packages (e.g. internal/update/upgrade) can override it.
+// Package-level var for testability — swapped by this package's own tests to
+// point at a temp directory (manifest_test.go, restore_test.go,
+// retention_test.go, snapshot_dir_fsync_test.go). No other package overrides
+// it: production code elsewhere resolves the backup root through
+// BackupRootFor/LegacyBackupRootFor/BackupRoots instead.
 var BackupRootFn = backupRoot
 
 func isDirUnderRoot(dir, root string) bool {
