@@ -1,6 +1,7 @@
 package components_test
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -123,6 +125,7 @@ func TestGoldenSDD_Claude(t *testing.T) {
 }
 
 func TestGoldenSDD_OpenCode(t *testing.T) {
+	pinGoldenOpenCodeV1(t)
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, opencodeAdapter(), "")
@@ -162,6 +165,7 @@ func TestGoldenSDD_OpenCode(t *testing.T) {
 }
 
 func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
+	pinGoldenOpenCodeV1(t)
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, opencodeAdapter(), "multi")
@@ -1035,4 +1039,13 @@ func firstDiffIndex(a, b string) int {
 		return maxLen
 	}
 	return -1
+}
+
+func pinGoldenOpenCodeV1(t *testing.T) {
+	t.Helper()
+	old := runtimeopencode.VersionRunnerOverride
+	t.Cleanup(func() { runtimeopencode.VersionRunnerOverride = old })
+	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
+		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 }

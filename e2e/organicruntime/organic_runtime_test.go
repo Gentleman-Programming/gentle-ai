@@ -910,23 +910,12 @@ func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
 	context, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
 	defer cancel()
 	traceBase := filepath.Join(t.TempDir(), "opencode-connect")
-	bin := t.TempDir()
-	wrapper := filepath.Join(bin, "opencode")
-	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
-set -eu
-exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e trace=connect "$GENTLE_AI_RUNTIME_TRACE_TARGET" "$@"
-`), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.CommandContext(context, wrapper, "run", "--format", "json", "--dir", host.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
+	command := openCodeTraceCommand(context, strace, binary, traceBase, "run", "--format", "json", "--dir", host.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
 	command.Dir = host.repo.worktree
 	command.Env = append(harness.environment(),
 		"OPENCODE_CONFIG_DIR="+configDirectory,
 		"OPENCODE_CONFIG_CONTENT="+string(config),
-		"PATH="+bin+string(os.PathListSeparator)+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GENTLE_AI_RUNTIME_TRACE_BINARY="+strace,
-		"GENTLE_AI_RUNTIME_TRACE_LOG="+traceBase,
-		"GENTLE_AI_RUNTIME_TRACE_TARGET="+binary,
+		"PATH="+filepath.Dir(binary)+string(os.PathListSeparator)+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HTTP_PROXY="+proxy.URL,
 		"HTTPS_PROXY="+proxy.URL,
 		"ALL_PROXY="+proxy.URL,
@@ -2176,6 +2165,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 // TestOrganicRuntimeCurrentReviewHardening consolidates the remaining current
 // lifecycle hardening journeys on the v2 negotiated STATUS and last-event routes.
 func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
+	installPolicyTestOpenCodeVersion(t)
 	t.Run("issue-1699-capture-admission", func(t *testing.T) {
 		for _, test := range []struct {
 			name string
@@ -4911,4 +4901,35 @@ func messageText(content any) string {
 		encoded, _ := json.Marshal(value)
 		return string(encoded)
 	}
+}
+
+// Trace the real host once; -ff covers descendants, including relay version
+// probes. A PATH wrapper would recursively invoke strace in an already traced
+// child. The real OpenCode remains on PATH for the production capability check.
+func openCodeTraceCommand(ctx context.Context, tracer, binary, traceBase string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, tracer, append([]string{"-ff", "-o", traceBase, "-e", "trace=connect", binary}, args...)...)
+}
+
+// These policy journeys supply version evidence only; they do not exercise a
+// model runtime. Keep this fixture scoped away from the real-host tests.
+func installPolicyTestOpenCodeVersion(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "version.go")
+	body := `package main
+import ("fmt"; "os")
+func main(){if len(os.Args)!=2 || os.Args[1]!="--version" {os.Exit(2)};fmt.Println("1.18.30")}
+`
+	if err := os.WriteFile(source, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(dir, "opencode")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	command := exec.CommandContext(t.Context(), "go", "build", "-o", binary, source)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build version-only fixture: %v: %s", err, output)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }

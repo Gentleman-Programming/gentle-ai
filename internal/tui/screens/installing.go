@@ -42,6 +42,9 @@ func RenderInstalling(progress InstallProgress, spinner string) string {
 		switch item.Status {
 		case "succeeded":
 			icon = styles.SuccessStyle.Render("✓")
+		case "skipped":
+			icon = styles.SubtextStyle.Render("−")
+			item.Label += " (skipped)"
 		case "failed":
 			icon = styles.ErrorStyle.Render("✗")
 		case "running":
@@ -71,9 +74,17 @@ func RenderInstalling(progress InstallProgress, spinner string) string {
 	if progress.Done {
 		b.WriteString("\n")
 		succeeded, failed := countResults(progress.Items)
+		skipped := 0
+		for _, item := range progress.Items {
+			if item.Status == "skipped" {
+				skipped++
+			}
+		}
 		if progress.Failed {
 			b.WriteString(styles.WarningStyle.Render(fmt.Sprintf("Completed with errors: %d succeeded, %d failed", succeeded, failed)))
 			b.WriteString("\n")
+		} else if skipped > 0 {
+			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("Completed: %d succeeded, %d skipped\n", succeeded, skipped)))
 		} else {
 			b.WriteString(styles.SuccessStyle.Render(fmt.Sprintf("All %d steps completed successfully.", succeeded)))
 			b.WriteString("\n")

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -32,11 +31,12 @@ type openCodeInfo struct {
 		Created   *int64 `json:"created"`
 		Completed *int64 `json:"completed,omitempty"`
 	} `json:"time"`
-	ProviderID string `json:"providerID"`
-	ModelID    string `json:"modelID"`
-	Agent      string `json:"agent,omitempty"`
-	Summary    bool   `json:"summary,omitempty"`
-	Tokens     *struct {
+	ProviderID     string          `json:"providerID"`
+	ModelID        string          `json:"modelID"`
+	Agent          string          `json:"agent,omitempty"`
+	SelectedEffort json.RawMessage `json:"selectedEffort,omitempty"`
+	Summary        bool            `json:"summary,omitempty"`
+	Tokens         *struct {
 		Input     *json.RawMessage `json:"input,omitempty"`
 		Output    *json.RawMessage `json:"output,omitempty"`
 		Reasoning *json.RawMessage `json:"reasoning,omitempty"`
@@ -99,7 +99,10 @@ func sendOpenCode(ctx context.Context, home string, getenv func(string) string, 
 	}
 	d = json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
-	if d.Decode(&envelope) != nil || envelope.Schema != OpenCodeSchema {
+	if d.Decode(&envelope) != nil || (envelope.Schema != OpenCodeSchema && envelope.Schema != "gentle-ai.telemetry-opencode/v2") {
+		return "", errEnvelope
+	}
+	if envelope.Schema == OpenCodeSchema && envelope.Info.SelectedEffort != nil {
 		return "", errEnvelope
 	}
 	if envelope.Info.Time.Completed != nil && envelope.Info.Time.Created == nil {
@@ -120,7 +123,21 @@ func sendOpenCode(ctx context.Context, home string, getenv func(string) string, 
 	if observation == nil {
 		return "ignored", nil
 	}
-	applyOpenCodeAssignment(&observation.Row, readOpenCodeAssignment(home, observation.Agent))
+	if envelope.Schema == OpenCodeSchema {
+		applyOpenCodeAssignment(&observation.Row, readOpenCodeAssignment(home, observation.Agent))
+	} else {
+		// V2 start observes the runtime selection, not provider response identity.
+		if observation.Row.ModelEvidence != "unknown" {
+			observation.Row.ModelEvidence = "selected"
+		}
+		var effort string
+		if len(envelope.Info.SelectedEffort) > 0 && json.Unmarshal(envelope.Info.SelectedEffort, &effort) != nil {
+			return "", errEnvelope
+		}
+		if telemetry.RuntimeEffortAllowed(effort) {
+			observation.Row.SelectedEffort = effort
+		}
+	}
 	batch, err := json.Marshal(telemetry.RuntimeBatch{Schema: telemetry.RuntimeSchema, Registry: json.RawMessage("1"), Host: "opencode", Rows: []telemetry.RuntimeRow{observation.Row}})
 	if err != nil {
 		return "", errEnvelope
@@ -156,12 +173,7 @@ func readOpenCodeAssignment(home, agent string) model.ModelAssignment {
 	if err != nil {
 		return model.ModelAssignment{}
 	}
-	agents, _ := root["agent"].(map[string]any)
-	definition, _ := agents[agent].(map[string]any)
-	modelSpec, _ := definition["model"].(string)
-	provider, modelID, _ := model.SplitModelSpec(strings.TrimSpace(modelSpec))
-	effort, _ := definition["variant"].(string)
-	return model.ModelAssignment{ProviderID: provider, ModelID: modelID, Effort: effort}
+	return opencode.ConfigAssignments(root)[agent].Assignment
 }
 
 // Reject duplicate keys and case aliases before struct decoding. All accepted
@@ -195,7 +207,7 @@ func strictObjectKeys(d *json.Decoder, depth int) error {
 			return errEnvelope
 		}
 		switch s {
-		case "schema", "info", "role", "time", "created", "completed", "providerID", "modelID", "agent", "summary", "tokens", "input", "output", "reasoning", "cache", "read", "write", "error", "name", "data", "statusCode":
+		case "selectedEffort", "schema", "info", "role", "time", "created", "completed", "providerID", "modelID", "agent", "summary", "tokens", "input", "output", "reasoning", "cache", "read", "write", "error", "name", "data", "statusCode":
 		default:
 			return errEnvelope
 		}

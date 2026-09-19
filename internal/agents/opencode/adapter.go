@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	config "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -147,8 +148,15 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 		if err != nil {
 			continue
 		}
-		mcp, ok := root["mcp"].(map[string]any)
-		if ok && isEffectiveCodeGraphEntry(mcp["codegraph"]) {
+		entry, native := config.MCPEntry(root, "codegraph")
+		if native {
+			if disabled, exists := entry["disabled"]; exists && disabled != false {
+				continue
+			}
+			// V2 does not interpret legacy enabled inside a native server.
+			entry = map[string]any{"type": entry["type"], "command": entry["command"]}
+		}
+		if isEffectiveCodeGraphEntry(entry) {
 			return path, true
 		}
 	}

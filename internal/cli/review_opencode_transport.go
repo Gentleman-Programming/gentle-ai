@@ -173,6 +173,9 @@ func RunReviewOpenCodeTransport(args []string, stdout io.Writer) error {
 }
 
 func runReviewOpenCodeTransport(args []string, stdin io.Reader, stdout io.Writer) error {
+	if !reviewImmutableRuntimeCapability(model.AgentOpenCode).supportsImmutableReceiptReview() {
+		return errors.New(reviewImmutableTransportUnsupportedCode)
+	}
 	if len(args) != 0 {
 		return errors.New("review opencode-transport requires strict relay frames on standard input") // refusal:by-design world-action: the managed OpenCode shim starts this internal relay without caller-authored flags
 	}

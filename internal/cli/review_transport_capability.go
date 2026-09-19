@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 const reviewImmutableTransportUnsupportedCode = "immutable_review_transport_unsupported"
@@ -66,6 +68,17 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentCodex:
 		policy.Eligible = true
 	case model.AgentOpenCode:
+		// A managed host declaration can only narrow capability, never enable it.
+		// This also refuses active V2 when PATH resolves a coexisting V1 binary.
+		if os.Getenv("GENTLE_AI_OPENCODE_RELAY_CONTRACT") != "" {
+			return policy
+		}
+		// V2 wire transport is staged, not organically certified. Version evidence
+		// only narrows the compiled capability; it cannot enable a new transport.
+		major, err := opencode.DetectRuntimeMajor(context.Background())
+		if err != nil || major != opencode.RuntimeV1 {
+			return policy
+		}
 		policy.Eligible = true
 	case model.AgentPi:
 		// The relay's declared contract is a required conjunct: it can only

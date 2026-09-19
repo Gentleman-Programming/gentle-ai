@@ -2443,6 +2443,11 @@ func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
 }
 
 func TestStandaloneOpenCodePluginsContinueRegistersSelectedPlugins(t *testing.T) {
+	oldVersionRunner := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersionRunner })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

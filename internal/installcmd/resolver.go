@@ -242,31 +242,20 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 	}
 }
 
-// resolveOpenCodeInstall returns the display-only install command sequence
-// gentle-ai shows for OpenCode per platform — never executed by gentle-ai.
-// - darwin: brew install anomalyco/tap/opencode (official OpenCode tap)
-// - linux: npm install -g opencode-ai (official npm package)
-// See https://opencode.ai/docs for official install methods.
-//
-// This deliberately advises "latest" rather than versions.OpenCode: that
-// constant pins the exact OpenCode build the organic-runtime E2E installs
-// and CI asserts against (TestOrganicRuntimeE2EUsesInstalledOpenCodePin in
-// internal/assets/formatter_ordering_test.go, and organic_runtime_test.go's
-// pinnedOpenCodeVersion) — a real, separate owner that must keep its exact
-// pin. This display string has no such owner, so it is decoupled from that
-// constant for the same reason the other five install commands are: a human
-// reads and runs it, and an old hardcoded version goes stale the moment a
-// newer OpenCode ships.
+// resolveOpenCodeInstall is display-only advice for new V2 installations.
+// Released @opencode/cli needs its postinstall binary setup: never add
+// --ignore-scripts. Existing V1 installations are not upgraded by this advice.
+// Source: https://opencode.ai/v2/docs/migrate-v1/
 func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, error) {
-	const pkg = "opencode-ai@latest"
+	const pkg = "@opencode/cli@latest"
 	switch profile.PackageManager {
 	case "brew":
 		return CommandSequence{
-			{"brew", "install", "anomalyco/tap/opencode"},
+			{"npm", "install", "-g", pkg},
 		}, nil
 	case "winget":
 		// On Windows, npm global installs do not require sudo.
-		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+		return CommandSequence{{"npm", "install", "-g", pkg}}, nil
 	default:
 		// Any package manager the system probe accepted is enough here: the
 		// install runs through npm, never through the manager itself, so
@@ -275,9 +264,9 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		// (empty PackageManager) on the unsupported arm.
 		if profile.OS == "linux" && profile.PackageManager != "" {
 			if profile.NpmWritable {
-				return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+				return CommandSequence{{"npm", "install", "-g", pkg}}, nil
 			}
-			return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+			return CommandSequence{{"sudo", "npm", "install", "-g", pkg}}, nil
 		}
 		return nil, fmt.Errorf(
 			"unsupported platform for opencode: os=%q distro=%q pm=%q",
