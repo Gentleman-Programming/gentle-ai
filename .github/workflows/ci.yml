@@ -174,10 +174,13 @@ jobs:
       # verb above that mutates the checkout fails this step loudly instead
       # of the mutation silently landing.
       #
-      # Red surface inventoried on this date: none yet -- this step has not
-      # run in CI before this phase. Per design.md open question O-4, the
-      # inventory is written the first time the step actually runs and
-      # surfaces something, not invented ahead of that run.
+      # Red surface inventoried 2026-09-19, on this step's first CI run, per
+      # design.md open question O-4: `go test ./internal/dashboard/...`
+      # rewrites openspec/INDEX.md, because dashboard_test.go builds
+      # NewService("../..") against the real repository root, which syncs the
+      # living-doc index (LastSync: time.Now). Pre-existing on main, not caused
+      # by this phase -- the guard below therefore compares against the state
+      # captured before the smoke, not against a clean tree. Assumed by INC-21.
       # design.md D-07 also names codegraph, telemetry, skill-registry, and bench-model-picker, but REQ-20.15's floor does not; they stay informative here too, assumed by INC-21.
       #
       # Successor: INC-21 (docs/ROADMAP.md). This window does not grow: any
@@ -187,6 +190,7 @@ jobs:
           go build -trimpath -o "$RUNNER_TEMP/axiom-canonical-smoke" ./cmd/axiom
           bin="$RUNNER_TEMP/axiom-canonical-smoke"
           notice="'gentle-ai' está deprecado"
+          dirty_before="$(git status --porcelain)"
 
           smoke() {
             local label="$1" want_exit="$2"
@@ -222,8 +226,8 @@ jobs:
           smoke "init --help" 0 init --help
           smoke "ui --help"   0 ui --help
 
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "FAIL: the canonical binary smoke left the checkout dirty:" >&2
+          if [ "$(git status --porcelain)" != "$dirty_before" ]; then
+            echo "FAIL: the canonical binary smoke changed the checkout:" >&2
             git status --porcelain >&2
             exit 1
           fi
