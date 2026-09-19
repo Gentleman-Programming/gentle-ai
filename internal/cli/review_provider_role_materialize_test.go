@@ -249,6 +249,185 @@ func TestReviewCaptureRefuterExecutesGoOwnedPiAndClosesOnTheRefuterEvent(t *test
 	}
 }
 
+// TestReviewCaptureRefuterInputSubmitsHostRunResultAndClosesTheSlot is T1
+// (issue #4611): the host materializes the refuter prompt itself, runs its own
+// reviewer on it out of process, and submits only the raw bytes through
+// --input. Go never spawns anything for this submission -- the poisoned
+// adapter override fails the test if the retired PiAdapter seam is invoked --
+// and admission and closure land exactly where --execute already lands them.
+func TestReviewCaptureRefuterInputSubmitsHostRunResultAndClosesTheSlot(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, handle := piRefuterReview(t)
+	binding := piRefuterBinding(repo, record, handle)
+	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+		t.Fatal("review capture-refuter --input must not invoke any provider adapter")
+		return nil, nil
+	}))
+	input := filepath.Join(t.TempDir(), "refuter-result.json")
+	if err := os.WriteFile(input, piRefuterRawResult(t, repo, store, record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	submit := append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", input)
+	var output bytes.Buffer
+	if err := RunReview(submit, &output); err != nil {
+		t.Fatal(err)
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.Schema != reviewLastEventClosureSchema || terminal.Operation != reviewCaptureRefuterCaptureOperation ||
+		terminal.LineageID != record.State.LineageID || terminal.State != reviewtransaction.StateCorrectionRequired {
+		t.Fatalf("refuter --input closure = %#v", terminal)
+	}
+	final, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, captured := final.State.AdmittedRoleResult(reviewtransaction.CompactRoleRefuter, record.State.CapturePhaseRevision, record.State.InitialSnapshot.Identity, request.RequestHash); !captured {
+		t.Fatal("refuter --input submission did not merge an in-record role value")
+	}
+}
+
+// TestReviewCaptureRefuterInputDashReadsStdin is the stdin form of the same
+// submission (#4611): a host that piped its reviewer's stdout straight through
+// submits with `--input -` instead of a file path.
+func TestReviewCaptureRefuterInputDashReadsStdin(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, handle := piRefuterReview(t)
+	binding := piRefuterBinding(repo, record, handle)
+	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+		t.Fatal("review capture-refuter --input - must not invoke any provider adapter")
+		return nil, nil
+	}))
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	originalStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = originalStdin })
+	raw := piRefuterRawResult(t, repo, store, record)
+	go func() {
+		_, _ = w.Write(raw)
+		_ = w.Close()
+	}()
+	submit := append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", "-")
+	if err := RunReview(submit, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	final, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recordHasAdmittedRole(final.State, reviewtransaction.CompactRoleRefuter) {
+		t.Fatal("refuter --input - submission did not merge an in-record role value")
+	}
+}
+
+// TestReviewCaptureRefuterInputRefusesMissingEmptyOrUnadmittableBytesWithoutStrandingTheSlot
+// covers three distinct submission failures (#4611): a missing file, an empty
+// file, and syntactically invalid bytes. Every one leaves the compact
+// authority untouched, so a following STATUS reoffers the exact same refuter
+// collection input -- no verdict is ever synthesized from a failed submission.
+func TestReviewCaptureRefuterInputRefusesMissingEmptyOrUnadmittableBytesWithoutStrandingTheSlot(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, handle := piRefuterReview(t)
+	binding := piRefuterBinding(repo, record, handle)
+	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+		t.Fatal("review capture-refuter --input must not invoke any provider adapter")
+		return nil, nil
+	}))
+
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", missing), io.Discard); err == nil || !strings.Contains(err.Error(), "read provider refuter result") {
+		t.Fatalf("missing --input file refusal = %v", err)
+	}
+
+	empty := filepath.Join(t.TempDir(), "empty.json")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", empty), io.Discard); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("empty --input file refusal = %v", err)
+	}
+
+	garbage := filepath.Join(t.TempDir(), "garbage.json")
+	if err := os.WriteFile(garbage, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--input", garbage), io.Discard); err == nil {
+		t.Fatal("unadmittable --input bytes were accepted")
+	}
+
+	current, err := store.Load()
+	if err != nil || recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
+		t.Fatalf("rejected --input bytes mutated compact authority: %#v, %v", current, err)
+	}
+	var status bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", record.State.LineageID, "--contract", ReviewIntegrationContractV2,
+		"--agent", string(model.AgentPi), "--next-transition",
+	}, &status); err != nil {
+		t.Fatal(err)
+	}
+	var reoffered ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, status.Bytes(), &reoffered)
+	if reoffered.NextTransition == nil || reoffered.NextTransition.ReasonCode != "provider_refuter_required" {
+		t.Fatalf("STATUS did not reoffer the refuter slot after a rejected --input submission: %#v", reoffered.NextTransition)
+	}
+}
+
+// TestReviewCaptureValidationInputSubmitsHostRunResultAndCloses is
+// capture-validation's counterpart to
+// TestReviewCaptureRefuterInputSubmitsHostRunResultAndClosesTheSlot (#4611):
+// --input carries the frozen --request-hash binding exactly like --execute
+// does, submits without invoking any adapter, and closes the bounded
+// correction on its terminal capture.
+func TestReviewCaptureValidationInputSubmitsHostRunResultAndCloses(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := []string{
+		"--cwd", repo, "--lineage", lineage,
+		"--target", request.CorrectionTargetIdentity, "--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash,
+	}
+	overrideProviderRoleHostAdapter(t, providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
+		t.Fatal("review capture-validation --input must not invoke any provider adapter")
+		return nil, nil
+	}))
+	input := filepath.Join(t.TempDir(), "validation-result.json")
+	if err := os.WriteFile(input, providerTargetedValidationPayload(t, request), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	submit := append(append([]string{"capture-validation"}, binding...), "--agent", string(model.AgentPi), "--input", input)
+	var output bytes.Buffer
+	if err := RunReview(submit, &output); err != nil {
+		t.Fatal(err)
+	}
+	var closure reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &closure)
+	if closure.Schema != reviewLastEventClosureSchema || closure.Operation != "review/capture-validation" ||
+		closure.LineageID != lineage || closure.State != reviewtransaction.StateApproved {
+		t.Fatalf("validation --input closure = %#v", closure)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, lineage)
+}
+
 // TestReviewCaptureRefuterExecuteDeadlineFailsClosedWithoutCapture stalls a
 // real spawned fake pi (its grandchild holds the inherited stdout pipe) past
 // the shrunken deadline: typed refusal, untouched slot, no hang.
@@ -374,9 +553,29 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			want: "cannot be combined with --execute",
 		},
 		{
-			name: "retired caller-authored input flag", env: reviewPiHostRelayContract,
-			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--input", "-"),
-			want: "not defined: -input",
+			name: "materialize combined with input", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true", "--input", "-"),
+			want: "cannot be combined with --input",
+		},
+		{
+			name: "execute combined with input", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--execute=true", "--input", "-"),
+			want: "cannot be combined with --input",
+		},
+		{
+			name: "input from compiled claude-code runtime", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentClaudeCode), "--input", "-"),
+			want: "invalid_request",
+		},
+		{
+			name: "input from compiled codex runtime", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentCodex), "--input", "-"),
+			want: "invalid_request",
+		},
+		{
+			name: "input from opencode keeps its host-mediated refusal", env: reviewPiHostRelayContract,
+			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--input", "-"),
+			want: "invalid_request",
 		},
 		{
 			name: "without agent", env: reviewPiHostRelayContract,
