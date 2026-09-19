@@ -315,8 +315,8 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 func TestReleaseDistributionPolicyAcceptsSemanticYAMLFormatting(t *testing.T) {
 	root := newReleasePolicyFixture(t)
 	replaceReleasePolicyFile(t, root, ".goreleaser.yaml",
-		"version: 2\n\nproject_name: gentle-ai\n",
-		"# Top-level key order and formatting are not release semantics.\nproject_name: gentle-ai\n\nversion: 2\n")
+		"version: 2\n\nproject_name: axiom\n",
+		"# Top-level key order and formatting are not release semantics.\nproject_name: axiom\n\nversion: 2\n")
 	replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"),
 		"permissions:\n  contents: read\n\nconcurrency:\n  group: release-${{ github.ref }}\n  cancel-in-progress: false\n",
 		"concurrency:\n  group: release-${{ github.ref }}\n  cancel-in-progress: false\n\n# Mapping order is intentionally non-semantic.\npermissions:\n  contents: read\n")
