@@ -1885,7 +1885,7 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentOpenCodeGentleLogo:
-		if !containsAgent(s.agents, model.AgentOpenCode) {
+		if len(s.agents) > 0 && !containsAgent(s.agents, model.AgentOpenCode) {
 			return nil
 		}
 		if _, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo); err != nil {
