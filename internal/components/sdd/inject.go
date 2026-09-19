@@ -1433,6 +1433,10 @@ func renderPreservedOpenCodeOrchestratorPrompt(
 	options ...OrchestratorRenderOptions,
 ) string {
 	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	if agent == model.AgentOpenCode {
+		migrated = strings.ReplaceAll(migrated, legacyOpenCodeConsentV3QuestionRoute, openCodeConsentV3QuestionRoute)
+		migrated = strings.ReplaceAll(migrated, openCodeFallbackSourceClause, openCodeConsentV3FallbackClause)
+	}
 	if strings.Contains(migrated, openCodeNativeQuestionSourceRoute) {
 		migrated = replaceOpenCodeConsentV3QuestionRoute(migrated, agent)
 	}
