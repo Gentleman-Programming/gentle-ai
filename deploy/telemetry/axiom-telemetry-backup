@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Nightly backup of the gentle-telemetry SQLite database: a consistent
+# Nightly backup of the Axiom telemetry SQLite database: a consistent
 # `sqlite3 .backup` snapshot uploaded via `rclone copy`, then removed
 # locally.
 #
-# Installed by install.sh to /usr/local/bin/gentle-telemetry-backup and
-# invoked with no arguments by gentle-telemetry-backup.service's
+# Installed by install.sh to /usr/local/bin/axiom-telemetry-backup and
+# invoked with no arguments by axiom-telemetry-backup.service's
 # ExecStart. This logic does NOT live inline in that unit's ExecStart
 # line: systemd expands "$VAR"/"${VAR}" there using its OWN environment
 # before the shell ever runs, which would have silently mangled local
@@ -35,6 +35,6 @@ trap 'rm -f "${snapshot}"' EXIT
 
 # sqlite3's ".backup" command takes a consistent snapshot even while the
 # collector is writing (SQLite's own backup API), so this never needs to
-# stop gentle-telemetry.service.
+# stop axiom-telemetry.service.
 sqlite3 "${DB}" ".backup ${snapshot}"
 rclone copy "${snapshot}" "${GENTLE_TELEMETRY_BACKUP_REMOTE}"

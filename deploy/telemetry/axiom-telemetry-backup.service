@@ -1,15 +1,17 @@
 [Unit]
-Description=Nightly backup of the gentle-telemetry SQLite database
+Description=Nightly backup of the Axiom telemetry SQLite database
 Documentation=https://github.com/Gentleman-Programming/gentle-ai/blob/main/docs/telemetry-collector.md
 # Only makes sense once the collector has created its database.
-Requisite=gentle-telemetry.service
+Requisite=axiom-telemetry.service
 
 [Service]
 Type=oneshot
 
 # Configure GENTLE_TELEMETRY_BACKUP_REMOTE (an rclone remote:path, e.g.
 # "b2:my-bucket/gentle-telemetry") in this file. It is not created by
-# install.sh: create it before enabling the timer.
+# install.sh: create it before enabling the timer. The variable name and
+# state paths stay pinned to gentle-telemetry: same already-provisioned
+# host state boundary noted in axiom-telemetry.service (REQ-20.12).
 EnvironmentFile=/etc/gentle-telemetry/backup.env
 
 # The backup logic lives in a standalone script, not inline here: systemd
@@ -18,7 +20,7 @@ EnvironmentFile=/etc/gentle-telemetry/backup.env
 # variables (e.g. $ts/$snapshot) written as if this were a normal shell
 # line. A single command with no arguments has nothing of that shape for
 # systemd to misinterpret.
-ExecStart=/usr/local/bin/gentle-telemetry-backup
+ExecStart=/usr/local/bin/axiom-telemetry-backup
 
 # Runs as root: simplest way to guarantee read access to the collector's
 # StateDirectory regardless of which static user owns it.

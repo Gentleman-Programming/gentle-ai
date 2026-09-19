@@ -1,4 +1,4 @@
-# Grafana datasource provisioning for the gentle-telemetry SQLite database.
+# Grafana datasource provisioning for the Axiom telemetry SQLite database.
 # Installed by deploy/telemetry/install.sh --with-grafana. Requires the
 # frser-sqlite-datasource plugin (installed by the same script via
 # `grafana-cli plugins install frser-sqlite-datasource`) and, since that
@@ -12,7 +12,7 @@
 apiVersion: 1
 
 datasources:
-  - name: gentle-telemetry
+  - name: axiom-telemetry
     uid: gentle-telemetry-sqlite
     type: frser-sqlite-datasource
     access: proxy

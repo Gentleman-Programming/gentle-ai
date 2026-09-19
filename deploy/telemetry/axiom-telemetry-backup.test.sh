@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Shell-level test for deploy/telemetry/gentle-telemetry-backup: runs the
+# Shell-level test for deploy/telemetry/axiom-telemetry-backup: runs the
 # real script against a temp SQLite file with a stubbed `rclone` on PATH,
 # and asserts it took a snapshot, "uploaded" it, and cleaned up. Requires
 # `sqlite3`; run manually (not part of `go test`):
-#   ./deploy/telemetry/gentle-telemetry-backup.test.sh
+#   ./deploy/telemetry/axiom-telemetry-backup.test.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="${SCRIPT_DIR}/gentle-telemetry-backup"
+TARGET="${SCRIPT_DIR}/axiom-telemetry-backup"
 
 if ! command -v sqlite3 >/dev/null 2>&1; then
 	printf 'skip: sqlite3 not found on PATH\n'
@@ -50,4 +50,4 @@ if compgen -G "${tmp}/backup-*.sqlite" >/dev/null; then
 	exit 1
 fi
 
-printf 'PASS: gentle-telemetry-backup took a snapshot, "uploaded" it, and cleaned up\n'
+printf 'PASS: axiom-telemetry-backup took a snapshot, "uploaded" it, and cleaned up\n'
