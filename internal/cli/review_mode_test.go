@@ -16,6 +16,36 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
 
+func TestReviewModeCloneEnableExplainsExplicitGlobalOff(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo}, &output); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--scope", "clone", "--cwd", repo}, &output); !errors.Is(err, reviewtransaction.ErrRDDDisabled) {
+		t.Fatalf("clone enable must preserve explicit global OFF, got %v", err)
+	}
+	for _, want := range []string{"receipt-driven development: off (decided by global)", "gentle-ai review mode enable --scope global"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("clone enable missing %q: %s", want, output.String())
+		}
+	}
+}
+
+func TestReviewModeHelpDescribesDefaultOnAndOptOut(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"on by default", "opt out", "gentle-ai review mode disable", "Any off wins", "status is read-only"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("help missing %q: %s", want, output.String())
+		}
+	}
+}
+
 func TestReviewModeStatusReportsBothSourcesWithoutMutating(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -38,11 +68,8 @@ func TestReviewModeStatusReportsBothSourcesWithoutMutating(t *testing.T) {
 	if result.Schema != ReviewModeSchema || result.Operation != "status" {
 		t.Fatalf("status result = %#v", result)
 	}
-	// Nobody opted in here, so both sources stay unset and the default
-	// decides -- and the default is off, because receipt-driven development
-	// is opt-in. Status still has to name both sources rather than collapsing
-	// them into the one effective answer.
-	if result.Status.Effective != reviewtransaction.RDDModeOff ||
+	// Default ON must still name both unset sources without inventing a decision.
+	if result.Status.Effective != reviewtransaction.RDDModeOn ||
 		result.Status.Source != reviewtransaction.RDDModeSourceDefault ||
 		result.Status.Global != reviewtransaction.RDDModeUnset ||
 		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
@@ -94,7 +121,7 @@ func TestReviewModeGlobalScopeWorksFromNonGitDirectory(t *testing.T) {
 	if err := RunReviewMode([]string{"status", "--cwd", nonGit, "--json"}, &output); err != nil {
 		t.Fatalf("unset global status from non-Git cwd error = %v\n%s", err, output.String())
 	}
-	if before := decodeReviewModeResult(t, output.Bytes()); before.Status.Effective != reviewtransaction.RDDModeOff ||
+	if before := decodeReviewModeResult(t, output.Bytes()); before.Status.Effective != reviewtransaction.RDDModeOn ||
 		before.Status.Source != reviewtransaction.RDDModeSourceDefault ||
 		before.Status.Global != reviewtransaction.RDDModeUnset || before.Status.CloneLocal != reviewtransaction.RDDModeUnset {
 		t.Fatalf("unset global status from non-Git cwd = %#v", before.Status)
@@ -217,13 +244,8 @@ func TestWriteGlobalRDDModeSerializesWithInstallStateAndPreservesFreshFields(t *
 	}
 }
 
-// TestReviewModeGlobalEnableSurvivesTheOptInDefault is the upgrade-safety
-// property behind making receipt-driven development opt-in. A user who
-// deliberately ran `review mode enable --scope global` before the flip must
-// still be reviewed after it: the enable writes an explicit "on" into user
-// state, and resolution reads that explicit opinion rather than falling through
-// to the now-off default. A clone that never opted in stays off.
-func TestReviewModeGlobalEnableSurvivesTheOptInDefault(t *testing.T) {
+// Explicit global ON remains distinguishable from the unset ON default.
+func TestReviewModeGlobalEnableSurvivesTheDefaultOn(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 
@@ -231,9 +253,9 @@ func TestReviewModeGlobalEnableSurvivesTheOptInDefault(t *testing.T) {
 	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
 		t.Fatalf("RunReviewMode(status) error = %v", err)
 	}
-	if before := decodeReviewModeResult(t, output.Bytes()); before.Status.Effective != reviewtransaction.RDDModeOff ||
+	if before := decodeReviewModeResult(t, output.Bytes()); before.Status.Effective != reviewtransaction.RDDModeOn ||
 		before.Status.Source != reviewtransaction.RDDModeSourceDefault {
-		t.Fatalf("a clone nobody opted in was not off by default: %#v", before.Status)
+		t.Fatalf("an unconfigured clone was not on by default: %#v", before.Status)
 	}
 
 	output.Reset()
@@ -267,11 +289,8 @@ func TestReviewModeGlobalEnableSurvivesTheOptInDefault(t *testing.T) {
 	}
 }
 
-// TestReviewModeCloneScopeDisablesOnlyThisClone needs a user who opted in
-// globally: the property under test is that a clone-local off does not travel
-// to a second clone, and that is only observable when something other than the
-// override would have said on. Against the opt-in default both clones would
-// read off for the same reason and the test would prove nothing.
+// Explicit global ON isolates the property that a clone-local OFF does not
+// travel to another clone, independently of the product default.
 func TestReviewModeCloneScopeDisablesOnlyThisClone(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -320,9 +339,8 @@ func TestReviewModeCloneScopeEnableIsIdempotentWhenGlobalOn(t *testing.T) {
 }
 
 // TestReviewModeCloneScopeEnableMigratesLegacyRevision seeds the clone-local
-// override against an explicit global "on", so the fixture opts in the same
-// way: clearing the override has to land back on that global opinion, and
-// against the opt-in default it would land on off and hide the migration.
+// override against an explicit global "on": clearing it must return to that
+// same global opinion rather than merely inherit the ON default.
 func TestReviewModeCloneScopeEnableMigratesLegacyRevision(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -936,13 +954,9 @@ func reviewModeHome(t *testing.T) string {
 	return home
 }
 
-// reviewEnabledHome is reviewModeHome for a user who opted in. Receipt-driven
-// development is off until someone explicitly enables it, so a test whose
-// subject is the review lifecycle -- rather than the switch itself -- has to
-// opt in the way a real user does before a review will start at all. It writes
-// the same explicit global "on" that `gentle-ai review mode enable` persists,
-// rather than reaching past the switch, so these fixtures keep exercising the
-// resolution path they are meant to run through.
+// reviewEnabledHome supplies an explicit global ON for lifecycle tests so
+// their preconditions remain independent of the ON default. It writes the same
+// global opinion that `gentle-ai review mode enable` persists.
 //
 // The opinion lives in the user's home directory, which is process-wide state
 // reached through t.Setenv. Go forbids t.Setenv in a test that also calls
@@ -970,16 +984,9 @@ func decodeReviewModeResult(t *testing.T, payload []byte) ReviewModeResult {
 	return result
 }
 
-// TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset is the
-// RED-first proof for issue #3972. The clone-local override can only disable,
-// so `enable --scope clone` on a home whose global switch is unset clears an
-// opinion this clone never held and leaves receipt-driven development off.
-// That outcome is by design and exits 0; what was missing is the sentence
-// that says the global switch decides and names the one command that turns
-// reviews on. The JSON envelope already carries that fact as `source:
-// "default"` and stays byte-for-byte the same shape, because gentle-pi decodes
-// it as an exact object and would reject a new field.
-func TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset(t *testing.T) {
+// A no-op clone enable inherits default ON without persisting either opinion
+// or extending the status schema consumed by gentle-pi.
+func TestReviewModeCloneScopeEnableInheritsDefaultOnWhileGlobalUnset(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 
@@ -988,14 +995,11 @@ func TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset(t *testing
 		t.Fatalf("clearing an absent clone override must succeed while global mode is unset: %v", err)
 	}
 	human := output.String()
-	for _, want := range []string{
-		"receipt-driven development: off (decided by default)",
-		"can only disable",
-		"gentle-ai review mode enable --scope global",
-	} {
-		if !strings.Contains(human, want) {
-			t.Fatalf("clone enable on an unset global does not say the global switch decides (%q missing):\n%s", want, human)
-		}
+	if !strings.Contains(human, "receipt-driven development: on (decided by default)") {
+		t.Fatalf("clone enable did not inherit default ON:\n%s", human)
+	}
+	if strings.Contains(human, "--scope global") {
+		t.Fatalf("default ON must not ask for a redundant global enable:\n%s", human)
 	}
 
 	output.Reset()
@@ -1003,11 +1007,11 @@ func TestReviewModeCloneScopeEnableNamesTheGlobalExitWhileGlobalUnset(t *testing
 		t.Fatalf("RunReviewMode(enable clone --json) error = %v", err)
 	}
 	result := decodeReviewModeResult(t, output.Bytes())
-	if result.Status.Effective != reviewtransaction.RDDModeOff ||
+	if result.Status.Effective != reviewtransaction.RDDModeOn ||
 		result.Status.Source != reviewtransaction.RDDModeSourceDefault ||
 		result.Status.Global != reviewtransaction.RDDModeUnset ||
 		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
-		t.Fatalf("clone enable result = %#v, want off decided by default with both sources unset", result.Status)
+		t.Fatalf("clone enable result = %#v, want on decided by default with both sources unset", result.Status)
 	}
 	var envelope struct {
 		Status map[string]json.RawMessage `json:"status"`

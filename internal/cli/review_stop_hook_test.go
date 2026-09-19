@@ -165,7 +165,10 @@ func TestReviewStopHookSilentWhenRDDOff(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	stageReviewStopHookCandidate(t, repo)
-	// Receipt-driven development is opt-in and off by default: no enable call.
+	// Explicit OFF is the negative control, independent of the default.
+	if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
 
 	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-off", repo, false, nil))
 	var stdout, stderr bytes.Buffer
@@ -447,7 +450,10 @@ func TestReviewStopHookSessionStartSilentWhenRDDOff(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	stageReviewStopHookCandidate(t, repo)
-	// Receipt-driven development is opt-in and off by default: no enable call.
+	// Explicit OFF must suppress SessionStart even with default ON.
+	if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
 
 	stdout, stderr := runReviewStopHookSessionStartTest(t, "sess-rdd-off", repo)
 	if stdout.Len() != 0 || stderr.Len() != 0 {

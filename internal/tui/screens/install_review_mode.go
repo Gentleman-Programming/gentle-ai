@@ -22,7 +22,7 @@ func RenderInstallReviewMode(status reviewtransaction.RDDModeStatus, err error, 
 	b.WriteString(styles.TitleStyle.Render("Receipt-Driven Development") + "\n\n")
 	b.WriteString(styles.SubtextStyle.Render("RDD adds an independent review of your code changes to help catch bugs and regressions before they reach your project.") + "\n")
 	b.WriteString(styles.SubtextStyle.Render("It records review findings and verifies corrections, helping you understand what was checked and build confidence in your changes.") + "\n\n")
-	b.WriteString(styles.HeadingStyle.Render("Would you like to enable RDD?") + "\n")
+	b.WriteString(styles.HeadingStyle.Render("RDD is ON by default. You can opt out.") + "\n")
 	b.WriteString(styles.SubtextStyle.Render("Your choice applies globally after installation succeeds. Existing project-specific settings are preserved.") + "\n\n")
 
 	if err != nil {
@@ -46,6 +46,6 @@ func installReviewModeStatusLabel(status reviewtransaction.RDDModeStatus) string
 	case reviewtransaction.RDDModeOff:
 		return "RDD is currently OFF."
 	default:
-		return "No global RDD preference is configured. RDD defaults to OFF until you explicitly choose otherwise."
+		return "No global RDD preference is configured. RDD defaults to ON; choose Disable RDD to opt out."
 	}
 }

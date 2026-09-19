@@ -87,11 +87,8 @@ func TestKillSwitchStatusIsReadableWhileReviewAuthorityIsDamaged(t *testing.T) {
 	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
 		t.Fatalf("status refused on a damaged authority tree: %v", err)
 	}
-	// No clone-local override was ever written and nobody opted in, so the
-	// default decides and receipt-driven development stays off. What matters
-	// here is that the damaged tree did not stop status from projecting that
-	// answer: failing closed is preserved; only reachability changed.
-	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOff {
-		t.Fatalf("status = %#v, want the default to still decide off", result.Status)
+	// Damage to unrelated authority must not change the unset ON/default mode.
+	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOn || result.Status.Source != reviewtransaction.RDDModeSourceDefault {
+		t.Fatalf("status = %#v, want on/default", result.Status)
 	}
 }

@@ -25,11 +25,8 @@ func TestNegotiatedStatusMatchesReviewStartRDDMode(t *testing.T) {
 		{name: "global unset clone off", cloneOff: true, wantScope: "clone"},
 		{name: "global on clone off", global: "enable", cloneOff: true, wantScope: "clone"},
 		{name: "global on", global: "enable", enabled: true},
-		// Receipt-driven development is opt-in, so a clone nobody enabled
-		// resolves through the same default as an explicit off: STATUS must
-		// report the disabled eligibility and the rdd_disabled stop, not a
-		// START it would then refuse.
-		{name: "global unset clone unset default off", wantScope: "default"},
+		// Unset mode permits START without recording a user decision.
+		{name: "global unset clone unset default on", enabled: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

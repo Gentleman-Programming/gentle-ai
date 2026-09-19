@@ -24,14 +24,10 @@ func reviewModeHome(t *testing.T) string {
 	return home
 }
 
-// reviewEnabledHome is reviewModeHome for a user who opted in. Receipt-driven
-// development is off until someone explicitly enables it, so a test whose
-// subject is the review lifecycle -- rather than the switch itself -- has to
-// opt in the way a real user does before an offer, a gate, or a review will
-// exist at all. It writes the same explicit global "on" that
-// `gentle-ai review mode enable` persists, rather than reaching past the
-// switch, so these fixtures keep exercising the resolution path they are
-// meant to run through.
+// reviewEnabledHome records explicit global ON for lifecycle tests rather than
+// relying on the unset ON default. It writes the same global setting that
+// `gentle-ai review mode enable` persists, so these fixtures keep exercising
+// the intended resolution path even if the product default changes.
 //
 // The opinion lives in the user's home directory, which is process-wide state
 // reached through t.Setenv. Go forbids t.Setenv in a test that also calls

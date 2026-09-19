@@ -3,13 +3,13 @@ Receipt-Driven Development
 RDD adds an independent review of your code changes to help catch bugs and regressions before they reach your project.
 It records review findings and verifies corrections, helping you understand what was checked and build confidence in your changes.
 
-Would you like to enable RDD?
+RDD is ON by default. You can opt out.
 Your choice applies globally after installation succeeds. Existing project-specific settings are preserved.
 
-No global RDD preference is configured. RDD defaults to OFF until you explicitly choose otherwise.
+No global RDD preference is configured. RDD defaults to ON; choose Disable RDD to opt out.
 
-  Enable RDD
-▸ Disable RDD
+▸ Enable RDD
+  Disable RDD
   Back
 
 j/k: navigate • enter: choose • esc: back

@@ -21,9 +21,9 @@ import (
 // hand reproduction hit: authority that already exists, and a switch that is
 // now off.
 //
-// Reaching that shape needs both halves of the switch in order. Receipt-driven
-// development is opt-in, so the START that creates the authority to freeze only
-// runs for a user who explicitly turned reviews on -- hence the enabled home.
+// Reaching that shape needs both halves of the switch in order. The enabled
+// home gives START an explicit global ON precondition, independent of the
+// product's ON default.
 // The clone-local disable that follows is what the tests here are actually
 // about, and it still wins over that explicit global "on".
 func disabledReviewRepo(t *testing.T, lineage string) (repo string, started ReviewFacadeStartResult) {

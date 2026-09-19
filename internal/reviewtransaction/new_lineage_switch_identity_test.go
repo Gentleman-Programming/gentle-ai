@@ -15,8 +15,8 @@ func TestRDDModeResolvesOnlyFromItsPersistedSetting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Enabled() {
-		t.Fatal("RDD mode defaulted on without a persisted opt-in")
+	if !status.Enabled() || status.Source != RDDModeSourceDefault || status.Global != RDDModeUnset || status.CloneLocal != RDDModeUnset {
+		t.Fatalf("RDD mode must default on without inventing a persisted decision: %#v", status)
 	}
 
 	status, err = ResolveRDDMode(ctx, repo, RDDGlobalMode{Value: string(RDDModeOn)})

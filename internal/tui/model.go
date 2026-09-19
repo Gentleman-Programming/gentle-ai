@@ -1158,9 +1158,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.InstallReviewModeStatus = msg.Status
 		m.InstallReviewModeLoadErr = msg.Err
 		if msg.Err == nil {
-			m.Cursor = 1 // RDD OFF is the opt-in default for unset and off global modes.
-			if msg.Status.Global == reviewtransaction.RDDModeOn {
-				m.Cursor = 0
+			m.Cursor = 0 // Unset defaults to ON; preserve an explicit global OFF choice.
+			if msg.Status.Global == reviewtransaction.RDDModeOff {
+				m.Cursor = 1
 			}
 		}
 		return m, nil

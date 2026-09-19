@@ -12,7 +12,7 @@ func TestReviewModeTUIWrappersResolveAndChangeOnlyGlobalMode(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 
 	before, err := ReviewModeStatus(context.Background(), repo)
-	if err != nil || before.Effective != reviewtransaction.RDDModeOff {
+	if err != nil || before.Effective != reviewtransaction.RDDModeOn || before.Source != reviewtransaction.RDDModeSourceDefault {
 		t.Fatalf("initial status = %#v, %v", before, err)
 	}
 	updated, err := SetGlobalReviewMode(context.Background(), repo, true)

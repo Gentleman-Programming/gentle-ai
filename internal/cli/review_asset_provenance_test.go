@@ -726,10 +726,8 @@ func splitContinuationCommand(command string) []string {
 // binary's, which is the only skew the provenance guard refuses on.
 //
 // It reads the existing user state and rewrites only that one field. A blind
-// state.Write would also erase the explicit global "on" these fixtures depend
-// on -- receipt-driven development is opt-in, so wiping it would turn every
-// following gate into a disabled/unmanaged report and the provenance refusal
-// under test would never be reached.
+// state.Write would also erase the fixture's explicit global "on", silently
+// replacing its declared precondition with the unset ON default.
 func staleManagedReviewerAssets(t *testing.T, home string) {
 	t.Helper()
 	recordManagedAssetDigest(t, home, "sha256:stale")

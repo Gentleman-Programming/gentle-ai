@@ -558,9 +558,9 @@ func startCommittedCorrectionFixture(t *testing.T, repo, lineage, baseRef string
 
 // forecastCommittedCorrection drives a real lineage from START through a
 // blocking finding to an open correction budget. Every caller continues that
-// lifecycle through the native CLI, so the fixture opts in the way a real user
-// does: receipt-driven development is off until someone enables it, and none of
-// these transitions exist for a clone that never did.
+// lifecycle through the native CLI. RDD defaults to ON, but the fixture explicitly
+// enables it to keep its lifecycle precondition independent of the default;
+// explicit OFF still prevents these transitions.
 func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	t.Helper()
 	reviewEnabledHome(t)

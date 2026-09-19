@@ -2943,13 +2943,9 @@ type organicHarness struct {
 // runs against: a seeded repository, an isolated HOME, and an explicit global
 // opt-in into receipt-driven development.
 //
-// The opt-in is part of the fixture rather than of each journey because review
-// is off unless somebody turns it on. A fresh HOME therefore reproduces a fresh
-// install, where every `review start` is refused before it can reach the
-// behaviour under test. Performing the opt-in the way an operator would --
-// through the real command, against this run's own HOME -- keeps the journeys
-// about the lifecycle instead of about the default, and leaves the kill-switch
-// journeys with a real `on` to switch off.
+// Explicit enable is part of the fixture so lifecycle journeys do not depend
+// on the ON default. The real command runs against this fixture's isolated HOME
+// and gives kill-switch journeys a persisted ON opinion to switch off.
 func newOrganicHarness(t *testing.T) *organicHarness {
 	t.Helper()
 	harness := &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
@@ -3328,12 +3324,8 @@ func (harness *organicHarness) disableReview() organicModeResult {
 }
 
 // enableReviewGlobally records the user-scoped `on` this fixture's isolated
-// HOME needs before any review may start.
-//
-// Only the global scope can assert `on`. A clone-local enable merely clears
-// this clone's own `off` opinion, so it can never stand in for this call: with
-// no global opinion recorded, clearing the clone override just falls back to
-// the default, which keeps review off.
+// HOME declares as a lifecycle precondition, independently of default ON.
+// Only global enable persists `on`; clone enable merely clears a local OFF.
 func (harness *organicHarness) enableReviewGlobally() organicModeResult {
 	harness.t.Helper()
 	payload := harness.gentle("review", "mode", "enable", "--cwd", harness.repo.worktree, "--scope", "global", "--json")

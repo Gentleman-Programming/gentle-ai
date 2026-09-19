@@ -27,21 +27,15 @@ func TestRDDDisabledErrorNamesTheCommandThatTurnsItBackOn(t *testing.T) {
 	}
 }
 
-// Receipt-driven development is opt-in, which makes the default source the
-// single most common reason a refusal happens at all: every install nobody
-// configured lands here. It used to be unreachable, and naming no command was
-// right then; now it is the first thing a new user hits, so it must name the
-// one command that turns reviews on. That command is global-scoped because a
-// clone can only ever disable -- it may never assert "on" for the user -- so
-// the clone scope would be a continuation that cannot work. Both refusable
-// operations are covered: a mutation says more than a start does, and the
-// continuation has to survive that extra prose.
+// Default ON no longer produces this refusal through mode resolution. Keep
+// compatibility coverage for a constructed default-source error: its recovery
+// command must still name global enable for both operations.
 func TestRDDDisabledErrorSendsTheDefaultSourceToTheGlobalEnable(t *testing.T) {
 	for _, operation := range []RDDOperation{RDDOperationStart, RDDOperationMutate} {
 		t.Run(string(operation), func(t *testing.T) {
 			got := (&RDDDisabledError{Operation: operation, Source: RDDModeSourceDefault}).Error()
 			if !strings.Contains(got, "gentle-ai review mode enable --scope=global") {
-				t.Fatalf("an opt-in default left the operator with no runnable way in: %s", got)
+				t.Fatalf("a default-source error omitted its global recovery command: %s", got)
 			}
 			if strings.Contains(got, "--scope=clone") {
 				t.Fatalf("a clone scope can never turn reviews on, so it must not be offered: %s", got)

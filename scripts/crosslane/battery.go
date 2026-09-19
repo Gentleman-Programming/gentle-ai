@@ -63,10 +63,9 @@ type battery struct {
 	// sandboxHome is the battery's own HOME for every deterministic-lane
 	// invocation. The lanes used to inherit the operator's real HOME, which
 	// silently made their results depend on that machine's global review mode.
-	// Receipt-driven development is opt-in, so on a machine nobody configured
-	// every lifecycle lane would be refused at start; on the maintainer's own
-	// machine it would pass. Owning the HOME makes the battery answer the same
-	// way everywhere, and keeps it from ever writing to the operator's state.
+	// An operator's explicit OFF must not affect lifecycle lanes. Owning HOME
+	// and explicitly enabling review makes the precondition independent of
+	// default ON, without ever writing to the operator's state.
 	sandboxHome string
 
 	envelopes        []capturedEnvelope

@@ -205,12 +205,11 @@ type RDDDisabledError struct {
 
 // Error names the exact command that turns reviews on, scoped to the source
 // that actually decided. Refusing here is correct -- either the operator asked
-// for reviews to be off, or nobody ever opted in -- but a refusal that exits
+// for reviews to be off -- but a refusal that exits
 // non-zero and names no runnable continuation is the one shape this project
 // does not ship. The scope is derived rather than generic so the operator does
-// not have to work out which source they need to change. The wording says "on"
-// rather than "back on" because receipt-driven development is opt-in: the most
-// common refusal is a fresh install where reviews were never on to begin with.
+// not have to work out which source they need to change. An unset installation
+// defaults to ON and does not reach this refusal.
 func (err *RDDDisabledError) Error() string {
 	message := fmt.Sprintf("%v: %s is rejected because the %s mode source keeps it off",
 		ErrRDDDisabled, rddOperationSubject(err.Operation), err.Source)
@@ -239,17 +238,10 @@ func rddOperationSubject(operation RDDOperation) string {
 }
 
 // reviewModeEnableForSource names the exact `gentle-ai review mode enable`
-// commands that turn reviews on. Receipt-driven development is opt-in, so the
-// default source is not an absence of a decision the operator can act on: it is
-// the ordinary state of an install nobody configured, and it resolves the same
-// way a global opinion does. It answers "global" for that reason, and because
-// global is the only scope that can turn reviews on at all -- a clone may
-// disable for itself but may never require review for the user, so pointing a
-// never-configured operator at --scope=clone would name a command that cannot
-// do what the refusal just asked them to do. A clone-local off is the one
-// source needing two commands: --scope=clone clears the override, but clearing
-// it only lands on the global source, which an opt-in install has no reason to
-// have turned on -- so naming that scope alone was a dead end.
+// commands that turn reviews on. Global enable changes an explicit global OFF;
+// clone enable only clears that clone's OFF override. A clone-local refusal
+// names both because a global OFF may also exist. These are user actions, not
+// automatic mode changes. The default source now permits review.
 func reviewModeEnableForSource(source RDDModeSource) string {
 	const enable = "gentle-ai review mode enable --scope="
 	if source == RDDModeSourceCloneLocal {
@@ -704,11 +696,9 @@ func rddModeStatus(
 	case globalMode == RDDModeOn:
 		status.Effective, status.Source = RDDModeOn, RDDModeSourceGlobal
 	default:
-		// Receipt-driven development is opt-in. Nobody expressed an opinion
-		// here, and an install nobody configured must not start reviewing on
-		// its own: the only way to "on" is an explicit global enable, which the
-		// case above reads back untouched across an upgrade.
-		status.Effective, status.Source = RDDModeOff, RDDModeSourceDefault
+		// An unset installation permits review without recording a user decision.
+		// Explicit global and clone-local choices above retain precedence.
+		status.Effective, status.Source = RDDModeOn, RDDModeSourceDefault
 	}
 	return status
 }

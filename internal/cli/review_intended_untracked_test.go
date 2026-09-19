@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -448,6 +449,9 @@ func TestEligibleUntrackedInventoryPublishedUnconditionally(t *testing.T) {
 			case "rdd_disabled":
 				reviewModeHome(t)
 				repo = initReviewCLIRepo(t)
+				if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+					t.Fatal(err)
+				}
 				if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}

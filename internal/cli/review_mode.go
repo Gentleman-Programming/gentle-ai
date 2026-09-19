@@ -38,15 +38,15 @@ type ReviewModeResult struct {
 }
 
 // RunReviewMode is the user-controlled receipt-driven-development switch.
-// Receipt-driven development is opt-in: with no source expressing an opinion it
-// resolves to off, and only an explicit global enable turns it on. The global
+// Receipt-driven development is opt-out: with no source expressing an opinion it
+// resolves to on without persisting a user decision. The global
 // mode lives in uncommitted user state; the clone-local override lives under
 // this clone's Git common directory and can only disable. Any off wins, status
 // never mutates, and enabling applies to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
-		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is off until you enable it: run 'gentle-ai review mode enable --scope global' to opt in. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is on by default: run 'gentle-ai review mode disable' to opt out. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
 		return nil
 	}
 	operation := args[0]
@@ -138,6 +138,8 @@ func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtr
 		Source:     reviewtransaction.RDDModeSourceDefault,
 	}
 	switch strings.TrimSpace(global.Value) {
+	case "":
+		status.Effective = reviewtransaction.RDDModeOn
 	case string(reviewtransaction.RDDModeOn):
 		status.Global = reviewtransaction.RDDModeOn
 		status.Effective = reviewtransaction.RDDModeOn
@@ -471,14 +473,9 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 		return err
 	}
 	if result.Operation == "enable" && result.Scope == reviewModeScopeClone &&
-		result.Status.Effective == reviewtransaction.RDDModeOff && result.Status.Source == reviewtransaction.RDDModeSourceDefault {
-		// The clone-local override can only disable, so this enable cleared an
-		// opinion and turned nothing on: the global switch was never set and
-		// still decides (issue #3972). The outcome is by design and exits 0,
-		// but a status block that stops at "off" reads as if reviews were
-		// enabled, and the next START refuses with rdd_disabled again. The
-		// JSON envelope already carries the fact as source "default", so the
-		// sentence lives on the human surface only.
+		result.Status.Effective == reviewtransaction.RDDModeOff && result.Status.Source == reviewtransaction.RDDModeSourceGlobal {
+		// Clearing a clone override cannot override an explicit global OFF.
+		// Keep the next action on the human surface without extending the schema.
 		if _, err = fmt.Fprint(
 			stdout,
 			"  note:        a clone-local override can only disable, so this cleared the clone's off opinion and the global switch still decides; run `gentle-ai review mode enable --scope global` to turn receipt-driven development on\n",
@@ -593,9 +590,9 @@ const (
 
 	// reviewConsentSkippedNotice keeps the fail-safe default discoverable: an
 	// unanswerable question must never look like a silent yes. It carries no
-	// provenance sentence about how reviews got switched on, because with
-	// receipt-driven development opt-in there is only one way: an explicit
-	// enable. A clone that never opted in is refused long before this point.
+	// provenance sentence about how reviews got switched on: either the unset
+	// default or an explicit enable may permit review. Explicit OFF is refused
+	// before this point.
 	reviewConsentSkippedNotice = "Gentle AI reviewed this change without asking, because this session has no terminal to answer on. " +
 		"Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
 

@@ -438,6 +438,9 @@ func TestRenderRoutingObeysTheUserOnReviewMode(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"It is **on by default and opt-out**.",
+		"A `default` deciding source means nobody has chosen, so the effective mode is on.",
+		"Never toggle the mode automatically",
 		"When the user asks to stop using receipt-driven development, run `disable`.",
 		"Do not argue, do not work around it, and do not propose alternatives first.",
 		"Never enable receipt-driven development on the user's behalf unless the user explicitly asks for it.",

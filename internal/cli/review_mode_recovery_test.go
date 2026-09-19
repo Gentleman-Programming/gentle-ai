@@ -97,9 +97,8 @@ func assertUnreadableModeIsRecoverable(t *testing.T, corruption reviewModeCorrup
 // status` -- the read-only diagnostic an operator reaches for first -- emits.
 //
 // The operator this models wants to review, so the fixture starts from an
-// explicit global "on": receipt-driven development is opt-in, and without that
-// opinion clearing a corrupted clone-local override would land on the off
-// default and the recovery would look like it never worked. A global
+// explicit global "on" rather than relying on the unset ON default. Clearing a
+// corrupted clone-local override must restore that explicit opinion. A global
 // corruption below overwrites that same field, so the global case is unchanged.
 func reviewModeUnreadableFixture(t *testing.T, corruption reviewModeCorruption) (string, string) {
 	t.Helper()

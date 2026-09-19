@@ -17,7 +17,7 @@ func TestRenderInstallReviewModeExplainsChoiceAndGlobalScope(t *testing.T) {
 	for _, want := range []string{
 		"RDD adds an independent review of your code changes to help catch bugs and regressions before they reach your project.",
 		"It records review findings and verifies corrections, helping you understand what was checked and build confidence in your changes.",
-		"Would you like to enable RDD?",
+		"RDD is ON by default. You can opt out.",
 		"Your choice applies globally after installation succeeds. Existing project-specific settings are preserved.",
 		"Enable RDD",
 		"Disable RDD",
@@ -42,7 +42,7 @@ func TestInstallReviewModeStatusLabelsRemainTruthful(t *testing.T) {
 	}{
 		{name: "on", global: reviewtransaction.RDDModeOn, want: "RDD is currently ON."},
 		{name: "off", global: reviewtransaction.RDDModeOff, want: "RDD is currently OFF."},
-		{name: "unset", global: reviewtransaction.RDDModeUnset, want: "No global RDD preference is configured. RDD defaults to OFF until you explicitly choose otherwise."},
+		{name: "unset", global: reviewtransaction.RDDModeUnset, want: "No global RDD preference is configured. RDD defaults to ON; choose Disable RDD to opt out."},
 	}
 
 	for _, tt := range tests {
