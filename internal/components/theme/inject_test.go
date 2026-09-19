@@ -9,12 +9,16 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 
 func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
 	home := t.TempDir()
@@ -96,6 +100,74 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 	if root.Theme != "gentleman" {
 		t.Fatalf("theme = %q, want gentleman", root.Theme)
+	}
+}
+
+// TestInjectSkipsAdapterWithoutGentlemanTheme verifies that Inject is a no-op
+// for adapters whose visual theme assets do not register a "gentleman" theme.
+// Pi ships themes named Gentle, Gentleman-Cute, and Gentleman-Sexy via the
+// `gentle-pi` npm package, so injecting the hardcoded "gentleman" overlay into
+// Pi's settings.json would persist a non-resolvable theme identifier and break
+// Pi startup on every run. See issue #4775.
+func TestInjectSkipsAdapterWithoutGentlemanTheme(t *testing.T) {
+	cases := []struct {
+		name    string
+		adapter agents.Adapter
+		seed    string
+		path    string
+	}{
+		{
+			name:    "pi",
+			adapter: piAdapter(),
+			seed:    "{\n  \"tuiMode\": \"fullscreen\",\n  \"packages\": [\"npm:gentle-pi\"]\n}\n",
+			path:    filepath.Join(".pi", "agent", "settings.json"),
+		},
+		{
+			name:    "kimi",
+			adapter: kimiAdapter(),
+			seed:    "[settings]\ntheme = \"user-theme\"\n",
+			path:    filepath.Join(".kimi", "config.toml"),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, filepath.FromSlash(tc.path))
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(settings dir) error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.seed), 0o644); err != nil {
+				t.Fatalf("WriteFile(settings) error = %v", err)
+			}
+
+			result, err := Inject(home, tc.adapter)
+			if err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			if result.Changed {
+				t.Fatalf("Inject() changed = true, want no-op for adapter without gentleman theme")
+			}
+			if len(result.Files) != 0 {
+				t.Fatalf("Inject() files = %#v, want none", result.Files)
+			}
+
+			got, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(settings) error = %v", err)
+			}
+			if string(got) != tc.seed {
+				t.Fatalf("settings changed unexpectedly:\nwant:\n%s\ngot:\n%s", tc.seed, string(got))
+			}
+
+			second, err := Inject(home, tc.adapter)
+			if err != nil {
+				t.Fatalf("Inject() second error = %v", err)
+			}
+			if second.Changed {
+				t.Fatalf("Inject() second changed = true, want no-op on re-run")
+			}
+		})
 	}
 }
 
