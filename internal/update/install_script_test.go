@@ -224,3 +224,87 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		}
 	}
 }
+
+// TestInstallScriptUsesStagingAndRename (issue #1728): the install path must
+// never `cp` directly to the destination; partial `cp` failures leave the
+// destination binary truncated. The script stages next to the destination
+// and renames in place so the previous binary either survives intact or is
+// fully replaced.
+func TestInstallScriptUsesStagingAndRename(t *testing.T) {
+	content := readInstallScript(t)
+	// Find any `cp` invocation that writes under the install dir variable.
+	cpToDest := regexp.MustCompile(`cp\s+"\$\{?tmpdir`)
+	if cpToDest.MatchString(content) {
+		t.Errorf("scripts/install.sh still copies from tmpdir directly; use a same-directory staging file + POSIX rename")
+	}
+	// The rename path must use a local staging file, not a cross-directory mv.
+	staging := regexp.MustCompile(`\.staging\.\$\$`)
+	if !staging.MatchString(content) {
+		t.Errorf("scripts/install.sh must stage with a same-directory .staging.$$ file")
+	}
+	mvInPlace := regexp.MustCompile(`mv -f -- "\$staging" "\$final"`)
+	if !mvInPlace.MatchString(content) {
+		t.Errorf("scripts/install.sh must rename staging -> final in place; got: %s", findMatches(content, regexp.MustCompile(`mv -f[^\n]*`)))
+	}
+}
+
+// TestInstallScriptUsesExplicitMode (issue #1728): chmod +x inherits the
+// caller umask (0711 under umask 022, 0700 under umask 077). The install path
+// must use `install -m 0755` so the destination mode is the intended 0755
+// regardless of caller umask.
+func TestInstallScriptUsesExplicitMode(t *testing.T) {
+	content := readInstallScript(t)
+	if strings.Contains(content, "chmod +x \"${install_dir}/${BINARY_NAME}\"") {
+		t.Error("scripts/install.sh must not chmod +x the destination binary; use install -m 0755")
+	}
+	if !strings.Contains(content, "install -m 0755") {
+		t.Error("scripts/install.sh must call `install -m 0755` to publish the binary")
+	}
+}
+
+// TestInstallScriptSudoUsesPositionalArgs (issue #1728): the sudo path must
+// not interpolate the destination path into a sudo bash -c program; a path
+// containing $(...) or backticks would be re-interpreted as commands by the
+// invoking user's shell.
+func TestInstallScriptSudoUsesPositionalArgs(t *testing.T) {
+	content := readInstallScript(t)
+	// Old vulnerable form: sudo cp ... "${install_dir}/${BINARY_NAME}"
+	badCp := regexp.MustCompile(`sudo\s+cp\s+`)
+	if badCp.MatchString(content) {
+		t.Error("scripts/install.sh still uses sudo cp; pass paths as positional args to a fixed shell body")
+	}
+	// The new safe form passes paths as positional args: sudo -- bash -c '...' _ "$1" ...
+	safeSudo := regexp.MustCompile(`sudo -- bash -c '[^']*' _ "`)
+	if !safeSudo.MatchString(content) {
+		t.Error("scripts/install.sh must pass sudo paths as positional args: `sudo -- bash -c '...' _ \"$1\" ...`")
+	}
+}
+
+// TestInstallScriptHasStagingCleanupTrap (issue #1728): a TERM during the
+// install must clean up the destination-local staging file; otherwise the
+// previous binary can be left in a partial state and debris remains next
+// to it.
+func TestInstallScriptHasStagingCleanupTrap(t *testing.T) {
+	content := readInstallScript(t)
+	trapLine := regexp.MustCompile(`trap\s+'rm -f -- "\$staging"`).MatchString(content)
+	if !trapLine {
+		t.Error("scripts/install.sh must register `trap 'rm -f -- \"$staging\"' EXIT TERM INT` to clean up the staging file on any exit")
+	}
+}
+
+func readInstallScript(t *testing.T) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join("..", "..", "scripts", "install.sh"))
+	if err != nil {
+		t.Fatalf("ReadFile install.sh: %v", err)
+	}
+	return string(content)
+}
+
+func findMatches(text string, re *regexp.Regexp) []string {
+	matches := re.FindAllString(text, -1)
+	if len(matches) > 5 {
+		matches = matches[:5]
+	}
+	return matches
+}
