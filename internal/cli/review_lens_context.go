@@ -266,8 +266,18 @@ const (
 )
 
 // reviewLensContextBudgetProbe assembles the complete immutable evidence for
-// every lens a review selected and classifies the candidate. It derives the
+// every lens a review selected, proves the non-lens role envelopes still fit
+// around that same evidence, and classifies the candidate. It derives the
 // opaque handle without publishing it, records no emission, and writes nothing.
+//
+// Both measurements are needed because the roles are delivered differently. A
+// lens block carries patch bytes raw; a refuter or targeted-validator prompt
+// carries them through json.Marshal, which doubles every quote, backslash,
+// newline and tab. Classifying on the raw block alone admitted quote-dense
+// candidates that no role prompt could hold, which is the unexecutable lineage
+// this probe exists to prevent, reached through the envelope rather than
+// through the evidence. reviewProviderRoleEnvelopeFloor charges what is
+// knowable before a lens has run.
 //
 // The third outcome is the one that matters. Every stop that is not the budget
 // refusal -- an unreachable tree, an expired deadline, any other typed refusal
@@ -308,6 +318,16 @@ func reviewLensContextBudgetProbe(
 		if assemblyErr != nil {
 			return reviewLensContextUnproven, assemblyErr
 		}
+	}
+	// The lens block is raw; a refuter or validator prompt is JSON-serialized.
+	// Proving only the raw block leaves the escaped envelope unmeasured, which
+	// is the same unexecutable lineage reached through a different door.
+	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, state.InitialSnapshot); floorErr != nil {
+		var refusal *reviewLensContextError
+		if errors.As(floorErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
+			return reviewLensContextOverBudget, nil
+		}
+		return reviewLensContextUnproven, floorErr
 	}
 	return reviewLensContextRepresentable, nil
 }

@@ -828,3 +828,51 @@ func providerSHA256(value string) bool {
 	}
 	return true
 }
+
+// reviewProviderRoleEnvelopeFloor proves, before START persists anything, that
+// the knowable part of every non-lens role prompt still fits the runtime input
+// ceiling this candidate would be admitted under.
+//
+// START admits a candidate by assembling the lens block, and that block is
+// delivered raw: reviewLensContextBlock writes patch bytes into the prompt
+// verbatim and charges len(rendered) against the budget. A refuter or
+// targeted-validator prompt is not raw. reviewProviderRolePrompt serializes the
+// whole request through json.Marshal, and JSON escaping doubles every quote,
+// backslash, newline and tab in that same content before the role instruction
+// and the result schema are added on top. So the value START measures is not
+// the value those roles are held to: a quote-dense or deeply line-broken
+// candidate assembles as a lens block under the ceiling and exceeds it as a
+// refuter prompt. Authority is frozen by then, and once one lens result is
+// persisted compactPristineReviewing is false, so review invalidate is gone
+// too. That is the unexecutable lineage of #3367 and #4680 reached through the
+// envelope instead of through the evidence, and it is why the raw probe alone
+// is not an admission proof.
+//
+// Only what is knowable at START is charged: the real materialized evidence,
+// serialized exactly as each role prompt will serialize it, inside that role's
+// real instruction and schema. Claims and the frozen policy body do not exist
+// until a lens has run, so they are deliberately not estimated here -- guessing
+// them would refuse candidates that fit. They stay bounded where they are
+// produced, by reviewProviderRolePrompt itself and by the corrective retry.
+func reviewProviderRoleEnvelopeFloor(ctx context.Context, repo, runtime string, snapshot reviewtransaction.Snapshot) error {
+	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, runtime, snapshot)
+	if err != nil {
+		return err
+	}
+	for _, probe := range []struct {
+		role    string
+		request any
+	}{
+		{role: reviewProviderRoleRefuter, request: reviewProviderRefuterRequest{Claims: []reviewtransaction.RefuterClaim{}, Evidence: evidence}},
+		{role: reviewProviderRoleTargetedValidator, request: reviewProviderTargetedValidatorRequest{Evidence: evidence}},
+	} {
+		contract, contractErr := reviewProviderRoleContractFor(probe.role)
+		if contractErr != nil {
+			return contractErr
+		}
+		if _, promptErr := reviewProviderRolePrompt(contract, probe.request, runtime); promptErr != nil {
+			return promptErr
+		}
+	}
+	return nil
+}

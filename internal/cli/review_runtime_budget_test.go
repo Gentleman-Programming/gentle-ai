@@ -278,3 +278,65 @@ func TestNegotiatedStartAdmitsGeneratedDominatedCandidateEveryRoleCanMaterialize
 		t.Fatalf("refuter evidence is %d bytes, over the %d byte runtime cap START admitted on", total, reviewRuntimeBudgetTestCapBytes)
 	}
 }
+
+// writeRuntimeBudgetEscapedCandidate writes one tracked candidate whose raw
+// bytes fit the runtime cap and whose JSON-escaped bytes do not. Every line is
+// quote-dense on purpose: json.Marshal doubles each quote, so the same content
+// that assembles as a raw lens block well under the cap serializes into a
+// refuter or validator prompt well over it.
+func writeRuntimeBudgetEscapedCandidate(t *testing.T, repo string) int64 {
+	t.Helper()
+	body := strings.Repeat(strings.Repeat(`"`, 28)+"\n", 5_000)
+	writeReviewStartCandidate(t, repo, "runtime-budget-escaped.txt", body, 0o644)
+	info, err := os.Stat(filepath.Join(repo, "runtime-budget-escaped.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := info.Size()
+	if size >= int64(reviewRuntimeBudgetTestCapBytes) {
+		t.Fatalf("escaped fixture is %d raw bytes; it must stay under the %d byte runtime cap so only escaping pushes it over", size, reviewRuntimeBudgetTestCapBytes)
+	}
+	return size
+}
+
+// TestNegotiatedStartRuntimeBudgetRefusesEscapedOverBudgetCandidate closes the
+// envelope door into the unexecutable lineage of #3367 and #4680.
+//
+// START's probe assembles the lens block, which carries patch bytes raw. The
+// refuter and targeted validator prompts carry the same bytes through
+// json.Marshal, which doubles every quote, backslash, newline and tab before
+// the role instruction and result schema are added. A quote-dense candidate
+// therefore passed the raw probe and dead-ended at role materialization with
+// authority already frozen -- and once one lens result is persisted,
+// compactPristineReviewing is false, so review invalidate is gone too. The
+// probe must measure the envelope those roles are actually held to.
+func TestNegotiatedStartRuntimeBudgetRefusesEscapedOverBudgetCandidate(t *testing.T) {
+	home := reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeRuntimeBudgetEscapedCandidate(t, repo)
+	authorityRoot := reviewCLIAuthorityRoot(t, repo)
+	authorityBefore := snapshotAuthorityTree(t, authorityRoot)
+	homeBefore := readLegacyAuthorityTree(t, home)
+
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", "runtime-budget-escaped",
+	}), &output)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("escaped over-budget START error = %v; the candidate fits raw and cannot fit any role prompt\n%s", err, output.String())
+	}
+	var failure *ReviewIntegrationFailureError
+	if !errors.As(err, &failure) {
+		t.Fatalf("escaped over-budget START did not emit a typed negotiated failure: %T", err)
+	}
+	if failure.Failure.MutationOutcome != ReviewMutationNotStarted || failure.Failure.Phase != "preflight" ||
+		failure.Failure.NextAction != "stop" || failure.Failure.Code != "lens_context_budget_exceeded" {
+		t.Fatalf("escaped over-budget START envelope does not report a refusal that wrote nothing: %#v", failure.Failure)
+	}
+	if after := snapshotAuthorityTree(t, authorityRoot); authorityBefore != after {
+		t.Fatalf("escaped over-budget START changed authority storage before create:\nbefore:\n%s\nafter:\n%s", authorityBefore, after)
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("escaped over-budget START persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+}
