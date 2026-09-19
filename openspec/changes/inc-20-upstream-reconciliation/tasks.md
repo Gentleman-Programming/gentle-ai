@@ -286,14 +286,30 @@ Depende de la Fase 5 (el registro debe existir para escribir sus filas) y de la 
 
 Depende de la Fase 6. Sigue el «Protocolo compartido de tanda de absorción».
 
-- [ ] 7.1 [Prerrequisito — R13] Medir el solape con lo que INC-18 trajo a medias: `git show --stat` de los PRs de upstream que INC-18 absorbió parcialmente, contrastado contra el árbol actual, **antes** de absorber ningún commit de esta tanda. Registrar el resultado (solape real o nulo) en el informe de esta fase.
-- [ ] 7.2 [Protocolo — paso B] Derivar la lista de ficheros de los 29 commits con `git show <sha> --stat`. Comprobar si alguno coincide con `15ea98ed`, `e28af0fd` o `cd95b782` (candidatos por asunto).
-- [ ] 7.3 [Protocolo — paso C] Cherry-pick agrupado, informado por la medición de solape de 7.1 (si hay solape, reconciliar en vez de duplicar).
-- [ ] 7.4 [Protocolo — paso D] Contrastar contra la derivación de 7.2.
-- [ ] 7.5 [Protocolo — paso E] Frontera y no-reversión.
-- [ ] 7.6 [Protocolo — paso F] Verificación sin filtrar completa.
-- [ ] 7.7 [Protocolo — paso G] Sección "F3 — Reviewer y parsing de OpenCode" en el registro, con sus filas y su sub-tabla RA-1. Espejar en Engram.
-- [ ] 7.8 [Verificación de cierre F3] Mismo criterio que 6.7, con el recuento acumulado de filas actualizado.
+- [x] 7.1 [Prerrequisito — R13] Medir el solape con lo que INC-18 trajo a medias: `git show --stat` de los PRs de upstream que INC-18 absorbió parcialmente, contrastado contra el árbol actual, **antes** de absorber ningún commit de esta tanda. Registrar el resultado (solape real o nulo) en el informe de esta fase.
+- [x] 7.2 [Protocolo — paso B] Derivar la lista de ficheros de los 29 commits con `git show <sha> --stat`. Comprobar si alguno coincide con `15ea98ed`, `e28af0fd` o `cd95b782` (candidatos por asunto).
+- [x] 7.3 [Protocolo — paso C] Cherry-pick agrupado, informado por la medición de solape de 7.1 (si hay solape, reconciliar en vez de duplicar).
+- [x] 7.4 [Protocolo — paso D] Contrastar contra la derivación de 7.2.
+- [x] 7.5 [Protocolo — paso E] Frontera y no-reversión.
+- [x] 7.6 [Protocolo — paso F] Verificación sin filtrar completa.
+- [x] 7.7 [Protocolo — paso G] Sección "F3 — Reviewer y parsing de OpenCode" en el registro, con sus filas y su sub-tabla RA-1. Espejar en Engram.
+- [x] 7.8 [Verificación de cierre F3] Mismo criterio que 6.7, con el recuento acumulado de filas actualizado.
+
+  > **Ajuste de entrega (2026-09-19).** **27 de 29 commits absorbidos**, por decisión D6 del usuario. 166 ficheros, 8640+/1850− = **10490 líneas**. Ancla `f3-base` = `5de14aaf`.
+  >
+  > **Choque con REQ-20.10, resuelto por D6.** Cuatro commits tocaban `contracts/review-integration/v2/schemas/`. Tres solo **añaden** ficheros (`capabilities-v2.6`, `status-v8`, `status-v9`): entran, porque añadir no altera el estado previo de ningún fichero y la garantía byte a byte de REQ-20.10 queda intacta — además el Go de `15ea98ed` y `55eefed3` los referencia en 30 y 42 líneas. **`71a47477` modifica `assess.schema.json`** (preexistente, `additionalProperties: false`) añadiendo `review_due`, `review_due_reason` y `consumed` a `required`: descartado, junto con `972446f1`, que solo lo documenta. Comprobación de cierre: el sha256 de `assess.schema.json` sigue siendo `96479039…f217c` y `git diff -- contracts/` muestra 3 altas y 0 modificaciones.
+  >
+  > **La nota cruzada D-01 vuelve a quedarse corta, ahora por cinco.** Además de `cd95b782`, `e28af0fd` y `15ea98ed` (listados), también importaban `gentle-ai/v3`: `c2174348`, `f7d737aa`, `22b67765`, `55eefed3` y `55a1a072`. Sumados a `b6308292` de F2, la lista de cinco SHAs del protocolo ha fallado **seis veces**. Las fases restantes deben comprobar commit por commit; esa lista no es un conjunto cerrado.
+  >
+  > **Rutas prohibidas: 14 ficheros derivados y ausentes**, 9 de `bench/` y 5 de `odd/tasks/`, todos con motivo en la sub-tabla RA-1 del registro. Más 6 exclusivos de los dos commits descartados, verificados byte a byte idénticos a `f3-base`.
+  >
+  > **Dos juicios de V1 verificados de forma independiente por el orquestador, no aceptados por declaración.** (a) El escritor afirmó que el golden `sdd-opencode-multi-settings.golden` tenía cero `gentle-orchestrator`; **tiene dos**. Medido contra `f3-base`: **2 antes y 2 después**, luego son preexistentes y F3 no revierte nada — la conclusión era correcta aunque la cifra fuese falsa. Quedan como deuda preexistente de V3, ajena a este incremento. (b) `55eefed3` borra `internal/agents/pi/review_routing.go`, único portador de `AXIOM_PI_CONFIG_HOME` y `.pi/axiom/`. No es reversión de V1: desaparece con la función que configuraba, no se reintrodujo ninguna ruta pi de upstream (grep vacío sobre las líneas añadidas) y `GENTLE_PI_CONFIG_HOME`, superficie distinta y preexistente, **baja** de 5 ficheros a 2.
+  >
+  > **Un hallazgo del orquestador que el escritor no vio.** `docs/opencode-compatibility.md` entra **nuevo** desde upstream llamando al producto «Gentle AI» en su única línea de prosa, con cero menciones a Axiom. No es reversión (no pisa texto previo), pero mete identidad de upstream en documentación del fork. Corregido en `6377ce98`.
+  >
+  > **Tarea 7.1 (R13), solape con INC-18: real pero no conflictivo.** INC-18 absorbió `1a2f6775`, `8c078527`, `11f6c000`, `59e6705f`, `90992285`; ninguno coincide con los 29 de F3. A nivel de fichero solapa **solo** `internal/cli/run.go`, tocado por `e28af0fd` en `openCodeTelemetryStep.Run()` (~:1302) frente a las regiones de INC-18 (~:2611-2621). Disjuntas; el cherry-pick aplicó limpio.
+  >
+  > **Verificación**: `go build` 0, `go vet` 0, `go test ./...` con `internal/components/engram` como único fallo (ambiental), `gofmt -l` sobre los 135 `.go` tocados sin salida, `e2e` con los tres niveles en **487/2, idéntico a la base**. `bench/` fuera de cobertura.
 
 ## Fase 8: F4 — Poda y refactor SDD (zona más caliente, re-derivación) (REQ-13.3, rdd-sdd-receipt-consumption, sdd-research, rdd-post-verify-review-offer)
 

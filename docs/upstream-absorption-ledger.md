@@ -27,10 +27,10 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 19 |
-| `descartado-deliberadamente` | 0 |
+| `absorbido` | 46 |
+| `descartado-deliberadamente` | 2 |
 | `revertido` | 0 |
-| **Total** | **19 (= universo declarado en la cabecera: 91)** |
+| **Total** | **48 (= universo declarado en la cabecera: 91)** |
 
 ## F0 — Identidad de distribución, artefacto de release y cobertura del binario real
 
@@ -86,11 +86,44 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |
 |---|---|---|---|---|
+| `f927da73` | fix(review): classify OpenCode reviewer task outcomes explicitly | `absorbido` | `dd7bdb6d` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `25c1dc78` | fix(review): harden OpenCode task wrapper parsing to the shipped grammar | `absorbido` | `5af347e4` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `a160dafd` | fix(review): require complete Task frames before reporting host states | `absorbido` | `fe075346` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `bae15d4f` | fix(review): admit the complete no-result frame for non-completed states | `absorbido` | `0c5997c2` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `9ec0cf44` | fix(opencode): restore compatible review consent (#4584) | `absorbido` | `3c5d79db` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `cd95b782` | fix(review): suppress consumed target re-review (#4737) | `absorbido` | `c5df8d52` (rama `inc-20/pr7-absorcion-upstream`) | Importaciones `gentle-ai/v3` reconciliadas a mano a `/v2`; la Fase 17 las reescribirá con el resto del árbol. |
+| `e8811b53` | fix(review): gate active status on asset freshness (#4747) | `absorbido` | `3becff09` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `e28af0fd` | feat(opencode): add version-aware v2 beta support (#4728) | `absorbido` | `5a395e45` (rama `inc-20/pr7-absorcion-upstream`) | Reconciliación manual en `internal/opencode/config.go`: se combinó el parseo nuevo de upstream (`model.ParseModelReference` con fallback de `Effort`) con el espejo de claves legacy del fork hacia `axiom-orchestrator`. Único solape con INC-18 (`internal/cli/run.go`), en regiones disjuntas del fichero. Importaciones `/v3` reconciliadas a mano a `/v2`. |
+| `b5851c32` | fix(review): freeze generated-path interpretation in snapshots | `absorbido` | `8c8aefd2` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `fdaf2625` | fix(review): summarize frozen generated paths without content hunks | `absorbido` | `1c0efd99` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `c2174348` | fix(review): enforce runtime input budgets before starting authority | `absorbido` | `f9192220` (rama `inc-20/pr7-absorcion-upstream`) | Importaciones `gentle-ai/v3` reconciliadas a mano a `/v2`; la Fase 17 las reescribirá con el resto del árbol. |
+| `f7d737aa` | fix(review): bound complete role prompts and corrective retries | `absorbido` | `9c8d89b3` (rama `inc-20/pr7-absorcion-upstream`) | Importaciones `gentle-ai/v3` reconciliadas a mano a `/v2`; la Fase 17 las reescribirá con el resto del árbol. |
+| `c78b411b` | fix(review): keep legacy authorities valid against live evidence | `absorbido` | `9c6ef0d5` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `da6cc368` | fix(review): summarize generated paths for refuter and validator too | `absorbido` | `7d7fc422` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `99df73fb` | test(review): cover the reported candidate shapes end to end | `absorbido` | `13071414` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `3c2d6f1c` | fix(review): stop promising the validator content it is not handed | `absorbido` | `dba0ca81` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `812d152a` | fix(review): measure the role envelope START admits a candidate under | `absorbido` | `e93c2907` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `bf969778` | fix(review): charge the frozen policy in the role envelope floor | `absorbido` | `7f6b9036` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `af0008c1` | test(review): prove recover keeps a non-destructive exit for over-budget lineages | `absorbido` | `8411c331` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `a9e74085` | fix(review): stop promising an exit the recovered lineage can lose | `absorbido` | `9392767e` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `22b67765` | fix(review): classify the correction-stage budget refusal and name its exit | `absorbido` | `af765fdd` (rama `inc-20/pr7-absorcion-upstream`) | Importaciones `gentle-ai/v3` reconciliadas a mano a `/v2`; la Fase 17 las reescribirá con el resto del árbol. |
+| `b93c9ea1` | fix(review): keep the new stop row inside Pi's facade-only contract | `absorbido` | `889b6164` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `15ea98ed` | fix(review): relay provider-owned OpenCode lens tasks (#4765) | `absorbido` | `18d26672` (rama `inc-20/pr7-absorcion-upstream`) | Añade `capabilities-v2.6.schema.json` y `status-v8.schema.json` bajo `contracts/`: ficheros **nuevos**, permitidos por la decisión D6 porque no modifican ningún fichero preexistente y REQ-20.10 protege el estado previo. 2 ficheros de `bench/` derivados y ausentes por ruta prohibida. Importaciones `/v3` reconciliadas a mano a `/v2`. |
+| `08d14841` | feat(review): accept host-submitted refuter and validator results through --input | `absorbido` | `1cd17006` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `55eefed3` | feat(review): make pi refuter and validator captures host-mediated and stop spawning pi | `absorbido` | `385e6e03` (rama `inc-20/pr7-absorcion-upstream`) | Añade `status-v9.schema.json` (fichero nuevo, decisión D6). Acepta el borrado de upstream de `internal/agents/pi/review_routing.go` y su test: eran los únicos portadores de `AXIOM_PI_CONFIG_HOME` y `.pi/axiom/`, y desaparecen con la función que configuraban, no revierten a la grafía de upstream. Verificado: cero rutas pi de upstream reintroducidas y `GENTLE_PI_CONFIG_HOME` baja de 5 ficheros a 2. Importaciones `/v3` reconciliadas a mano a `/v2`. |
+| `070f82ed` | fix(review): carry the release command on the correction budget stop | `absorbido` | `13e89ff3` (rama `inc-20/pr7-absorcion-upstream`) | — |
+| `55a1a072` | fix(review): charge the lens context terminator against its own budget | `absorbido` | `e8b2ac08` (rama `inc-20/pr7-absorcion-upstream`) | Importaciones `gentle-ai/v3` reconciliadas a mano a `/v2`; la Fase 17 las reescribirá con el resto del árbol. |
+| `71a47477` | feat(review): report review_due and the exact preflight transition from review assess | `descartado-deliberadamente` | Decisión D6 del mantenedor, 2026-09-19 | Modifica `contracts/review-integration/v2/schemas/assess.schema.json`, fichero **preexistente** que declara `additionalProperties: false`, añadiendo `review_due`, `review_due_reason` y `consumed` a `required`. REQ-20.10 (decisión D2.3) exige que `contracts/**` quede byte a byte idéntico a su estado previo para no romper a los consumidores externos que validan contra `gentle-ai.review-integration/v2`. Absorber su Go sin el esquema tampoco podía quedar verde: `internal/cli/review_assess_test.go:154` valida contra el esquema publicado. Descarte decidido por el usuario (decisión D6). |
+| `972446f1` | docs(review): make the post-commit review rule follow assess review_due and next_transition | `descartado-deliberadamente` | Decisión D6 del mantenedor, 2026-09-19 | Documenta exclusivamente `review_due` y `next_transition`, la función que introduce `71a47477`. Absorberlo dejaría documentación de una función que el fork no tiene. Descarte decidido por el usuario (decisión D6). |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
+| `bench/{journeys_atomic_review.go, journeys_atomic_review_test.go, journeys_capture_evidence_v5.go, journeys_intended_untracked.go, journeys_issue_2138.go, main.go, runner.go, runtime_fixture.go, runtime_fixture_test.go}` (9) | Sí | Ruta prohibida D-10 (`bench/`). Módulo Go independiente sin `go.work`, declarado fuera de la cobertura de verificación. |
+| `odd/tasks/{rdd-terminal-consumption.md, opencode-rdd-provider-task.md, opencode-v2-support.md, 4504-active-lineage-asset-freshness.md, review-runtime-context-budget.md}` (5) | Sí | Ruta prohibida D-10 (`odd/tasks/*.md`). |
+| `contracts/review-integration/v2/schemas/assess.schema.json`, `internal/cli/review_assess.go`, `internal/cli/review_assess_test.go` (3) | Sí | Exclusivos de `71a47477`, descartado deliberadamente (decisión D6). Verificado byte a byte idénticos a `f3-base`. |
+| `docs/usage.md`, `internal/components/agentguidance/routing.go`, `internal/components/agentguidance/routing_test.go` (3) | Sí | Exclusivos de `972446f1`, descartado deliberadamente (decisión D6). Verificado byte a byte idénticos a `f3-base`. |
 
 ## F4 — Poda y refactor SDD
 
