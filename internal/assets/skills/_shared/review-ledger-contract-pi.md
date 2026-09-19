@@ -43,7 +43,7 @@ A `stop` ends its transition, never approves delivery. `D` means the human disab
 | `captured_artifacts_unverifiable`, `captured_result_selection_unavailable`, `captured_verification_evidence_invalid`, `final_verification_retry_unavailable`, `missing_authority_binding`, `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal: the maintainer inspects authority/lineage, or `D`. |
 | `empty_base_diff_bootstrap_required` | Terminal: authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal: reduce the candidate scope and start a new transaction, or `D`. |
-| `correction_context_budget_exceeded` | Release the authority with `gentle-ai review abandon` (no flags prints the binding template); `gentle-ai review invalidate` refuses here. Then review as smaller candidates, or `D`. |
+| `correction_context_budget_exceeded` | Terminal: this authority has to be released rather than left in place, and invalidation refuses here; the maintainer runs the release command the stop's `continuation` names. Then review as smaller candidates, or `D`. |
 | `managed_assets_outdated` | Run the `gentle-ai sync` command from the stop's `continuation`, then `S`. |
 | `staged_workspace_overlay_recovery_unavailable` | Call facade `recover` with the retained `lineageId`, or start a fresh transaction; otherwise `D`. |
 | `corrected_candidate_unavailable` | Change the correction candidate, then `S`; do not reuse the pre-correction target. |
