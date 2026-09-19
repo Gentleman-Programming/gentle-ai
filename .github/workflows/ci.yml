@@ -178,6 +178,7 @@ jobs:
       # run in CI before this phase. Per design.md open question O-4, the
       # inventory is written the first time the step actually runs and
       # surfaces something, not invented ahead of that run.
+      # design.md D-07 also names codegraph, telemetry, skill-registry, and bench-model-picker, but REQ-20.15's floor does not; they stay informative here too, assumed by INC-21.
       #
       # Successor: INC-21 (docs/ROADMAP.md). This window does not grow: any
       # new symptom belongs to the successor, not to this list.
@@ -209,6 +210,7 @@ jobs:
             rm -f "$err_file"
           }
 
+          smoke "project"     1 project
           smoke "change"      1 change
           smoke "workspace"   1 workspace
           smoke "handoff"     1 handoff
