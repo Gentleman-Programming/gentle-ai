@@ -294,8 +294,8 @@ domain configured this way, so this kit does not use one.
 | File | Purpose |
 |---|---|
 | `apache/telemetry-vhost.conf.tmpl` | Template for the two `<VirtualHost>` blocks (`:80` and `:443`), mirroring the existing pattern: proxies `/v1/`, `/healthz`, and (with `--with-grafana`) `/grafana/` to loopback, asserts `X-Forwarded-For` from Apache itself, force-HTTPS except for the ACME challenge path, and a supplementary access log that omits the client address for `/v1/`. `__DOMAIN__` is substituted by `install.sh --domain`. Not applied automatically — see below. |
-| `gentle-telemetry.service` | systemd unit: runs as the static `gentle-telemetry` system user (created by `install.sh`), `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). See [Why a static user, not `DynamicUser`](#why-a-static-user-not-dynamicuser). |
-| `gentle-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `gentle-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. |
+| `axiom-telemetry.service` | systemd unit: runs as the static `gentle-telemetry` system user (created by `install.sh`), `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). See [Why a static user, not `DynamicUser`](#why-a-static-user-not-dynamicuser). |
+| `axiom-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `axiom-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. |
 | `grafana/` | Datasource and dashboard provisioning for an optional on-box Grafana; see [Grafana dashboards](#grafana-dashboards). |
 | `install.sh` | Creates the static `gentle-telemetry` system user (migrating an older `DynamicUser`-layout install in place if found), installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo. It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
 
@@ -310,7 +310,7 @@ where to render `apache/telemetry-vhost.conf.tmpl` yourself; omit
 
 ### Why a static user, not DynamicUser
 
-`gentle-telemetry.service` used to run with `DynamicUser=yes`. With
+`axiom-telemetry.service` used to run with `DynamicUser=yes`. With
 `DynamicUser`, systemd materializes `StateDirectory=gentle-telemetry` under
 `/var/lib/private/gentle-telemetry` (a directory it keeps at exactly mode
 `0700`) and leaves a symlink at `/var/lib/gentle-telemetry`. To let Grafana
@@ -412,7 +412,7 @@ when every other vhost on the box is also `*`).
    expect `200`.
 5. Set `GENTLE_TELEMETRY_BACKUP_REMOTE` in `/etc/gentle-telemetry/backup.env`
    to an `rclone` remote:path, then
-   `systemctl enable --now gentle-telemetry-backup.timer`.
+   `systemctl enable --now axiom-telemetry-backup.timer`.
 
 ### Capacity
 
@@ -433,7 +433,7 @@ ownership. To rotate, edit the file and restart:
 
 ```
 sudo install -m 0600 <(openssl rand -hex 32) /etc/gentle-telemetry/summary.token
-sudo systemctl restart gentle-telemetry.service
+sudo systemctl restart axiom-telemetry.service
 ```
 
 The old token stops working the moment the service restarts and picks up
@@ -446,8 +446,8 @@ Raw events older than `--retention-days` (default 90) are purged by the
 daily job; `rollups_daily` — and therefore the historical monthly/weekly
 counts in `/v1/summary` — is retained indefinitely. To change the retention
 window, edit the `--retention-days` flag in
-`/etc/systemd/system/gentle-telemetry.service` and
-`systemctl daemon-reload && systemctl restart gentle-telemetry.service`.
+`/etc/systemd/system/axiom-telemetry.service` and
+`systemctl daemon-reload && systemctl restart axiom-telemetry.service`.
 
 The daily job catches up: if the process was down for a while, the next
 run rolls up every UTC day between the last one it committed (or the
@@ -521,7 +521,7 @@ optional; `/v1/summary` above already answers the headline questions.
 uses the [`frser-sqlite-datasource`](https://grafana.com/grafana/plugins/frser-sqlite-datasource/)
 plugin pointed read-only at `/var/lib/gentle-telemetry/events.sqlite`.
 Grafana's own process needs read access to that one file; since
-`gentle-telemetry.service` runs as the static `gentle-telemetry` system
+`axiom-telemetry.service` runs as the static `gentle-telemetry` system
 user (see [Why a static user, not DynamicUser](#why-a-static-user-not-dynamicuser)),
 which `grafana` does not belong to, `install.sh --with-grafana` grants
 access via a POSIX ACL (`setfacl -m u:grafana:r ...`) instead of group
@@ -532,7 +532,7 @@ chase.
 
 **Dashboard**: `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
 provisioned via `deploy/telemetry/grafana/provisioning/dashboards/telemetry.yaml`
-into the "Gentle AI" folder. Its panels:
+into the "Axiom" folder. Its panels:
 
 | Panel | What it shows |
 |---|---|
@@ -556,17 +556,17 @@ pure overhead on a small box that only needs one dashboard.
 `admin`/`admin` login reachable. Before Grafana's first start, it
 generates a random password (`openssl rand -base64 24`), writes it
 root-only 0600 to `/etc/grafana/admin-password`, and sets
-`admin_user = gentle` plus `admin_password` in `grafana.ini`, alongside
+`admin_user = axiom` plus `admin_password` in `grafana.ini`, alongside
 `[auth.anonymous] enabled = false` and `[users] allow_sign_up = false`.
 The script prints that file's path once. Read it with
 `sudo cat /etc/grafana/admin-password` and sign in at
-`https://telemetry.example.com/grafana/` as `gentle`. Grafana only seeds
+`https://telemetry.example.com/grafana/` as `axiom`. Grafana only seeds
 `admin_user`/`admin_password` into its own database on that very first
 startup — on a re-run against an already-initialized Grafana, rotate the
 live password instead with `grafana cli --homepath /usr/share/grafana admin reset-admin-password
 <new-password>` on the VPS (and update `/etc/grafana/admin-password` to
 match, so the two stay in sync). To change it via the UI later:
-**Administration → Users → gentle**.
+**Administration → Users → axiom**.
 
 **The access log**: the `:443` block's `CustomLog` directive logs every
 request through this vhost — `/v1/`, `/healthz`, and `/grafana/` alike —
