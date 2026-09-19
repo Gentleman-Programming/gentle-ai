@@ -714,6 +714,10 @@ func TestOpenCodeTaskHostOutputPreservesPayloadBytesAndFailsClosed(t *testing.T)
 	}{
 		{name: "bare host output", raw: payload, want: payload},
 		{name: "completed task envelope", raw: "<task id=\"opaque\" state=\"completed\">\n<task_result>\n" + payload + "\n</task_result>\n</task>", want: payload},
+		{name: "completed task with summary", raw: "<task id=\"opaque\" state=\"completed\">\n<summary>host summary</summary>\n<task_result>\n" + payload + "\n</task_result>\n</task>", want: payload},
+		{name: "completed task with empty result", raw: "<task id=\"opaque\" state=\"completed\">\n<task_result>\n\n</task_result>\n</task>", code: "opencode_task_output_empty"},
+		{name: "backgrounded task", raw: "<task id=\"opaque\" state=\"running\">\n<summary>Background task started</summary>\n<task_result>\nThe task is working in the background.\n</task_result>\n</task>", code: "opencode_task_not_completed"},
+		{name: "errored task", raw: "<task id=\"opaque\" state=\"error\">\n<summary>Background task failed: description</summary>\n<task_error>\nboom\n</task_error>\n</task>", code: "opencode_task_error"},
 		{name: "short task prefix", raw: "<task", code: "opencode_task_output_malformed"},
 		{name: "unterminated task", raw: "<task id=\"opaque\" state=\"completed\">\n<task_result>\n{", code: "opencode_task_output_truncated"},
 		{name: "nested task", raw: "<task id=\"opaque\" state=\"completed\">\n<task_result>\n<task id=\"nested\" state=\"completed\">\n</task>\n</task_result>\n</task>", code: "opencode_task_output_malformed"},
@@ -955,9 +959,9 @@ func TestOpenCodeReviewTransportBoundsCompletionWaitForSilentlyDeadHost(t *testi
 	reviewEnabledHome(t)
 	original := openCodeTransportCompletionSafetyBound
 	t.Cleanup(func() { openCodeTransportCompletionSafetyBound = original })
-	if openCodeTransportCompletionSafetyBound != reviewProviderRoleCaptureTimeout {
-		t.Fatalf("completion safety bound = %s, want the %s provider capture deadline",
-			openCodeTransportCompletionSafetyBound, reviewProviderRoleCaptureTimeout)
+	if openCodeTransportCompletionSafetyBound != 60*time.Minute {
+		t.Fatalf("completion safety bound = %s, want the 60m silent-host backstop (issue #3477)",
+			openCodeTransportCompletionSafetyBound)
 	}
 	openCodeTransportCompletionSafetyBound = 30 * time.Millisecond
 	repo, _, store, record := newArtifactReview(t, false)

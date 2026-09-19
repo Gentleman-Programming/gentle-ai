@@ -42,7 +42,16 @@ type openCodeTransportEnvelope struct {
 type openCodeTaskOutputError struct{ Code string }
 
 func (err *openCodeTaskOutputError) Error() string {
-	return err.Code + ": OpenCode Task output is incomplete or malformed"
+	switch err.Code {
+	case "opencode_task_output_empty":
+		return err.Code + ": the reviewer Task completed without producing a result"
+	case "opencode_task_not_completed":
+		return err.Code + ": the reviewer Task did not complete in this relay"
+	case "opencode_task_error":
+		return err.Code + ": the reviewer Task failed before producing a result"
+	default:
+		return err.Code + ": OpenCode Task output is incomplete or malformed"
+	}
 }
 
 type openCodeTransportBindingError struct{ detail string }
@@ -150,13 +159,14 @@ type openCodeTransportSession struct {
 var openCodeTransportRandom = rand.Read
 var openCodeTransportTrailingClosureTimeout = 5 * time.Second
 
-// openCodeTransportCompletionSafetyBound is a safety bound for a host that
-// died silently without ever completing or closing the relay pipe; it is not
-// the operating lifetime. The OpenCode host still owns the Task lifetime and
-// decides the wait well inside this deadline. It deliberately mirrors
-// reviewProviderRoleCaptureTimeout so relay waits share the repository's
-// generous provider role capture deadline.
-var openCodeTransportCompletionSafetyBound = reviewProviderRoleCaptureTimeout
+// openCodeTransportCompletionSafetyBound backstops only a host that died
+// silently without ever completing or closing the relay pipe; it is not the
+// operating lifetime. The OpenCode host owns the Task lifetime and imposes no
+// deadline of its own -- a foreground Task waits indefinitely -- so this
+// backstop must stay far above any plausible review duration and must never
+// preempt valid work (issue #3477). The completion frame, pipe closure, or
+// child termination resolves every normal relay long before it fires.
+var openCodeTransportCompletionSafetyBound = 60 * time.Minute
 
 func RunReviewOpenCodeTransport(args []string, stdout io.Writer) error {
 	return runReviewOpenCodeTransport(args, os.Stdin, stdout)
@@ -627,28 +637,88 @@ func decodeOpenCodeTaskHostOutput(raw []byte) ([]byte, error) {
 	if !bytes.HasPrefix(trimmed, []byte("<task")) && !bytes.Contains(trimmed, []byte("<task_result")) {
 		return boundedOpenCodeTaskPayload(raw)
 	}
-	const resultOpen = "<task_result>\n"
-	const resultClose = "\n</task_result>\n</task>"
 	openingEnd := bytes.IndexByte(trimmed, '>')
-	if openingEnd < 0 || !bytes.HasPrefix(trimmed, []byte("<task ")) || !bytes.Contains(trimmed[:openingEnd], []byte(`state="completed"`)) {
+	if openingEnd < 0 || !bytes.HasPrefix(trimmed, []byte("<task ")) {
+		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_malformed"}
+	}
+	state, ok := openCodeTaskState(trimmed[:openingEnd])
+	if !ok {
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_malformed"}
 	}
 	body := trimmed[openingEnd+1:]
-	if !bytes.HasPrefix(body, []byte("\n"+resultOpen)) || !bytes.HasSuffix(body, []byte(resultClose)) {
+	// The host prints an optional host-owned <summary>...</summary> line
+	// between the opening tag and the result element; it is host metadata and
+	// never part of the reviewer payload.
+	if after, found := bytes.CutPrefix(body, []byte("\n<summary>")); found {
+		summaryEnd := bytes.Index(after, []byte("</summary>"))
+		if summaryEnd < 0 {
+			return nil, &openCodeTaskOutputError{Code: "opencode_task_output_malformed"}
+		}
+		body = after[summaryEnd+len("</summary>"):]
+	}
+	switch state {
+	case "error":
+		return nil, &openCodeTaskOutputError{Code: "opencode_task_error"}
+	case "completed":
+		result, err := openCodeTaskResultBody(body)
+		if err != nil {
+			return nil, err
+		}
+		if len(bytes.TrimSpace(result)) == 0 {
+			// The Task completed without any final reviewer output (for
+			// example a reviewer whose model exhausted its reasoning budget).
+			// That is a distinct, actionable reviewer outcome, never a
+			// malformed host wrapper.
+			return nil, &openCodeTaskOutputError{Code: "opencode_task_output_empty"}
+		}
+		return boundedOpenCodeTaskPayload(result)
+	default:
+		// Any other state (for example a Task promoted to the background)
+		// never carries a capturable result through this relay.
+		return nil, &openCodeTaskOutputError{Code: "opencode_task_not_completed"}
+	}
+}
+
+// openCodeTaskState reads the host-owned state attribute from a rendered Task
+// opening tag.
+func openCodeTaskState(openingTag []byte) (string, bool) {
+	index := bytes.Index(openingTag, []byte(`state="`))
+	if index < 0 {
+		return "", false
+	}
+	rest := openingTag[index+len(`state="`):]
+	end := bytes.IndexByte(rest, '"')
+	if end < 0 {
+		return "", false
+	}
+	return string(rest[:end]), true
+}
+
+// openCodeTaskResultBody extracts the <task_result> body the host rendered
+// inside a completed Task. A structurally broken wrapper refuses as malformed,
+// while a partially received wrapper refuses as truncated.
+func openCodeTaskResultBody(body []byte) ([]byte, error) {
+	const (
+		resultOpen  = "<task_result>"
+		resultClose = "</task_result>"
+	)
+	prefix := []byte("\n" + resultOpen + "\n")
+	suffix := []byte("\n" + resultClose + "\n</task>")
+	if !bytes.HasPrefix(body, prefix) || !bytes.HasSuffix(body, suffix) {
 		content := body
-		if bytes.HasPrefix(content, []byte("\n"+resultOpen)) {
-			content = content[len("\n"+resultOpen):]
+		if bytes.HasPrefix(content, prefix) {
+			content = content[len(prefix):]
 		}
 		if bytes.Contains(content, []byte("<task")) || bytes.Contains(content, []byte("</task")) {
 			return nil, &openCodeTaskOutputError{Code: "opencode_task_output_malformed"}
 		}
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_truncated"}
 	}
-	result := body[len("\n"+resultOpen) : len(body)-len(resultClose)]
-	if len(bytes.TrimSpace(result)) == 0 || bytes.Contains(result, []byte("<task")) || bytes.Contains(result, []byte("</task")) {
+	result := body[len(prefix) : len(body)-len(suffix)]
+	if bytes.Contains(result, []byte("<task")) || bytes.Contains(result, []byte("</task")) {
 		return nil, &openCodeTaskOutputError{Code: "opencode_task_output_malformed"}
 	}
-	return boundedOpenCodeTaskPayload(result)
+	return result, nil
 }
 
 func boundedOpenCodeTaskPayload(payload []byte) ([]byte, error) {
