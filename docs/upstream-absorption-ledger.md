@@ -27,10 +27,10 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 59 |
+| `absorbido` | 66 |
 | `descartado-deliberadamente` | 2 |
 | `revertido` | 0 |
-| **Total** | **61 (= universo declarado en la cabecera: 91)** |
+| **Total** | **68 (= universo declarado en la cabecera: 91)** |
 
 ## F0 — Identidad de distribución, artefacto de release y cobertura del binario real
 
@@ -155,11 +155,23 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |
 |---|---|---|---|---|
+| `08206a15` | feat(community-tools): add RTK runtime integration | `absorbido` | `f11d9bea` (rama `inc-20/pr7-absorcion-upstream`) | Su efecto queda superado por `110f1371` dentro de esta misma tanda: upstream añade la integración RTK y la retira en la misma secuencia. Lo absorbido es el estado final (RTK retirado), no el arco intermedio, que el fork nunca llegó a tener — verificado byte a byte contra `08206a15^`. |
+| `1174de2c` | feat(cli): wire RTK install status and sync | `absorbido` | `f11d9bea` (rama `inc-20/pr7-absorcion-upstream`) | Su efecto queda superado por `110f1371` dentro de esta misma tanda: upstream añade la integración RTK y la retira en la misma secuencia. Lo absorbido es el estado final (RTK retirado), no el arco intermedio, que el fork nunca llegó a tener — verificado byte a byte contra `08206a15^`. |
+| `c6824eb3` | fix(community-tools): avoid Pi runtime identity literal | `absorbido` | `f11d9bea` (rama `inc-20/pr7-absorcion-upstream`) | Su efecto queda superado por `110f1371` dentro de esta misma tanda: upstream añade la integración RTK y la retira en la misma secuencia. Lo absorbido es el estado final (RTK retirado), no el arco intermedio, que el fork nunca llegó a tener — verificado byte a byte contra `08206a15^`. El literal de identidad de Pi que este commit corrige **nunca existió en el fork**: `rtk_source.go` era idéntico al estado previo al arco y desaparece entero. |
+| `b4084a74` | fix(community-tools): scope RTK setup to selected agents | `absorbido` | `f11d9bea` (rama `inc-20/pr7-absorcion-upstream`) | Su efecto queda superado por `110f1371` dentro de esta misma tanda: upstream añade la integración RTK y la retira en la misma secuencia. Lo absorbido es el estado final (RTK retirado), no el arco intermedio, que el fork nunca llegó a tener — verificado byte a byte contra `08206a15^`. |
+| `8c078527` | fix(cli): scope agent artifacts independently of runtime cwd (#4668) (#4673) | `absorbido` | INC-18 (`2026-09-16-inc-18-rdd-decoupling-and-v3-stability-fixes`) | Ya absorbido por INC-18, que lo **re-derivó** en vez de aplicarlo: por eso no es ancestro de `HEAD` y no aparece en `git log`. Verificado por contenido: `componentInjectionDirScoped` existe en `internal/cli/run.go` con la misma firma y 11 usos, y `resolveOpenClawWorkspaceDir` y `openClawWorkspaceConfig`, que este commit retira, están ausentes del fork. No se reaplica aquí: duplicaría. |
+| `1a2f6775` | fix(cli): decode SDD status JSON when asserting granted roots on Windows (#4676) | `absorbido` | INC-18 (`2026-09-16-inc-18-rdd-decoupling-and-v3-stability-fixes`) | Ya absorbido por INC-18 por re-derivación. Verificado por contenido: `internal/cli/sdd_attempt_test.go:48-56` decodifica el JSON con `json.Unmarshal` en vez de comparar subcadenas, con el comentario sobre las barras invertidas escapadas en Windows. La tanda F4 de esta misma rama conservó deliberadamente esa versión del fork frente a la de upstream. |
+| `110f1371` | refactor(community-tools): retire RTK integration | `absorbido` | `f11d9bea` (rama `inc-20/pr7-absorcion-upstream`) | Re-derivación al estado final, no parche aplicado: RTK retirado por completo (4 ficheros borrados, la constante `CommunityToolRTK` y 3 referencias residuales limpiadas, baseline de código muerto actualizado con 3 borrados y cero adiciones). La mayoría de sus hunks eran no-op sobre el fork, que nunca entró en el arco. |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
+| `odd/tasks/retire-rtk.md` | Sí | Ruta prohibida D-10 (`odd/tasks/*.md`). |
+| `rtk_runtime.go`, `rtk_runtime_test.go` | Sí | Nacen en `08206a15` y mueren en `110f1371`: ciclo completo dentro del arco que el fork nunca absorbió, así que nunca existieron aquí. |
+| `tool.go`, `internal/cli/run.go`, `sync.go`, `internal/tui/model.go`, `model_test.go`, `community_tools_test.go`, `run_community_tool_test.go`, `docs/{components,usage,pi,codebase/integrations}.md` | Sí | Cero menciones a RTK en el fork: los hunks de `110f1371` sobre ellos son no-op. Verificado con `diff` vacío contra `08206a15^` en el paquete `communitytool`. |
+| `internal/cli/run_component_paths_test.go`, `internal/cli/sdd_attempt_test.go` | Sí | Exclusivos de `8c078527` y `1a2f6775`, ya absorbidos por INC-18; fuera de esta re-derivación. |
+| `internal/state/state_test.go` | Sí | Su fixture ya usaba `"jq"` en vez de `"rtk"`: divergencia propia del fork anterior a esta tanda, que hace innecesario el cambio. |
 
 ## F6 — Retirada destructiva de la capa Go de ODD
 

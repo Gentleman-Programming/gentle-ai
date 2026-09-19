@@ -350,13 +350,25 @@ Depende de la Fase 7. Método distinto al resto: **re-derivación sobre el fork*
 
 Depende de la Fase 8. Sigue el «Protocolo compartido de tanda de absorción».
 
-- [ ] 9.1 [Protocolo — paso B] Derivar la lista de ficheros de los 7 commits con `git show <sha> --stat` cada uno. Comprobar si alguno coincide con `110f1371` (candidato por asunto: "retire RTK integration").
-- [ ] 9.2 [Protocolo — paso C] Cherry-pick agrupado; solape parcial esperado con el fork (`proposal.md` §4.3) — reconciliar manualmente commit por commit, no en bloque.
-- [ ] 9.3 [Protocolo — paso D] Contrastar contra la derivación de 9.1.
-- [ ] 9.4 [Protocolo — paso E] Frontera y no-reversión.
-- [ ] 9.5 [Protocolo — paso F] Verificación sin filtrar completa.
-- [ ] 9.6 [Protocolo — paso G] Sección "F5 — CLI y community-tools RTK" en el registro. Espejar en Engram.
-- [ ] 9.7 [Verificación de cierre F5] Mismo criterio que 7.8, con el recuento acumulado actualizado.
+- [x] 9.1 [Protocolo — paso B] Derivar la lista de ficheros de los 7 commits con `git show <sha> --stat` cada uno. Comprobar si alguno coincide con `110f1371` (candidato por asunto: "retire RTK integration").
+- [x] 9.2 [Protocolo — paso C] Cherry-pick agrupado; solape parcial esperado con el fork (`proposal.md` §4.3) — reconciliar manualmente commit por commit, no en bloque.
+- [x] 9.3 [Protocolo — paso D] Contrastar contra la derivación de 9.1.
+- [x] 9.4 [Protocolo — paso E] Frontera y no-reversión.
+- [x] 9.5 [Protocolo — paso F] Verificación sin filtrar completa.
+- [x] 9.6 [Protocolo — paso G] Sección "F5 — CLI y community-tools RTK" en el registro. Espejar en Engram.
+- [x] 9.7 [Verificación de cierre F5] Mismo criterio que 7.8, con el recuento acumulado actualizado.
+
+  > **Ajuste de entrega (2026-09-20).** **7 de 7 absorbidos, pero solo 5 ficheros de código cambiados**: 9 ficheros, 7+/430− = **437 líneas**. Es con diferencia la tanda más pequeña, y el plan no podía preverlo porque su tamaño no depende de los commits sino de lo que el fork ya tenía. Ancla `f5-base` = `5ee01c61`, commit `f11d9bea`.
+  >
+  > **Dos commits ya estaban absorbidos por INC-18** y no se reaplicaron: `8c078527` y `1a2f6775`. INC-18 los **re-derivó** en vez de aplicarlos, así que no son ancestros de `HEAD` y `git log` no los encuentra — por eso hacía falta verificarlos por contenido. `componentInjectionDirScoped` existe con la misma firma y 11 usos, y `resolveOpenClawWorkspaceDir`/`openClawWorkspaceConfig`, que `8c078527` retira, están ausentes; `sdd_attempt_test.go:48-56` decodifica el JSON con `json.Unmarshal` tal como manda `1a2f6775`. **Esto valida el prerrequisito R13 de la Fase 7**, que existía precisamente para destapar este solape.
+  >
+  > **Los otros cinco se anulan entre sí.** `08206a15` añade la integración RTK, `1174de2c`/`c6824eb3`/`b4084a74` la afinan y `110f1371` la retira entera, todo dentro de la misma tanda. El fork **nunca entró en ese arco**: verificado con `diff` vacío contra `08206a15^` en los cinco ficheros del paquete `communitytool`. Se re-derivó al **estado final** en vez de replicar el arco, porque un cherry-pick de `110f1371` habría chocado al referenciar `rtk_runtime.go`, que aquí nunca existió. Retirado de verdad: 4 ficheros `rtk_*` borrados, la constante `CommunityToolRTK` y 3 referencias residuales limpiadas.
+  >
+  > **V1–V8 sin reversión.** Caso vigilado por el orquestador: `c6824eb3` («avoid Pi runtime identity literal») toca identidad de Pi, la misma zona donde F3 ya encontró un caso. Aquí no hay riesgo — el literal que corrige **nunca existió en el fork**, y su fichero objetivo desaparece entero con el resto de RTK. Hallazgo colateral: `internal/state/state_test.go` no necesitó cambio porque su fixture ya usaba `"jq"` en vez de `"rtk"`, divergencia propia anterior a esta tanda.
+  >
+  > **Trinquete**: 0 adiciones, 3 borrados (`acquireRTKCandidate`, `extractRTKExecutable`, `rtkArchiveExecutable`), ya inalcanzables desde `cmd/axiom` antes de este cambio.
+  >
+  > **Verificación**: `go build` 0, `go vet` 0, `go test ./...` con `internal/components/engram` como único fallo, `gofmt -l` sobre los 4 `.go` tocados sin salida, `e2e` en **487/2 idéntico a la base**. `contracts/` sin tocar, cero rutas prohibidas, cero `gentle-ai/v3`.
 
 ## Fase 10: F6.1 — Doctrina ODD reescrita hacia el protocolo de upstream (parte de organic-agent-trigger-rules, 11 commits de scope `odd`)
 
