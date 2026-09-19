@@ -848,13 +848,21 @@ func providerSHA256(value string) bool {
 // envelope instead of through the evidence, and it is why the raw probe alone
 // is not an admission proof.
 //
-// Only what is knowable at START is charged: the real materialized evidence,
-// serialized exactly as each role prompt will serialize it, inside that role's
-// real instruction and schema. Claims and the frozen policy body do not exist
-// until a lens has run, so they are deliberately not estimated here -- guessing
-// them would refuse candidates that fit. They stay bounded where they are
-// produced, by reviewProviderRolePrompt itself and by the corrective retry.
-func reviewProviderRoleEnvelopeFloor(ctx context.Context, repo, runtime string, snapshot reviewtransaction.Snapshot) error {
+// Only what is knowable at START is charged, and the frozen policy is knowable:
+// START reads it before it derives anything (reviewtransaction.CompactState's
+// FrozenPolicyContent is "the exact policy text START read"), its source file
+// carries no size bound of its own, and the real targeted-validator prompt
+// carries it TWICE -- appended raw to the instruction and again JSON-escaped
+// inside the marshalled request. Charging it zero here was a defect of exactly
+// the class this function exists to close: a large --policy-source froze
+// authority and then failed every validator capture deterministically. So the
+// validator probe carries the same frozen policy the real request will.
+//
+// Refuter claims are the one thing still left out, because they genuinely do
+// not exist until a lens has run. Guessing them would refuse candidates that
+// fit, so they stay bounded where they are produced, by reviewProviderRolePrompt
+// itself and by the corrective retry.
+func reviewProviderRoleEnvelopeFloor(ctx context.Context, repo, runtime, frozenPolicy string, snapshot reviewtransaction.Snapshot) error {
 	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, runtime, snapshot)
 	if err != nil {
 		return err
@@ -864,7 +872,10 @@ func reviewProviderRoleEnvelopeFloor(ctx context.Context, repo, runtime string, 
 		request any
 	}{
 		{role: reviewProviderRoleRefuter, request: reviewProviderRefuterRequest{Claims: []reviewtransaction.RefuterClaim{}, Evidence: evidence}},
-		{role: reviewProviderRoleTargetedValidator, request: reviewProviderTargetedValidatorRequest{Evidence: evidence}},
+		{role: reviewProviderRoleTargetedValidator, request: reviewProviderTargetedValidatorRequest{
+			ValidationRequest: reviewtransaction.TargetedValidationRequest{PolicyContent: frozenPolicy},
+			Evidence:          evidence,
+		}},
 	} {
 		contract, contractErr := reviewProviderRoleContractFor(probe.role)
 		if contractErr != nil {

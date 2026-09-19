@@ -340,3 +340,51 @@ func TestNegotiatedStartRuntimeBudgetRefusesEscapedOverBudgetCandidate(t *testin
 		t.Fatalf("escaped over-budget START persisted an artifact: before=%#v after=%#v", homeBefore, after)
 	}
 }
+
+// TestNegotiatedStartRuntimeBudgetRefusesOverBudgetFrozenPolicy proves the
+// envelope floor charges the frozen policy body.
+//
+// START reads the policy before it derives anything and freezes it into the
+// authority, and the real targeted-validator prompt carries it twice: appended
+// raw to the instruction and again JSON-escaped inside the marshalled request.
+// The policy file itself has no size bound. A floor that charged it zero let a
+// large --policy freeze authority on candidate evidence that fits, and then
+// fail every validator capture deterministically -- with the lens result
+// already persisted, so review invalidate was gone. That is the dead-end this
+// issue closes, reached through the validator role.
+func TestNegotiatedStartRuntimeBudgetRefusesOverBudgetFrozenPolicy(t *testing.T) {
+	home := reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	// Small candidate: its own evidence is nowhere near the cap, so only the
+	// policy can push the validator envelope over it.
+	writeRuntimeBudgetCandidate(t, repo, "runtime-budget-policy.txt", 200)
+	policy := filepath.Join(t.TempDir(), "policy.md")
+	if err := os.WriteFile(policy, []byte(strings.Repeat("frozen review policy line\n", 5_000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	authorityRoot := reviewCLIAuthorityRoot(t, repo)
+	authorityBefore := snapshotAuthorityTree(t, authorityRoot)
+	homeBefore := readLegacyAuthorityTree(t, home)
+
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", "runtime-budget-policy", "--policy", policy,
+	}), &output)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("over-budget frozen policy START error = %v; the validator prompt carries this policy twice and cannot fit\n%s", err, output.String())
+	}
+	var failure *ReviewIntegrationFailureError
+	if !errors.As(err, &failure) {
+		t.Fatalf("over-budget frozen policy START did not emit a typed negotiated failure: %T", err)
+	}
+	if failure.Failure.MutationOutcome != ReviewMutationNotStarted || failure.Failure.Phase != "preflight" {
+		t.Fatalf("over-budget frozen policy START envelope does not report a refusal that wrote nothing: %#v", failure.Failure)
+	}
+	if after := snapshotAuthorityTree(t, authorityRoot); authorityBefore != after {
+		t.Fatalf("over-budget frozen policy START changed authority storage before create")
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("over-budget frozen policy START persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+}

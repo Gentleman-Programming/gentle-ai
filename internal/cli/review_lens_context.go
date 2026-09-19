@@ -322,7 +322,11 @@ func reviewLensContextBudgetProbe(
 	// The lens block is raw; a refuter or validator prompt is JSON-serialized.
 	// Proving only the raw block leaves the escaped envelope unmeasured, which
 	// is the same unexecutable lineage reached through a different door.
-	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, state.InitialSnapshot); floorErr != nil {
+	frozenPolicy := ""
+	if state.FrozenPolicyContent != nil {
+		frozenPolicy = *state.FrozenPolicyContent
+	}
+	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, frozenPolicy, state.InitialSnapshot); floorErr != nil {
 		var refusal *reviewLensContextError
 		if errors.As(floorErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
 			return reviewLensContextOverBudget, nil
@@ -347,6 +351,12 @@ func reviewLensContextBudgetProbe(
 // build created, so it stays as the upgrade path's defence rather than the
 // primary guard.
 func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
+	// An undecided probe is deliberately NOT refused here. A candidate whose
+	// diff exceeds the native Git ceiling reaches this surface as an assembly
+	// failure, and c6e6a1e4 (#1689) made exactly that candidate startable on
+	// purpose: START carries frozen tree references instead of an eager diff,
+	// so a change larger than any inline limit stays addressable. Refusing on
+	// an undecided outcome would retract that.
 	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
 	return outcome == reviewLensContextOverBudget
 }
