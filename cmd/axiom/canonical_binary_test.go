@@ -12,7 +12,33 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+// canonicalBinaryPath is the product's own build target. Every build,
+// workflow and ratchet target in the repository must resolve through this
+// path, never through deprecatedShimPath [D-04].
+const canonicalBinaryPath = "./cmd/axiom"
+
+// deprecatedShimPath is named so this guard family can reject its
+// reappearance as a BUILD TARGET, not so production code invokes it.
+// cmd/gentle-ai/main.go itself stays as the deprecation pass-through into
+// app.RunArgs that D2.4 requires; only its use as a build target elsewhere
+// is disallowed.
+const deprecatedShimPath = "./cmd/gentle-ai"
+
+// repositoryRoot resolves the repository root from cmd/axiom, where every
+// test in this file runs. Shared so the five assertions of this guard
+// family never duplicate this resolution [D-04, task 3.9].
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	return repoRoot
+}
 
 // backupRootLiteralDirectories are the two spellings of the backup root
 // directory segment. A filepath.Join call outside the owning internal/backup
@@ -78,10 +104,7 @@ const backupRootOwningPackageDir = "internal/backup"
 // sites to nine. Phase F0.b then migrated all nine to the canonical
 // accessors, so this assertion now runs unskipped and green.
 func TestUserStateRootsResolveThroughOwningPackage(t *testing.T) {
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
+	repoRoot := repositoryRoot(t)
 
 	violations, err := backupRootLiteralViolations(repoRoot)
 	if err != nil {
@@ -226,4 +249,214 @@ func stringLiteralValue(expr ast.Expr) (string, bool) {
 		return "", false
 	}
 	return value, true
+}
+
+// goreleaserBuildTarget is the subset of a .goreleaser.yaml builds[] entry
+// this guard cares about: enough to confirm the canonical binary is one of
+// the published artifacts, and nothing about signing, archives or brews.
+type goreleaserBuildTarget struct {
+	ID     string `yaml:"id"`
+	Main   string `yaml:"main"`
+	Binary string `yaml:"binary"`
+}
+
+// goreleaserConfig is the subset of .goreleaser.yaml this guard parses.
+type goreleaserConfig struct {
+	Builds []goreleaserBuildTarget `yaml:"builds"`
+}
+
+// TestReleaseArtifactBuildsCanonicalBinary fails until .goreleaser.yaml
+// publishes a build whose main package is canonicalBinaryPath under the
+// "axiom" binary name [D-04, D-08]. Phase F0.a and F0.b ran this guard
+// before it existed; this phase (F0.c1) adds it RED (only
+// main: ./cmd/gentle-ai published) and turns it GREEN by splitting
+// .goreleaser.yaml's single build into the two D2.4 requires.
+func TestReleaseArtifactBuildsCanonicalBinary(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+	path := filepath.Join(repoRoot, ".goreleaser.yaml")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	var config goreleaserConfig
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	for _, build := range config.Builds {
+		if build.Main == canonicalBinaryPath && build.Binary == "axiom" {
+			return
+		}
+	}
+	t.Errorf("%s: no builds[] entry publishes main: %s with binary: axiom", path, canonicalBinaryPath)
+}
+
+// buildTargetException documents why one specific workflow file is allowed
+// to keep naming deprecatedShimPath as a build target. The exceptions list
+// TestWorkflowsBuildCanonicalBinary consults is empty for this phase: F0.c1's
+// audit found no legitimate site that still needs to build the deprecated
+// shim as its own target.
+type buildTargetException struct {
+	File   string // repository-relative path, forward slashes
+	Reason string // why the shim is correct here; never empty
+}
+
+// workflowBuildTargetExceptions is the written-reason allowlist
+// TestWorkflowsBuildCanonicalBinary consults.
+var workflowBuildTargetExceptions = []buildTargetException{}
+
+// TestWorkflowsBuildCanonicalBinary rejects any non-comment line under
+// .github/workflows/*.yml that names deprecatedShimPath, unless its file is
+// listed in workflowBuildTargetExceptions with a written reason [D-04].
+// Comment lines that merely explain why the shim is wrong here (for example
+// ci.yml's "Build the canonical binary, not ./cmd/gentle-ai" notes above the
+// job's own ./cmd/axiom builds) are not build targets and are excluded, so
+// this guard does not force an exception entry for explanatory prose.
+func TestWorkflowsBuildCanonicalBinary(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+	pattern := filepath.Join(repoRoot, ".github", "workflows", "*.yml")
+
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		t.Fatalf("glob %s: %v", pattern, err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("no workflow files matched %s", pattern)
+	}
+
+	exceptionsByFile := make(map[string]string, len(workflowBuildTargetExceptions))
+	for _, exception := range workflowBuildTargetExceptions {
+		if exception.Reason == "" {
+			t.Fatalf("exception for %s has no written reason", exception.File)
+		}
+		exceptionsByFile[exception.File] = exception.Reason
+	}
+
+	for _, match := range matches {
+		relPath, err := filepath.Rel(repoRoot, match)
+		if err != nil {
+			t.Fatalf("resolve relative path for %s: %v", match, err)
+		}
+		relSlash := filepath.ToSlash(relPath)
+		if _, excepted := exceptionsByFile[relSlash]; excepted {
+			continue
+		}
+
+		content, err := os.ReadFile(match)
+		if err != nil {
+			t.Fatalf("read %s: %v", relSlash, err)
+		}
+
+		for i, line := range strings.Split(string(content), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if strings.Contains(line, deprecatedShimPath) {
+				t.Errorf("%s:%d: names %s as a build target; the canonical binary is %s, or add a written exception to workflowBuildTargetExceptions", relSlash, i+1, deprecatedShimPath, canonicalBinaryPath)
+			}
+		}
+	}
+}
+
+// canonicalDispatchVerbs parses file with go/parser and returns the string
+// literals used as case values in its first top-level switch statement --
+// the dispatch switch on the first CLI argument in both cmd/axiom/main.go's
+// main() and internal/app.RunArgs. It stops descending as soon as that
+// switch is found, so a subcommand's own nested switch (for example
+// "project"'s list/switch/add/remove in main.go) is never mistaken for the
+// top-level dispatch switch.
+func canonicalDispatchVerbs(t *testing.T, file string) map[string]struct{} {
+	t.Helper()
+
+	source, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+
+	fileSet := token.NewFileSet()
+	tree, err := parser.ParseFile(fileSet, file, source, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+
+	verbs := make(map[string]struct{})
+	found := false
+	ast.Inspect(tree, func(node ast.Node) bool {
+		if found {
+			return false
+		}
+		switchStmt, ok := node.(*ast.SwitchStmt)
+		if !ok {
+			return true
+		}
+		found = true
+		for _, stmt := range switchStmt.Body.List {
+			caseClause, ok := stmt.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
+			for _, expr := range caseClause.List {
+				if value, ok := stringLiteralValue(expr); ok {
+					verbs[value] = struct{}{}
+				}
+			}
+		}
+		return false
+	})
+	if !found {
+		t.Fatalf("%s: no top-level switch statement found", file)
+	}
+
+	return verbs
+}
+
+// TestAppDispatchIsSubsetOfCanonicalDispatch is the root assertion of the
+// canonical-binary guard family [D-04]: every verb reachable through the
+// deprecated internal/app.RunArgs dispatch switch MUST also be reachable
+// through cmd/axiom/main.go's own dispatch switch. This is the guard that
+// would have caught codegraph, telemetry, skill-registry and
+// bench-model-picker existing only in internal/app before this increment.
+//
+// Characterization test (task 3.5): the four verbs above were already
+// rewired into cmd/axiom/main.go before this phase started (main.go:396-415),
+// so this assertion is expected to pass the first time it runs, not to go
+// through a RED step.
+func TestAppDispatchIsSubsetOfCanonicalDispatch(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+
+	appVerbs := canonicalDispatchVerbs(t, filepath.Join(repoRoot, "internal", "app", "app.go"))
+	axiomVerbs := canonicalDispatchVerbs(t, filepath.Join(repoRoot, "cmd", "axiom", "main.go"))
+
+	for verb := range appVerbs {
+		if _, ok := axiomVerbs[verb]; !ok {
+			t.Errorf("verb %q is reachable through the deprecated cmd/gentle-ai shim (internal/app.RunArgs) but not through the canonical cmd/axiom binary", verb)
+		}
+	}
+}
+
+// TestDeadcodeRatchetTargetsCanonicalBinary fixes
+// scripts/deadcode-ratchet.sh's default DEADCODE_TARGET so the dead-code
+// ratchet measures reachability from the canonical binary, not the
+// deprecated shim [D-04].
+//
+// Characterization test (task 3.6): the target was already corrected to
+// ./cmd/axiom before this increment started (scripts/deadcode-ratchet.sh:41),
+// so this assertion is expected to pass the first time it runs. It turns
+// that fact into evidence instead of an unverified assumption.
+func TestDeadcodeRatchetTargetsCanonicalBinary(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+	path := filepath.Join(repoRoot, "scripts", "deadcode-ratchet.sh")
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	want := `target="${DEADCODE_TARGET:-` + canonicalBinaryPath + `}"`
+	if !strings.Contains(string(content), want) {
+		t.Errorf("%s: does not default DEADCODE_TARGET to %s (want to contain %q)", path, canonicalBinaryPath, want)
+	}
 }

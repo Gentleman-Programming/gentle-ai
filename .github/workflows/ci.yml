@@ -150,6 +150,88 @@ jobs:
             completed_once("j97-opencode-custom-agent-model-picker-runtime")
           ' "$RUNNER_TEMP/bench-model-picker.json"
 
+      # Informative window -- cmd/axiom coverage (INC-20 F0, opened 2026-09-19)
+      #
+      # Blocking: init, project, change, workspace, handoff, role, skill,
+      # semantic, archive, ui, and odd (blocking until this increment's Phase
+      # 11 retires it) in their help or no-argument form -- the exclusive
+      # surface axiom-distribution-identity's build-identity contract touches
+      # (REQ-20.15). This is additional to, and does not replace, the
+      # "Run benchmark evidence" step above: that step already builds and
+      # exercises cmd/axiom, but only through journeys shared with upstream's
+      # review/SDD lifecycle, none of which invoke this exclusive surface.
+      #
+      # init and ui use --help instead of the no-argument form: their
+      # no-argument form is NOT inert, confirmed empirically in an isolated
+      # directory while building this step, not assumed from reading the
+      # source. `axiom init` with no arguments really scaffolds axiom.yaml,
+      # openspec/specs/, openspec/changes/ and .axiom/inbox/skills/ under the
+      # current directory (runInit -> hub.Initializer.Init). `axiom ui` with
+      # no arguments starts a real HTTP server that blocks
+      # (runUI -> dashboard.Server.ListenAndServe). Only their help form is
+      # safe to run in a single foreground command. The trailing
+      # `git status --porcelain` check is a second, independent guard: any
+      # verb above that mutates the checkout fails this step loudly instead
+      # of the mutation silently landing.
+      #
+      # Red surface inventoried 2026-09-19, on this step's first CI run, per
+      # design.md open question O-4: `go test ./internal/dashboard/...`
+      # rewrites openspec/INDEX.md, because dashboard_test.go builds
+      # NewService("../..") against the real repository root, which syncs the
+      # living-doc index (LastSync: time.Now). Pre-existing on main, not caused
+      # by this phase -- the guard below therefore compares against the state
+      # captured before the smoke, not against a clean tree. Assumed by INC-21.
+      # design.md D-07 also names codegraph, telemetry, skill-registry, and bench-model-picker, but REQ-20.15's floor does not; they stay informative here too, assumed by INC-21.
+      #
+      # Successor: INC-21 (docs/ROADMAP.md). This window does not grow: any
+      # new symptom belongs to the successor, not to this list.
+      - name: Smoke the canonical binary surface
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/axiom-canonical-smoke" ./cmd/axiom
+          bin="$RUNNER_TEMP/axiom-canonical-smoke"
+          notice="'gentle-ai' está deprecado"
+          dirty_before="$(git status --porcelain)"
+
+          smoke() {
+            local label="$1" want_exit="$2"
+            shift 2
+            local err_file got_exit
+            err_file="$(mktemp)"
+            got_exit=0
+            "$bin" "$@" >/dev/null 2>"$err_file" || got_exit=$?
+            if [ "$got_exit" -ne "$want_exit" ]; then
+              echo "FAIL: axiom $label exited $got_exit, want $want_exit" >&2
+              cat "$err_file" >&2
+              rm -f "$err_file"
+              exit 1
+            fi
+            if grep -qF "$notice" "$err_file"; then
+              echo "FAIL: axiom $label emitted the cmd/gentle-ai deprecation notice on stderr" >&2
+              cat "$err_file" >&2
+              rm -f "$err_file"
+              exit 1
+            fi
+            rm -f "$err_file"
+          }
+
+          smoke "project"     1 project
+          smoke "change"      1 change
+          smoke "workspace"   1 workspace
+          smoke "handoff"     1 handoff
+          smoke "role"        1 role
+          smoke "skill"       1 skill
+          smoke "semantic"    1 semantic
+          smoke "archive"     1 archive
+          smoke "odd"         1 odd
+          smoke "init --help" 0 init --help
+          smoke "ui --help"   0 ui --help
+
+          if [ "$(git status --porcelain)" != "$dirty_before" ]; then
+            echo "FAIL: the canonical binary smoke changed the checkout:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
       # Lives in this job, not the format job, because only Unit Tests is a
       # required status check on main. A guard that cannot block a merge is
       # decoration.
@@ -261,9 +343,16 @@ jobs:
           go test -v ./internal/reviewtransaction -count=1 -run $selector
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Canonical package, same reason as the "Run benchmark evidence" step:
+      # ./cmd/gentle-ai is the deprecation shim, and these release-blocker
+      # tests read the product's own behavior. The output keeps the retired
+      # "gentle-ai.exe" name: nothing downstream (GENTLE_AI_TEST_BINARY below,
+      # the Defender exclusion above) needs it renamed, and this repository's
+      # own precedent for this exact kind of switch (ci.yml's benchmark
+      # steps) is to keep the artifact name and change only the build target.
       - name: Build native test binary
         shell: pwsh
-        run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/gentle-ai
+        run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/axiom
 
       - name: Run Windows release-blocker tests
         shell: pwsh

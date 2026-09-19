@@ -1,6 +1,6 @@
 version: 2
 
-project_name: gentle-ai
+project_name: axiom
 
 before:
   hooks:
@@ -9,8 +9,31 @@ before:
     - mkdir -p .goreleaser-provenance
     - go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2
 
+# Two builds, not a rename: D2.4 keeps `gentle-ai` alive as the deprecation
+# alias crosslane's shim and cmd/gentle-ai/main.go both depend on, so the
+# release still has to publish that binary alongside the product's own
+# (inc-20-upstream-reconciliation, D-08).
 builds:
-  - main: ./cmd/gentle-ai
+  - id: axiom
+    main: ./cmd/axiom
+    binary: axiom
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X main.version={{ .Version }}
+        -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+  - id: gentle-ai-deprecated
+    main: ./cmd/gentle-ai
     binary: gentle-ai
     env:
       - CGO_ENABLED=0
