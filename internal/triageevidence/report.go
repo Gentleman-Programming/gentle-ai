@@ -2,6 +2,7 @@ package triageevidence
 
 import (
 	"html"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -160,18 +161,31 @@ func renderItem(it ReportItem) string {
 	return b.String()
 }
 
-// esc escapes untrusted text for HTML contexts (the markdown stream GitHub
-// renders) and neutralizes the table-cell pipe.
+// esc renders untrusted text as one Markdown-safe text fragment. It removes
+// line breaks before escaping link/image delimiters, so issue data cannot add
+// a heading, list, table row, or link to the artifact's fixed structure.
 func esc(s string) string {
-	return strings.ReplaceAll(html.EscapeString(s), "|", "&#124;")
+	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
+	s = html.EscapeString(s)
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"`", "\\`",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"!", "\\!",
+		"|", "&#124;",
+	).Replace(s)
 }
 
-// escLink renders a supporting URL as a clickable markdown link after escaping
-// both halves. Only http(s) URLs become links; anything else renders as escaped
-// plain text so a hostile "javascript:..." value can never become clickable.
+// escLink renders a supporting URL as a clickable Markdown link only when it
+// is a complete http(s) URL without control characters. Angle-bracket
+// destinations keep ordinary URL parentheses from ending the Markdown link.
 func escLink(u string) string {
-	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+	parsed, err := url.Parse(u)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || strings.ContainsAny(u, "\r\n") {
 		return esc(u)
 	}
-	return "[" + esc(u) + "](" + esc(u) + ")"
+	return "[" + esc(u) + "](<" + html.EscapeString(u) + ">)"
 }

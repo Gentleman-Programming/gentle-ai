@@ -74,7 +74,7 @@ func Classify(in ClassificationInput) Verdict {
 			v = v.addReason(label + " already landed; evaluate it before re-testing this report")
 			v = v.addSupport(rel.URL)
 			if issue.MatchesReference(rel.Number) {
-				v = v.addReason("the change explicitly references " + linkRef(issue.Number, rel.Number))
+				v = v.addReason("the report explicitly references " + linkRef(issue.Number, rel.Number))
 			}
 			return v
 		}

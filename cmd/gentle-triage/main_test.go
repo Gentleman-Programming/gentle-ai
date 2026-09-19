@@ -41,6 +41,28 @@ func fixtureIssues() []apiIssue {
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func jsonResponse(v any) *http.Response {
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(recorder).Encode(v)
+	return recorder.Result()
+}
+
+func issueHasLabel(issue apiIssue, label string) bool {
+	for _, current := range issue.Labels {
+		if current.Name == label {
+			return true
+		}
+	}
+	return false
+}
+
 func fixtureReleases() []apiRelease {
 	return []apiRelease{
 		{TagName: "v3.4.0", Name: "v3.4.0", HTMLURL: "https://example.com/releases/3.4.0"},
@@ -185,6 +207,7 @@ func TestBuildReportSearchBudget(t *testing.T) {
 	_, client := newTestServer(t)
 	b := defaultBounds()
 	b.MaxSearches = 1 // enough for one issue's search only
+	client.maxSearches = b.MaxSearches
 	report, err := buildReport(t.Context(), client, "o", "r", b, "")
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +250,110 @@ func TestBuildReportSearchFailureIsReportedNotFatal(t *testing.T) {
 	joined := strings.Join(report.Items[0].Verdict.Reasons, " ")
 	if !strings.Contains(joined, "evidence unavailable") {
 		t.Errorf("reasons %v do not mark the search failure as unavailable evidence", report.Items[0].Verdict.Reasons)
+	}
+}
+
+func TestListReleasesHonorsMaxReleases(t *testing.T) {
+	_, client := newTestServer(t)
+	b := defaultBounds()
+	b.MaxReleases = 2
+	releases, err := client.listReleases("o", "r", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 2 {
+		t.Fatalf("releases = %d, want cap of 2", len(releases))
+	}
+}
+
+func TestGetJSONAcceptsSuccessfulFinalRateLimitResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		_ = json.NewEncoder(w).Encode([]apiIssue{{Number: 42}})
+	}))
+	t.Cleanup(server.Close)
+	client := &githubClient{http: server.Client()}
+	var issues []apiIssue
+	if err := client.getJSON(server.URL, &issues); err != nil {
+		t.Fatalf("successful response with final quota must be usable evidence: %v", err)
+	}
+	if len(issues) != 1 || issues[0].Number != 42 {
+		t.Fatalf("decoded issues = %#v, want issue 42", issues)
+	}
+}
+
+func TestSelectIssuesSkipsPullRequests(t *testing.T) {
+	_, client := newTestServer(t)
+	all := fixtureIssues()
+	all = append(all, apiIssue{
+		Number:      14,
+		Title:       "Pull request in issues endpoint",
+		PullRequest: &apiPullRequest{},
+		Labels:      []apiLabel{{Name: "status:needs-review"}},
+	})
+	client.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/releases") {
+			return jsonResponse(fixtureReleases()), nil
+		}
+		if r.URL.Path == "/search/issues" {
+			return jsonResponse(apiSearchResponse{}), nil
+		}
+		label := r.URL.Query().Get("labels")
+		var out []apiIssue
+		for _, issue := range all {
+			if label == "" || issueHasLabel(issue, label) {
+				out = append(out, issue)
+			}
+		}
+		return jsonResponse(out), nil
+	})}
+	issues, err := selectIssues(t.Context(), client, "o", "r", defaultBounds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range issues {
+		if issue.Number == 14 {
+			t.Fatal("pull request returned by issues endpoint entered the report population")
+		}
+	}
+}
+
+func TestBuildReportReleaseFailureWarns(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/o/r/issues", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(fixtureIssues()[:1])
+	})
+	mux.HandleFunc("/repos/o/r/releases", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "release outage", http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/search/issues", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(apiSearchResponse{})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := &githubClient{baseURL: server.URL, http: server.Client(), maxSearches: 5}
+	report, err := buildReport(t.Context(), client, "o", "r", defaultBounds(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(report.Warnings, " "), "release") {
+		t.Fatalf("warnings = %v, want release-evidence warning", report.Warnings)
+	}
+}
+
+func TestBuildReportSearchBudgetMarksEvidenceUnavailable(t *testing.T) {
+	_, client := newTestServer(t)
+	b := defaultBounds()
+	b.MaxSearches = 1
+	client.maxSearches = b.MaxSearches
+	report, err := buildReport(t.Context(), client, "o", "r", b, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range report.Items {
+		if item.Issue.Number == 11 && !strings.Contains(strings.Join(item.Verdict.Reasons, " "), "evidence unavailable") {
+			t.Fatalf("issue 11 reasons = %v, want unavailable related evidence", item.Verdict.Reasons)
+		}
 	}
 }
 

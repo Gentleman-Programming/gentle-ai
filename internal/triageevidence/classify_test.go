@@ -97,6 +97,17 @@ func TestExtractEvidenceUnlabeledMissingSections(t *testing.T) {
 	}
 }
 
+func TestExtractEvidenceUsesExactSectionNamesAndCaseInsensitiveLogErrors(t *testing.T) {
+	body := "### Affected Area Extended\n\nwrong area\n\nERROR: uppercase diagnostic\n"
+	ev := ExtractEvidence(body)
+	if ev.AffectedArea != "" {
+		t.Errorf("AffectedArea = %q, want empty when only an overlapping heading exists", ev.AffectedArea)
+	}
+	if !ev.HasLogsOrCommands {
+		t.Error("HasLogsOrCommands = false for uppercase ERROR diagnostic")
+	}
+}
+
 func TestIssueHelpers(t *testing.T) {
 	i := Issue{Number: 42, Title: "fix that", Body: "see #4711", Labels: []string{"type:bug"}}
 	if !i.IsBugReport() {
@@ -151,6 +162,23 @@ func TestClassifyPrecedence(t *testing.T) {
 				t.Error("related-change-found verdict carries no supporting URL")
 			}
 		})
+	}
+}
+
+func TestClassifyReferenceRationaleNamesTheReferencingReport(t *testing.T) {
+	issue := Issue{Body: "See related PR #8"}
+	verdict := Classify(ClassificationInput{
+		Issue: issue,
+		Related: []RelatedChange{{
+			Kind: RelatedPR, Number: 8, State: "merged", URL: "https://example.com/pulls/8",
+		}},
+	})
+	joined := strings.Join(verdict.Reasons, " ")
+	if !strings.Contains(joined, "report explicitly references") {
+		t.Errorf("reference rationale = %q, want to name the referencing report", joined)
+	}
+	if strings.Contains(joined, "change explicitly references") {
+		t.Errorf("reference rationale = %q, falsely attributes reference to change", joined)
 	}
 }
 
