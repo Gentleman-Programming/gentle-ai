@@ -547,6 +547,37 @@ Depende de la Fase 16 (todas las demás fases ya fusionadas — es la única for
 
 ---
 
+## Fase 18: Reconciliación del corpus de `bench/` con el runtime absorbido (REQ-20.4 enmendado, REQ-13.3)
+
+No es una tanda de absorción: no incorpora comportamiento nuevo de upstream. Su propósito exclusivo es realinear `bench/` con la superficie que las tandas anteriores ya retiraron. Existe porque la CI de la cadena quedó en rojo con las 17 fases cerradas en verde, y esa contradicción **es el hallazgo**, no un contratiempo.
+
+- [x] 18.1 [Diagnóstico] Aislar el fallo del job `Unit Tests` al paso «Run benchmark evidence», con `go test ./...` en verde y CI verde en `main`. Clasificar las causas contando el log, no infiriéndolas.
+- [x] 18.2 [Derivación — paso B] Listar con `git log --no-merges 266574b0..82a6de96 -- bench/` los commits de upstream que tocan el corpus, y medir por separado las dos divergencias contra el ancestro común: las adaptaciones del fork (`266574b0..HEAD`) y los cambios de upstream (`266574b0..82a6de96`). Calcular el solape: solo ahí hay juicio que ejercer.
+- [x] 18.3 [Aplicación] Tomar el `bench/` de `82a6de96` y reponer las doce adaptaciones del fork, resolviendo a mano los tres ficheros del solape.
+- [x] 18.4 [Alineación de CI] Retirar `j81` de la primera puerta de `.github/workflows/ci.yml` y adoptar el eje `transition` reducido de upstream. Sustituir la nota de entrega de la Fase 4 que justificaba conservar las once journeys.
+- [x] 18.5 [Contrato] Enmendar REQ-20.4 para admitir la tanda de reconciliación como excepción acotada, conservando la prohibición para las tandas de absorción. Actualizar la regla 5 del registro, la fila de `9f15bc44` y el recuento.
+- [x] 18.6 [Verificación] Corpus **completo** en el contenedor Linux, no solo las journeys que las puertas afirman, y auditoría de qué journeys desaparecieron.
+
+  > **Entrega (2026-09-20).** 44 ficheros, 280+/3293− en `c9b71093`.
+  >
+  > **El defecto.** El corpus conducía `sdd-attempt acquire/settle/status` y el transporte de OpenCode V2, superficie que F4 retiró por REQ-13.3 y por la puerta `DetectRuntimeMajor` de `e28af0fd`. **37 de 70 journeys fallaban**: 19 por `unknown sdd-attempt operation "status"`, 20 por `immutable_review_transport_unsupported`.
+  >
+  > **Por qué el incremento pudo cerrar 152 de 156 tareas en verde con la CI en rojo.** `bench/` es un módulo Go independiente sin `go.work`: **no entra en `go test ./...`**. La regla 3 del registro y REQ-20.4 lo declaran fuera de cobertura, y toda tanda cumplió esa declaración. El corpus solo se ejecuta en un sitio, el paso «Run benchmark evidence», y ninguna verificación de fase lo alcanzaba. La lección no es que faltara rigor: es que **una ausencia de cobertura declarada se había vuelto indistinguible de una cobertura en verde**. REQ-20.4 lo dice ahora de forma explícita.
+  >
+  > **Corrección de la nota de entrega de la Fase 4.** Decía que upstream reducía el eje `tr*` de 11 a 1 «porque retira código de `bench/`», y que el fork conservaba los 11 porque su corpus sigue emitiendo el conjunto completo. El recuento era correcto; el razonamiento, incompleto. Upstream lo redujo porque **el runtime retiró los comandos que esas transiciones conducen**. Al absorber la retirada sin el corpus, `bench/` no emitía 11 journeys que pasan sino 11 que fallan. Y upstream **no podó `bench/`**: lo actualizó — en `82a6de96` el paso «Run benchmark evidence» sigue existiendo.
+  >
+  > **Por qué no bastaba retocar `ci.yml`.** `bench/main.go:236` devuelve 1 en cuanto `JourneysFailed > 0`, antes de que `jq` llegue a evaluarse. Y de las 14 journeys que la primera puerta exige completadas, 8 fallaban. No existe lista blanca con `--only` que salve el paso.
+  >
+  > **El solape eran tres ficheros, y solo dos necesitaron reposición.** `classify.go`: upstream solo cambió un comentario, se repone el regex de rehúses localizados de INC-16. `journeys_issue4377.go`: se toma el conteo dinámico de filas de upstream (`communityToolCursorRows`) y se repone `screenShows`. `journeys_sdd.go`: **upstream convergió con la enmienda del fork** — su versión ya exige la ausencia estructural de `reviewOffer`, que es exactamente lo que INC-18 había establecido aquí por su cuenta. No se repuso nada.
+  >
+  > **Lo que la disciplina de derivación evitó.** Un `git checkout 82a6de96 -- bench/` en bloque habría borrado `tui_localized_markers.go` y `forked_namespace.go`, y con el segundo el sondeo del renombrado **parcial** `.axiom/` frente a `.gentle-ai/` — `state.json` y `bin/` viven bajo el nuevo nombre, `telemetry.json` y `backups/` bajo el viejo. Una sustitución en bloque rompe las journeys que leen `backups/`.
+  >
+  > **Auditoría de las 14 journeys retiradas** (70 → 56), exigida porque un corpus que encoge en silencio es indistinguible de una pérdida: `j40`, `j62`, `j64`, `j74`, `j79`, `j80`, `j81`, `j84`, `j87`, `j99`, `j103`, `j112`, `j124` y `j4040`. **Todas** conducen `sdd-attempt` o el flujo de *rescope*. Las exclusivas del fork siguen registradas y en verde: `j93`, `j96`, `j97`, `j120`, `j121`, `j3043`, `j3336`, `j3500`.
+  >
+  > **Verificación en el contenedor Linux**, con el corpus completo y no solo las puertas — la advertencia registrada de que varias `jq` encadenadas bajo `bash -e` solo reportan el primer fallo: corpus **56/56 completadas, 0 fallos, 0 unsupported**; eje `transition` 1/1; `j105` verde; `j97` `unsupported` sin fixture y `completed` con él, que es lo que cada invocación debe probar por separado. `bench`: `vet` 0, `go test` 0, `gofmt -l` sin salida. `internal/absorptionledger` en verde tras reescribir el recuento a 80/11.
+  >
+  > **Los 8 fallos que aparecieron en Windows eran del entorno, medido y no asumido**: los tests del módulo escriben stubs sin extensión ejecutable, que Windows no puede lanzar. Los mismos tests dan `exit 0` en Linux.
+
 ## Trazabilidad rápida (fase → requerimiento)
 
 | Fase | Requerimientos / capacidades cubiertos |
@@ -568,3 +599,4 @@ Depende de la Fase 16 (todas las demás fases ya fusionadas — es la única for
 | 15 (F6.4) | `odd-living-document`, `odd-cli-commands`, `odd-sdd-promotion`, `odd-ui-integration` (REMOVED); `dashboard-sdd-orchestration` (MODIFIED); `organic-agent-trigger-rules` (ADDED, firme) |
 | 16 (F7) | REQ-20.5, REQ-20.6 (parcial: 89 de 91 filas), REQ-20.10 (verificación final), REQ-20.16 (cierre) |
 | 17 (F1) | REQ-20.9 |
+| 18 (reconciliación del corpus) | REQ-20.4 (enmendado), REQ-13.3 (corpus alineado con la retirada) |

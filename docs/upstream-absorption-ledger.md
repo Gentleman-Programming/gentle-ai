@@ -19,16 +19,18 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 2. **"El código parece relacionado" no es evidencia.** Ni lo es un fichero compartido ni un asunto de commit parecido. El estado `absorbido` exige una referencia de verificación concreta (PR del fork o commit de re-derivación), no una impresión de similitud.
 3. **Verificación sin filtrar (RA-2).** Ninguna tanda se marca `absorbido` sin `go build ./...`, `go vet ./...`, `go test ./...` sin `-run`, y `e2e/e2e_test.sh`, todos en verde — salvo el único fallo aceptado y saltado de este mismo paquete (`TestUpstreamAbsorptionLedgerCoversDeclaredUniverseAtClose`) hasta el cierre de la Fase 16. La cobertura no alcanzada por `bench/` (módulo Go independiente, sin `go.work`) se declara explícitamente, nunca se omite.
 4. **Inventario de no-reversión (V1–V8).** Ninguna tanda distinta de F6 revierte, total o parcialmente, las entradas V1–V6 u V8. La entrada V7 (ODD como paquete Go) solo la retira F6, y solo mediante los deltas de especificación que esa fase autoriza.
-5. **Rutas prohibidas.** Ninguna tanda toca `bench/`, `internal/hub/`, `internal/workspace/`, `internal/multirole/`, `internal/handoff/`, `internal/semantic/`, `internal/livingdoc/`, `internal/components/uninstall/cleaners.go`, `openspec/INDEX.md`, `openspec/config.yaml`, `openspec/changes/archive/**`, `docs/releases/**` ni `odd/tasks/*.md`.
+5. **Rutas prohibidas.** Ninguna tanda **de absorción** toca `bench/`, `internal/hub/`, `internal/workspace/`, `internal/multirole/`, `internal/handoff/`, `internal/semantic/`, `internal/livingdoc/`, `internal/components/uninstall/cleaners.go`, `openspec/INDEX.md`, `openspec/config.yaml`, `openspec/changes/archive/**`, `docs/releases/**` ni `odd/tasks/*.md`. **Excepción de 2026-09-20 (REQ-20.4 enmendado):** se admite una única *tanda de reconciliación del corpus*, cuyo propósito exclusivo es realinear `bench/` con la superficie de runtime que las tandas de absorción ya retiraron. No absorbe comportamiento nuevo, preserva las adaptaciones propias del fork y presenta el recuento del corpus completo como evidencia.
 6. **Donde la disposición no puede establecerse con evidencia, el veredicto es "no está claro — requiere confirmación del autor".** Adivinar es peor que admitir incertidumbre.
 7. **Una tanda revertida actualiza el estado de sus filas a `revertido`, conservando el resto de sus campos. Ninguna fila se borra nunca.**
+
+> **Nota de 2026-09-20 — la reconciliación del corpus de `bench/`.** La exclusión de `bench/` se fundaba en que el corpus era independiente del runtime absorbido. No lo era. Tras absorber la retirada de `sdd-attempt` (`18fa04fb`, REQ-13.3) y la puerta de transporte de OpenCode (`e28af0fd`), **37 de las 70 journeys fallaron**: 19 por `unknown sdd-attempt operation "status"` y 20 por `immutable_review_transport_unsupported`. La regla 3 de este registro declara `bench/` fuera de cobertura por ser un módulo sin `go.work`, así que ninguna verificación de tanda podía verlo; el rojo solo era observable en el paso «Run benchmark evidence» de CI. El commit `c9b71093` realinea el corpus tomando el `bench/` de `82a6de96` y reponiendo las doce adaptaciones del fork. Resultado medido: **56 journeys, 56 completadas, cero fallos**. Las catorce retiradas conducen todas gobernanza de attempts. Esa ausencia de cobertura declarada por la regla 3 **no debe volver a leerse como evidencia de que el corpus sigue verde**.
 
 ## Recuento
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 79 |
-| `descartado-deliberadamente` | 12 |
+| `absorbido` | 80 |
+| `descartado-deliberadamente` | 11 |
 | `revertido` | 0 |
 | **Total** | **91 (= universo declarado en la cabecera: 91)** |
 
@@ -234,13 +236,13 @@ Las Fases 11 a 15 no absorben ningún commit de upstream: retiran la capa Go de 
 | `95867aa4` | fix(tui): remove dead community tool runner | `descartado-deliberadamente` | Cherry-pick real → `CONFLICT`; llamadores verificados en el árbol | **La función que este commit borra sigue viva en el fork.** `runCommunityToolCommand` (`internal/tui/model.go:3711`) la consume `communitytool.RunnerFunc(runCommunityToolCommand)` en `startCommunityToolInstallation` (`:3654`), invocada desde el bucle Update (`:4753`) y ejercitada por `model_test.go:2418`. Upstream pudo borrarla porque su arco RTK (`08206a15`→`110f1371`) la dejó huérfana allí; el fork **nunca entró en ese arco**, como estableció la Fase 9. Absorberlo rompería `go build`. |
 | `0fbd8dd8` | docs(readme): present ODD as a feature with its own cycle diagram | `descartado-deliberadamente` | Encabezados de `README.md` y `docs/usage.md` verificados en el árbol | El README del fork **no tiene sección `### ODD`** (sus encabezados son Engram, SDD, RDD, Deterministic, Gentle Shell, 16 agentes, Also in the box), `docs/usage.md` menciona ODD **cero veces** —el enlace `docs/usage.md#organic-driven-development-odd` quedaría roto— y `docs/assets/diagrams/odd-cycle.svg` no existe. Absorberlo no sería absorber sino **fabricar documentación** de una superficie ejecutable que las Fases 11–14 acaban de retirar, que es justo lo que D-02 prohíbe. |
 | `a6ab6ddb` | docs: improve ODD workflow diagram | `descartado-deliberadamente` | `git show a6ab6ddb --stat` | Toca **únicamente** `docs/assets/diagrams/odd-cycle.svg`, que no existe en el fork ni se va a crear por el motivo de la fila anterior. |
-| `9f15bc44` | test(bench): adapt community tool navigation | `descartado-deliberadamente` | `git show 9f15bc44 --stat` | Toca **únicamente** `bench/journeys_issue4377.go`, ruta prohibida por D-10 y por la regla 5 de este registro. |
+| `9f15bc44` | test(bench): adapt community tool navigation | `absorbido` | `c9b71093` (rama `inc-20/pr7-absorcion-upstream`) | Descartado en su momento por tocar **únicamente** `bench/journeys_issue4377.go`. Absorbido el 2026-09-20 por la tanda de reconciliación del corpus, que toma la versión de upstream de ese fichero — conteo dinámico de filas mediante `communityToolCursorRows`, en lugar de dos pulsaciones fijas — y le repone `screenShows`, la adaptación del fork para marcadores de TUI localizados. |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
-| `bench/journeys_issue4377.go` | Sí | Ruta prohibida D-10; único fichero de `9f15bc44`. |
+| `bench/journeys_issue4377.go` | No | Estuvo ausente por la prohibición D-10 sobre `bench/`. Presente desde `c9b71093`, la tanda de reconciliación del corpus. |
 | `docs/assets/diagrams/odd-cycle.svg`, sección `### ODD` de `README.md` | Sí | No existen en el fork; ver las filas de `0fbd8dd8` y `a6ab6ddb`. |
 | `internal/cli/review_assess_test.go` | Sí | Hunk de `82a6de96` dependiente de `71a47477`, descartado por D6. |
 | `internal/tui/model.go` (hunk de `95867aa4`) | Sí | La función que borra sigue teniendo llamador vivo en el fork. |
