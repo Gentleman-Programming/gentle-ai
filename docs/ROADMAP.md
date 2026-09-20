@@ -5,10 +5,10 @@
 > - **Fase 1: Fundación de la Plataforma e Identidad Base:** ✅ 100% Completada (7/7 Incrementos Archivados)  
 > - **Fase 2: Autonomía, Identidad, Multi-Proyecto y Orquestación SDD:** ✅ 100% Completada (8/8 Incrementos Archivados)  
 > - **Fase 3: Experiencia de Usuario, Localización y Ecosistema:** ✅ 100% Completada (2/2 Incrementos Archivados)  
-> - **Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3:** ⏳ En progreso (1/3 Incrementos Archivados)  
-> **Total de Incrementos Archivados:** 19 de 19 (INC-01 a INC-19)  
-> **Total de Incrementos Planificados:** 1 (INC-20)  
-> **Última Actualización:** 2026-09-17
+> - **Fase 4: Evolución Arquitectónica, Flujo Orgánico (ODD) y Absorción Upstream v3:** ⏳ En progreso (2/3 Incrementos Archivados)  
+> **Total de Incrementos Archivados:** 19 de 20 (INC-01 a INC-19)  
+> **Total de Incrementos En Progreso:** 1 (INC-20)  
+> **Última Actualización:** 2026-09-20
 
 ---
 
@@ -64,7 +64,7 @@
 | :--- | :--- | :---: | :---: | :--- |
 | **INC-18** | `rdd-decoupling-and-v3-stability-fixes` | ✅ Archivado | Core SDD / Estabilidad | Desacoplamiento de RDD del motor de estados SDD y absorción de parches de estabilidad upstream (rutas JSON Windows, aislamiento CWD, saneamiento de presets de skills y Engram session recovery). |
 | **INC-19** | `inc-19-odd-workflow-and-promotion` | ✅ Archivado | ODD & Puerta de Promoción / Experiencia | Carril ágil ODD operativo (documento vivo `odd/tasks/<feature>.md`, espejo de solo lectura en Engram, CLI `axiom odd create`, `status` y `promote`, superficie en Web UI y TUI) y puerta de promoción no destructiva hacia el carril formal SDD. |
-| **INC-20** | `inc-20-sdd-engine-contract-retirement` | 📋 Planificado | Motor SDD / Arquitectura | Retirada coordinada del contrato de runtime ya publicado de *attempts*, presupuesto y remediación (`internal/sddstatus`, `axiom sdd attempt`) y resolución de la capacidad `sdd-research` sin implementación conectada, con deltas de especificación viva y migración de los activos distribuidos que hoy invocan esa superficie. |
+| **INC-20** | `inc-20-upstream-reconciliation` | ⏳ En progreso | Arquitectura / Integración Upstream / Distribución | Reconciliación auditada del fork con `Gentleman-Programming/gentle-ai`: protocolo de absorción por tandas con registro durable (`docs/upstream-absorption-ledger.md`, espejado en Engram) para los 91 commits de upstream sin fusiones entre el ancestro común y el techo congelado `v3.4.0` (Decisión D4); identidad de distribución de Axiom resuelta en instalador, tap, compuertas de release, CI, `crosslane` y namespace de `contracts/**`; cobertura de CI sobre el binario real `cmd/axiom`; retirada de la gobernanza de *attempts* absorbida de upstream (`axiom sdd attempt acquire`/`settle`, conservando `grant`); retirada destructiva del paquete Go `internal/odd` en favor del protocolo ODD de upstream; y migración final de la ruta de módulo Go `/v2` → `/v3`. |
 
 
 ---
@@ -288,13 +288,15 @@
   4. **Web UI y TUI:** pestaña `tab-odd` con listado, filtros, creación, promoción y comprobación de espejo desde el navegador; pantalla `ScreenODDFeatures` alcanzable desde Gobernanza en la TUI; conmutación explícita y visible entre el carril ágil (ODD) y el carril formal (SDD) en ambas superficies.
   5. **Directrices ODD/SDD en castellano peninsular bajo la Persona `axiom`**, distribuidas en `internal/assets/` con renderizado determinista y sin vínculo evento → acción.
 
-### [INC-20] inc-20-sdd-engine-contract-retirement (📋 Planificado)
-- **Responsabilidad:** Motor SDD / Arquitectura
-- **Naturaleza real, no burocracia huérfana:** este incremento no retira código muerto aislado. Retira un **contrato de runtime ya publicado**: la maquinaria de *attempts*, presupuesto y remediación de `internal/sddstatus` la invocan hoy los propios activos que Axiom distribuye a los agentes que instala (`internal/assets/claude/sdd-orchestrator-workflow.md`, `internal/assets/skills/_shared/sdd-orchestrator-sections.md` y `sdd-status-contract.md`), y choca de frente con dos especificaciones vivas: `axiom-sdd-cli-integration` (REQ-13.3 exige `axiom sdd attempt acquire`/`settle` con escenario BDD propio) y `rdd-sdd-receipt-consumption` (propiedad del libro mayor de intentos, confirmada por el mantenedor el 2026-08-02). Retirarlo exige deltas de especificación coordinados y migración de los activos distribuidos, no un borrado mecánico.
-- **Alcance planificado (sin iniciar; pendiente de las decisiones de producto D1-D5 de la preproposal):**
-  1. Blindaje previo de la compuerta de verificación formal (`verify → archive`) como contrato especificado y cubierto por tests de caracterización, antes de tocar cualquier otra pieza.
-  2. Poda selectiva de *attempts*, presupuesto y cadenas de remediación en `internal/sddstatus`, preservando un registro mínimo que siga sosteniendo el `ReceiptRef` terminal exigido por `rdd-sdd-receipt-consumption`.
-  3. Deltas coordinados sobre `axiom-sdd-cli-integration` y `rdd-sdd-receipt-consumption`, y migración de los activos distribuidos que hoy invocan la superficie retirada.
-  4. Resolución diferida de `internal/agents/researchcapability` (cero importadores Go, pero respaldado por la especificación viva `sdd-research` y el activo `internal/assets/skills/sdd-research/SKILL.md`): no es código muerto aislado, es una capacidad publicada sin implementación conectada.
-- **Preproposal:** análisis completo persistido en Engram bajo el topic `sdd/inc-20-sdd-engine-contract-retirement/preproposal`.
+### [INC-20] inc-20-upstream-reconciliation (⏳ En progreso)
+- **Responsabilidad:** Arquitectura / Integración Upstream / Distribución
+- **Sustituye por completo el alcance planificado anterior:** el INC-20 original (`inc-20-sdd-engine-contract-retirement`, retirada del contrato de *attempts*, presupuesto y remediación) quedó obsoleto antes de ejecutarse — upstream ya había ejecutado esa misma poda (commits `18fa04fb`, `15cbbde4`, `ba3ed690`, `62ce74b7`, `e0774e05`) — y se reescribió como lo que el terreno exigía: reconciliar el fork con `Gentleman-Programming/gentle-ai` de forma auditada, por tandas temáticas, sin perder los 19 incrementos de producto propio ya archivados. La preproposal original (topic de Engram `sdd/inc-20-sdd-engine-contract-retirement/preproposal`) queda obsoleta y sustituida.
+- **Alcance real entregado:**
+  1. **Protocolo de absorción por tandas** (`upstream-absorption-protocol`): deriva obligatoriamente la lista de ficheros de cada tanda desde `git show --stat`, exige verificación sin filtrar (`go build`/`go vet`/`go test ./...` sin `-run`, `e2e/e2e_test.sh`), respeta el inventario de no-reversión V1–V8 y las rutas protegidas, y sostiene el **registro durable de absorción** (`docs/upstream-absorption-ledger.md`, espejado en Engram) con una fila por cada uno de los **91 commits de upstream** sin fusiones entre el ancestro común `266574b0` y el techo congelado `82a6de96` (etiqueta `v3.4.0`, Decisión D4), absorbidos en las tandas temáticas F0 y F2–F7, más la migración final F1.
+  2. **Identidad de distribución** (`axiom-distribution-identity`): taxonomía de interoperabilidad vs. identidad (Decisiones D2.1–D2.4) aplicada al instalador y tap, las compuertas de release, el workflow de CI, el shim de `crosslane`, el namespace de protocolo en `contracts/**` (conservado byte a byte, REQ-20.10) y la ruta de módulo Go, cerrando el defecto vivo de que el instalador del fork instalaba upstream y no Axiom.
+  3. **Cobertura de CI sobre el binario real** (`axiom-binary-ci-coverage`): el pipeline pasa a ejercitar `cmd/axiom` en vez de validar únicamente el wrapper deprecado `cmd/gentle-ai`.
+  4. **Retirada de la gobernanza de *attempts*** (`axiom-sdd-cli-integration`, REQ-13.3 reescrito): `axiom sdd attempt acquire`/`settle` dejan de estar soportados, siguiendo la retirada ya ejecutada upstream (`18fa04fb`); `axiom sdd attempt grant` se conserva sin cambio de comportamiento.
+  5. **Sustitución destructiva de ODD** (Decisión D1): retirada completa de la CLI, la Web UI, la TUI y el paquete Go `internal/odd` propios, en favor del protocolo ODD de upstream basado en instrucciones de agente y elevado a protocolo obligatorio por defecto del orquestador (`organic-agent-trigger-rules`).
+  6. **Migración de la ruta de módulo Go `/v2` → `/v3`**, última fase de la cadena, absorbiendo además los 2 commits de upstream que ejecutan esa misma migración aguas arriba (`2594581e`, `9bf454d4`).
+- **Preproposal (obsoleta, sustituida por completo):** el análisis original persistido en Engram bajo el topic `sdd/inc-20-sdd-engine-contract-retirement/preproposal` ya no describe el alcance real de este incremento; ver la propuesta vigente `inc-20-upstream-reconciliation`.
 
