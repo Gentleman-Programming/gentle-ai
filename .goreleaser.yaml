@@ -143,14 +143,12 @@ changelog:
       - "^test:"
       - "^ci:"
 
-brews:
-  - repository:
-      owner: Gentleman-Programming
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
-    name: gentle-ai
-    homepage: "https://github.com/Gentleman-Programming/gentle-ai"
-    description: "Gentle-AI — Ecosystem, Frameworks, Workflows for AI coding agents."
-    license: "MIT"
-    commit_msg_template: "chore: update gentle-ai formula to {{ .Tag }}"
+# Sin bloque `brews:` mientras Axiom no publique su primer release.
+#
+# El bloque heredado de upstream apuntaba a Gentleman-Programming/homebrew-tap
+# con la formula "gentle-ai": publicar desde este fork habria intentado escribir
+# en el tap de otro proyecto, que no es un release bajo la identidad de Axiom.
+#
+# El primer release publica binarios firmados y nada mas. El tap propio se anade
+# cuando se decida donde vive, junto con las tareas 4.2 a 4.5 (instalador y
+# compuertas), que REQ-20.8 mantiene diferidas hasta que exista ese release.
