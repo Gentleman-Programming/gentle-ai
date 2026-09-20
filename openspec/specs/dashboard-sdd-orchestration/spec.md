@@ -45,7 +45,7 @@ El servidor HTTP local DEBE exponer el endpoint `POST /api/increments` para reci
 #### Scenario: Creación de incremento con cuerpo de propuesta ya renderizado
 
 - **DADO** el servidor HTTP del Dashboard Web activo
-- **CUANDO** se envía una petición `POST /api/increments` con `"name": "gestion-inventario"`, un `"intent"` descriptivo y un campo `"proposal_body"` que contiene un documento de propuesta ya redactado, por ejemplo sembrado por `axiom odd promote`
+- **CUANDO** se envía una petición `POST /api/increments` con `"name": "gestion-inventario"`, un `"intent"` descriptivo y un campo `"proposal_body"` que contiene un documento de propuesta ya redactado, por ejemplo por un cliente externo que sembró la propuesta antes de llamar al endpoint
 - **ENTONCES** el servidor responde con código de estado HTTP `201 Created`
 - **Y** `openspec/changes/gestion-inventario/proposal.md` contiene exactamente el contenido de `proposal_body`, sin sustituirlo por la plantilla generada por defecto
 

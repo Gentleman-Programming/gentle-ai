@@ -8,60 +8,25 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 
 ---
 
-## 1. Capacidad: `odd-ui-integration`
+## 1. Capacidad Modificada (Retirada Destructiva): `odd-ui-integration`
 
-Expone el estado del carril ODD de forma reactiva y con paridad de información en el Dashboard Web y en la TUI interactiva, con una conmutación de carril explícita y visible en ambas superficies.
+**Aviso de delta destructivo**: los tres requerimientos siguientes, archivados el 2026-09-18 como parte de INC-19, se retiran en su totalidad junto con `internal/dashboard/odd_service.go` y `internal/tui/screens/odd_features.go`, así como la entrada de ODD en `internal/tui/screens/governance.go` y su enrutamiento en `internal/tui/router.go` (INC-20 F6.2b, F6.2c). Corresponde a la fase de archivado de INC-20 decidir si este fichero se elimina por completo o se conserva vacío con esta misma nota de retirada.
+
+## REMOVED Requirements
 
 ### Requirement: Exposición del Estado ODD en el Dashboard Web (REQ-19.13)
 
-El Dashboard Web (`axiom ui`) DEBE exponer el estado de los documentos vivos ODD (lista de documentos, progreso de cada uno y cuáles están marcados como `promovido`) a través de la API REST local, y el frontend DEBE renderizar esa información en la interfaz visual sin requerir recarga manual de página.
-
-#### Scenario: Listado de documentos vivos con su progreso en el Dashboard
-
-- **DADO** uno o más documentos vivos en `odd/tasks/`
-- **CUANDO** se consulta el estado ODD desde el Dashboard Web
-- **ENTONCES** la interfaz muestra cada documento con su progreso y, si aplica, su marca de `promovido`
-
-#### Scenario: Sin documentos vivos, el Dashboard informa un estado vacío claro
-
-- **DADO** que no existe ningún documento en `odd/tasks/`
-- **CUANDO** se consulta el estado ODD desde el Dashboard Web
-- **ENTONCES** la interfaz informa que no hay documentos vivos, sin reportar error
-
----
+(Motivo: `internal/dashboard/odd_service.go`, que exponía el estado ODD vía API REST local, se retira por la Decisión D1.)
+(Migración: ninguna. El Dashboard Web deja de mostrar el estado de los documentos vivos ODD.)
 
 ### Requirement: Exposición del Estado ODD en la TUI (REQ-19.14)
 
-La TUI interactiva de Axiom DEBE implementar una pantalla dedicada que lea y muestre los documentos vivos ODD (lista, progreso y estado de promoción), accesible desde el menú de Gobernanza existente, con la misma información que expone REQ-19.13 para el Dashboard Web.
-
-#### Scenario: Consulta del estado ODD desde la TUI
-
-- **DADO** uno o más documentos vivos en `odd/tasks/`
-- **CUANDO** el usuario navega a la pantalla ODD de la TUI desde el menú de Gobernanza
-- **ENTONCES** la pantalla muestra la misma lista de documentos, progreso y estado de promoción que el Dashboard Web
-
-#### Scenario: Sin documentos vivos, la TUI informa un estado vacío claro
-
-- **DADO** que no existe ningún documento en `odd/tasks/`
-- **CUANDO** el usuario navega a la pantalla ODD de la TUI
-- **ENTONCES** la pantalla informa que no hay documentos vivos, sin reportar error
-
----
+(Motivo: `internal/tui/screens/odd_features.go` se retira por la Decisión D1.)
+(Migración: ninguna. El progreso ODD deja de ser visible desde la TUI; solo es legible leyendo directamente el contenido Markdown del documento vivo.)
 
 ### Requirement: Conmutación Visible entre Carril ODD y Carril SDD (REQ-19.15)
 
-Tanto el Dashboard Web como la TUI DEBEN ofrecer una acción visible y explícita para conmutar entre el carril ágil (ODD) y el carril formal (SDD), y DEBEN reflejar cuándo un documento ODD ha sido promovido, ofreciendo el salto directo al cambio SDD correspondiente.
-
-#### Scenario: Salto desde un documento ODD promovido a su cambio SDD
-
-- **DADO** un documento vivo marcado como `promovido` con referencia a `openspec/changes/gestion-inventario/`
-- **CUANDO** el usuario selecciona ese documento en el Dashboard Web o en la TUI
-- **ENTONCES** la interfaz ofrece una acción visible que conduce a la vista del cambio SDD `gestion-inventario`
-
-#### Scenario: Conmutación entre carriles desde cualquiera de las dos interfaces
-
-- **DADO** la pantalla de gobernanza en la TUI o la vista equivalente en el Dashboard Web
-- **CUANDO** el usuario activa la acción de conmutación de carril
-- **ENTONCES** la interfaz cambia entre la vista del carril ODD y la vista del carril SDD sin perder el contexto del proyecto activo
+(Motivo: la acción de conmutación de carril y el salto directo desde un documento promovido hacia su cambio SDD dependían de `internal/dashboard/odd_service.go` y de la entrada de ODD en `internal/tui/screens/governance.go`, retirados por la Decisión D1.)
+(Migración: ninguna. No existe una conmutación de carril visible equivalente en el Dashboard Web ni en la TUI tras esta retirada; el carril SDD sigue siendo accesible por sus propias pantallas y endpoints, sin cambios por este incremento.)
 
 ---

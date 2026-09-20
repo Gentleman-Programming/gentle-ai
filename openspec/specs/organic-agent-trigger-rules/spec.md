@@ -211,3 +211,35 @@ become inputs to typed safety decisions.
 - WHEN routing instructions are evaluated
 - THEN canonical direct, delegated-direct, and optional-SDD facts are unchanged
 - AND no safety outcome is inferred from the runtime preference
+
+### Requirement: Organic Driven Development is the orchestrator's mandatory default protocol
+
+Managed routing instructions MUST project the Organic Driven Development (ODD)
+protocol as the orchestrator's default workflow for every request, executed
+first and without the user having to request it explicitly or ask about
+planning or task tracking, per the upstream absorption (commits `70c774f8`,
+`1b202d77`, `cfc415ce`). This projection MUST include, at minimum,
+commit-per-work-unit, configured TDD, and feature continuity on resume.
+Routing instructions toward SDD (`direct_inline`, `delegated-direct`,
+`optional-SDD`) MUST NOT replace, precede, or defer the ODD projection; SDD
+activates only after an explicit user selection or an accepted SDD proposal,
+exactly as the "SDD remains optional" requirement of this same capability
+already governs.
+
+#### Scenario: ODD is projected before any routing decision
+
+- GIVEN a provider-registered adapter with a valid capability manifest
+- WHEN its managed routing instructions are rendered
+- THEN the ODD protocol is projected as the default workflow, executed before
+  `direct_inline`, `delegated-direct`, or `optional-SDD` are evaluated
+- AND none of those three routing facets is presented as a substitute for the
+  ODD projection
+
+#### Scenario: SDD still requires explicit selection even with ODD as default
+
+- GIVEN ODD is projected as the orchestrator's default protocol
+- WHEN work has not received an explicit SDD request nor an accepted SDD
+  proposal
+- THEN routing toward `optional-SDD` remains unactivated
+- AND work continues under the ODD projection or another direct
+  implementation route
