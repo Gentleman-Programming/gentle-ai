@@ -27,10 +27,10 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 66 |
-| `descartado-deliberadamente` | 2 |
+| `absorbido` | 71 |
+| `descartado-deliberadamente` | 8 |
 | `revertido` | 0 |
-| **Total** | **68 (= universo declarado en la cabecera: 91)** |
+| **Total** | **79 (= universo declarado en la cabecera: 91)** |
 
 ## F0 — Identidad de distribución, artefacto de release y cobertura del binario real
 
@@ -177,11 +177,26 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |
 |---|---|---|---|---|
+| `1b202d77` | feat(odd): add unified feature continuity and configured TDD (#4608) | `absorbido` | `b6c941d2`, `3a618ad2` (rama `inc-20/pr7-absorcion-upstream`) | Continuidad de *feature* (`mem_context`/`mem_search`/`mem_get_observation`) y TDD configurado, absorbidos hacia la sección `### Organic Driven Development` de `internal/components/agentguidance/routing.go`. |
+| `70c774f8` | feat(odd): make ODD the orchestrator's mandatory default protocol (#4644) | `absorbido` | `b6c941d2`, `3a618ad2` (rama `inc-20/pr7-absorcion-upstream`) | Protocolo ODD de 7 pasos como flujo predefinido del orquestador, absorbido hacia `### ODD protocol (MANDATORY…)`. Su carga paralela sobre 12 `sdd-orchestrator.md` y sus goldens queda fuera del alcance que `tasks.md` asigna a F6.1. |
+| `cfc415ce` | feat(odd): close each task with a work-unit commit, review per commit or slice, and offer chained delivery (#4714) | `absorbido` | `b6c941d2`, `3a618ad2` (rama `inc-20/pr7-absorcion-upstream`) | Cierre por commit de unidad de trabajo y candidato de revisión por commit o rebanada, absorbidos hacia los pasos 6 y 7 del protocolo. Su carga paralela sobre 2 `SKILL.md` queda fuera de alcance. |
+| `794c5326` | docs(odd): explain everyday workflow and optional SDD (#4636) | `absorbido` | `b6c941d2`, `3a618ad2` (rama `inc-20/pr7-absorcion-upstream`) | Doctrina «ODD por defecto, SDD opcional» absorbida hacia los 7 activos de persona y `routing.go`. El README y los `docs/` de upstream no se tocan: ninguno menciona ODD en el fork hoy, así que no se abre ninguna ventana de documentación falsa. |
+| `dcd2fa07` | fix(odd): make delegation mandatory with trigger table, route declaration, and long-session backstop | `absorbido` | `b6c941d2`, `3a618ad2` (rama `inc-20/pr7-absorcion-upstream`) | Disparadores obligatorios de delegación absorbidos hacia `### Mandatory Delegation Triggers`, ligados a los mismos umbrales del manifiesto canónico que ya usaban las rutas directa y delegada. |
+| `e7729359` | docs(odd): record feature outcome and per-task route/review evidence | `descartado-deliberadamente` | `git show e7729359 --stat` verificado en la tarea 10.2 | Toca **únicamente** `odd/tasks/odd-mandatory-delegation.md`, ruta prohibida por la regla 5 de este registro y por D-10. No se absorbe. |
+| `03dc975e` | docs(odd): sync the feature document with the pushed branch tip | `descartado-deliberadamente` | `git show 03dc975e --stat` verificado en la tarea 10.2 | Toca **únicamente** `odd/tasks/review-runtime-context-budget.md`, ruta prohibida por la regla 5 de este registro y por D-10. No se absorbe. |
+| `c9e3bdaf` | docs(odd): record RTK retirement delivery readiness | `descartado-deliberadamente` | `git show c9e3bdaf --stat` verificado en la tarea 10.2 | Toca **únicamente** `odd/tasks/retire-rtk.md`, ruta prohibida por la regla 5 de este registro y por D-10. No se absorbe. |
+| `6aa08748` | docs(odd): clarify RTK evidence scope | `descartado-deliberadamente` | `git show 6aa08748 --stat` verificado en la tarea 10.2 | Toca **únicamente** `odd/tasks/retire-rtk.md`, ruta prohibida por la regla 5 de este registro y por D-10. No se absorbe. |
+| `b2e5ec6b` | docs(odd): make RTK rollback evidence reproducible | `descartado-deliberadamente` | `git show b2e5ec6b --stat` verificado en la tarea 10.2 | Toca **únicamente** `odd/tasks/retire-rtk.md`, ruta prohibida por la regla 5 de este registro y por D-10. No se absorbe. |
+| `163e6a3f` | docs(odd): record the pi in-process reviewer and assess transition feature outcome | `descartado-deliberadamente` | `git show 163e6a3f --stat` verificado en la tarea 10.2 | Toca **únicamente** `odd/tasks/pi-inprocess-reviewer-assess-transition.md`, ruta prohibida por la regla 5 de este registro y por D-10. No se absorbe. |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
+| Los 6 ficheros `odd/tasks/*.md` de los commits descartados | Sí | Ruta prohibida D-10. |
+| `README.md`, `docs/{agents,components,intended-usage,pi,quickstart,trigger-rules,usage}.md` | Sí | Existen en el fork pero **ninguno menciona ODD hoy**, verificado con grep: dejarlos sin tocar no abre ninguna ventana de documentación falsa, y `tasks.md` no asigna escritura sobre ellos en F6.1. |
+| 12 `internal/assets/*/sdd-orchestrator.md`, `sdd-orchestrator-sections.md`, sus goldens y `orchestrator_shared_sections_test.go`, `skills/{chained-pr,work-unit-commits}/SKILL.md` | Sí | Carga paralela de `70c774f8` y `cfc415ce` fuera del alcance que la partición de fases asigna a F6.1. |
+| `odd_integration_test.go` | Sí | No existe en el fork. |
 
 ## F7 — Cierre del registro y documentación
 
