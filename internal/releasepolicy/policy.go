@@ -670,7 +670,7 @@ signs:
       - "-c"
       - "signature from gentle-ai release"
       - "-t"
-      - "repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}"
+      - "repo=IGutierrezZ/axiom;tag={{ .Tag }}"
     output: true
 changelog:
   sort: asc
