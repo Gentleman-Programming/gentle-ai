@@ -13,7 +13,7 @@ import (
 // apply/verify/archive/status/continue surface, except through the
 // Scope (deliberately narrow, per design.md decision 4's own rationale):
 // only the SDD apply/verify/archive/status/continue files — sdd_attempt.go,
-// sdd_status.go, sdd_verify_validate.go — are scanned. The ~30 other
+// sdd_status.go — are scanned. The ~30 other
 // internal/cli files that import reviewtransaction (review_*.go) are
 // explicit, user-invoked `review` subcommands, not automatic SDD
 // apply/verify/archive paths, and
@@ -27,7 +27,6 @@ import (
 var reviewOfferAbsenceScopedCLIFiles = []string{
 	"sdd_attempt.go",
 	"sdd_status.go",
-	"sdd_verify_validate.go",
 }
 
 // reviewOfferAbsenceCLIForbiddenSelectors mirrors
@@ -58,7 +57,7 @@ func example() int { return 1 }
 import (
 	"context"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 func example(ctx context.Context) {

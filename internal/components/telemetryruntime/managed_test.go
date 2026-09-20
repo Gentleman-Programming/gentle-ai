@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 func TestOpenCodeTelemetryApprovedPriorAssetUpgrade(t *testing.T) {
@@ -202,7 +203,7 @@ func TestOpenCodeTelemetryManagedModeEquivalence(t *testing.T) {
 
 func TestOpenCodeTelemetryManagedModeLifecycle(t *testing.T) {
 	dir := t.TempDir()
-	changed, rollback, err := ReconcileWithRollback(dir)
+	changed, rollback, err := ReconcileForMajorWithRollback(dir, opencode.RuntimeV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +399,139 @@ func TestOpenCodeTelemetryManagedLifecycle(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatal("owned file remains", path, err)
 		}
+	}
+}
+
+// TestOpenCodeTelemetryManagedAcceptsSymlinkedConfigRoot covers the
+// stow/chezmoi dotfiles pattern where the agent's whole configuration
+// directory is a symlink into a tracked repository (issue #4559). The
+// managed pair must install, validate, reconcile idempotently and remove
+// cleanly through that symlinked root, ending up on disk under the real
+// resolved target rather than being refused outright.
+func TestOpenCodeTelemetryManagedAcceptsSymlinkedConfigRoot(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "opencode-real")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "opencode")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip(err)
+	}
+
+	changed, err := Reconcile(link)
+	if err != nil {
+		t.Fatalf("reconcile through symlinked config root: %v", err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("reconcile through symlinked root changed %d files, want 2", len(changed))
+	}
+	for _, path := range ManagedPaths(target) {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("managed file missing under resolved root: %s: %v", path, err)
+		}
+	}
+	if err := CheckManaged(link); err != nil {
+		t.Fatalf("check managed through symlinked root: %v", err)
+	}
+	if changed, err := Reconcile(link); err != nil || len(changed) != 0 {
+		t.Fatalf("second reconcile through symlinked root not idempotent: changed=%v err=%v", changed, err)
+	}
+
+	removed, err := RemoveManaged(link)
+	if err != nil || len(removed) != 2 {
+		t.Fatalf("remove managed through symlinked root: removed=%v err=%v", removed, err)
+	}
+	for _, path := range ManagedPaths(target) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("managed file remains under resolved root after removal: %s: %v", path, err)
+		}
+	}
+	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
+		t.Fatalf("resolved root directory was removed or altered: %v", err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config root symlink was removed or altered: %v", err)
+	}
+}
+
+// TestOpenCodeTelemetryManagedRefusesSymlinkedPluginsDirectory covers real
+// indirection strictly inside a regular (non-symlinked) managed root: a
+// symlinked "plugins" directory must still be refused, unlike the root
+// symlink itself.
+func TestOpenCodeTelemetryManagedRefusesSymlinkedPluginsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	realPlugins := filepath.Join(t.TempDir(), "plugins-real")
+	if err := os.MkdirAll(realPlugins, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pluginsLink := filepath.Join(dir, "plugins")
+	if err := os.Symlink(realPlugins, pluginsLink); err != nil {
+		t.Skip(err)
+	}
+
+	_, err := Reconcile(dir)
+	if err == nil {
+		t.Fatal("symlinked plugins directory was accepted")
+	}
+	if !strings.Contains(err.Error(), "telemetry runtime symlink conflict:") {
+		t.Fatalf("unexpected error missing conflict prefix: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rerun 'gentle-ai sync'") {
+		t.Fatalf("error does not name an executable exit: %v", err)
+	}
+	if err := CheckManaged(dir); err == nil {
+		t.Fatal("symlinked plugins directory passed check")
+	}
+	if _, err := RemoveManaged(dir); err == nil {
+		t.Fatal("symlinked plugins directory passed removal check")
+	}
+}
+
+func TestOpenCodeTelemetryManagedAcceptsSymlinkedConfigRootWithTrailingSeparator(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "opencode-real")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "opencode")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip(err)
+	}
+	uncleaned := link + string(filepath.Separator)
+
+	if _, err := Reconcile(uncleaned); err != nil {
+		t.Fatalf("reconcile through uncleaned symlinked config root: %v", err)
+	}
+	for _, path := range ManagedPaths(target) {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("managed file missing under resolved target: %v", err)
+		}
+	}
+	if err := CheckManaged(uncleaned); err != nil {
+		t.Fatalf("check through uncleaned symlinked config root: %v", err)
+	}
+}
+
+func TestOpenCodeTelemetryManagedRefusesDanglingConfigRootSymlink(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "opencode")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing-target"), link); err != nil {
+		t.Skip(err)
+	}
+
+	_, err := Reconcile(link)
+	if err == nil {
+		t.Fatal("dangling config root symlink was accepted")
+	}
+	if !strings.Contains(err.Error(), "telemetry runtime symlink conflict:") {
+		t.Fatalf("unexpected error missing conflict prefix: %v", err)
+	}
+	if !strings.Contains(err.Error(), "does not resolve to an existing directory") {
+		t.Fatalf("error does not explain the dangling root: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rerun 'gentle-ai sync'") {
+		t.Fatalf("error does not name an executable exit: %v", err)
+	}
+	if err := CheckManaged(link); err == nil {
+		t.Fatal("dangling config root symlink passed check")
 	}
 }
 

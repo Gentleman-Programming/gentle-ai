@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 )
 
 func TestProgressPercentTracksCompletedSteps(t *testing.T) {
@@ -30,5 +30,13 @@ func TestProgressFromExecutionIncludesAllStages(t *testing.T) {
 
 	if got, want := progress.Percent(), 100; got != want {
 		t.Fatalf("Percent() = %d, want %d", got, want)
+	}
+}
+
+func TestProgressSkippedIsTerminalNotSuccess(t *testing.T) {
+	progress := NewProgressState([]string{"logo"})
+	progress.Mark(0, string(pipeline.StepStatusSkipped))
+	if !progress.Done() || progress.HasFailures() || progress.Items[0].Status != "skipped" {
+		t.Fatalf("skip progress: %#v", progress)
 	}
 }

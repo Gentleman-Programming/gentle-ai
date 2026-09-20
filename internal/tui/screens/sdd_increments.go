@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 // SDDIncrementInfo modela la información de un incremento para la TUI.
@@ -44,8 +44,6 @@ func RenderSDDIncrements(increments []SDDIncrementInfo, cursor int, message stri
 	b.WriteString("\n\n")
 
 	b.WriteString(styles.SubtextStyle.Render("Seguimiento de cambios activos y especificaciones archivadas en openspec/:"))
-	b.WriteString("\n")
-	b.WriteString(styles.SubtextStyle.Render("Carril activo: SDD · esc → Gobernanza → «6» para el carril ágil (ODD)"))
 	b.WriteString("\n\n")
 
 	if message != "" {

@@ -24,6 +24,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  opencode-v2-contracts:
+    name: OpenCode V2 Released SDK Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
+        with:
+          node-version: '24'
+      - name: Test bounded V2 host activation polling
+        run: python3 -B -m unittest discover -s scripts -p test_opencode_v2_host_test.py
+      - name: Typecheck V2 assets against released 2.0.4
+        run: bash scripts/test-opencode-v2-contracts.sh
+
   go-format:
     name: Go Format
     runs-on: ubuntu-latest
@@ -92,7 +110,6 @@ jobs:
             completed_once("j59-current-status-and-start-ignore-sibling-worktree-transaction") and
             completed_once("j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow") and
             completed_once("j75-intended-untracked-selection-executes-printed-start") and
-            completed_once("j81-rc1-consecutive-rescope-repair-executes-printed-command") and
             completed_once("j89-staged-validation-is-informational-and-unmanaged") and
             completed_once("j104-repository-context-survives-fresh-process") and
             completed_once("j110-untracked-terminal-burn-and-unmanaged-staged-validation") and
@@ -113,24 +130,28 @@ jobs:
           # Transition axis (#2829): sequences of ordinary operations, which is
           # how #2830 shipped. #2830 now refuses the second consecutive rescope
           # before publication, so every transition journey must complete.
+          #
+          # #4612 retires SDD attempt transitions; the standalone review-mode
+          # transition must still execute exactly once and complete.
+          #
+          # INC-20 correction (2026-09-20): the F4 note this replaces kept the
+          # 11-journey assertion on the premise that upstream had merely pruned
+          # files from bench/ while this fork kept them. The count was right and
+          # the reason was not. Upstream reduced the axis because the runtime
+          # retired `sdd-attempt` acquire/settle/status, which those transitions
+          # drive. This fork absorbed that retirement (REQ-13.3) without the
+          # corpus that accompanied it, so bench/ was not emitting 11 journeys
+          # that pass -- it was emitting 11 that fail. bench/ has now been
+          # reconciled with the absorbed runtime, preserving this fork's own
+          # adaptations, so the assertion tracks upstream's reduced axis.
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis transition --out "$RUNNER_TEMP/bench-transition.json"
           jq -e '
             def completed_once($id):
               [.journeys[] | select(.id == $id)] as $matches
               | ($matches | length == 1) and ($matches[0].status == "completed");
-            ([.journeys[] | select(.id | startswith("tr"))] | length) == 11 and
-            ([.journeys[] | select((.id | startswith("tr")) and .status == "completed")] | length) == 11 and
-            completed_once("tr01-consecutive-rescope-keeps-the-ledger-readable") and
-            completed_once("tr02-reset-after-rescope-keeps-the-ledger-readable") and
-            completed_once("tr03-review-disabled-mid-change-keeps-sdd-moving") and
-            completed_once("tr04-reset-then-rescope-keeps-the-ledger-readable") and
-            completed_once("tr05-review-re-enabled-mid-change-keeps-sdd-moving") and
-            completed_once("tr06-mode-flip-during-an-active-attempt") and
-            completed_once("tr07-reset-then-reset-keeps-the-ledger-readable") and
-            completed_once("tr08-scope-change-after-a-delegated-handoff") and
-            completed_once("tr09-mode-flip-while-a-review-lineage-is-open") and
-            completed_once("tr10-scope-change-after-the-review-is-bound") and
-            completed_once("tr11-abandon-the-review-while-an-attempt-is-open")
+            ([.journeys[] | select(.id | startswith("tr"))] | length) == 1 and
+            ([.journeys[] | select((.id | startswith("tr")) and .status == "completed")] | length) == 1 and
+            completed_once("tr09-mode-flip-while-a-review-lineage-is-open")
           ' "$RUNNER_TEMP/bench-transition.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker-untagged.json"
           jq -e '
@@ -153,10 +174,12 @@ jobs:
       # Informative window -- cmd/axiom coverage (INC-20 F0, opened 2026-09-19)
       #
       # Blocking: init, project, change, workspace, handoff, role, skill,
-      # semantic, archive, ui, and odd (blocking until this increment's Phase
-      # 11 retires it) in their help or no-argument form -- the exclusive
-      # surface axiom-distribution-identity's build-identity contract touches
-      # (REQ-20.15). This is additional to, and does not replace, the
+      # semantic, archive, and ui in their help or no-argument form -- the
+      # exclusive surface axiom-distribution-identity's build-identity
+      # contract touches (REQ-20.15). The odd verb blocked here too until
+      # this increment's Phase 11 (F6.2a) retired the `axiom odd` command
+      # entirely; it no longer exists, so it no longer appears in this list
+      # or in the smoke table below. This is additional to, and does not replace, the
       # "Run benchmark evidence" step above: that step already builds and
       # exercises cmd/axiom, but only through journeys shared with upstream's
       # review/SDD lifecycle, none of which invoke this exclusive surface.
@@ -222,7 +245,6 @@ jobs:
           smoke "skill"       1 skill
           smoke "semantic"    1 semantic
           smoke "archive"     1 archive
-          smoke "odd"         1 odd
           smoke "init --help" 0 init --help
           smoke "ui --help"   0 ui --help
 
@@ -606,6 +628,21 @@ jobs:
       # and push/schedule already prove they fit the step budget on the same
       # runners. Do not reintroduce per-event tier selection here without
       # renaming the checks to state the reduced scope.
+      - name: Diagnose pinned OpenCode runtime before E2E
+        run: |
+          docker run --rm --pull=never --network none --entrypoint /bin/bash \
+            gentle-ai-e2e-${{ matrix.platform.name }}:ci -c '
+              set -u
+              export HOME=$(mktemp -d)
+              export XDG_CONFIG_HOME="$HOME/config" XDG_DATA_HOME="$HOME/data"
+              export XDG_CACHE_HOME="$HOME/cache" XDG_STATE_HOME="$HOME/state"
+              command -v opencode
+              opencode --version
+              result=$?
+              printf "opencode version exit=%s\n" "$result"
+              exit "$result"
+            '
+
       - name: Run E2E tests
         timeout-minutes: 30
         env:

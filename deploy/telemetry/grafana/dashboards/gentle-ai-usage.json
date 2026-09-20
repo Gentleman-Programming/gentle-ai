@@ -10,7 +10,7 @@
   "schemaVersion": 39,
   "version": 1,
   "time": {
-    "from": "now-7d",
+    "from": "2026-09-10T00:00:00.000Z",
     "to": "now"
   },
   "refresh": "1m",
@@ -998,7 +998,7 @@
     {
       "id": 601,
       "title": "Deliveries, last 15 min",
-      "description": "This anonymous activity counts agent responses, not people, and shows telemetry deliveries received in the last 15 minutes.",
+      "description": "This anonymous activity counts agent responses, not people, and shows telemetry deliveries received in the last 15 minutes. VictoriaMetrics: increase() over a fixed 15-minute window (matches the original SQL's now-900s filter, independent of the dashboard time range).",
       "type": "stat",
       "gridPos": {
         "x": 0,
@@ -1007,15 +1007,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COUNT(DISTINCT d.delivery_id) AS Deliveries FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT COUNT(DISTINCT d.delivery_id) AS Deliveries FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_deliveries_total[15m]))",
+          "legendFormat": "Deliveries",
+          "instant": true
         }
       ],
       "options": {
@@ -1047,7 +1051,7 @@
     {
       "id": 602,
       "title": "Responses, last 15 min",
-      "description": "This anonymous activity counts agent responses, not people, received in the last 15 minutes.",
+      "description": "This anonymous activity counts agent responses, not people, received in the last 15 minutes. VictoriaMetrics: increase() over a fixed 15-minute window.",
       "type": "stat",
       "gridPos": {
         "x": 6,
@@ -1056,15 +1060,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_responses_total[15m]))",
+          "legendFormat": "Responses",
+          "instant": true
         }
       ],
       "options": {
@@ -1096,7 +1104,7 @@
     {
       "id": 603,
       "title": "Tokens processed, last 15 min",
-      "description": "This anonymous activity counts agent responses, not people, and totals their derived token volume over the last 15 minutes.",
+      "description": "This anonymous activity counts agent responses, not people, and totals their derived token volume over the last 15 minutes. VictoriaMetrics: increase() over a fixed 15-minute window, summing input+output+cache_read+cache_creation+reasoning kinds (excludes kind=\"total\").",
       "type": "stat",
       "gridPos": {
         "x": 12,
@@ -1105,15 +1113,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_tokens_total{kind=~\"input|output|cache_read|cache_creation|reasoning\"}[15m]))",
+          "legendFormat": "Tokens processed",
+          "instant": true
         }
       ],
       "options": {
@@ -1145,7 +1157,7 @@
     {
       "id": 604,
       "title": "Hosts active, last 15 min",
-      "description": "This anonymous activity counts agent responses, not people, and shows distinct reporting host types over the last 15 minutes.",
+      "description": "This anonymous activity counts agent responses, not people, and shows distinct reporting host types over the last 15 minutes. VictoriaMetrics: counts distinct host label values with a nonzero 15-minute delivery increase.",
       "type": "stat",
       "gridPos": {
         "x": 18,
@@ -1154,15 +1166,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COUNT(DISTINCT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown')) AS \"Hosts active\" FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT COUNT(DISTINCT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown')) AS \"Hosts active\" FROM runtime_deliveries d WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 900) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "count(count by (host) (increase(gentle_runtime_deliveries_total[15m]) > 0))",
+          "legendFormat": "Hosts active",
+          "instant": true
         }
       ],
       "options": {
@@ -1194,7 +1210,7 @@
     {
       "id": 605,
       "title": "Responses per minute by host (last 3h)",
-      "description": "This anonymous activity counts agent responses, not people, and shows their per-minute host distribution over the last three hours.",
+      "description": "This anonymous activity counts agent responses, not people, and shows their per-minute host distribution over the last three hours. VictoriaMetrics: per-minute increase() for each of the four known hosts (matches the original SQL's fixed host columns; other hosts are not plotted, same as before).",
       "type": "timeseries",
       "timeFrom": "3h",
       "gridPos": {
@@ -1204,18 +1220,49 @@
         "h": 8
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
-          "rawQueryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
-          "timeColumns": [
-            "time"
-          ]
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_responses_total{host=\"pi\"}[1m]))",
+          "legendFormat": "pi",
+          "interval": "1m"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_responses_total{host=\"opencode\"}[1m]))",
+          "legendFormat": "opencode",
+          "interval": "1m"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_responses_total{host=\"claude-code\"}[1m]))",
+          "legendFormat": "claude-code",
+          "interval": "1m"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_responses_total{host=\"codex\"}[1m]))",
+          "legendFormat": "codex",
+          "interval": "1m"
         }
       ],
       "options": {
@@ -1312,7 +1359,7 @@
     {
       "id": 606,
       "title": "Tokens processed per minute (last 3h)",
-      "description": "This anonymous activity counts agent responses, not people, and shows their derived token volume per minute over the last three hours.",
+      "description": "This anonymous activity counts agent responses, not people, and shows their derived token volume per minute over the last three hours. VictoriaMetrics: per-minute increase(), summing input+output+cache_read+cache_creation+reasoning kinds.",
       "type": "timeseries",
       "timeFrom": "3h",
       "gridPos": {
@@ -1322,18 +1369,19 @@
         "h": 8
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
-          "rawQueryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:%M:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= (CAST(strftime('%s', 'now') AS INTEGER) - 10800) * 1000000000 AND d.received_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000000000 GROUP BY time ORDER BY time ASC",
-          "timeColumns": [
-            "time"
-          ]
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_tokens_total{kind=~\"input|output|cache_read|cache_creation|reasoning\"}[1m]))",
+          "legendFormat": "Tokens processed",
+          "interval": "1m"
         }
       ],
       "options": {
@@ -1373,7 +1421,7 @@
     {
       "id": 401,
       "title": "Tokens processed",
-      "description": "Derived token volume processed by instrumented agents during the selected time range.",
+      "description": "Derived token volume processed by instrumented agents during the selected time range. VictoriaMetrics: increase() over the dashboard's selected time range ($__range); the dashboard's default time.from is 2026-09-10, matching the start of the backfilled history.",
       "type": "stat",
       "gridPos": {
         "x": 0,
@@ -1382,15 +1430,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_tokens_total{kind=~\"input|output|cache_read|cache_creation|reasoning\"}[$__range]))",
+          "legendFormat": "Tokens processed",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1422,7 +1474,7 @@
     {
       "id": 402,
       "title": "Responses",
-      "description": "Response occurrences reported by instrumented agents during the selected time range.",
+      "description": "Response occurrences reported by instrumented agents during the selected time range. VictoriaMetrics: increase() over the dashboard's selected time range.",
       "type": "stat",
       "gridPos": {
         "x": 6,
@@ -1431,15 +1483,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_responses_total[$__range]))",
+          "legendFormat": "Responses",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1471,7 +1527,7 @@
     {
       "id": 403,
       "title": "Deliveries",
-      "description": "Telemetry deliveries received from instrumented agent hosts during the selected time range.",
+      "description": "Telemetry deliveries received from instrumented agent hosts during the selected time range. VictoriaMetrics: increase() over the dashboard's selected time range. Note: gentle_runtime_deliveries_total increments once per received delivery regardless of whether it carried any rows, while the original SQL inner-joined runtime_rows and so excluded zero-row deliveries; in practice every real delivery carries rows.",
       "type": "stat",
       "gridPos": {
         "x": 12,
@@ -1480,15 +1536,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COUNT(DISTINCT d.delivery_id) AS Deliveries FROM runtime_deliveries d JOIN runtime_rows r ON r.delivery_id = d.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT COUNT(DISTINCT d.delivery_id) AS Deliveries FROM runtime_deliveries d JOIN runtime_rows r ON r.delivery_id = d.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_deliveries_total[$__range]))",
+          "legendFormat": "Deliveries",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1520,7 +1580,7 @@
     {
       "id": 404,
       "title": "Hosts reporting",
-      "description": "Distinct agent host types that reported runtime usage during the selected time range.",
+      "description": "Distinct agent host types that reported runtime usage during the selected time range. VictoriaMetrics: counts distinct host label values with a nonzero delivery increase over the selected range. Same zero-row-delivery caveat as the Deliveries panel.",
       "type": "stat",
       "gridPos": {
         "x": 18,
@@ -1529,15 +1589,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COUNT(DISTINCT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown')) AS Hosts FROM runtime_deliveries d JOIN runtime_rows r ON r.delivery_id = d.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT COUNT(DISTINCT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown')) AS Hosts FROM runtime_deliveries d JOIN runtime_rows r ON r.delivery_id = d.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "count(count by (host) (increase(gentle_runtime_deliveries_total[$__range]) > 0))",
+          "legendFormat": "Hosts",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1582,7 +1646,7 @@
     {
       "id": 501,
       "title": "Subagent coverage",
-      "description": "Share of observations attributed to a named subagent.",
+      "description": "Share of observations attributed to a named subagent. VictoriaMetrics: ratio of increase() on gentle_runtime_rows_total with agent_class excluding orchestrator/unknown to the same metric's total increase, over the selected range.",
       "type": "stat",
       "gridPos": {
         "x": 0,
@@ -1591,15 +1655,19 @@
         "h": 4
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT 100.0 * SUM(CASE WHEN COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS \"Subagent coverage\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0",
-          "rawQueryText": "SELECT 100.0 * SUM(CASE WHEN COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS \"Subagent coverage\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 HAVING COUNT(*) > 0"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "100 * sum(increase(gentle_runtime_rows_total{agent_class!~\"orchestrator|unknown\"}[$__range])) / sum(increase(gentle_runtime_rows_total[$__range]))",
+          "legendFormat": "Subagent coverage",
+          "instant": true
         }
       ],
       "options": {
@@ -1631,7 +1699,7 @@
     {
       "id": 502,
       "title": "Responses by subagent",
-      "description": "Observed responses and launches show which named subagents ran most often.",
+      "description": "Observed responses and launches show which named subagents ran most often. VictoriaMetrics: sum of increase() on gentle_runtime_responses_total plus gentle_runtime_launches_total, grouped by agent_class, excluding orchestrator/unknown, over the selected range.",
       "type": "barchart",
       "gridPos": {
         "x": 6,
@@ -1640,15 +1708,19 @@
         "h": 7
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0))) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC, Subagent ASC LIMIT 1000",
-          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0))) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC, Subagent ASC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (agent_class) (increase(gentle_runtime_responses_total{agent_class!~\"orchestrator|unknown\"}[$__range])) + sum by (agent_class) (increase(gentle_runtime_launches_total{agent_class!~\"orchestrator|unknown\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "options": {
@@ -1672,12 +1744,35 @@
           }
         },
         "overrides": []
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "agent_class": "Subagent",
+              "Value": "Responses"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Responses",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 503,
       "title": "Tokens processed by subagent",
-      "description": "Derived token volume shows which named subagents handled the most model work.",
+      "description": "Derived token volume shows which named subagents handled the most model work. VictoriaMetrics: increase() on gentle_runtime_tokens_total grouped by agent_class (excluding orchestrator/unknown), summing input+output+cache_read+cache_creation+reasoning kinds, over the selected range.",
       "type": "barchart",
       "gridPos": {
         "x": 15,
@@ -1686,15 +1781,19 @@
         "h": 7
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC, Subagent ASC LIMIT 1000",
-          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Subagent HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC, Subagent ASC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (agent_class) (increase(gentle_runtime_tokens_total{agent_class!~\"orchestrator|unknown\", kind=~\"input|output|cache_read|cache_creation|reasoning\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "options": {
@@ -1718,12 +1817,35 @@
           }
         },
         "overrides": []
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "agent_class": "Subagent",
+              "Value": "Tokens processed"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Tokens processed",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 504,
       "title": "Subagent model and effort selection",
-      "description": "Shows which named subagent ran on which model and effort, together with launches, responses, and token volume.",
+      "description": "Shows which named subagent ran on which model and effort, together with launches, responses, and token volume. VictoriaMetrics: joins increase() on gentle_runtime_launches_total, gentle_runtime_responses_total and gentle_runtime_tokens_total (summed input+output+cache_read+cache_creation+reasoning kinds) grouped by host, agent_class, provider, model, selected_effort, over the selected range. Known gap: model_evidence and effective_effort live only on the low-cardinality gentle_runtime_rows_by_evidence_total{host,model_evidence,effective_effort} series by design (bounded cardinality, see the feature's Design section) and cannot be joined against this breakdown, so the Evidence and Effective effort columns are not reproduced here.",
       "type": "table",
       "gridPos": {
         "x": 0,
@@ -1732,15 +1854,39 @@
         "h": 9
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS \"Provider/model\", COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", COALESCE(NULLIF(json_extract(r.row_json, '$.effective_effort'), ''), 'unknown') AS \"Effective effort\", SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') ELSE 0 END) AS Launches, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Host, Subagent, \"Provider/model\", Evidence, \"Selected effort\", \"Effective effort\" HAVING COUNT(*) > 0 ORDER BY Responses DESC, \"Tokens processed\" DESC, Subagent ASC LIMIT 1000",
-          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS \"Provider/model\", COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", COALESCE(NULLIF(json_extract(r.row_json, '$.effective_effort'), ''), 'unknown') AS \"Effective effort\", SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') ELSE 0 END) AS Launches, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown') GROUP BY Host, Subagent, \"Provider/model\", Evidence, \"Selected effort\", \"Effective effort\" HAVING COUNT(*) > 0 ORDER BY Responses DESC, \"Tokens processed\" DESC, Subagent ASC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, agent_class, provider, model, selected_effort) (increase(gentle_runtime_launches_total{agent_class!~\"orchestrator|unknown\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, agent_class, provider, model, selected_effort) (increase(gentle_runtime_responses_total{agent_class!~\"orchestrator|unknown\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, agent_class, provider, model, selected_effort) (increase(gentle_runtime_tokens_total{agent_class!~\"orchestrator|unknown\", kind=~\"input|output|cache_read|cache_creation|reasoning\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "options": {
@@ -1769,12 +1915,62 @@
             ]
           }
         ]
-      }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "host": "Host",
+              "agent_class": "Subagent",
+              "provider": "Provider",
+              "model": "Model",
+              "selected_effort": "Selected effort",
+              "Value #A": "Launches",
+              "Value #B": "Responses",
+              "Value #C": "Tokens processed"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": "Tokens processed",
+              "operator": "/",
+              "right": "Responses"
+            },
+            "alias": "Avg tokens per response",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Responses",
+                "desc": true
+              },
+              {
+                "field": "Tokens processed",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 505,
       "title": "Most popular models per subagent",
-      "description": "Ranks the community’s most observed models for each named subagent and shows the effort and hosts behind that usage.",
+      "description": "Ranks the community’s most observed models for each named subagent and shows the effort and hosts behind that usage. VictoriaMetrics: sum of increase() on gentle_runtime_responses_total plus gentle_runtime_launches_total grouped by agent_class, provider, model (excluding orchestrator/unknown), sorted by subagent then observations. Known gap: PromQL has no per-group Rank/percentage-share or string-aggregation primitive equivalent to the original SQL's window functions and group_concat, so the Rank, \"Most common selected effort\", \"Share of subagent (%)\" and \"Hosts\" columns are not reproduced; only Subagent, Provider, Model and Observations are shown.",
       "type": "table",
       "gridPos": {
         "x": 0,
@@ -1783,15 +1979,19 @@
         "h": 9
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT Subagent, Rank, Model AS \"Provider/model\", Effort AS \"Most common selected effort\", Observations, ROUND(100.0 * Observations / NULLIF(subagent_observations, 0), 1) AS \"Share of subagent (%)\", Hosts FROM ranked ORDER BY Subagent ASC, Rank ASC LIMIT 1000",
-          "rawQueryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT Subagent, Rank, Model AS \"Provider/model\", Effort AS \"Most common selected effort\", Observations, ROUND(100.0 * Observations / NULLIF(subagent_observations, 0), 1) AS \"Share of subagent (%)\", Hosts FROM ranked ORDER BY Subagent ASC, Rank ASC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (agent_class, provider, model) (increase(gentle_runtime_responses_total{agent_class!~\"orchestrator|unknown\"}[$__range])) + sum by (agent_class, provider, model) (increase(gentle_runtime_launches_total{agent_class!~\"orchestrator|unknown\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "options": {
@@ -1824,12 +2024,40 @@
             ]
           }
         ]
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "agent_class": "Subagent",
+              "provider": "Provider",
+              "model": "Model",
+              "Value": "Observations"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Subagent"
+              },
+              {
+                "field": "Observations",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 506,
       "title": "Top model per subagent",
-      "description": "Highlights the most observed model for each named subagent across the selected time range.",
+      "description": "Highlights the most observed model for each named subagent across the selected time range. VictoriaMetrics: topk by (agent_class) (1, ...) selects the single top provider/model per subagent by combined increase() of responses_total plus launches_total, over the selected range. Known gap: the original single \"Subagent and model\" text column is now three separate columns (Subagent, Provider, Model) since PromQL/Grafana table transforms have no string-concatenation primitive; the barchart's xField now reads Subagent instead of the concatenated string.",
       "type": "barchart",
       "gridPos": {
         "x": 0,
@@ -1838,20 +2066,24 @@
         "h": 7
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT CAST(Subagent || ' · ' || Model AS TEXT) AS \"Subagent and model\", Observations FROM ranked WHERE Rank = 1 ORDER BY Observations DESC, Subagent ASC LIMIT 1000",
-          "rawQueryText": "WITH base AS (SELECT CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS TEXT) AS Subagent, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS TEXT) AS Model, CAST(COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS TEXT) AS Effort, CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, (COALESCE(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') END, 0) + COALESCE(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') END, 0)) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') NOT IN ('orchestrator', 'unknown')), pair_totals AS (SELECT Subagent, Model, SUM(Observations) AS Observations, group_concat(DISTINCT Host) AS Hosts FROM base GROUP BY Subagent, Model), effort_totals AS (SELECT Subagent, Model, Effort, SUM(Observations) AS Observations FROM base GROUP BY Subagent, Model, Effort), effort_ranked AS (SELECT Subagent, Model, Effort, ROW_NUMBER() OVER (PARTITION BY Subagent, Model ORDER BY Observations DESC, Effort ASC) AS effort_rank FROM effort_totals), ranked AS (SELECT p.Subagent, p.Model, e.Effort, p.Observations, p.Hosts, ROW_NUMBER() OVER (PARTITION BY p.Subagent ORDER BY p.Observations DESC, p.Model ASC) AS Rank, SUM(p.Observations) OVER (PARTITION BY p.Subagent) AS subagent_observations FROM pair_totals p JOIN effort_ranked e ON e.Subagent = p.Subagent AND e.Model = p.Model AND e.effort_rank = 1) SELECT CAST(Subagent || ' · ' || Model AS TEXT) AS \"Subagent and model\", Observations FROM ranked WHERE Rank = 1 ORDER BY Observations DESC, Subagent ASC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "topk by (agent_class) (1, sum by (agent_class, provider, model) (increase(gentle_runtime_responses_total{agent_class!~\"orchestrator|unknown\"}[$__range])) + sum by (agent_class, provider, model) (increase(gentle_runtime_launches_total{agent_class!~\"orchestrator|unknown\"}[$__range])))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "options": {
         "orientation": "horizontal",
-        "xField": "Subagent and model",
+        "xField": "Subagent",
         "showValue": "always",
         "legend": {
           "showLegend": false
@@ -1870,12 +2102,37 @@
           }
         },
         "overrides": []
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "agent_class": "Subagent",
+              "provider": "Provider",
+              "model": "Model",
+              "Value": "Observations"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Observations",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 409,
       "title": "Usage by host, subagent, model and effort",
-      "description": "Answers which subagent used which model at which effort and how many tokens were processed.",
+      "description": "Answers which subagent used which model at which effort and how many tokens were processed. VictoriaMetrics: joins increase() on launches_total, responses_total and tokens_total (summed input+output+cache_read+cache_creation+reasoning) grouped by host, agent_kind, agent_class, provider, model, selected_effort, over the selected range, including orchestrator/unknown (matches the original SQL, which did not filter them). Known gaps: effective_effort is not available at this label granularity (same cardinality-bound design as the Subagent model and effort selection panel) so that column is dropped; Provider and Model are shown as separate columns instead of the original concatenated \"Provider/model\" string.",
       "type": "table",
       "gridPos": {
         "x": 0,
@@ -1884,15 +2141,39 @@
         "h": 9
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.agent_kind'), ''), 'unknown') AS agent_kind, COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS agent_class, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS \"Provider/model\", COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS selected_effort, COALESCE(NULLIF(json_extract(r.row_json, '$.effective_effort'), ''), 'unknown') AS effective_effort, SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') ELSE 0 END) AS Launches, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, agent_kind, agent_class, \"Provider/model\", selected_effort, effective_effort ORDER BY Responses + Launches DESC LIMIT 1000",
-          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.agent_kind'), ''), 'unknown') AS agent_kind, COALESCE(NULLIF(json_extract(r.row_json, '$.agent_class'), ''), 'unknown') AS agent_class, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') || '/' || COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS \"Provider/model\", COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS selected_effort, COALESCE(NULLIF(json_extract(r.row_json, '$.effective_effort'), ''), 'unknown') AS effective_effort, SUM(CASE WHEN json_type(r.row_json, '$.launches') = 'integer' THEN json_extract(r.row_json, '$.launches') ELSE 0 END) AS Launches, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, agent_kind, agent_class, \"Provider/model\", selected_effort, effective_effort ORDER BY Responses + Launches DESC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, agent_kind, agent_class, provider, model, selected_effort) (increase(gentle_runtime_launches_total[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, agent_kind, agent_class, provider, model, selected_effort) (increase(gentle_runtime_responses_total[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, agent_kind, agent_class, provider, model, selected_effort) (increase(gentle_runtime_tokens_total{kind=~\"input|output|cache_read|cache_creation|reasoning\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -1969,12 +2250,59 @@
         "footer": {
           "enablePagination": false
         }
-      }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "host": "Host",
+              "agent_kind": "agent_kind",
+              "agent_class": "agent_class",
+              "provider": "Provider",
+              "model": "Model",
+              "selected_effort": "selected_effort",
+              "Value #A": "Launches",
+              "Value #B": "Responses",
+              "Value #C": "Tokens processed"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": "Responses",
+              "operator": "+",
+              "right": "Launches"
+            },
+            "alias": "Responses + Launches",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Responses + Launches",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 405,
       "title": "Tokens processed by host",
-      "description": "Derived token volume compares runtime usage across supported agent hosts.",
+      "description": "Derived token volume compares runtime usage across supported agent hosts. VictoriaMetrics: increase() on gentle_runtime_tokens_total grouped by host, summing input+output+cache_read+cache_creation+reasoning kinds, over the selected range.",
       "type": "barchart",
       "gridPos": {
         "x": 0,
@@ -1983,15 +2311,19 @@
         "h": 7
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC LIMIT 1000",
-          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Tokens processed\" DESC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host) (increase(gentle_runtime_tokens_total{kind=~\"input|output|cache_read|cache_creation|reasoning\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -2051,12 +2383,35 @@
         },
         "barWidth": 0.6,
         "groupWidth": 0.7
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "host": "Host",
+              "Value": "Tokens processed"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Tokens processed",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 406,
       "title": "Responses by host",
-      "description": "Reported response occurrences compare activity across supported agent hosts.",
+      "description": "Reported response occurrences compare activity across supported agent hosts. VictoriaMetrics: increase() on gentle_runtime_responses_total grouped by host, over the selected range.",
       "type": "barchart",
       "gridPos": {
         "x": 12,
@@ -2065,15 +2420,19 @@
         "h": 7
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC LIMIT 1000",
-          "rawQueryText": "SELECT CAST(COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS TEXT) AS Host, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS \"Responses\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host HAVING COUNT(*) > 0 ORDER BY \"Responses\" DESC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host) (increase(gentle_runtime_responses_total[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -2133,12 +2492,35 @@
         },
         "barWidth": 0.6,
         "groupWidth": 0.7
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "host": "Host",
+              "Value": "Responses"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Responses",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 407,
       "title": "Tokens by model",
-      "description": "Model-level usage keeps unknown and custom model evidence visible instead of hiding incomplete attribution.",
+      "description": "Model-level usage keeps unknown and custom model evidence visible instead of hiding incomplete attribution. VictoriaMetrics: joins increase() on gentle_runtime_responses_total and gentle_runtime_tokens_total (summed input+output+cache_read+cache_creation+reasoning) grouped by host, provider, model, over the selected range. Known gap: model_evidence lives only on the separate low-cardinality gentle_runtime_rows_by_evidence_total series and cannot be joined against provider/model at this granularity, so the Evidence column is dropped.",
       "type": "table",
       "gridPos": {
         "x": 0,
@@ -2147,15 +2529,29 @@
         "h": 9
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') AS Provider, COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS Model, COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, Provider, Model, Evidence ORDER BY \"Tokens processed\" DESC LIMIT 1000",
-          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, COALESCE(NULLIF(json_extract(r.row_json, '$.model.provider'), ''), 'unknown') AS Provider, COALESCE(NULLIF(json_extract(r.row_json, '$.model.id'), ''), 'unknown') AS Model, COALESCE(NULLIF(json_extract(r.row_json, '$.model_evidence'), ''), 'unknown') AS Evidence, SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host, Provider, Model, Evidence ORDER BY \"Tokens processed\" DESC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, provider, model) (increase(gentle_runtime_responses_total[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, provider, model) (increase(gentle_runtime_tokens_total{kind=~\"input|output|cache_read|cache_creation|reasoning\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -2232,12 +2628,55 @@
         "footer": {
           "enablePagination": false
         }
-      }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "host": "Host",
+              "provider": "Provider",
+              "model": "Model",
+              "Value #A": "Responses",
+              "Value #B": "Tokens processed"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": "Tokens processed",
+              "operator": "/",
+              "right": "Responses"
+            },
+            "alias": "Avg tokens per response",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Tokens processed",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 408,
       "title": "Responses and tokens by selected effort",
-      "description": "Selected reasoning effort shows how usage and token volume are distributed across requested effort levels.",
+      "description": "Selected reasoning effort shows how usage and token volume are distributed across requested effort levels. VictoriaMetrics: joins increase() on gentle_runtime_responses_total and gentle_runtime_tokens_total (summed input+output+cache_read+cache_creation+reasoning) grouped by selected_effort, over the selected range.",
       "type": "table",
       "gridPos": {
         "x": 12,
@@ -2246,15 +2685,29 @@
         "h": 9
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY \"Selected effort\" ORDER BY Responses DESC, \"Tokens processed\" DESC LIMIT 1000",
-          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.selected_effort'), ''), 'unknown') AS \"Selected effort\", SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END) AS Responses, SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) AS \"Tokens processed\", ROUND(1.0 * SUM((CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END)) / NULLIF(SUM(CASE WHEN json_type(r.row_json, '$.responses') = 'integer' THEN json_extract(r.row_json, '$.responses') ELSE 0 END), 0), 1) AS \"Avg tokens per response\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY \"Selected effort\" ORDER BY Responses DESC, \"Tokens processed\" DESC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (selected_effort) (increase(gentle_runtime_responses_total[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (selected_effort) (increase(gentle_runtime_tokens_total{kind=~\"input|output|cache_read|cache_creation|reasoning\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -2331,12 +2784,57 @@
         "footer": {
           "enablePagination": false
         }
-      }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "selected_effort": "Selected effort",
+              "Value #A": "Responses",
+              "Value #B": "Tokens processed"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": "Tokens processed",
+              "operator": "/",
+              "right": "Responses"
+            },
+            "alias": "Avg tokens per response",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Responses",
+                "desc": true
+              },
+              {
+                "field": "Tokens processed",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 410,
       "title": "Tokens processed per hour by host (last 24h)",
-      "description": "Hourly derived token volume over the last 24 hours shows recent runtime activity by host.",
+      "description": "Hourly derived token volume over the last 24 hours shows recent runtime activity by host. VictoriaMetrics: hourly increase() per host, summing input+output+cache_read+cache_creation+reasoning kinds, for each of the four known hosts (same fixed-host-column semantics as the original SQL).",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -2345,18 +2843,49 @@
         "h": 8
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:00:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY time ORDER BY time ASC",
-          "rawQueryText": "SELECT CAST(strftime('%s', strftime('%Y-%m-%d %H:00:00', d.received_at / 1000000000, 'unixepoch')) AS INTEGER) AS time, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'pi' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS pi, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'opencode' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS opencode, SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'claude-code' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS \"claude-code\", SUM(CASE WHEN COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') = 'codex' THEN (CASE WHEN json_extract(r.row_json, '$.input_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.input_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.output_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.output_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_read_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_read_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.cache_creation_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.sum'), 0) ELSE 0 END + CASE WHEN json_extract(r.row_json, '$.reasoning_tokens.reported') > 0 THEN COALESCE(json_extract(r.row_json, '$.reasoning_tokens.sum'), 0) ELSE 0 END) ELSE 0 END) AS codex FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY time ORDER BY time ASC",
-          "timeColumns": [
-            "time"
-          ]
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_tokens_total{host=\"pi\", kind=~\"input|output|cache_read|cache_creation|reasoning\"}[1h]))",
+          "legendFormat": "pi",
+          "interval": "1h"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_tokens_total{host=\"opencode\", kind=~\"input|output|cache_read|cache_creation|reasoning\"}[1h]))",
+          "legendFormat": "opencode",
+          "interval": "1h"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_tokens_total{host=\"claude-code\", kind=~\"input|output|cache_read|cache_creation|reasoning\"}[1h]))",
+          "legendFormat": "claude-code",
+          "interval": "1h"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum(increase(gentle_runtime_tokens_total{host=\"codex\", kind=~\"input|output|cache_read|cache_creation|reasoning\"}[1h]))",
+          "legendFormat": "codex",
+          "interval": "1h"
         }
       ],
       "fieldConfig": {
@@ -2454,7 +2983,7 @@
     {
       "id": 411,
       "title": "Token coverage per field",
-      "description": "Coverage makes the reporting quality of every token field transparent for each host.",
+      "description": "Coverage makes the reporting quality of every token field transparent for each host. VictoriaMetrics: for every (host, kind) pair, sums increase() on gentle_runtime_token_fields_total by state (reported/unavailable/unsupported) over the selected range; Reported % is computed directly in PromQL as 100 * reported / (reported+unavailable+unsupported). Unlike the original panel's six hardcoded UNION ALL blocks (Input/Output/Cache read/Cache creation/Reasoning/Total reported), this single query naturally covers all six token kinds (the kind label includes \"total\") in one table.",
       "type": "table",
       "gridPos": {
         "x": 12,
@@ -2463,15 +2992,49 @@
         "h": 9
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT * FROM (SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Input' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.input_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.input_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Output' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.output_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.output_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Cache read' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Cache creation' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Reasoning' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Total reported' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.total_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.total_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host) ORDER BY Host, Field LIMIT 1000",
-          "rawQueryText": "SELECT * FROM (SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Input' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.input_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.input_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.input_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Output' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.output_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.output_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.output_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Cache read' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.cache_read_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.cache_read_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Cache creation' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.cache_creation_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Reasoning' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.reasoning_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.reasoning_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host UNION ALL SELECT COALESCE(NULLIF(json_extract(d.canonical_payload, '$.host'), ''), 'unknown') AS Host, 'Total reported' AS Field, SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.reported'), 0)) AS Reported, SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.unavailable'), 0)) AS Unavailable, SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.unsupported'), 0)) AS Unsupported, ROUND(100.0 * SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.reported'), 0)) / NULLIF(SUM(COALESCE(json_extract(r.row_json, '$.total_tokens.reported'), 0) + COALESCE(json_extract(r.row_json, '$.total_tokens.unavailable'), 0) + COALESCE(json_extract(r.row_json, '$.total_tokens.unsupported'), 0)), 0), 1) AS \"Reported %\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 GROUP BY Host) ORDER BY Host, Field LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, kind) (increase(gentle_runtime_token_fields_total{state=\"reported\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, kind) (increase(gentle_runtime_token_fields_total{state=\"unavailable\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (host, kind) (increase(gentle_runtime_token_fields_total{state=\"unsupported\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "100 * sum by (host, kind) (increase(gentle_runtime_token_fields_total{state=\"reported\"}[$__range])) / sum by (host, kind) (increase(gentle_runtime_token_fields_total[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -2548,12 +3111,45 @@
         "footer": {
           "enablePagination": false
         }
-      }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "host": "Host",
+              "kind": "Field",
+              "Value #A": "Reported",
+              "Value #B": "Unavailable",
+              "Value #C": "Unsupported",
+              "Value #D": "Reported %"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Host"
+              },
+              {
+                "field": "Field"
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 412,
       "title": "Error observations by category",
-      "description": "Categorized error observations surface reliability signals without exposing error text.",
+      "description": "Categorized error observations surface reliability signals without exposing error text. VictoriaMetrics: increase() on gentle_runtime_errors_total grouped by category, over the selected range. gentle_runtime_errors_total is only ever incremented for a non-empty, non-\"none\" category (see metrics.go Observe), so no extra filter is needed to reproduce the original SQL's <> 'none' clause.",
       "type": "barchart",
       "gridPos": {
         "x": 0,
@@ -2562,15 +3158,19 @@
         "h": 7
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.error_category'), ''), 'unknown') AS Category, COUNT(*) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.error_category'), ''), 'unknown') <> 'none' GROUP BY Category ORDER BY Observations DESC LIMIT 1000",
-          "rawQueryText": "SELECT COALESCE(NULLIF(json_extract(r.row_json, '$.error_category'), ''), 'unknown') AS Category, COUNT(*) AS Observations FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND COALESCE(NULLIF(json_extract(r.row_json, '$.error_category'), ''), 'unknown') <> 'none' GROUP BY Category ORDER BY Observations DESC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (category) (increase(gentle_runtime_errors_total[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -2649,12 +3249,35 @@
         },
         "barWidth": 0.6,
         "groupWidth": 0.7
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "category": "Category",
+              "Value": "Observations"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Observations",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
     },
     {
       "id": 413,
       "title": "Measured duration by kind",
-      "description": "Average measured duration and observation count by available timing kind show how responsive instrumented activity is.",
+      "description": "Average measured duration and observation count by available timing kind show how responsive instrumented activity is. VictoriaMetrics: joins increase() on gentle_runtime_duration_measured_total and gentle_runtime_duration_ms_sum grouped by duration_kind (excluding duration_kind=\"unavailable\"), over the selected range; Average ms is computed as sum_ms / measured_count. Rows with zero measured count are filtered out, matching the original SQL's HAVING clause.",
       "type": "table",
       "gridPos": {
         "x": 12,
@@ -2663,15 +3286,29 @@
         "h": 9
       },
       "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "gentle-telemetry-sqlite"
+        "type": "prometheus",
+        "uid": "gentle-runtime-vm"
       },
       "targets": [
         {
           "refId": "A",
-          "queryType": "table",
-          "queryText": "SELECT json_extract(r.row_json, '$.duration.kind') AS Kind, SUM(json_extract(r.row_json, '$.duration.measured_count')) AS \"Measured count\", ROUND(SUM(json_extract(r.row_json, '$.duration.sum_ms')) / NULLIF(SUM(json_extract(r.row_json, '$.duration.measured_count')), 0), 1) AS \"Average ms\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.duration.kind') <> 'unavailable' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' AND json_extract(r.row_json, '$.duration.measured_count') > 0 AND json_type(r.row_json, '$.duration.sum_ms') IN ('integer', 'real') GROUP BY Kind HAVING SUM(json_extract(r.row_json, '$.duration.measured_count')) > 0 ORDER BY \"Measured count\" DESC, Kind ASC LIMIT 1000",
-          "rawQueryText": "SELECT json_extract(r.row_json, '$.duration.kind') AS Kind, SUM(json_extract(r.row_json, '$.duration.measured_count')) AS \"Measured count\", ROUND(SUM(json_extract(r.row_json, '$.duration.sum_ms')) / NULLIF(SUM(json_extract(r.row_json, '$.duration.measured_count')), 0), 1) AS \"Average ms\" FROM runtime_rows r JOIN runtime_deliveries d ON d.delivery_id = r.delivery_id WHERE d.received_at >= ${__from} * 1000000 AND d.received_at <= ${__to} * 1000000 AND json_extract(r.row_json, '$.duration.kind') <> 'unavailable' AND json_type(r.row_json, '$.duration.measured_count') = 'integer' AND json_extract(r.row_json, '$.duration.measured_count') > 0 AND json_type(r.row_json, '$.duration.sum_ms') IN ('integer', 'real') GROUP BY Kind HAVING SUM(json_extract(r.row_json, '$.duration.measured_count')) > 0 ORDER BY \"Measured count\" DESC, Kind ASC LIMIT 1000"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (duration_kind) (increase(gentle_runtime_duration_measured_total{duration_kind!=\"unavailable\"}[$__range]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "gentle-runtime-vm"
+          },
+          "expr": "sum by (duration_kind) (increase(gentle_runtime_duration_ms_sum{duration_kind!=\"unavailable\"}[$__range]))",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -2717,7 +3354,77 @@
         "footer": {
           "enablePagination": false
         }
-      }
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "duration_kind": "Kind",
+              "Value #A": "Measured count",
+              "Value #B": "__sum_ms"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "binary": {
+              "left": "__sum_ms",
+              "operator": "/",
+              "right": "Measured count"
+            },
+            "alias": "Average ms",
+            "replaceFields": false
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "Measured count",
+                "config": {
+                  "id": "greater",
+                  "options": {
+                    "value": 0
+                  }
+                }
+              }
+            ],
+            "type": "include",
+            "match": "all"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "__sum_ms": true
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Measured count",
+                "desc": true
+              },
+              {
+                "field": "Kind"
+              }
+            ]
+          }
+        }
+      ]
     }
   ]
 }

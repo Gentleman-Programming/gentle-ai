@@ -1,0 +1,20 @@
+# Grafana datasource provisioning for VictoriaMetrics (Prometheus-compatible
+# HTTP API on 127.0.0.1:8428), backing the runtime metrics panels rewritten
+# in PromQL. Installed by deploy/telemetry/install.sh when both
+# --with-grafana and --with-victoria-metrics are set. See
+# docs/telemetry-collector.md#victoriametrics.
+#
+# The uid below is fixed rather than left to auto-generate, so provisioned
+# dashboard JSON (see ../dashboards/gentle-ai-usage.json) can reference it
+# directly without a manual re-link after install, mirroring
+# ./telemetry.yaml's own fixed uid for the SQLite datasource.
+apiVersion: 1
+
+datasources:
+  - name: gentle-runtime-vm
+    uid: gentle-runtime-vm
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:8428
+    isDefault: false
+    editable: false

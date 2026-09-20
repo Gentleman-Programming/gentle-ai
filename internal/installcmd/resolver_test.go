@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/versions"
 )
 
 func TestValidateGoForModuleInstall(t *testing.T) {
@@ -331,40 +331,40 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
-			name:    "opencode on darwin uses official anomalyco brew tap",
+			name:    "opencode on darwin uses V2 npm package",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"brew", "install", "anomalyco/tap/opencode"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on ubuntu system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on ubuntu nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on arch system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on fedora system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on fedora nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			// Issue #2499: the probe (#2493) accepts any Linux package manager
@@ -372,13 +372,13 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "opencode on alpine system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "alpine", PackageManager: "apk", Supported: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on opensuse nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "opensuse-leap", PackageManager: "zypper", Supported: true, NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			// A Linux profile the probe rejected (no manager on PATH) must keep
@@ -398,7 +398,7 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "opencode on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "kimi on windows uses uv to strictly enforce secure package installation",

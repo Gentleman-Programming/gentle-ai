@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/versions"
 )
 
 func TestSDDOrchestratorsRequireSafeFormatterOrdering(t *testing.T) {
@@ -346,5 +346,19 @@ func TestWindowsFullSuiteShardsCoverEveryTestName(t *testing.T) {
 				t.Fatalf("%s shard %q selector %q matches no test", pkg, s.name, s.selector)
 			}
 		}
+	}
+}
+
+func TestArchOpenCodeProvisioningRunsPublishedRepairBeforeVersionCheck(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "e2e", "Dockerfile.arch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := "RUN npm install --global opencode-ai@" + versions.OpenCode + " && \\\n" +
+		"    (cd \"$(npm root --global)/opencode-ai\" && node postinstall.mjs) && \\\n" +
+		"    opencode_version=\"$(opencode --version)\" && \\\n" +
+		"    test \"$opencode_version\" = \"" + versions.OpenCode + "\" && \\\n"
+	if !strings.Contains(string(data), required) {
+		t.Fatal("Arch must run the package-published postinstall repair in its package directory and fail closed on the pinned version before installing other runtimes")
 	}
 }

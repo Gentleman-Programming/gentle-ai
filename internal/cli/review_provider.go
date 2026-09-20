@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const (
@@ -67,7 +67,7 @@ func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, 
 	if err != nil {
 		return reviewProviderRequest{}, err
 	}
-	prompt, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
+	prompt, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen, authority.RuntimeAgent)
 	if err != nil {
 		return reviewLensContextCleanup(ctx, reviewProviderRequest{}, err, func() error { return deps.close(authority.Inspector) })
 	}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 

@@ -1,36 +1,8 @@
 package screens
 
 import (
-	"strings"
 	"testing"
 )
-
-// TestRenderSDDIncrementsIncludesActiveLaneHeader verifica que
-// RenderSDDIncrements añade la línea de cabecera de solo renderizado que
-// señala el carril activo y la ruta de conmutación hacia el carril ágil
-// ODD (REQ-19.15, design.md D-13).
-func TestRenderSDDIncrementsIncludesActiveLaneHeader(t *testing.T) {
-	tests := []struct {
-		name       string
-		increments []SDDIncrementInfo
-	}{
-		{name: "sin incrementos", increments: nil},
-		{name: "con un incremento", increments: []SDDIncrementInfo{
-			{Name: "demo", Type: "active", Phase: "spec", TasksTotal: 2, TasksCompleted: 1, ProgressPct: 50},
-		}},
-	}
-
-	const wantHeader = "Carril activo: SDD · esc → Gobernanza → «6» para el carril ágil (ODD)"
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			view := RenderSDDIncrements(tt.increments, 0, "")
-			if !strings.Contains(view, wantHeader) {
-				t.Errorf("RenderSDDIncrements() no contiene la cabecera de carril activo, esperada %q:\n%s", wantHeader, view)
-			}
-		})
-	}
-}
 
 // TestSDDIncrementsOptionsUnchangedByLaneHeader protege D-13: la cabecera
 // de conmutación de carril es de solo renderizado y NO debe alterar la

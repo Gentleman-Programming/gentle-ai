@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 type UninstallModeOption struct {

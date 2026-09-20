@@ -3,8 +3,8 @@ package tui
 import (
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
 )
 
 type ProgressItem struct {
@@ -71,7 +71,7 @@ func (p ProgressState) Percent() int {
 
 	completed := 0
 	for _, item := range p.Items {
-		if item.Status == string(pipeline.StepStatusSucceeded) || item.Status == string(pipeline.StepStatusFailed) {
+		if item.Status == string(pipeline.StepStatusSucceeded) || item.Status == string(pipeline.StepStatusFailed) || item.Status == string(pipeline.StepStatusSkipped) {
 			completed++
 		}
 	}

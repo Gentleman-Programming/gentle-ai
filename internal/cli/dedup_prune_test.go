@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
 )
 
 // TestPrepareBackupStep_SkipsDuplicateBackup verifies that when the new checksum

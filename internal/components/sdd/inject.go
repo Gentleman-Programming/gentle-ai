@@ -9,14 +9,14 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 const legacyMandatoryWording = "TOTALMENTE " + "obligatorio"
@@ -389,6 +389,17 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if len(options) > 0 {
 		opts = options[0]
 	}
+	pluginAssetDir := "opencode/plugins/"
+	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		var err error
+		pluginAssetDir, err = openCodePluginAssetDirectory(adapter.Agent())
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if err = validateOpenCodePluginReplacement(filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins"), pluginAssetDir); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 	settingsPath := openCodeSettingsPath(homeDir, adapter, opts.OpenCodeSettingsPath)
 	if opts.PreserveOpenCodeOrchestratorPrompt && AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		prompt, err := readPreservedOpenCodeOrchestratorPrompt(settingsPath)
@@ -670,7 +681,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			mergedSettingsBytes = agentResult.merged
 
 			// Install OpenCode plugins (all SDD modes).
-			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
+			pluginResult, err := installOpenCodePluginsDirectory(homeDir, adapter, pluginAssetDir)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -966,7 +977,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 func renderClaudeSessionPreflight() (string, error) {
 	content := renderBoundedReviewAsset(model.AgentClaudeCode, "claude/sdd-orchestrator-workflow.md")
-	return projectSDDSessionPreflightWithTool(content, "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
+	return projectSDDSessionPreflightWithTool(substituteSharedOrchestratorSections(content), "### SDD Entry Routing (MANDATORY)", "AskUserQuestion")
 }
 
 // Preparation is read-only. A template composer panic must not escape after a
@@ -1413,13 +1424,12 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 }
 
 func ensurePreservedOpenCodeResearchLifecycle(prompt string) string {
-	if strings.Contains(prompt, "<!-- gentle-ai:sdd-research-lifecycle -->") && strings.Contains(prompt, researchLifecycleContract()) {
-		return prompt
-	}
+	// Older generated prompts embedded this managed gate as one unmarked line.
+	// Replace that exact legacy shape without deleting unrelated user questions.
 	lines := strings.Split(prompt, "\n")
 	kept := lines[:0]
 	for _, line := range lines {
-		if strings.Contains(line, "Before the `sdd-propose` phase in interactive mode") || strings.Contains(line, "proposal question round") {
+		if strings.HasPrefix(line, "### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research`") {
 			continue
 		}
 		kept = append(kept, line)
@@ -1433,6 +1443,10 @@ func renderPreservedOpenCodeOrchestratorPrompt(
 	options ...OrchestratorRenderOptions,
 ) string {
 	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	if agent == model.AgentOpenCode {
+		migrated = strings.ReplaceAll(migrated, legacyOpenCodeConsentV3QuestionRoute, openCodeConsentV3QuestionRoute)
+		migrated = strings.ReplaceAll(migrated, openCodeFallbackSourceClause, openCodeConsentV3FallbackClause)
+	}
 	if strings.Contains(migrated, openCodeNativeQuestionSourceRoute) {
 		migrated = replaceOpenCodeConsentV3QuestionRoute(migrated, agent)
 	}
@@ -1740,6 +1754,13 @@ func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
 		root = parsedRoot
 	}
 
+	if native, _ := root["agents"].(map[string]any); native != nil {
+		entry, _ := native[agentKey].(map[string]any)
+		if prompt, valid := entry["system"].(string); valid {
+			return prompt, nil
+		}
+	}
+
 	agentsRaw, ok := root["agent"]
 	if !ok {
 		return "", nil
@@ -2009,9 +2030,13 @@ func ensureClaudeSDDPreflightHook(settingsPath string, agentID model.AgentID) (b
 
 	command := fmt.Sprintf("gentle-ai sdd-preflight-hook --agent %s", agentID)
 	changed := false
-	// Claude Code hook commands are callable by model-started processes and do
-	// not carry authenticated caller provenance. Install only the fail-closed
-	// dispatch guard; never install a hook that claims to mint authority.
+	// The guard derives parent-confirmed SDD preflight authority at dispatch
+	// time directly from the session transcript the hook runner supplies on
+	// stdin (transcript_path and session_id). A model-started copy of this
+	// hook command cannot influence the real dispatch, because Claude Code
+	// only honors the output of the hook invocation it started itself, and
+	// that invocation's stdin is runner-supplied. No hook mints or persists
+	// authority; install only this single fail-closed PreToolUse(Agent) entry.
 	for _, hook := range []struct{ key, matcher string }{
 		{key: "PreToolUse", matcher: "Agent"},
 	} {
@@ -2303,8 +2328,15 @@ func stripOpenCodeNativeFallbackAgents(overlayBytes []byte) ([]byte, error) {
 // sync. Managed plugins carry no user content, so drift is resolved by
 // overwriting, matching installOpenCodePlugins.
 func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	assetDir, err := openCodePluginAssetDirectory(adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, err
+	}
 	pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
 
+	if err := validateOpenCodePluginReplacement(pluginsDir, assetDir); err != nil {
+		return InjectionResult{}, err
+	}
 	var files []string
 	var changed bool
 	migrate, err := hasRegularLegacyOpenCodeReviewPlugin(pluginsDir)
@@ -2330,7 +2362,7 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 				continue
 			}
 			if os.IsNotExist(err) {
-				content := assets.MustRead("opencode/plugins/" + name)
+				content := assets.MustRead(assetDir + name)
 				writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
 				if err != nil {
 					return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
@@ -2347,7 +2379,7 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 			continue
 		}
 
-		content := assets.MustRead("opencode/plugins/" + name)
+		content := assets.MustRead(assetDir + name)
 		writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
 		if err != nil {
 			return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
@@ -2398,13 +2430,16 @@ func removeLegacyOpenCodeReviewPlugin(pluginsDir string) (string, bool, error) {
 	return path, true, nil
 }
 
-// installOpenCodePlugins copies the OpenCode-compatible plugins that gentle-ai
+// installOpenCodePluginsDirectory copies the OpenCode-compatible plugins that gentle-ai
 // still manages by default. Native OpenCode subagents replace the legacy
 // background-agents plugin, so that legacy cleanup is scoped to OpenCode only.
-func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+func installOpenCodePluginsDirectory(homeDir string, adapter agents.Adapter, assetDir string) (InjectionResult, error) {
 	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")
 
+	if err := validateOpenCodePluginReplacement(pluginsDir, assetDir); err != nil {
+		return InjectionResult{}, err
+	}
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return InjectionResult{}, fmt.Errorf("create plugins dir: %w", err)
 	}
@@ -2439,7 +2474,7 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 
 	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
-		content := assets.MustRead("opencode/plugins/" + name)
+		content := assets.MustRead(assetDir + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 
 		writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
@@ -2479,6 +2514,19 @@ func mergeOpenCodeCompatibleJSONFile(path string, overlay []byte) (mergeJSONResu
 // mergeOpenCodeJSONFile applies the shared legacy settings migrations and then
 // removes deprecated agent-local tools only for OpenCode managed agent keys.
 func mergeOpenCodeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+	// V2 reuses agents for the native map. Do not run the historical plural-key
+	// migration when native-only fields identify the configuration.
+	if data, readErr := os.ReadFile(path); readErr == nil {
+		root, parseErr := filemerge.UnmarshalJSONObject(data)
+		if parseErr == nil && opencode.NativeConfig(root) {
+			converted, err := nativeAgentOverlay(overlay, root)
+			if err != nil {
+				return mergeJSONResult{}, err
+			}
+			return mergeJSONFileContents(path, data, converted)
+		}
+	}
+
 	baseJSON, err := readAndMigrateOpenCodeCompatibleJSON(path)
 	if err != nil {
 		return mergeJSONResult{}, err
@@ -3506,8 +3554,10 @@ func readOpenCodeRootModel(path string) (string, error) {
 		return "", nil
 	}
 
-	rootModelID, _ := root["model"].(string)
-	return rootModelID, nil
+	if selection, ok := model.ParseModelReference(root["model"]); ok {
+		return selection.FullID(), nil
+	}
+	return "", nil
 }
 
 // readExistingAgentModels reads opencode.json at path and returns a set of
@@ -3528,19 +3578,14 @@ func readExistingAgentModels(path string) (map[string]bool, error) {
 		return map[string]bool{}, nil
 	}
 
-	agentRaw, ok := root["agent"]
-	if !ok {
-		return map[string]bool{}, nil
-	}
-	agentMap, ok := agentRaw.(map[string]any)
-	if !ok {
-		return map[string]bool{}, nil
+	result := map[string]bool{}
+	for _, section := range []string{"agent", "agents"} {
+		entries, _ := root[section].(map[string]any)
+		for name := range entries {
+			result[name] = true
+		}
 	}
 
-	result := make(map[string]bool, len(agentMap))
-	for name := range agentMap {
-		result[name] = true
-	}
 	return result, nil
 }
 

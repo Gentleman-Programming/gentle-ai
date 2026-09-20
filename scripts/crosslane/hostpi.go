@@ -195,11 +195,25 @@ func (b *battery) hostPiDriveCorrectionToValidation(repo string) bool {
 	b.pass(hostPiLane, check, "exact correction-plan vector forecast one deletion plus one addition; restoring authorize(token) to trusted-token validation made the unchanged security test pass")
 	status, stderr, code = b.statusEnv(repo, "pi", b.piEnvironment)
 	input = collectInput(status)
-	if code != 0 || getString(status, "next_transition", "reason_code") != "targeted_validation_required" || input == nil || input["capture_operation"] != "review.capture-validation" || !hasArgument(input, "agent") || !hasArgument(input, "execute") {
+	if code != 0 || getString(status, "next_transition", "reason_code") != "targeted_validation_required" || input == nil || input["capture_operation"] != "review.capture-validation" ||
+		!hasArgument(input, "agent") || !hasArgument(input, "materialize") || getMap(input, "submission") == nil {
 		return fail(fmt.Sprintf("expected targeted-validator vector: exit=%d reason=%q operation=%q %s",
 			code, getString(status, "next_transition", "reason_code"), getString(input, "capture_operation"), firstLine(stderr)))
 	}
-	vector := argumentTokens(input)
+	// pi is host-mediated (#4611): the rendered vector is only the read-only
+	// materialize prelude, and the submission descriptor -- the same binding
+	// tokens with the raw result substituted into --input -- is what actually
+	// advances authority. The battery authors its own fixture verdict instead
+	// of relaying through a model; see authoredRoleVerdict.
+	verdict, ok := b.authoredRoleVerdict(hostPiLane, repo, b.piEnvironment, input)
+	if !ok {
+		return false
+	}
+	verdictPath := filepath.Join(b.workRoot, "host-pi-validator-wrong-binding-verdict.json")
+	if err := os.WriteFile(verdictPath, []byte(verdict), 0o644); err != nil {
+		return fail(err.Error())
+	}
+	vector := substituteTokens(getSlice(input, "submission", "argument_tokens"), map[string]string{"value": verdictPath})
 	wrong := append([]string(nil), vector...)
 	for index, token := range wrong {
 		if strings.HasPrefix(token, "--request-hash=") {
@@ -208,20 +222,20 @@ func (b *battery) hostPiDriveCorrectionToValidation(repo string) bool {
 		}
 	}
 	if strings.Join(wrong, "\x00") == strings.Join(vector, "\x00") {
-		return fail("targeted-validator vector omitted request-hash")
+		return fail("targeted-validator submission omitted request-hash")
 	}
 	if _, rejection, rejected := b.runJSONEnv("validator-unconfirmed", repo, b.piEnvironment,
-		append([]string{"review", "capture-validation"}, wrong...)...); rejected == 0 {
+		append([]string{"review", getString(input, "submission", "operation_token")}, wrong...)...); rejected == 0 {
 		return fail("wrong validator binding unexpectedly succeeded: " + firstLine(rejection))
 	}
 	reoffered, reofferStderr, reofferCode := b.statusEnv(repo, "pi", b.piEnvironment)
 	reofferedInput := collectInput(reoffered)
 	if reofferCode != 0 || getString(reoffered, "next_transition", "reason_code") != "targeted_validation_required" ||
-		reofferedInput == nil || strings.Join(argumentTokens(reofferedInput), "\x00") != strings.Join(vector, "\x00") {
+		reofferedInput == nil || strings.Join(argumentTokens(reofferedInput), "\x00") != strings.Join(argumentTokens(input), "\x00") {
 		return fail(fmt.Sprintf("unconfirmed validator capture lost its exact live slot: exit=%d reason=%q %s",
 			reofferCode, getString(reoffered, "next_transition", "reason_code"), firstLine(reofferStderr)))
 	}
-	b.pass(hostPiLane, check, "a rejected unconfirmed validator vector retained the same lineage and exact reoffered capture; no fresh review was authorized")
+	b.pass(hostPiLane, check, "a rejected unconfirmed validator submission retained the same lineage and exact reoffered capture; no fresh review was authorized, and Go never spawned a process for the role (#4611)")
 	return true
 }
 

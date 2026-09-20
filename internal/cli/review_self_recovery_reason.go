@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+import "github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 
 // reviewSelfRecoveryShape is a closed enumeration of the deterministic
 // triggering states a self-derived recovery reason may name. It is

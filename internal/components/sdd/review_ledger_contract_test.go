@@ -11,9 +11,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 // requiredLedgerClauses is the OpenCode binding of the shared clause set: the
@@ -517,6 +517,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// falling back to a lossless blocking prompt when all three groups are
 	// representable, so the runtime-owned plugin can canonicalize and tolerantly match
 	// grouped answers instead of losing them to a typed chat reply. Kilocode embeds the
+	// same shared session preflight body, so the hash moved. Deliberate, not drift.
 	// INC-10: Language Domain Contract updated for Axiom Spanish SDD artifacts. Deliberate, not drift.
 	// INC-11: Orchestrator agent renamed to axiom-orchestrator. Deliberate, not drift.
 	// The baseline is rederived for two deliberate causes, both audited against
@@ -529,8 +530,17 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	//      as a fallback.
 	//   2. INC-19 adds the "Flujo Dual: ODD y SDD" section to
 	//      internal/assets/opencode/persona-axiom.md, which Kilocode embeds.
-	// No other content moved. Deliberate, not drift.
-	const want = "03fe74e1aaf2d2e445f816e304b89e189a03fe23e4a00e95d36f19ed5ed23f86"
+	// INC-20 F4 rederives this baseline again, absorbing upstream's own reasons
+	// for the same shared session preflight body moving, on top of Axiom's own
+	// branding (which upstream's hash below does not carry):
+	// #4612 excludes SDD from the shared RDD gate and removes its command offer.
+	// Kilocode inherits those OpenCode prompt changes, not native RDD capability.
+	// #4612 also removes the shared mandatory SDD attempt protocol.
+	// Root3 makes verification optional in the shared dispatcher/dependency graph.
+	// Root4b replaces shared research admission prose; Kilocode permissions stay unchanged.
+	// Root4c scopes research above the generic gate; Kilocode inherits only that shared prose.
+	// No other content moved beyond the above. Deliberate, not drift.
+	const want = "770f9320edcac11c31cfd23a9a77f2dc985413238cf35ae291c40f2c9918d136"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -821,8 +831,23 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #4324 adds 1,354 canonical remote-authorization characters per reviewer.
 		// Preserve the existing absolute ceiling margins (3 and 1,533 characters).
 		// INC-11: Canonical markers <!-- axiom:... --> save 16 characters per section vs legacy <!-- gentle-ai:... -->.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_702, maxCharacters: 18_721},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_061, maxCharacters: 36_658},
+		// #4405 adds the target_already_acknowledged terminal continuation (+390
+		// characters per row on top of upstream's baseline; preserved here on top of
+		// the INC-11 marker savings). Preserve the existing absolute ceiling margins
+		// (19 and 1,597 characters) established on this fork's own lineage.
+		// #4680 adds the correction_context_budget_exceeded continuation row
+		// (+233 characters per row): the correction stage now has a stop of its
+		// own whose exit is `gentle-ai review abandon`, not a smaller candidate,
+		// and the shipped contract has to name it. Deliberate, not drift; the
+		// ceilings move by the same amount to preserve each row's existing
+		// absolute margin on this fork's own lineage.
+		// #4765 relays provider-owned OpenCode lens tasks and ORPT-2 removes
+		// host-side binding assembly from the OpenCode contract; measured
+		// directly (see RED below) rather than composed by hand, and the
+		// ceilings move by the same net delta to preserve each row's existing
+		// absolute margin on this fork's own lineage.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_095, maxCharacters: 19_114},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_454, maxCharacters: 37_051},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

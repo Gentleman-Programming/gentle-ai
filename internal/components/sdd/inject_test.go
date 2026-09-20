@@ -12,19 +12,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	windsurfagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodemodel "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"gopkg.in/yaml.v3"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
@@ -1097,7 +1097,7 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 				"Read the configured models from `opencode.json`",
 				"Always collect this preflight with the `question` tool",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
-				"### Research and Pre-Proposal Gate (MANDATORY)",
+				"### Optional Research and Product Discovery",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",
 				"otherwise emit the complete choice through the plain chat or terminal fallback and STOP",
 			} {
@@ -1375,8 +1375,8 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"confirmed pre-proposal handoff",
+		"### Optional Research and Product Discovery",
+		"unresolved product decision",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
 		"fully mandatory",
 		"Bounded read rule",
@@ -1871,8 +1871,8 @@ Map answers to canonical values: A1/Interactive -> interactive.
 		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"confirmed pre-proposal handoff",
+		"### Optional Research and Product Discovery",
+		"unresolved product decision",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated partial prompt content %q", wanted)
@@ -1966,8 +1966,8 @@ Hard gate rules:
 		"never collect these answers as typed chat text",
 		"3. **PR strategy**: Ask me, Single PR, or Auto.",
 		"fixed at 400 changed lines",
-		"### Research and Pre-Proposal Gate (MANDATORY)",
-		"confirmed pre-proposal handoff",
+		"### Optional Research and Product Discovery",
+		"unresolved product decision",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing refreshed preserved prompt content %q", wanted)

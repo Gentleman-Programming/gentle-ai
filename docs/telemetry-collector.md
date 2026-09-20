@@ -87,25 +87,98 @@ and unavailable requests return 400, 413, 429, and 500 respectively. Clients do
 not retry any of them or retain the event after a lost response.
 
 Existing SQLite `runtime_deliveries`/`runtime_rows`, `user_version=1`, transactional
-storage, shared rate limiting, and startup/daily retention remain unchanged.
+storage, and startup/daily retention remain unchanged. Rate limiting for
+`/v1/runtime-events` has its own budget, separate from `/v1/events` — see
+[Rate limiting](#rate-limiting).
 `received_at` is delivery time, not activity time. Existing `--retention-days`
 purges whole deliveries strictly before the UTC cutoff; deduplication ends when
 the corresponding delivery is purged. No runtime daily rollup, new scheduler,
 production configuration change, or deployment is included.
 
+## Runtime metrics for VictoriaMetrics
+
+`--runtime-store` selects how a newly stored `/v1/runtime-events` delivery is
+persisted:
+
+- `sqlite` (default): today's behavior, unchanged — `runtime_deliveries` and
+  `runtime_rows` as described above, no counters, `GET /metrics` serves an
+  empty body.
+- `metrics`: no raw rows at all. The delivery is deduplicated by id alone in
+  `runtime_delivery_ids(delivery_id TEXT PRIMARY KEY, received_at INTEGER NOT
+  NULL)`, and its rows are folded into an in-memory Prometheus counters
+  registry instead. This table stores no payload, because in this mode there
+  is no canonical payload to compare a repeat against — a repeated id is
+  always treated as `duplicate`, the same trust model as any bare idempotency
+  key (contrast `runtime_deliveries`, which detects a same-id-different-payload
+  conflict via its stored `canonical_payload`). It shares `--retention-days`
+  and the daily purge with `runtime_deliveries`/`runtime_rows`; an id expires
+  the same way and a retry past that point is `stored` again, not tombstoned.
+- `both`: writes raw rows and observes into the registry, for a transition
+  window before cutover.
+
+A delivery is only ever observed into the registry once, on `stored` — never
+on `duplicate`, and never at all under `sqlite`.
+
+`GET /metrics` renders that registry as Prometheus text exposition
+(`Content-Type: text/plain; version=0.0.4`) for VictoriaMetrics to scrape. It
+has no auth: the collector's listener is loopback-only and VictoriaMetrics
+scrapes it from the same host, the same trust boundary every other
+unauthenticated route on this listener already relies on. Every metric is a
+monotonically increasing counter (reset only by process restart, handled
+downstream by `increase()`/`rate()`), all carrying `host`:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `gentle_runtime_deliveries_total` | `host` | one per stored delivery |
+| `gentle_runtime_rows_total` | `host,agent_kind,agent_class,provider,model,selected_effort` | one per row |
+| `gentle_runtime_responses_total` | same as rows | sum of `responses` |
+| `gentle_runtime_launches_total` | same as rows | sum of `launches` (a `null` observation adds 0) |
+| `gentle_runtime_tokens_total` | same as rows, `+kind` (`input\|output\|cache_read\|cache_creation\|reasoning\|total`) | sum of each token object's `sum` |
+| `gentle_runtime_token_fields_total` | same as rows, `+kind,state` (`reported\|unavailable\|unsupported`) | sum of each token object's coverage counts |
+| `gentle_runtime_errors_total` | same as rows, `+category` | one per row, skipped entirely when `error_category` is `none` |
+| `gentle_runtime_duration_ms_sum` | same as rows, `+duration_kind` | sum of `duration.sum_ms` |
+| `gentle_runtime_duration_measured_total` | same as rows, `+duration_kind` | sum of `duration.measured_count` |
+| `gentle_runtime_rows_by_evidence_total` | `host,model_evidence,effective_effort` | one per row, kept low-cardinality by leaving out agent/provider/model |
+
+A label value is sanitized for the exposition format (`\`, `"`, and newline
+escaped) and an empty value renders as `unknown`; in practice every label
+already comes from the wire contract (see
+[Runtime observations](#runtime-observations)), so this only matters if
+`RuntimeMetrics.Observe` is ever called from something other than a parsed,
+validated `telemetry.RuntimeEvent`.
+
+**Exposition size**: the registry is in memory and never evicts a series,
+so `/metrics` grows with every distinct `host`/`agent_kind`/`agent_class`/
+`provider`/`model`/`selected_effort` combination observed since the last
+collector restart. `provider` is any short lowercase label and `model` is
+any id matching the public family pattern (`NormalizeRuntimeModel`), so
+this vocabulary is bounded by convention, not by an enum: on 2026-09-18
+production reached 155 providers, 255 model ids and roughly 90,000
+exposition lines (17.5 MB), which is above VictoriaMetrics' default
+16 MiB scrape cap. The shipped unit therefore sets
+`-promscrape.maxScrapeSize=64MiB` (see [VictoriaMetrics](#victoriametrics)).
+
+**Cutover**: the default stays `sqlite` until the VictoriaMetrics deploy
+(`deploy/telemetry/`, not yet built — see the feature's task list) is
+installed, backfilled, and verified. Flipping `--runtime-store` before that
+exists means either losing runtime history (`metrics` with nothing scraping
+`/metrics` yet) or, in `both`, doubling work for no benefit.
+
 ## HTTP API
 
 | Endpoint | Method | Auth | Notes |
 |---|---|---|---|
-| `/v1/events` | POST | none | Body ≤ 4 KiB, strict schema validation, per-IP rate limit. `202` on accept, `400` invalid, `413` oversize, `429` rate-limited. |
-| `/v1/runtime-events` | POST | none | Body ≤ 16 KiB; strict public observations. `200` with `stored`/`duplicate`; one client attempt only. |
+| `/v1/events` | POST | none | Body ≤ 4 KiB, strict schema validation, own per-address rate limit (`--rate-limit-per-minute`). `202` on accept, `400` invalid, `413` oversize, `429` rate-limited. |
+| `/v1/runtime-events` | POST | none | Body ≤ 16 KiB; strict public observations; own per-address rate limit (`--runtime-rate-limit-per-minute`). `200` with `stored`/`duplicate`; one client attempt only. |
 | `/v1/summary` | GET | `Authorization: Bearer <token>` | Returns the JSON described below. `401` without a valid token. |
 | `/healthz` | GET | none | Liveness check for the reverse proxy / process supervisor. |
+| `/metrics` | GET | none | Prometheus text exposition of the runtime counters registry — see [Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics). Empty body under `--runtime-store=sqlite` (the default). |
 
 ### No IP addresses, anywhere
 
-- The per-IP rate limiter keys an in-memory token bucket by remote address,
-  and never writes that address to disk, to a log line, or anywhere else.
+- The per-address rate limiters (one for `/v1/events`, one for
+  `/v1/runtime-events`) key an in-memory token bucket by remote address,
+  and never write that address to disk, to a log line, or anywhere else.
   See `internal/telemetrycollector/limiter.go`.
 - The `events` table has no column that could hold a remote address (see
   the schema below); `Event`, decoded from the request body, structurally
@@ -118,14 +191,20 @@ production configuration change, or deployment is included.
 ## Storage
 
 SQLite via `modernc.org/sqlite` (cgo-free), opened with `PRAGMA
-journal_mode=DELETE` and a single connection (`SetMaxOpenConns(1)`): this
+journal_mode=WAL` and a single connection (`SetMaxOpenConns(1)`): this
 collector's expected throughput does not justify concurrent SQLite
 writers, and a single connection avoids `SQLITE_BUSY` entirely rather than
-tuning around it. DELETE, not WAL, because WAL's main benefit — readers
-and a writer proceeding concurrently — is moot when every read and write
-of the collector's own is already serialized onto one connection; skipping
-it also means no `-wal`/`-shm` sidecar files ever exist, which keeps the
-read-only Grafana deployment (below) down to one file instead of three.
+tuning around it. WAL, not DELETE, because this process is not the only
+reader of the database: Grafana's SQLite datasource and the open-data
+export both hold read-only connections against the same file from outside
+this process. Under DELETE mode, an external read that outlasted
+`busy_timeout` made `InsertRuntimeEvent` fail outright, since DELETE takes
+an exclusive lock to commit a write. WAL lets writes commit without
+waiting on those external readers, at the cost of two extra sidecar files
+next to the database, `events.sqlite-wal` and `events.sqlite-shm`; the
+read-only Grafana deployment (below) is granted read access to both via
+POSIX ACLs, including a default ACL so a sidecar recreated later stays
+readable without rerunning the installer.
 
 ```sql
 CREATE TABLE events (
@@ -153,13 +232,40 @@ CREATE TABLE rollups_daily (
 );
 ```
 
-An in-process daily job (`telemetrycollector.RunMaintenance`, driven by a
-24-hour ticker in `cmd/gentle-telemetry/main.go`) runs once at startup and
-once a day thereafter:
+An in-process daily job (`telemetrycollector.RunMaintenance`, driven by
+`cmd/gentle-telemetry/main.go`) runs once at startup (catching up any
+rollup missed while the process was down) and then once a day, anchored to
+00:05 UTC rather than 24 hours after startup, so the previous day's rollup
+is never more than a few minutes stale on the dashboard regardless of when
+the process last restarted:
 
 1. Rolls up **yesterday**'s events into `rollups_daily` (idempotent — safe
    to re-run after a crash or restart).
-2. Purges raw `events` rows older than `--retention-days` (default 90).
+2. Purges raw `events` rows and whole sqlite-mode runtime deliveries older
+   than `--retention-days` (default 90).
+3. Purges runtime delivery identities (`runtime_delivery_ids`, the
+   `--runtime-store=metrics` dedup table) older than `--runtime-dedup-days`
+   (default 2, never longer than `--retention-days`), in batches of 50,000
+   rows in short transactions so the purge never holds the single writer
+   for seconds. An identity only has to outlive the moments in which a
+   replay of its delivery can arrive; clients never retry, and the table
+   grows by every accepted delivery (about a million rows a day in
+   production), so ninety days of it would be a hundred million rows.
+4. Compacts the file: a `PRAGMA wal_checkpoint(PASSIVE)` every run (it
+   never waits on a reader), followed by a `TRUNCATE` when every frame was
+   backfilled so the sidecar returns to zero bytes, and `VACUUM` only when
+   at least 25% of a file of at least 1,024 pages is free AND the live data
+   is at most 131,072 pages (512 MiB): the rewrite holds the single writer
+   and runtime clients never retry, so a larger one is never started
+   unattended. Logged as `database compacted` with `page_count`,
+   `free_pages`, `wal_frames`, `vacuumed`, `vacuum_deferred` (live data
+   over the cap) and `busy` (an outside reader held the WAL; truncation
+   waits for the next run).
+
+When `vacuum_deferred=true` shows up in the journal, vacuum offline once:
+stop `gentle-telemetry.service`, run `sqlite3 <db> 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'`,
+start the unit. `--runtime-dedup-days` is refused below 1 and clamped to
+`--retention-days` with a startup warning.
 
 `rollups_daily` itself is never purged: it is the durable historical record
 once the raw rows behind it age out.
@@ -228,12 +334,36 @@ querying a handful of small SQLite tables is fast enough at this scale.
 
 ## Rate limiting
 
-`POST /v1/events` is limited per remote address by an in-memory token
-bucket (`--rate-limit-per-minute`, default 60): burst capacity equals the
-configured limit, refilled continuously at `limit/60` tokens per second.
-Buckets are swept every 10 minutes and evicted after 30 minutes of
-inactivity, so the limiter's memory does not grow unbounded across many
-distinct callers. None of this state is ever persisted.
+`POST /v1/events` and `POST /v1/runtime-events` each have their own
+in-memory token bucket per remote address, keyed by the same client
+address (see "Deriving the client address" below): `--rate-limit-per-minute`
+(default 60) for `/v1/events`, and `--runtime-rate-limit-per-minute`
+(default 600) for `/v1/runtime-events`. They used to share one bucket,
+which meant frequent runtime heartbeats and infrequent stored events
+competed for the same budget — stored deliveries plateaued at exactly the
+configured limit while heartbeats were rejected once it was exhausted, and
+"active machines" counts collapsed as a result. Burst capacity equals each
+limit, refilled continuously at `limit/60` tokens per second. Buckets are
+swept every 10 minutes and evicted after 30 minutes of inactivity, so
+neither limiter's memory grows unbounded across many distinct callers.
+None of this state is ever persisted. A 429 on either endpoint is logged
+(`"telemetry event rejected"` / `"runtime telemetry rejected"`,
+`"reason", "rate_limited"`) with no client address attached.
+
+### Deriving the client address
+
+The rate limiter's key is the TCP peer address, unless the peer is a
+trusted proxy (`--trusted-proxy-cidr`, default `127.0.0.0/8,::1/128`), in
+which case it is the first `X-Forwarded-For` hop that parses as an IP
+address (falling back to `X-Real-IP`, then the peer). A forwarded value
+that does not parse as an IP is skipped rather than trusted verbatim: a
+misconfigured reverse proxy has been observed sending
+`X-Forwarded-For: (null), <client>`, which — without this validation —
+keyed every client on the literal string `"(null)"`, collapsing the rate
+limiter (and "active machines" counts derived from it) to a single shared
+bucket. When a trusted proxy's forwarded header has no element that
+parses, this is logged once per minute as `"ignored an invalid forwarded
+address"`, with the header's value itself never logged.
 
 ## Running it
 
@@ -242,7 +372,10 @@ distinct callers. None of this state is ever persisted.
 --db /var/lib/gentle-telemetry/events.sqlite              # SQLite file
 --summary-token-file <path>                               # bearer token for /v1/summary (local runs; systemd uses LoadCredential, see Token rotation)
 --retention-days 90                                        # raw event retention
---rate-limit-per-minute 60                                 # per-IP budget on /v1/events
+--runtime-dedup-days 2                                     # runtime delivery id retention (replay rejection), never longer than --retention-days
+--rate-limit-per-minute 60                                 # per-address budget on /v1/events
+--runtime-rate-limit-per-minute 600                         # per-address budget on /v1/runtime-events
+--runtime-store sqlite                                      # sqlite (default) | metrics | both — see Runtime metrics for VictoriaMetrics
 --trusted-proxy-cidr 127.0.0.0/8 --trusted-proxy-cidr ::1/128  # peers allowed to set X-Forwarded-For (repeatable; this is the default)
 --npm-package gentle-pi --npm-package gentle-engram        # npm packages to fetch daily downloads for (repeatable; this is the default)
 --github-repo Gentleman-Programming/gentle-ai              # GitHub repo to fetch release downloads for (repeatable; this is the default)
@@ -295,9 +428,11 @@ domain configured this way, so this kit does not use one.
 |---|---|
 | `apache/telemetry-vhost.conf.tmpl` | Template for the two `<VirtualHost>` blocks (`:80` and `:443`), mirroring the existing pattern: proxies `/v1/`, `/healthz`, and (with `--with-grafana`) `/grafana/` to loopback, asserts `X-Forwarded-For` from Apache itself, force-HTTPS except for the ACME challenge path, and a supplementary access log that omits the client address for `/v1/`. `__DOMAIN__` is substituted by `install.sh --domain`. Not applied automatically — see below. |
 | `axiom-telemetry.service` | systemd unit: runs as the static `gentle-telemetry` system user (created by `install.sh`), `StateDirectory=gentle-telemetry`, and a hardened sandbox (no new privileges, restricted syscalls/namespaces/capabilities, private `/tmp` and devices). See [Why a static user, not `DynamicUser`](#why-a-static-user-not-dynamicuser). |
-| `axiom-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 .backup` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally. The logic lives in the standalone `axiom-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. |
-| `grafana/` | Datasource and dashboard provisioning for an optional on-box Grafana; see [Grafana dashboards](#grafana-dashboards). |
-| `install.sh` | Creates the static `gentle-telemetry` system user (migrating an older `DynamicUser`-layout install in place if found), installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo. It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
+| `axiom-telemetry-backup` + `.service` + `.timer` | Nightly `sqlite3 VACUUM INTO` snapshot uploaded via `rclone copy` to a configurable remote, then deleted locally; also backs up VictoriaMetrics when it is installed. The logic lives in the standalone `axiom-telemetry-backup` script (installed to `/usr/local/bin`), not inline in the unit's `ExecStart` — systemd expands `$VAR`/`${VAR}` there using its own environment before the shell runs, which would mangle a script's local variables. The unit runs as root for simplicity: it just needs read access to the collector's state directory. See [VictoriaMetrics](#victoriametrics). |
+| `victoria-metrics.service` | systemd unit for single-node VictoriaMetrics, installed with `--with-victoria-metrics`; runs as the static `victoria-metrics` system user with the same hardening approach as `axiom-telemetry.service`. See [VictoriaMetrics](#victoriametrics). |
+| `victoria-metrics-scrape.yaml` | The one `promscrape.config` job (`gentle-telemetry`, 15s interval) scraping the collector's `/metrics` on `127.0.0.1:18181`. Installed to `/etc/victoria-metrics/scrape.yaml`. |
+| `grafana/` | Datasource and dashboard provisioning for an optional on-box Grafana; see [Grafana dashboards](#grafana-dashboards). With both `--with-grafana` and `--with-victoria-metrics`, also provisions the `gentle-runtime-vm` Prometheus datasource. |
+| `install.sh` | Creates the static `gentle-telemetry` system user (migrating an older `DynamicUser`-layout install in place if found), installs the binary, `sqlite3` and `rclone` (via `dnf`), the systemd units, and a generated summary token; with `--domain`, renders the vhost template to `/root/telemetry-vhost.conf.rendered`; with `--with-grafana`, installs Grafana OSS from its official rpm repo; with `--with-victoria-metrics`, installs single-node VictoriaMetrics (see [VictoriaMetrics](#victoriametrics)). It never edits `post_virtualhost_global.conf`, runs `apachectl configtest`, or reloads `httpd` — those, plus DNS and the certificate, are printed at the end as operator steps, in the order they must run. |
 
 ```
 sudo ./deploy/telemetry/install.sh --local-source /path/to/gentle-ai/checkout \
@@ -457,6 +592,88 @@ ever stops the catch-up loop *between* days — the in-progress day always
 either finishes and commits, or never starts — so a restart mid-catch-up
 never leaves a half-written day behind.
 
+### VictoriaMetrics
+
+`install.sh --with-victoria-metrics [--victoria-metrics-version <tag>]`
+(default `v1.152.0`) installs single-node VictoriaMetrics next to the
+collector, so the counters exposed at `/metrics` (see
+[Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics))
+get scraped and kept with effectively unlimited retention.
+
+| What | Where |
+|---|---|
+| Binary | `/usr/local/bin/victoria-metrics` (the release's `victoria-metrics-prod` asset, checksum-verified against that release's own `_checksums.txt` before install) |
+| Unit | `/etc/systemd/system/victoria-metrics.service`, static `victoria-metrics` system user, same hardening approach as `gentle-telemetry.service` |
+| Data | `/var/lib/victoria-metrics`, `-retentionPeriod=100y` |
+| Scrape config | `/etc/victoria-metrics/scrape.yaml` — one job, `gentle-telemetry`, `scrape_interval: 15s`, `metrics_path: /metrics`, target `127.0.0.1:18181` |
+| HTTP API | loopback only, `127.0.0.1:8428` (never proxied publicly by this kit) |
+
+Install is idempotent: re-running `install.sh --with-victoria-metrics`
+skips the download once the installed binary already reports the pinned
+version via `victoria-metrics --version`, but always reinstalls the unit
+and scrape config so a version bump or a scrape config change still takes
+effect without a redundant download. After installing the unit, `install.sh`
+waits (bounded retries against `http://127.0.0.1:8428/health`) for it to
+come up before returning.
+
+**How the scrape works**: `-promscrape.config=/etc/victoria-metrics/scrape.yaml`
+tells VictoriaMetrics to pull the collector's `/metrics` endpoint every 15s
+over loopback. The collector's own counters reset to 0 on every process
+restart (an in-memory registry — see
+[Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics)),
+so every PromQL query against this data uses `increase()`/`rate()`, never
+the raw counter value, and a restart never shows up as a drop.
+
+**Scrape size cap**: the unit passes `-promscrape.maxScrapeSize=64MiB`
+because the collector's exposition exceeds VictoriaMetrics' default
+16 MiB cap once enough label combinations accumulate (see
+[Runtime metrics for VictoriaMetrics](#runtime-metrics-for-victoriametrics)).
+When a scrape is refused, `journalctl -u victoria-metrics` logs
+`the response from "http://127.0.0.1:18181/metrics" exceeds
+-promscrape.maxScrapeSize`, `GET /api/v1/targets` reports the target
+`down`, and every `increase()`-based panel reads 0 while the collector
+keeps accepting deliveries. Compare `curl -s http://127.0.0.1:18181/metrics | wc -c`
+against the flag before raising it further.
+
+**Backup**: `gentle-telemetry-backup` skips the VictoriaMetrics step
+silently when `victoria-metrics.service` is not installed/active. When it
+is, the script takes a consistent snapshot via `POST /snapshot/create`,
+tars `/var/lib/victoria-metrics/snapshots/<name>` to `vm-<timestamp>.tar.gz`,
+uploads it via the same `rclone copy` used for the SQLite backup, then
+deletes the snapshot via `POST /snapshot/delete?snapshot=<name>` (this
+only removes VictoriaMetrics' own on-disk snapshot hardlinks; the
+already-uploaded archive and the live series data are unaffected). The
+SQLite half of the same script now takes its snapshot with `VACUUM INTO`
+instead of `sqlite3 .backup`: `.backup` restarts its copy loop every time
+it notices the source changed mid-copy, and under this collector's real
+write rate (~1,150 deliveries/min once #4723 shipped) that restart never
+stopped recurring, so `.backup` never finished under load. `VACUUM INTO`
+reads one consistent snapshot in a single pass regardless of concurrent
+writes.
+
+**Grafana**: with both `--with-victoria-metrics` and `--with-grafana`,
+`install.sh` also provisions a Prometheus datasource named
+`gentle-runtime-vm` (fixed `uid: gentle-runtime-vm`, `url:
+http://127.0.0.1:8428`, not default) alongside the existing SQLite
+datasource, so dashboard panels can reference it directly without a
+manual re-link after install.
+
+**Dashboard**: in `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
+the 25 runtime panels under the "Live activity" and "Subagents" rows (live
+deliveries/responses/tokens/hosts, subagent coverage and breakdowns, host
+and model and effort usage, token coverage, error and duration observations)
+now query VictoriaMetrics through the `gentle-runtime-vm` datasource with
+PromQL `increase()`/`rate()` expressions instead of raw SQL against the
+retired `runtime_rows`/`runtime_deliveries` SQLite tables; each rewritten
+panel's `description` states its exact windowing choice (a fixed window for
+the "last 15 min"/"last 3h"/"last 24h" panels, `increase(metric[$__range])`
+for the panels driven by the dashboard's time picker). The adoption panels
+(install/heartbeat events, rollups, npm and GitHub download counts) are
+unaffected and still read the SQLite datasource. The dashboard's default
+time range (`time.from`) now starts at **2026-09-10**, the start of the
+backfilled VictoriaMetrics history, so the "in range" runtime stat and table
+panels show a meaningful total by default instead of only the last 7 days.
+
 ### Answering "how many people use it"
 
 ```
@@ -473,6 +690,10 @@ curl -sH "Authorization: Bearer $(sudo cat /etc/gentle-telemetry/summary.token)"
   days, not distinct installs — see [above](#get-v1summary)).
 - **RDD adoption**: `rdd_enabled_ratio`.
 - **Upgrade lag**: `version_distribution`.
+
+### Runtime store selection
+
+`gentle-telemetry.service` reads `/etc/gentle-telemetry/runtime.env`. `install.sh --with-victoria-metrics` writes `GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics` there, so the next collector restart stops writing raw runtime rows and serves counters on `/metrics`; without VictoriaMetrics the file stays commented and the collector keeps the `sqlite` default. Change the mode by editing that file and restarting the unit.
 
 ## Grafana dashboards
 
@@ -520,15 +741,41 @@ optional; `/v1/summary` above already answers the headline questions.
 **Datasource**: `deploy/telemetry/grafana/provisioning/datasources/telemetry.yaml`
 uses the [`frser-sqlite-datasource`](https://grafana.com/grafana/plugins/frser-sqlite-datasource/)
 plugin pointed read-only at `/var/lib/gentle-telemetry/events.sqlite`.
-Grafana's own process needs read access to that one file; since
+Grafana's own process needs read access to that database; since
 `axiom-telemetry.service` runs as the static `gentle-telemetry` system
 user (see [Why a static user, not DynamicUser](#why-a-static-user-not-dynamicuser)),
 which `grafana` does not belong to, `install.sh --with-grafana` grants
-access via a POSIX ACL (`setfacl -m u:grafana:r ...`) instead of group
-membership. This stays a single file to grant because the collector opens
-SQLite with `journal_mode=DELETE`, not WAL (see [Storage](#storage)) — no
-`-wal`/`-shm` sidecar files are ever created for a second ACL entry to
-chase.
+access via POSIX ACLs (`setfacl -m u:grafana:r ...`) instead of group
+membership. Because the collector opens SQLite with `journal_mode=WAL`
+(see [Storage](#storage)), this now covers three files, not one:
+`events.sqlite` itself plus its `-wal`/`-shm` sidecars, each granted
+individually when present, plus a default ACL on the directory so a
+sidecar created on a later collector restart inherits read access without
+rerunning the installer. A WAL checkpoint does not remove the `-wal`/`-shm`
+files; SQLite only removes them when the last connection to the database
+closes cleanly, and recreates them on the next open.
+
+A few things follow from that setup, worth knowing before relying on it:
+
+- The default ACL on `STATE_DIR` grants `grafana` read on every file
+  created there from that point on, not only the three SQLite files above.
+  Do not treat the directory as a general scratch space (a manual backup
+  copy, a debug dump) without accounting for that: anything dropped there
+  becomes Grafana-readable too.
+- A read-only reader can only open a WAL database while its sidecars
+  exist. They exist for the lifetime of the collector's own connection and
+  are only removed on a clean close (a graceful `systemctl stop
+  gentle-telemetry`), so Grafana has nothing consistent to read from in
+  the window between that stop and the collector's next start, which
+  recreates them.
+- SQLite creates a `-wal`/`-shm` sidecar with the same file mode as
+  `events.sqlite` at that moment. Once `events.sqlite` itself carries the
+  `grafana` ACL entry (from the per-file grant above, or inherited from
+  the directory's default ACL if it did not exist yet when the ACL was
+  set), a freshly created sidecar mirrors that mode and inherits the entry
+  too. This is why the default ACL keeps working across restarts even
+  though it only directly targets `STATE_DIR` itself, not the database
+  file.
 
 **Dashboard**: `deploy/telemetry/grafana/dashboards/gentle-ai-usage.json`,
 provisioned via `deploy/telemetry/grafana/provisioning/dashboards/telemetry.yaml`
@@ -594,10 +841,16 @@ Alongside the collector's own telemetry, the daily job also fetches two
 - **GitHub release downloads** (`--github-repo`, repeatable, default
   `Gentleman-Programming/gentle-ai`; optional `--github-token-file` to
   raise the rate limit — the token is never logged): `GET
-  https://api.github.com/repos/<owner>/<repo>/releases?per_page=20`,
-  summing `assets[].download_count` per release. GitHub's own counts are
-  already cumulative-since-release, so each day's fetch stores a snapshot
-  of that running total under today, not a daily delta.
+  https://api.github.com/repos/<owner>/<repo>/releases?per_page=100`,
+  following the response's `Link: rel="next"` header for up to 10 pages
+  (1,000 releases) so older releases are not silently dropped, and summing
+  `assets[].download_count` per release across every page fetched. A
+  failure on a later page (or too little of the collector's own fetch
+  budget left to be worth starting another request) stops pagination but
+  keeps whatever earlier pages already returned, rather than discarding
+  the whole fetch. GitHub's own counts are already cumulative-since-release,
+  so each day's fetch stores a snapshot of that running total under today,
+  not a daily delta.
 
 Both are stored in `rollups_daily` (`npm_downloads_day` / `key=<pkg>`,
 `github_release_downloads_total` / `key=<tag>`) alongside the collector's

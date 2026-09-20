@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
 )
 
 // commandTimeout bounds every non-host command: the --with-model lane drives

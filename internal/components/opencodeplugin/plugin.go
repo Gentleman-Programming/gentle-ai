@@ -2,14 +2,16 @@ package opencodeplugin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 type Definition struct {
@@ -21,6 +23,15 @@ type Definition struct {
 	Repo        string
 	Description string
 }
+
+// UnsupportedLogoError reports the accepted V2 omission without installing or
+// relocating branding. Pipeline callers classify this as skipped, not success.
+type UnsupportedLogoError struct{}
+
+func (UnsupportedLogoError) Error() string {
+	return "OpenCode V2 logo skipped: no equivalent home_logo slot; existing branding and configuration preserved"
+}
+func (e UnsupportedLogoError) SkipReason() string { return e.Error() }
 
 type Result struct {
 	Changed bool
@@ -160,6 +171,17 @@ func InstallPaths(homeDir string, selected []model.OpenCodeCommunityPluginID) ([
 }
 
 func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error) {
+	major, err := opencode.DetectRuntimeMajor(context.Background())
+	if err != nil {
+		return Result{}, err
+	}
+	if major == opencode.RuntimeV2 {
+		if id == model.OpenCodePluginGentleLogo {
+			return Result{}, UnsupportedLogoError{}
+		}
+		return Result{}, fmt.Errorf("OpenCode community plugin V2 compatibility is unverified; existing configuration preserved")
+	}
+
 	if id == model.OpenCodePluginGentleLogo {
 		return installGentleLogo(homeDir)
 	}

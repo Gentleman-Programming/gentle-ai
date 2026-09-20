@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // reviewContractRequiredForActionEligibilityReason is the single wording
@@ -1028,13 +1028,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		var native reviewtransaction.TargetStatusResult
 		var liveSnapshot reviewtransaction.Snapshot
-		// derivedCommittedRange carries the executable base-diff status a
-		// selectorless STATUS derives when the fresh workspace candidate froze
-		// zero paths and the remote default branch names an unambiguous
-		// committed range (issue #4412). It stays nil whenever any step of that
-		// derivation is not certain, so the fallback base_ref collect is
-		// preserved byte-for-byte.
-		var derivedCommittedRange *ReviewTargetStatusResult
+		derivedBaseRef := ""
 		// Issue #3932: a continuation START issued carries the opaque
 		// repository context, so it is a resume of an existing lineage, never
 		// a pre-named fresh START. A process cwd that does not hold that
@@ -1069,6 +1063,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if err != nil {
 				return fmt.Errorf("freeze negotiated fresh review target: %w", err)
 			}
+			// Resolve the effective candidate before acknowledgement discovery or
+			// consumption lookup, so STATUS and START share one identity.
+			if requestedLineage == "" && selectedBaseRef == "" && !*workspaceOverlay {
+				if derived, derivedTarget, ok := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); ok {
+					liveSnapshot, target = derived, derivedTarget
+					derivedBaseRef = derivedTarget.BaseRef
+					selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+				}
+			}
 			// #3900: a zero-lens START closes approved with a pending
 			// acknowledgement in the same call, and the canonical selectorless
 			// STATUS is the only continuation the orchestrator holds. The one
@@ -1091,14 +1094,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 			} else {
 				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
-				// Issue #4412: a selectorless STATUS that classifies this empty
-				// workspace candidate must not hand back the unroutable
-				// external.select_base_ref collect when the reviewed work is
-				// simply already committed. Derive the committed-range START the
-				// `--base-ref --committed-only` STATUS path already publishes, and
-				// keep the collect fallback for every ambiguous repository shape.
-				if requestedLineage == "" && selectedBaseRef == "" && !*workspaceOverlay {
-					derivedCommittedRange = reviewDerivedCommittedRangeStatus(ctx, root, builder, liveSnapshot, target, *contract, intendedScope)
+				consumed, consumptionErr := reviewtransaction.CompactTargetConsumed(ctx, root, liveSnapshot.Identity)
+				if consumptionErr != nil {
+					return fmt.Errorf("read terminal consumption evidence: %w", consumptionErr)
+				}
+				if consumed {
+					native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
 				}
 			}
 		} else {
@@ -1127,7 +1128,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
-		result.derivedCommittedRange = derivedCommittedRange
+		result.committedRangeBaseRef = derivedBaseRef
 		// Issue #4040: publish the digest once, here, before every path that
 		// could suppress it — the compact-reviewing replacement immediately
 		// below (which deliberately zeros Digest for the #1972 fail-closed
@@ -1210,6 +1211,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			capturedProviderTargetedValidatorInconclusive := false
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
+			correctionContextBudgetExceeded := false
+			var correctionReleaseEligibility *reviewtransaction.CompactAbandonEligibility
 			var unachievableLensAttempts []reviewtransaction.CompactUnachievableLensAttempt
 			var artifactErr error
 			if native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
@@ -1255,6 +1258,23 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							} else {
 								validationRequest = &request
 								result.ValidationRequest = validationRequest
+								// The correction-stage sibling of the lens probe
+								// below (:1287): the validator request STATUS just
+								// built is not what the validator is finally handed
+								// -- that assembly adds the corrected snapshot's
+								// materialized evidence and the unbounded finding
+								// text -- so only assembling it for real answers
+								// whether this offer can be satisfied (#4680).
+								correctionContextBudgetExceeded = reviewCorrectionContextBudgetExhausted(ctx, root, record.State, record.State.CapturePhaseRevision)
+								if correctionContextBudgetExceeded {
+									// Read-only, lock-free and written nowhere:
+									// the same prediction the capture-time
+									// narration renders, taken here so the stop
+									// can carry the concrete release (#4680).
+									if eligibility, inspectErr := reviewtransaction.InspectCompactPristineAbandonment(ctx, root, record.State.LineageID); inspectErr == nil {
+										correctionReleaseEligibility = &eligibility
+									}
+								}
 							}
 						}
 						if artifactErr == nil && *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
@@ -1386,28 +1406,20 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			startLineage := strings.TrimSpace(*lineage)
 			startTargetIdentity := native.TargetIdentity
-			// Issue #4412: the derived committed-range START binds the base-diff
-			// identity, so its lineage must derive from that identity, exactly as
-			// the `--base-ref --committed-only` STATUS path derives it. Deriving
-			// it from the empty workspace identity would create the lineage under
-			// a name no later selectorless STATUS would look for.
-			if result.derivedCommittedRange != nil {
-				startTargetIdentity = result.derivedCommittedRange.TargetIdentity
-			}
 			if native.Action == reviewtransaction.TargetStatusActionStart {
 				startLineage, err = reviewStatusStartLineage(ctx, root, startTargetIdentity, *lineage, *recoverySuccessor)
 				if err != nil {
 					return fmt.Errorf("select STATUS atomic START lineage: %w", err)
 				}
 			}
-			if lensContextBudgetExceeded {
+			if lensContextBudgetExceeded || correctionContextBudgetExceeded {
 				result.Action = reviewtransaction.TargetStatusActionStop
 				result.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 				if *actionEligibility {
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, UnachievableLensAttempts: unachievableLensAttempts}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, CorrectionContextBudgetExceeded: correctionContextBudgetExceeded, CorrectionReleaseEligibility: correctionReleaseEligibility, UnachievableLensAttempts: unachievableLensAttempts}
 			var transition ReviewNextTransition
 			transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
 			result.NextTransition = &transition
@@ -1425,7 +1437,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// allowlisted downstream. The registered Tier C statements remain
 			// in review_narration.go as the human-surface vocabulary source.
 		}
-		// v7 is emitted unconditionally for contract v2 (design decision 4):
+		// The current status schema is emitted unconditionally for contract v2:
 		// newReviewTargetStatusResultForContract already resolved
 		// result.Schema from the ReviewIntegrationStatusSchema alias, so no
 		// per-request bump is needed here anymore.
@@ -1502,47 +1514,25 @@ func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot rev
 	}
 }
 
-// reviewDerivedCommittedRangeStatus is the selectorless STATUS fallback for the
-// fresh workspace candidate that froze zero paths because the reviewed work is
-// already committed (issue #4412). It resolves the remote default branch's
-// unique merge-base and re-classifies the exact `--base-ref <merge-base>
-// --committed-only` target the working STATUS path already understands, so the
-// unroutable empty_candidate_base_ref_required collect is replaced by an
-// executable committed-range START.
-//
-// It returns nil for every repository shape the derivation cannot resolve -- no
-// origin/HEAD, a criss-cross history, an empty range, a Git fault, or a derived
-// range that still nets zero paths -- so newReviewNextTransition keeps today's
-// collect transition byte-for-byte. It reuses the same snapshot, status, and
-// result computation as the working `--base-ref --committed-only` route rather
-// than re-deriving target identity, evidence, or projection here.
-func reviewDerivedCommittedRangeStatus(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target, contract string, intended reviewIntendedUntrackedScope) *ReviewTargetStatusResult {
+// reviewDerivedCommittedRangeSnapshot resolves an empty selectorless workspace
+// to the remote default branch's unique committed range before classification.
+// The result is the effective STATUS candidate, not a second transition-only
+// identity. Ambiguous or empty ranges retain the existing base-selection fallback.
+func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, bool) {
 	if live.Kind != reviewtransaction.TargetCurrentChanges || len(live.Paths) != 0 {
-		return nil
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
 	}
 	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root)
 	if err != nil || base == "" {
-		return nil
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
 	}
 	derivedTarget := reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseDiff, BaseRef: base,
 		IntendedUntracked: append([]string{}, target.IntendedUntracked...),
 	}
 	snapshot, err := builder.BuildStoredSnapshot(ctx, derivedTarget)
-	if err != nil || len(snapshot.Paths) == 0 {
-		// A non-empty commit range whose trees still coincide (an empty commit)
-		// has no candidate to review, so the collect fallback stays truthful.
-		return nil
-	}
-	native := reviewFreshAtomicTargetStatus(derivedTarget, snapshot)
-	if native.Action != reviewtransaction.TargetStatusActionStart {
-		return nil
-	}
-	result := newReviewTargetStatusResultForContract(native, contract)
-	result.repositoryRoot = root
-	result.intendedUntracked = intended
-	result.committedRangeBaseRef = base
-	return &result
+	// Empty commits and ambiguous ranges retain the base-selection fallback.
+	return snapshot, derivedTarget, err == nil && len(snapshot.Paths) > 0
 }
 
 // reviewFreshStatusPreflight makes the fresh, store-free STATUS classification

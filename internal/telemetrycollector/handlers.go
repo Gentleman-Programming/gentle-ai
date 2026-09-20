@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,9 +24,40 @@ type Server struct {
 	Logger       *slog.Logger
 	Now          func() time.Time
 
+	// RuntimeStore selects how POST /v1/runtime-events persists a newly
+	// stored delivery: RuntimeStoreSQLite (the default, "" also means this)
+	// keeps today's behavior (runtime_deliveries/runtime_rows, no metrics);
+	// RuntimeStoreMetrics stops writing raw rows entirely, deduping by id
+	// only (runtime_delivery_ids) and observing into Metrics instead;
+	// RuntimeStoreBoth does both, for a transition window. See
+	// runtimeStoreMode and handleRuntimeEvents.
+	RuntimeStore string
+
+	// Metrics is the in-memory Prometheus counters registry GET /metrics
+	// serves. Only Observe()d for a newly stored delivery under
+	// RuntimeStoreMetrics/RuntimeStoreBoth (never for a duplicate, and
+	// never at all under RuntimeStoreSQLite even if this is non-nil). Left
+	// nil, GET /metrics serves an empty body.
+	Metrics *RuntimeMetrics
+
+	// RuntimeLimiter is the rate budget for POST /v1/runtime-events,
+	// separate from Limiter (POST /v1/events): heartbeats are frequent and
+	// were sharing one 60/min bucket with stored deliveries, plateauing
+	// storage at exactly that rate and rejecting most heartbeats. When nil
+	// (older callers/tests that only set Limiter), runtimeLimiter falls
+	// back to Limiter so existing wiring keeps its previous shared-budget
+	// behavior.
+	RuntimeLimiter *RateLimiter
+
 	// TrustedProxies are peer CIDRs allowed to set X-Forwarded-For/X-Real-IP
 	// for rate-limiting. Any other peer is keyed on its own address.
 	TrustedProxies []*net.IPNet
+
+	// invalidForwardedMu guards invalidForwardedLast, which throttles the
+	// "ignored an invalid forwarded address" log line to at most once per
+	// minute regardless of request volume.
+	invalidForwardedMu   sync.Mutex
+	invalidForwardedLast time.Time
 }
 
 // NewMux builds the collector's HTTP routes.
@@ -35,6 +67,7 @@ func (s *Server) NewMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/runtime-events", s.handleRuntimeEvents)
 	mux.HandleFunc("GET /v1/summary", s.handleSummary)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	return mux
 }
 
@@ -52,9 +85,23 @@ func (s *Server) now() time.Time {
 	return time.Now()
 }
 
+// runtimeLimiter returns RuntimeLimiter, falling back to Limiter when
+// RuntimeLimiter is unset so callers that only configure Limiter keep the
+// previous shared-budget behavior.
+func (s *Server) runtimeLimiter() *RateLimiter {
+	if s.RuntimeLimiter != nil {
+		return s.RuntimeLimiter
+	}
+	return s.Limiter
+}
+
 // clientKey derives the rate-limiter key: the peer address, unless the peer
-// is a trusted proxy, in which case the first X-Forwarded-For hop (or
-// X-Real-IP) is used. Never persisted or logged.
+// is a trusted proxy, in which case the first X-Forwarded-For hop that
+// parses as an IP address is used (falling back to X-Real-IP, then the
+// peer). A forwarded value that does not parse as an IP is never used as a
+// key: production has seen "X-Forwarded-For: (null), <client>" from a
+// misconfigured proxy, which would otherwise key every client on the
+// literal string "(null)". Never persisted or logged.
 func (s *Server) clientKey(r *http.Request) string {
 	peer, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -64,14 +111,51 @@ func (s *Server) clientKey(r *http.Request) string {
 		return peer
 	}
 	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		if first := strings.TrimSpace(strings.SplitN(forwarded, ",", 2)[0]); first != "" {
-			return first
+		for _, hop := range strings.Split(forwarded, ",") {
+			if ip := parseForwardedAddress(hop); ip != "" {
+				return ip
+			}
 		}
+		s.logInvalidForwardedAddress()
 	}
-	if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); real != "" {
-		return real
+	if ip := parseForwardedAddress(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
 	}
 	return peer
+}
+
+// parseForwardedAddress validates raw as an IP address, accepting a bare
+// IP, a host:port pair, or a bracketed [v6]:port pair (the port, if any, is
+// stripped before validation). Returns "" when raw does not parse as an IP.
+func parseForwardedAddress(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(candidate); err == nil {
+		candidate = host
+	} else {
+		candidate = strings.TrimSuffix(strings.TrimPrefix(candidate, "["), "]")
+	}
+	if net.ParseIP(candidate) == nil {
+		return ""
+	}
+	return candidate
+}
+
+// logInvalidForwardedAddress logs that a trusted proxy sent an
+// X-Forwarded-For header with no parseable IP hop, throttled to at most
+// once per minute so a misconfigured proxy cannot flood the log. The
+// invalid value itself is never logged (privacy).
+func (s *Server) logInvalidForwardedAddress() {
+	now := s.now()
+	s.invalidForwardedMu.Lock()
+	defer s.invalidForwardedMu.Unlock()
+	if !s.invalidForwardedLast.IsZero() && now.Sub(s.invalidForwardedLast) < time.Minute {
+		return
+	}
+	s.invalidForwardedLast = now
+	s.logger().Info("ignored an invalid forwarded address")
 }
 
 func (s *Server) peerIsTrustedProxy(host string) bool {
@@ -124,7 +208,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.Storage.InsertEvent(r.Context(), event, s.now()); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		s.logger().Error("telemetry event storage failed", "error", err)
+		// err.Error() is behavior-neutral here under both the text and JSON
+		// slog handlers: slog already special-cases a top-level error Attr
+		// value by calling its Error method (see log/slog's JSONHandler
+		// doc), so this produced the same log line even before this call
+		// was made explicit. Kept explicit for symmetry with
+		// handleRuntimeEvents' error-attribute logging.
+		s.logger().Error("telemetry event storage failed", "error", err.Error())
 		return
 	}
 

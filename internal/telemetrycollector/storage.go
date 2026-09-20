@@ -34,6 +34,19 @@ CREATE TABLE IF NOT EXISTS rollups_daily (
 	value INTEGER NOT NULL,
 	PRIMARY KEY (day, metric, key)
 );
+
+-- runtime_delivery_ids backs --runtime-store=metrics: identity-only dedup
+-- for POST /v1/runtime-events with no payload stored (the row data is only
+-- ever aggregated into the in-memory RuntimeMetrics registry, see
+-- metrics.go). Deliberately no foreign key or shared identity with
+-- runtime_deliveries: sqlite/both modes dedup by payload comparison there,
+-- metrics mode dedups by id only here, and a collector is never run in more
+-- than one mode at a time.
+CREATE TABLE IF NOT EXISTS runtime_delivery_ids (
+	delivery_id TEXT PRIMARY KEY,
+	received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runtime_delivery_ids_received_at ON runtime_delivery_ids(received_at);
 `
 
 const dayLayout = "2006-01-02"
@@ -52,13 +65,17 @@ type Storage struct {
 // of concurrent SQLite writers, and a single connection sidesteps
 // SQLITE_BUSY entirely.
 //
-// journal_mode is DELETE, not WAL: WAL's main benefit is letting readers
-// and a writer proceed concurrently, which this process cannot use anyway
-// since SetMaxOpenConns(1) already serializes every read and write of its
-// own onto one connection. DELETE mode also never creates -wal/-shm
-// sidecar files, which keeps the read-only Grafana deployment (see
-// deploy/telemetry/install.sh's install_grafana) down to granting access
-// to one file instead of three.
+// journal_mode is WAL, not DELETE: this process serializes its own reads
+// and writes onto a single connection (SetMaxOpenConns(1)), but it is not
+// the only reader of this database. Grafana's SQLite datasource and the
+// open-data export both hold read-only connections against the same file
+// from outside this process. Under DELETE mode any one of those external
+// reads that outlasted busy_timeout made InsertRuntimeEvent fail outright
+// (issue #4717): DELETE takes an exclusive lock to commit, so a slow
+// external reader blocks the writer, not just other readers. WAL lets
+// writes commit without waiting on those external readers. WAL adds
+// -wal/-shm sidecar files next to the database; deploy/telemetry/install.sh's
+// install_grafana grants Grafana read access to both via ACLs.
 func OpenStorage(path string) (*Storage, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -74,10 +91,15 @@ func OpenStorage(path string) (*Storage, error) {
 	}
 
 	for _, pragma := range []string{
-		"PRAGMA journal_mode=DELETE;",
+		// busy_timeout must be applied before journal_mode: switching journal
+		// mode needs a moment of exclusive access, and if an external reader
+		// (Grafana, the open-data export) holds a lock at that instant,
+		// applying busy_timeout first makes the mode switch itself wait up to
+		// five seconds instead of failing immediately with SQLITE_BUSY.
+		"PRAGMA busy_timeout=5000;",
+		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
 		"PRAGMA foreign_keys=ON;",
-		"PRAGMA busy_timeout=5000;",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
 			db.Close()
@@ -295,10 +317,13 @@ type rollupRow struct {
 }
 
 // PurgeOlderThan atomically deletes legacy events and whole runtime deliveries
-// received strictly before cutoff. Its count remains legacy events only, not
-// runtime rows, deliveries, observations, or people. Rollups are never purged.
-// Runtime delivery identities expire with their rows; retries do not renew age.
-func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+// received strictly before cutoff, then trims runtime delivery identities
+// received before dedupCutoff in batches (see purgeRuntimeDeliveryIDsOlderThan).
+// Its count remains legacy events only, not runtime rows, deliveries,
+// identities, observations, or people. Rollups are never purged. Retries do not
+// renew age. dedupCutoff is normally later than cutoff: an identity only has to
+// outlive the moments in which a replay of its delivery can arrive.
+func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff, dedupCutoff time.Time) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -317,6 +342,11 @@ func (s *Storage) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, 
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, errRuntimeStorage
+	}
+	// The raw purge is committed by now: a failure here is the identity
+	// trim's own, named with its cutoff, and the committed count still returns.
+	if _, err := purgeRuntimeDeliveryIDsOlderThan(ctx, s.db, dedupCutoff); err != nil {
+		return count, fmt.Errorf("purge runtime delivery ids before %s: %w", dedupCutoff.UTC().Format(dayLayout), err)
 	}
 	return count, nil
 }

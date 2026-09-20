@@ -47,8 +47,8 @@ For each task:
 
 Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
 
-REVIEW ROUTING (post-verify, not post-apply):
-Return control to the parent orchestrator. Apply itself never routes to review — `nextRecommended` proceeds to `verify` once tasks are complete. If the parent later observes a fresh `reviewOffer` block, it may present and run only its exact invocation. SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority; the apply executor never launches review.
+SDD CONTINUATION:
+Return control to the parent orchestrator. Apply itself never routes to review — `nextRecommended` proceeds to `archive` once tasks are complete; verification is optional. SDD never offers or launches RDD, including after verification. SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority; the apply executor never launches review.
 
 ### Authority-First Terminal Procedure
 

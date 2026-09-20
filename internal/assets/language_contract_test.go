@@ -213,7 +213,7 @@ func TestSDDOrchestratorAssetsUseCanonicalResearchGate(t *testing.T) {
 	}
 }
 
-func TestSDDProposeAssetsRequireConfirmedHandoffWithoutInterview(t *testing.T) {
+func TestSDDProposeAssetsKeepProductDecisionsUserOwned(t *testing.T) {
 	paths := allSDDProposeAssetPaths(t)
 	if len(paths) < 4 {
 		t.Fatalf("SDD propose asset count = %d, want at least 4", len(paths))
@@ -221,9 +221,9 @@ func TestSDDProposeAssetsRequireConfirmedHandoffWithoutInterview(t *testing.T) {
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			content := resolveSharedOrchestratorSections(MustRead(path))
-			for _, required := range []string{"confirmed pre-proposal handoff", "MUST NOT interview"} {
+			for _, required := range []string{"Return unresolved product decisions to the orchestrator", "do not interview the user", "Pause only dependent work"} {
 				if !strings.Contains(content, required) {
-					t.Fatalf("%s missing confirmed-handoff wording %q", path, required)
+					t.Fatalf("%s missing product-decision boundary %q", path, required)
 				}
 			}
 			if strings.Contains(content, "proposal question round") {
@@ -233,11 +233,11 @@ func TestSDDProposeAssetsRequireConfirmedHandoffWithoutInterview(t *testing.T) {
 	}
 }
 
-func TestSharedSDDProposeSkillRequiresConfirmedHandoffWithoutInterview(t *testing.T) {
+func TestSharedSDDProposeSkillKeepsProductDecisionsUserOwned(t *testing.T) {
 	content := MustRead("skills/sdd-propose/SKILL.md")
-	for _, required := range []string{"confirmed pre-proposal handoff", "MUST NOT interview"} {
+	for _, required := range []string{"Return unresolved product decisions to the orchestrator", "do not interview the user", "Pause only dependent work"} {
 		if !strings.Contains(content, required) {
-			t.Fatalf("skills/sdd-propose/SKILL.md missing confirmed-handoff wording %q", required)
+			t.Fatalf("skills/sdd-propose/SKILL.md missing product-decision boundary %q", required)
 		}
 	}
 	if strings.Contains(content, "proposal question round") {

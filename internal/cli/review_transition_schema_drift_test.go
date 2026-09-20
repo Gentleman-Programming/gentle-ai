@@ -11,7 +11,7 @@ import (
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const (
@@ -185,12 +185,12 @@ func TestV2TransitionSchemasAcceptProviderPayloadsAndRejectDrift(t *testing.T) {
 	}, &statusOutput); err != nil {
 		t.Fatalf("approved STATUS: %v\n%s", err, statusOutput.String())
 	}
-	statusV7Schema := compileWholeNativeStatusSchema(t, "status-v7.schema.json")
-	validatePublishedReviewSchema(t, statusV7Schema, statusOutput.Bytes())
+	statusV9Schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
+	validatePublishedReviewSchema(t, statusV9Schema, statusOutput.Bytes())
 	statusDocument := decodeJSONObjectCopy(t, statusOutput.Bytes())
 	statusDocument["escalation"] = map[string]any{"cause": "unresolved_severe_findings", "finding_ids": []any{}}
-	if err := statusV7Schema.Validate(statusDocument); err == nil {
-		t.Fatal("status-v7 schema accepted escalation on approved authority")
+	if err := statusV9Schema.Validate(statusDocument); err == nil {
+		t.Fatal("status-v9 schema accepted escalation on approved authority")
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)

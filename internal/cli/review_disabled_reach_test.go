@@ -9,8 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // The maintainer's rule for this file: while the kill switch is off,
@@ -447,67 +446,4 @@ func reflectDeepEqualStrings(got, want []string) bool {
 		}
 	}
 	return true
-}
-
-// TestSDDAttemptFinishHonorsTheKillSwitchOverRemediationObligations is the
-// end-to-end proof that the switch actually REACHES the SDD runtime ledger. The
-// unit test in internal/sddstatus proves the ledger obeys the flag; this proves
-// the CLI resolves the switch and sets it, which is the part that was missing
-// entirely — internal/sddstatus never consulted the kill switch in any form.
-//
-// The shape is the reporter's: a clone holds a review binding, work continues,
-// the attempt changes the candidate tree, and the passing attempt is closed
-// without remediation flags. With reviews ON that still demands an approved
-// recovery successor. With reviews OFF it closes, because the successor could
-// only come from `review start`, which the same switch refuses.
-func TestSDDAttemptFinishImposesNoRemediationObligationEitherWay(t *testing.T) {
-	for _, testCase := range []struct {
-		name     string
-		disable  bool
-		wantFail bool
-	}{
-		{name: "reviews enabled impose no obligation", disable: false, wantFail: false},
-		{name: "reviews disabled impose no obligation", disable: true, wantFail: false},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			reviewModeHome(t)
-			repo := initReviewCLIRepo(t)
-			change := "cli-kill-switch-remediation"
-			changeRoot := filepath.Join(repo, "openspec", "changes", change)
-			writeCLIAttemptFile(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
-			writeCLIAttemptFile(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n")
-			runReviewCLIGit(t, repo, "add", ".")
-			runReviewCLIGit(t, repo, "commit", "-qm", "seed change")
-
-			bound := runSDDAttemptStatus(t, []string{
-				"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", "switch-begin-1",
-				"--work-unit", "cli-kill-switch", "--evidence-goal", "close a bound attempt",
-				"--max-attempts", "3", "--max-changed-lines", "40",
-			})
-
-			// Work that changes the candidate tree during the attempt: this is
-			// exactly what arms the implicit successor demand.
-			writeCLIAttemptFile(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# more work\n")
-
-			if testCase.disable {
-				disableReviewForClone(t, repo)
-			}
-
-			var output bytes.Buffer
-			err := RunSDDAttempt([]string{
-				"finish", "--cwd", repo, "--change", change, "--expected-revision", bound.Revision,
-				"--request-id", "switch-finish-1", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'),
-				"--diagnosis", "attempt passed", "--harness-disposition", "reused",
-				"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan found no descendants",
-			}, &output)
-			if err != nil {
-				t.Fatalf("bound finish demanded a review obligation: %T %v\n%s", err, err, output.String())
-			}
-			var status sddstatus.RuntimeStatus
-			decodeStrictReviewJSON(t, output.Bytes(), &status)
-			if status.ActiveAttempt != nil {
-				t.Fatalf("disabled bound finish left the attempt open: %#v", status.ActiveAttempt)
-			}
-		})
-	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -372,6 +373,104 @@ func installLargeStderrGitAddShim(t *testing.T) {
 	}
 	t.Setenv("GENTLE_AI_TEST_REAL_GIT", realGit)
 	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestSnapshotGeneratedPathInterpretationPersistsWithoutChangingIdentity proves
+// fresh snapshots persist the current reviewer interpretation while legacy
+// snapshots retain their absent-field serialization and content identity.
+func TestSnapshotGeneratedPathInterpretationPersistsWithoutChangingIdentity(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "go.sum", "candidate dependency\n")
+	builder := SnapshotBuilder{Repo: repo}
+	snapshot, err := builder.Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"go.sum"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if snapshot.GeneratedPathInterpretation != GeneratedPathInterpretationSummaryV1 {
+		t.Fatalf("fresh snapshot interpretation = %q, want %q", snapshot.GeneratedPathInterpretation, GeneratedPathInterpretationSummaryV1)
+	}
+	frozen, err := builder.FrozenCandidateContext(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("FrozenCandidateContext() error = %v", err)
+	}
+	if len(frozen.ChangedPathManifest) != 1 || !frozen.ChangedPathManifest[0].Generated {
+		t.Fatalf("fresh generated manifest = %#v, want one generated path", frozen.ChangedPathManifest)
+	}
+
+	identity := snapshot.Identity
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal fresh snapshot: %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"generated_path_interpretation":"`+GeneratedPathInterpretationSummaryV1+`"`)) {
+		t.Fatalf("fresh snapshot JSON omitted its interpretation: %s", encoded)
+	}
+
+	legacy := snapshot
+	legacy.GeneratedPathInterpretation = ""
+	legacy.LedgerIDs = nil
+	legacyEncoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal historical snapshot: %v", err)
+	}
+	if bytes.Contains(legacyEncoded, []byte("generated_path_interpretation")) {
+		t.Fatalf("historical snapshot JSON did not omit empty interpretation: %s", legacyEncoded)
+	}
+	var roundTrip Snapshot
+	if err := json.Unmarshal(legacyEncoded, &roundTrip); err != nil {
+		t.Fatalf("unmarshal historical snapshot: %v", err)
+	}
+	if !reflect.DeepEqual(roundTrip, legacy) {
+		t.Fatalf("historical snapshot round trip changed state:\nwant=%#v\ngot=%#v", legacy, roundTrip)
+	}
+	if legacy.Identity != identity || IdentityForComponents(legacy.Kind, legacy.Projection, legacy.BaseTree, legacy.CandidateTree, legacy.PathsDigest) != identity {
+		t.Fatalf("interpretation changed content-only identity: historical=%q fresh=%q", legacy.Identity, identity)
+	}
+	freshRevision, err := CompactRevisionForState(CompactState{InitialSnapshot: snapshot})
+	if err != nil {
+		t.Fatalf("derive fresh authority revision: %v", err)
+	}
+	historicalRevision, err := CompactRevisionForState(CompactState{InitialSnapshot: roundTrip})
+	if err != nil {
+		t.Fatalf("derive historical authority revision: %v", err)
+	}
+	if freshRevision == historicalRevision {
+		t.Fatal("authority revision ignored persisted generated-path interpretation")
+	}
+	if err := builder.ValidateEvidence(context.Background(), roundTrip); err != nil {
+		t.Fatalf("historical snapshot no longer validates after round trip: %v", err)
+	}
+}
+
+func TestSnapshotUnknownGeneratedPathInterpretationFailsClosed(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "go.sum", "candidate dependency\n")
+	builder := SnapshotBuilder{Repo: repo}
+	snapshot, err := builder.Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"go.sum"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	snapshot.GeneratedPathInterpretation = "generated-summary/v2"
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal unknown interpretation snapshot: %v", err)
+	}
+	var decoded Snapshot
+	if err := json.Unmarshal(payload, &decoded); err == nil || !strings.Contains(err.Error(), "unsupported generated path interpretation") {
+		t.Fatalf("unknown interpretation JSON error = %v", err)
+	}
+	if err := builder.ValidateEvidence(context.Background(), snapshot); err == nil || !strings.Contains(err.Error(), "unsupported generated path interpretation") {
+		t.Fatalf("unknown interpretation validation error = %v", err)
+	}
+	if _, err := builder.FrozenCandidateContext(context.Background(), snapshot); err == nil || !strings.Contains(err.Error(), "unsupported generated path interpretation") {
+		t.Fatalf("unknown interpretation context error = %v", err)
+	}
 }
 
 // TestBuildCurrentChangesToleratesLargeStagingOutput reproduces #3993: a
@@ -2221,5 +2320,54 @@ func TestStagingCommandTimeoutIsBoundedByFloorAndCeiling(t *testing.T) {
 	huge := int(ceiling/perPath) * 100
 	if got := stagingCommandTimeout(huge); got != ceiling {
 		t.Fatalf("%d tracked paths: got %s, want ceiling %s", huge, got, ceiling)
+	}
+}
+
+// A legacy authority carries no generated-path interpretation, and no live
+// repository state can ever produce that absence again: every fresh rebuild
+// stamps the current interpretation. Live revalidation proves that a frozen
+// snapshot still describes its live target, which is a statement about
+// content, so a reviewer-representation discriminator must not decide it.
+func TestValidateLiveSnapshotPreservesHistoricalInterpretation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	expected, err := builder.BuildStoredSnapshot(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"candidate.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.ValidateLiveSnapshot(context.Background(), expected); err != nil {
+		t.Fatalf("fresh snapshot must validate against its own live target: %v", err)
+	}
+	expected.GeneratedPathInterpretation = ""
+	if err := builder.ValidateLiveSnapshot(context.Background(), expected); err != nil {
+		t.Fatalf("historical snapshot rejected against an unchanged repository: %v", err)
+	}
+}
+
+// review/invalidate rebuilds live evidence for a stored authority. A legacy
+// authority must remain invalidatable: refusing it would strand every lineage
+// created before generated-path summaries existed.
+func TestRebuildCurrentSnapshotEvidenceAcceptsHistoricalInterpretation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := SnapshotBuilder{Repo: repo}.BuildStoredSnapshot(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"candidate.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuildCurrentSnapshotEvidence(context.Background(), repo, stored); err != nil {
+		t.Fatalf("fresh authority must rebuild its own live evidence: %v", err)
+	}
+	stored.GeneratedPathInterpretation = ""
+	if err := rebuildCurrentSnapshotEvidence(context.Background(), repo, stored); err != nil {
+		t.Fatalf("historical authority rejected against an unchanged repository: %v", err)
 	}
 }

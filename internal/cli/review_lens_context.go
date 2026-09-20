@@ -8,15 +8,19 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // reviewLensContextTimeout bounds the whole assembly, not one read. The surface
-// performs two discovery reads plus one patch read per changed path, and a
-// reviewer that never launches is the correct outcome when the repository stops
+// performs two discovery reads plus one patch read per authored path; generated
+// paths use immutable metadata from discovery. A reviewer that never launches
+// is the correct outcome when the repository stops
 // answering partway through.
 const reviewLensContextTimeout = 120 * time.Second
 
@@ -25,8 +29,9 @@ const reviewLensContextTimeout = 120 * time.Second
 // every other immutable-diff read in this product already accepts
 // (reviewtransaction.MaxFrozenCandidateDiffBytes), rather than a fraction of
 // it: a smaller budget would refuse candidates whose risk-tier-counted changed
-// lines are small but whose manifest includes large regenerated or golden
-// files, which this surface materializes in full for every manifest path.
+// lines are small but whose manifest includes many generated or golden paths,
+// whose deterministic metadata summaries still belong in the complete review
+// context alongside authored patches.
 //
 // It is enforced by outright refusal. Truncating would hand a reviewer a
 // partial view of the candidate while still letting it report a clean result,
@@ -42,6 +47,25 @@ const reviewLensContextTimeout = 120 * time.Second
 // property splitting a candidate barely changes (issue #3367).
 const reviewLensContextByteBudget = reviewtransaction.MaxFrozenCandidateDiffBytes
 
+// reviewLensContextRuntimeBudget returns the effective immutable-candidate
+// evidence budget for one runtime identity: the smaller of the unchanged
+// native per-command Git diff ceiling above and the provider-declared
+// per-runtime context budget. The Git ceiling stays the aggregate bound it
+// always was; the runtime cap is the additional conservative provider policy
+// on the complete block a runtime is asked to hold, so a candidate that fits
+// the repository's own bound is still refused when the runtime that must hold
+// it would receive more than the approved context. The runtime identity
+// travels from the authoritative state START froze (state.RuntimeAgent); an
+// unknown or absent identity fails closed to the same approved cap, never a
+// larger budget.
+func reviewLensContextRuntimeBudget(runtime string) int {
+	ceiling := reviewLensContextByteBudget
+	if runtimeBudget := reviewerprovider.RuntimeContextBudget(model.AgentID(runtime)); runtimeBudget < ceiling {
+		return runtimeBudget
+	}
+	return ceiling
+}
+
 // The two markers an installed agent definition also names are read from the
 // canonical constants both halves share, never respelled here: a reviewer
 // admits the block by marker name, so a second spelling on either side is the
@@ -55,6 +79,7 @@ const (
 	reviewLensContextInstruction   = "GENTLE_AI_REVIEW_INSTRUCTION"
 	reviewLensContextResultSchema  = "GENTLE_AI_REVIEW_RESULT_SCHEMA"
 	reviewLensContextPatch         = "GENTLE_AI_REVIEW_PATCH"
+	reviewLensContextGenerated     = "GENTLE_AI_REVIEW_GENERATED"
 )
 
 // reviewLensContextBinding is the machine data a relaying orchestrator used to
@@ -218,7 +243,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	defer func() {
 		payload, err = reviewLensContextCleanup(ctx, payload, err, func() error { return deps.close(authority.Inspector) })
 	}()
-	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
+	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen, authority.RuntimeAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -241,8 +266,18 @@ const (
 )
 
 // reviewLensContextBudgetProbe assembles the complete immutable evidence for
-// every lens a review selected and classifies the candidate. It derives the
+// every lens a review selected, proves the non-lens role envelopes still fit
+// around that same evidence, and classifies the candidate. It derives the
 // opaque handle without publishing it, records no emission, and writes nothing.
+//
+// Both measurements are needed because the roles are delivered differently. A
+// lens block carries patch bytes raw; a refuter or targeted-validator prompt
+// carries them through json.Marshal, which doubles every quote, backslash,
+// newline and tab. Classifying on the raw block alone admitted quote-dense
+// candidates that no role prompt could hold, which is the unexecutable lineage
+// this probe exists to prevent, reached through the envelope rather than
+// through the evidence. reviewProviderRoleEnvelopeFloor charges what is
+// knowable before a lens has run.
 //
 // The third outcome is the one that matters. Every stop that is not the budget
 // refusal -- an unreachable tree, an expired deadline, any other typed refusal
@@ -275,7 +310,7 @@ func reviewLensContextBudgetProbe(
 		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
 			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
-		}, subject, frozen)
+		}, subject, frozen, state.RuntimeAgent)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
 			return reviewLensContextOverBudget, nil
@@ -283,6 +318,20 @@ func reviewLensContextBudgetProbe(
 		if assemblyErr != nil {
 			return reviewLensContextUnproven, assemblyErr
 		}
+	}
+	// The lens block is raw; a refuter or validator prompt is JSON-serialized.
+	// Proving only the raw block leaves the escaped envelope unmeasured, which
+	// is the same unexecutable lineage reached through a different door.
+	frozenPolicy := ""
+	if state.FrozenPolicyContent != nil {
+		frozenPolicy = *state.FrozenPolicyContent
+	}
+	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, frozenPolicy, state.InitialSnapshot); floorErr != nil {
+		var refusal *reviewLensContextError
+		if errors.As(floorErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
+			return reviewLensContextOverBudget, nil
+		}
+		return reviewLensContextUnproven, floorErr
 	}
 	return reviewLensContextRepresentable, nil
 }
@@ -297,11 +346,33 @@ func reviewLensContextBudgetProbe(
 // this keeps offering re-runs the same assembly against the same frozen trees
 // and refuses with its own typed, refreshable cause.
 //
-// Since START refuses an unrepresentable candidate before persisting anything,
-// the only lineages this can still classify as exhausted are ones an older
-// build created, so it stays as the upgrade path's defence rather than the
-// primary guard.
+// START refuses an unrepresentable candidate before persisting anything, but
+// it is not the only surface that creates authority: `review recover` mints a
+// successor from a new snapshot with new lenses and runs no budget check of
+// its own (the START guard has exactly one call site, review_facade.go:2193).
+// So this classifies live lineages on the current build, not only ones an
+// older build left behind, and it is a real guard rather than an upgrade-path
+// defence. A recovered over-budget lineage does not ARRIVE as the dead-end
+// this issue closes: it lands with no admitted role results, so
+// compactPristineReviewing holds and `review invalidate` accepts it.
+// TestRecoveredOverBudgetLineageStopsTypedAndArrivesWithItsExitIntact proves
+// that by execution.
+//
+// That exit is not an invariant, and nothing here enforces it. Two separately
+// tracked paths lose it: a direct `review capture-result --input`, which never
+// consults this guard (its only production call site is STATUS) and whose
+// admitted result makes compactPristineReviewing false; and a drifted
+// worktree, because `review invalidate` also rebuilds current-snapshot
+// evidence and refuses when the live tree no longer matches. Read the
+// guarantee as "the exit is there when the lineage arrives", never as "the
+// exit cannot be lost".
 func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
+	// An undecided probe is deliberately NOT refused here. A candidate whose
+	// diff exceeds the native Git ceiling reaches this surface as an assembly
+	// failure, and c6e6a1e4 (#1689) made exactly that candidate startable on
+	// purpose: START carries frozen tree references instead of an eager diff,
+	// so a change larger than any inline limit stays addressable. Refusing on
+	// an undecided outcome would retract that.
 	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
 	return outcome == reviewLensContextOverBudget
 }
@@ -354,11 +425,12 @@ var reviewLensContextStartBudgetReason = reviewPreflightReason{
 // resolveReviewLensAuthority is the only place that turns an opaque repository
 // context and a lens name into native authority.
 type reviewLensAuthority struct {
-	Store     reviewtransaction.CompactStore
-	Binding   reviewLensContextBinding
-	Subject   reviewtransaction.ArtifactSubject
-	Frozen    reviewtransaction.FrozenCandidateContext
-	Inspector reviewLensCandidateInspector
+	Store        reviewtransaction.CompactStore
+	Binding      reviewLensContextBinding
+	Subject      reviewtransaction.ArtifactSubject
+	Frozen       reviewtransaction.FrozenCandidateContext
+	Inspector    reviewLensCandidateInspector
+	RuntimeAgent string
 }
 
 // resolveReviewLensAuthority recovers the exact lineage, target, revision,
@@ -419,7 +491,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 			Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
 			Revision: binding.Revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
 		},
-		Subject: subject, Frozen: frozen, Inspector: inspector,
+		Subject: subject, Frozen: frozen, Inspector: inspector, RuntimeAgent: state.RuntimeAgent,
 	}, nil
 }
 
@@ -440,9 +512,114 @@ func reviewLensContextSelectedOrder(selected []string, lens string) (int, error)
 	return first, nil
 }
 
+type reviewLensContextNumstatEntry struct {
+	additions int
+	deletions int
+	binary    bool
+}
+
+type reviewLensContextGeneratedSummary struct {
+	Path              string                                `json:"path"`
+	Status            reviewtransaction.CandidatePathStatus `json:"status"`
+	Additions         int                                   `json:"additions"`
+	Deletions         int                                   `json:"deletions"`
+	OldMode           string                                `json:"old_mode"`
+	NewMode           string                                `json:"new_mode"`
+	Deleted           bool                                  `json:"deleted"`
+	TypeChanged       bool                                  `json:"type_changed"`
+	ModeOnly          bool                                  `json:"mode_only"`
+	IntendedUntracked bool                                  `json:"intended_untracked"`
+	Binary            bool                                  `json:"binary"`
+	OldObjectID       string                                `json:"old_object_id"`
+	NewObjectID       string                                `json:"new_object_id"`
+	Generated         bool                                  `json:"generated"`
+	ContentOmitted    bool                                  `json:"content_omitted"`
+	Disclosure        string                                `json:"content_disclosure"`
+}
+
+func reviewLensContextParseNumstat(payload []byte, manifest []reviewtransaction.ChangedPathManifestEntry) (map[string]reviewLensContextNumstatEntry, error) {
+	expected := make(map[string]struct{}, len(manifest))
+	for _, entry := range manifest {
+		expected[entry.Path] = struct{}{}
+	}
+	stats := make(map[string]reviewLensContextNumstatEntry, len(manifest))
+	for _, line := range strings.Split(strings.TrimSuffix(string(payload), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("immutable numstat metadata is malformed: %q", line) // refusal:by-design world-action: numstat bytes come from Go's own frozen-tree inspection, so a malformed line is a native inspection defect no command can repair
+		}
+		path := fields[2]
+		if strings.HasPrefix(path, `"`) {
+			decoded, err := strconv.Unquote(path)
+			if err != nil {
+				return nil, fmt.Errorf("decode immutable numstat path %q: %w", path, err)
+			}
+			path = decoded
+		}
+		if _, ok := expected[path]; !ok {
+			return nil, fmt.Errorf("immutable numstat metadata names unexpected path %q", path) // refusal:by-design world-action: numstat output and the frozen manifest both come from Go's own inspection; a disagreement is a native inspection defect requiring a code fix
+		}
+		if _, duplicate := stats[path]; duplicate {
+			return nil, fmt.Errorf("immutable numstat metadata repeats path %q", path) // refusal:by-design world-action: numstat output is Go's own frozen-tree read; a repeated path is a native inspection defect requiring a code fix
+		}
+		stat := reviewLensContextNumstatEntry{}
+		if fields[0] == "-" || fields[1] == "-" {
+			if fields[0] != "-" || fields[1] != "-" {
+				return nil, fmt.Errorf("immutable numstat metadata has incomplete binary counts for %q", path) // refusal:by-design world-action: binary numstat counts come from Go's own frozen-tree read; an incomplete pair is a native inspection defect requiring a code fix
+			}
+			stat.binary = true
+		} else {
+			var err error
+			stat.additions, err = strconv.Atoi(fields[0])
+			if err != nil || stat.additions < 0 {
+				return nil, fmt.Errorf("immutable numstat additions for %q are invalid", path) // refusal:by-design world-action: addition counts come from Go's own frozen-tree read; a negative or unparsable count is a native inspection defect requiring a code fix
+			}
+			stat.deletions, err = strconv.Atoi(fields[1])
+			if err != nil || stat.deletions < 0 {
+				return nil, fmt.Errorf("immutable numstat deletions for %q are invalid", path) // refusal:by-design world-action: deletion counts come from Go's own frozen-tree read; a negative or unparsable count is a native inspection defect requiring a code fix
+			}
+		}
+		stats[path] = stat
+	}
+	if len(stats) != len(expected) {
+		return nil, fmt.Errorf("immutable numstat metadata covers %d paths, want %d", len(stats), len(expected)) // refusal:by-design world-action: numstat output and the frozen manifest both come from Go's own inspection; partial coverage is a native inspection defect requiring a code fix
+	}
+	return stats, nil
+}
+
+func reviewLensContextGeneratedSummaryFor(index int, entry reviewtransaction.ChangedPathManifestEntry, frozen reviewtransaction.FrozenCandidateContext, stats map[string]reviewLensContextNumstatEntry) ([]byte, error) {
+	oldObjectID, newObjectID, ok := frozen.CandidatePathObjectIDs(index)
+	if !ok {
+		return nil, errors.New("generated path has no immutable blob identities") // refusal:by-design world-action: generated summaries derive from blob identities Go itself froze; missing identities are a native inspection defect requiring a code fix
+	}
+	stat, ok := stats[entry.Path]
+	if !ok {
+		return nil, errors.New("generated path has no immutable numstat metadata") // refusal:by-design world-action: generated summaries derive from numstat Go itself read; a missing entry is a native inspection defect requiring a code fix
+	}
+	summary := reviewLensContextGeneratedSummary{
+		Path: entry.Path, Status: entry.Status, Additions: stat.additions, Deletions: stat.deletions,
+		OldMode: entry.OldMode, NewMode: entry.NewMode, Deleted: entry.Deleted, TypeChanged: entry.TypeChanged,
+		ModeOnly: entry.ModeOnly, IntendedUntracked: entry.IntendedUntracked, Binary: stat.binary,
+		OldObjectID: oldObjectID, NewObjectID: newObjectID, Generated: true, ContentOmitted: true,
+		Disclosure: "the reviewer did not receive and did not examine content hunks; blob IDs identify bytes, not their correctness",
+	}
+	return json.Marshal(summary)
+}
+
+// reviewLensContextBlock materializes the complete reviewer block for one
+// lens slot. The runtime identity is the one START froze into the authority
+// (state.RuntimeAgent): the budget it selects is a property of the reviewer
+// that will hold the block, so every surface that materializes a block for
+// the same authority -- START's probe, STATUS's classification, and the lens
+// materialization itself -- must pass the same value and therefore reach the
+// same refusal.
 func reviewLensContextBlock(
 	ctx context.Context, deps reviewLensContextDeps, inspector reviewLensCandidateInspector,
 	binding reviewLensContextBinding, subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
+	runtime string,
 ) ([]byte, error) {
 	// RepositoryRoot stays empty: this block is produced only for an opaque
 	// binding, and a reviewer transcript never carries a provider path.
@@ -462,8 +639,21 @@ func reviewLensContextBlock(
 
 	// The budget bounds the whole delivered block, not only the evidence: at
 	// this level the block IS the reviewer's prompt, so the instruction and the
-	// result schema are part of what has to fit.
-	budget := reviewLensContextByteBudget - block.Len()
+	// result schema are part of what has to fit. It is the effective budget for
+	// the runtime that will hold this block, never the Git ceiling alone.
+	//
+	// Three things are therefore charged before the first section is consumed:
+	// the header lines already written (block.Len()), and the terminator line
+	// written after the last section, which is reserved here precisely because
+	// it is written after the accounting. Reserving it is what makes the claim
+	// above true rather than approximate: without it, a block that filled the
+	// budget exactly was delivered one terminator over the runtime cap. That
+	// was never a dead end -- the START admission probe and the materialization
+	// both run through this same function, so they always agreed and nothing
+	// was admitted that later failed -- but the comment promised a bound the
+	// arithmetic did not keep.
+	terminator := reviewLensContextTerminator + "\n"
+	budget := reviewLensContextRuntimeBudget(runtime) - block.Len() - len(terminator)
 	consume := func(header, footer string, body []byte) error {
 		rendered := header + "\n" + string(bytes.TrimSpace(body)) + "\n" + footer + "\n"
 		budget -= len(rendered)
@@ -483,6 +673,7 @@ func reviewLensContextBlock(
 	if err := consume(reviewLensContextResultSchema, reviewLensContextResultSchema+"_END", []byte(reviewtransaction.ReviewerResultSchema)); err != nil {
 		return nil, err
 	}
+	var numstats map[string]reviewLensContextNumstatEntry
 	for _, discovery := range []struct{ header, operation string }{
 		{header: reviewLensContextNameStatus, operation: "name-status"},
 		{header: reviewLensContextNumstat, operation: "numstat"},
@@ -491,11 +682,27 @@ func reviewLensContextBlock(
 		if err != nil {
 			return nil, reviewLensContextInspectionFailure(ctx, err)
 		}
+		if discovery.operation == "numstat" {
+			numstats, err = reviewLensContextParseNumstat(payload, frozen.ChangedPathManifest)
+			if err != nil {
+				return nil, reviewLensContextInspectionFailure(ctx, err)
+			}
+		}
 		if err := consume(discovery.header, discovery.header+"_END", payload); err != nil {
 			return nil, err
 		}
 	}
 	for index, entry := range frozen.ChangedPathManifest {
+		if entry.Generated {
+			payload, err := reviewLensContextGeneratedSummaryFor(index, entry, frozen, numstats)
+			if err != nil {
+				return nil, reviewLensContextInspectionFailure(ctx, err)
+			}
+			if err := consume(fmt.Sprintf("%s %d %s", reviewLensContextGenerated, index, entry.Path), reviewLensContextGenerated+"_END", payload); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		payload, err := deps.inspect(ctx, inspector, "patch", index, "")
 		if err != nil {
 			return nil, reviewLensContextInspectionFailure(ctx, err)
@@ -513,7 +720,8 @@ func reviewLensContextBlock(
 			return nil, err
 		}
 	}
-	block.WriteString(reviewLensContextTerminator + "\n")
+	// Reserved above, so this write can never take the block past the budget.
+	block.WriteString(terminator)
 	return block.Bytes(), nil
 }
 
@@ -533,7 +741,7 @@ func reviewLensContextInstructionText(binding reviewLensContextBinding, paths in
 	}
 	return fmt.Sprintf(`You are the %s lens of one bounded Gentle AI review. %s
 
-Scope. The %s sections below are the complete and only view of this candidate: all %d changed paths are present in full, in the canonical manifest order carried by %s. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
+Scope. The %s sections below are the complete and only view of this candidate: all %d changed paths are represented in the canonical manifest order carried by %s. Authored paths carry full immutable patches; generated paths carry immutable metadata summaries without content hunks. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
 
 Causality. Report only what this candidate caused. Give every BLOCKER or CRITICAL finding an evidence_class and a causal_disposition, and mark what the base already contained as pre-existing or base-only rather than as a blocker.
 

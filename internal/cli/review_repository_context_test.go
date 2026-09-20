@@ -12,8 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.T) {
@@ -276,19 +275,22 @@ func TestNegotiatedStatusReturnsProviderOwnedTargetedValidationRequest(t *testin
 		t.Fatalf("validation transition = %#v", status.NextTransition)
 	}
 
-	captureArgs := reviewTransitionInputTokens(t, repo, status.NextTransition.Collect.Inputs[0])
+	// The pi host relay submits through its rendered submission descriptor
+	// instead of --execute (#4611): Go never spawns anything here either.
+	submission := status.NextTransition.Collect.Inputs[0].Submission
+	if submission == nil {
+		t.Fatal("pi host relay validation transition rendered no submission descriptor")
+	}
+	captureArgs := append([]string{submission.OperationToken, "--cwd", repo}, submission.ArgumentTokens...)
 	captureArgs = replaceReviewContextToken(t, captureArgs, rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: started.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
 	}))
-	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return providerTargetedValidationPayload(t, *request), nil
-		}), nil
+	resultFile := writeReviewCLIRawInput(t, providerTargetedValidationPayload(t, *request))
+	for index := range captureArgs {
+		captureArgs[index] = strings.ReplaceAll(captureArgs[index], reviewSubmissionValuePlaceholder, resultFile)
 	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
 	var output bytes.Buffer
-	if err := RunReviewCaptureValidation(captureArgs, &output); err != nil {
+	if err := RunReview(captureArgs, &output); err != nil {
 		t.Fatalf("capture exact targeted-validator transition: %v\n%s", err, output.String())
 	}
 	var closure reviewLastEventClosureResult

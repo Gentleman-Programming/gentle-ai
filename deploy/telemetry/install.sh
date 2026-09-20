@@ -15,6 +15,8 @@
 #   sudo ./install.sh --local-source /path/to/gentle-ai/checkout
 #   sudo ./install.sh --local-source /path/to/gentle-ai/checkout \
 #       --domain telemetry.example.com --with-grafana
+#   sudo ./install.sh --local-source /path/to/gentle-ai/checkout \
+#       --with-victoria-metrics --with-grafana
 #
 # gentle-telemetry (cmd/gentle-telemetry) is not yet wired into
 # .goreleaser.yaml — see docs/telemetry-collector.md for why — so there is
@@ -36,12 +38,17 @@ REPO="Gentleman-Programming/gentle-ai"
 RELEASE_TAG=""
 LOCAL_SOURCE=""
 WITH_GRAFANA="false"
+WITH_VICTORIA_METRICS="false"
+VICTORIA_METRICS_VERSION="v1.152.0"
 DOMAIN=""
 ADDRESS=""
 BIN_DEST="/usr/local/bin/gentle-telemetry"
 UNIT_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/gentle-telemetry"
 STATE_DIR="/var/lib/gentle-telemetry"
+VM_BIN_DEST="/usr/local/bin/victoria-metrics"
+VM_CONFIG_DIR="/etc/victoria-metrics"
+VM_STATE_DIR="/var/lib/victoria-metrics"
 # Where systemd keeps DynamicUser state; only the migration reads it.
 PRIVATE_STATE_ROOT="/var/lib/private"
 APACHE_INCLUDE_FILE="/etc/apache2/conf.d/includes/post_virtualhost_global.conf"
@@ -56,6 +63,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: $0 (--release-tag <tag> | --local-source <path>)
           [--domain <fqdn>] [--with-grafana]
+          [--with-victoria-metrics] [--victoria-metrics-version <tag>]
           [--address <ipv4|*>]
 
   --address  Address to bind the rendered <VirtualHost> blocks to. On a
@@ -65,6 +73,14 @@ Usage: $0 (--release-tag <tag> | --local-source <path>)
              among vhosts bound to the same address). By default this is
              detected from \${APACHE_INCLUDE_FILE}; pass this flag to
              override that detection.
+
+  --with-victoria-metrics    Install single-node VictoriaMetrics
+                              (deploy/telemetry/victoria-metrics.service)
+                              and point it at the collector's /metrics
+                              endpoint. Off by default. With --with-grafana,
+                              also provisions a "gentle-runtime-vm"
+                              datasource.
+  --victoria-metrics-version Release tag to install. Default: v1.152.0.
 EOF
 	exit 1
 }
@@ -90,6 +106,14 @@ while [[ $# -gt 0 ]]; do
 	--with-grafana)
 		WITH_GRAFANA="true"
 		shift
+		;;
+	--with-victoria-metrics)
+		WITH_VICTORIA_METRICS="true"
+		shift
+		;;
+	--victoria-metrics-version)
+		VICTORIA_METRICS_VERSION="$2"
+		shift 2
 		;;
 	-h | --help)
 		usage
@@ -288,6 +312,14 @@ EOF
 fi
 
 install -m 0644 "${SCRIPT_DIR}/axiom-telemetry.service" "${UNIT_DIR}/axiom-telemetry.service"
+# The collector's runtime store follows the VictoriaMetrics decision: with
+# --with-victoria-metrics it stops writing raw runtime rows and serves counters
+# on /metrics for the scrape; otherwise an existing choice is left alone and a
+# fresh install stays on sqlite. Applied on the next collector restart.
+if [[ "${WITH_VICTORIA_METRICS}" != "true" ]] && [[ ! -f "${CONFIG_DIR}/runtime.env" ]]; then
+	printf '# GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics\n' >"${CONFIG_DIR}/runtime.env"
+	chmod 0644 "${CONFIG_DIR}/runtime.env"
+fi
 install -m 0755 "${SCRIPT_DIR}/axiom-telemetry-backup" /usr/local/bin/axiom-telemetry-backup
 install -m 0644 "${SCRIPT_DIR}/axiom-telemetry-backup.service" "${UNIT_DIR}/axiom-telemetry-backup.service"
 install -m 0644 "${SCRIPT_DIR}/axiom-telemetry-backup.timer" "${UNIT_DIR}/axiom-telemetry-backup.timer"
@@ -300,6 +332,89 @@ if grep -q '^GENTLE_TELEMETRY_BACKUP_REMOTE=.\+' "${CONFIG_DIR}/backup.env"; the
 else
 	printf 'skipping axiom-telemetry-backup.timer: set GENTLE_TELEMETRY_BACKUP_REMOTE in %s/backup.env, then run:\n' "${CONFIG_DIR}"
 	printf '  systemctl enable --now axiom-telemetry-backup.timer\n'
+fi
+
+# create_victoria_metrics_user idempotently creates the static system
+# user/group victoria-metrics.service runs as, mirroring
+# create_telemetry_user's reasoning: a static user gives the storage
+# directory a stable, real path rather than DynamicUser's
+# /var/lib/private/<name> indirection.
+create_victoria_metrics_user() {
+	if getent passwd victoria-metrics >/dev/null 2>&1; then
+		return
+	fi
+	printf 'creating system user/group victoria-metrics\n'
+	useradd --system --home-dir "${VM_STATE_DIR}" --shell /sbin/nologin --user-group victoria-metrics
+}
+
+# install_victoria_metrics idempotently installs single-node
+# VictoriaMetrics: the pinned release binary (checksum-verified), its
+# scrape config, and its systemd unit, then waits for it to answer
+# healthy. Re-running skips the download once the installed binary
+# already reports ${VICTORIA_METRICS_VERSION} via `victoria-metrics
+# --version`; the directories, unit, and scrape config are always
+# (re)installed so a changed scrape config or a version bump still takes
+# effect without a download.
+install_victoria_metrics() {
+	local asset="victoria-metrics-linux-amd64-${VICTORIA_METRICS_VERSION}.tar.gz"
+	local checksums_file="victoria-metrics-linux-amd64-${VICTORIA_METRICS_VERSION}_checksums.txt"
+	local base_url="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${VICTORIA_METRICS_VERSION}"
+
+	create_victoria_metrics_user
+
+	if [[ -x "${VM_BIN_DEST}" ]] && "${VM_BIN_DEST}" --version 2>&1 | grep -qF -- "-${VICTORIA_METRICS_VERSION}-"; then
+		printf '%s already reports %s; skipping download\n' "${VM_BIN_DEST}" "${VICTORIA_METRICS_VERSION}"
+	else
+		local tmp
+		tmp="$(mktemp -d)"
+		trap 'rm -rf "${tmp}"' RETURN
+
+		printf 'downloading %s\n' "${base_url}/${asset}"
+		curl -fsSL "${base_url}/${asset}" -o "${tmp}/${asset}"
+		curl -fsSL "${base_url}/${checksums_file}" -o "${tmp}/${checksums_file}"
+
+		# Verify only the exact asset's line, fail closed on any mismatch or
+		# missing entry. The release's checksums file is already formatted
+		# as "<sha256>  <filename>" per line, i.e. sha256sum -c's own
+		# output format, so the filtered single line needs no reformatting.
+		if ! grep -F "  ${asset}" "${tmp}/${checksums_file}" >"${tmp}/${asset}.sha256"; then
+			printf 'checksum entry for %s not found in %s\n' "${asset}" "${checksums_file}" >&2
+			exit 1
+		fi
+		(cd "${tmp}" && sha256sum -c "${asset}.sha256")
+
+		tar -xzf "${tmp}/${asset}" -C "${tmp}" victoria-metrics-prod
+		install -m 0755 "${tmp}/victoria-metrics-prod" "${VM_BIN_DEST}"
+	fi
+
+	mkdir -p "${VM_STATE_DIR}" "${VM_CONFIG_DIR}"
+	chown victoria-metrics:victoria-metrics "${VM_STATE_DIR}"
+	chmod 0750 "${VM_STATE_DIR}"
+
+	install -m 0644 "${SCRIPT_DIR}/victoria-metrics.service" "${UNIT_DIR}/victoria-metrics.service"
+	install -m 0644 "${SCRIPT_DIR}/victoria-metrics-scrape.yaml" "${VM_CONFIG_DIR}/scrape.yaml"
+
+	systemctl daemon-reload
+	systemctl enable --now victoria-metrics.service
+
+	printf 'waiting for VictoriaMetrics to answer healthy on 127.0.0.1:8428/health\n'
+	local _attempt
+	for _attempt in $(seq 1 30); do
+		if curl -fsS -o /dev/null "http://127.0.0.1:8428/health"; then
+			printf 'VictoriaMetrics is healthy\n'
+			return
+		fi
+		sleep 1
+	done
+	printf 'VictoriaMetrics did not answer healthy on http://127.0.0.1:8428/health after 30s\n' >&2
+	exit 1
+}
+
+if [[ "${WITH_VICTORIA_METRICS}" == "true" ]]; then
+	install_victoria_metrics
+	printf 'GENTLE_TELEMETRY_RUNTIME_STORE_FLAG=--runtime-store=metrics\n' >"${CONFIG_DIR}/runtime.env"
+	chmod 0644 "${CONFIG_DIR}/runtime.env"
+	printf 'runtime store -> metrics (%s/runtime.env)\n' "${CONFIG_DIR}"
 fi
 
 # set_ini_kv upserts key = value under [section] in an ini file, creating
@@ -378,8 +493,22 @@ EOF
 		grafana_cli plugins install frser-sqlite-datasource
 	fi
 
+	# Grafana 12+ ships Prometheus as an externalized plugin that its
+	# background installer fetches at startup as the grafana user. The
+	# root-run install above leaves the plugins directory root-owned, which
+	# makes that installer fail with "permission denied" and leaves the
+	# VictoriaMetrics datasource without a plugin, so install it here and
+	# hand the directory back to grafana.
+	if [[ "${WITH_VICTORIA_METRICS}" == "true" ]] && ! grafana_cli plugins ls 2>/dev/null | grep -q '^prometheus '; then
+		grafana_cli plugins install prometheus || printf 'prometheus plugin install skipped (bundled on this Grafana or catalog unreachable)\n'
+	fi
+	chown -R grafana:grafana /var/lib/grafana/plugins
+
 	mkdir -p "${GRAFANA_PROVISIONING_DIR}/datasources" "${GRAFANA_PROVISIONING_DIR}/dashboards" "${GRAFANA_DASHBOARD_DIR}"
 	install -m 0644 "${SCRIPT_DIR}/grafana/provisioning/datasources/telemetry.yaml" "${GRAFANA_PROVISIONING_DIR}/datasources/telemetry.yaml"
+	if [[ "${WITH_VICTORIA_METRICS}" == "true" ]]; then
+		install -m 0644 "${SCRIPT_DIR}/grafana/provisioning/datasources/victoria-metrics.yaml" "${GRAFANA_PROVISIONING_DIR}/datasources/victoria-metrics.yaml"
+	fi
 	install -m 0644 "${SCRIPT_DIR}/grafana/provisioning/dashboards/telemetry.yaml" "${GRAFANA_PROVISIONING_DIR}/dashboards/telemetry.yaml"
 	install -m 0644 "${SCRIPT_DIR}/grafana/dashboards/gentle-ai-usage.json" "${GRAFANA_DASHBOARD_DIR}/gentle-ai-usage.json"
 
@@ -416,27 +545,39 @@ EOF
 	set_ini_kv "${GRAFANA_INI}" auth.anonymous enabled false
 	set_ini_kv "${GRAFANA_INI}" users allow_sign_up false
 
-	# The collector runs SQLite in journal_mode=DELETE (see storage.go),
-	# not WAL: axiom-telemetry.service already serializes all of its own
-	# reads and writes through a single connection, so WAL's concurrent-
-	# reader benefit is moot for the collector itself, and dropping it
-	# avoids ever creating -wal/-shm sidecar files. That leaves only one
-	# file for a second, read-only process to deal with: grant Grafana's
-	# system user read access to it via a POSIX ACL rather than group
-	# membership, since gentle-telemetry:gentle-telemetry is not a group
-	# grafana belongs to.
+	# The collector runs SQLite in journal_mode=WAL (see storage.go): an
+	# external read-only connection, like Grafana's, no longer blocks the
+	# collector's single writer while it holds a read lock. WAL creates
+	# -wal/-shm sidecar files next to the database, so a second, read-only
+	# process now needs read access to three files, not one: grant
+	# Grafana's system user read access to them via a POSIX ACL rather
+	# than group membership, since gentle-telemetry:gentle-telemetry is
+	# not a group grafana belongs to.
 	dnf install -y acl >/dev/null 2>&1 || true
 	# STATE_DIR is a real directory owned by the static gentle-telemetry
 	# user (not a DynamicUser symlink into /var/lib/private), so the ACL
-	# only needs to land on it and on the database file — never on an
+	# only needs to land on it and on the database files, never on an
 	# ancestor. Granting Grafana access anywhere under /var/lib/private
 	# would widen that directory past the exactly-0700 mode systemd
 	# requires for its own DynamicUser bookkeeping and would make other
 	# DynamicUser units refuse to (re)start.
 	setfacl -m u:grafana:rx "${STATE_DIR}"
-	if [[ -f "${STATE_DIR}/events.sqlite" ]]; then
-		setfacl -m u:grafana:r "${STATE_DIR}/events.sqlite"
-	fi
+	# Default ACL so a -wal/-shm sidecar created on the next start inherits
+	# read access without rerunning this installer. A WAL checkpoint does
+	# not remove these files; SQLite only removes them when the last
+	# connection to the database closes cleanly, and recreates them on the
+	# next open (e.g. after gentle-telemetry.service restarts). This ACL
+	# applies to every file later created directly under STATE_DIR, not
+	# only the three SQLite files below; do not use this directory as a
+	# general scratch space without accounting for that. See
+	# docs/telemetry-collector.md#grafana-setup for the full detail on how
+	# this interacts with SQLite recreating the sidecars.
+	setfacl -d -m u:grafana:r "${STATE_DIR}"
+	for db_file in events.sqlite events.sqlite-wal events.sqlite-shm; do
+		if [[ -f "${STATE_DIR}/${db_file}" ]]; then
+			setfacl -m u:grafana:r "${STATE_DIR}/${db_file}"
+		fi
+	done
 
 	systemctl daemon-reload
 	systemctl enable --now grafana-server

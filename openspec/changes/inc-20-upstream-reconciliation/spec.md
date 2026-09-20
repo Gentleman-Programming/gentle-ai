@@ -96,7 +96,11 @@ El sistema DEBE tratar las entradas V1, V2, V3, V4, V5, V6 y V8 del inventario d
 
 ### Requirement: Rutas protegidas fuera de alcance (REQ-20.4)
 
-Ninguna tanda de absorción DEBE contener ficheros bajo `bench/`, `internal/hub/`, `openspec/INDEX.md` u `openspec/config.yaml`. Un diff que toque cualquiera de esas rutas DEBE rechazarse y detener el incremento hasta el último estado verde.
+Ninguna tanda de absorción DEBE contener ficheros bajo `internal/hub/`, `openspec/INDEX.md` u `openspec/config.yaml`. Un diff que toque cualquiera de esas rutas DEBE rechazarse y detener el incremento hasta el último estado verde.
+
+Ninguna tanda **de absorción** DEBE contener ficheros bajo `bench/`. El sistema DEBE admitir, como única excepción, una **tanda de reconciliación del corpus**: una tanda cuyo propósito exclusivo sea realinear `bench/` con la superficie de runtime que las tandas de absorción ya retiraron, y que NO DEBE absorber comportamiento nuevo de upstream. Esa tanda DEBE preservar las adaptaciones propias del fork sobre el corpus y DEBE presentar como evidencia la ejecución del corpus completo, no solo de las journeys que las puertas de `.github/workflows/ci.yml` afirman.
+
+**Enmienda de 2026-09-20 (motivo).** La exclusión original de `bench/` se fundaba en la premisa de que el corpus era independiente del runtime absorbido. Esa premisa es falsa y se midió falsa: tras absorber la retirada de `sdd-attempt` (REQ-13.3) y la puerta de transporte de OpenCode, **37 de las 70 journeys del corpus fallaron**, porque conducen comandos que el binario dejó de tener. Al no entrar `bench/` en `go test ./...` —módulo Go independiente sin `go.work`—, ese rojo solo era observable en el paso «Run benchmark evidence» de CI, y no en la verificación de ninguna tanda. Mantener la prohibición habría dejado el incremento con un corpus que afirma una superficie que el producto ya no expone.
 
 #### Scenario: Diff que toca una ruta protegida rechazado
 
@@ -105,18 +109,34 @@ Ninguna tanda de absorción DEBE contener ficheros bajo `bench/`, `internal/hub/
 - **ENTONCES** se rechaza
 - **Y** se revierte hasta el último estado verde
 
+#### Scenario: Tanda de absorción que toca bench/ rechazada
+
+- **DADO** una tanda de absorción cuyo diff incluye un fichero bajo `bench/`
+- **CUANDO** se evalúa la tanda para su cierre
+- **ENTONCES** se rechaza, porque la excepción solo alcanza a la tanda de reconciliación del corpus
+- **Y** se revierte hasta el último estado verde
+
+#### Scenario: Tanda de reconciliación del corpus admitida con evidencia completa
+
+- **DADO** que una tanda de absorción retiró superficie de runtime que `bench/` conduce
+- **CUANDO** una tanda posterior realinea `bench/` con esa retirada sin absorber comportamiento nuevo
+- **ENTONCES** se admite pese a tocar `bench/`
+- **Y** presenta el recuento del corpus completo como evidencia
+- **Y** deja constancia escrita de qué adaptaciones propias del fork se preservaron
+
 #### Scenario: bench/ fuera de la cobertura no bloquea el cierre
 
 - **DADO** que `bench/` es un módulo Go independiente sin `go.work`
-- **CUANDO** una tanda cierra su verificación sin tocar ningún fichero de `bench/`
+- **CUANDO** una tanda de absorción cierra su verificación sin tocar ningún fichero de `bench/`
 - **ENTONCES** la ausencia de cobertura de `bench/` se declara explícitamente
 - **Y** no impide marcar la tanda como `absorbido`
+- **Y** esa ausencia NO DEBE leerse como evidencia de que el corpus sigue verde
 
 ---
 
 ### Requirement: Estructura y estados del registro durable de absorción (REQ-20.5)
 
-El sistema DEBE mantener el registro durable de absorción en `docs/upstream-absorption-ledger.md`, con una fila por cada uno de los 55 commits de upstream sin fusiones entre el ancestro común `266574b0` y `upstream/main`, medidos el 2026-09-18. Cada fila DEBE registrar como mínimo: el sha de upstream, la tanda del fork que lo absorbe, su estado (`absorbido`, `descartado-deliberadamente` o `revertido`), su evidencia de verificación, y un motivo escrito cuando el estado sea `descartado-deliberadamente` o `revertido`.
+El sistema DEBE mantener el registro durable de absorción en `docs/upstream-absorption-ledger.md`, con una fila por cada uno de los 91 commits de upstream sin fusiones entre el ancestro común `266574b0` y el techo congelado `82a6de96` (etiqueta `v3.4.0` de upstream), medidos el 2026-09-19. La cifra de 55 medida el 2026-09-18 quedó superada por la decisión D4, que congela el universo en `v3.4.0` y no lo re-mide. Cada fila DEBE registrar como mínimo: el sha de upstream, la tanda del fork que lo absorbe, su estado (`absorbido`, `descartado-deliberadamente` o `revertido`), su evidencia de verificación, y un motivo escrito cuando el estado sea `descartado-deliberadamente` o `revertido`.
 
 #### Scenario: Fila completa para un commit absorbido
 
@@ -135,13 +155,13 @@ El sistema DEBE mantener el registro durable de absorción en `docs/upstream-abs
 
 ### Requirement: Completitud del registro al cierre, espejo en Engram e inmutabilidad de las filas (REQ-20.6)
 
-Al cierre del incremento, el registro DEBE contener las 55 filas correspondientes a los 55 commits de upstream sin fusiones medidos el 2026-09-18, cada una con un estado asignado. El sistema DEBE mantener un espejo del registro en Engram, con su medición fechada. Ninguna fila DEBE borrarse: revertir una tanda ya absorbida DEBE actualizar el estado de sus filas a `revertido`, conservando el resto de sus campos, nunca eliminar la fila.
+Al cierre del incremento, el registro DEBE contener las 91 filas correspondientes a los 91 commits de upstream sin fusiones medidos el 2026-09-19 entre `266574b0` y el techo congelado `82a6de96` (etiqueta `v3.4.0`, decisión D4), cada una con un estado asignado. El sistema DEBE mantener un espejo del registro en Engram, con su medición fechada. Ninguna fila DEBE borrarse: revertir una tanda ya absorbida DEBE actualizar el estado de sus filas a `revertido`, conservando el resto de sus campos, nunca eliminar la fila.
 
-#### Scenario: Registro completo con 55 filas al cierre
+#### Scenario: Registro completo con 91 filas al cierre
 
 - **DADO** el cierre del incremento `inc-20-upstream-reconciliation`
 - **CUANDO** se audita `docs/upstream-absorption-ledger.md`
-- **ENTONCES** contiene 55 filas, cada una con estado asignado
+- **ENTONCES** contiene 91 filas, cada una con estado asignado
 - **Y** su espejo en Engram existe y está fechado
 
 #### Scenario: Reversión actualiza el estado sin borrar la fila

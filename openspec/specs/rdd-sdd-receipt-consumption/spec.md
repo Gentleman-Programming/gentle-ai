@@ -42,23 +42,25 @@ SDD MUST NOT compute review-context meaning (such as exact, changed, escalated, 
 - THEN SDD surfaces the facade's typed answer verbatim for review repair
 - AND SDD does not substitute a locally computed result or turn the stale receipt into an archive or delivery block
 
-### Requirement: Attempt Ledger Ownership Stays With SDD (Maintainer-Confirmed, 2026-08-02)
+### Requirement: Attempt Ledger Ownership Stays With SDD, Now Alone (formerly: Decision 9, Maintainer-Confirmed, 2026-08-02)
 
-Decision 9 is RATIFIED (maintainer-confirmed, 2026-08-02): SDD retains ownership of its own work-unit attempts in `runtime_ledger.go`, because `previous_revision` chaining, CAS `expected_revision`, and `request_digest` replay identity already satisfy durable cumulative-record properties; RDD owns only the receipt. `RuntimeObjective` MUST be the single named work-unit owner across `runtime_ledger.go` and `runtime_compact.go`, closing CON-08's split-ownership gap; `CompactAcquireRequest`'s work-unit fields MUST collapse into `BeginAttemptRequest`.
+SDD retains sole ownership of its own work-unit attempts in `runtime_ledger.go`, because `previous_revision` chaining, CAS `expected_revision`, and `request_digest` replay identity already satisfy durable cumulative-record properties. After absorbing upstream's removal of RDD from the SDD lifecycle (commit `e0774e05`), this ownership stops coordinating with RDD at all: RDD no longer participates in the SDD lifecycle and claims no ownership over the attempt ledger. `RuntimeObjective` MUST remain the single named work-unit owner across `runtime_ledger.go` and `runtime_compact.go`; `CompactAcquireRequest`'s work-unit fields MUST stay collapsed into `BeginAttemptRequest`.
 
-#### Scenario: Attempts remain in SDD's runtime ledger
+(Previously: ownership was declared coordinated with RDD -- "RDD owns only the receipt" -- under Decision 9, maintainer-confirmed 2026-08-02.)
 
-- GIVEN Wave 4 lands with decision 9 ratified
+#### Scenario: Attempts remain in SDD's runtime ledger with no RDD counterpart
+
+- GIVEN RDD's removal from the SDD lifecycle is already absorbed
 - WHEN a work-unit attempt completes
 - THEN it is appended to `runtime_ledger.go`'s CAS chain
-- AND RDD's authority store holds no duplicate attempt record
+- AND no RDD authority store claims or retains a matching attempt record, because RDD is no longer part of the SDD lifecycle
 
 #### Scenario: One owner named for compaction and ledger
 
 - GIVEN `runtime_ledger.go` and `runtime_compact.go` both touch work-unit scope
 - WHEN ownership is documented
 - THEN exactly one named component/owner is recorded for both files
-- AND no second, competing ownership claim exists
+- AND no second, competing ownership claim exists, from RDD or from any other component
 
 ### Requirement: Legacy `reviewGate` v1 Field Compatibility
 
@@ -84,13 +86,22 @@ Decision 9 is RATIFIED (maintainer-confirmed, 2026-08-02): SDD retains ownership
 - WHEN status v1 is serialized
 - THEN the legacy `reviewGate` field is omitted from the response, in the same output that carries a populated `reviewOffer`
 
-### Requirement: ReceiptRef Lives in SDD's Runtime Ledger, Not a New Artifact
+### Requirement: ReceiptRef Becomes a Historical, Read-Only Field in SDD's Runtime Ledger
 
-The `ReceiptRef` MUST be stored inside SDD's existing runtime ledger record for the attempt. SDD MUST NOT introduce a new standalone OpenSpec artifact file to hold it, since a dedicated file recreates the mirror this wave removes.
+After absorbing upstream's removal of RDD from the SDD lifecycle (commit `e0774e05`), SDD MUST NOT write a new `ReceiptRef` value on any attempt in its runtime ledger, because no active relationship with RDD remains to produce one. SDD MUST keep reading, purely informationally and without re-deriving any review-lifecycle meaning, any `ReceiptRef` already persisted on an attempt that predates this absorption. SDD MUST NOT introduce a new, standalone OpenSpec artifact file to replace that field.
 
-#### Scenario: ReceiptRef stored in the runtime ledger
+(Previously: SDD MUST store the `ReceiptRef` of every finalized review outcome as a field on the existing runtime-ledger attempt record, without introducing a new artifact.)
 
-- GIVEN a finalized review outcome
-- WHEN SDD records it
-- THEN the `ReceiptRef` is a field on the existing runtime ledger attempt record
-- AND no new `openspec/.../receipt-ref.*` file type is introduced
+#### Scenario: An attempt predating the absorption keeps its ReceiptRef as historical data
+
+- GIVEN a work-unit attempt whose runtime ledger record already carried a `ReceiptRef` before absorbing RDD's removal
+- WHEN SDD loads that change's state
+- THEN the `ReceiptRef` field remains readable as historical data
+- AND SDD does not re-derive any review-lifecycle meaning from it
+
+#### Scenario: No new attempt writes a ReceiptRef after the absorption
+
+- GIVEN RDD's removal from the SDD lifecycle is already absorbed
+- WHEN a work-unit attempt completes
+- THEN its runtime ledger record writes no new `ReceiptRef` value
+- AND no new OpenSpec artifact file is introduced to replace that field

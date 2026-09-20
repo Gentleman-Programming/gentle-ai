@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 func TestRuntimeStorageMigration(t *testing.T) {
@@ -351,5 +351,98 @@ func TestRuntimeStorageDelivery(t *testing.T) {
 	}
 	if err := s.db.QueryRow(`SELECT count(*) FROM runtime_deliveries`).Scan(&deliveries); err != nil || deliveries != 1 {
 		t.Fatalf("partial write: %d %v", deliveries, err)
+	}
+}
+
+// TestInsertRuntimeEvent_ReportsBusyDatabaseDistinctly guards issue #4717's
+// actual failure mode: a slow external reader (Grafana, the open-data
+// export) holding a lock long enough that the collector's own write times
+// out. That must surface as errRuntimeStorageBusy, not the generic
+// errRuntimeStorage sentinel, without ever exposing the raw driver error
+// text (see TestRuntimeHandleEvents' canary assertions).
+func TestInsertRuntimeEvent_ReportsBusyDatabaseDistinctly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "busy.db")
+	s, err := OpenStorage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Shorten busy_timeout for this connection only, so a genuine
+	// SQLITE_BUSY surfaces in milliseconds instead of the production 5s.
+	if _, err := s.db.Exec(`PRAGMA busy_timeout=200`); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second, independent connection holds the write lock the whole
+	// collector connection needs, the same way an external reader that
+	// outlives busy_timeout would (WAL still serializes writers).
+	blocker, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	blockerConn, err := blocker.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blockerConn.Close()
+	if _, err := blockerConn.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	ev, err := telemetry.ParseRuntimeEvent(runtimeFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, insertErr := s.InsertRuntimeEvent(context.Background(), ev, time.Now())
+	if !errors.Is(insertErr, errRuntimeStorageBusy) {
+		t.Fatalf("InsertRuntimeEvent error = %v, want errRuntimeStorageBusy", insertErr)
+	}
+	if insertErr.Error() == "" || strings.Contains(insertErr.Error(), "SQLITE") {
+		t.Errorf("error text leaks driver internals: %q", insertErr.Error())
+	}
+
+	if _, err := blockerConn.ExecContext(context.Background(), `ROLLBACK`); err != nil {
+		t.Fatal(err)
+	}
+	if err := blockerConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := blocker.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ev.DeliveryID = "cccccccccccccccccccccccccccccccc"
+	if _, err := s.InsertRuntimeEvent(context.Background(), ev, time.Now()); err != nil {
+		t.Fatalf("InsertRuntimeEvent after lock release: %v", err)
+	}
+}
+
+// TestRuntimeInsertDeliveryIDDedup exercises the identity-only dedup table
+// backing --runtime-store=metrics: unlike InsertRuntimeEvent, it never
+// compares payloads (there is none to compare — see InsertRuntimeDeliveryID),
+// and it never writes runtime_deliveries or runtime_rows.
+func TestRuntimeInsertDeliveryIDDedup(t *testing.T) {
+	s := openTestStorage(t)
+	ctx := context.Background()
+
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, "dddddddddddddddddddddddddddddddd", time.Unix(1, 0)); err != nil || decision != "stored" {
+		t.Fatalf("first insert: %q %v", decision, err)
+	}
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, "dddddddddddddddddddddddddddddddd", time.Unix(2, 0)); err != nil || decision != "duplicate" {
+		t.Fatalf("repeat insert: %q %v", decision, err)
+	}
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", time.Unix(3, 0)); err != nil || decision != "stored" {
+		t.Fatalf("distinct id insert: %q %v", decision, err)
+	}
+
+	var ids, deliveries, rows int
+	if err := s.db.QueryRow(`SELECT (SELECT count(*) FROM runtime_delivery_ids),
+	 (SELECT count(*) FROM runtime_deliveries), (SELECT count(*) FROM runtime_rows)`).Scan(&ids, &deliveries, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if ids != 2 || deliveries != 0 || rows != 0 {
+		t.Fatalf("ids/deliveries/rows = %d/%d/%d, want 2/0/0", ids, deliveries, rows)
 	}
 }

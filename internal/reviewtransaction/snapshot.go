@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathidentity"
 )
 
 type TargetKind string
@@ -33,6 +34,12 @@ const (
 
 	ProjectionWorkspace Projection = "workspace"
 	ProjectionStaged    Projection = "staged"
+
+	// GeneratedPathInterpretationSummaryV1 identifies the current generated-path
+	// policy. An empty value is the historical representation: the frozen
+	// inspector must not summarize any path for an authority that predates this
+	// field.
+	GeneratedPathInterpretationSummaryV1 = "generated-summary/v1"
 )
 
 type Target struct {
@@ -56,17 +63,49 @@ func CanonicalTarget(target Target) Target {
 }
 
 type Snapshot struct {
-	Kind                   TargetKind `json:"kind"`
-	Projection             Projection `json:"projection,omitempty"`
-	UnbornHead             bool       `json:"unborn_head,omitempty"`
-	BaseTree               string     `json:"base_tree"`
-	CandidateTree          string     `json:"candidate_tree"`
-	PathsDigest            string     `json:"paths_digest"`
-	IntendedUntracked      []string   `json:"intended_untracked"`
-	IntendedUntrackedProof string     `json:"intended_untracked_proof"`
-	LedgerIDs              []string   `json:"ledger_ids,omitempty"`
-	Paths                  []string   `json:"paths"`
-	Identity               string     `json:"identity"`
+	Kind       TargetKind `json:"kind"`
+	Projection Projection `json:"projection,omitempty"`
+	UnbornHead bool       `json:"unborn_head,omitempty"`
+	// GeneratedPathInterpretation is deliberately outside Snapshot.Identity:
+	// the identity names candidate content, while this field freezes how a
+	// reviewer may represent that content. Empty is the legacy no-summary
+	// interpretation; fresh snapshots carry the current version explicitly.
+	GeneratedPathInterpretation string   `json:"generated_path_interpretation,omitempty"`
+	BaseTree                    string   `json:"base_tree"`
+	CandidateTree               string   `json:"candidate_tree"`
+	PathsDigest                 string   `json:"paths_digest"`
+	IntendedUntracked           []string `json:"intended_untracked"`
+	IntendedUntrackedProof      string   `json:"intended_untracked_proof"`
+	LedgerIDs                   []string `json:"ledger_ids,omitempty"`
+	Paths                       []string `json:"paths"`
+	Identity                    string   `json:"identity"`
+}
+
+// UnmarshalJSON validates the closed interpretation discriminator at the
+// authority boundary. Keeping this check on Snapshot makes a persisted unknown
+// version fail closed even when a caller only loads authority and has not yet
+// prepared reviewer context; the inner strict decoder also preserves the
+// repository's usual unknown-field behavior.
+func (snapshot *Snapshot) UnmarshalJSON(payload []byte) error {
+	type snapshotJSON Snapshot
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var decoded snapshotJSON
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values in snapshot") // refusal:by-design world-action: a snapshot payload with trailing JSON values is corrupt stored authority no review command can make trustworthy
+		}
+		return err
+	}
+	if err := validateGeneratedPathInterpretation(decoded.GeneratedPathInterpretation); err != nil {
+		return err
+	}
+	*snapshot = Snapshot(decoded)
+	return nil
 }
 
 type SnapshotBuilder struct {
@@ -215,7 +254,7 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 	identity := snapshotIdentityForProjection(target.Kind, projection, baseTree, candidateTree, pathsDigest, untrackedProof, intended, ledgerIDs)
 	return Snapshot{
 		Kind: target.Kind, Projection: projection, BaseTree: baseTree, CandidateTree: candidateTree,
-		UnbornHead:  builder.unbornHead,
+		UnbornHead: builder.unbornHead, GeneratedPathInterpretation: GeneratedPathInterpretationSummaryV1,
 		PathsDigest: pathsDigest, IntendedUntracked: intended,
 		IntendedUntrackedProof: untrackedProof, LedgerIDs: ledgerIDs,
 		Paths: paths, Identity: identity,
@@ -279,6 +318,9 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 
 // ValidateEvidence binds snapshot metadata to repository object evidence.
 func (builder SnapshotBuilder) ValidateEvidence(ctx context.Context, snapshot Snapshot) error {
+	if err := validateGeneratedPathInterpretation(snapshot.GeneratedPathInterpretation); err != nil {
+		return err
+	}
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {
 		return err
@@ -361,6 +403,11 @@ func (builder SnapshotBuilder) ValidateLiveSnapshot(ctx context.Context, expecte
 	if err != nil {
 		return fmt.Errorf("rebuild live snapshot target: %w", err)
 	}
+	// The live tree is freshly rebuilt, but reviewer representation is part of
+	// the frozen authority. Carry the validated expected interpretation across
+	// this content comparison instead of rejecting a legacy authority whose
+	// content still matches its live target exactly.
+	live.GeneratedPathInterpretation = expected.GeneratedPathInterpretation
 	if live.UnbornHead != expected.UnbornHead || !snapshotsEqual(live, expected) {
 		return fmt.Errorf("live repository snapshot no longer matches frozen target: expected %s, got %s", expected.Identity, live.Identity)
 	}
@@ -484,6 +531,11 @@ func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot S
 	if err != nil {
 		return err
 	}
+	// Same carry-over as live snapshot validation: invalidation asks whether
+	// the repository still matches the authority's content, and a legacy
+	// authority must stay invalidatable rather than be stranded by a
+	// representation discriminator no live rebuild can reproduce.
+	live.GeneratedPathInterpretation = snapshot.GeneratedPathInterpretation
 	if !snapshotsEqual(live, snapshot) {
 		return fmt.Errorf("live repository snapshot no longer matches the reviewing authority: expected %s, got %s", snapshot.Identity, live.Identity)
 	}
@@ -785,61 +837,6 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 	return selected, nil
 }
 
-// StillUntrackedIntended returns the subset of a HISTORICAL intended-untracked
-// selection whose paths are still absent from the real index, preserving the
-// recorded order.
-//
-// Issue #3842: a ledger that replays a recorded selection into a later capture
-// must first reconcile it against the index the capture will actually read. A
-// selected path the user has since committed is already part of the ordinary
-// candidate — its bytes live in HEAD/index/worktree — so keeping it in the
-// overlay list only trips buildCurrentChanges's "already tracked" refusal,
-// while dropping it keeps the candidate tree byte-identical. Snapshot
-// identity binds trees and paths, not the selection itself, so a bare
-// landing of the selection replays as zero drift and any further edit reads
-// as ordinary candidate drift — exactly the distinction the ledger's
-// reset/rescope split already routes on. This is strictly a replay-time
-// reconciliation: FRESH caller-supplied selections must never pass through
-// here, so an explicit selection of a tracked path keeps failing loudly as
-// the scope declaration error it is.
-//
-// A selection that landed completely returns a non-nil empty slice, because
-// snapshot targets demand an explicit selection rather than an absent one; an
-// empty (including nil) input short-circuits unchanged without touching the
-// repository.
-func (builder SnapshotBuilder) StillUntrackedIntended(ctx context.Context, intended []string) ([]string, error) {
-	if len(intended) == 0 {
-		return intended, nil
-	}
-	root, err := builder.ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	trackedOutput, err := runGitInventory(ctx, root, "ls-files", "--cached", "-z", "--")
-	if err != nil {
-		return nil, err
-	}
-	tracked := nulSeparatedPathSet(trackedOutput)
-	remaining := make([]string, 0, len(intended))
-	for _, path := range intended {
-		if _, isTracked := tracked[path]; isTracked {
-			continue
-		}
-		// A recorded path that no longer exists in the working tree has left
-		// the candidate just as surely as one that became tracked: carrying it
-		// forward would make every later capture fail on the missing file
-		// instead of classifying the discard as drift (#4055).
-		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("intended-untracked path %q: %w", path, err)
-		}
-		remaining = append(remaining, path)
-	}
-	return remaining, nil
-}
-
 func intendedUntrackedInventoryDigest(paths []string) string {
 	hash := sha256.New()
 	writeLengthPrefixed(hash, []byte("gentle-ai.intended-untracked-inventory/v1"))
@@ -925,36 +922,6 @@ func linkedWorktreeDirectories(ctx context.Context, root string) ([]string, erro
 	return directories, nil
 }
 
-// DiscoverTrackedAndUnignoredPaths returns the canonical Git-owned workspace
-// inventory: every cached path plus every unignored untracked path.
-func (builder SnapshotBuilder) DiscoverTrackedAndUnignoredPaths(ctx context.Context) ([]string, error) {
-	root, err := builder.ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	output, err := runGitInventory(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return nil, err
-	}
-	parts := bytes.Split(output, []byte{0})
-	paths := make([]string, 0, len(parts))
-	for _, item := range parts {
-		if len(item) > 0 {
-			value := string(item)
-			if strings.HasSuffix(value, "/") {
-				value = strings.TrimSuffix(value, "/")
-				if value == "" || strings.HasSuffix(value, "/") {
-					return nil, fmt.Errorf("invalid opaque Git inventory path %q", item)
-				}
-			}
-			paths = append(paths, value)
-		}
-	}
-	return canonicalPaths(paths)
-}
-
-// HasDirtyTrackedChanges reports whether the worktree or index differs from
-// HEAD, excluding untracked paths.
 func (builder SnapshotBuilder) HasDirtyTrackedChanges(ctx context.Context) (bool, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -1686,6 +1653,15 @@ func canonicalProjection(projection Projection) (Projection, error) {
 		return ProjectionStaged, nil
 	default:
 		return "", fmt.Errorf("unsupported projection %q", projection)
+	}
+}
+
+func validateGeneratedPathInterpretation(interpretation string) error {
+	switch interpretation {
+	case "", GeneratedPathInterpretationSummaryV1:
+		return nil
+	default:
+		return fmt.Errorf("unsupported generated path interpretation %q", interpretation) // refusal:by-design world-action: an unrecognized persisted discriminator means the authority was written outside this build's vocabulary; no command can reinterpret immutable stored bytes
 	}
 }
 

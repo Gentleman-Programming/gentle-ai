@@ -13,7 +13,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const ReviewIntegrationContractV1 = "gentle-ai.review-integration/v1"
@@ -42,6 +42,8 @@ const ReviewIntegrationCapabilitiesSchemaV24 = "gentle-ai.review-integration.cap
 const ReviewIntegrationCapabilitiesSchemaIDV24 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.4.schema.json"
 const ReviewIntegrationCapabilitiesSchemaV25 = "gentle-ai.review-integration.capabilities/v2.5"
 const ReviewIntegrationCapabilitiesSchemaIDV25 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.5.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV26 = "gentle-ai.review-integration.capabilities/v2.6"
+const ReviewIntegrationCapabilitiesSchemaIDV26 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.6.schema.json"
 
 const (
 	reviewRefuterSchemaID   = "https://gentle-ai.dev/schema/review/refuter/v1"
@@ -289,8 +291,8 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV25, ReviewIntegrationContractV2
-		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 5}
+		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV26, ReviewIntegrationContractV2
+		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 6}
 		for index, schema := range result.Schemas {
 			switch schema {
 			case reviewtransaction.AdmittedReviewerResultSchemaV1:
@@ -298,7 +300,7 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			case reviewtransaction.ArtifactSubjectSchemaV1:
 				result.Schemas[index] = reviewtransaction.ArtifactSubjectSchema
 			case ReviewIntegrationCapabilitiesSchema:
-				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV25
+				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV26
 			case ReviewIntegrationFailureSchema:
 				result.Schemas[index] = ReviewIntegrationFailureSchemaV2
 			case ReviewIntegrationConsentSchema:
@@ -315,7 +317,11 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		}
 		// issue #4040: status/v7 publishes eligible_untracked_inventory
 		// unconditionally at the STATUS top level (design decision 5).
-		result.Schemas = append(result.Schemas, ReviewIntegrationStatusSchemaV6, ReviewIntegrationConsentSchemaV3, reviewIntendedUntrackedSelectionSchema, ReviewIntegrationStatusSchemaV7)
+		// The published capabilities-v2.6.schema.json advertisement is a
+		// closed enum (issue #4765's shipped surface); status/v9 (#4611) is
+		// additive to the status contract but is not yet advertised through
+		// capabilities, which stays its own separately versioned contract.
+		result.Schemas = append(result.Schemas, ReviewIntegrationStatusSchemaV6, ReviewIntegrationConsentSchemaV3, reviewIntendedUntrackedSelectionSchema, ReviewIntegrationStatusSchemaV7, ReviewIntegrationStatusSchemaV8)
 		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
 			Name: "provider_bound_native_git_context", Supported: true,
 			Requires: []string{"native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"},

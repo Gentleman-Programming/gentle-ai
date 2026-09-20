@@ -57,13 +57,23 @@
 	ProxyPass /.well-known/acme-challenge/ !
 
 	# gentle-telemetry trusts X-Forwarded-For only from loopback (its
-	# default --trusted-proxy-cidr 127.0.0.0/8,::1/128). Apache is the
-	# one process connecting to it, so assert the real client address
-	# here rather than letting a caller set its own and have it believed.
-	# %{REMOTE_ADDR}e is mod_headers' environment-variable format; there
-	# is no "s" format specifier, so a literal "%{REMOTE_ADDR}s" would
-	# not be substituted at all and would silently defeat this guarantee.
-	RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}e"
+	# default --trusted-proxy-cidr 127.0.0.0/8,::1/128), and Apache is the
+	# one process connecting to it. A prior version of this file tried to
+	# assert the real client address with
+	# `RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}e"`, but
+	# mod_headers has no REMOTE_ADDR *environment variable* on a plain
+	# proxied request (that's only populated by things like mod_rewrite),
+	# so %{REMOTE_ADDR}e rendered as the literal string "(null)" instead
+	# of an address. mod_proxy then appended the real client address after
+	# it (ProxyAddHeaders, on by default), producing headers observed in
+	# production like "X-Forwarded-For: (null), 203.0.113.9" — gentle-
+	# telemetry's rate limiter keyed every client on that same "(null)"
+	# element until it learned to validate forwarded addresses (see
+	# internal/telemetrycollector/handlers.go's clientKey). Unsetting the
+	# header here instead strips any value a caller could have set on
+	# their own, and mod_proxy still appends the true client address
+	# afterward, so gentle-telemetry (trusting loopback) sees only that.
+	RequestHeader unset X-Forwarded-For
 
 	ProxyPass /v1/ http://127.0.0.1:18181/v1/
 	ProxyPassReverse /v1/ http://127.0.0.1:18181/v1/

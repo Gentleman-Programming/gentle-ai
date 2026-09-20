@@ -14,22 +14,22 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
 	"github.com/muesli/termenv"
 )
 
@@ -2443,6 +2443,11 @@ func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
 }
 
 func TestStandaloneOpenCodePluginsContinueRegistersSelectedPlugins(t *testing.T) {
+	oldVersionRunner := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersionRunner })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -9289,115 +9294,12 @@ func TestGovernanceScreensNavigationAndActions(t *testing.T) {
 		t.Fatalf("Esc from LivingDoc: screen = %v, want ScreenGovernance", state.Screen)
 	}
 
-	// 7. Navegación al carril ágil ODD (cursor 5) — REQ-19.14.
+	// 7. Salir de gobernanza — "Volver al menú principal" recupera la
+	// posición 5 tras retirar el carril ágil ODD (F6.2c).
 	state.Cursor = 5
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
-	if state.Screen != ScreenODDFeatures {
-		t.Fatalf("cursor 5 Enter: screen = %v, want ScreenODDFeatures", state.Screen)
-	}
-	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	state = updated.(Model)
-	if state.Screen != ScreenGovernance {
-		t.Fatalf("Esc from ODDFeatures: screen = %v, want ScreenGovernance", state.Screen)
-	}
-
-	// 8. Salir de gobernanza — "Volver al menú principal" desplazada a la
-	// posición 6 tras insertar el carril ODD en la posición 5 (protege el
-	// desplazamiento de "Volver": design.md riesgo C y §4.5).
-	state.Cursor = 6
-	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state = updated.(Model)
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("cursor 6 Enter: screen = %v, want ScreenWelcome", state.Screen)
-	}
-}
-
-// TestODDFeaturesScreenPromotedFeatureJumpsToSDDLane verifica REQ-19.15: al
-// pulsar Enter sobre una feature ya promovida en ScreenODDFeatures, la TUI
-// conmuta al carril formal SDD fijando SDDActiveChange al nombre desnudo
-// del cambio, recortado de la referencia completa PromotedTo
-// ("openspec/changes/<nombre>/") — el mismo ajuste ya aplicado en
-// assets/app.js::oddOriginMap() para el Dashboard Web (Fase 6, INC-19).
-// Sobre una feature activa (sin promover), Enter no navega: solo confirma
-// la selección con un mensaje, igual que ScreenSDDIncrements con un
-// incremento activo.
-func TestODDFeaturesScreenPromotedFeatureJumpsToSDDLane(t *testing.T) {
-	tests := []struct {
-		name              string
-		features          []screens.ODDFeatureInfo
-		cursor            int
-		wantScreen        Screen
-		wantActiveChange  string
-		wantMessageSubstr string
-	}{
-		{
-			name: "feature promovida salta al carril SDD con el nombre desnudo",
-			features: []screens.ODDFeatureInfo{
-				{Feature: "gestion-inventario", Path: "odd/tasks/gestion-inventario.md", Status: "promovido", PromotedTo: "openspec/changes/gestion-inventario/"},
-			},
-			cursor:           0,
-			wantScreen:       ScreenSDDIncrements,
-			wantActiveChange: "gestion-inventario",
-		},
-		{
-			name: "feature activa no navega, solo confirma selección",
-			features: []screens.ODDFeatureInfo{
-				{Feature: "modulo-pagos", Path: "odd/tasks/modulo-pagos.md", Status: "activo"},
-			},
-			cursor:            0,
-			wantScreen:        ScreenODDFeatures,
-			wantMessageSubstr: "modulo-pagos",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(system.DetectionResult{}, "dev")
-			m.Screen = ScreenODDFeatures
-			m.ODDFeatures = tt.features
-			m.Cursor = tt.cursor
-
-			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			state := updated.(Model)
-
-			if state.Screen != tt.wantScreen {
-				t.Fatalf("screen = %v, want %v", state.Screen, tt.wantScreen)
-			}
-			if tt.wantActiveChange != "" && state.SDDActiveChange != tt.wantActiveChange {
-				t.Fatalf("SDDActiveChange = %q, want %q", state.SDDActiveChange, tt.wantActiveChange)
-			}
-			if tt.wantMessageSubstr != "" && !strings.Contains(state.GovernanceMessage, tt.wantMessageSubstr) {
-				t.Fatalf("GovernanceMessage = %q, esperado que contenga %q", state.GovernanceMessage, tt.wantMessageSubstr)
-			}
-		})
-	}
-}
-
-// TestScreenOptionCountMatchesODDFeaturesOptions cierra la nota de alcance
-// dejada por el lote anterior (tarea 7.1): confirma, contra el model.go
-// real, que optionCount() para ScreenODDFeatures coincide exactamente con
-// len(screens.ODDFeaturesOptions(...)) para 0, 1 y N features.
-func TestScreenOptionCountMatchesODDFeaturesOptions(t *testing.T) {
-	tests := []struct {
-		name     string
-		features []screens.ODDFeatureInfo
-	}{
-		{name: "sin features", features: nil},
-		{name: "una feature", features: []screens.ODDFeatureInfo{{Feature: "demo"}}},
-		{name: "varias features", features: []screens.ODDFeatureInfo{{Feature: "demo1"}, {Feature: "demo2"}}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(system.DetectionResult{}, "dev")
-			m.Screen = ScreenODDFeatures
-			m.ODDFeatures = tt.features
-
-			want := len(screens.ODDFeaturesOptions(tt.features))
-			if got := m.optionCount(); got != want {
-				t.Errorf("optionCount() = %d, want %d (len(ODDFeaturesOptions))", got, want)
-			}
-		})
+		t.Fatalf("cursor 5 Enter: screen = %v, want ScreenWelcome", state.Screen)
 	}
 }

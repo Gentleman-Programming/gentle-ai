@@ -7,13 +7,14 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/qwen"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/qwen"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 // telemetryTestSpawnRecorder is the RecordingSpawner installed as
@@ -55,6 +56,9 @@ var telemetryTestSpawnRecorder *telemetry.RecordingSpawner
 // TestRunInstallRefusesMissingKimiRegardlessOfUVPresence for that opposite,
 // deliberately-kept case.
 func TestMain(m *testing.M) {
+	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
+		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	// Subprocess stand-in (#4434 regression): re-executed with the CLI
 	// arguments of an emitted continuation command, this test binary must
 	// run the real CLI dispatch (flag parsing, agent selection, sync

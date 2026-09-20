@@ -21,7 +21,6 @@ import (
 var reviewerAdapterImplementations = map[string]string{
 	"claude_adapter.go": "ClaudeAdapter",
 	"codex_adapter.go":  "CodexAdapter",
-	"pi_adapter.go":     "PiAdapter",
 }
 
 // TestAdapterMinimalityGuard protects the Go-owned review boundary. An adapter
@@ -44,7 +43,7 @@ func TestReviewerAdapterGuardDetectsSemanticOwnership(t *testing.T) {
 	violations := reviewerAdapterSourceViolations("bad_adapter.go", []byte("package reviewerprovider\n"+`
 import (
   "encoding/json"
-  "github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+  "github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 type binding struct { SubjectHash string `+"`json:\"subject_hash\"`"+` }
 func (adapter *BadAdapter) Review(ctx context.Context, invocation Invocation) ([]byte, error) {

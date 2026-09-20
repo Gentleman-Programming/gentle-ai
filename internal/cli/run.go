@@ -15,35 +15,35 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
-	opencodeagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	codexagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
 
 type InstallResult struct {
@@ -1301,7 +1301,11 @@ func (s openCodeTelemetryStep) Run() error {
 	if s.checkOnly {
 		return telemetryruntime.CheckManaged(s.configDir)
 	}
-	changed, rollback, err := telemetryruntime.ReconcileWithRollback(s.configDir)
+	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	if err != nil {
+		return err
+	}
+	changed, rollback, err := telemetryruntime.ReconcileForMajorWithRollback(s.configDir, major)
 	if s.state != nil {
 		s.state.telemetryRollback = rollback
 	}
@@ -1840,6 +1844,9 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentOpenCodeGentleLogo:
+		if !containsAgent(s.agents, model.AgentOpenCode) {
+			return nil
+		}
 		if _, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo); err != nil {
 			return fmt.Errorf("install OpenCode Gentle Logo plugin: %w", err)
 		}
@@ -2546,10 +2553,12 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		case model.ComponentClaudeTheme:
 			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
 		case model.ComponentOpenCodeGentleLogo:
-			paths = append(paths,
-				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
-			)
+			if adapter.Agent() == model.AgentOpenCode {
+				paths = append(paths,
+					filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+					filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+				)
+			}
 		}
 	}
 

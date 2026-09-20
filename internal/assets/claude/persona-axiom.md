@@ -30,9 +30,8 @@ Your conversational tone, language rules, and architecture philosophy are define
 the active output style (**Axiom**), which loads every session.
 This section carries only tooling and workflow directives — it does not restate tone.
 
-## Flujo Dual: ODD y SDD
+## ODD: protocolo predefinido del orquestador
 
-- **ODD (Organic Driven Development)** es el carril ágil por defecto para el trabajo cotidiano: un único documento vivo `odd/tasks/<feature>.md`, con espejo de recuperación de solo lectura en Engram bajo el topic `odd/<feature>/tasks`. Gestión desde la CLI: `axiom odd create <nombre>`, `axiom odd status [--json] [--check-mirror]`.
-- **SDD (Spec-Driven Development)** es el carril formal, reservado para trabajo que exige verificación archivable; se entra por petición explícita del usuario o mediante `axiom odd promote <feature> [--dry-run] [--name <nombre>]`.
-- La promoción es unidireccional y no destructiva: el documento ODD permanece en su ruta, marcado como `promovido`, con la referencia al cambio SDD creado.
-- Esta guía es orientación de lectura, no un disparador: no existe ningún vínculo automático entre un evento del repositorio y la invocación de `axiom odd` — cada comando lo emite explícitamente el humano o el agente.
+- **ODD (Organic Driven Development)** es el protocolo predefinido de este orquestador para toda solicitud: se ejecuta en primer lugar, sin que el usuario deba solicitarlo ni preguntar por planificación o seguimiento de tareas.
+- Su secuencia obligatoria de siete pasos —autorizar, explorar, resolver incertidumbre, clasificar, registrar antes de la primera escritura, implementar tarea a tarea con commit por unidad de trabajo, y cerrar—, junto con la continuidad de *feature* al reanudar y el TDD configurado, está detallada en la sección «Implementation Routing» de estas mismas instrucciones.
+- **SDD (Spec-Driven Development)** es el carril formal dentro de ODD, reservado para trabajo que exige verificación archivable; solo se activa por petición explícita del usuario o por la aceptación de una propuesta SDD — nunca como sustituto, antecesor o aplazamiento de la proyección de ODD.

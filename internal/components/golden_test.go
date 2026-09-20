@@ -1,6 +1,7 @@
 package components_test
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"os"
@@ -8,23 +9,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/cursor"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kiro"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	codexagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kiro"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -123,6 +125,7 @@ func TestGoldenSDD_Claude(t *testing.T) {
 }
 
 func TestGoldenSDD_OpenCode(t *testing.T) {
+	pinGoldenOpenCodeV1(t)
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, opencodeAdapter(), "")
@@ -162,6 +165,7 @@ func TestGoldenSDD_OpenCode(t *testing.T) {
 }
 
 func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
+	pinGoldenOpenCodeV1(t)
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, opencodeAdapter(), "multi")
@@ -1035,4 +1039,13 @@ func firstDiffIndex(a, b string) int {
 		return maxLen
 	}
 	return -1
+}
+
+func pinGoldenOpenCodeV1(t *testing.T) {
+	t.Helper()
+	old := runtimeopencode.VersionRunnerOverride
+	t.Cleanup(func() { runtimeopencode.VersionRunnerOverride = old })
+	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
+		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 }

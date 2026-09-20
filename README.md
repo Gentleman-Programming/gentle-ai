@@ -74,9 +74,9 @@ The cost of a fresh session is not the tokens — it is you, re-explaining the s
 
 ### SDD — Give each change a clear path
 
-<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle in three bands. Understand: Explore, then optional Research. Plan: Proposal, Spec, Design and Tasks, each writing its own markdown file. Build: Apply writes code and tests, Verify checks the evidence against the spec, Archive merges the specs and closes the cycle." />
+<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle is selected only by explicit request or accepted proposal. Explore can use optional Research; Proposal, Spec, Design and Tasks create formal planning artifacts; Apply uses configured TDD. Optional Verify reports practical diagnostics, including for partial work, but does not gate Archive: a separate path leads from Apply straight to Archive when Verify is skipped. Archive records actual state and history, including unfinished work when explicitly archived. It is not shipping, approval, or RDD." />
 
-Every phase leaves a file on disk you can open, argue with, and correct — so the plan is reviewable before a single line of code exists. TDD (test-driven development) belongs in Apply when it fits, because that is the first point where there is a spec to test against. Verify then runs as its own step against that spec, not as a self-report from whatever wrote the code, so you can see what was actually checked.
+When you explicitly choose Spec-Driven Development, proposal, specification, design, and task artifacts make the plan reviewable before implementation. File-backed storage keeps them on disk; Engram-backed storage keeps them in memory. Apply follows the configured TDD mode. Research and Verify are optional: Verify can diagnose partial work and report practical findings, but it is not an archive gate. Archive records the actual state and history, including unfinished work when you explicitly archive it; it does not ship or approve the change, and SDD does not invoke RDD. TDD is also available in ODD; it does not require an SDD phase.
 
 **[Docs →](docs/intended-usage.md)**
 
@@ -152,7 +152,7 @@ brew install gentleman-programming/tap/gentle-ai
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
 # Windows (PowerShell) — source install, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
 ```
 
 ```bash

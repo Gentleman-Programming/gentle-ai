@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
 )
 
-// relayAssemblyClause is the sentence that puts the complete immutable evidence
-// on the parent. It is correct for a host-mediated runtime and wrong for one
-// whose compiled transport captures in process.
-const relayAssemblyClause = "The reviewer prompt begins with the exact literal prefix"
+// relayProviderTaskClause identifies the opaque provider-task relay used by a
+// host-mediated runtime. It is wrong for a runtime whose compiled transport
+// captures in process.
+const relayProviderTaskClause = "copy `provider_task.agent` exactly as `subagent_type`"
 
 // TestInstalledContractNamesTheTransportEachRuntimeActuallyUses is the
 // regression guard for issue #3825. The contract this product installs is the
@@ -42,7 +42,7 @@ func TestInstalledContractNamesTheTransportEachRuntimeActuallyUses(t *testing.T)
 			compiled := reviewerprovider.CapturesInProcess(agent)
 
 			if compiled {
-				if strings.Contains(contract, relayAssemblyClause) {
+				if strings.Contains(contract, relayProviderTaskClause) {
 					t.Errorf("%s captures in process, but its installed contract still instructs the parent to assemble and relay a reviewer prompt", agent)
 				}
 				for _, want := range []string{"--agent", "captures in process", "Never assemble a reviewer prompt", "exactly as returned"} {
@@ -55,7 +55,7 @@ func TestInstalledContractNamesTheTransportEachRuntimeActuallyUses(t *testing.T)
 
 			// A host-mediated runtime has no in-process capture, so the relay is
 			// its only path and must survive intact.
-			if !strings.Contains(contract, relayAssemblyClause) {
+			if !strings.Contains(contract, relayProviderTaskClause) {
 				t.Errorf("%s is host-mediated and lost the relay instruction that is its only capture path", agent)
 			}
 		})

@@ -2,11 +2,18 @@ package telemetrycollector
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+// testServerNextPageURL lets a pagination test's first-page handler
+// advertise a Link: rel="next" URL that depends on the httptest server's
+// own address, which is only known after httptest.NewServer returns (i.e.
+// after the handler closures below are already registered).
+var testServerNextPageURL string
 
 // stubDownloadsAPIs points npmDownloadsURL/githubReleasesURL at httptest
 // servers for the duration of the test, restoring the real endpoints
@@ -92,6 +99,159 @@ func TestFetchAndStoreDownloads_WritesExpectedRows(t *testing.T) {
 	}
 	if githubByKey["v1.0.0"] != 10 {
 		t.Errorf("v1.0.0 total = %d, want 10", githubByKey["v1.0.0"])
+	}
+}
+
+// TestFetchGithubReleaseDownloads_FollowsLinkHeaderPagination serves two
+// pages of releases linked via the Link header's rel="next" and asserts
+// both pages' releases are aggregated into one result, and that the first
+// request asks for per_page=100.
+func TestFetchGithubReleaseDownloads_FollowsLinkHeaderPagination(t *testing.T) {
+	origGithub := githubReleasesURL
+	t.Cleanup(func() { githubReleasesURL = origGithub })
+
+	var requestedPaths []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/octo/repo/releases", func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.RequestURI())
+		if r.URL.Query().Get("per_page") != "100" {
+			t.Errorf("first page request per_page = %q, want 100", r.URL.Query().Get("per_page"))
+		}
+		w.Header().Set("Link", `<`+testServerNextPageURL+`>; rel="next", <`+testServerNextPageURL+`>; rel="last"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"tag_name":"v2.0.0","assets":[{"download_count":100}]}]`))
+	})
+	mux.HandleFunc("/octo/repo/releases/page2", func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.RequestURI())
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"tag_name":"v1.0.0","assets":[{"download_count":10}]}]`))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	testServerNextPageURL = server.URL + "/octo/repo/releases/page2"
+	githubReleasesURL = func(repo string) string { return server.URL + "/" + repo + "/releases?per_page=100" }
+
+	totals, err := fetchGithubReleaseDownloads(context.Background(), http.DefaultClient, "octo/repo", "")
+	if err != nil {
+		t.Fatalf("fetchGithubReleaseDownloads: %v", err)
+	}
+	if totals["v2.0.0"] != 100 {
+		t.Errorf("v2.0.0 (page 1) = %d, want 100", totals["v2.0.0"])
+	}
+	if totals["v1.0.0"] != 10 {
+		t.Errorf("v1.0.0 (page 2) = %d, want 10", totals["v1.0.0"])
+	}
+	if len(requestedPaths) != 2 {
+		t.Fatalf("requested %d pages, want 2: %v", len(requestedPaths), requestedPaths)
+	}
+}
+
+// TestFetchGithubReleaseDownloads_StopsAtTenPages guards against an
+// unbounded Link-header loop (e.g. a server that always links to a
+// "next" page): pagination must stop after 10 pages even if the server
+// keeps offering another one.
+func TestFetchGithubReleaseDownloads_StopsAtTenPages(t *testing.T) {
+	origGithub := githubReleasesURL
+	t.Cleanup(func() { githubReleasesURL = origGithub })
+
+	var requests int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/octo/repo/releases", func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		page := requests
+		w.Header().Set("Link", fmt.Sprintf(`<http://%s/octo/repo/releases?page=%d>; rel="next"`, r.Host, page+1))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `[{"tag_name":"v%d","assets":[{"download_count":1}]}]`, page)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	githubReleasesURL = func(repo string) string { return server.URL + "/" + repo + "/releases" }
+
+	totals, err := fetchGithubReleaseDownloads(context.Background(), http.DefaultClient, "octo/repo", "")
+	if err != nil {
+		t.Fatalf("fetchGithubReleaseDownloads: %v", err)
+	}
+	if requests != 10 {
+		t.Fatalf("requests = %d, want exactly 10 (the page cap)", requests)
+	}
+	if len(totals) != 10 {
+		t.Fatalf("aggregated releases = %d, want 10", len(totals))
+	}
+}
+
+// TestFetchGithubReleaseDownloads_StopsOnLaterPageErrorButKeepsEarlierData
+// asserts a failure fetching a later page stops pagination without
+// discarding the releases already fetched from earlier pages.
+func TestFetchGithubReleaseDownloads_StopsOnLaterPageErrorButKeepsEarlierData(t *testing.T) {
+	origGithub := githubReleasesURL
+	t.Cleanup(func() { githubReleasesURL = origGithub })
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/octo/repo/releases", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+testServerNextPageURL+`>; rel="next"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"tag_name":"v1.0.0","assets":[{"download_count":5}]}]`))
+	})
+	mux.HandleFunc("/octo/repo/releases/page2", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	testServerNextPageURL = server.URL + "/octo/repo/releases/page2"
+	githubReleasesURL = func(repo string) string { return server.URL + "/" + repo + "/releases" }
+
+	totals, err := fetchGithubReleaseDownloads(context.Background(), http.DefaultClient, "octo/repo", "")
+	if err != nil {
+		t.Fatalf("fetchGithubReleaseDownloads: %v, want a nil error with the earlier page's data preserved", err)
+	}
+	if totals["v1.0.0"] != 5 {
+		t.Errorf("v1.0.0 (page 1) = %d, want 5 to survive the page 2 failure", totals["v1.0.0"])
+	}
+	if len(totals) != 1 {
+		t.Errorf("totals = %+v, want only page 1's release", totals)
+	}
+}
+
+// TestFetchGithubReleaseDownloads_StopsWhenContextDeadlineIsNear asserts
+// pagination stops before issuing a next-page request once the context's
+// remaining time is too small to be worth starting it, preserving
+// whatever was already fetched instead of erroring.
+func TestFetchGithubReleaseDownloads_StopsWhenContextDeadlineIsNear(t *testing.T) {
+	origGithub := githubReleasesURL
+	t.Cleanup(func() { githubReleasesURL = origGithub })
+
+	var page2Requested bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/octo/repo/releases", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<`+testServerNextPageURL+`>; rel="next"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"tag_name":"v1.0.0","assets":[{"download_count":5}]}]`))
+	})
+	mux.HandleFunc("/octo/repo/releases/page2", func(w http.ResponseWriter, r *http.Request) {
+		page2Requested = true
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"tag_name":"v2.0.0","assets":[{"download_count":9}]}]`))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	testServerNextPageURL = server.URL + "/octo/repo/releases/page2"
+	githubReleasesURL = func(repo string) string { return server.URL + "/" + repo + "/releases" }
+
+	// A deadline shorter than githubPaginationDeadlineBuffer: the first
+	// page still gets fetched (no deadline check before it), but the loop
+	// must stop before requesting page 2.
+	ctx, cancel := context.WithTimeout(context.Background(), githubPaginationDeadlineBuffer/2)
+	defer cancel()
+
+	totals, err := fetchGithubReleaseDownloads(ctx, http.DefaultClient, "octo/repo", "")
+	if err != nil {
+		t.Fatalf("fetchGithubReleaseDownloads: %v", err)
+	}
+	if page2Requested {
+		t.Fatal("page 2 was requested despite the near context deadline")
+	}
+	if totals["v1.0.0"] != 5 || len(totals) != 1 {
+		t.Errorf("totals = %+v, want only page 1's release", totals)
 	}
 }
 
@@ -232,7 +392,7 @@ func TestRunMaintenance_DownloadRowsDoNotPoisonRollupCatchUp(t *testing.T) {
 	cfg := DownloadsConfig{NpmPackages: []string{"gentle-pi"}, GithubRepos: []string{"Gentleman-Programming/gentle-ai"}}
 	FetchAndStoreDownloads(ctx, s, http.DefaultClient, cfg, day2, nil)
 
-	if err := RunMaintenance(ctx, s, now, 90); err != nil {
+	if err := RunMaintenance(ctx, s, now, 90, 2); err != nil {
 		t.Fatalf("RunMaintenance: %v", err)
 	}
 

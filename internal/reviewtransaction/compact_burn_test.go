@@ -151,6 +151,9 @@ func TestAcknowledgeApprovedCompactAuthorityFailureKeepsPendingAuthority(t *test
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("acknowledgement deletion failure = %v, want incomplete burn", err)
 	}
+	if consumed, err := CompactTargetConsumed(context.Background(), repo, acknowledgement.TargetIdentity); err != nil || consumed {
+		t.Fatalf("failed burn activated terminal evidence: %v, %v", consumed, err)
+	}
 	after, err := store.Load()
 	if err != nil || after.Revision != acknowledgement.ExpectedRevision || after.State.ApprovedAckToken != acknowledgement.Token {
 		t.Fatalf("failed acknowledgement did not leave the exact pending authority replayable: %#v, %v", after, err)

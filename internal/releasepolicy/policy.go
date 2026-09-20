@@ -575,7 +575,7 @@ builds:
       - >-
         -s -w
         -X main.version={{ .Version }}
-        -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+        -X github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
   - id: gentle-ai-deprecated
     main: ./cmd/gentle-ai
     binary: gentle-ai
@@ -593,7 +593,7 @@ builds:
       - >-
         -s -w
         -X main.version={{ .Version }}
-        -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+        -X github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
 archives:
   - formats:
       - tar.gz
@@ -679,17 +679,6 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^ci:"
-brews:
-  - repository:
-      owner: Gentleman-Programming
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
-    name: gentle-ai
-    homepage: "https://github.com/Gentleman-Programming/gentle-ai"
-    description: "Gentle-AI — Ecosystem, Frameworks, Workflows for AI coding agents."
-    license: "MIT"
-    commit_msg_template: "chore: update gentle-ai formula to {{ .Tag }}"
 `
 
 const expectedReleaseWorkflowYAML = `name: Release

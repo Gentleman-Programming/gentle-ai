@@ -3,7 +3,7 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 // GovernanceOptions retorna la lista ordenada de opciones del submenú de gobernanza.
@@ -14,7 +14,6 @@ func GovernanceOptions() []string {
 		"3. Monitor Multi-Rol y Barrera Fan-In (inspeccionar, migrar diferidas)",
 		"4. Visor de Handoffs Estructurados (relevos formales)",
 		"5. Catálogo de Especificaciones Vivas (specs e INDEX.md)",
-		"6. Carril Ágil ODD (documentos vivos, promoción)",
 		"Volver al menú principal",
 	}
 }

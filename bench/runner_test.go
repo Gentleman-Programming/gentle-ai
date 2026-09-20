@@ -425,14 +425,14 @@ func TestRunTTYJoinsCloseAndDeterministicWaitErrors(t *testing.T) {
 }
 
 // A build that HAS the flag fails on state, not on shape. The probe must read
-// that as supported: "sdd-attempt requires --cwd" is the repository's answer,
+// that as supported: "fixture requires --cwd" is the repository's answer,
 // not the CLI's.
 
 func TestProbeCapabilityAcceptsAStateFailure(t *testing.T) {
-	sandbox := fakeBinary(t, `echo "Error: sdd-attempt requires --cwd" >&2; exit 1`)
+	sandbox := fakeBinary(t, `echo "Error: fixture requires --cwd" >&2; exit 1`)
 	capability := &Capability{
-		Verb:  []string{"sdd-attempt", "finish"},
-		Probe: []string{"sdd-attempt", "finish", "--expected-binding-revision=probe"},
+		Verb:  []string{"fixture", "finish"},
+		Probe: []string{"fixture", "finish", "--expected-revision=probe"},
 	}
 	supported, reason := newCapabilityProbe(sandbox).supported(capability)
 	if !supported {
@@ -443,10 +443,10 @@ func TestProbeCapabilityAcceptsAStateFailure(t *testing.T) {
 // A build that LACKS the flag rejects the shape, and the journey must record
 // `unsupported` rather than a state failure it never had.
 func TestProbeCapabilityRejectsAMissingFlag(t *testing.T) {
-	sandbox := fakeBinary(t, `echo "Error: flag provided but not defined: -expected-binding-revision" >&2; exit 1`)
+	sandbox := fakeBinary(t, `echo "Error: flag provided but not defined: -expected-revision" >&2; exit 1`)
 	capability := &Capability{
-		Verb:  []string{"sdd-attempt", "finish"},
-		Probe: []string{"sdd-attempt", "finish", "--expected-binding-revision=probe"},
+		Verb:  []string{"fixture", "finish"},
+		Probe: []string{"fixture", "finish", "--expected-revision=probe"},
 	}
 	supported, reason := newCapabilityProbe(sandbox).supported(capability)
 	if supported {
@@ -471,7 +471,7 @@ func TestProbeAndHelpProbeDoNotShareACacheEntry(t *testing.T) {
 	sandbox := fakeBinary(t, `
 case "$*" in
   *--help*) echo "Error: flag provided but not defined: -help" >&2; exit 1 ;;
-  *)        echo "Error: sdd-attempt requires --cwd" >&2; exit 1 ;;
+  *)        echo "Error: fixture requires --cwd" >&2; exit 1 ;;
 esac`)
 	probe := newCapabilityProbe(sandbox)
 	if supported, _ := probe.supported(&Capability{Verb: []string{"legacy", "finish"}}); supported {
@@ -479,7 +479,7 @@ esac`)
 	}
 	supported, reason := probe.supported(&Capability{
 		Verb:  []string{"legacy", "finish"},
-		Probe: []string{"legacy", "finish", "--expected-binding-revision=probe"},
+		Probe: []string{"legacy", "finish", "--expected-revision=probe"},
 	})
 	if !supported {
 		t.Fatalf("supported = false (%s), want true: the probe answer must not come from the help cache", reason)
@@ -490,11 +490,11 @@ esac`)
 // invocation, or an uncounted proof would inflate a measured dimension.
 func TestReadBackBlanksGitTrace(t *testing.T) {
 	sandbox := fakeBinary(t, `echo "GIT_TRACE=[$GIT_TRACE]"`)
-	observation := sandbox.readBack("sdd-attempt", "status")
+	observation := sandbox.readBack("fixture", "status")
 	if observation.Stdout != "GIT_TRACE=[]\n" {
 		t.Fatalf("readBack stdout = %q, want a blanked GIT_TRACE", observation.Stdout)
 	}
-	counted := sandbox.invoke([]string{"sdd-attempt", "status"})
+	counted := sandbox.invoke([]string{"fixture", "status"})
 	if counted.Stdout == "GIT_TRACE=[]\n" {
 		t.Fatal("a counted invocation lost GIT_TRACE, so git_subprocesses would stop being observable")
 	}

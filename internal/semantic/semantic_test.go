@@ -71,7 +71,7 @@ package sample
 import (
 	"context"
 	"fmt"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
 // RepositoryManager define la interfaz para gestionar repositorios.

@@ -93,6 +93,8 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 
 #### Delegated Verification Gate (MANDATORY)
 
+SDD never offers or launches RDD, regardless of review mode. For SDD work, run the applicable functional checks and configured TDD, report actual results, and follow the SDD phase instructions; do not assess review risk or invoke review from this gate. The rules below apply only to non-SDD work.
+
 Verification of a delegated writer's work is decided by two inputs the parent reads deterministically: the receipt-driven development (RDD) state for the repository (`on`, `off`, or `unknown`), and the native risk tier from `axiom review assess --cwd <repo> --json` (`gentle-ai.review-assessment/v1`, `risk` one of `passive`, `medium`, `high`). A runtime that already renders an RDD status line reads it from there; otherwise read `axiom review mode status` (read-only) and treat a failure as `unknown`. Any assessment failure or an unrecognized verb is treated as `high`.
 
 The `on` branch below holds only while the native review reaches a terminal outcome for this candidate. When the human declines the consent envelope for this candidate (candidate-scoped; never the kill switch), when receipt-driven development is disabled for the clone after this status was read, or when START or STATUS refuses, the parent follows the RDD off path instead: run `axiom review assess --cwd <repo> --json` over the writer's diff and apply the tier table below. An unknown outcome is treated as not closed, never as terminal.
@@ -196,11 +198,13 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 | `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal — maintainer inspects authority/lineage, or `D`. |
 | `empty_base_diff_bootstrap_required` | Terminal — authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal — reduce B scope and start a new transaction, or `D`. |
+| `correction_context_budget_exceeded` | Release B authority with `gentle-ai review abandon` (run it with no flags for the binding template); `gentle-ai review invalidate` refuses here. Then review B as smaller candidates, or `D`. |
 | `managed_assets_outdated` | Run the `gentle-ai sync` command from the stop's `continuation`, then `S`. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover, or drop `--workspace-overlay` and start fresh; otherwise `D`. |
 | `corrected_candidate_unavailable` | Change B correction candidate, then `S`; do not reuse the pre-correction target. |
 | `recovery_scope_unchanged` | Change B target identity, then retry the exact returned `gentle-ai review recover`. |
 | `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable. If transient, re-run `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the slot. If not, reduce B scope and start a new `gentle-ai review start`, or `D`. |
+| `target_already_acknowledged` | Terminal: this exact target was already acknowledged and its review authority burned. No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target. |
 | `rdd_disabled` | `--scope clone` only clears a clone-local off; `gentle-ai review mode enable --scope global`, then `S`. |
 
 ## Delivery follows ordinary repository policy
@@ -407,7 +411,7 @@ Use native v2 for every declared artifact store, including Engram. The dispatche
 
 Only explicit authorized continuation may call `axiom sdd continue [change] --cwd <repo>`. First inspect with status and confirm the current human scope covers the selected change-directory marker. Read-only or excluded-marker scope forbids this mutating call; native allowed roots do not grant human consent. Preparation grants no source roots or attempts. Carry native `actionContext` intersected with the current narrower human scope into any executor.
 
-For authorized phase routing only: Route only by `nextRecommended` and dependency states; honor `blockedReasons` and never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase only within the authorized scope.
+For authorized phase routing only: Route only by `nextRecommended` and dependency states; honor `blockedReasons` and never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop; if `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase only within the authorized scope.
 
 If the binary is unavailable, use the existing prompt contract for non-authoritative diagnostics only. Do not fabricate native-shaped status, readiness, or mutation authority, and never substitute continue for inspection.
 
@@ -447,7 +451,27 @@ For this agent (sub-agent delegation): **Automatic** means phases run back-to-ba
 
 Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
 
-### Research and Pre-Proposal Gate (MANDATORY) — Offer `sdd-research` immediately after `sdd-explore`; selection makes completion mandatory. Before every `propose`, invoke `sdd-propose` only when selected research is `done` or research is unselected, product decisions are `confirmed`, evidence references are valid, and the selected artifact-store state is ready. The orchestrator owns product discovery. Automatic unresolved choices require one lossless grouped prompt with all context, options, consequences, allowed answers, and exact tokens; it MUST persist the pending state before prompting, then STOP without invoking `sdd-propose`. The proposer receives a confirmed pre-proposal handoff and MUST NOT interview or infer consent. Native `gentle-ai.sdd-status/v2` is the sole status contract.
+### Optional Research and Product Discovery
+
+Research remains optional, including after selection. After exploration, recommend a scoped investigation only when an unresolved question would benefit from external evidence. No fixed questionnaire, mandatory rounds or research-completion ceremony is required.
+
+- Establish the problem, intended outcome, constraints and current evidence. Inspect the code through ordinary exploration; pass relevant context to the output-only research collector.
+- The orchestrator owns product discovery. Ask one focused product question at a time and wait for the answer; do not choose for the user or repeat settled decisions. A delegated worker returns decision gaps to the orchestrator rather than interviewing the user or inventing choices.
+- Use external documentation or web tools only when actually available and authorized; prefer primary sources. Never infer access from a tool name, Bash, generic MCP access or a source-class declaration, and never bypass configured permissions.
+- Forward the research objective, relevant context, actual tool restrictions and these evidence-quality instructions to the collector. Adapt depth to uncertainty and consequences, not a fixed number of questions or sources.
+- Attribute material claims to URLs or supplied sources; distinguish verified facts from assumptions, contradictions, freshness limits and evidence gaps. Unavailable tools or unsupported claims must be disclosed, not represented as completed research.
+- Return concise findings, recommendations, tradeoffs, open questions and implementation implications. Research does not require a separate research proposal; pass useful findings into the normal requested SDD proposal.
+- Missing, partial, unavailable or divergent research metadata does not block proposal work. No request token, positive revision, readiness state or cross-store equality certificate is required. Pause only work dependent on an unresolved product decision or unsafe missing evidence; continue independent work within the authorized scope.
+- Keep research output in conversation unless the selected store or an explicit request calls for persistence. The orchestrator handles any authorized persistence and reports failed writes honestly; no research-store handshake admits proposals. Preserve historical research/preproposal artifacts and observations rather than rewriting or deleting them.
+
+#### Research-specific gatekeeper precedence
+
+For `sdd-research` only (including named-profile variants), this contract takes precedence over the generic Automatic Mode Gatekeeper, including its lazy-loaded workflow rules:
+
+- Validate honest findings, source attribution and disclosed limitations; do not require a persisted artifact or full-success status. Read back any artifact actually claimed as persisted, but accept useful inline or partial research with its gaps visible. Never manufacture success or evidence.
+- Do not automatically retry or STOP solely because research is partial, inline or tools are unavailable. Continue independent authorized work; this exception does not admit dishonest claims or unsupported conclusions.
+- Preserve real tool permissions, unresolved human product decisions and unsafe-dependent-work blocks. Terminal transport failures retain their existing stop/continuation rules; missing or malformed transport results are not usable partial research.
+- All other phases retain their existing gatekeeper checks and failure handling. This is not a general artifact, success or retry exemption for planning or implementation.
 
 ### Automatic Mode Gatekeeper (MANDATORY)
 
@@ -472,16 +496,6 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 **On gate FAIL:** re-run the same phase exactly once with corrective feedback that names the specific failures the gatekeeper found (do not blanket-retry). Re-run the gate on the new result. If it passes, continue the chain. If it fails again, STOP the automatic chain and surface a report to the user naming the phase, what the gatekeeper caught, both attempts, and the recommended fix. Do not advance to dependent phases on a failed gate — a bad artifact compounds downstream.
 
 The gatekeeper runs in addition to the Review Workload Guard and the Mandatory Delegation Triggers; it never relaxes them and never auto-marks anything reviewed in engram.
-
-### Native Runtime Attempt Authority (MANDATORY)
-
-Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `sdd-apply`, `sdd-verify`, or remediation continuation. It is the single attempt/budget authority for both OpenSpec and Engram; never persist caller-authored counters in OpenSpec files, Engram topics, prompts, or Pi state.
-
-1. Before an actor or harness launch, call `axiom sdd attempt acquire --cwd <repo> --change <change> --request-id <id> --work-unit <label> --evidence-goal <goal> --max-attempts <count> --max-changed-lines <count>`.
-2. Launch only when acquire returns `state: proceed`, and retain its opaque `token`. `blocked` or `complete` stops the launch.
-3. After a failed or passed run, call `axiom sdd attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> --outcome <passed|failed> --evidence-revision <sha256> --diagnosis "<proven-diagnosis>" --harness-disposition <reused|invalidated> --cleanup-evidence "<evidence>" --process-evidence "<evidence>"`. After an interrupted run, pass `--outcome interrupted` and omit `--evidence-revision`. When the acquire carried `--remediates-evidence-revision <sha256>`, settle with the same `--remediates-evidence-revision <sha256>`. Use a `<settle-id>` distinct from the acquire operation's request ID; reuse each operation's own ID only for its idempotent replay. Settle defines no other flag and derives native binding and remediation inputs itself.
-4. On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Axiom or the native ledger caused the independent consumer command failure.
-5. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
 
 ### Artifact Store Mode
 

@@ -15,7 +15,7 @@ import (
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 func TestCorrectionPlanStatusIsStableAcrossRestart(t *testing.T) {
@@ -814,13 +814,13 @@ func TestReviewStatusEscalationParityPreservesLegacyAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), payload)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), payload)
 	if err := status.Validate(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestReviewStatusEscalationRequiresV7Schema(t *testing.T) {
+func TestReviewStatusEscalationRequiresCurrentSchema(t *testing.T) {
 	identity := "sha256:" + strings.Repeat("a", 64)
 	native := reviewtransaction.TargetStatusResult{
 		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
@@ -841,7 +841,7 @@ func TestReviewStatusEscalationRequiresV7Schema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), payload)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), payload)
 
 	legacy := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV1)
 	legacy.Projection = status.Projection

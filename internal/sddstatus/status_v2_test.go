@@ -48,7 +48,6 @@ func TestProjectStatusV2RejectsUnsupportedValues(t *testing.T) {
 
 func TestStatusRenderersEmbedOnlyStatusV2Projection(t *testing.T) {
 	status := baseStatus(ArtifactStoreOpenSpec, "/repo", nil, nil, nil, "apply", nil)
-	status.RuntimeStatus = &RuntimeStatus{Schema: RuntimeStatusSchema, Change: "internal-only"}
 
 	rendered := map[string]string{
 		"markdown":     RenderMarkdown(status),

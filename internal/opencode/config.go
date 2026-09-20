@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // ConfigSnapshot is the file-backed OpenCode configuration view shared by UI,
@@ -52,7 +52,8 @@ func ResolveRuntimeConfigForHome(homeDir, projectDir string) (ConfigSnapshot, er
 			dirs = append(dirs, filepath.Dir(DefaultSettingsPathForHome(homeDir)))
 		}
 	}
-	root := map[string]any{}
+	snapshot.Providers = map[string]Provider{}
+	snapshot.Assignments = map[string]AssignmentPresence{}
 	var paths []string
 	for i := len(dirs) - 1; i >= 0; i-- {
 		for _, name := range []string{"opencode.json", "opencode.jsonc"} {
@@ -68,31 +69,16 @@ func ResolveRuntimeConfigForHome(homeDir, projectDir string) (ConfigSnapshot, er
 			if err != nil {
 				return snapshot, fmt.Errorf("read OpenCode config %s: %w", path, err)
 			}
-			overlayConfigFields(root, layer)
+			overlayConfiguredProviders(snapshot.Providers, layer)
+			overlayConfiguredAssignments(snapshot.Assignments, layer)
 			snapshot.Path = path
 			paths = append(paths, path)
 		}
 	}
-	snapshot.Providers = configuredProviders(root)
-	snapshot.Assignments = configuredAssignments(root)
 	if len(paths) > 1 {
 		snapshot.Diagnostics = append(snapshot.Diagnostics, fmt.Sprintf("OpenCode layered config (%s): higher-priority overrides are preserved. Model edits to %s may not be effective; file-backed model/profile values are not runtime assignments.", strings.Join(paths, " < "), snapshot.WritePath))
 	}
 	return snapshot, err
-}
-
-// overlayConfigFields overlays local object fields without interpreting installer
-// directives such as __replace__; those keys are ordinary data in runtime reads.
-func overlayConfigFields(base, layer map[string]any) {
-	for key, value := range layer {
-		baseMap, baseOK := base[key].(map[string]any)
-		layerMap, layerOK := value.(map[string]any)
-		if baseOK && layerOK {
-			overlayConfigFields(baseMap, layerMap)
-		} else {
-			base[key] = value
-		}
-	}
 }
 
 // EffectiveSettingsPath returns the shared OpenCode settings write path.
@@ -213,7 +199,7 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-func configuredProviders(root map[string]any) map[string]Provider {
+func legacyConfiguredProviders(root map[string]any) map[string]Provider {
 	providerRaw, _ := root["provider"].(map[string]any)
 	providers := make(map[string]Provider, len(providerRaw))
 	for id, raw := range providerRaw {
@@ -259,7 +245,7 @@ func configuredModels(provider map[string]any) map[string]Model {
 	return models
 }
 
-func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
+func legacyConfiguredAssignments(root map[string]any) map[string]AssignmentPresence {
 	agentRaw, _ := root["agent"].(map[string]any)
 	assignments := make(map[string]AssignmentPresence, len(agentRaw))
 	for name, raw := range agentRaw {
@@ -287,7 +273,7 @@ func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
 			}
 			continue
 		}
-		providerID, modelID, ok := model.SplitModelSpec(strings.TrimSpace(modelSpec))
+		assignment, ok := model.ParseModelReference(modelSpec)
 		if !ok {
 			assignments[key] = AssignmentPresence{Present: true}
 			if key != name {
@@ -295,8 +281,10 @@ func configuredAssignments(root map[string]any) map[string]AssignmentPresence {
 			}
 			continue
 		}
-		effort, _ := def["variant"].(string)
-		presence := AssignmentPresence{Present: true, Assignment: model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}}
+		if assignment.Effort == "" {
+			assignment.Effort, _ = def["variant"].(string)
+		}
+		presence := AssignmentPresence{Present: true, Assignment: assignment}
 		assignments[key] = presence
 		if key != name {
 			assignments[name] = presence

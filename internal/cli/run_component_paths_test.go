@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
 
 func TestComponentPathsSDDIncludesSystemPromptForPromptFileAdapters(t *testing.T) {
@@ -1241,6 +1241,30 @@ func TestComponentPathsVisualThemesMatchSelectedAdapter(t *testing.T) {
 		{model.AgentOpenCode, []string{filepath.Join(home, ".config", "opencode", "themes", "axiom.json"), filepath.Join(home, ".config", "opencode", "themes", "axiom-dark.json")}},
 	} {
 		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentClaudeTheme)
+		if len(paths) != len(tt.want) {
+			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+		}
+		for i := range tt.want {
+			if paths[i] != tt.want[i] {
+				t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
+			}
+		}
+	}
+}
+
+func TestComponentPathsOpenCodeGentleLogoMatchesSelectedAdapter(t *testing.T) {
+	home := t.TempDir()
+	for _, tt := range []struct {
+		agent model.AgentID
+		want  []string
+	}{
+		{model.AgentClaudeCode, []string{}},
+		{model.AgentOpenCode, []string{
+			filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+			filepath.Join(home, ".config", "opencode", "tui.json"),
+		}},
+	} {
+		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentOpenCodeGentleLogo)
 		if len(paths) != len(tt.want) {
 			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
 		}

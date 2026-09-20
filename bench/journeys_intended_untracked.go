@@ -79,7 +79,7 @@ func selectIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
 	if err := decodeWaveObservation(initialObservation, &initial, "initial Pi STATUS"); err != nil {
 		return err
 	}
-	if initial.Schema != statusSchemaV7 || initial.Authority != nil ||
+	if initial.Schema != statusSchemaV9 || initial.Authority != nil ||
 		initial.NextTransition.Kind != "collect" || initial.NextTransition.ReasonCode != "intended_untracked_selection_required" ||
 		len(initial.NextTransition.Collect.Inputs) != 1 {
 		return fmt.Errorf("initial Pi STATUS = %+v", initial)
@@ -118,7 +118,7 @@ func selectIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
 	if err := decodeWaveObservation(selectedObservation, &selected, "selected intended-untracked STATUS"); err != nil {
 		return err
 	}
-	if selected.Schema != statusSchemaV7 || selected.NextTransition.Kind != "execute" ||
+	if selected.Schema != statusSchemaV9 || selected.NextTransition.Kind != "execute" ||
 		selected.NextTransition.Execute.Operation != "review.start" ||
 		!slices.Equal(selected.Projection.Paths, []string{"README.md", selectedPaths[0], selectedPaths[1]}) {
 		return fmt.Errorf("selected Pi STATUS = %+v", selected)

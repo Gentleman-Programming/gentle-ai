@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
 )
 
 const ownershipSchema = "gentle-ai.telemetry-runtime-ownership/v1"
@@ -56,16 +58,39 @@ func ManagedPaths(configDir string) []string {
 	return []string{filepath.Join(configDir, "plugins", "telemetry-runtime.ts"), filepath.Join(configDir, ".gentle-ai-telemetry-runtime.json")}
 }
 
-// Refuse indirection inside the caller-resolved configuration root as well as
-// leaf symlinks. The generic journal only refuses a leaf or a root escape.
+// Refuse indirection strictly inside the caller-resolved configuration root,
+// both a symlinked intermediate directory (e.g. a symlinked "plugins"
+// directory) and a symlinked leaf managed file. The generic journal only
+// refuses a leaf or a root escape.
+//
+// The root itself may be a symlink: an agent's whole configuration directory
+// symlinked into a tracked dotfiles repository (stow/chezmoi pattern) is a
+// valid managed root as long as it resolves to an existing directory. That
+// symlink is not treated as indirection to refuse; only a dangling root
+// symlink, or one resolving to a non-directory, is still refused, since sync
+// cannot safely install files there.
 func checkManagedPath(configDir, path string) error {
-	for _, candidate := range []string{configDir, filepath.Dir(path), path} {
+	// ManagedPaths builds cleaned paths, so the root only matches a cleaned
+	// candidate; a caller-supplied trailing separator must not turn the
+	// accepted root symlink back into a refusal.
+	root := filepath.Clean(configDir)
+	if info, err := os.Lstat(root); err != nil && !os.IsNotExist(err) {
+		return err
+	} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if target, statErr := os.Stat(root); statErr != nil || !target.IsDir() {
+			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink that does not resolve to an existing directory; point it at a directory or replace it with one, then rerun 'gentle-ai sync'", root)
+		}
+	}
+	for _, candidate := range []string{filepath.Dir(path), path} {
+		if candidate == root {
+			continue
+		}
 		info, err := os.Lstat(candidate)
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("telemetry runtime symlink conflict: %s", candidate)
+			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink inside the managed root; replace it with a regular file or directory, then rerun 'gentle-ai sync'", candidate)
 		}
 	}
 	return nil
@@ -130,9 +155,15 @@ func inspect(configDir string) ([][]byte, error) {
 		(!managedModeMatches(0600, os.FileMode(manifest.File.Mode)) && !managedModeMatches(0644, os.FileMode(manifest.File.Mode))) || manifest.File.AfterHash != fmt.Sprintf("%x", sha256.Sum256([]byte(manifest.File.After))) {
 		return nil, conflict
 	}
-	embedded, err := assets.Read("opencode/plugins/telemetry-runtime.ts")
-	embeddedDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(embedded)))
+	assetDir := "opencode/plugins/"
 	_, approvedPrior := approvedPriorPluginDigests[manifest.File.AfterHash]
+	if strings.HasPrefix(manifest.File.After, "// gentle-ai:managed telemetry-runtime/v2\n") {
+		assetDir = "opencode/plugins-v2/"
+		// V2 has no released prior asset digest yet. V1 provenance never admits V2.
+		approvedPrior = false
+	}
+	embedded, err := assets.Read(assetDir + "telemetry-runtime.ts")
+	embeddedDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(embedded)))
 	if err != nil || (manifest.File.AfterHash != embeddedDigest && !approvedPrior) {
 		return nil, conflict
 	}
@@ -199,7 +230,7 @@ func CheckManaged(configDir string) error {
 // Reconcile installs or refreshes only this managed asset. Permission is checked
 // by the plugin at runtime, never by installation: disabled installs stay inert.
 func Reconcile(configDir string) ([]string, error) {
-	changed, _, err := ReconcileWithRollback(configDir)
+	changed, _, err := ReconcileForMajorWithRollback(configDir, opencode.RuntimeV1)
 	return changed, err
 }
 
@@ -235,15 +266,19 @@ func (f *guardedFile) restore() error {
 	return nil
 }
 
-// ReconcileWithRollback retains per-file journals for the outer lifecycle. The
-// caller must exclude this pair from unconditional snapshot restoration, even
+// ReconcileForMajorWithRollback retains per-file journals for the selected runtime.
+// The caller must exclude this pair from unconditional snapshot restoration, even
 // if reconcile fails or never runs. Safe members restore despite other conflicts.
-func ReconcileWithRollback(configDir string) (changed []string, rollback func() error, err error) {
+func ReconcileForMajorWithRollback(configDir string, major opencode.RuntimeMajor) (changed []string, rollback func() error, err error) {
+	assetDir, err := major.PluginAssetDirectory()
+	if err != nil {
+		return nil, nil, err
+	}
 	current, err := inspect(configDir)
 	if err != nil {
 		return nil, nil, err
 	}
-	content, err := assets.Read("opencode/plugins/telemetry-runtime.ts")
+	content, err := assets.Read(assetDir + "telemetry-runtime.ts")
 	if err != nil {
 		return nil, nil, err
 	}

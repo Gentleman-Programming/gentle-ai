@@ -14,23 +14,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodeconfig "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeconfig "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
 
 func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
@@ -1586,6 +1586,48 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	}
 }
 
+// TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected ensures that when
+// ComponentOpenCodeGentleLogo is in state, but OpenCode is not selected (e.g. only
+// Claude Code is selected), sync does not touch OpenCode directories or fail (issue #1212).
+func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"claude-code"},
+		SelectionConfigured: true,
+		Components: []model.ComponentID{
+			model.ComponentOpenCodeGentleLogo,
+		},
+		Persona: "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	result, err := RunSync([]string{"--agents", "claude-code"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if _, err := os.Stat(opencodeDir); !os.IsNotExist(err) {
+		t.Fatalf("expected OpenCode config dir %q to not exist, err: %v", opencodeDir, err)
+	}
+
+	for _, p := range result.ChangedFiles {
+		if strings.Contains(p, "opencode") {
+			t.Fatalf("unexpected opencode path in ChangedFiles: %s", p)
+		}
+	}
+}
+
 // TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent
 // reproduces issue #1440: when the persisted selection lacks the SDD component
 // but managed OpenCode plugins are already installed on disk, `gentle-ai sync`
@@ -2628,7 +2670,7 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 		want      bool
 	}{
 		{name: "explicit selected", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"codegraph"}}, want: true},
-		{name: "explicit none", persisted: state.InstallState{CommunityToolsConfigured: true}},
+		{name: "unknown persisted value", persisted: state.InstallState{CommunityToolsConfigured: true, CommunityTools: []string{"unknown"}}},
 		{name: "legacy managed marker", persisted: state.InstallState{}, want: true},
 	}
 	for _, test := range tests {
@@ -2637,6 +2679,9 @@ func TestRestorePersistedCommunityToolsRequiresInstallerSelection(t *testing.T) 
 			restorePersistedCommunityTools(home, &selection, test.persisted)
 			if got := selection.HasCommunityTool(model.CommunityToolCodeGraph); got != test.want {
 				t.Fatalf("CodeGraph selected = %t, want %t", got, test.want)
+			}
+			if !test.want && len(selection.CommunityTools) != 0 {
+				t.Fatalf("community tools = %v, want unknown values ignored", selection.CommunityTools)
 			}
 		})
 	}
@@ -3849,10 +3894,10 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		}
 	}
 
-	// post-apply leaves review to the parent after independent verification. It
+	// post-apply returns to SDD verification without offering review. It
 	// must not negotiate canonical STATUS or retain review authority itself.
 	for _, required := range []string{
-		"fresh `reviewOffer` block",
+		"SDD never offers or launches RDD",
 		"SDD does not retain, read, or persist review lineage, receipt, binding, successor, gate, transaction, or prior authority",
 	} {
 		if !strings.Contains(postApply, required) {

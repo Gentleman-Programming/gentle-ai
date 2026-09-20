@@ -167,7 +167,7 @@ If Strict TDD mode is active, apply the TDD cycle and explain it:
 "Step 7: Verify — We check that what we built matches what we specified."
 ```
 
-Run `sdd-verify` behavior. Explain the compliance matrix:
+Offer optional `sdd-verify` diagnostics; skip this step when not requested. If requested, explain observed checks and limitations:
 
 ```
 "Each spec scenario gets a verdict: COMPLIANT, FAILING, or UNTESTED.
@@ -208,7 +208,7 @@ Here's what we built together:
 - {list of files}
 
 **The SDD cycle in one line**:
-explore → propose → spec → design → tasks → apply → verify → archive
+explore → propose → spec → design → tasks → apply → archive (verify is optional diagnostics)
 
 **When to use SDD**: Any change where you want to agree on WHAT before writing code.
 Small tweaks? Just code. Features, APIs, architecture decisions? SDD first.

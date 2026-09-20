@@ -171,6 +171,15 @@ func TestCurrentTerminalJourneysRequireAcknowledgementBeforeBurn(t *testing.T) {
 	}
 }
 
+func TestAtomicBurnFinalStepPinsTerminalSelectorlessStatus(t *testing.T) {
+	journey := atomicReviewJourneys()[0]
+	last := journey.Steps[len(journey.Steps)-1]
+	if last.Name != "repeat selectorless STATUS for the exact unchanged target: terminal STOP target_already_acknowledged without START" ||
+		last.Requires != atomicReviewStatusCapability || last.Composite == nil {
+		t.Fatalf("j111 final step must prove #4405 terminal selectorless STATUS, got %+v", last)
+	}
+}
+
 func TestAtomicReviewJourneysRatifyAcknowledgementContract(t *testing.T) {
 	journeys := map[string]Journey{}
 	for _, journey := range Journeys() {
@@ -185,7 +194,8 @@ func TestAtomicReviewJourneysRatifyAcknowledgementContract(t *testing.T) {
 			"#3587", "four lenses", "correction", "validator",
 		},
 		"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged": {
-			"#3797", "selectorless STATUS", "printed START", "acknowledgement",
+			"#3797", "#4453", "#4405", "selectorless STATUS", "printed START", "acknowledgement",
+			"target_already_acknowledged", "exact unchanged target", "intentionally independent review", "unmanaged",
 		},
 		"j114-last-reviewer-capture-closes-and-burns": {
 			"#3797", "last admitted reviewer capture", "acknowledgement",

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // reviewTransitionArgumentValue finds one argument's value by name inside a
@@ -105,7 +105,7 @@ func TestReviewCaptureUnachievableLensSlotStopsStatusFromReofferingIt(t *testing
 	if after.NextTransition.Collect != nil {
 		t.Fatalf("a typed stop must never also carry a collect offer: %#v", after.NextTransition.Collect)
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v7.schema.json"), afterRaw)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), afterRaw)
 	if after.NextTransition.UnachievableLensSlots == nil || len(*after.NextTransition.UnachievableLensSlots) != 1 {
 		t.Fatalf("stop carries %#v, want exactly one recoverable declared slot", after.NextTransition.UnachievableLensSlots)
 	}

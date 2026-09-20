@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -11,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/sddstatus"
 )
 
 func TestRunSDDStatusAndContinueOmitExpectedPlanningBlockers(t *testing.T) {
@@ -182,63 +181,6 @@ func TestRunSDDContinuePrintsJSONWithInstructionsByDefault(t *testing.T) {
 	}
 	if status.NextRecommended != "apply" {
 		t.Fatalf("NextRecommended = %q, want apply", status.NextRecommended)
-	}
-}
-
-func TestSDDJSONCommandsHideInternalRuntimeStatusInRealGitRepository(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	seedSDDStatusReadyChange(t, repo, "runtime-projection", "- [ ] 1.1 Work\n")
-	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, "runtime-projection")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Begin(context.Background(), sddstatus.BeginAttemptRequest{
-		ExpectedRevision: "",
-		RequestID:        "begin-runtime-projection",
-		WorkUnit:         "status-projection",
-		EvidenceGoal:     "prove internal runtime status is not public",
-		MaxAttempts:      1,
-		MaxChangedLines:  20,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	internalStatus, err := sddstatus.Resolve(sddstatus.ResolveOptions{
-		CWD:        repo,
-		ChangeName: "runtime-projection",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if internalStatus.RuntimeStatus == nil {
-		t.Fatal("Resolve() RuntimeStatus = nil, want internal runtime authority")
-	}
-
-	for name, run := range map[string]func([]string, io.Writer) error{
-		"sdd-status":   RunSDDStatus,
-		"sdd-continue": RunSDDContinue,
-	} {
-		t.Run(name, func(t *testing.T) {
-			var stdout bytes.Buffer
-			if err := run([]string{"runtime-projection", "--cwd", repo, "--json"}, &stdout); err != nil {
-				t.Fatalf("%s error = %v", name, err)
-			}
-
-			var document map[string]json.RawMessage
-			if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
-				t.Fatalf("decode %s JSON: %v\n%s", name, err, stdout.String())
-			}
-			if _, leaked := document["runtimeStatus"]; leaked {
-				t.Fatalf("%s leaked runtimeStatus:\n%s", name, stdout.String())
-			}
-			var remediation map[string]json.RawMessage
-			if err := json.Unmarshal(document["remediationState"], &remediation); err != nil {
-				t.Fatalf("decode remediationState: %v", err)
-			}
-			if _, leaked := remediation["correctionBudget"]; leaked {
-				t.Fatalf("%s leaked remediationState.correctionBudget:\n%s", name, stdout.String())
-			}
-		})
 	}
 }
 

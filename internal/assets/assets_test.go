@@ -532,66 +532,25 @@ func TestSDDInitRequiresBoundedWorkspaceProjectDiscovery(t *testing.T) {
 }
 
 func TestSDDVerificationAndArchiveContractsIgnoreReviewContext(t *testing.T) {
-	statusContract := MustRead("skills/_shared/sdd-status-contract.md")
-	for _, want := range []string{
-		"`verify` is `ready` only when every implementation task is complete and required planning/apply evidence is available.",
-		"Review presence, absence, or non-allow state is informational: it never routes status to `review`, suppresses test/build execution, or blocks verification.",
-		"`archive` is `ready` only when tasks are complete and strict SDD verification passes.",
-	} {
-		if !strings.Contains(statusContract, want) {
-			t.Fatalf("sdd-status-contract missing independent SDD verification rule %q", want)
-		}
-	}
-	for _, forbidden := range []string{
-		"persisted bounded transaction reaches `ready_final_verification`",
-		"Missing or active review state routes to `review`",
-	} {
-		if strings.Contains(statusContract, forbidden) {
-			t.Fatalf("sdd-status-contract retains pre-verify review dependency %q", forbidden)
-		}
-	}
-
-	for _, path := range []string{
-		"skills/sdd-verify/SKILL.md",
-		"skills/sdd-verify/references/report-format.md",
-	} {
+	for _, path := range []string{"skills/sdd-verify/SKILL.md", "skills/_shared/sdd-status-contract.md", "skills/sdd-archive/SKILL.md"} {
 		content := MustRead(path)
-		for _, want := range []string{
-			"Review state is informational and never a verification prerequisite.",
-			"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
-			"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
-		} {
-			if !strings.Contains(content, want) {
-				t.Fatalf("%s missing independent verification rule %q", path, want)
-			}
-		}
-		for _, forbidden := range []string{"missing_review_authority", "authority_only_failure"} {
+		for _, forbidden := range []string{"sdd-verify-validate", "gentle-ai.verify-result/v1", "Task Completion Gate", "remediationState:", "before settlement"} {
 			if strings.Contains(content, forbidden) {
-				t.Fatalf("%s retains missing-review preflight denial %q", path, forbidden)
+				t.Errorf("%s retains %q", path, forbidden)
 			}
 		}
-	}
-
-	verifySkill := MustRead("skills/sdd-verify/SKILL.md")
-	for _, want := range []string{
-		"Review state is informational and never a verification prerequisite.",
-		"A missing, pending, invalid, or non-allow review state never suppresses tests or builds.",
-		"Exit `125` is reserved for an actual verification prerequisite or unavailable verification tooling, never missing review authority.",
-	} {
-		if got := strings.Count(verifySkill, want); got != 2 {
-			t.Fatalf("sdd-verify must state independent verification in both model sections: %q occurs %d times", want, got)
+		if !strings.Contains(content, "RDD") || !strings.Contains(content, "optional") {
+			t.Errorf("%s omits optional verification/RDD boundary", path)
 		}
 	}
-
-	archiveSkill := MustRead("skills/sdd-archive/SKILL.md")
-	for _, want := range []string{
-		"CRITICAL issues in `verify-report` still block archive with no prompt override",
-		"reviewOffer` is an invitation only and is never read as archive state",
-		"The Task Completion Gate and strict independent verification decide whether archive can proceed",
-	} {
-		if !strings.Contains(archiveSkill, want) {
-			t.Fatalf("sdd-archive missing independent archive prerequisite %q", want)
+	skill := MustRead("skills/sdd-verify/SKILL.md")
+	for _, want := range []string{"including partial work", "strict_tdd", "strict-tdd-verify.md", "never fabricate historical RED or GREEN", "command results and limitations", "do not fix code or tasks", "model/provider/profile/effort", "Findings do not start automatic review", "do not gate archive"} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("verify skill missing %q", want)
 		}
+	}
+	if strings.Count(skill, "name: sdd-verify") != 1 {
+		t.Fatal("verify must have one shared contract, not concatenated model documents")
 	}
 }
 
@@ -608,7 +567,7 @@ func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 		})
 	}
 
-	const archiveRoute = "Archive only when refreshed native SDD status reports `dependencies.archive: ready` and `nextRecommended: archive`."
+	const archiveRoute = "an explicit archive request may close unfinished work without a verification certificate."
 	for _, path := range []string{
 		"claude/commands/sdd-archive.md",
 		"opencode/commands/sdd-archive.md",
@@ -622,28 +581,16 @@ func TestSDDVerifyAndArchiveCommandsRouteOnlyFromRefreshedStatus(t *testing.T) {
 	}
 }
 
-func TestSDDVerifyAdmissionPrecedesPersistence(t *testing.T) {
+func TestSDDOptionalReportsNeedNoAdmissionCertificate(t *testing.T) {
 	for _, path := range []string{"skills/sdd-verify/SKILL.md", "skills/sdd-verify/references/report-format.md", "skills/_shared/sdd-phase-common.md", "skills/_shared/persistence-contract.md"} {
 		content := MustRead(path)
-		for _, want := range []string{"sdd-verify-validate", "exact candidate bytes", "before any OpenSpec or Engram write", "validator is unavailable", "valid `fail`"} {
-			if !strings.Contains(content, want) {
-				t.Fatalf("%s missing admission contract %q", path, want)
+		for _, forbidden := range []string{"sdd-verify-validate", "gentle-ai.verify-result/v1", "same admitted bytes", "before settlement"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("%s retains admission %q", path, forbidden)
 			}
 		}
-	}
-	contract := MustRead("skills/_shared/persistence-contract.md")
-	for _, want := range []string{"Do not create, truncate, delete, or overwrite any prior `verify-report`", "A valid `fail` report must be persisted", "validator is unavailable"} {
-		if !strings.Contains(contract, want) {
-			t.Fatalf("persistence contract missing %q", want)
-		}
-	}
-	if count := strings.Count(MustRead("skills/sdd-verify/SKILL.md"), "sdd-verify-validate"); count < 2 {
-		t.Fatalf("both sdd-verify model sections require admission, got %d occurrences", count)
-	}
-	for _, path := range []string{"claude/agents/sdd-verify.md", "claude/commands/sdd-verify.md", "cursor/agents/sdd-verify.md", "kimi/agents/sdd-verify.md", "kiro/agents/sdd-verify.md"} {
-		content := MustRead(path)
-		if skill, save := strings.Index(content, "sdd-verify/SKILL.md"), strings.LastIndex(content, "mem_save"); skill < 0 || save < 0 || skill > save {
-			t.Fatalf("%s must load the shared verify contract before persistence", path)
+		if !strings.Contains(strings.ToLower(content), "historical") {
+			t.Errorf("%s omits historical report preservation", path)
 		}
 	}
 }
@@ -950,17 +897,17 @@ func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
 		required    []string
 	}{
 		{
-			path: "claude/agents/sdd-research.md", declaration: "Evidence grants: documentation=[WebFetch]; open-web=[WebSearch,WebFetch].",
+			path: "claude/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools",
 			toolLine: "tools:", toolsExact: "tools: WebFetch, WebSearch", evidence: []string{"WebFetch", "WebSearch"},
 			forbidden: []string{"Read", "Edit", "Write", "mcp__plugin_engram_engram__"},
-			required:  []string{"already-persisted intent", "Do not read or mutate repository or Engram state", "bounded evidence envelope", "The orchestrator validates and persists this envelope"},
+			required:  []string{"Do not read or mutate repository or Engram state", "The orchestrator supplies relevant context and handles any authorized persistence", "never invent access or unsupported claims"},
 		},
 		{
-			path: "kiro/agents/sdd-research.md", declaration: "Evidence grants: documentation=[@context7]; open-web=[].",
+			path: "kiro/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools",
 			toolLine: "tools:", evidence: []string{"@context7"},
 		},
-		{path: "cursor/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
-		{path: "kimi/agents/sdd-research.md", declaration: "Evidence grants: documentation=[]; open-web=[]."},
+		{path: "cursor/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools"},
+		{path: "kimi/agents/sdd-research.md", declaration: "Use only actually available and authorized external tools"},
 	}
 
 	for _, tt := range tests {
@@ -968,8 +915,8 @@ func TestSDDResearchRuntimeAssetsDeclareExactEvidenceGrants(t *testing.T) {
 			content := MustRead(tt.path)
 			for _, required := range []string{
 				tt.declaration,
-				"Persistence tools are not evidence grants.",
-				"Unsupported or undeclared classes deny admission and emit no claims.",
+				"never bypass configured permissions.",
+				"Missing request IDs, revisions or store metadata are not admission barriers.",
 			} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing %q", tt.path, required)
@@ -1352,6 +1299,12 @@ func TestOpenCodeSDDCommandsAreOrchestratorGuarded(t *testing.T) {
 			requiredGuards = []string{"command is read-only", "Inspection needs no execution preflight", "without executing any recommendation"}
 			if strings.Contains(content, "SDD Session Preflight must already be complete") {
 				t.Fatal("read-only status requires mutation preflight")
+			}
+		}
+		if entry.Name() == "sdd-research.md" {
+			requiredGuards = []string{"Research remains optional, including after selection.", "actually available and authorized external tools", "wait; never answer for the user"}
+			if strings.Contains(content, "SDD Session Preflight must already be complete") {
+				t.Fatal("optional research requires administrative preflight")
 			}
 		}
 		for _, required := range requiredGuards {
@@ -2009,17 +1962,11 @@ func TestSDDStatusContractPreservesFrozenExternalV2Projection(t *testing.T) {
 		"amends: []",
 		"conflictsWith: []",
 		"sameDomainActiveChanges: []",
-		"remediationState:",
-		"failedEvidenceRevision:",
-		"reviewOffer:",
-		"available: true",
-		"invocation: <fresh review start command>",
 		"phaseInstructions:",
 		"apply: [<instruction strings>]",
 		"verify: [<instruction strings>]",
-		"remediate: [<instruction strings>]",
 		"archive: [<instruction strings>]",
-		"nextRecommended: propose | spec | design | tasks | apply | verify | remediate | archive | sdd-new | select-change | resolve-blockers",
+		"nextRecommended: propose | spec | design | tasks | apply | verify | archive | sdd-new | select-change | resolve-blockers",
 		"blockedReasons: []",
 		// #4372: the non-blocking diagnostics channel that keeps blockedReasons a pure gate.
 		"notes: []",
@@ -2290,88 +2237,16 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 	}
 }
 
-func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
-	const causalFailureDisclosure = "On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Gentle AI or the native ledger caused the independent consumer command failure."
-	const causalFailureDisclosureAxiom = "On any failed external command (test command or non-test external command) before a later native block, disclose in this order: **Primary failure:** identify the command in a privacy-safe form, its failed/cancelled/non-zero outcome, and only bounded relevant error evidence; never persist or print secrets, private values, raw environment, or unbounded output. **Verification consequence:** state that the current SDD phase/verification did not pass. **Attempt settlement:** when the native contract requires it, settle the current token with the correct failed/interrupted outcome and diagnosis, and disclose the settlement result before any later acquire/refusal. **Secondary governance block:** label a later objective-change/acquire refusal as secondary, never as the cause of the external command failure, and preserve the exact provider-owned runnable continuation unchanged. Never imply Axiom or the native ledger caused the independent consumer command failure."
-
-	paths := []string{
-		"antigravity/sdd-orchestrator.md",
-		"claude/sdd-orchestrator.md",
-		"codex/sdd-orchestrator.md",
-		"cursor/sdd-orchestrator.md",
-		"gemini/sdd-orchestrator.md",
-		"generic/sdd-orchestrator.md",
-		"hermes/sdd-orchestrator.md",
-		"kimi/sdd-orchestrator.md",
-		"kiro/sdd-orchestrator.md",
-		"opencode/sdd-orchestrator.md",
-		"qwen/sdd-orchestrator.md",
-		"windsurf/sdd-orchestrator.md",
-	}
-	required := []string{
-		"Native Runtime Attempt Authority",
-		"state: proceed",
-		"opaque `token`",
-		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
-		// #3696: the settle invocation is spelled out with every flag the CLI
-		// requires; an elided `...` sent orchestrators into a flag-by-flag
-		// refusal loop, and `--successor-lineage` never existed on settle.
-		"--outcome <passed|failed>", "--evidence-revision <sha256>", "--diagnosis \"<proven-diagnosis>\"",
-		"--harness-disposition <reused|invalidated>", "--cleanup-evidence \"<evidence>\"", "--process-evidence \"<evidence>\"",
-		"--outcome interrupted", "omit `--evidence-revision`", "--remediates-evidence-revision <sha256>",
-		"status|begin|finish|reset",
-		"never automatic",
-	}
+func TestSDDOrchestratorsDoNotRequireRuntimeAttempts(t *testing.T) {
+	paths := append(allSDDOrchestratorAssetPaths(t), "skills/_shared/sdd-orchestrator-sections.md", "skills/_shared/sdd-status-contract.md")
 	for _, path := range paths {
-		content := resolveSharedOrchestratorSections(MustRead(path))
-		if path == "claude/sdd-orchestrator.md" {
-			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
+		content, err := Read(path)
+		if err != nil {
+			t.Fatal(err)
 		}
-		section := markdownSection(content, "### Native Runtime Attempt Authority")
-		hasAcquire := strings.Contains(section, "axiom sdd attempt acquire") || strings.Contains(section, "gentle-ai sdd-attempt acquire")
-		if !hasAcquire {
-			t.Fatalf("%s missing native runtime-attempt authority wording for acquire", path)
-		}
-		hasSettle := strings.Contains(section, "axiom sdd attempt settle") || strings.Contains(section, "gentle-ai sdd-attempt settle")
-		if !hasSettle {
-			t.Fatalf("%s missing native runtime-attempt authority wording for settle", path)
-		}
-		hasCausal := strings.Contains(section, causalFailureDisclosure) || strings.Contains(section, causalFailureDisclosureAxiom)
-		if !hasCausal {
-			t.Fatalf("%s missing native runtime-attempt authority causal failure disclosure", path)
-		}
-		for _, want := range required {
-			if !strings.Contains(section, want) {
-				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
-			}
-		}
-		if strings.Contains(section, "--successor-lineage") {
-			t.Fatalf("%s names --successor-lineage, which sdd-attempt settle does not define", path)
-		}
-		last := -1
-		for _, label := range []string{
-			"**Primary failure:**",
-			"**Verification consequence:**",
-			"**Attempt settlement:**",
-			"**Secondary governance block:**",
-		} {
-			index := strings.Index(section, label)
-			if index < 0 || index <= last {
-				t.Fatalf("%s must order causal failure disclosure label %q after the preceding label", path, label)
-			}
-			last = index
-		}
-		for _, forbidden := range []string{
-			"gentle-ai.sdd-attempt-ledger/v1",
-			"attempt-ledger-{work-unit}.json",
-			"sdd/{change-name}/attempt-ledger",
-			"gentle-ai sdd-attempt status",
-			"gentle-ai sdd-attempt begin",
-			"gentle-ai sdd-attempt finish",
-			"gentle-ai sdd-attempt reset",
-		} {
-			if strings.Contains(section, forbidden) {
-				t.Fatalf("%s still delegates native authority to mutable artifact %q", path, forbidden)
+		for _, retired := range []string{"sdd-attempt acquire", "sdd-attempt settle", "Native Runtime Attempt Authority"} {
+			if strings.Contains(string(content), retired) {
+				t.Errorf("%s retains %q", path, retired)
 			}
 		}
 	}
@@ -2517,7 +2392,7 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		"Never resolve it silently",
 		"at verification time",
 		"record the failure as undiagnosed",
-		"requires re-running `sdd-verify`",
+		"unfinished tasks do not block archive",
 	} {
 		if !strings.Contains(skill, required) {
 			t.Fatalf("skills/sdd-archive/SKILL.md missing final-state authority wording %q", required)
@@ -3060,24 +2935,28 @@ func TestSDDSpecAndProposeNameTheChangeLocalSpecLocation(t *testing.T) {
 	}
 }
 
-// axiomODDWorkflowRequired lists the Spanish-language ODD/SDD dual-lane
-// guidance every Persona axiom asset must carry (INC-19 Phase 8, task
-// 8.1/8.2). Values mirror the real, shipped command contract from Phases 3
-// and 5 of the same increment — never an aspirational or invented shape.
+// axiomODDWorkflowRequired lists the Spanish-language ODD-as-default-protocol
+// guidance every Persona axiom asset must carry (INC-20 F6.1, tasks
+// 10.3/10.4). Values mirror the real doctrine absorbed from upstream
+// (commits 1b202d77, 70c774f8, cfc415ce, dcd2fa07 — see routing.go's "ODD
+// protocol" and "Mandatory Delegation Triggers" sections) — never an
+// aspirational or invented shape.
 var axiomODDWorkflowRequired = []string{
-	"## Flujo Dual: ODD y SDD",
-	"`odd/tasks/<feature>.md`",
-	"`odd/<feature>/tasks`",
-	"`axiom odd create <nombre>`",
-	"`axiom odd status [--json] [--check-mirror]`",
-	"`axiom odd promote <feature> [--dry-run] [--name <nombre>]`",
-	"orientación de lectura, no un disparador",
+	"## ODD: protocolo predefinido del orquestador",
+	"protocolo predefinido de este orquestador",
+	"siete pasos",
+	"Implementation Routing",
+	"SDD (Spec-Driven Development)",
+	"solo se activa por petición explícita del usuario o por la aceptación de una propuesta SDD",
 }
 
 // axiomODDWorkflowForbiddenTriggers guards risk R7 (capability
 // organic-agent-trigger-rules): this guidance must never wire a filesystem,
-// Git, or CI event to an automatic `axiom odd` invocation — only an explicit
-// human or agent command.
+// Git, or CI event to an automatic ODD invocation — only an explicit human or
+// agent action. It also guards D-02 (INC-20 F6.1): the retired `axiom odd
+// create|status|promote` CLI literals must never return to the doctrine,
+// because Fase 11 (F6.2a) retires that CLI surface and the guidance must stop
+// naming it before it disappears, even though the command still works today.
 var axiomODDWorkflowForbiddenTriggers = []string{
 	"pre-commit hook",
 	"post-commit hook",
@@ -3087,6 +2966,9 @@ var axiomODDWorkflowForbiddenTriggers = []string{
 	"runs automatically when",
 	"se ejecuta automáticamente cuando",
 	"on file save",
+	"axiom odd create",
+	"axiom odd status",
+	"axiom odd promote",
 }
 
 // axiomPersonaAssetPaths is the same asset family TestPersonaAxiomAssetsContract
@@ -3135,4 +3017,44 @@ func TestPersonaAxiomAssetsDescribeODDWorkflowDeterministically(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Native task-progress routing must not be overridden by a stale executor brief.
+func TestSDDOptionalVerificationConsumersPreserveDiagnosticSemantics(t *testing.T) {
+	t.Run("apply has no retired remediation obligations", func(t *testing.T) {
+		content := MustRead("skills/sdd-apply/SKILL.md")
+		for _, forbidden := range []string{"failed_evidence_revision", "exhausted attempt budget", "Focused remediation is the sole"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("apply retains retired obligation %q", forbidden)
+			}
+		}
+	})
+	for _, runtime := range []string{"cursor", "kimi", "kiro"} {
+		t.Run(runtime, func(t *testing.T) {
+			content := MustRead(runtime + "/agents/sdd-verify.md")
+			for _, want := range []string{"Read design artifact (when available)", "Missing inputs limit conclusions", "never invent passing checks or completed tasks", "refreshed native task-progress routing", "independent of diagnostic findings"} {
+				if !strings.Contains(content, want) {
+					t.Errorf("%s verify missing %q", runtime, want)
+				}
+			}
+			for _, forbidden := range []string{"(if PASS)", "(if FAIL/blockers found)", "Read design artifact:"} {
+				if strings.Contains(content, forbidden) {
+					t.Errorf("%s verify retains %q", runtime, forbidden)
+				}
+			}
+		})
+	}
+	t.Run("Claude command retrieves only available artifacts", func(t *testing.T) {
+		content := MustRead("claude/commands/sdd-verify.md")
+		for _, want := range []string{"Missing inputs limit conclusions", "never invent passing checks or completed tasks", "if spec_id exists:", "if design_id exists:", "if tasks_id exists:"} {
+			if !strings.Contains(content, want) {
+				t.Errorf("Claude verify missing %q", want)
+			}
+		}
+		for _, forbidden := range []string{"Continue only when tasks and implementation evidence exist", "for EVERY artifact", "\n  mem_get_observation(id:"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("Claude verify retains prerequisite %q", forbidden)
+			}
+		}
+	})
 }

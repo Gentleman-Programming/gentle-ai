@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // reviewNarrationTier classifies every registered human-facing emission into
@@ -127,6 +127,16 @@ var reviewStopReasonNarration = map[string]string{
 	"empty_base_diff_bootstrap_required": "This selected committed base has no changes to review. " +
 		"If you are following the authorized first-publication bootstrap, a maintainer must first insert an empty root below the content commit. " +
 		"Then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition --base-ref <empty-root> --committed-only`.",
+	// The correction-stage sibling is rendered, not literal:
+	// reviewCorrectionContextBudgetAction fills the concrete release with the
+	// values InspectCompactPristineAbandonment publishes for the real
+	// authority, exactly as the escalation entry above renders its template
+	// with live numbers. The sample below pins the fixed English around those
+	// slots, and it uses the eligible branch because that is the branch that
+	// has to carry a runnable command.
+	reviewCorrectionContextBudgetCode: reviewCorrectionContextBudgetAction(
+		reviewtransaction.CompactAbandonEligibility{Eligible: true, Revision: "<revision>", SnapshotIdentity: "<target>"},
+		"<repo>", "<id>"),
 	"lens_context_budget_exceeded": "This frozen candidate cannot fit complete reviewer evidence without truncation, so this review stops before an inspection result. " +
 		"Reduce the candidate scope or target identity, then run `gentle-ai review start` for that new candidate; or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"managed_assets_outdated": "This installation's reviewer assets no longer match this version of Gentle AI, so this review stops before it starts. " +
@@ -146,6 +156,9 @@ var reviewStopReasonNarration = map[string]string{
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
 		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
+	"target_already_acknowledged": "This exact target was already acknowledged and its review authority was burned. " +
+		"No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. " +
+		"Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target.",
 	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",

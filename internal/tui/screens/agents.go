@@ -3,9 +3,10 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 func AgentOptions() []model.AgentID {
@@ -17,7 +18,7 @@ func AgentOptions() []model.AgentID {
 	return ids
 }
 
-func RenderAgents(selected []model.AgentID, cursor int) string {
+func RenderAgents(selected []model.AgentID, cursor int, runtimeMajor ...opencode.RuntimeMajor) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Select AI Agents"))
@@ -34,9 +35,15 @@ func RenderAgents(selected []model.AgentID, cursor int) string {
 	for idx, agent := range agents {
 		_, checked := selectedSet[agent]
 		focused := idx == cursor
-		b.WriteString(renderCheckbox(string(agent), checked, focused))
+		label := string(agent)
+		if agent == model.AgentOpenCode && len(runtimeMajor) > 0 && runtimeMajor[0] == opencode.RuntimeV2 {
+			label = "OpenCode V2 (beta)"
+		}
+		b.WriteString(renderCheckbox(label, checked, focused))
 	}
 
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("OpenCode V2 (beta): this integration is being tested."))
 	b.WriteString("\n")
 	actions := []string{"Continue", "Back"}
 	b.WriteString(renderOptions(actions, cursor-len(agents)))

@@ -1,14 +1,16 @@
 package sdd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const (
@@ -16,10 +18,9 @@ const (
 	boundedPiReviewContractAsset = "skills/_shared/review-ledger-contract-pi.md"
 )
 
-// reviewerBindingEnvironmentVariable is the prefix the orchestrator contract
-// tells the parent to assemble before running a lens. Naming it inside the lens
-// prompt is what lets a reviewer resolve subject_hash from its own instructions
-// instead of depending on whatever context the orchestrator happened to carry.
+// reviewerBindingEnvironmentVariable is the provider-owned prefix delivered to
+// a lens task. Naming it inside the lens prompt lets a reviewer resolve
+// subject_hash from its own instructions instead of depending on caller prose.
 //
 // Both markers are the canonical constants the renderer emits, never a second
 // spelling declared here. A definition that named its own marker is exactly how
@@ -67,7 +68,7 @@ const (
 	researchLifecyclePlaceholder            = "{{GENTLE_AI_RESEARCH_LIFECYCLE}}"
 	openCodeConcurrentReviewerGroupContract = "### OpenCode Concurrent Reviewer Group (MANDATORY)\n\n" +
 		"When one fresh `collect.inputs` set contains multiple distinct independent `review.capture-result` reviewer slots, emit one grouped OpenCode `task` tool-call response with one foreground task per input in provider order. For canonical 4R, preserve `review-risk`, `review-resilience`, `review-readability`, `review-reliability` order.\n\n" +
-		"Each task submits only its own provider-issued `review.capture-result` binding, exact lens as `subagent_type`, and exact binding prompt prefix. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
+		"Each task copies its own `provider_task.agent` exactly as `subagent_type` and its own `provider_task.prompt` exactly as `prompt`. Do not parse, reconstruct, fence, or append text to either value. Do not set a `background` flag. Do not wait between launches; wait for every foreground task result. Completion order is not authority: shared Go admission/election owns reduction and semantics. The final admitted capture owns reduction and closure. On `approved`, authority is already burned: do not FINALIZE or issue a trailing STATUS. On `correction_required`, continue only through exact bound STATUS and the provider-issued `review.capture-correction-plan` binding. After a malformed or nonterminal capture, reconcile through exact bound STATUS and retry only an identically reoffered slot."
 
 	// concurrentReviewerGroupContract is the transport-neutral counterpart of
 	// the OpenCode block above for every other registered review runtime. The
@@ -122,7 +123,11 @@ func boundedReviewContractFor(agent model.AgentID) string {
 	contract := selectReviewerCaptureTransport(boundedReviewContractSource(), agent)
 	switch {
 	case agent == model.AgentOpenCode:
-		return contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+		rendered := contract + "\n\n" + openCodeConcurrentReviewerGroupContract
+		if major, err := opencode.DetectRuntimeMajor(context.Background()); err == nil && major == opencode.RuntimeV2 {
+			rendered = "OpenCode V2 review transport is unavailable pending organic runtime conformance. Do not start a review or launch reviewer subagents on V2. The following contract is staged reference, not capability authorization.\n\n" + strings.NewReplacer("`task`", "`subagent`", "`subagent_type`", "`agent`").Replace(rendered)
+		}
+		return rendered
 	case reviewerprovider.RegisteredRuntime(agent):
 		return contract + "\n\n" + concurrentReviewerGroupContract
 	}
@@ -173,14 +178,7 @@ func selectReviewerCaptureTransport(contract string, agent model.AgentID) string
 }
 
 func researchLifecycleContract() string {
-	source := assets.MustRead("skills/_shared/research-lifecycle.md")
-	start := strings.Index(source, "<!-- research-lifecycle-gate:start -->")
-	end := strings.Index(source, "<!-- research-lifecycle-gate:end -->")
-	if start < 0 || end < start {
-		return ""
-	}
-	start += len("<!-- research-lifecycle-gate:start -->")
-	return strings.TrimSpace(source[start:end])
+	return strings.TrimSpace(assets.MustRead("skills/_shared/research-lifecycle.md"))
 }
 
 // renderBoundedReviewAsset resolves one embedded asset into the exact bytes a

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
 // Service provee la interfaz unificada para operaciones de documentación viva.

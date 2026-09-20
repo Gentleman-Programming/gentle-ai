@@ -127,7 +127,7 @@ func TestStorage_PurgeOlderThanRetainsRecentRows(t *testing.T) {
 		t.Fatalf("InsertEvent(recent): %v", err)
 	}
 
-	purged, err := s.PurgeOlderThan(ctx, cutoff)
+	purged, err := s.PurgeOlderThan(ctx, cutoff, cutoff)
 	if err != nil {
 		t.Fatalf("PurgeOlderThan: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestStorage_PurgeOlderThanIsExclusiveOnRecentBoundary(t *testing.T) {
 		t.Fatalf("InsertEvent: %v", err)
 	}
 
-	purged, err := s.PurgeOlderThan(ctx, cutoff)
+	purged, err := s.PurgeOlderThan(ctx, cutoff, cutoff)
 	if err != nil {
 		t.Fatalf("PurgeOlderThan: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestStorage_SubSecondEventStaysOnItsOwnDayAndSurvivesRetention(t *testing.T
 	// A retention cutoff at exactly midnight of the event's own day must
 	// not purge it: 00:00:00.5 is chronologically AFTER, not before, a
 	// whole-second midnight cutoff on the same day.
-	purged, err := s.PurgeOlderThan(ctx, truncateToDay(day))
+	purged, err := s.PurgeOlderThan(ctx, truncateToDay(day), truncateToDay(day))
 	if err != nil {
 		t.Fatalf("PurgeOlderThan: %v", err)
 	}
@@ -222,5 +222,36 @@ func TestStorage_SubSecondEventStaysOnItsOwnDayAndSurvivesRetention(t *testing.T
 	}
 	if len(remaining) != 1 {
 		t.Errorf("event was purged a day early: eventsOnDay = %d, want 1 to survive", len(remaining))
+	}
+}
+
+func TestStorage_OpenStorageUsesWALJournalMode(t *testing.T) {
+	s := openTestStorage(t)
+
+	var mode string
+	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want %q", mode, "wal")
+	}
+}
+
+func TestStorage_OpenStorageAcceptsInMemoryDatabase(t *testing.T) {
+	s, err := OpenStorage(":memory:")
+	if err != nil {
+		t.Fatalf("OpenStorage(:memory:): %v", err)
+	}
+	defer s.Close()
+
+	// :memory: cannot use WAL; SQLite silently falls back and reports the
+	// mode it actually applied instead of erroring. OpenStorage must not
+	// fail just because it asked for a mode SQLite could not honor here.
+	var mode string
+	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if mode == "" {
+		t.Error("journal_mode: empty")
 	}
 }

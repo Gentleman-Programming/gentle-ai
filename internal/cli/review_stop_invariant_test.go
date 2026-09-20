@@ -40,6 +40,11 @@ const reviewStopReasonDocsTerminalPrefix = "Terminal"
 // removed from this table entirely, not marked with either disposition — see
 // the organic-dx Phase 3 investigation note on escalated_recovery_requires_changed_target.
 var reviewStopInvariantClassification = map[string]reviewStopDisposition{
+	"target_already_acknowledged": {
+		Terminal:      true,
+		Justification: "the exact target was already acknowledged and its authority burned; no review continuation is required, delivery follows ordinary repository policy, and changed targets remain eligible",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"captured_artifacts_unverifiable": {
 		Terminal:      true,
 		Justification: "inspection failure of an already-captured artifact, not a routable state; requires a maintainer to inspect the review authority store directly",
@@ -71,6 +76,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      true,
 		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
 		ToolFault:     reviewStopToolFault(false),
+	},
+	"correction_context_budget_exceeded": {
+		Terminal:      false,
+		Justification: "caller-continuable: unlike its lens sibling this stop arrives with review authority in place and lens results already admitted, so `review invalidate` refuses and `review abandon` is the one exit that still accepts the state; a caller holding --cwd access can run it without a maintainer, and the docs row names that concrete command rather than opening with \"Terminal\"",
 	},
 	"managed_assets_outdated": {
 		Terminal:      false,

@@ -28,6 +28,9 @@ import (
 )
 
 func main() {
+	if handled, code := policyRuntimeVersionFixture(os.Args, os.Stdout); handled {
+		os.Exit(code)
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 type orchestratorContractSection struct {
@@ -107,15 +107,6 @@ var currentOpenCodeOrchestratorSections = []orchestratorContractSection{
 			"gatekeeper runs after every phase",
 			"re-run the same phase exactly once",
 			"Do not advance to dependent phases on a failed gate",
-		},
-	},
-	{
-		name:   "runtime attempt authority",
-		marker: "### Native Runtime Attempt Authority (MANDATORY)",
-		sentinels: []string{
-			"provider-owned Git-common-dir runtime ledger",
-			"sdd attempt acquire|sdd-attempt acquire",
-			"sdd attempt settle|sdd-attempt settle",
 		},
 	},
 	{

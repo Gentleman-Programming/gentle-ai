@@ -21,7 +21,7 @@ func TestRunMaintenance_RollsUpYesterdayAndPurgesOldEvents(t *testing.T) {
 		t.Fatalf("InsertEvent(old): %v", err)
 	}
 
-	if err := RunMaintenance(ctx, s, now, 90); err != nil {
+	if err := RunMaintenance(ctx, s, now, 90, 2); err != nil {
 		t.Fatalf("RunMaintenance: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestRunMaintenance_CatchesUpMultipleUnrolledDays(t *testing.T) {
 		t.Fatalf("InsertEvent(day3): %v", err)
 	}
 
-	if err := RunMaintenance(ctx, s, now, 90); err != nil {
+	if err := RunMaintenance(ctx, s, now, 90, 2); err != nil {
 		t.Fatalf("RunMaintenance: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestRunMaintenance_CancelBetweenDaysLeavesEarlierDaysCompleteAndLaterAbsent
 	// RunDailyRollup means this override never reaches day1's own
 	// transaction, so day1 completes and commits regardless.
 	ctx := &cancelAfterCalls{Context: bg, cancelAfter: 0}
-	if err := RunMaintenance(ctx, s, now, 90); err != nil {
+	if err := RunMaintenance(ctx, s, now, 90, 2); err != nil {
 		t.Fatalf("RunMaintenance: %v", err)
 	}
 

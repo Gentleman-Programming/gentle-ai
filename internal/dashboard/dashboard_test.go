@@ -2,9 +2,7 @@ package dashboard
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -14,8 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/odd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/hub"
 )
 
 func TestServiceWorkspace(t *testing.T) {
@@ -840,182 +837,5 @@ func TestEcosystemEndpoints(t *testing.T) {
 	router.ServeHTTP(rr7, req7)
 	if rr7.Code != http.StatusOK && rr7.Code != http.StatusInternalServerError {
 		t.Errorf("código inesperado para upgrade: %d", rr7.Code)
-	}
-}
-
-// TestODDEndpoints cubre la tarea 6.5 (REQ-19.13): los cinco endpoints REST
-// del carril ODD sobre un workspace de prueba, con el mismo patrón que
-// TestArchiveEndpoints/TestProjectsEndpoints — httptest.NewRequest +
-// router.ServeHTTP sobre server.Router() — en vez del httptest.NewServer con
-// listener real que sí usa TestHTTPEndpoints: ambos ejercitan el mismo
-// ServeMux, y el primero es el que domina en este fichero para pruebas de
-// ruta por método y código de estado.
-func TestODDEndpoints(t *testing.T) {
-	root := t.TempDir()
-	if _, err := odd.Create(root, "gestion-inventario", "2026-09-17"); err != nil {
-		t.Fatalf("odd.Create() error = %v", err)
-	}
-
-	svc := NewService(root)
-	server := NewServer(svc)
-	router := server.Router()
-
-	// 1. GET /api/odd lista los documentos vivos existentes.
-	reqList := httptest.NewRequest(http.MethodGet, "/api/odd", nil)
-	rrList := httptest.NewRecorder()
-	router.ServeHTTP(rrList, reqList)
-	if rrList.Code != http.StatusOK {
-		t.Fatalf("GET /api/odd retornó %d: %s", rrList.Code, rrList.Body.String())
-	}
-	var list []odd.FeatureSummary
-	if err := json.Unmarshal(rrList.Body.Bytes(), &list); err != nil {
-		t.Fatalf("JSON inválido en GET /api/odd: %v", err)
-	}
-	if len(list) != 1 || list[0].Feature != "gestion-inventario" {
-		t.Errorf("GET /api/odd = %+v, esperado 1 feature 'gestion-inventario'", list)
-	}
-
-	// 2. POST /api/odd crea un documento vivo nuevo (201).
-	createBody, _ := json.Marshal(ODDCreateRequest{Feature: "modulo-pagos"})
-	reqCreate := httptest.NewRequest(http.MethodPost, "/api/odd", bytes.NewReader(createBody))
-	rrCreate := httptest.NewRecorder()
-	router.ServeHTTP(rrCreate, reqCreate)
-	if rrCreate.Code != http.StatusCreated {
-		t.Fatalf("POST /api/odd retornó %d: %s", rrCreate.Code, rrCreate.Body.String())
-	}
-
-	// 3. POST /api/odd rechaza un nombre inválido (400).
-	invalidBody, _ := json.Marshal(ODDCreateRequest{Feature: "Nombre Invalido"})
-	reqInvalid := httptest.NewRequest(http.MethodPost, "/api/odd", bytes.NewReader(invalidBody))
-	rrInvalid := httptest.NewRecorder()
-	router.ServeHTTP(rrInvalid, reqInvalid)
-	if rrInvalid.Code != http.StatusBadRequest {
-		t.Errorf("POST /api/odd con nombre inválido retornó %d, esperado 400", rrInvalid.Code)
-	}
-
-	// 4. GET /api/odd/{feature} no colisiona con POST /api/odd/promote
-	// (resolución de patrón más largo del ServeMux, igual que
-	// /api/increments/continue frente a /api/increments/).
-	reqDetail := httptest.NewRequest(http.MethodGet, "/api/odd/modulo-pagos", nil)
-	rrDetail := httptest.NewRecorder()
-	router.ServeHTTP(rrDetail, reqDetail)
-	if rrDetail.Code != http.StatusOK {
-		t.Fatalf("GET /api/odd/modulo-pagos retornó %d: %s", rrDetail.Code, rrDetail.Body.String())
-	}
-	var detail odd.Document
-	if err := json.Unmarshal(rrDetail.Body.Bytes(), &detail); err != nil {
-		t.Fatalf("JSON inválido en GET /api/odd/modulo-pagos: %v", err)
-	}
-	if detail.Feature != "modulo-pagos" {
-		t.Errorf("GET /api/odd/modulo-pagos Feature = %q, esperado %q", detail.Feature, "modulo-pagos")
-	}
-
-	// GET /api/odd/{feature} inexistente responde 404.
-	reqMissing := httptest.NewRequest(http.MethodGet, "/api/odd/no-existe", nil)
-	rrMissing := httptest.NewRecorder()
-	router.ServeHTTP(rrMissing, reqMissing)
-	if rrMissing.Code != http.StatusNotFound {
-		t.Errorf("GET /api/odd/no-existe retornó %d, esperado 404", rrMissing.Code)
-	}
-
-	// 5. POST /api/odd/promote con dry_run:true no escribe nada.
-	// Document.Raw no viaja en el JSON (json:"-"): se lee el fichero
-	// directamente para construir el cuerpo candidato del exportador falso.
-	rawBytes, err := os.ReadFile(filepath.Join(root, "odd", "tasks", "modulo-pagos.md"))
-	if err != nil {
-		t.Fatalf("leyendo el documento vivo creado: %v", err)
-	}
-	rawContent := string(rawBytes)
-
-	promoteBody, _ := json.Marshal(ODDPromoteRequest{Feature: "modulo-pagos", DryRun: true})
-	reqPromote := httptest.NewRequest(http.MethodPost, "/api/odd/promote", bytes.NewReader(promoteBody))
-	rrPromote := httptest.NewRecorder()
-	router.ServeHTTP(rrPromote, reqPromote)
-	if rrPromote.Code != http.StatusOK {
-		t.Fatalf("POST /api/odd/promote retornó %d: %s", rrPromote.Code, rrPromote.Body.String())
-	}
-	var promoteResult odd.PromoteResult
-	if err := json.Unmarshal(rrPromote.Body.Bytes(), &promoteResult); err != nil {
-		t.Fatalf("JSON inválido en POST /api/odd/promote: %v", err)
-	}
-	if !promoteResult.DryRun {
-		t.Errorf("POST /api/odd/promote(dry_run).DryRun = false, esperado true")
-	}
-	if _, statErr := os.Stat(filepath.Join(root, "openspec", "changes", "modulo-pagos")); !os.IsNotExist(statErr) {
-		t.Errorf("POST /api/odd/promote(dry_run) no debía crear openspec/changes/modulo-pagos/, statErr = %v", statErr)
-	}
-
-	// 6. POST /api/odd/check-mirror devuelve los tres estados según el
-	// Exporter inyectado en el servidor de pruebas.
-	mirrorTests := []struct {
-		name      string
-		export    odd.Exporter
-		wantState odd.MirrorState
-	}{
-		{
-			name: "sincronizado",
-			export: func(ctx context.Context, root string) ([]odd.Observation, error) {
-				return []odd.Observation{{Topic: odd.MirrorTopic("modulo-pagos"), Content: rawContent}}, nil
-			},
-			wantState: odd.MirrorSynced,
-		},
-		{
-			name: "divergente",
-			export: func(ctx context.Context, root string) ([]odd.Observation, error) {
-				return []odd.Observation{{Topic: odd.MirrorTopic("modulo-pagos"), Content: "# ODD: modulo-pagos\notro contenido"}}, nil
-			},
-			wantState: odd.MirrorDiverged,
-		},
-		{
-			name: "no disponible",
-			export: func(ctx context.Context, root string) ([]odd.Observation, error) {
-				return nil, errors.New("engram no responde")
-			},
-			wantState: odd.MirrorUnavailable,
-		},
-	}
-	for _, tt := range mirrorTests {
-		t.Run("check-mirror/"+tt.name, func(t *testing.T) {
-			server.oddExporter = tt.export
-			mirrorBody, _ := json.Marshal(ODDMirrorRequest{Feature: "modulo-pagos"})
-			reqMirror := httptest.NewRequest(http.MethodPost, "/api/odd/check-mirror", bytes.NewReader(mirrorBody))
-			rrMirror := httptest.NewRecorder()
-			router.ServeHTTP(rrMirror, reqMirror)
-			if rrMirror.Code != http.StatusOK {
-				t.Fatalf("POST /api/odd/check-mirror retornó %d: %s", rrMirror.Code, rrMirror.Body.String())
-			}
-			var report odd.MirrorReport
-			if err := json.Unmarshal(rrMirror.Body.Bytes(), &report); err != nil {
-				t.Fatalf("JSON inválido en POST /api/odd/check-mirror: %v", err)
-			}
-			if report.State != tt.wantState {
-				t.Errorf("POST /api/odd/check-mirror State = %q, esperado %q", report.State, tt.wantState)
-			}
-		})
-	}
-
-	// 7. Método no permitido en cada ruta (405). Los casos 3 y 4 verifican
-	// además que "/api/odd/promote" y "/api/odd/check-mirror" no colisionan
-	// con el patrón genérico "/api/odd/{feature}": si lo hicieran, GET
-	// respondería 404 (feature "promote"/"check-mirror" no encontrada) en
-	// vez de 405.
-	methodNotAllowed := []struct {
-		method string
-		path   string
-	}{
-		{http.MethodDelete, "/api/odd"},
-		{http.MethodPost, "/api/odd/modulo-pagos"},
-		{http.MethodGet, "/api/odd/promote"},
-		{http.MethodGet, "/api/odd/check-mirror"},
-	}
-	for _, mna := range methodNotAllowed {
-		t.Run("405/"+mna.method+"/"+mna.path, func(t *testing.T) {
-			req := httptest.NewRequest(mna.method, mna.path, nil)
-			rr := httptest.NewRecorder()
-			router.ServeHTTP(rr, req)
-			if rr.Code != http.StatusMethodNotAllowed {
-				t.Errorf("%s %s retornó %d, esperado 405", mna.method, mna.path, rr.Code)
-			}
-		})
 	}
 }

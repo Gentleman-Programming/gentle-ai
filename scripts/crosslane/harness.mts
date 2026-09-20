@@ -2,17 +2,14 @@
 //
 // Emulates ONLY the OpenCode Task hook surface (tool.execute.before /
 // tool.execute.after) around the REAL transport plugin bytes copied next to
-// this file as plugin.mts. The binding frame is assembled HERE, on the host
-// side, with the host's own JSON serialization - exactly the seam where
-// opencode_review_transport_binding_invalid escaped to the field.
+// this file as plugin.mts. The harness accepts only the provider-owned Task
+// fields returned by STATUS, exactly as the live orchestration contract does.
 //
 // Input: one case config JSON path as argv[2]:
 //   {
 //     "name": string,
 //     "subagent": string,                     // e.g. review-reliability
-//     "binding_pairs": [[key, value], ...],   // host-assembled lens binding
-//     "body": string,                         // prompt body after the binding
-//     "prompt": string,                       // OR a verbatim prompt (role frames)
+//     "prompt": string,                       // provider_task.prompt verbatim
 //     "task_output": string,                  // raw reviewer/validator output
 //     "skip_after": boolean                    // materialize only, then dispose
 //   }
@@ -29,17 +26,13 @@ import plugin from "./plugin.mts"
 interface CaseConfig {
   name: string
   subagent: string
-  binding_pairs?: [string, unknown][]
-  body?: string
-  prompt?: string
+  prompt: string
   task_output: string
   skip_after?: boolean
 }
 
 const config = JSON.parse(readFileSync(process.argv[2], "utf8")) as CaseConfig
-const prompt =
-  config.prompt ??
-  "GENTLE_AI_REVIEW_BINDING " + JSON.stringify(Object.fromEntries(config.binding_pairs ?? [])) + "\n" + (config.body ?? "")
+const prompt = config.prompt
 
 const hooks = await plugin({
   directory: process.cwd(),

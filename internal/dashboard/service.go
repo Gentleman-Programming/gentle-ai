@@ -13,18 +13,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/app"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/autoskill"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/hub"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/app"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/autoskill"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/hub"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/livingdoc"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/semantic"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
 // Service provee la lógica de lectura y agregación del estado de Axiom.
@@ -351,31 +351,6 @@ func (s *Service) GetRoleStatus(changeName string) (*multirole.BarrierReport, er
 	}
 
 	return multirole.EvaluateBarrier(path, changeName, roles)
-}
-
-// GetRoles retorna los roles definidos en axiom.yaml.
-func (s *Service) GetRoles() (map[string]RoleMeta, error) {
-	root := s.getRootPath()
-	cfg, err := workspace.LoadConfig(filepath.Join(root, "axiom.yaml"))
-	if err != nil {
-		return nil, fmt.Errorf("error cargando axiom.yaml: %w", err)
-	}
-
-	rolesMap := make(map[string]RoleMeta)
-	for id, r := range cfg.Roles {
-		var repoPaths []string
-		for _, repo := range r.Repositories {
-			repoPaths = append(repoPaths, repo.Path)
-		}
-
-		rolesMap[id] = RoleMeta{
-			Name:         r.Name,
-			GatePolicy:   "blocking",
-			Repositories: repoPaths,
-			Tech:         r.Tech,
-		}
-	}
-	return rolesMap, nil
 }
 
 // GetHandoff obtiene el relevo estructurado handoff.md de un cambio.
@@ -750,13 +725,6 @@ func (s *Service) GetHubManager() *hub.Manager {
 	return s.hubManager
 }
 
-// SetHubManager asigna el gestor de Hub del servicio.
-func (s *Service) SetHubManager(m *hub.Manager) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hubManager = m
-}
-
 var validIncrementNameRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // CreateIncrement crea un nuevo cambio SDD con su plantilla inicial de proposal.md en español.
@@ -889,7 +857,6 @@ func (s *Service) VerifyIncrement(name string) (*IncrementActionResponse, error)
 	if name == "" {
 		return nil, fmt.Errorf("el nombre del incremento es obligatorio")
 	}
-	root := s.getRootPath()
 	targetPath, kind, err := s.FindIncrementPath(name)
 	if err != nil || kind != "active" {
 		return nil, fmt.Errorf("el incremento %q no existe como cambio activo", name)
@@ -906,24 +873,15 @@ func (s *Service) VerifyIncrement(name string) (*IncrementActionResponse, error)
 		}, nil
 	}
 
-	var stdout bytes.Buffer
-	runErr := cli.RunSDDVerifyValidate([]string{"--report", verifyFile, "--cwd", root}, &stdout)
-	outStr := stdout.String()
-	if runErr != nil && outStr == "" {
-		outStr = runErr.Error()
-	}
-
-	errMsg := ""
-	if runErr != nil {
-		errMsg = runErr.Error()
-	}
-
+	// La absorción de upstream (INC-20 F4, commit 62ce74b7) retira el
+	// subcomando "sdd verify-validate": la verificación pasa a ser opcional
+	// e informativa y deja de ser una compuerta independiente de archive.
 	return &IncrementActionResponse{
-		Success:    runErr == nil,
+		Success:    true,
 		ChangeName: name,
 		Action:     "sdd-verify-validate",
-		Output:     outStr,
-		Error:      errMsg,
+		Output:     "verify-report.md existe. La validación formal contra especificaciones ya no es una compuerta independiente de archive tras la absorción de upstream (verificación opcional, sin atestación).",
+		Error:      "",
 	}, nil
 }
 

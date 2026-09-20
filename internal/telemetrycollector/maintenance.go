@@ -10,7 +10,9 @@ import (
 // up every UTC day from the last rolled day (or the oldest raw event, if
 // nothing has ever been rolled up) through yesterday — catching up in one
 // run after the process was down for a while — and purges legacy raw events and
-// whole runtime deliveries older than retentionDays. Runtime-only databases
+// whole runtime deliveries older than retentionDays, and runtime delivery
+// identities (the --runtime-store=metrics dedup table) older than
+// runtimeDedupDays, never longer than retentionDays. Runtime-only databases
 // still reach purge when the legacy rollup range is empty. Runtime observations
 // are not rolled up here; their age is server receipt time, not activity time.
 //
@@ -21,7 +23,10 @@ import (
 // before the next day starts rather than mid-day. The next run resumes
 // exactly where this one left off, since lastRolledDay only ever reflects
 // committed days.
-func RunMaintenance(ctx context.Context, s *Storage, now time.Time, retentionDays int) error {
+func RunMaintenance(ctx context.Context, s *Storage, now time.Time, retentionDays, runtimeDedupDays int) error {
+	if runtimeDedupDays < 1 { // would purge every identity each run and disable replay rejection
+		return fmt.Errorf("runtime dedup days must be at least 1, got %d", runtimeDedupDays)
+	}
 	yesterday := truncateToDay(now.UTC()).AddDate(0, 0, -1)
 
 	start, err := s.rollupStartDay(ctx, yesterday)
@@ -40,8 +45,13 @@ func RunMaintenance(ctx context.Context, s *Storage, now time.Time, retentionDay
 	}
 
 	cutoff := truncateToDay(now.UTC()).AddDate(0, 0, -retentionDays)
-	if _, err := s.PurgeOlderThan(ctx, cutoff); err != nil {
-		return fmt.Errorf("purge events before %s: %w", cutoff.Format(dayLayout), err)
+	dedupCutoff := truncateToDay(now.UTC()).AddDate(0, 0, -runtimeDedupDays)
+	if dedupCutoff.Before(cutoff) {
+		dedupCutoff = cutoff
+	}
+	if _, err := s.PurgeOlderThan(ctx, cutoff, dedupCutoff); err != nil {
+		// PurgeOlderThan already names which purge failed and its cutoff.
+		return fmt.Errorf("purge: %w", err)
 	}
 
 	return nil

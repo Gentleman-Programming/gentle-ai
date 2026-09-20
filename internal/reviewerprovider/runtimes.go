@@ -1,6 +1,6 @@
 package reviewerprovider
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v3/internal/model"
 
 // registeredRuntimeIdentities is deliberately closed. A runtime appears here
 // only after the compiled review boundary admits it: Claude's prompt-carried

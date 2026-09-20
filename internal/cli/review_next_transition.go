@@ -1,14 +1,16 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const (
@@ -34,7 +36,7 @@ type ReviewNextTransition struct {
 	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
 	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
-	Continuation      *ReviewManagedAssetsContinuation         `json:"continuation,omitempty"`
+	Continuation      *ReviewStopContinuation                  `json:"continuation,omitempty"`
 	// UnachievableLensSlots is a pointer-to-slice, exactly like
 	// ReviewTransitionExecution.SelectorArguments, so ReviewNextTransition
 	// stays a comparable struct (== / != against a zero value) for the
@@ -194,11 +196,31 @@ type ReviewTransitionArtifact struct {
 }
 
 func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
+	transition := resolveReviewNextTransition(status, selectedLenses, artifacts, artifactErr, input)
+	// Gate only active capture offers; recovery, acknowledgement, and existing
+	// stops retain their routing. Freshness never changes the bound authority.
+	if status.Applicability == reviewtransaction.TargetApplicabilityCurrent && status.Authority != nil && transition.Collect != nil {
+		for _, capture := range transition.Collect.Inputs {
+			if _, native := reviewNativeCaptureVerb(capture.CaptureOperation); native || capture.ProviderTask != nil {
+				if provenance := checkManagedReviewerAssets(); provenance.stale() {
+					return reviewManagedAssetsStopTransition(input.RuntimeAgent, provenance.staleAssetIdentities())
+				}
+				break
+			}
+		}
+	}
+	return transition
+}
+
+func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
 	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		switch status.Applicability {
 		case reviewtransaction.TargetApplicabilityUnrelated:
 			if input.RDDModeResolved && !input.RDDMode.Enabled() {
 				return reviewStopTransition("rdd_disabled")
+			}
+			if status.Action == reviewtransaction.TargetStatusActionStop && status.Replayability == reviewtransaction.ReplayabilityNotReplayable {
+				return reviewStopTransition("target_already_acknowledged")
 			}
 			if input.Selector != nil && input.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
 				input.Selector.Projection == reviewtransaction.ProjectionStaged {
@@ -221,21 +243,8 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			// instead, and — exactly like the refusal it replaces — name it
 			// without deriving it, so the caller keeps choosing the scope.
 			if status.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(status.Projection.Paths) == 0 {
-				// Issue #4412: when STATUS could resolve the remote default
-				// branch's unique merge-base, the reviewed work is already
-				// committed and the truthful answer is the executable
-				// committed-range START the working `--base-ref --committed-only`
-				// STATUS path already publishes, not the unroutable
-				// external.select_base_ref collect (transition_input.submission
-				// is a closed oneOf, so no submission was ever schema-legal).
-				// The collect below stays the fallback for every repository
-				// shape the derivation cannot resolve.
-				if derived := status.derivedCommittedRange; derived != nil {
-					return reviewExecuteTransition("fresh_target_ready", "review.start",
-						reviewStartArguments(*derived, input.StartLineage, input.RuntimeAgent, derived.intendedUntracked),
-						[]ReviewTransitionArgument{{Name: "target_identity", Value: derived.TargetIdentity}},
-						ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: derived.TargetIdentity}, nil)
-				}
+				// Unambiguous committed ranges were already resolved before
+				// classification. Only the genuinely unresolved case remains.
 				return reviewCollectTransition("empty_candidate_base_ref_required", ReviewTransitionInput{
 					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
 					Arguments: reviewTargetArguments(status),
@@ -300,6 +309,20 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
 		}
 		return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: reviewApprovedAcknowledgementTransition(status.repositoryRoot, acknowledgement)}
+	}
+	// The correction-stage gate follows the captured_artifacts_unverifiable
+	// precedent below, which already extends past reviewing with
+	// `|| input.ValidationRequest != nil`, and it is deliberately ordered
+	// AHEAD of it. The same deterministic budget refusal also surfaces as an
+	// unreadable validator slot on this path, and reporting it as unverifiable
+	// captured evidence would send the operator to inspect a store that is
+	// perfectly intact. The refusal is about what cannot be assembled, and its
+	// continuation is a release rather than a smaller candidate, so it carries
+	// its own code (#4680).
+	if input.CorrectionContextBudgetExceeded &&
+		(status.Authority.State == reviewtransaction.StateCorrectionRequired ||
+			status.Authority.State == reviewtransaction.StateValidating || input.ValidationRequest != nil) {
+		return reviewCorrectionContextBudgetStopTransition(status.repositoryRoot, input.RuntimeAgent, input.CorrectionReleaseEligibility)
 	}
 	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
@@ -422,8 +445,18 @@ func reviewProviderRoleInputName(role reviewProviderRole) string {
 }
 
 func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
-	if reviewProviderHostRelayMaterializeRuntime(runtime) || reviewProviderCaptureRuntime(runtime) {
-		input, err := reviewProviderHostRelayRoleInput(binding, role, runtime, validation)
+	switch {
+	case reviewProviderHostRelayMaterializeRuntime(runtime):
+		// The pi host relay never receives a Go-owned spawn (#4611): it
+		// materializes the opaque prompt itself and submits its own
+		// reviewer's raw result back through the submission descriptor.
+		input, err := reviewProviderRoleMaterializeSubmissionInput(binding, role, runtime, validation)
+		if err != nil {
+			return reviewStopTransition("captured_artifacts_unverifiable")
+		}
+		return reviewCollectTransition(reason, input)
+	case reviewProviderCaptureRuntime(runtime):
+		input, err := reviewProviderCompiledRoleExecuteInput(binding, role, runtime, validation)
 		if err != nil {
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
@@ -453,16 +486,16 @@ const (
 	reviewCaptureValidationCaptureOperation = "review.capture-validation"
 )
 
-// reviewProviderHostRelayRoleInput renders the one pi host-relay collection
-// input for a Go-issued non-lens provider role. The vector is self-contained:
-// its --execute form materializes the role request in Go, runs the Go-owned
-// locked-down pi process on it, and admits the raw bytes -- so the rendered
-// arguments themselves advance authority and no submission descriptor exists
-// for a caller to author a verdict through.
-func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) (ReviewTransitionInput, error) {
+// reviewProviderRoleBindingArguments builds the binding argument prefix
+// (lineage, expected-revision, target, repository-context, and -- for the
+// targeted validator -- the frozen request-hash) and the input's name,
+// schema, and capture_operation shared by both the compiled --execute
+// rendering and the pi materialize+submission rendering, so the two forms
+// can never drift on which role maps to which schema or operation.
+func reviewProviderRoleBindingArguments(binding ReviewTransitionBinding, role reviewProviderRole, validation *reviewtransaction.TargetedValidationRequest) ([]ReviewTransitionArgument, ReviewTransitionInput, error) {
 	if binding.LineageID == "" || !providerSHA256(binding.Revision) || !providerSHA256(binding.TargetIdentity) ||
 		reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
-		return ReviewTransitionInput{}, errors.New("provider role host-relay binding is incomplete") // refusal:by-design world-action: only a Go-issued STATUS transition may bind a host-relay provider role input
+		return nil, ReviewTransitionInput{}, errors.New("provider role binding is incomplete") // refusal:by-design world-action: only a Go-issued STATUS transition may bind a provider role input
 	}
 	arguments := append(reviewBindingArguments(binding),
 		reviewRepositoryContextArguments(binding)...)
@@ -473,18 +506,72 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 		input.CaptureOperation = reviewCaptureRefuterCaptureOperation
 	case reviewerprovider.RoleTargetedValidator:
 		if validation == nil {
-			return ReviewTransitionInput{}, errors.New("provider targeted validator host-relay input requires the frozen validation request") // refusal:by-design world-action: only STATUS can bind the frozen correction request
+			return nil, ReviewTransitionInput{}, errors.New("provider targeted validator input requires the frozen validation request") // refusal:by-design world-action: only STATUS can bind the frozen correction request
 		}
 		arguments = append(arguments, ReviewTransitionArgument{Name: "request-hash", Value: validation.RequestHash})
 		input.Schema = reviewValidatorSchemaID
 		input.CaptureOperation = reviewCaptureValidationCaptureOperation
 		input.ValidationRequest = validation
 	default:
-		return ReviewTransitionInput{}, fmt.Errorf("unsupported provider role %q", role) // refusal:by-design world-action: the pi host relay may collect only compiled provider roles
+		return nil, ReviewTransitionInput{}, fmt.Errorf("unsupported provider role %q", role) // refusal:by-design world-action: only the refuter and targeted-validator roles render a non-lens collection input
+	}
+	return arguments, input, nil
+}
+
+// reviewProviderCompiledRoleExecuteInput renders the one collection input for
+// a compiled in-process provider role (claude-code, codex). The vector is
+// self-contained: its --execute form runs the Go-owned compiled adapter
+// directly on the Go-materialized role request and admits its raw bytes in
+// the same process, so the rendered arguments themselves advance authority
+// and no submission descriptor exists for a caller to author a verdict
+// through.
+func reviewProviderCompiledRoleExecuteInput(binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) (ReviewTransitionInput, error) {
+	arguments, input, err := reviewProviderRoleBindingArguments(binding, role, validation)
+	if err != nil {
+		return ReviewTransitionInput{}, err
 	}
 	input.Arguments = append(arguments,
 		ReviewTransitionArgument{Name: "agent", Value: string(runtime)},
 		ReviewTransitionArgument{Name: "execute", Value: "true"})
+	return input, nil
+}
+
+// reviewProviderRoleMaterializeSubmissionInput renders the one pi host-relay
+// collection input for a Go-issued non-lens provider role, mirroring
+// reviewCaptureInput's host-relay lens shape exactly: the materialize
+// arguments are only the prelude that prints the Go-materialized opaque role
+// prompt, and the submission descriptor -- the same binding tokens with the
+// raw provider result substituted into --input -- is what actually advances
+// authority. Go never spawns a process for this role (#4611): the host
+// materializes, runs its own reviewer out of process, and submits the raw
+// bytes back through --input, admitted by the same raw admitters --execute
+// used to feed.
+func reviewProviderRoleMaterializeSubmissionInput(binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) (ReviewTransitionInput, error) {
+	arguments, input, err := reviewProviderRoleBindingArguments(binding, role, validation)
+	if err != nil {
+		return ReviewTransitionInput{}, err
+	}
+	// The submission repeats every binding token INCLUDING --agent -- the raw
+	// verdict is only admissible from the identified host-relay runtime -- and
+	// drops only the read-only --materialize prelude selector.
+	tokens := make([]string, 0, len(arguments)+2)
+	for _, argument := range arguments {
+		tokens = append(tokens, reviewTransitionArgumentToken(argument))
+	}
+	tokens = append(tokens,
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "agent", Value: string(runtime)}),
+		"--input="+reviewSubmissionValuePlaceholder)
+	verb, _ := reviewNativeCaptureVerb(input.CaptureOperation)
+	input.Submission = &ReviewTransitionSubmission{
+		OperationToken: verb, ArgumentTokens: tokens,
+		Value: &ReviewTransitionSubmissionValue{
+			Slot: input.Name, Domain: "artifact_path_or_stdin", Schema: input.Schema,
+			SubstitutionLocation: len(tokens) - 1,
+		},
+	}
+	input.Arguments = append(arguments,
+		ReviewTransitionArgument{Name: "agent", Value: string(runtime)},
+		ReviewTransitionArgument{Name: "materialize", Value: "true"})
 	return input, nil
 }
 
@@ -509,7 +596,7 @@ func reviewRootActionForTransition(action reviewtransaction.TargetStatusAction, 
 
 func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, unachievable []reviewtransaction.CompactUnachievableLensAttempt, runtime ...model.AgentID) ReviewNextTransition {
 	providerRuntime := model.AgentID("")
-	if len(runtime) > 0 && (reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {
+	if len(runtime) > 0 && (runtime[0] == model.AgentOpenCode || reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {
 		providerRuntime = runtime[0]
 	}
 	captured := make(map[int]bool, len(artifacts))
@@ -539,7 +626,15 @@ func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLen
 	inputs := make([]ReviewTransitionInput, 0)
 	for order, lens := range selectedLenses {
 		if !captured[order] {
-			inputs = append(inputs, reviewCaptureInput(binding, lens, order, context, providerRuntime))
+			capture := reviewCaptureInput(binding, lens, order, context, providerRuntime)
+			if providerRuntime == model.AgentOpenCode {
+				task, err := newReviewLensProviderTask(capture.Arguments, capture.ArtifactSubject)
+				if err != nil {
+					return reviewStopTransition("captured_artifacts_unverifiable")
+				}
+				capture.ProviderTask = &task
+			}
+			inputs = append(inputs, capture)
 		}
 	}
 	if len(inputs) == 0 {
@@ -688,6 +783,35 @@ func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int,
 	return input
 }
 
+// newReviewLensProviderTask produces the exact opaque Task input OpenCode V1
+// relays. The prompt is the same strict binding line the native transport
+// already admits, but Go now owns its JSON bytes instead of asking the model
+// to rename and serialize STATUS argument rows.
+func newReviewLensProviderTask(arguments []ReviewTransitionArgument, subject *reviewtransaction.ArtifactSubject) (ReviewProviderTask, error) {
+	values, err := reviewTransitionArgumentMap(arguments)
+	if err != nil || subject == nil || len(values) != 7 ||
+		values["lineage"] != subject.LineageID || values["expected-revision"] != subject.AuthorityRevision ||
+		values["target"] != subject.TargetIdentity || values["lens"] != subject.Lens || values["subject-hash"] != subject.SubjectHash ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(values["repository-context"]) != nil {
+		return ReviewProviderTask{}, errors.New("lens provider task binding is incomplete") // refusal:by-design world-action: only a complete native capture input may issue an OpenCode lens task
+	}
+	order, err := strconv.Atoi(values["order"])
+	if err != nil || order != subject.SelectedOrder {
+		return ReviewProviderTask{}, errors.New("lens provider task selected order is invalid") // refusal:by-design world-action: the opaque task must bind the exact selected slot
+	}
+	payload, err := json.Marshal(reviewLensContextBinding{
+		Lineage: values["lineage"], Target: values["target"], Lens: values["lens"], Order: order,
+		Revision: values["expected-revision"], RepositoryContext: values["repository-context"], SubjectHash: subject.SubjectHash,
+	})
+	if err != nil {
+		return ReviewProviderTask{}, err
+	}
+	return ReviewProviderTask{
+		Agent: values["lens"], Role: string(reviewerprovider.RoleLens),
+		Prompt: reviewLensContextBindingHeader + " " + string(payload),
+	}, nil
+}
+
 type reviewNextTransitionInput struct {
 	Gate                                           reviewtransaction.GateKind
 	Successor, Reason, Actor, Authorization        string
@@ -709,6 +833,13 @@ type reviewNextTransitionInput struct {
 	RDDMode                                        reviewtransaction.RDDModeStatus
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
+	CorrectionContextBudgetExceeded                bool
+	// CorrectionReleaseEligibility is the read-only abandonment prediction
+	// taken beside the correction budget probe, so the stop it produces can
+	// name the release concretely instead of leaving a caller to recover it
+	// from prose. Nil means the prediction was never taken or failed, and the
+	// stop then names nothing rather than a command that may be refused.
+	CorrectionReleaseEligibility *reviewtransaction.CompactAbandonEligibility
 	// UnachievableLensAttempts carries every bound host declaration the
 	// active reviewing phase currently holds (issue #3442), so
 	// reviewMissingCaptureTransition can stop re-offering a slot a host
@@ -1250,6 +1381,20 @@ func reviewManagedAssetsStopTransition(agent model.AgentID, staleAssets []string
 	return transition
 }
 
+// reviewCorrectionContextBudgetStopTransition follows the managed-assets
+// precedent above for the one other stop that has a runnable follow-up: the
+// release this refusal requires travels with the stop, because the shipped Pi
+// ledger row points at the stop's continuation and the Pi facade contract may
+// not name the raw `gentle-ai review ` route itself.
+func reviewCorrectionContextBudgetStopTransition(repo string, agent model.AgentID, eligibility *reviewtransaction.CompactAbandonEligibility) ReviewNextTransition {
+	// The literal mirrors reviewManagedAssetsStopTransition: the shipped
+	// stop-reason registries are proven against the codes this file emits
+	// literally.
+	transition := reviewStopTransition("correction_context_budget_exceeded")
+	transition.Continuation = reviewCorrectionReleaseContinuation(repo, string(agent), eligibility)
+	return transition
+}
+
 func reviewReasonDescription(reason string) string {
 	switch reason {
 	case "fresh_target_ready":
@@ -1274,6 +1419,8 @@ func reviewReasonDescription(reason string) string {
 		return "Committed base-diff has no paths; empty-root bootstrap is required"
 	case "lens_context_budget_exceeded":
 		return "Frozen reviewer context exceeds the native evidence budget"
+	case reviewCorrectionContextBudgetCode:
+		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
 	case "missing_authority_binding":

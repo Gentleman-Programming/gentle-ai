@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 // profileNameRegex matches valid profile name slugs: lowercase alphanumeric + hyphens,
@@ -182,18 +182,13 @@ func DetectProfiles(settingsPath string) ([]model.Profile, error) {
 		return nil, fmt.Errorf("read settings %q: %w", settingsPath, err)
 	}
 
-	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		return nil, fmt.Errorf("parse settings %q: %w", settingsPath, err)
 	}
-
-	agentRaw, ok := root["agent"]
-	if !ok {
-		return []model.Profile{}, nil
-	}
-	agentMap, ok := agentRaw.(map[string]any)
-	if !ok {
-		return []model.Profile{}, nil
+	agentMap := map[string]any{}
+	for name, presence := range opencode.ConfigAssignments(root) {
+		agentMap[name] = map[string]any{"model": presence.Assignment.FullID(), "variant": presence.Assignment.Effort}
 	}
 
 	// Scan every canonical profile key, not just the orchestrator. A prior sync
@@ -250,17 +245,14 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 	if agentMap == nil {
 		return model.ModelAssignment{}
 	}
-	modelStr, _ := agentMap["model"].(string)
-	if modelStr == "" {
-		return model.ModelAssignment{}
-	}
-
-	providerID, modelID, ok := model.SplitModelSpec(modelStr)
+	assignment, ok := model.ParseModelReference(agentMap["model"])
 	if !ok {
 		return model.ModelAssignment{}
 	}
-	effort, _ := agentMap["variant"].(string)
-	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID, Effort: effort}
+	if assignment.Effort == "" {
+		assignment.Effort, _ = agentMap["variant"].(string)
+	}
+	return assignment
 }
 
 // GenerateProfileOverlay builds an OpenCode agent overlay JSON for the given
@@ -474,32 +466,26 @@ func cleanupStaleProfileJDAgents(settingsPath string, profile model.Profile) (fi
 		return filemerge.WriteResult{}, nil
 	}
 
-	agentRaw, ok := root["agent"]
-	if !ok {
-		return filemerge.WriteResult{}, nil
-	}
-	agentMap, ok := agentRaw.(map[string]any)
-	if !ok {
-		return filemerge.WriteResult{}, nil
-	}
-
 	deleted := 0
 	suffix := "-" + profile.Name
-	for _, jd := range opencode.JDPhases() {
-		if hasProfileAssignment(profile, jd) {
-			continue
-		}
-		key := jd + suffix
-		if _, exists := agentMap[key]; exists {
-			delete(agentMap, key)
-			deleted++
+	for _, section := range []string{"agent", "agents"} {
+		agentMap, _ := root[section].(map[string]any)
+		for _, jd := range opencode.JDPhases() {
+			if hasProfileAssignment(profile, jd) {
+				continue
+			}
+			key := jd + suffix
+			if _, exists := agentMap[key]; exists {
+				delete(agentMap, key)
+				deleted++
+			}
 		}
 	}
+
 	if deleted == 0 {
 		return filemerge.WriteResult{}, nil
 	}
 
-	root["agent"] = agentMap
 	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return filemerge.WriteResult{}, fmt.Errorf("marshal settings: %w", err)
@@ -810,22 +796,14 @@ func RemoveProfileAgents(settingsPath string, profileName string) error {
 		return fmt.Errorf("parse settings %q: %w", settingsPath, err)
 	}
 
-	agentRaw, ok := root["agent"]
-	if !ok {
-		return nil // No-op: no agent section
-	}
-	agentMap, ok := agentRaw.(map[string]any)
-	if !ok {
-		return nil // No-op: malformed
-	}
-
-	// Delete the profile keys, tracking how many were actually present.
-	keysToDelete := ProfileAgentKeys(profileName)
 	deleted := 0
-	for _, key := range keysToDelete {
-		if _, exists := agentMap[key]; exists {
-			delete(agentMap, key)
-			deleted++
+	for _, section := range []string{"agent", "agents"} {
+		agentMap, _ := root[section].(map[string]any)
+		for _, key := range ProfileAgentKeys(profileName) {
+			if _, exists := agentMap[key]; exists {
+				delete(agentMap, key)
+				deleted++
+			}
 		}
 	}
 
@@ -836,7 +814,6 @@ func RemoveProfileAgents(settingsPath string, profileName string) error {
 		return nil
 	}
 
-	root["agent"] = agentMap
 	out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)

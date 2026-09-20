@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const ReviewIntegrationStatusSchemaV1 = "gentle-ai.review-integration.status/v1"
@@ -29,8 +29,12 @@ const ReviewIntegrationStatusSchemaV6 = "gentle-ai.review-integration.status/v6"
 const ReviewIntegrationStatusSchemaIDV6 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v6.schema.json"
 const ReviewIntegrationStatusSchemaV7 = "gentle-ai.review-integration.status/v7"
 const ReviewIntegrationStatusSchemaIDV7 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v7.schema.json"
-const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV7
-const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV7
+const ReviewIntegrationStatusSchemaV8 = "gentle-ai.review-integration.status/v8"
+const ReviewIntegrationStatusSchemaIDV8 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v8.schema.json"
+const ReviewIntegrationStatusSchemaV9 = "gentle-ai.review-integration.status/v9"
+const ReviewIntegrationStatusSchemaIDV9 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v9.schema.json"
+const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV9
+const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV9
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -104,16 +108,8 @@ type ReviewTargetStatusResult struct {
 	repositoryRoot    string
 	rddMode           reviewtransaction.RDDModeStatus
 	rddModeResolved   bool
-	// derivedCommittedRange is the executable base-diff status a selectorless
-	// STATUS derived from the remote default branch's unique merge-base when
-	// the fresh workspace candidate froze zero paths (issue #4412). Its
-	// presence turns the otherwise-unroutable base_ref collect into the
-	// committed-range START the working `--base-ref --committed-only` STATUS
-	// path already publishes; validateNextTransitionTargets validates the
-	// emitted execute against this exact derived status.
-	derivedCommittedRange *ReviewTargetStatusResult
 	// committedRangeBaseRef, when non-empty, is the base *commit* STATUS
-	// derived for a set derivedCommittedRange. reviewStartArguments prefers it
+	// derived for its effective candidate. reviewStartArguments prefers it
 	// over Projection.BaseTree for a base-diff projection so the emitted START
 	// discloses the exact merge-base commit STATUS resolved (never the tree
 	// object the derived snapshot froze), letting the caller see and override
@@ -244,7 +240,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
 	}
-	if native.Escalation != nil && schema == ReviewIntegrationStatusSchemaV7 {
+	if native.Escalation != nil && (schema == ReviewIntegrationStatusSchemaV7 || schema == ReviewIntegrationStatusSchemaV8 || schema == ReviewIntegrationStatusSchemaV9) {
 		result.Escalation = native.Escalation
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
@@ -335,7 +331,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 
 func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7) && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -488,7 +484,8 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// nothing governs, so nothing decides) while still listing those
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
+		terminalConsumed := result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -536,10 +533,10 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	default:
 		return errors.New("unsupported review status recovery disposition")
 	}
-	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 {
+	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
 		return errors.New("status escalation requires review status schema v7") // refusal:by-design world-action: only the provider can omit escalation from a pre-v7 envelope or publish the v7 identity that defines it
 	}
-	escalationRequired := result.Schema == ReviewIntegrationStatusSchemaV7 && result.Authority != nil &&
+	escalationRequired := (result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9) && result.Authority != nil &&
 		result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.State == reviewtransaction.StateEscalated
 	if escalationRequired != (result.Escalation != nil) {
 		return errors.New("status escalation must match escalated authority") // refusal:by-design world-action: only the provider can project canonical escalation evidence for a v7 compact authority
@@ -573,7 +570,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 {
+	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	for _, input := range transition.Collect.Inputs {
@@ -583,12 +580,21 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			}
 			continue
 		}
-		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 {
-			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
-		}
 		arguments, err := reviewTransitionArgumentMap(input.Arguments)
 		if err != nil {
 			return err
+		}
+		if input.CaptureOperation == reviewCaptureResultCaptureOperation {
+			if result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
+				return errors.New("pre-v8 negotiated status contains a lens provider task") // refusal:by-design world-action: only status/v8 may publish provider-owned lens tasks
+			}
+			if err := validateReviewLensProviderTaskInput(input, arguments); err != nil {
+				return err
+			}
+			continue
+		}
+		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
+			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
 		}
 		if err := validateReviewProviderTaskInput(input, arguments); err != nil {
 			return err
@@ -640,13 +646,30 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
 		}
 		if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
-			// The pi host-relay form: a self-contained executable vector with
-			// no submission descriptor; bind it here to this exact authority
-			// and its frozen validation request.
+			// Two forms share this capture operation. The compiled --execute
+			// form is a self-contained executable vector with no submission
+			// descriptor; the pi host-relay form is only the read-only
+			// --materialize prelude, and its submission descriptor -- the
+			// same binding tokens with the raw result substituted into
+			// --input -- is what actually advances authority (#4611).
 			arguments, err := reviewTransitionArgumentMap(input.Arguments)
-			if err != nil || result.Authority == nil || result.ValidationRequest == nil || input.Submission != nil ||
-				(!reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) && !reviewProviderCaptureRuntime(model.AgentID(arguments["agent"]))) ||
-				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
+			if err != nil || result.Authority == nil || result.ValidationRequest == nil {
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			runtime := model.AgentID(arguments["agent"])
+			switch {
+			case reviewProviderCaptureRuntime(runtime):
+				if input.Submission != nil {
+					return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+				}
+			case reviewProviderHostRelayMaterializeRuntime(runtime):
+				if input.Submission == nil {
+					return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+				}
+			default:
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.ValidationRequest.ExpectedRevision ||
 				arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity ||
 				arguments["request-hash"] != result.ValidationRequest.RequestHash {
 				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
@@ -708,8 +731,25 @@ func validateReviewProviderTaskInput(input ReviewTransitionInput, arguments map[
 	return nil
 }
 
+func validateReviewLensProviderTaskInput(input ReviewTransitionInput, arguments map[string]string) error {
+	if input.ProviderTask == nil || input.ArtifactSubject == nil || input.CaptureOperation != reviewCaptureResultCaptureOperation ||
+		input.Name != "reviewer_result" || input.Schema != reviewReviewerSchemaID || input.Submission != nil {
+		return errors.New("lens provider task is not bound to a reviewer result input") // refusal:by-design world-action: only Go may bind a lens task to one frozen capture slot
+	}
+	want, err := newReviewLensProviderTask(input.Arguments, input.ArtifactSubject)
+	if err != nil || !reflect.DeepEqual(*input.ProviderTask, want) {
+		return errors.New("lens provider task is not an exact Go-owned binding") // refusal:by-design world-action: provider-owned lens task bytes must match the frozen native arguments and artifact subject
+	}
+	if arguments["lineage"] != input.ArtifactSubject.LineageID || arguments["expected-revision"] != input.ArtifactSubject.AuthorityRevision ||
+		arguments["target"] != input.ArtifactSubject.TargetIdentity || arguments["lens"] != input.ArtifactSubject.Lens ||
+		arguments["subject-hash"] != input.ArtifactSubject.SubjectHash {
+		return errors.New("lens provider task is not bound to its artifact subject") // refusal:by-design world-action: only Go may bind a lens task to one frozen artifact subject
+	}
+	return nil
+}
+
 func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
-	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7) || result.Authority == nil || result.ValidationRequest == nil ||
+	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9) || result.Authority == nil || result.ValidationRequest == nil ||
 		input.Name != reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
 		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
 		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
@@ -732,20 +772,33 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
 	}
-	// #3299, #4170: the continuation is the one and only signal for a stale
-	// managed-asset digest. Attaching it to any other transition -- an
-	// execute the caller would run alongside a sync it was never told about,
-	// or a stop for an unrelated reason -- would let a caller read two
-	// disagreeing exits out of one envelope. Checked once here, ahead of
-	// every applicability branch below, so no later branch can reintroduce
-	// the gap by omission.
-	if result.NextTransition.Continuation != nil &&
-		!(result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "managed_assets_outdated") {
-		return errors.New("next_transition.continuation is valid only on a managed_assets_outdated stop") // refusal:by-design world-action: a producer that attaches this continuation to any other transition built a malformed envelope and requires a code fix, not an operator command
-	}
+	// #3299, #4170: the continuation is the runnable follow-up of exactly the
+	// two stops that have one -- a stale managed-asset digest, and the #4680
+	// correction budget release. Attaching it to any other transition -- an
+	// execute the caller would run alongside a command it was never told
+	// about, or a stop for an unrelated reason -- would let a caller read two
+	// disagreeing exits out of one envelope. Each code's own shape is checked
+	// by its own validator, so neither can borrow the other's. Checked once
+	// here, ahead of every applicability branch below, so no later branch can
+	// reintroduce the gap by omission.
 	if continuation := result.NextTransition.Continuation; continuation != nil {
-		if err := validateManagedAssetsContinuation(continuation); err != nil {
-			return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
+		if result.NextTransition.Kind != reviewNextTransitionStop {
+			return errors.New("next_transition.continuation is valid only on a stop") // refusal:by-design world-action: a producer that attaches this continuation to an execute or collect built a malformed envelope and requires a code fix, not an operator command
+		}
+		switch result.NextTransition.ReasonCode {
+		case "managed_assets_outdated":
+			if err := validateManagedAssetsContinuation(continuation); err != nil {
+				return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
+			}
+		case reviewCorrectionContextBudgetCode:
+			// #4680: the release route may not appear in the Pi facade
+			// contract's prose, so the stop is the only channel carrying it.
+			// Its shape is checked as strictly as the sync one.
+			if err := validateCorrectionReleaseContinuation(continuation); err != nil {
+				return fmt.Errorf("invalid correction release STATUS continuation: %w", err)
+			}
+		default:
+			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated or correction_context_budget_exceeded stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
 		}
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
@@ -758,6 +811,12 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
 				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
 				return errors.New("disabled fresh target lacks an RDD STOP transition")
+			}
+			return nil
+		}
+		if result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable {
+			if result.Authority != nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "target_already_acknowledged" {
+				return errors.New("consumed target lacks an authority-free terminal STOP") // refusal:by-design world-action: only a provider code fix can reconcile an internally inconsistent consumed-target envelope
 			}
 			return nil
 		}
@@ -800,22 +859,6 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(result.Projection.Paths) == 0 {
 			if result.NextTransition.Kind == reviewNextTransitionCollect && result.NextTransition.ReasonCode == "intended_untracked_selection_required" {
 				return result.validateIntendedUntrackedSelectionTransition()
-			}
-			// Issue #4412: when STATUS resolved the remote default branch's
-			// unique merge-base it offers the executable committed-range START
-			// the `--base-ref --committed-only` STATUS path already publishes,
-			// instead of the unroutable base_ref collect. Validating that
-			// execute against the exact derived base-diff status that produced
-			// it still refuses a hand-edited base-ref, target, evidence token,
-			// or committed-only flag.
-			if result.NextTransition.Kind == reviewNextTransitionExecute {
-				if result.derivedCommittedRange == nil {
-					// refusal:by-design world-action: only a provider code fix can render a committed-range execute without the derived base-diff status that proves its scope
-					return errors.New("fresh empty workspace target lacks a base-ref collection transition")
-				}
-				derived := *result.derivedCommittedRange
-				derived.NextTransition = result.NextTransition
-				return derived.validateStartNextTransition()
 			}
 			if result.NextTransition.Kind != reviewNextTransitionCollect || result.NextTransition.ReasonCode != "empty_candidate_base_ref_required" ||
 				result.NextTransition.Collect == nil || len(result.NextTransition.Collect.Inputs) != 1 {
@@ -1210,7 +1253,8 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == reviewCaptureCorrectionPlanOperation || input.CaptureOperation == "review.capture-result" || input.CaptureOperation == "external.select_intended_untracked"
+			submissionAllowed := input.CaptureOperation == reviewCaptureCorrectionPlanOperation || input.CaptureOperation == "review.capture-result" || input.CaptureOperation == "external.select_intended_untracked" ||
+				input.CaptureOperation == reviewCaptureRefuterCaptureOperation || input.CaptureOperation == reviewCaptureValidationCaptureOperation
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -1299,12 +1343,18 @@ func (transition ReviewNextTransition) Validate() error {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
 			}
 			if input.CaptureOperation == reviewCaptureRefuterCaptureOperation || input.CaptureOperation == reviewCaptureValidationCaptureOperation {
-				// A pi host-relay role capture input is a self-contained
-				// executable vector: exactly the binding arguments plus
-				// --agent and --execute=true. Go materializes the role
-				// request, spawns its own locked-down pi process, and admits
-				// the raw bytes, so no submission descriptor may exist for a
-				// caller to author a verdict through.
+				// Two forms share these capture operations. The compiled
+				// --execute form is a self-contained executable vector:
+				// exactly the binding arguments plus --agent and
+				// --execute=true, with no submission descriptor -- Go
+				// materializes the role request, runs its own compiled
+				// adapter in process, and admits the raw bytes. The pi
+				// host-relay form carries the same binding arguments plus
+				// --agent and --materialize=true as a read-only prelude, and
+				// its submission descriptor -- the same binding tokens with
+				// the raw provider result substituted into --input -- is what
+				// actually advances authority; Go never spawns anything for
+				// this role (#4611).
 				providerRuntime := model.AgentID(arguments["agent"])
 				argumentCount, schema := 6, reviewRefuterSchemaID
 				if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
@@ -1321,10 +1371,33 @@ func (transition ReviewNextTransition) Validate() error {
 					return errors.New("provider validation capture transition lacks its frozen request binding") // refusal:by-design world-action: only STATUS can bind the frozen correction request
 				}
 				if input.Schema != schema ||
-					(!reviewProviderHostRelayMaterializeRuntime(providerRuntime) && !reviewProviderCaptureRuntime(providerRuntime)) || arguments["execute"] != "true" ||
 					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
-					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
-					input.Submission != nil {
+					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+				switch {
+				case reviewProviderCaptureRuntime(providerRuntime):
+					if arguments["execute"] != "true" || input.Submission != nil {
+						return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+				case reviewProviderHostRelayMaterializeRuntime(providerRuntime):
+					if arguments["materialize"] != "true" {
+						return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+					// The submission repeats every binding token INCLUDING
+					// --agent and drops only the read-only --materialize
+					// prelude selector.
+					expected := make([]string, 0, len(input.Arguments))
+					for _, argument := range input.Arguments {
+						if argument.Name != "materialize" {
+							expected = append(expected, reviewTransitionArgumentToken(argument))
+						}
+					}
+					expected = append(expected, "--input="+reviewSubmissionValuePlaceholder)
+					if input.Submission == nil || !reflect.DeepEqual(input.Submission.ArgumentTokens, expected) {
+						return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+				default:
 					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
 				}
 			}
@@ -1405,6 +1478,9 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	if submission.OperationToken == "status" {
 		return submission.validateIntendedUntrackedSelection()
 	}
+	if submission.OperationToken == "capture-refuter" || submission.OperationToken == "capture-validation" {
+		return submission.validateProviderRoleCapture()
+	}
 	return errors.New("submission descriptor operation is unsupported") // refusal:by-design world-action: only result capture and correction-plan capture remain public submissions
 }
 
@@ -1445,6 +1521,50 @@ func (submission ReviewTransitionSubmission) validateCaptureResult() error {
 		submission.Value.Schema != reviewReviewerSchemaID || submission.Value.Minimum != 0 ||
 		submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
 		return errors.New("reviewer result submission descriptor value is invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domain
+	}
+	return nil
+}
+
+// validateProviderRoleCapture is the pi host-relay non-lens role submission
+// (#4611): binding tokens only, with the raw provider result substituted
+// into --input. The refuter batch binds lineage/revision/target/
+// repository-context and the identified host-relay runtime; the targeted
+// validator additionally binds the frozen validation request hash.
+func (submission ReviewTransitionSubmission) validateProviderRoleCapture() error {
+	expected, slot, schema := 6, reviewProviderRoleInputName(reviewerprovider.RoleRefuter), reviewRefuterSchemaID
+	if submission.OperationToken == "capture-validation" {
+		expected, slot, schema = 7, reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator), reviewValidatorSchemaID
+	}
+	if submission.Value == nil || len(submission.Values) != 0 || len(submission.ArgumentTokens) != expected ||
+		submission.Value.SubstitutionLocation != expected-1 {
+		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+	}
+	for _, token := range submission.ArgumentTokens {
+		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
+		}
+	}
+	tokens := submission.ArgumentTokens
+	if !strings.HasPrefix(tokens[0], "--lineage=") || !validReviewIntegrationLineage(strings.TrimPrefix(tokens[0], "--lineage=")) ||
+		!strings.HasPrefix(tokens[1], "--expected-revision=") || !validReviewCapabilitySHA256(strings.TrimPrefix(tokens[1], "--expected-revision=")) ||
+		!strings.HasPrefix(tokens[2], "--target=") || !validReviewCapabilitySHA256(strings.TrimPrefix(tokens[2], "--target=")) ||
+		!strings.HasPrefix(tokens[3], "--repository-context=") ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(strings.TrimPrefix(tokens[3], "--repository-context=")) != nil {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
+	}
+	if submission.OperationToken == "capture-validation" &&
+		(!strings.HasPrefix(tokens[4], "--request-hash=") || !validReviewCapabilitySHA256(strings.TrimPrefix(tokens[4], "--request-hash="))) {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
+	}
+	if !strings.HasPrefix(tokens[expected-2], "--agent=") ||
+		!reviewProviderHostRelayMaterializeRuntime(model.AgentID(strings.TrimPrefix(tokens[expected-2], "--agent="))) {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can bind the identified host-relay runtime
+	}
+	if tokens[expected-1] != "--input="+reviewSubmissionValuePlaceholder ||
+		submission.Value.Slot != slot || submission.Value.Domain != "artifact_path_or_stdin" ||
+		submission.Value.Schema != schema || submission.Value.Minimum != 0 ||
+		submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
+		return errors.New("provider role capture submission descriptor value is invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domain
 	}
 	return nil
 }

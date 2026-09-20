@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 func insertRetentionDelivery(t *testing.T, s *Storage, id int, received time.Time) telemetry.RuntimeEvent {
@@ -58,7 +58,7 @@ func TestRuntimePurgeCutoffAndDedupeExpiry(t *testing.T) {
 	if decision, err := s.InsertRuntimeEvent(ctx, old, cutoff.Add(time.Hour)); err != nil || decision != "duplicate" {
 		t.Fatalf("retry: %q %v", decision, err)
 	}
-	purged, err := s.PurgeOlderThan(ctx, cutoff.In(time.FixedZone("west", -7*60*60)))
+	purged, err := s.PurgeOlderThan(ctx, cutoff.In(time.FixedZone("west", -7*60*60)), cutoff)
 	if err != nil || purged != 1 {
 		t.Fatalf("legacy-only purge count: %d %v", purged, err)
 	}
@@ -70,7 +70,7 @@ func TestRuntimePurgeCutoffAndDedupeExpiry(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 1 {
 		t.Fatalf("schema changed: %d %v", version, err)
 	}
-	if count, err := s.PurgeOlderThan(ctx, cutoff); err != nil || count != 0 {
+	if count, err := s.PurgeOlderThan(ctx, cutoff, cutoff); err != nil || count != 0 {
 		t.Fatalf("repeat purge: %d %v", count, err)
 	}
 	// No infinite tombstones: an expired identity is no longer recognized.
@@ -78,6 +78,40 @@ func TestRuntimePurgeCutoffAndDedupeExpiry(t *testing.T) {
 		t.Fatalf("expired retry: %q %v", decision, err)
 	}
 	assertRetentionCounts(t, s, 1, 3, 6)
+}
+
+// TestRuntimePurgeDeletesExpiredDeliveryIDs proves PurgeOlderThan reaches
+// runtime_delivery_ids (the --runtime-store=metrics dedup table) the same
+// way it reaches runtime_deliveries/runtime_rows: strictly-older rows are
+// removed, rows at or after cutoff survive.
+func TestRuntimePurgeDeletesExpiredDeliveryIDs(t *testing.T) {
+	s := openTestStorage(t)
+	ctx := context.Background()
+	cutoff := time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
+
+	if _, err := s.InsertRuntimeDeliveryID(ctx, fmt.Sprintf("%032x", 1), cutoff.Add(-time.Nanosecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertRuntimeDeliveryID(ctx, fmt.Sprintf("%032x", 2), cutoff); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.PurgeOlderThan(ctx, cutoff, cutoff); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT count(*) FROM runtime_delivery_ids`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("runtime_delivery_ids count = %d, want 1", count)
+	}
+	// A retried id past its retention window is treated as fresh, exactly
+	// like runtime_deliveries: purge ends dedupe, it does not tombstone.
+	if decision, err := s.InsertRuntimeDeliveryID(ctx, fmt.Sprintf("%032x", 1), cutoff.Add(time.Hour)); err != nil || decision != "stored" {
+		t.Fatalf("expired retry: %q %v", decision, err)
+	}
 }
 
 func TestRuntimePurgeRollback(t *testing.T) {
@@ -106,7 +140,7 @@ func TestRuntimePurgeRollback(t *testing.T) {
 			if _, err := s.db.Exec(setup); err != nil {
 				t.Fatal(err)
 			}
-			if count, err := s.PurgeOlderThan(ctx, cutoff); err == nil || count != 0 {
+			if count, err := s.PurgeOlderThan(ctx, cutoff, cutoff); err == nil || count != 0 {
 				t.Fatalf("failed purge reported committed count: %d %v", count, err)
 			}
 			assertRetentionCounts(t, s, 1, 2, 4)
@@ -116,7 +150,10 @@ func TestRuntimePurgeRollback(t *testing.T) {
 
 func TestRuntimeMaintenanceWithoutLegacyEvents(t *testing.T) {
 	// Existing policy performs date arithmetic without a special zero/negative
-	// sentinel. Preserve it rather than introducing runtime-only validation.
+	// sentinel for retentionDays. Preserve it rather than introducing
+	// runtime-only validation. The dedup window is a separate argument with
+	// its own lower bound (see TestRunMaintenance_RejectsNonPositiveDedupDays)
+	// and is clamped to retention, so it does not affect these counts.
 	for _, tc := range []struct{ days, cutoffDay int }{{2, 12}, {0, 14}, {-1, 15}} {
 		t.Run(fmt.Sprintf("days=%d", tc.days), func(t *testing.T) {
 			s := openTestStorage(t)
@@ -124,7 +161,7 @@ func TestRuntimeMaintenanceWithoutLegacyEvents(t *testing.T) {
 			cutoff := time.Date(2026, 6, tc.cutoffDay, 0, 0, 0, 0, time.UTC)
 			insertRetentionDelivery(t, s, 1, cutoff.Add(-time.Nanosecond))
 			insertRetentionDelivery(t, s, 2, cutoff)
-			if err := RunMaintenance(context.Background(), s, now, tc.days); err != nil {
+			if err := RunMaintenance(context.Background(), s, now, tc.days, 1); err != nil {
 				t.Fatal(err)
 			}
 			assertRetentionCounts(t, s, 0, 1, 2)
@@ -147,14 +184,14 @@ func TestRuntimeMaintenanceRollupFailureCanRetry(t *testing.T) {
 	 WHEN (SELECT enabled FROM maintenance_gate)=1 BEGIN SELECT RAISE(ABORT,'test failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunMaintenance(ctx, s, now, 2); err == nil {
+	if err := RunMaintenance(ctx, s, now, 2, 2); err == nil {
 		t.Fatal("rollup failure was ignored")
 	}
 	assertRetentionCounts(t, s, 1, 1, 2)
 	if _, err := s.db.Exec(`UPDATE maintenance_gate SET enabled=0`); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunMaintenance(ctx, s, now, 2); err != nil {
+	if err := RunMaintenance(ctx, s, now, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	assertRetentionCounts(t, s, 0, 0, 0)
@@ -166,11 +203,11 @@ func TestRuntimeMaintenanceCancellationCanRetry(t *testing.T) {
 	insertRetentionDelivery(t, s, 1, now.AddDate(0, 0, -3))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := RunMaintenance(ctx, s, now, 2); err == nil {
+	if err := RunMaintenance(ctx, s, now, 2, 2); err == nil {
 		t.Fatal("cancelled runtime-only maintenance succeeded")
 	}
 	assertRetentionCounts(t, s, 0, 1, 2)
-	if err := RunMaintenance(context.Background(), s, now, 2); err != nil {
+	if err := RunMaintenance(context.Background(), s, now, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	assertRetentionCounts(t, s, 0, 0, 0)

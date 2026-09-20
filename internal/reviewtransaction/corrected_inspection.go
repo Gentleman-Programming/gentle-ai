@@ -58,7 +58,8 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repo string, repos
 	}
 	correction := Snapshot{
 		Kind: TargetFixDiff, Projection: projection, UnbornHead: state.CurrentSnapshot.UnbornHead,
-		BaseTree: state.CurrentSnapshot.CandidateTree, CandidateTree: request.CorrectionCandidateTree,
+		GeneratedPathInterpretation: state.CurrentSnapshot.GeneratedPathInterpretation,
+		BaseTree:                    state.CurrentSnapshot.CandidateTree, CandidateTree: request.CorrectionCandidateTree,
 		PathsDigest: request.CorrectionPathsDigest, Paths: append([]string(nil), request.CorrectionPaths...),
 		IntendedUntracked: append([]string(nil), state.InitialSnapshot.IntendedUntracked...),
 		LedgerIDs:         append([]string(nil), state.FixFindingIDs...),

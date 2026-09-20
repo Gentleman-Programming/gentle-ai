@@ -30,8 +30,8 @@ type OpenCodeObservation struct {
 // Source: https://opencode.ai/docs/sdk/ and the parent-fetched public types at
 // https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/sdk/js/src/gen/types.gen.ts
 // This mutable-dev source fixture does not establish released SDK compatibility.
-// Caller MUST dedupe input using sessionID/id BEFORE normalization: identifiers
-// are deliberately dropped, and this pure function offers no exactly-once claim.
+// Identifiers are deliberately dropped. This pure function offers no
+// exactly-once claim and does not require caller identity retention.
 // No hooks, transcript retrieval, installation, network, or telemetry send occurs.
 func NormalizeOpenCode(input io.Reader) (*OpenCodeObservation, error) {
 	data, err := io.ReadAll(io.LimitReader(input, OpenCodeMaxBytes+1))

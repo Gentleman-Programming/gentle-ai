@@ -15,10 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary on the stable channel.
@@ -126,6 +127,18 @@ func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile 
 }
 
 func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, error) {
+	major, err := opencode.DetectRuntimeMajor(ctx)
+	if err != nil {
+		return "", &ManualFallbackError{Hint: err.Error()}
+	}
+	if major == opencode.RuntimeV2 {
+		return "", &ManualFallbackError{Hint: "OpenCode community plugin V2 compatibility is unverified; package and user configuration preserved."}
+	}
+	sdk, err := major.PluginDependency()
+	if err != nil {
+		return "", err
+	}
+
 	pkg := strings.TrimSpace(r.Tool.NpmPackage)
 	if pkg == "" {
 		return "", &ManualFallbackError{Hint: openCodePluginManualHint(r)}
@@ -165,7 +178,7 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, 
 	if expectedVersion == "" {
 		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s upgrade cannot be pinned because the expected version is empty; rerun the update check and try again.", pkg)}
 	}
-	targets := []string{pkg + "@" + expectedVersion, "@opencode-ai/plugin@latest"}
+	targets := []string{pkg + "@" + expectedVersion, sdk}
 	var cmd *exec.Cmd
 	switch pm {
 	case "bun":
@@ -663,7 +676,7 @@ func gentleAIModulePath(tool update.ToolInfo) string {
 	// suffix: for major 2 and above the module path must end in /vN or the
 	// toolchain refuses every resolution of that repository, including the
 	// branch pseudo-versions this beta path installs.
-	return repository + "/v2"
+	return repository + "/v3"
 }
 
 func goProxyBypassEnv(base []string, module string) []string {

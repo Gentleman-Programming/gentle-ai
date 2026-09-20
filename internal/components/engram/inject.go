@@ -9,11 +9,12 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -353,6 +354,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			break
 		}
 		overlay := engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()))
+		if adapter.Agent() == model.AgentOpenCode {
+			var err error
+			overlay, err = nativeOpenCodeEngramOverlay(settingsPath, overlay)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+		}
 		settingsWrite, err := mergeJSONFile(settingsPath, overlay)
 		if err != nil {
 			return InjectionResult{}, err
@@ -791,11 +799,7 @@ func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, boo
 	var server any
 	switch agentID {
 	case model.AgentOpenCode:
-		mcp, ok := root["mcp"].(map[string]any)
-		if !ok {
-			return "", false
-		}
-		server = mcp["engram"]
+		server, _ = opencode.MCPEntry(root, "engram")
 	case model.AgentOpenClaw:
 		mcp, ok := root["mcp"].(map[string]any)
 		if !ok {
@@ -1080,4 +1084,35 @@ func resolveProfileAssignments(carrilModels map[string]string, phaseEfforts map[
 		})
 	}
 	return out
+}
+
+// nativeOpenCodeEngramOverlay updates only the managed server in its existing
+// format, preserving native disabled, environment, and timeout settings.
+func nativeOpenCodeEngramOverlay(path string, overlay []byte) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return overlay, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
+		return nil, err
+	}
+	mcp, _ := root["mcp"].(map[string]any)
+	if _, native := mcp["servers"]; !native && !opencode.NativeConfig(root) {
+		return overlay, nil
+	}
+	patch, err := filemerge.UnmarshalJSONObject(overlay)
+	if err != nil {
+		return nil, err
+	}
+	patchMCP, _ := patch["mcp"].(map[string]any)
+	server, _ := patchMCP["engram"].(map[string]any)
+	if replacement, ok := server["__replace__"].(map[string]any); ok {
+		server = replacement
+	}
+	patch["mcp"] = map[string]any{"servers": map[string]any{"engram": server}}
+	return json.Marshal(patch)
 }

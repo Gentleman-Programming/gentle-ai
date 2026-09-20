@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // execCommandContext is a package-level seam over exec.CommandContext,

@@ -10,9 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // escalatedIntendedUntrackedRecoveryFixture is the #3159 predecessor: an
@@ -98,17 +97,13 @@ func escalateReviewForRecovery(t *testing.T, repo string, started ReviewFacadeSt
 		t.Fatal(err)
 	}
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	previous := reviewProviderRoleHostAdapter
-	reviewProviderRoleHostAdapter = func(reviewerprovider.Role, string) (reviewerprovider.Adapter, error) {
-		return providerTestAdapterFunc(func(context.Context, reviewerprovider.Invocation) ([]byte, error) {
-			return payload, nil
-		}), nil
-	}
-	t.Cleanup(func() { reviewProviderRoleHostAdapter = previous })
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	resultFile := writeReviewCLIRawInput(t, payload)
 	if err := RunReviewCaptureValidation([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", request.CorrectionTargetIdentity,
 		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
-		"--agent", string(model.AgentPi), "--execute=true",
+		"--agent", string(model.AgentPi), "--input", resultFile,
 	}, io.Discard); err != nil {
 		t.Fatalf("capture rejected targeted validator: %v", err)
 	}

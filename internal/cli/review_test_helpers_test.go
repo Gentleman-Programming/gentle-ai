@@ -4,11 +4,26 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
+
+// writeReviewCLIRawInput writes raw provider role result bytes to a temp file
+// and returns its path, for tests driving the `--input=<path>` submission
+// form a host-relay runtime uses after it materializes and runs its own
+// reviewer (#4611): Go never spawns anything for these tests either.
+func writeReviewCLIRawInput(t *testing.T, raw []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "role-result.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func startFacadeReview(t *testing.T, repo string) ReviewFacadeStartResult {
 	t.Helper()

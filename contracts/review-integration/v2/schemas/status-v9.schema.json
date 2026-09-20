@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v9.schema.json",
+  "title": "Gentle AI Review Integration native Git target status v9",
+  "type": "object", "additionalProperties": false,
+  "required": [
+    "schema", "contract", "operation", "applicability", "action", "replayability",
+    "target_identity", "projection", "repair", "candidates"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.status/v9"},
+    "contract": {"$ref": "status-v8.schema.json#/properties/contract"}, "operation": {"$ref": "status-v8.schema.json#/properties/operation"},
+    "applicability": {"$ref": "status-v8.schema.json#/properties/applicability"}, "authority": {"$ref": "status-v8.schema.json#/properties/authority"},
+    "action": {"$ref": "status-v8.schema.json#/properties/action"}, "action_disposition": {"$ref": "status-v8.schema.json#/properties/action_disposition"},
+    "replayability": {"$ref": "status-v8.schema.json#/properties/replayability"}, "frozen": {"$ref": "status-v8.schema.json#/properties/frozen"},
+    "target_identity": {"$ref": "status-v8.schema.json#/properties/target_identity"}, "authority_target_identity": {"$ref": "status-v8.schema.json#/properties/authority_target_identity"},
+    "projection": {"$ref": "status-v8.schema.json#/properties/projection"}, "repair": {"$ref": "status-v8.schema.json#/properties/repair"},
+    "candidates": {"$ref": "status-v8.schema.json#/properties/candidates"}, "reconciliation": {"$ref": "status-v8.schema.json#/properties/reconciliation"},
+    "eligibility": {"$ref": "status-v8.schema.json#/properties/eligibility"}, "forecast": {"$ref": "status-v8.schema.json#/properties/forecast"},
+    "next_transition": {"$ref": "#/$defs/next_transition"}, "validation_request": {"$ref": "status-v8.schema.json#/properties/validation_request"},
+    "repository_context": {"$ref": "status-v8.schema.json#/properties/repository_context"}, "disposition": {"$ref": "status-v8.schema.json#/properties/disposition"},
+    "eligible_untracked_inventory": {"$ref": "status-v8.schema.json#/properties/eligible_untracked_inventory"},
+    "escalation": {"$ref": "status-v8.schema.json#/properties/escalation"}
+  },
+  "dependentRequired": {"forecast": ["next_transition"]},
+  "$defs": {
+    "next_transition": {"oneOf": [
+      {"allOf": [
+        {"$ref": "status-v8.schema.json#/$defs/next_transition"},
+        {"not": {"properties": {"reason_code": {"enum": [
+          "provider_refuter_required", "targeted_validation_required", "targeted_validation_inconclusive_recapture_required"
+        ]}}, "required": ["reason_code"]}}
+      ]},
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
+        "properties": {
+          "kind": {"const": "collect"},
+          "reason_code": {"const": "provider_refuter_required"},
+          "collect": {
+            "type": "object", "additionalProperties": false, "required": ["inputs"],
+            "properties": {"inputs": {
+              "type": "array", "minItems": 1, "maxItems": 1,
+              "items": {"oneOf": [
+                {"$ref": "status-v5.schema.json#/$defs/transition_input"},
+                {"$ref": "#/$defs/provider_role_submission_input"}
+              ]}
+            }}
+          }
+        }
+      },
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
+        "properties": {
+          "kind": {"const": "collect"},
+          "reason_code": {"enum": ["targeted_validation_required", "targeted_validation_inconclusive_recapture_required"]},
+          "collect": {
+            "type": "object", "additionalProperties": false, "required": ["inputs"],
+            "properties": {"inputs": {
+              "type": "array", "minItems": 1, "maxItems": 1,
+              "items": {"oneOf": [
+                {"$ref": "status-v5.schema.json#/$defs/transition_input"},
+                {"$ref": "#/$defs/provider_role_submission_input"}
+              ]}
+            }}
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"reason_code": {"const": "targeted_validation_required"}}, "required": ["reason_code"]},
+            "then": {"properties": {"collect": {"properties": {"inputs": {"items": {"anyOf": [
+              {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation", "submission"]},
+              {"properties": {"capture_operation": {"const": "external.run_provider_role"}}, "required": ["capture_operation", "provider_task"]},
+              {"properties": {"capture_operation": {"const": "review.capture-validation"}}, "required": ["capture_operation", "validation_request"]}
+            ]}}}}}}
+          }
+        ]
+      }
+    ]},
+    "provider_role_submission_input": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "schema", "capture_operation", "arguments", "submission"],
+      "properties": {
+        "name": {"enum": ["provider_refuter", "provider_targeted_validator"]},
+        "schema": {"enum": [
+          "https://gentle-ai.dev/schema/review/refuter/v1",
+          "https://gentle-ai.dev/schema/review/validator/v1"
+        ]},
+        "capture_operation": {"enum": ["review.capture-refuter", "review.capture-validation"]},
+        "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "transition-execution.schema.json#/$defs/transition_argument"}},
+        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
+        "submission": {"$ref": "#/$defs/provider_role_submission_descriptor"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"capture_operation": {"const": "review.capture-validation"}}, "required": ["capture_operation"]},
+          "then": {"required": ["validation_request"]},
+          "else": {"not": {"required": ["validation_request"]}}
+        }
+      ]
+    },
+    "provider_role_submission_descriptor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_token", "argument_tokens", "value"],
+      "properties": {
+        "operation_token": {"enum": ["capture-refuter", "capture-validation"]},
+        "argument_tokens": {"type": "array", "items": {"type": "string", "pattern": "^--\\S+=\\S+$"}},
+        "value": {
+          "type": "object", "additionalProperties": false,
+          "required": ["slot", "domain", "schema", "substitution_location"],
+          "properties": {
+            "slot": {"enum": ["provider_refuter", "provider_targeted_validator"]},
+            "domain": {"const": "artifact_path_or_stdin"},
+            "schema": {"enum": [
+              "https://gentle-ai.dev/schema/review/refuter/v1",
+              "https://gentle-ai.dev/schema/review/validator/v1"
+            ]},
+            "substitution_location": {"type": "integer", "minimum": 0}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"operation_token": {"const": "capture-refuter"}}, "required": ["operation_token"]},
+          "then": {
+            "properties": {
+              "argument_tokens": {"minItems": 6, "maxItems": 6, "prefixItems": [
+                {"pattern": "^--lineage=\\S+$"},
+                {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"},
+                {"pattern": "^--target=sha256:[0-9a-f]{64}$"},
+                {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"},
+                {"pattern": "^--agent=\\S+$"},
+                {"const": "--input={{value}}"}
+              ], "items": false},
+              "value": {"properties": {"slot": {"const": "provider_refuter"}, "schema": {"const": "https://gentle-ai.dev/schema/review/refuter/v1"}, "substitution_location": {"const": 5}}}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"operation_token": {"const": "capture-validation"}}, "required": ["operation_token"]},
+          "then": {
+            "properties": {
+              "argument_tokens": {"minItems": 7, "maxItems": 7, "prefixItems": [
+                {"pattern": "^--lineage=\\S+$"},
+                {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"},
+                {"pattern": "^--target=sha256:[0-9a-f]{64}$"},
+                {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"},
+                {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"},
+                {"pattern": "^--agent=\\S+$"},
+                {"const": "--input={{value}}"}
+              ], "items": false},
+              "value": {"properties": {"slot": {"const": "provider_targeted_validator"}, "schema": {"const": "https://gentle-ai.dev/schema/review/validator/v1"}, "substitution_location": {"const": 6}}}
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {"$ref": "status-v8.schema.json#/allOf/0"}, {"$ref": "status-v8.schema.json#/allOf/1"},
+    {"$ref": "status-v8.schema.json#/allOf/2"}, {"$ref": "status-v8.schema.json#/allOf/3"},
+    {"$ref": "status-v8.schema.json#/allOf/4"}, {"$ref": "status-v8.schema.json#/allOf/5"}
+  ]
+}

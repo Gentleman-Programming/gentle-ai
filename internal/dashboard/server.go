@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/odd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/semantic"
 )
 
 // Server representa el servidor HTTP local para el dashboard web de Axiom.
@@ -21,11 +20,6 @@ type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	port       int
-	// oddExporter sustituye, sólo en pruebas, el Exporter que
-	// handleODDCheckMirror usa para sondear el espejo de recuperación en
-	// Engram del carril ODD (REQ-19.4, REQ-19.7). nil en producción: el
-	// propio manejador recurre entonces a odd.DefaultExporter.
-	oddExporter odd.Exporter
 }
 
 // NewServer inicializa el servidor HTTP y configura las rutas de la API y assets estáticos.
@@ -55,10 +49,6 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/increments/verify", s.handleIncrementVerify)
 	s.mux.HandleFunc("/api/increments/migrate-cumulative", s.handleMigrateCumulative)
 	s.mux.HandleFunc("/api/increments/", s.handleIncrementDetail)
-	s.mux.HandleFunc("/api/odd", s.handleODD)
-	s.mux.HandleFunc("/api/odd/promote", s.handleODDPromote)
-	s.mux.HandleFunc("/api/odd/check-mirror", s.handleODDCheckMirror)
-	s.mux.HandleFunc("/api/odd/", s.handleODDDetail)
 	s.mux.HandleFunc("/api/roles", s.handleRoles)
 	s.mux.HandleFunc("/api/handoffs", s.handleHandoffs)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
@@ -365,113 +355,6 @@ func (s *Server) handleMigrateCumulative(w http.ResponseWriter, r *http.Request)
 		"change":   req.Change,
 		"role":     req.Role,
 	})
-}
-
-// handleODD atiende GET /api/odd (lista los documentos vivos ODD existentes,
-// REQ-19.13) y POST /api/odd (crea un documento vivo nuevo, REQ-19.5).
-// Calcado de handleIncrements: mismo reparto por método, mismo mapeo de
-// error de creación a 400 Bad Request.
-func (s *Server) handleODD(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		list, err := s.service.GetODDFeatures()
-		if err != nil {
-			s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		s.respondJSON(w, http.StatusOK, list)
-	case http.MethodPost:
-		var req ODDCreateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido: " + err.Error()})
-			return
-		}
-		doc, err := s.service.CreateODDFeature(req)
-		if err != nil {
-			s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		s.respondJSON(w, http.StatusCreated, doc)
-	default:
-		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
-	}
-}
-
-// handleODDDetail atiende GET /api/odd/{feature} (REQ-19.13). Registrada
-// bajo el patrón de prefijo "/api/odd/"; el ServeMux resuelve por patrón más
-// largo, así que "/api/odd/promote" y "/api/odd/check-mirror" —registradas
-// aparte— nunca llegan aquí, igual que "/api/increments/continue" nunca
-// llega a handleIncrementDetail.
-func (s *Server) handleODDDetail(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
-		return
-	}
-	feature := strings.TrimPrefix(r.URL.Path, "/api/odd/")
-	feature = strings.TrimSpace(feature)
-	if feature == "" {
-		http.Error(w, "Nombre de feature ODD requerido", http.StatusBadRequest)
-		return
-	}
-
-	doc, err := s.service.GetODDFeature(feature)
-	if err != nil {
-		s.respondJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-	s.respondJSON(w, http.StatusOK, doc)
-}
-
-// handleODDPromote atiende POST /api/odd/promote: promueve un documento vivo
-// ODD a una propuesta SDD sembrada, o la previsualiza sin escribir nada
-// cuando el cuerpo trae "dry_run": true (REQ-19.8, REQ-19.9, REQ-19.13).
-func (s *Server) handleODDPromote(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
-		return
-	}
-	var req ODDPromoteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido: " + err.Error()})
-		return
-	}
-	result, err := s.service.PromoteODDFeature(req)
-	if err != nil {
-		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	s.respondJSON(w, http.StatusOK, result)
-}
-
-// handleODDCheckMirror atiende POST /api/odd/check-mirror: sondeo deliberado
-// del espejo de recuperación en Engram (REQ-19.4, REQ-19.7). Es POST y no
-// GET porque lanza un subproceso ("engram export" vía odd.DefaultExporter):
-// nunca debe caer en un GET que un sondeo periódico pudiera repetir sin
-// pedirlo explícitamente. s.oddExporter permite instrumentar los tres
-// estados de espejo en pruebas; en producción queda nil y se usa
-// odd.DefaultExporter.
-func (s *Server) handleODDCheckMirror(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
-		return
-	}
-	var req ODDMirrorRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "JSON inválido: " + err.Error()})
-		return
-	}
-
-	export := s.oddExporter
-	if export == nil {
-		export = odd.DefaultExporter
-	}
-
-	report, err := s.service.CheckODDMirror(r.Context(), req, export)
-	if err != nil {
-		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	s.respondJSON(w, http.StatusOK, report)
 }
 
 func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
 
 // InstallScope controls where agent-scoped config files (system prompts, skills/, agents/, etc.) are written.

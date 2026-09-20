@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 // TelemetryStatusSchema identifies the `gentle-ai telemetry status|enable|disable`
@@ -385,19 +385,6 @@ func telemetryRecordReviewOutcome(kind string) {
 	case "escalated":
 		_ = telemetry.IncrementReviewsEscalated(homeDir)
 	}
-	telemetryTriggerQuiet(homeDir)
-}
-
-// telemetryRecordSDDPhaseRun increments sdd_phase_runs when a `sdd-attempt
-// finish|settle` completes successfully, then opportunistically triggers a
-// send for the same reason telemetryRecordReviewOutcome does.
-func telemetryRecordSDDPhaseRun() {
-	defer func() { _ = recover() }()
-	homeDir, ok := telemetryEnabledHomeDir()
-	if !ok {
-		return
-	}
-	_ = telemetry.IncrementSDDPhaseRuns(homeDir)
 	telemetryTriggerQuiet(homeDir)
 }
 

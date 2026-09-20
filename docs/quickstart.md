@@ -52,7 +52,7 @@
 
 ```powershell
 # Stable channel (`@latest`, currently v2.6.0)
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
 ```
 
 This command uses the `/v2` module path. Go requires that suffix for major
@@ -67,7 +67,7 @@ The current stable release is [`v2.6.0`](https://github.com/Gentleman-Programmin
 ### Install the stable channel
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
@@ -77,11 +77,11 @@ Only use `main` when testing changes that are not part of a release yet:
 
 ```bash
 # macOS / Linux
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main
 gentle-ai version
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main
 gentle-ai version
 ```
 
@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
 ```
 
-> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main`).
+> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main`).
 
 The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 
