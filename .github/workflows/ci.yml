@@ -178,10 +178,12 @@ jobs:
       # Informative window -- cmd/axiom coverage (INC-20 F0, opened 2026-09-19)
       #
       # Blocking: init, project, change, workspace, handoff, role, skill,
-      # semantic, archive, ui, and odd (blocking until this increment's Phase
-      # 11 retires it) in their help or no-argument form -- the exclusive
-      # surface axiom-distribution-identity's build-identity contract touches
-      # (REQ-20.15). This is additional to, and does not replace, the
+      # semantic, archive, and ui in their help or no-argument form -- the
+      # exclusive surface axiom-distribution-identity's build-identity
+      # contract touches (REQ-20.15). The odd verb blocked here too until
+      # this increment's Phase 11 (F6.2a) retired the `axiom odd` command
+      # entirely; it no longer exists, so it no longer appears in this list
+      # or in the smoke table below. This is additional to, and does not replace, the
       # "Run benchmark evidence" step above: that step already builds and
       # exercises cmd/axiom, but only through journeys shared with upstream's
       # review/SDD lifecycle, none of which invoke this exclusive surface.
@@ -247,7 +249,6 @@ jobs:
           smoke "skill"       1 skill
           smoke "semantic"    1 semantic
           smoke "archive"     1 archive
-          smoke "odd"         1 odd
           smoke "init --help" 0 init --help
           smoke "ui --help"   0 ui --help
 
