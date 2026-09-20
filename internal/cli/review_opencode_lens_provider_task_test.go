@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
 func TestOpenCodeV1StatusEmitsProviderOwnedLensTasks(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // A scoped-fix validator that could not inspect the immutable corrected

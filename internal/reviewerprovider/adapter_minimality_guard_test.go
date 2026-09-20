@@ -43,7 +43,7 @@ func TestReviewerAdapterGuardDetectsSemanticOwnership(t *testing.T) {
 	violations := reviewerAdapterSourceViolations("bad_adapter.go", []byte("package reviewerprovider\n"+`
 import (
   "encoding/json"
-  "github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+  "github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 type binding struct { SubjectHash string `+"`json:\"subject_hash\"`"+` }
 func (adapter *BadAdapter) Review(ctx context.Context, invocation Invocation) ([]byte, error) {

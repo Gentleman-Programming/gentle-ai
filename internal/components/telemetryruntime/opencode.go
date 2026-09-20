@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 const OpenCodeSchema = "gentle-ai.telemetry-opencode/v1"

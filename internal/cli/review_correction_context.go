@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 // reviewCorrectionContextBudgetCode is the correction-stage sibling of

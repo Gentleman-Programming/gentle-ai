@@ -8,16 +8,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }

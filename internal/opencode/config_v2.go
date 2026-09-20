@@ -3,7 +3,7 @@ package opencode
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // Normalize only the fields represented by ConfigSnapshot. Native entries are

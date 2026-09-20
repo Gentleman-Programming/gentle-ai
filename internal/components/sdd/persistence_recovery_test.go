@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
 // Contract checks inspect shipped and installed instructions, not live backend behavior.

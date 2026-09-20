@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 )
 
 // stateDir matches internal/state's own stateDir: telemetry state lives next

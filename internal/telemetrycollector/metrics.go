@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 // runtimeMetricNames lists every metric family this registry can hold, in

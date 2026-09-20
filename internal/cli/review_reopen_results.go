@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const ReviewResultReopenSchema = "gentle-ai.review-result-reopen-result/v1"

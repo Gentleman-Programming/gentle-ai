@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/sddstatus"
 )
 
 // RunSDDAttempt retains only the existing grant verb for explicit edit consent.

@@ -3,7 +3,7 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 // RenderABInstalling renders the installation-in-progress (or error) screen.

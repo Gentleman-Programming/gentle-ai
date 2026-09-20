@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/releaseprovenance"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/releaseprovenance"
 )
 
 func main() {

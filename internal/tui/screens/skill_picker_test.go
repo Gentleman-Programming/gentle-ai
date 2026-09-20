@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 func TestSkillPickerCanonicalRowsAndActions(t *testing.T) {

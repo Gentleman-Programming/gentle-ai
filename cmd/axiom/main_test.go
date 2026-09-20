@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
 )
 
 func TestAppVersionInitialization(t *testing.T) {

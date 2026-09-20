@@ -32,7 +32,7 @@ func TestReviewOfferAbsenceGuardCatchesKnownShapes(t *testing.T) {
 			name: "clean source touching unrelated reviewtransaction symbols",
 			src: `package sddstatus
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+import "github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 
 func example() reviewtransaction.GateResult { return reviewtransaction.GateAllow }
 `,
@@ -45,7 +45,7 @@ func example() reviewtransaction.GateResult { return reviewtransaction.GateAllow
 import (
 	"context"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 func example(ctx context.Context) {
@@ -58,7 +58,7 @@ func example(ctx context.Context) {
 			name: "references the ReviewCore type",
 			src: `package sddstatus
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+import "github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 
 func example() reviewtransaction.ReviewCore { return reviewtransaction.ReviewCore{} }
 `,

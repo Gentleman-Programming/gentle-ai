@@ -1,6 +1,6 @@
 package reviewerprovider
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v3/internal/model"
 
 // ApprovedRuntimeContextBudget is the provider-owned cap on the complete
 // reviewer context one runtime is handed for a single capture: the whole

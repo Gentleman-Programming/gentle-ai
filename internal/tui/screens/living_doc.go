@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/livingdoc"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/livingdoc"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 // LivingDocOptions construye las opciones para la pantalla de especificaciones vivas.

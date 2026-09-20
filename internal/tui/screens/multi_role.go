@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/multirole"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 // MultiRoleInfo describe la información de un rol para la TUI.

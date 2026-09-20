@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
 const sampleDesignWithRoles = `# Documento de Diseño

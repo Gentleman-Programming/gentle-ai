@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
 // Detector analiza el sistema de archivos del workspace y de los repositorios asignados a cada rol.

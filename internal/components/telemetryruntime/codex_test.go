@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
 
 const codexRealBridgeTranscriptFixture = `{"timestamp":"PRIVATE_TIME","type":"session_meta","payload":{"id":"PRIVATE_SESSION","source":{"subagent":{"thread_spawn":{"parent_thread_id":"PRIVATE_PARENT","depth":1,"agent_nickname":"PRIVATE_NICKNAME","agent_path":"/root/sdd_explore"}}}}}

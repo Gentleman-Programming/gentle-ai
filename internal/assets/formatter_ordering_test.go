@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/versions"
 )
 
 func TestSDDOrchestratorsRequireSafeFormatterOrdering(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
 
 const managedAssetProvenanceRefusal = "managed reviewer assets are outdated; run `gentle-ai sync`"

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/semantic"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/semantic"
 )
 
 // Server representa el servidor HTTP local para el dashboard web de Axiom.

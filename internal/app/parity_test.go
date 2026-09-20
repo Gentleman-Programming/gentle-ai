@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui"
 )
 
 func TestInstallDefaultsMatchTUIModelDefaults(t *testing.T) {

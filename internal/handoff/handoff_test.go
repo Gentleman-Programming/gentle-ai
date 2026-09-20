@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/workspace"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
 const sampleValidHandoff = `---

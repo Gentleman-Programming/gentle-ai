@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/handoff"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/handoff"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
 )
 
 // RenderHandoffs renderiza la pantalla del visor de relevos estructurados en la TUI.

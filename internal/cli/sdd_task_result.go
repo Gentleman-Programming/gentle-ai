@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddtaskresult"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/sddtaskresult"
 )
 
 // maxSDDTaskResultBytes bounds what a phase result may be before it is refused

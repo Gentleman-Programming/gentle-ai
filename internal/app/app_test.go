@@ -19,17 +19,17 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
 )
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted

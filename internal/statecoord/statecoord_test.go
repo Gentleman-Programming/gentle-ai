@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
 
 func TestLockPathResolvesHomeSymlink(t *testing.T) {
