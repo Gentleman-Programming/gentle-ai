@@ -149,6 +149,87 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 	}
 }
 
+// TestRenderRoutingProjectsODDProtocolBeforeTopology guards INC-20 F6.1: the
+// Organic Driven Development protocol absorbed from upstream (1b202d77,
+// 70c774f8, cfc415ce, dcd2fa07) must be projected as the orchestrator's
+// predefined workflow, rendered before the direct/delegated/SDD topology so
+// no adapter reads the topology as the entry point into implementation.
+func TestRenderRoutingProjectsODDProtocolBeforeTopology(t *testing.T) {
+	t.Parallel()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+
+			oddOffset := strings.Index(rendered, "### ODD protocol")
+			topologyOffset := strings.Index(rendered, "**Direct inline:**")
+			if oddOffset < 0 || topologyOffset < 0 || oddOffset > topologyOffset {
+				t.Fatalf("RenderRouting(%q) must project the ODD protocol before implementation topology:\n%s", agent.ID, rendered)
+			}
+
+			for _, want := range []string{
+				"Organic Driven Development (ODD) is the predefined workflow of this orchestrator.",
+				"SDD is a branch inside ODD, entered only by an explicit request or an accepted proposal.",
+				"1. **Authorize.**",
+				"2. **Explore.**",
+				"3. **Resolve uncertainty.**",
+				"4. **Classify.**",
+				"5. **Track before the first write.**",
+				"6. **Implement task by task.**",
+				"7. **Close.**",
+				"`odd/tasks/<feature-name>.md`",
+				"`odd/<feature-name>/tasks`",
+				"work-unit commit",
+				"Conventional Commit",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) is missing ODD protocol fact %q:\n%s", agent.ID, want, rendered)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderRoutingRendersMandatoryDelegationTriggers guards the upstream
+// dcd2fa07 absorption: delegation triggers must be behavioral (rendered as
+// mandatory stop-and-delegate rules keyed to the canonical manifest
+// thresholds), not left as the advisory "smallest useful topology" framing
+// alone.
+func TestRenderRoutingRendersMandatoryDelegationTriggers(t *testing.T) {
+	t.Parallel()
+
+	routing := capabilitymanifest.CanonicalImplementationRouting()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+
+			for _, want := range []string{
+				"### Mandatory Delegation Triggers",
+				"These triggers are mandatory, not advisory.",
+				fmt.Sprintf("%d or more files", routing.DelegatedDirect.MappingMinUnderstandingFiles),
+				fmt.Sprintf("%d or more non-trivial files", routing.DelegatedDirect.WriterMinNonTrivialFiles),
+				"Long-session backstop",
+				"Route declaration",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) is missing delegation trigger %q:\n%s", agent.ID, want, rendered)
+				}
+			}
+		})
+	}
+}
+
 // TestRenderRoutingMakesTheReviewKillSwitchDiscoverable guards the product
 // promise that configuring an agent tells it what it may do. The kill switch is
 // only real for the user if every configured agent can name it, so the exact
