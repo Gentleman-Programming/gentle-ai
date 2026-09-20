@@ -198,6 +198,24 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 | 12 `internal/assets/*/sdd-orchestrator.md`, `sdd-orchestrator-sections.md`, sus goldens y `orchestrator_shared_sections_test.go`, `skills/{chained-pr,work-unit-commits}/SKILL.md` | Sí | Carga paralela de `70c774f8` y `cfc415ce` fuera del alcance que la partición de fases asigna a F6.1. |
 | `odd_integration_test.go` | Sí | No existe en el fork. |
 
+### Retiradas destructivas F6.2–F6.4 (autoría del fork, no commits de upstream)
+
+Las Fases 11 a 15 no absorben ningún commit de upstream: retiran la capa Go de ODD del fork, que es la entrada **V7** del inventario de no-reversión. REQ-20.3 autoriza esa retirada **solo a F6** y **solo mediante los deltas de las capacidades `odd-living-document`, `odd-cli-commands`, `odd-sdd-promotion` y `odd-ui-integration`**, aplicados en la Fase 15. Se registran aquí por trazabilidad, con el commit del fork como evidencia.
+
+| Fase | Qué retira | Evidencia | Tamaño |
+|---|---|---|---|
+| F6.2a (11) | Subcomandos `axiom odd create|status|promote`: 6 ficheros de `internal/cli` y los puntos de `main.go` | `09602ab7` | 9 ficheros, 1140 bajas |
+| F6.2b (12) | Web UI: `odd_service.go`, 4 rutas y manejadores de `server.go`, 3 DTOs, superficie de `assets/` | `28298be3` | 8 ficheros, 1092 bajas |
+| F6.2c (13) | TUI: `odd_features.go`, los puntos de `model.go`, `router.go` y `governance.go` | `1b7cdd5f` | 9 ficheros, 529 bajas |
+| F6.3 (14) | `internal/odd/**` íntegro. Un paquete Go no se borra a medias sin romper su compilación: la prueba de ejecución **es** `go build ./...` | `79dca9bc` | 19 ficheros, 3537 bajas |
+| F6.4 (15) | Deltas destructivos sobre las 4 capacidades `odd-*` que autoriza REQ-20.3 | `ba8fb27e` | 6 ficheros, 79+/266− |
+
+**Evidencia inversa de D-02, ejecutada sobre el binario construido tras la Fase 14**: `axiom odd status` responde `Error: comando 'odd' no reconocido.`, frente al estado real que devolvía al cerrar la Fase 10. La ventana entre doctrina retirada y verbo vivo queda cerrada.
+
+**`odd/tasks/*.md` no se toca**: es ruta prohibida por D-10, así que los documentos vivos permanecen aunque el comando que los leía ya no exista. Cero ficheros de `odd/` en el diff de estas fases.
+
+**Corrección de frontera aplicada por el orquestador.** El commit del trinquete borraba cinco funciones que esta retirada dejó huérfanas, pero **tres vivían en rutas prohibidas**: `Manager.Save` en `internal/hub/manager.go` — que es además la entrada **V8** — y `Service.GetSpecsRoot`/`Service.GetIndexPath` en `internal/livingdoc/service.go`. Se restauraron ambos ficheros y las tres funciones quedan **declaradas en `.deadcode-baseline.txt`** (260 → 263 entradas), que no es ruta prohibida, conforme a la regla 8 del plan: las correcciones transversales sobre rutas prohibidas van en su propia PR tras fusionar la cadena. Las dos huérfanas en alcance (`Service.GetRoles` y `Service.SetHubManager`, en `internal/dashboard/service.go`) sí se borraron. Evidencia: `cfad7866`; `./scripts/deadcode-ratchet.sh` en modo CI devuelve `no new unreachable functions`.
+
 ## F7 — Cierre del registro y documentación
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |

@@ -402,64 +402,78 @@ Depende de la Fase 5 (el registro debe existir). Independiente de las Fases 6–
 
 Depende de la Fase 10 (la doctrina ya no nombra estos comandos). Independiente de las Fases 12 y 13.
 
-- [ ] 11.1 [Caracterización] Confirmar mediante `rg -n 'axiom odd'` el inventario de sitios que invocan la CLI antes de borrarla (criterio de cierre de F6.2 completo, no solo de esta sub-fase).
-- [ ] 11.2 [GREEN] Borrar `internal/cli/odd_create.go`, `internal/cli/odd_create_test.go`, `internal/cli/odd_status.go`, `internal/cli/odd_status_test.go`, `internal/cli/odd_promote.go`, `internal/cli/odd_promote_test.go` (6 ficheros).
-- [ ] 11.3 [GREEN] `cmd/axiom/main.go`: retirar el import de `internal/odd` (`:25`), el `case "odd":` (`:356-357`), la función `runODD` (`:1789-1823`), `dashboardScaffolder`/`newDashboardScaffolder`/su método `Scaffold` (`:1825-1866`), y las líneas de ayuda que mencionan `odd` (bloque de `printHelp()`).
-- [ ] 11.4 [GREEN] `cmd/axiom/main_test.go`: retirar los casos que ejercitan `runODD` y el despacho de `odd`.
-- [ ] 11.5 [GREEN] Retirar el verbo `odd` del paso de CI "Smoke the canonical binary surface" (Fase 3, tarea 3.7) — ya no aplica.
-- [ ] 11.6 [Verificación] `axiom odd status` sobre el binario recién construido devuelve "comando no reconocido" (o equivalente), no un pánico ni una ayuda fantasma.
-- [ ] 11.7 [Verificación de cierre F6.2a] `go build ./...`, `go vet ./...`, `go test ./internal/cli/... ./cmd/axiom/... -v`. Confirmar `rg -n 'axiom odd|internal/cli/odd_'` sin resultados fuera de `openspec/changes/archive/**`.
+- [x] 11.1 [Caracterización] Confirmar mediante `rg -n 'axiom odd'` el inventario de sitios que invocan la CLI antes de borrarla (criterio de cierre de F6.2 completo, no solo de esta sub-fase).
+- [x] 11.2 [GREEN] Borrar `internal/cli/odd_create.go`, `internal/cli/odd_create_test.go`, `internal/cli/odd_status.go`, `internal/cli/odd_status_test.go`, `internal/cli/odd_promote.go`, `internal/cli/odd_promote_test.go` (6 ficheros).
+- [x] 11.3 [GREEN] `cmd/axiom/main.go`: retirar el import de `internal/odd` (`:25`), el `case "odd":` (`:356-357`), la función `runODD` (`:1789-1823`), `dashboardScaffolder`/`newDashboardScaffolder`/su método `Scaffold` (`:1825-1866`), y las líneas de ayuda que mencionan `odd` (bloque de `printHelp()`).
+- [x] 11.4 [GREEN] `cmd/axiom/main_test.go`: retirar los casos que ejercitan `runODD` y el despacho de `odd`.
+- [x] 11.5 [GREEN] Retirar el verbo `odd` del paso de CI "Smoke the canonical binary surface" (Fase 3, tarea 3.7) — ya no aplica.
+- [x] 11.6 [Verificación] `axiom odd status` sobre el binario recién construido devuelve "comando no reconocido" (o equivalente), no un pánico ni una ayuda fantasma.
+- [x] 11.7 [Verificación de cierre F6.2a] `go build ./...`, `go vet ./...`, `go test ./internal/cli/... ./cmd/axiom/... -v`. Confirmar `rg -n 'axiom odd|internal/cli/odd_'` sin resultados fuera de `openspec/changes/archive/**`.
 
 ## Fase 12: F6.2b — Retirada de la Web UI de ODD (REQ-19.13, parte de REQ-19.15)
 
 Depende de la Fase 10. Independiente de las Fases 11 y 13.
 
-- [ ] 12.1 [GREEN] Borrar `internal/dashboard/odd_service.go`, `internal/dashboard/odd_service_test.go`.
-- [ ] 12.2 [GREEN] `internal/dashboard/server.go`: retirar las 4 rutas (`:58-61` — `/api/odd`, `/api/odd/promote`, `/api/odd/check-mirror`, `/api/odd/`), sus 4 manejadores (`handleODD`, `handleODDDetail`, `handleODDPromote`, `handleODDCheckMirror`, `:370-472`) y el campo `oddExporter` (`:24-28`) más el import de `internal/odd` (`:13`).
-- [ ] 12.3 [GREEN] `internal/dashboard/types.go`: retirar `ODDCreateRequest` (`:229-235`), `ODDPromoteRequest` (`:237-244`), `ODDMirrorRequest` (`:246-…`).
-- [ ] 12.4 [GREEN] `internal/dashboard/assets/index.html`: retirar el botón `data-tab="tab-odd"` y la `<section id="tab-odd">`.
-- [ ] 12.5 [GREEN] `internal/dashboard/assets/app.js`: retirar `loadODD`, `renderODDFeatures`, `createODDFeature`, `promoteODDFeature`, `checkODDMirror`, y la insignia "← Origen ODD" (`oddOriginMap`) de `renderIncrements()`.
-- [ ] 12.6 [GREEN] `internal/dashboard/assets/style.css`: retirar `.lane-badge`, `.lane-badge--promoted`, `.mirror-state--*` si no los usa ninguna otra superficie.
-- [ ] 12.7 [GREEN] `internal/dashboard/dashboard_test.go`: retirar `TestODDEndpoints`.
-- [ ] 12.8 [Medición — O-1] Confirmar si `CreateIncrementRequest.ProposalBody` (`types.go`) tiene algún consumidor fuera de ODD (por ejemplo, un cliente externo de `POST /api/increments`). **Si no lo tiene:** retirar el campo y su rama en `service.go`, y actualizar `create_increment_characterization_test.go` en consecuencia. **Si lo tiene:** dejar ambos ficheros intactos — el campo permanece como superficie de API publicada, protegida por REQ-15.1 sin cambios.
-- [ ] 12.9 [Verificación] `axiom ui` sobre un workspace de prueba; confirmar ausencia de la pestaña `tab-odd` y que `GET /api/odd`, `POST /api/odd/promote`, `POST /api/odd/check-mirror` devuelven 404.
-- [ ] 12.10 [Verificación de cierre F6.2b] `go build ./...`, `go vet ./...`, `go test ./internal/dashboard/... -v`; confirmar que el dashboard SDD existente (`/api/increments`, pestaña de incrementos) sigue funcionando sin cambio de comportamiento.
+- [x] 12.1 [GREEN] Borrar `internal/dashboard/odd_service.go`, `internal/dashboard/odd_service_test.go`.
+- [x] 12.2 [GREEN] `internal/dashboard/server.go`: retirar las 4 rutas (`:58-61` — `/api/odd`, `/api/odd/promote`, `/api/odd/check-mirror`, `/api/odd/`), sus 4 manejadores (`handleODD`, `handleODDDetail`, `handleODDPromote`, `handleODDCheckMirror`, `:370-472`) y el campo `oddExporter` (`:24-28`) más el import de `internal/odd` (`:13`).
+- [x] 12.3 [GREEN] `internal/dashboard/types.go`: retirar `ODDCreateRequest` (`:229-235`), `ODDPromoteRequest` (`:237-244`), `ODDMirrorRequest` (`:246-…`).
+- [x] 12.4 [GREEN] `internal/dashboard/assets/index.html`: retirar el botón `data-tab="tab-odd"` y la `<section id="tab-odd">`.
+- [x] 12.5 [GREEN] `internal/dashboard/assets/app.js`: retirar `loadODD`, `renderODDFeatures`, `createODDFeature`, `promoteODDFeature`, `checkODDMirror`, y la insignia "← Origen ODD" (`oddOriginMap`) de `renderIncrements()`.
+- [x] 12.6 [GREEN] `internal/dashboard/assets/style.css`: retirar `.lane-badge`, `.lane-badge--promoted`, `.mirror-state--*` si no los usa ninguna otra superficie.
+- [x] 12.7 [GREEN] `internal/dashboard/dashboard_test.go`: retirar `TestODDEndpoints`.
+- [x] 12.8 [Medición — O-1] Confirmar si `CreateIncrementRequest.ProposalBody` (`types.go`) tiene algún consumidor fuera de ODD (por ejemplo, un cliente externo de `POST /api/increments`). **Si no lo tiene:** retirar el campo y su rama en `service.go`, y actualizar `create_increment_characterization_test.go` en consecuencia. **Si lo tiene:** dejar ambos ficheros intactos — el campo permanece como superficie de API publicada, protegida por REQ-15.1 sin cambios.
+- [x] 12.9 [Verificación] `axiom ui` sobre un workspace de prueba; confirmar ausencia de la pestaña `tab-odd` y que `GET /api/odd`, `POST /api/odd/promote`, `POST /api/odd/check-mirror` devuelven 404.
+- [x] 12.10 [Verificación de cierre F6.2b] `go build ./...`, `go vet ./...`, `go test ./internal/dashboard/... -v`; confirmar que el dashboard SDD existente (`/api/increments`, pestaña de incrementos) sigue funcionando sin cambio de comportamiento.
 
 ## Fase 13: F6.2c — Retirada de la TUI de ODD (REQ-19.14, resto de REQ-19.15)
 
 Depende de la Fase 10. Independiente de las Fases 11 y 12.
 
-- [ ] 13.1 [GREEN] Borrar `internal/tui/screens/odd_features.go`.
-- [ ] 13.2 [GREEN] `internal/tui/model.go`: retirar los 5+ puntos de integración — la constante `ScreenODDFeatures` (`:589-591`), su `case` en `View()` (`:1671`), su `case` en el manejador de Enter de `ScreenGovernance` (`:3141-3153`, revertir la numeración de "Volver al menú principal" a su posición previa), su `case` en `screenOptionCount` (`:4571`), `loadODDFeatures()` (`:5954-5980`) y `oddChangeNameFromPromotedTo()` (`:5982-5990`).
-- [ ] 13.3 [GREEN] `internal/tui/model_test.go`: retirar los casos que ejercitan `ScreenODDFeatures`.
-- [ ] 13.4 [GREEN] `internal/tui/router.go`: retirar `ScreenODDFeatures: {Backward: ScreenGovernance}` (`:70`) del mapa `linearRoutes`.
-- [ ] 13.5 [GREEN] `internal/tui/screens/governance.go`: retirar la entrada `"6. Carril Ágil ODD (documentos vivos, promoción)"` (`:17`) y recolocar "Volver al menú principal" a su posición previa a INC-19.
-- [ ] 13.6 [Verificación] `axiom tui` interactivo: navegar Gobernanza y confirmar que la entrada ODD ya no existe, que ninguna otra pantalla (Hub, Incrementos SDD, Multi-Rol, Handoffs, Specs Vivas) perdió su cursor ni su ruta de retroceso, y que "Volver al menú principal" sigue funcionando desde su nueva posición.
-- [ ] 13.7 [Verificación de cierre F6.2c] `go build ./...`, `go vet ./...`, `go test ./internal/tui/... -v`.
+- [x] 13.1 [GREEN] Borrar `internal/tui/screens/odd_features.go`.
+- [x] 13.2 [GREEN] `internal/tui/model.go`: retirar los 5+ puntos de integración — la constante `ScreenODDFeatures` (`:589-591`), su `case` en `View()` (`:1671`), su `case` en el manejador de Enter de `ScreenGovernance` (`:3141-3153`, revertir la numeración de "Volver al menú principal" a su posición previa), su `case` en `screenOptionCount` (`:4571`), `loadODDFeatures()` (`:5954-5980`) y `oddChangeNameFromPromotedTo()` (`:5982-5990`).
+- [x] 13.3 [GREEN] `internal/tui/model_test.go`: retirar los casos que ejercitan `ScreenODDFeatures`.
+- [x] 13.4 [GREEN] `internal/tui/router.go`: retirar `ScreenODDFeatures: {Backward: ScreenGovernance}` (`:70`) del mapa `linearRoutes`.
+- [x] 13.5 [GREEN] `internal/tui/screens/governance.go`: retirar la entrada `"6. Carril Ágil ODD (documentos vivos, promoción)"` (`:17`) y recolocar "Volver al menú principal" a su posición previa a INC-19.
+- [x] 13.6 [Verificación] `axiom tui` interactivo: navegar Gobernanza y confirmar que la entrada ODD ya no existe, que ninguna otra pantalla (Hub, Incrementos SDD, Multi-Rol, Handoffs, Specs Vivas) perdió su cursor ni su ruta de retroceso, y que "Volver al menú principal" sigue funcionando desde su nueva posición.
+- [x] 13.7 [Verificación de cierre F6.2c] `go build ./...`, `go vet ./...`, `go test ./internal/tui/... -v`.
 
 ## Fase 14: F6.3 — Retirada del dominio `internal/odd/**` (18 ficheros, 3473 líneas medidas) (`size:exception` recomendada)
 
 Depende de las Fases 11, 12 y 13 (nada externo debe seguir llamando al paquete). **Recomendación de `size:exception` explícita**: 1534 líneas de producción + 1939 de test, ya medidas y publicadas en `proposal.md` §9, tabla de alcance destructivo de D1. Un paquete Go no se puede borrar a medias entre PRs sin romper la compilación del resto del propio paquete — no es una elección de conveniencia, es la naturaleza del borrado atómico.
 
-- [ ] 14.1 [Verificación previa] `rg -n 'internal/odd'` en todo el árbol (excepto `openspec/changes/archive/**`) — confirmar cero importadores restantes tras las Fases 11–13.
-- [ ] 14.2 [GREEN] Borrar los 10 ficheros de producción: `args.go`, `document.go`, `errors.go`, `mirror.go`, `name.go`, `parse.go`, `promote.go`, `render.go`, `store.go`, `template.go`.
-- [ ] 14.3 [GREEN] Borrar los 8 ficheros de test: `args_test.go`, `mirror_test.go`, `name_test.go`, `parse_test.go`, `promote_test.go`, `render_test.go`, `store_test.go`, `template_test.go`.
-- [ ] 14.4 [GREEN] Borrar `internal/dashboard/name_parity_test.go` (propiedad de paridad de nombres ODD↔incremento; sin ODD no tiene sujeto).
-- [ ] 14.5 [Verificación de cierre F6.3] `go build ./...` — la prueba de ejecución de esta fase ES la compilación: si compila, ningún paquete referencia ya `internal/odd`. `go vet ./...`, `go test ./... -timeout 900s` (sin nuevos fallos respecto al estado de la Fase 13). Confirmar la etiqueta `size:exception` en la PR antes de solicitar revisión (regla 7).
+- [x] 14.1 [Verificación previa] `rg -n 'internal/odd'` en todo el árbol (excepto `openspec/changes/archive/**`) — confirmar cero importadores restantes tras las Fases 11–13.
+- [x] 14.2 [GREEN] Borrar los 10 ficheros de producción: `args.go`, `document.go`, `errors.go`, `mirror.go`, `name.go`, `parse.go`, `promote.go`, `render.go`, `store.go`, `template.go`.
+- [x] 14.3 [GREEN] Borrar los 8 ficheros de test: `args_test.go`, `mirror_test.go`, `name_test.go`, `parse_test.go`, `promote_test.go`, `render_test.go`, `store_test.go`, `template_test.go`.
+- [x] 14.4 [GREEN] Borrar `internal/dashboard/name_parity_test.go` (propiedad de paridad de nombres ODD↔incremento; sin ODD no tiene sujeto).
+- [x] 14.5 [Verificación de cierre F6.3] `go build ./...` — la prueba de ejecución de esta fase ES la compilación: si compila, ningún paquete referencia ya `internal/odd`. `go vet ./...`, `go test ./... -timeout 900s` (sin nuevos fallos respecto al estado de la Fase 13). Confirmar la etiqueta `size:exception` en la PR antes de solicitar revisión (regla 7).
 
 ## Fase 15: F6.4 — Especificaciones y filas del registro para F6
 
 Depende de las Fases 11, 12, 13 y 14 (los deltas destructivos deben coincidir con lo que el código ya no tiene).
 
-- [ ] 15.1 [GREEN — destructivo, español] `openspec/specs/odd-living-document/spec.md`: retirar por completo REQ-19.1 (`:15`), REQ-19.2 (`:35`), REQ-19.3 (`:54`), REQ-19.4 (`:73`) — los 4 requerimientos verificados en el fichero, con motivo y migración conforme al texto ya redactado en `spec.md` de este cambio §8.
-- [ ] 15.2 [GREEN — destructivo, español] `openspec/specs/odd-cli-commands/spec.md`: retirar REQ-19.5 (`:15`), REQ-19.6 (`:35`), REQ-19.7 (`:54`), REQ-19.8 (`:80`) — conforme a `spec.md` §9.
-- [ ] 15.3 [GREEN — destructivo, español] `openspec/specs/odd-sdd-promotion/spec.md`: retirar REQ-19.9 (`:15`), REQ-19.10 (`:35`), REQ-19.11 (`:55`), REQ-19.12 (`:75`) — conforme a `spec.md` §10.
-- [ ] 15.4 [GREEN — destructivo, español] `openspec/specs/odd-ui-integration/spec.md`: retirar REQ-19.13 (`:15`), REQ-19.14 (`:33`), REQ-19.15 (`:51`) — conforme a `spec.md` §11.
-- [ ] 15.5 [GREEN — MODIFIED, no destructivo, español] `openspec/specs/dashboard-sdd-orchestration/spec.md`: estrechar el escenario de `:45-51` ("Creación de incremento con cuerpo de propuesta ya renderizado", que cita `axiom odd promote` como ejemplo de sembrador) para que ya no ilustre con un comando retirado — el requerimiento (que `proposal_body` se acepte) permanece; solo cambia el ejemplo de quién lo siembra [D-11].
-- [ ] 15.6 [GREEN — firme, inglés] `openspec/specs/organic-agent-trigger-rules/spec.md`: el delta condicional que la propuesta preveía (§3.2) pasa a firme — el requerimiento `ADDED` ya redactado en `spec.md` de este cambio §7 ("Organic Driven Development como protocolo obligatorio...") se añade sin modificar ninguno de los requerimientos existentes del fichero (`(read-only)` en su totalidad), en particular sin tocar "SDD remains optional" (`:82-102`).
-- [ ] 15.7 [Decisión de archivado, no de este documento] Confirmar con la fase de archivado si `openspec/specs/odd-{living-document,cli-commands,sdd-promotion,ui-integration}/spec.md` se eliminan por completo o se conservan vacíos con nota de retirada (`spec.md` de este cambio lo deja explícitamente fuera del alcance de la especificación, a discreción de `sdd-archive`).
-- [ ] 15.8 [Protocolo — paso G, adaptado a fases de autoría propia] Sección "F6 — Reconciliación ODD (F6.2–F6.4)" en el registro con las filas de los commits ya absorbidos en la Fase 10 más una nota de las retiradas destructivas de código de las Fases 11–14 (no son commits de upstream, son autoría del fork — se registran igualmente por trazabilidad, con evidencia = número de PR). Espejar en Engram.
-- [ ] 15.9 [Verificación de cierre F6.4] Lectura estructurada de los 6 ficheros de especificación tocados, confirmando que cada uno preserva sin cambios los requerimientos no listados en las tareas 15.1–15.6. Confirmar que ningún fichero de especificación queda con una capacidad totalmente vacía sin la nota de la tarea 15.7 resuelta.
+- [x] 15.1 [GREEN — destructivo, español] `openspec/specs/odd-living-document/spec.md`: retirar por completo REQ-19.1 (`:15`), REQ-19.2 (`:35`), REQ-19.3 (`:54`), REQ-19.4 (`:73`) — los 4 requerimientos verificados en el fichero, con motivo y migración conforme al texto ya redactado en `spec.md` de este cambio §8.
+- [x] 15.2 [GREEN — destructivo, español] `openspec/specs/odd-cli-commands/spec.md`: retirar REQ-19.5 (`:15`), REQ-19.6 (`:35`), REQ-19.7 (`:54`), REQ-19.8 (`:80`) — conforme a `spec.md` §9.
+- [x] 15.3 [GREEN — destructivo, español] `openspec/specs/odd-sdd-promotion/spec.md`: retirar REQ-19.9 (`:15`), REQ-19.10 (`:35`), REQ-19.11 (`:55`), REQ-19.12 (`:75`) — conforme a `spec.md` §10.
+- [x] 15.4 [GREEN — destructivo, español] `openspec/specs/odd-ui-integration/spec.md`: retirar REQ-19.13 (`:15`), REQ-19.14 (`:33`), REQ-19.15 (`:51`) — conforme a `spec.md` §11.
+- [x] 15.5 [GREEN — MODIFIED, no destructivo, español] `openspec/specs/dashboard-sdd-orchestration/spec.md`: estrechar el escenario de `:45-51` ("Creación de incremento con cuerpo de propuesta ya renderizado", que cita `axiom odd promote` como ejemplo de sembrador) para que ya no ilustre con un comando retirado — el requerimiento (que `proposal_body` se acepte) permanece; solo cambia el ejemplo de quién lo siembra [D-11].
+- [x] 15.6 [GREEN — firme, inglés] `openspec/specs/organic-agent-trigger-rules/spec.md`: el delta condicional que la propuesta preveía (§3.2) pasa a firme — el requerimiento `ADDED` ya redactado en `spec.md` de este cambio §7 ("Organic Driven Development como protocolo obligatorio...") se añade sin modificar ninguno de los requerimientos existentes del fichero (`(read-only)` en su totalidad), en particular sin tocar "SDD remains optional" (`:82-102`).
+- [x] 15.7 [Decisión de archivado, no de este documento] Confirmar con la fase de archivado si `openspec/specs/odd-{living-document,cli-commands,sdd-promotion,ui-integration}/spec.md` se eliminan por completo o se conservan vacíos con nota de retirada (`spec.md` de este cambio lo deja explícitamente fuera del alcance de la especificación, a discreción de `sdd-archive`).
+- [x] 15.8 [Protocolo — paso G, adaptado a fases de autoría propia] Sección "F6 — Reconciliación ODD (F6.2–F6.4)" en el registro con las filas de los commits ya absorbidos en la Fase 10 más una nota de las retiradas destructivas de código de las Fases 11–14 (no son commits de upstream, son autoría del fork — se registran igualmente por trazabilidad, con evidencia = número de PR). Espejar en Engram.
+- [x] 15.9 [Verificación de cierre F6.4] Lectura estructurada de los 6 ficheros de especificación tocados, confirmando que cada uno preserva sin cambios los requerimientos no listados en las tareas 15.1–15.6. Confirmar que ningún fichero de especificación queda con una capacidad totalmente vacía sin la nota de la tarea 15.7 resuelta.
+
+  > **Ajuste de entrega (2026-09-20) — Fases 11 a 15 entregadas como una sola operación destructiva.** 54 ficheros, 95+/6614− = **6709 líneas**, en 6 commits (`09602ab7`, `28298be3`, `1b7cdd5f`, `79dca9bc`, `ba8fb27e`, `cfad7866`). Ancla `f62-base` = `ae162673`. Se agruparon a propósito: los estados intermedios dejan ODD a medio quitar.
+  >
+  > **Evidencia inversa de D-02, ejecutada y no leída**: `axiom odd status` sobre el binario construido tras la Fase 14 responde `Error: comando 'odd' no reconocido.`, frente al estado real que devolvía al cerrar la Fase 10. La ventana entre doctrina retirada y verbo vivo queda cerrada. `grep -rn 'internal/odd' --include='*.go' .` → **cero**.
+  >
+  > **Los deltas de 15.1–15.4 no borran el texto de los requerimientos: los mueven bajo `## REMOVED Requirements`**, que es la convención OpenSpec para declarar una retirada destructiva de forma auditable. Un recuento de `^### Requirement` sin mirar la sección padre da un falso negativo — comprobado por el orquestador antes de aceptarlo.
+  >
+  > **`odd/tasks/*.md` intacto**: 3 documentos vivos permanecen aunque el comando que los leía ya no exista. Ruta prohibida D-10, cero ficheros de `odd/` en el diff.
+  >
+  > **Violación de frontera detectada y corregida por el orquestador.** El commit del trinquete borraba cinco funciones que esta retirada dejó huérfanas, y **tres vivían en rutas prohibidas**: `Manager.Save` en `internal/hub/manager.go` — que es además la entrada **V8** del inventario — y `Service.GetSpecsRoot`/`Service.GetIndexPath` en `internal/livingdoc/service.go`. El razonamiento del escritor era correcto (verificó cero llamadores, distinguió `GetRoles` de `GetRoleStatus` y `SetHubManager` de `NewServiceWithHub`), pero la frontera no la salva un trinquete.
+  >
+  > **El conflicto era real**: retirar ODD deja huérfano código que este incremento no puede tocar, y `scripts/deadcode-ratchet.sh` **bloquea el CI** (`ci.yml:270`, sale con 1 ante cualquier adición). La salida está en la **regla 8** del plan: las correcciones transversales sobre rutas prohibidas van en su propia PR tras fusionar la cadena. Se restauraron los dos ficheros y las tres funciones quedan **declaradas en `.deadcode-baseline.txt`** (260 → 263), que no es ruta prohibida. Las dos huérfanas en alcance sí se borraron. Es un debilitamiento deliberado y acotado del trinquete, preferible a violar la frontera o dejar el CI en rojo; queda como **trabajo abierto** para esa PR posterior. Verificado: el trinquete en modo CI devuelve `no new unreachable functions`.
+  >
+  > **Nota de proceso**: el escritor delegado completó las cinco fases y sus 6 commits, pero se quedó atrapado esperando una notificación de su propia verificación en segundo plano y no llegó a emitir informe. El orquestador comprobó las puertas de forma independiente (frontera, trinquete, D-02 inversa, deltas, `contracts/`, `/v3`, `odd/tasks/`) y cerró la fase.
 
 ## Fase 16: F7 — Defectos dispersos, documentación y cierre del registro (91/91)
 
