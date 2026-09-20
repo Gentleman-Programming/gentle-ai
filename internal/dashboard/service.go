@@ -353,31 +353,6 @@ func (s *Service) GetRoleStatus(changeName string) (*multirole.BarrierReport, er
 	return multirole.EvaluateBarrier(path, changeName, roles)
 }
 
-// GetRoles retorna los roles definidos en axiom.yaml.
-func (s *Service) GetRoles() (map[string]RoleMeta, error) {
-	root := s.getRootPath()
-	cfg, err := workspace.LoadConfig(filepath.Join(root, "axiom.yaml"))
-	if err != nil {
-		return nil, fmt.Errorf("error cargando axiom.yaml: %w", err)
-	}
-
-	rolesMap := make(map[string]RoleMeta)
-	for id, r := range cfg.Roles {
-		var repoPaths []string
-		for _, repo := range r.Repositories {
-			repoPaths = append(repoPaths, repo.Path)
-		}
-
-		rolesMap[id] = RoleMeta{
-			Name:         r.Name,
-			GatePolicy:   "blocking",
-			Repositories: repoPaths,
-			Tech:         r.Tech,
-		}
-	}
-	return rolesMap, nil
-}
-
 // GetHandoff obtiene el relevo estructurado handoff.md de un cambio.
 func (s *Service) GetHandoff(changeName string) (*handoff.Handoff, error) {
 	path, _, err := s.FindIncrementPath(changeName)
@@ -748,13 +723,6 @@ func (s *Service) MigrateIncompleteTasksToCumulative(changeName, role string) (i
 // GetHubManager retorna el gestor de Hub asociado al servicio.
 func (s *Service) GetHubManager() *hub.Manager {
 	return s.hubManager
-}
-
-// SetHubManager asigna el gestor de Hub del servicio.
-func (s *Service) SetHubManager(m *hub.Manager) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hubManager = m
 }
 
 var validIncrementNameRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)

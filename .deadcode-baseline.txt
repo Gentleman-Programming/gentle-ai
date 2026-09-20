@@ -80,11 +80,14 @@ internal/dashboard/server.go	Server.Port
 internal/dashboard/server.go	Server.Router
 internal/handoff/mirror.go	ToEngramPayload
 internal/hub/init.go	buildAxiomYaml
+internal/hub/manager.go	Manager.Save
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv
 internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
+internal/livingdoc/service.go	Service.GetIndexPath
+internal/livingdoc/service.go	Service.GetSpecsRoot
 internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
 internal/reviewerprovider/windows_batch_cmdline.go	isWindowsBatchFile
 internal/reviewerprovider/windows_batch_cmdline.go	quoteWindowsArgument
