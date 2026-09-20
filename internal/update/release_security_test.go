@@ -353,7 +353,7 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 		`signature: ${artifact}.minisig`,
 		`- "${artifact}"`,
 		`- "${signature}"`,
-		`repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}`,
+		`repo=IGutierrezZ/axiom;tag={{ .Tag }}`,
 		`github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
 		"-trimpath",
 		"go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2",

@@ -13,7 +13,7 @@ Gentle AI™ releases only when the protected `release` environment provides a r
      -x checksums.txt.minisig \
      -P "$GENTLE_AI_MINISIGN_PUBLIC_KEY"
    # Must print exactly:
-   # repo=Gentleman-Programming/gentle-ai;tag=vMAJOR.MINOR.PATCH
+   # repo=IGutierrezZ/axiom;tag=vMAJOR.MINOR.PATCH
 
    sha256sum --check --strict --ignore-missing checksums.txt
    ```
