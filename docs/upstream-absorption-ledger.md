@@ -27,10 +27,10 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 71 |
-| `descartado-deliberadamente` | 8 |
+| `absorbido` | 77 |
+| `descartado-deliberadamente` | 12 |
 | `revertido` | 0 |
-| **Total** | **79 (= universo declarado en la cabecera: 91)** |
+| **Total** | **89 (= universo declarado en la cabecera: 91)** |
 
 ## F0 — Identidad de distribución, artefacto de release y cobertura del binario real
 
@@ -220,8 +220,23 @@ Las Fases 11 a 15 no absorben ningún commit de upstream: retiran la capa Go de 
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |
 |---|---|---|---|---|
+| `80c927ae` | fix(sync): accept a symlinked agent config root for telemetry runtime | `absorbido` | `4d88405f` (rama `inc-20/pr7-absorcion-upstream`) | Cherry-pick limpio. |
+| `cd5a3af6` | docs(readme): correct what SDD Verify and Archive actually do | `absorbido` | `b50b0a40` (rama `inc-20/pr7-absorcion-upstream`) | Conflicto textual en `README.md` resuelto a mano: la prosa propia del fork se sustituye por la corregida de upstream, coherente con el `alt` y el SVG. El fork sí tiene sección `### SDD` y `sdd-cycle.svg`, así que este commit sí tiene dónde aplicarse, a diferencia de sus hermanos de ODD. |
+| `5b82c00d` | test(mcp): gate native Claude discovery on the v2.1.154 reporting floor (#4157) | `absorbido` | `a0e02a84` (rama `inc-20/pr7-absorcion-upstream`) | Cherry-pick limpio. |
+| `27d71d57` | fix(sync): prevent Gentle Logo from configuring unselected OpenCode agent (#4780) | `absorbido` | `044e5e8d` (rama `inc-20/pr7-absorcion-upstream`) | Cherry-pick limpio. **V4 verificado intacto**: el fix actúa en la capa de ejecución (`componentApplyStep.Run`, `componentSyncStep.Run`), no en `internal/model/presets.go`, donde `installSafePresetVisualComponents()` sigue excluyendo `ComponentOpenCodeGentleLogo` a propósito. |
+| `11f6c000` | fix(skills): keep contributor skills out of the default preset (#4669) (#4671) | `absorbido` | INC-18 (`2026-09-16-inc-18-rdd-decoupling-and-v3-stability-fixes`, tarea `task-18-5-upstream-skills-presets-hygiene`) | Ya absorbido por INC-18, que lo **re-derivó** en vez de aplicarlo: no es ancestro de `HEAD`. Verificado por contenido: `internal/components/skills/presets.go` es byte a byte el resultado de este diff (mismas `contributorSkills`, `selectableFoundationSkills`, `excludeSkills`), `docs/components.md` ya distingue Foundation de contributor y el golden de presets no menciona las skills retiradas. No se reaplica. |
+| `82a6de96` | test(windows): set USERPROFILE in the V2 catalog harness and shell-quote the expected assess --cwd token (#4789) | `absorbido` | `3afa11be` (rama `inc-20/pr7-absorcion-upstream`) | **Absorción parcial.** Su hunk sobre `internal/assets/opencode_v2_plugins_test.go` entra limpio. El hunk sobre `internal/cli/review_assess_test.go` **queda fuera**: modifica `assertReviewAssessNextTransition` y `TestReviewAssessHumanReadableOutputNamesDueTransition`, que solo introduce `71a47477`, descartado por la decisión D6. Cherry-pick real → `CONFLICT (content)`. Es el commit de la propia etiqueta `v3.4.0`. |
+| `95867aa4` | fix(tui): remove dead community tool runner | `descartado-deliberadamente` | Cherry-pick real → `CONFLICT`; llamadores verificados en el árbol | **La función que este commit borra sigue viva en el fork.** `runCommunityToolCommand` (`internal/tui/model.go:3711`) la consume `communitytool.RunnerFunc(runCommunityToolCommand)` en `startCommunityToolInstallation` (`:3654`), invocada desde el bucle Update (`:4753`) y ejercitada por `model_test.go:2418`. Upstream pudo borrarla porque su arco RTK (`08206a15`→`110f1371`) la dejó huérfana allí; el fork **nunca entró en ese arco**, como estableció la Fase 9. Absorberlo rompería `go build`. |
+| `0fbd8dd8` | docs(readme): present ODD as a feature with its own cycle diagram | `descartado-deliberadamente` | Encabezados de `README.md` y `docs/usage.md` verificados en el árbol | El README del fork **no tiene sección `### ODD`** (sus encabezados son Engram, SDD, RDD, Deterministic, Gentle Shell, 16 agentes, Also in the box), `docs/usage.md` menciona ODD **cero veces** —el enlace `docs/usage.md#organic-driven-development-odd` quedaría roto— y `docs/assets/diagrams/odd-cycle.svg` no existe. Absorberlo no sería absorber sino **fabricar documentación** de una superficie ejecutable que las Fases 11–14 acaban de retirar, que es justo lo que D-02 prohíbe. |
+| `a6ab6ddb` | docs: improve ODD workflow diagram | `descartado-deliberadamente` | `git show a6ab6ddb --stat` | Toca **únicamente** `docs/assets/diagrams/odd-cycle.svg`, que no existe en el fork ni se va a crear por el motivo de la fila anterior. |
+| `9f15bc44` | test(bench): adapt community tool navigation | `descartado-deliberadamente` | `git show 9f15bc44 --stat` | Toca **únicamente** `bench/journeys_issue4377.go`, ruta prohibida por D-10 y por la regla 5 de este registro. |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
+| `bench/journeys_issue4377.go` | Sí | Ruta prohibida D-10; único fichero de `9f15bc44`. |
+| `docs/assets/diagrams/odd-cycle.svg`, sección `### ODD` de `README.md` | Sí | No existen en el fork; ver las filas de `0fbd8dd8` y `a6ab6ddb`. |
+| `internal/cli/review_assess_test.go` | Sí | Hunk de `82a6de96` dependiente de `71a47477`, descartado por D6. |
+| `internal/tui/model.go` (hunk de `95867aa4`) | Sí | La función que borra sigue teniendo llamador vivo en el fork. |
+| `internal/components/skills/presets.go`, `presets_test.go`, `skills-presets.json`, `e2e/e2e_test.sh`, `docs/components.md` | Sí | Exclusivos de `11f6c000`, ya absorbido por INC-18; reaplicarlos duplicaría. |
