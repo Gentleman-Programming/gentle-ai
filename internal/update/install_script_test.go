@@ -184,10 +184,10 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 // scripts against the regression upstream shipped in v3.0.1 and fixed in
 // 9bf454d4: both scripts build the `go install` package by interpolation, so
 // a module-major migration that only rewrites the literal module string
-// (e.g. a blanket "gentle-ai/v2" -> "gentle-ai/v3" substitution) misses this
-// line, because it hardcodes the version suffix separately from the
-// "gentle-ai" literal. The expected major is derived from go.mod so the next
-// migration fails here first.
+// (e.g. a blanket search-and-replace of the old "gentle-ai" + "/v2" pair)
+// misses this line, because it hardcodes the version suffix separately from
+// the "gentle-ai" literal. The expected major is derived from go.mod so the
+// next migration fails here first.
 func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
