@@ -40,9 +40,6 @@
       <button class="nav-tab active" data-tab="tab-increments">
         <span class="tab-icon">📋</span> Tablero de Incrementos
       </button>
-      <button class="nav-tab" data-tab="tab-odd">
-        <span class="tab-icon">🌱</span> Carril Ágil ODD
-      </button>
       <button class="nav-tab" data-tab="tab-roles">
         <span class="tab-icon">👥</span> Monitor Multi-Rol & Barrera
       </button>
@@ -101,27 +98,6 @@
 
         <div class="increments-grid" id="increments-container">
           <div class="loading-state">Cargando incrementos del workspace...</div>
-        </div>
-      </section>
-
-      <!-- TAB ODD: CARRIL ÁGIL (Documentos Vivos, INC-19) -->
-      <section id="tab-odd" class="tab-panel">
-        <div class="section-header">
-          <div>
-            <h2>Carril Ágil ODD (Documentos Vivos)</h2>
-            <p class="description">Documentos vivos en <code>odd/tasks/</code>, su progreso y su promoción al carril formal SDD.</p>
-          </div>
-          <div class="filter-group">
-            <button class="filter-btn active" data-filter="all">Todos</button>
-            <button class="filter-btn" data-filter="active">Activos</button>
-            <button class="filter-btn" data-filter="promoted">Promovidos</button>
-            <button id="btn-new-odd" class="btn btn-primary" style="margin-left: 0.75rem;" title="Crear un nuevo documento vivo ODD">+ Nuevo documento ODD</button>
-            <button id="btn-check-odd-mirror" class="btn btn-outline" style="margin-left: 0.5rem;" title="Comparar cada documento vivo contra su espejo de recuperación en Engram">↻ Comprobar espejo</button>
-          </div>
-        </div>
-
-        <div class="increments-grid" id="odd-container">
-          <div class="loading-state">Cargando documentos vivos ODD...</div>
         </div>
       </section>
 

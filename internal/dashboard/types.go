@@ -225,27 +225,3 @@ type ModelAssignmentsDTO struct {
 	ActivePersona string            `json:"active_persona"`
 	Assignments   []ModelConfigItem `json:"assignments"`
 }
-
-// ODDCreateRequest define el parámetro para crear un documento vivo ODD
-// nuevo mediante POST /api/odd (REQ-19.5, REQ-19.13). Los DTO de respuesta
-// del carril ODD reutilizan los tipos del dominio internal/odd en vez de
-// duplicar su forma: sólo las peticiones de entrada tienen DTO propio [D-15].
-type ODDCreateRequest struct {
-	Feature string `json:"feature"`
-}
-
-// ODDPromoteRequest define los parámetros para promover un documento vivo
-// ODD a una propuesta SDD sembrada, o previsualizarla sin escribir nada,
-// mediante POST /api/odd/promote (REQ-19.8, REQ-19.9, REQ-19.13). [D-15]
-type ODDPromoteRequest struct {
-	Feature string `json:"feature"`
-	Name    string `json:"name,omitempty"`
-	DryRun  bool   `json:"dry_run,omitempty"`
-}
-
-// ODDMirrorRequest define el parámetro para comparar un documento vivo ODD
-// contra su espejo de recuperación en Engram mediante
-// POST /api/odd/check-mirror (REQ-19.4, REQ-19.7). [D-15]
-type ODDMirrorRequest struct {
-	Feature string `json:"feature"`
-}
