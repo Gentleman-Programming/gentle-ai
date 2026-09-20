@@ -2935,24 +2935,28 @@ func TestSDDSpecAndProposeNameTheChangeLocalSpecLocation(t *testing.T) {
 	}
 }
 
-// axiomODDWorkflowRequired lists the Spanish-language ODD/SDD dual-lane
-// guidance every Persona axiom asset must carry (INC-19 Phase 8, task
-// 8.1/8.2). Values mirror the real, shipped command contract from Phases 3
-// and 5 of the same increment — never an aspirational or invented shape.
+// axiomODDWorkflowRequired lists the Spanish-language ODD-as-default-protocol
+// guidance every Persona axiom asset must carry (INC-20 F6.1, tasks
+// 10.3/10.4). Values mirror the real doctrine absorbed from upstream
+// (commits 1b202d77, 70c774f8, cfc415ce, dcd2fa07 — see routing.go's "ODD
+// protocol" and "Mandatory Delegation Triggers" sections) — never an
+// aspirational or invented shape.
 var axiomODDWorkflowRequired = []string{
-	"## Flujo Dual: ODD y SDD",
-	"`odd/tasks/<feature>.md`",
-	"`odd/<feature>/tasks`",
-	"`axiom odd create <nombre>`",
-	"`axiom odd status [--json] [--check-mirror]`",
-	"`axiom odd promote <feature> [--dry-run] [--name <nombre>]`",
-	"orientación de lectura, no un disparador",
+	"## ODD: protocolo predefinido del orquestador",
+	"protocolo predefinido de este orquestador",
+	"siete pasos",
+	"Implementation Routing",
+	"SDD (Spec-Driven Development)",
+	"solo se activa por petición explícita del usuario o por la aceptación de una propuesta SDD",
 }
 
 // axiomODDWorkflowForbiddenTriggers guards risk R7 (capability
 // organic-agent-trigger-rules): this guidance must never wire a filesystem,
-// Git, or CI event to an automatic `axiom odd` invocation — only an explicit
-// human or agent command.
+// Git, or CI event to an automatic ODD invocation — only an explicit human or
+// agent action. It also guards D-02 (INC-20 F6.1): the retired `axiom odd
+// create|status|promote` CLI literals must never return to the doctrine,
+// because Fase 11 (F6.2a) retires that CLI surface and the guidance must stop
+// naming it before it disappears, even though the command still works today.
 var axiomODDWorkflowForbiddenTriggers = []string{
 	"pre-commit hook",
 	"post-commit hook",
@@ -2962,6 +2966,9 @@ var axiomODDWorkflowForbiddenTriggers = []string{
 	"runs automatically when",
 	"se ejecuta automáticamente cuando",
 	"on file save",
+	"axiom odd create",
+	"axiom odd status",
+	"axiom odd promote",
 }
 
 // axiomPersonaAssetPaths is the same asset family TestPersonaAxiomAssetsContract
