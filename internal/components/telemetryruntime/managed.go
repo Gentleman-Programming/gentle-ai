@@ -58,16 +58,39 @@ func ManagedPaths(configDir string) []string {
 	return []string{filepath.Join(configDir, "plugins", "telemetry-runtime.ts"), filepath.Join(configDir, ".gentle-ai-telemetry-runtime.json")}
 }
 
-// Refuse indirection inside the caller-resolved configuration root as well as
-// leaf symlinks. The generic journal only refuses a leaf or a root escape.
+// Refuse indirection strictly inside the caller-resolved configuration root,
+// both a symlinked intermediate directory (e.g. a symlinked "plugins"
+// directory) and a symlinked leaf managed file. The generic journal only
+// refuses a leaf or a root escape.
+//
+// The root itself may be a symlink: an agent's whole configuration directory
+// symlinked into a tracked dotfiles repository (stow/chezmoi pattern) is a
+// valid managed root as long as it resolves to an existing directory. That
+// symlink is not treated as indirection to refuse; only a dangling root
+// symlink, or one resolving to a non-directory, is still refused, since sync
+// cannot safely install files there.
 func checkManagedPath(configDir, path string) error {
-	for _, candidate := range []string{configDir, filepath.Dir(path), path} {
+	// ManagedPaths builds cleaned paths, so the root only matches a cleaned
+	// candidate; a caller-supplied trailing separator must not turn the
+	// accepted root symlink back into a refusal.
+	root := filepath.Clean(configDir)
+	if info, err := os.Lstat(root); err != nil && !os.IsNotExist(err) {
+		return err
+	} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if target, statErr := os.Stat(root); statErr != nil || !target.IsDir() {
+			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink that does not resolve to an existing directory; point it at a directory or replace it with one, then rerun 'gentle-ai sync'", root)
+		}
+	}
+	for _, candidate := range []string{filepath.Dir(path), path} {
+		if candidate == root {
+			continue
+		}
 		info, err := os.Lstat(candidate)
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("telemetry runtime symlink conflict: %s", candidate)
+			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink inside the managed root; replace it with a regular file or directory, then rerun 'gentle-ai sync'", candidate)
 		}
 	}
 	return nil
