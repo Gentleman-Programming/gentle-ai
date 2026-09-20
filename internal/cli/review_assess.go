@@ -191,6 +191,22 @@ func reviewAssessNextTransitionFor(root string, runtime model.AgentID, baseRef s
 	}
 }
 
+func reviewFlagProvided(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag {
+			return true
+		}
+		if strings.HasPrefix(arg, flag+"=") {
+			val := strings.TrimPrefix(arg, flag+"=")
+			if val == "false" || val == "0" {
+				return false
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // RunReviewAssess is the read-only `gentle-ai review assess` command. It
 // builds the exact same candidate review start would (current changes, or a
 // named --base-ref comparison), runs the shared risk assessment, and prints
@@ -206,6 +222,28 @@ func reviewAssessNextTransitionFor(root string, runtime model.AgentID, baseRef s
 // failure exactly as they would treat a "high" result.
 func RunReviewAssess(args []string, stdout io.Writer) error {
 	ctx := context.Background()
+	jsonRequested := reviewFlagProvided(args, "--json")
+	var failClosedCandidate ReviewAssessmentCandidate
+	failClosedCandidate.Kind = string(reviewtransaction.TargetCurrentChanges)
+
+	failClosed := func(err error, candidate ReviewAssessmentCandidate) error {
+		if !jsonRequested {
+			return err
+		}
+		res := ReviewAssessmentResult{
+			Schema:          ReviewAssessmentSchema,
+			Risk:            "high",
+			Reasons:         []ReviewAssessmentReason{{Code: "unassessable", Detail: reviewScrubDefectReportField(err.Error())}},
+			ChangedPaths:    0,
+			ChangedLines:    0,
+			Candidate:       candidate,
+			ReviewDue:       true,
+			ReviewDueReason: reviewAssessDueReasonHighRisk,
+		}
+		_ = encodeReviewJSON(stdout, res)
+		return err
+	}
+
 	flags := newReviewFlagSet("review assess", stdout,
 		"Print the read-only candidate risk assessment review start would use to select lenses, without creating any review authority.")
 	cwd := flags.String("cwd", ".", "repository path")
@@ -220,13 +258,19 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
 	if err := parseReviewFlags(flags, args); err != nil {
-		return err
+		return failClosed(err, failClosedCandidate)
 	}
 	if reviewHelpRequested(args) {
 		return nil
 	}
 	if flags.NArg() != 0 {
-		return reviewPreflightError(fmt.Errorf("unexpected review assess argument %q; run `gentle-ai review assess --help` for the closed command form", flags.Arg(0)))
+		return failClosed(reviewPreflightError(fmt.Errorf("unexpected review assess argument %q; run `gentle-ai review assess --help` for the closed command form", flags.Arg(0))), failClosedCandidate)
+	}
+
+	trimmedBaseRef := strings.TrimSpace(*baseRef)
+	if trimmedBaseRef != "" {
+		failClosedCandidate.Kind = string(reviewtransaction.TargetBaseDiff)
+		failClosedCandidate.BaseRef = trimmedBaseRef
 	}
 
 	// The declared runtime identity is validated exactly as `review status`
@@ -239,17 +283,16 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 		var runtimeErr error
 		runtimeAgent, runtimeErr = reviewRuntimeWithImmutableTransport(*agent)
 		if runtimeErr != nil {
-			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, runtimeErr)
+			return failClosed(reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, runtimeErr), failClosedCandidate)
 		}
 	}
 
 	root, err := reviewtransaction.PrepareReviewRepositoryRoot(ctx, *cwd)
 	if err != nil {
-		return fmt.Errorf("review assess: resolve repository root: %w", err)
+		return failClosed(fmt.Errorf("review assess: resolve repository root: %w", err), failClosedCandidate)
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: root}
 
-	trimmedBaseRef := strings.TrimSpace(*baseRef)
 	target := reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
 		IntendedUntracked: []string{},
@@ -259,41 +302,41 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 		target.BaseRef = trimmedBaseRef
 		dirtyTracked, dirtyErr := builder.HasDirtyTrackedChanges(ctx)
 		if dirtyErr != nil {
-			return fmt.Errorf("review assess: detect dirty tracked changes: %w", dirtyErr)
+			return failClosed(fmt.Errorf("review assess: detect dirty tracked changes: %w", dirtyErr), failClosedCandidate)
 		}
 		if dirtyTracked && !*committedOnly {
-			return reviewPreflightError(fmt.Errorf(
+			return failClosed(reviewPreflightError(fmt.Errorf(
 				"review assess with --base-ref omits dirty tracked changes; rerun `gentle-ai review assess --base-ref %s --committed-only` to acknowledge committed-only scope",
-				trimmedBaseRef))
+				trimmedBaseRef)), failClosedCandidate)
 		}
 	}
 
 	intendedScope, err := intendedUntrackedScopeForTarget(ctx, builder, untrackedScope, intendedUntracked, expectedUntrackedInventory,
 		reviewIntendedUntrackedInventoryCommand, "gentle-ai review assess")
 	if err != nil {
-		return reviewPreflightError(err)
+		return failClosed(reviewPreflightError(err), failClosedCandidate)
 	}
 	if intendedScope.NeedsSelection {
-		return reviewPreflightError(intendedUntrackedSelectionRequired(intendedScope, reviewIntendedUntrackedInventoryCommand, "gentle-ai review assess"))
+		return failClosed(reviewPreflightError(intendedUntrackedSelectionRequired(intendedScope, reviewIntendedUntrackedInventoryCommand, "gentle-ai review assess")), failClosedCandidate)
 	}
 	target.IntendedUntracked = intendedScope.Intended
 
 	snapshot, err := builder.Build(ctx, target)
 	if err != nil {
-		return fmt.Errorf("review assess could not build the candidate; correct --cwd or --base-ref and retry with `gentle-ai review assess --help`: %w", err)
+		return failClosed(fmt.Errorf("review assess could not build the candidate; correct --cwd or --base-ref and retry with `gentle-ai review assess --help`: %w", err), failClosedCandidate)
 	}
 	if reviewStartEmptyCandidateScope(snapshot) {
-		return reviewPreflightError(errors.New(
-			"the review assess candidate has no pending changes; already-committed work can be assessed by rerunning `gentle-ai review assess --base-ref <commit>` naming the base to compare against"))
+		return failClosed(reviewPreflightError(errors.New(
+			"the review assess candidate has no pending changes; already-committed work can be assessed by rerunning `gentle-ai review assess --base-ref <commit>` naming the base to compare against")), failClosedCandidate)
 	}
 
 	assessment, err := builder.AssessSnapshotRisk(ctx, snapshot)
 	if err != nil {
-		return fmt.Errorf("review assess could not classify the candidate; retry with `gentle-ai review assess --help` or a narrower --base-ref: %w", err)
+		return failClosed(fmt.Errorf("review assess could not classify the candidate; retry with `gentle-ai review assess --help` or a narrower --base-ref: %w", err), failClosedCandidate)
 	}
 	publicRisk, err := reviewAssessPublicRisk(assessment.Level)
 	if err != nil {
-		return err
+		return failClosed(err, failClosedCandidate)
 	}
 
 	// Computed the same way STATUS itself computes it, so a lineage STATUS
@@ -302,7 +345,7 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	// tombstone; it matches by identity re-derivation only).
 	consumed, err := reviewtransaction.CompactTargetConsumed(ctx, root, snapshot.Identity)
 	if err != nil {
-		return fmt.Errorf("review assess could not read terminal consumption evidence; retry with `gentle-ai review assess --help`: %w", err)
+		return failClosed(fmt.Errorf("review assess could not read terminal consumption evidence; retry with `gentle-ai review assess --help`: %w", err), failClosedCandidate)
 	}
 	reviewDue, reviewDueReason := reviewAssessDue(consumed, publicRisk, assessment.ChangedLines)
 	var nextTransition *ReviewAssessmentNextTransition

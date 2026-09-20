@@ -93,6 +93,17 @@ func TestNegotiatedReviewV2FailureUsesSuccessorEnvelope(t *testing.T) {
 	if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 || failure.Code != "invalid_request" {
 		t.Fatalf("v2 failure = %#v", failure)
 	}
+
+	// Also verify that preflight errors for empty contract when requested as v2 use v2 failure envelope (#4332)
+	output.Reset()
+	err = RunReview([]string{"start", "--contract="}, &output)
+	if err == nil {
+		t.Fatal("empty contract succeeded")
+	}
+	failure = decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "empty_contract" {
+		t.Fatalf("expected empty_contract, got %#v", failure)
+	}
 }
 
 func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {

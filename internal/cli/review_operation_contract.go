@@ -602,11 +602,17 @@ func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrat
 	}
 	if missing {
 		failure := newReviewIntegrationPreflightFailure(operation, "invalid_request", "The negotiated review request is invalid.")
+		if provided && contract == ReviewIntegrationContractV2 {
+			failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+		}
 		failure.LineageID = safeReviewIntegrationLineage(operation, args[1:])
 		return operation, true, &failure
 	}
 	if contract == "" {
 		failure := newReviewIntegrationPreflightFailure(operation, "empty_contract", "The review integration contract cannot be empty.")
+		if provided && contract == ReviewIntegrationContractV2 {
+			failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+		}
 		failure.LineageID = safeReviewIntegrationLineage(operation, args[1:])
 		return operation, true, &failure
 	}
