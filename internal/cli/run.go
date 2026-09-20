@@ -1844,6 +1844,9 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentOpenCodeGentleLogo:
+		if !containsAgent(s.agents, model.AgentOpenCode) {
+			return nil
+		}
 		if _, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo); err != nil {
 			return fmt.Errorf("install OpenCode Gentle Logo plugin: %w", err)
 		}
@@ -2550,10 +2553,12 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		case model.ComponentClaudeTheme:
 			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
 		case model.ComponentOpenCodeGentleLogo:
-			paths = append(paths,
-				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
-			)
+			if adapter.Agent() == model.AgentOpenCode {
+				paths = append(paths,
+					filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+					filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+				)
+			}
 		}
 	}
 

@@ -1240,6 +1240,9 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentOpenCodeGentleLogo:
+		if !containsAgent(s.agents, model.AgentOpenCode) {
+			return nil
+		}
 		res, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo)
 		if err != nil {
 			return fmt.Errorf("sync OpenCode Gentle Logo plugin: %w", err)
