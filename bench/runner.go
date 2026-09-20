@@ -23,7 +23,8 @@ import (
 // repository, and (when the journey needs one) a local bare remote. Nothing
 // here ever touches the user's real config or repositories.
 type Sandbox struct {
-	Binary string
+	policyRuntimeBin string
+	Binary           string
 	// PathOverride is prepended to PATH for journeys that need a deterministic
 	// local runtime probe without depending on the host installation.
 	PathOverride string
@@ -73,6 +74,11 @@ func newSandbox(binary, root string) (*Sandbox, error) {
 		TracePath: filepath.Join(root, "git-trace.log"),
 		Scratch:   map[string]string{},
 	}
+	var err error
+	sandbox.policyRuntimeBin, err = installPolicyRuntimeFixture(root)
+	if err != nil {
+		return nil, err
+	}
 	return sandbox, nil
 }
 
@@ -80,6 +86,9 @@ func newSandbox(binary, root string) (*Sandbox, error) {
 // PATH is inherited because the product shells out to git.
 func (s *Sandbox) env() []string {
 	path := os.Getenv("PATH")
+	if s.policyRuntimeBin != "" {
+		path = s.policyRuntimeBin + string(os.PathListSeparator) + path
+	}
 	if s.PathOverride != "" {
 		path = s.PathOverride + string(os.PathListSeparator) + path
 	}

@@ -41,6 +41,7 @@ func issue4377Journeys() []Journey {
 
 func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 	agentCheckboxRows := 0
+	communityToolCursorRows := 0
 	return waitForIssue4377TTY(reader, []string{"Start installation", "q: quit"}, func() error {
 		if _, err := io.WriteString(writer, "\r"); err != nil {
 			return err
@@ -65,7 +66,10 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 							return err
 						}
 						return waitForIssue4377TTY(reader, []string{"Community Tools/Plugins", "Continue"}, func() error {
-							if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", 2)+"\r"); err != nil {
+							if communityToolCursorRows == 0 {
+								return fmt.Errorf("community tools rendered no tool rows")
+							}
+							if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", communityToolCursorRows)+"\r"); err != nil {
 								return err
 							}
 							return waitForIssue4377TTY(reader, []string{"Install Plan", "Continue"}, func() error {
@@ -98,6 +102,8 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 									})
 								})
 							})
+						}, func(screen string) {
+							communityToolCursorRows = strings.Count(screen, "View repo:") * 2
 						})
 					})
 				})
