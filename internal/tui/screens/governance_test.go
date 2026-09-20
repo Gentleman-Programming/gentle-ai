@@ -2,15 +2,14 @@ package screens
 
 import "testing"
 
-// TestGovernanceOptionsIncludesODDLaneBeforeBack verifica que
-// GovernanceOptions() incluye la nueva entrada del carril ágil ODD
-// («6. Carril Ágil ODD») inmediatamente antes de «Volver al menú
-// principal», que queda desplazada a la posición 6 (REQ-19.14, REQ-19.15;
-// design.md §4.5).
-func TestGovernanceOptionsIncludesODDLaneBeforeBack(t *testing.T) {
+// TestGovernanceOptionsEndsInBack verifica que GovernanceOptions() conserva
+// sus 5 entradas numeradas seguidas de «Volver al menú principal» sin
+// numerar, en su posición previa a INC-19 (F6.2c retira el carril ágil ODD
+// que ocupaba temporalmente la posición 6).
+func TestGovernanceOptionsEndsInBack(t *testing.T) {
 	options := GovernanceOptions()
 
-	const wantLen = 7
+	const wantLen = 6
 	if len(options) != wantLen {
 		t.Fatalf("GovernanceOptions() longitud = %d, esperado %d: %v", len(options), wantLen, options)
 	}
@@ -25,8 +24,7 @@ func TestGovernanceOptionsIncludesODDLaneBeforeBack(t *testing.T) {
 		{name: "opción 3 sin cambios", index: 2, want: "3. Monitor Multi-Rol y Barrera Fan-In (inspeccionar, migrar diferidas)"},
 		{name: "opción 4 sin cambios", index: 3, want: "4. Visor de Handoffs Estructurados (relevos formales)"},
 		{name: "opción 5 sin cambios", index: 4, want: "5. Catálogo de Especificaciones Vivas (specs e INDEX.md)"},
-		{name: "nueva opción 6: carril ágil ODD", index: 5, want: "6. Carril Ágil ODD (documentos vivos, promoción)"},
-		{name: "volver desplazada a la posición 6", index: 6, want: "Volver al menú principal"},
+		{name: "volver en su posición previa a INC-19", index: 5, want: "Volver al menú principal"},
 	}
 
 	for _, tt := range tests {
