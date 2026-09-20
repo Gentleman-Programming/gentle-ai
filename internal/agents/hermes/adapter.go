@@ -170,10 +170,17 @@ func defaultStat(path string) statResult {
 // 2. %LOCALAPPDATA%\hermes on native Windows.
 // 3. $HOME/.hermes on Linux, macOS, or as a default fallback.
 func ConfigPath(homeDir string) string {
+	return configPathForGOOS(homeDir, runtime.GOOS)
+}
+
+// configPathForGOOS is the testable core of ConfigPath: the same resolution
+// with the platform passed explicitly so tests cover every branch on any
+// OS runner instead of skipping assertions per runtime.GOOS.
+func configPathForGOOS(homeDir, goos string) string {
 	if env := strings.TrimSpace(os.Getenv("HERMES_HOME")); env != "" {
 		return filepath.Clean(env)
 	}
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			return filepath.Join(localAppData, "hermes")
 		}

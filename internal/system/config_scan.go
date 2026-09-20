@@ -3,6 +3,8 @@ package system
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.
@@ -44,7 +46,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "openclaw", Path: filepath.Join(homeDir, ".openclaw")},
 		{Agent: "pi", Path: filepath.Join(homeDir, ".pi")},
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
-		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
+		{Agent: "hermes", Path: hermesGlobalConfigDir(homeDir)},
 	}
 }
 
@@ -53,6 +55,31 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 // SystemPromptDir and SettingsPath are OS-dependent, but GlobalConfigDir is not.
 func vscodeCopilotGlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".copilot")
+}
+
+// hermesGlobalConfigDir returns the effective Hermes global config directory,
+// mirroring the resolution order of the hermes adapter's ConfigPath:
+// HERMES_HOME first, then %LOCALAPPDATA%\hermes on native Windows, then
+// ~/.hermes. It lives here instead of importing the adapter because
+// system <- agents would create an import cycle; keep both in sync if the
+// order ever changes.
+func hermesGlobalConfigDir(homeDir string) string {
+	return hermesGlobalConfigDirForGOOS(homeDir, runtime.GOOS)
+}
+
+// hermesGlobalConfigDirForGOOS is the testable core of hermesGlobalConfigDir:
+// the same resolution with the platform passed explicitly so tests cover
+// every branch on any OS runner.
+func hermesGlobalConfigDirForGOOS(homeDir, goos string) string {
+	if env := strings.TrimSpace(os.Getenv("HERMES_HOME")); env != "" {
+		return filepath.Clean(env)
+	}
+	if goos == "windows" {
+		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+			return filepath.Join(localAppData, "hermes")
+		}
+	}
+	return filepath.Join(homeDir, ".hermes")
 }
 
 // ScanConfigs returns the presence state of every known managed agent's global
