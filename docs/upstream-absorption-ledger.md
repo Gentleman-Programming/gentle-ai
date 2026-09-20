@@ -27,10 +27,10 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | Estado | Filas |
 |---|---|
-| `absorbido` | 77 |
+| `absorbido` | 79 |
 | `descartado-deliberadamente` | 12 |
 | `revertido` | 0 |
-| **Total** | **89 (= universo declarado en la cabecera: 91)** |
+| **Total** | **91 (= universo declarado en la cabecera: 91)** |
 
 ## F0 — Identidad de distribución, artefacto de release y cobertura del binario real
 
@@ -46,11 +46,16 @@ Adaptadas de `docs/releases/v2.2.0-closure-ledger.md:11-21` a la forma de este r
 
 | `sha` | Asunto | Estado | Evidencia | Motivo (si no es `absorbido`) |
 |---|---|---|---|---|
+| `2594581e` | fix!: move the Go module path to /v3 so v3.x is installable through go install (#4683) | `absorbido` | `d49cc604` (rama `inc-20/pr7-absorcion-upstream`) | Re-derivado sobre el árbol del fork, no aplicado como parche: de los 629 ficheros distintos que toca en upstream, 623 existen en el fork y los 623 quedan cubiertos por esta reescritura (ver sub-tabla RA-1 para los 6 restantes). Cubre además `go.mod` y otros ~47 ficheros propios del fork que upstream no tiene, y las 8 líneas de import bajo rutas nominalmente prohibidas (`internal/multirole`, `internal/handoff`, `internal/semantic`, `internal/livingdoc`, `internal/components/uninstall/cleaners.go`) cuyo `go build ./...` dependía de esta reescritura. |
+| `9bf454d4` | fix(scripts): install from the /v3 module in install.sh and install.ps1 (#4686) | `absorbido` | `d49cc604` (rama `inc-20/pr7-absorcion-upstream`) | Su mitad mecánica (GONOSUMDB/GOPRIVATE/GONOPROXY y `go install ...@latest`) ya la capturaba la derivación de `gentle-ai/v2`. Su otra mitad no: `install.sh`/`install.ps1` construyen el paquete de `go install` por interpolación (`${GITHUB_REPO}/v2/cmd/...`), sin el literal `gentle-ai` delante, así que sobrevivía a cualquier búsqueda de esa cadena. Corregidas ambas líneas y portado el test de regresión de upstream `TestInstallScriptsGoInstallPackageMatchesModuleMajor`, verificado en verde contra el árbol del fork. |
 
 ### Ficheros derivados y ausentes (RA-1)
 
 | Fichero derivado de `git show --stat` | Ausente del diff | Motivo escrito |
 |---|---|---|
+| `internal/components/communitytool/rtk_{runtime,runtime_test,source,source_test}.go` (4) | Sí | Retirados íntegros en la Fase 9 (`110f1371`): nacen en `08206a15` y mueren en `110f1371`, ciclo que el fork nunca absorbió (ya documentado en la sub-tabla RA-1 de F5). |
+| `internal/components/sdd/odd_integration_test.go` | Sí | No existe en el fork (ya documentado en la sub-tabla RA-1 de F3). |
+| `internal/cli/review_pi_role_routing_test.go` | Sí | Divergencia de re-derivación ya verificada al absorber `55eefed3`/`385e6e03` en F3: la superficie `pi`/`reviewerprovider` del fork tomó una forma distinta de la de upstream (cero rutas `pi` de upstream reintroducidas, `GENTLE_PI_CONFIG_HOME` de 5 a 2 ficheros). No es una omisión de esta fase. |
 
 ## F2 — Telemetría VictoriaMetrics
 
