@@ -676,7 +676,7 @@ func gentleAIModulePath(tool update.ToolInfo) string {
 	// suffix: for major 2 and above the module path must end in /vN or the
 	// toolchain refuses every resolution of that repository, including the
 	// branch pseudo-versions this beta path installs.
-	return repository + "/v2"
+	return repository + "/v3"
 }
 
 func goProxyBypassEnv(base []string, module string) []string {
