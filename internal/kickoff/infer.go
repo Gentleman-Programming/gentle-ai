@@ -2,7 +2,6 @@ package kickoff
 
 import (
 	"errors"
-	"fmt"
 	"os"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
@@ -63,21 +62,16 @@ func InferKickoff(designPath string, wsConfig *workspace.WorkspaceConfig) (Kicko
 }
 
 // inferredKickoff assembles the retro-sealed document body shared by cases
-// (a) and (b): only the role list differs between callers. Non-fullstack
-// roles keep the multi-role convention (tasks.<role>.md,
-// verify-report.<role>.md) that multirole.EvaluateBarrier already tries
-// first (barrier.go) — the retro-seal never invents a naming convention
-// the barrier does not already use, and never redirects it to a plain
-// tasks.md it did not ask for (REQ-21.4, third scenario).
+// (a) and (b): only the role list differs between callers. Role file names
+// come from defaultRoleArtifactFiles (types.go) — the same convention an
+// explicit `axiom sdd kickoff seal` applies via SealArgs.ToKickoff (args.go)
+// — so the retro-seal never invents a naming convention the barrier does
+// not already use, and never redirects it to a plain tasks.md it did not
+// ask for (REQ-21.4, third scenario).
 func inferredKickoff(roles []multirole.RoleAssignment) Kickoff {
 	kickoffRoles := make([]KickoffRole, 0, len(roles))
 	for _, r := range roles {
-		tasksFile := "tasks.md"
-		verifyFile := "verify-report.md"
-		if r.Role != "fullstack" {
-			tasksFile = fmt.Sprintf("tasks.%s.md", r.Role)
-			verifyFile = fmt.Sprintf("verify-report.%s.md", r.Role)
-		}
+		tasksFile, verifyFile := defaultRoleArtifactFiles(r.Role)
 		kickoffRoles = append(kickoffRoles, KickoffRole{
 			Role:       r.Role,
 			GatePolicy: r.GatePolicy,
