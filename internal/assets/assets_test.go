@@ -87,7 +87,7 @@ await hooks.dispose();assert.equal(calls[36].killed,true)
 await event(info);await tick();assert.equal(calls.length,37)
 console.log("ok")
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, "#!/bin/sh\nexit 99\n")
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, "#!/bin/sh\nexit 99\n")
 	if output != "ok\n" || log != "" {
 		t.Fatal("unexpected plugin output or native process")
 	}
