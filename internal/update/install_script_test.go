@@ -105,7 +105,7 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 	}
 	function := script[start : start+end+3]
 
-	cmd := exec.Command("bash", "-c", function+`
+	scriptBody := function + `
 GONOSUMDB=example.com/private
 GOPRIVATE=github.com/acme/*
 GONOPROXY=github.com/gentleman-programming/gentle-ai/v3
@@ -113,7 +113,14 @@ prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3
 prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3
 prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3
 printf '%s\n%s\n%s\n' "$GONOSUMDB" "$GOPRIVATE" "$GONOPROXY"
-`)
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "fixture.sh")
+	if err := os.WriteFile(tmpFile, []byte(scriptBody), 0755); err != nil {
+		t.Fatalf("write temp script: %v", err)
+	}
+
+	cmd := exec.Command("bash", tmpFile)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run prepend_go_env_pattern fixture: %v\noutput: %s", err, out)
@@ -192,7 +199,7 @@ func TestWindowsInstallScriptGoChannels(t *testing.T) {
 					tag = "v" + major + ".2.3"
 				}
 				mod := "// leading comment\n\nmodule \"" + module + "\" // trailing comment\n\ngo 1.99.0\n"
-				calls, output, err := runPowerShellInstallerFixture(t, channel, module, tag, strings.Repeat("a", 40), mod, "", major == "")
+				calls, output, err := runPowerShellInstallerFixture(t, channel, module, tag, strings.Repeat("a", 40), mod, "", "SystemDefault", major == "")
 				if err != nil {
 					t.Fatalf("installer failed: %v\n%s\n%s", err, output, calls)
 				}
@@ -220,14 +227,43 @@ func TestWindowsInstallScriptGoChannels(t *testing.T) {
 	}
 }
 
+func TestWindowsInstallScriptHTTPSProtocols(t *testing.T) {
+	const module = "github.com/gentleman-programming/gentle-ai/v5"
+	for _, tt := range []struct{ initial, want string }{
+		{"Tls, Tls11", "Tls, Tls11, Tls12"},
+		{"SystemDefault", "SystemDefault"},
+		{"Tls12", "Tls12"},
+		{"Tls12, Tls13", "Tls12, Tls13"},
+		{"Tls13", "Tls13"},
+		{"Tls, Tls13", "Tls, Tls12, Tls13"},
+	} {
+		for _, channel := range []string{"stable", "beta"} {
+			t.Run(channel+"/"+tt.initial, func(t *testing.T) {
+				calls, output, err := runPowerShellInstallerFixture(t, channel, module, "v5.2.3", strings.Repeat("a", 40), "module "+module+"\n", "", tt.initial, false)
+				if err != nil {
+					t.Fatalf("installer failed: %v\n%s\n%s", err, output, calls)
+				}
+				for _, request := range []string{"resolve", "metadata"} {
+					want := "tls-" + request + "=" + tt.want + "\n"
+					state, call := strings.Index(calls, want), strings.Index(calls, request+" https://")
+					if state < 0 || call < 0 || state >= call || strings.Count(calls, want) != 1 {
+						t.Errorf("expected protocol state %q before %s request:\n%s", tt.want, request, calls)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestWindowsInstallScriptGoFailures(t *testing.T) {
 	const module = "github.com/gentleman-programming/gentle-ai/v5"
-	for _, tt := range []struct{ name, channel, tag, sha, mod, fail string }{
+	for _, tt := range []struct{ name, channel, tag, sha, mod, fail, diagnostic string }{
 		{name: "missing release", channel: "stable", tag: " "},
 		{name: "malformed release", channel: "stable", tag: "v5.2.3/../../main"},
 		{name: "missing sha", sha: " "}, {name: "malformed sha", sha: "main"},
-		{name: "release HTTP failure", channel: "stable", fail: "resolve"},
-		{name: "commit HTTP failure", fail: "resolve"}, {name: "metadata HTTP failure", fail: "metadata"},
+		{name: "release HTTP failure", channel: "stable", fail: "resolve", diagnostic: "Could not request the latest release from the GitHub API."},
+		{name: "commit HTTP failure", fail: "resolve", diagnostic: "Could not request the main commit from the GitHub API."},
+		{name: "metadata HTTP failure", fail: "metadata", diagnostic: "Could not download the pinned go.mod for " + strings.Repeat("a", 40) + "."},
 		{name: "missing module", mod: "go 1.25.10\n"},
 		{name: "duplicate module", mod: "module " + module + "\nmodule " + module + "\n"},
 		{name: "malformed module", mod: "module \"unterminated\n"},
@@ -254,9 +290,22 @@ func TestWindowsInstallScriptGoFailures(t *testing.T) {
 			if tt.mod == "" {
 				tt.mod = "module " + module + "\ngo 1.99.0\n"
 			}
-			calls, output, err := runPowerShellInstallerFixture(t, tt.channel, module, tt.tag, tt.sha, tt.mod, tt.fail, tt.name == "parser failure with absent env")
+			calls, output, err := runPowerShellInstallerFixture(t, tt.channel, module, tt.tag, tt.sha, tt.mod, tt.fail, "SystemDefault", tt.name == "parser failure with absent env")
 			if err == nil {
 				t.Fatalf("unexpected success:\n%s\n%s", output, calls)
+			}
+			if tt.diagnostic != "" {
+				for _, want := range []string{"[error]", tt.diagnostic, "network", "proxy"} {
+					if !strings.Contains(output, want) {
+						t.Errorf("missing diagnostic %q:\n%s", want, output)
+					}
+				}
+				if tt.fail == "resolve" && !strings.Contains(output, "API availability or rate limits") {
+					t.Errorf("missing API guidance:\n%s", output)
+				}
+				if strings.Contains(output, "fixture transport detail") {
+					t.Errorf("diagnostic exposed raw transport details:\n%s", output)
+				}
 			}
 			want := 0
 			if tt.fail == "install" {
@@ -274,7 +323,7 @@ func TestWindowsInstallScriptGoFailures(t *testing.T) {
 
 // Native PowerShell doubles run the unchanged whole-script entrypoint. Only Go's
 // offline metadata parser is real; no install, application, or HTTP request runs.
-func runPowerShellInstallerFixture(t *testing.T, channel, module, tag, sha, mod, fail string, absent bool) (string, string, error) {
+func runPowerShellInstallerFixture(t *testing.T, channel, module, tag, sha, mod, fail, protocols string, absent bool) (string, string, error) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("PowerShell subprocess fixture")
@@ -292,6 +341,14 @@ func runPowerShellInstallerFixture(t *testing.T, channel, module, tag, sha, mod,
 	}
 	if shell == "" {
 		t.Skip("PowerShell is unavailable")
+	}
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		t.Skipf("Go is unavailable: %v", err)
+	}
+	goPath, err = filepath.Abs(goPath)
+	if err != nil {
+		t.Fatal(err)
 	}
 	root := t.TempDir()
 	tmp := filepath.Join(root, "tmp")
@@ -314,11 +371,7 @@ func runPowerShellInstallerFixture(t *testing.T, channel, module, tag, sha, mod,
 	if err != nil {
 		t.Fatal(err)
 	}
-	goName := "go"
-	if runtime.GOOS == "windows" {
-		goName += ".exe"
-	}
-	config, err := json.Marshal(map[string]any{"Channel": channel, "Module": module, "Tag": tag, "SHA": sha, "Fail": fail, "Absent": absent, "Script": script, "Go": filepath.Join(runtime.GOROOT(), "bin", goName)})
+	config, err := json.Marshal(map[string]any{"Channel": channel, "Module": module, "Tag": tag, "SHA": sha, "Fail": fail, "Absent": absent, "Protocols": protocols, "Script": script, "Go": goPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,6 +380,10 @@ func runPowerShellInstallerFixture(t *testing.T, channel, module, tag, sha, mod,
 $ErrorActionPreference = 'Stop'
 $cfg = Get-Content -LiteralPath (Join-Path $env:FIXTURE 'config.json') -Raw | ConvertFrom-Json
 function Log([string]$Text) { Add-Content -LiteralPath (Join-Path $env:FIXTURE 'calls') -Value $Text -Encoding UTF8 }
+if ($cfg.Protocols -match 'Tls13' -and -not [enum]::IsDefined([Net.SecurityProtocolType], 'Tls13')) {
+    Log 'skip unsupported TLS 1.3'; exit 0
+}
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]$cfg.Protocols
 function Parser-State {
     $values = foreach ($name in @('GOTOOLCHAIN','GOWORK','GOFLAGS')) {
         $value = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -341,8 +398,9 @@ $env:GOPRIVATE = 'github.com/acme/*'; $env:GONOPROXY = $cfg.Module
 function chcp { if (($args -join ' ') -ne '65001') { throw 'unexpected chcp' } }
 function Invoke-RestMethod {
     param([string]$Uri)
+    Log ('tls-resolve=' + [Net.ServicePointManager]::SecurityProtocol)
     Log ('resolve ' + $Uri)
-    if ($cfg.Fail -eq 'resolve') { throw 'fixture HTTP failure' }
+    if ($cfg.Fail -eq 'resolve') { throw 'fixture transport detail: HTTP failure' }
     switch -CaseSensitive ($Uri) {
         'https://api.github.com/repos/Gentleman-Programming/gentle-ai/releases/latest' { return @{tag_name=$cfg.Tag} }
         'https://api.github.com/repos/Gentleman-Programming/gentle-ai/commits/main' {
@@ -356,9 +414,10 @@ function Invoke-RestMethod {
 }
 function Invoke-WebRequest {
     param([string]$Uri, [switch]$UseBasicParsing, [string]$OutFile)
+    Log ('tls-metadata=' + [Net.ServicePointManager]::SecurityProtocol)
     Log ('metadata ' + $Uri)
     if (-not $UseBasicParsing -or -not $OutFile -or $Uri -cnotmatch '\Ahttps://raw\.githubusercontent\.com/Gentleman-Programming/gentle-ai/[^/]+/go\.mod\z') { throw 'unexpected metadata request' }
-    if ($cfg.Fail -eq 'metadata') { throw 'fixture download failure' }
+    if ($cfg.Fail -eq 'metadata') { throw 'fixture transport detail: download failure' }
     Copy-Item -LiteralPath (Join-Path $env:FIXTURE 'module') -Destination $OutFile
 }
 function go {
@@ -392,6 +451,7 @@ try { & $cfg.Script @options; exit $LASTEXITCODE }
 finally { Log ('final-state ' + (Parser-State)) }
 `)
 	cmd := exec.Command(shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", filepath.Join(root, "fixture.ps1"))
+	cmd.Dir = root
 	// Preserve only OS process essentials, never credentials or Go/user configuration.
 	for _, name := range []string{"SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"} {
 		if value, ok := os.LookupEnv(name); ok {
@@ -405,6 +465,9 @@ finally { Log ('final-state ' + (Parser-State)) }
 		t.Fatal(err)
 	}
 	calls := strings.ReplaceAll(strings.TrimPrefix(string(data), "\ufeff"), "\r\n", "\n")
+	if runErr == nil && calls == "skip unsupported TLS 1.3\n" {
+		t.Skip("PowerShell runtime does not expose TLS 1.3")
+	}
 	state := "auto|/missing-workspace|-mod=vendor"
 	if absent {
 		state = "<absent>|<absent>|<absent>"
@@ -461,7 +524,7 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		if tc.script == "install.ps1" {
 			t.Run(tc.script, func(t *testing.T) {
 				module, sha := "github.com/gentleman-programming/gentle-ai/"+major, strings.Repeat("a", 40)
-				calls, output, err := runPowerShellInstallerFixture(t, "beta", module, "", sha, string(goMod), "", false)
+				calls, output, err := runPowerShellInstallerFixture(t, "beta", module, "", sha, string(goMod), "", "SystemDefault", false)
 				if err != nil {
 					t.Fatalf("installer failed: %v\n%s\n%s", err, output, calls)
 				}

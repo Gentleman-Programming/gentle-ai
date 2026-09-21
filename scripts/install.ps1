@@ -29,7 +29,7 @@ $GITHUB_OWNER = "Gentleman-Programming"
 $GITHUB_REPO = "gentle-ai"
 $BINARY_NAME = "gentle-ai"
 $WINDOWS_DISTRIBUTION_HOLD = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
-$STABLE_SOURCE_COMMAND = ".\install.ps1 -Method go -Channel stable"
+$STABLE_SOURCE_COMMAND = "re-run this installer with -Method go -Channel stable"
 
 function Write-Info    { param([string]$Message) Write-Host "[info]    $Message" -ForegroundColor Blue }
 function Write-Success { param([string]$Message) Write-Host "[ok]      $Message" -ForegroundColor Green }
@@ -67,7 +67,7 @@ function Get-Platform {
 function Test-Prerequisites {
     Write-Step "Checking prerequisites"
     if (-not (Get-Command "go" -ErrorAction SilentlyContinue)) {
-        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD Install Go 1.25.10 or newer, then run: $STABLE_SOURCE_COMMAND"
+        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD Install Go 1.25.10 or newer, then $STABLE_SOURCE_COMMAND."
     }
     Write-Success "Go is available"
 }
@@ -76,7 +76,7 @@ function Get-InstallMethod {
     param([string]$Forced, [string]$Channel)
 
     if ($Forced -eq "binary") {
-        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD No unsigned binary will be downloaded or executed. Install from source with Go 1.25.10 or newer: $STABLE_SOURCE_COMMAND"
+        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD No unsigned binary will be downloaded or executed. With Go 1.25.10 or newer installed, $STABLE_SOURCE_COMMAND."
     }
     if ($Channel -eq "beta") {
         Write-Info "Using beta channel - installing $BINARY_NAME from main via go install"
@@ -90,14 +90,32 @@ function Install-ViaGo {
     param([string]$Channel = "stable")
 
     Write-Step "Installing via go install"
+    try {
+        $protocols = [Net.ServicePointManager]::SecurityProtocol
+        $legacyProtocols = [Net.SecurityProtocolType]::Ssl3 -bor [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11
+        # Preserve OS defaults and stronger protocols; supplement only explicit legacy settings.
+        if (($protocols -band $legacyProtocols) -ne 0 -and ($protocols -band [Net.SecurityProtocolType]::Tls12) -eq 0) {
+            [Net.ServicePointManager]::SecurityProtocol = $protocols -bor [Net.SecurityProtocolType]::Tls12
+        }
+    } catch {
+        Stop-WithError "Could not enable TLS 1.2 for HTTPS requests. Check your .NET and Windows TLS configuration, then try again."
+    }
     $api = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO"
     if ($Channel -eq "beta") {
-        $version = (Invoke-RestMethod -Uri "$api/commits/main").sha
+        try {
+            $version = (Invoke-RestMethod -Uri "$api/commits/main").sha
+        } catch {
+            Stop-WithError "Could not request the main commit from the GitHub API. Check your network, proxy settings, and GitHub API availability or rate limits, then try again."
+        }
         if ($version -isnot [string] -or $version -cnotmatch '\A[0-9a-fA-F]{40}\z') {
             Stop-WithError "Could not resolve main to a full commit SHA."
         }
     } else {
-        $version = (Invoke-RestMethod -Uri "$api/releases/latest").tag_name
+        try {
+            $version = (Invoke-RestMethod -Uri "$api/releases/latest").tag_name
+        } catch {
+            Stop-WithError "Could not request the latest release from the GitHub API. Check your network, proxy settings, and GitHub API availability or rate limits, then try again."
+        }
         if ($version -isnot [string] -or $version -cnotmatch '\Av[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z') {
             Stop-WithError "Could not resolve the latest release tag."
         }
@@ -138,7 +156,11 @@ function Get-GoModule {
     }
     $tempFile = [System.IO.Path]::GetTempFileName()
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/$GITHUB_OWNER/$GITHUB_REPO/$Version/go.mod" -OutFile $tempFile
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/$GITHUB_OWNER/$GITHUB_REPO/$Version/go.mod" -OutFile $tempFile
+        } catch {
+            Stop-WithError "Could not download the pinned go.mod for $Version. Check your network, proxy settings, and access to raw.githubusercontent.com, then try again."
+        }
         # Parse metadata without switching toolchains or loading a workspace.
         $env:GOTOOLCHAIN = "local"
         $env:GOWORK = "off"
@@ -231,7 +253,7 @@ function Main {
 
     Show-Banner
     if ($Insecure) {
-        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD The legacy -Insecure switch cannot bypass this policy. $STABLE_SOURCE_COMMAND"
+        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD The legacy -Insecure switch cannot bypass this policy. To install from source, $STABLE_SOURCE_COMMAND."
     }
     if ($InstallDir) {
         Stop-WithError "-InstallDir is unavailable for source installation. Configure go env GOBIN instead."
