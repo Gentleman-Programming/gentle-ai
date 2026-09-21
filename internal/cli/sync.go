@@ -1494,14 +1494,26 @@ func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState,
 	if persistedErr != nil || persisted == nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
 		return nil
 	}
-	persisted.Persona = string(model.PersonaNeutral)
-	if err := state.Write(homeDir, *persisted); err != nil {
-		return fmt.Errorf("persist remapped persona: %w", err)
-	}
-	// Notice only after the rewrite is durably persisted: a failed write must
-	// not tell the user the remap happened.
-	fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
-	return nil
+	return withInstallStateLock(homeDir, func() error {
+		latest, err := state.Read(homeDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("read install state: %w", err)
+		}
+		if latest.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
+			return nil
+		}
+		latest.Persona = string(model.PersonaNeutral)
+		if err := state.Write(homeDir, latest); err != nil {
+			return fmt.Errorf("persist remapped persona: %w", err)
+		}
+		// Notice only after the rewrite is durably persisted: a failed write must
+		// not tell the user the remap happened.
+		fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
+		return nil
+	})
 }
 
 // validatePersistedSyncState rejects state that cannot safely drive sync.

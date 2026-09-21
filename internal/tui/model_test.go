@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
@@ -6381,6 +6382,62 @@ func TestStartUpgradeSync_NoClobberOnCorruptStateFile(t *testing.T) {
 	}
 	if string(got) != string(corruptPayload) {
 		t.Errorf("state file was overwritten on corrupt-read error\ngot:  %q\nwant: %q", got, corruptPayload)
+	}
+}
+
+func TestStartUpgradeSync_SetsPendingSyncReReadsLatestStateUnderLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	lockPath, err := statecoord.LockPath(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := reviewtransaction.AcquireAuthorityFileLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		return upgrade.UpgradeReport{
+			Results: []upgrade.ToolUpgradeResult{
+				{ToolName: "gentle-ai", Status: upgrade.UpgradeSucceeded, NewVersion: "1.8.0"},
+			},
+		}
+	}
+
+	// Under lock contention, startUpgradeSync syncCmd fails to acquire the lock and leaves state untouched.
+	executeUpgradeSyncSequence(t, m)
+	if _, err := state.Read(home); err == nil {
+		t.Fatal("expected state file to not exist when lock acquisition fails on fresh home")
+	}
+
+	// Concurrent writer writes state while lock is held.
+	if err := state.Write(home, state.InstallState{
+		Persona: "concurrent",
+		RDDMode: "on",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	executeUpgradeSyncSequence(t, m)
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PendingSync {
+		t.Errorf("PendingSync = false, want true after upgrade")
+	}
+	if got.Persona != "concurrent" || got.RDDMode != "on" {
+		t.Fatalf("concurrent writer state was clobbered: %#v", got)
 	}
 }
 

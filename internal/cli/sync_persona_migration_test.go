@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
 
@@ -53,6 +54,50 @@ func TestMigratePersistedPersonaAliasSkipsUnreadableState(t *testing.T) {
 	persisted := state.InstallState{Persona: string(model.PersonaGentlemanNeutralArtifacts)}
 	if err := migratePersistedPersonaAlias(t.TempDir(), &persisted, errStateUnreadableForTest); err != nil {
 		t.Fatalf("migrate with read error must be a no-op, got %v", err)
+	}
+}
+
+func TestMigratePersistedPersonaAliasReReadsLatestStateUnderLock(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		Persona: string(model.PersonaGentlemanNeutralArtifacts),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	held, err := reviewtransaction.AcquireAuthorityFileLock(mustInstallStateLockPath(t, home))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	persisted := state.InstallState{Persona: string(model.PersonaGentlemanNeutralArtifacts)}
+	if err := migratePersistedPersonaAlias(home, &persisted, nil); err == nil || !strings.Contains(err.Error(), "acquire install state lock") {
+		t.Fatalf("contended migratePersistedPersonaAlias error = %v, want lock acquisition failure", err)
+	}
+
+	// Concurrent writer modifies unrelated fields while lock is held.
+	if err := state.Write(home, state.InstallState{
+		Persona: string(model.PersonaGentlemanNeutralArtifacts),
+		RDDMode: "on",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := migratePersistedPersonaAlias(home, &persisted, nil); err != nil {
+		t.Fatalf("migratePersistedPersonaAlias() error = %v", err)
+	}
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Persona != string(model.PersonaNeutral) {
+		t.Fatalf("persisted persona = %q, want %q", got.Persona, model.PersonaNeutral)
+	}
+	if got.RDDMode != "on" {
+		t.Fatalf("concurrent writer state was clobbered: %#v", got)
 	}
 }
 

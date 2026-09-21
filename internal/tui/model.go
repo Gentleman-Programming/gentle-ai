@@ -33,6 +33,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
@@ -3757,13 +3758,15 @@ func (m Model) startUpgradeSync() tea.Cmd {
 			// present — skip writing to avoid dropping installed_agents, model
 			// assignments, and other persisted fields.
 			if h := homeDir(); h != "" {
-				s, readErr := state.Read(h)
-				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-					// File exists but unreadable/corrupt — skip to avoid clobber.
-				} else {
+				_ = statecoord.WithLock(h, func() error {
+					s, readErr := state.Read(h)
+					if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+						// File exists but unreadable/corrupt — skip to avoid clobber.
+						return nil
+					}
 					s.PendingSync = true
-					_ = state.Write(h, s)
-				}
+					return state.Write(h, s)
+				})
 			}
 			return SyncDoneMsg{}
 		}

@@ -27,7 +27,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 )
 
 func TestUninstallOpenCodeTelemetryOwnershipAndScope(t *testing.T) {
@@ -2020,5 +2022,64 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginsUnderXDGConfigHome(
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, ".config", "opencode")); !os.IsNotExist(err) {
 		t.Fatalf("uninstall touched ~/.config/opencode although XDG_CONFIG_HOME is set (stat err = %v)", err)
+	}
+}
+
+func TestUpdateStateAfterUninstallReReadsLatestStateUnderLock(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:  []string{"claude", "opencode"},
+		BackgroundIntent: "on",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath, err := statecoord.LockPath(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := reviewtransaction.AcquireAuthorityFileLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Under lock contention, updateStateAfterUninstall fails fast.
+	if _, err := updateStateAfterUninstall(home, []model.AgentID{model.AgentOpenCode}); err == nil || !strings.Contains(err.Error(), "acquire install state lock") {
+		t.Fatalf("contended updateStateAfterUninstall error = %v, want lock acquisition failure", err)
+	}
+
+	// Concurrent writer modifies unrelated fields while lock is held.
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:  []string{"claude", "opencode"},
+		BackgroundIntent: "on",
+		Persona:          "concurrent",
+		RDDMode:          "on",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := updateStateAfterUninstall(home, []model.AgentID{model.AgentOpenCode})
+	if err != nil {
+		t.Fatalf("updateStateAfterUninstall() error = %v", err)
+	}
+	if len(removed) != 1 || removed[0] != model.AgentOpenCode {
+		t.Fatalf("removed = %#v, want [opencode]", removed)
+	}
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(got.InstalledAgents, "opencode") {
+		t.Errorf("InstalledAgents contains opencode after uninstall: %#v", got.InstalledAgents)
+	}
+	if got.BackgroundIntent != "" {
+		t.Errorf("BackgroundIntent = %q, want empty after opencode uninstall", got.BackgroundIntent)
+	}
+	if got.Persona != "concurrent" || got.RDDMode != "on" {
+		t.Fatalf("concurrent writer state was clobbered: %#v", got)
 	}
 }
