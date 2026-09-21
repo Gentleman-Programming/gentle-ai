@@ -45,7 +45,7 @@
 
 ### Test Summary
 - **Tests totales escritos**: 40 (27 funciones de test de nivel superior + 13 sub-tests de tablas: 7 en `TestKickoffValidateEnums`, 6 en `TestGateLedgerValidate`)
-- **Tests en verde**: 39 PASS + 1 SKIP (intencional, paridad con precedente `edit_authority_test.go` en Windows) + 0 FAIL
+- **Tests en verde**: 39 PASS + 1 SKIP (intencional, paridad con el precedente de `internal/storage/space_test.go:57-65`, que omite en Windows el mismo patron de fixture `chmod 0000` porque Windows no aplica los bits POSIX de lectura del propietario) + 0 FAIL
 - **Capas usadas**: Unit (40), Integración (0 — dominio puro sin consumidores todavía), E2E (0)
 - **Funciones puras creadas**: `Validate` (×3), `RoleApplyGate`, `ArtifactDigest`, `InferKickoff`, `inferredKickoff`, `normalizeLineEndings`
 
