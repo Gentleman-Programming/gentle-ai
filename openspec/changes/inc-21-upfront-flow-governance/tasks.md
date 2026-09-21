@@ -272,10 +272,10 @@ Depende de la Fase 15.
 
 Depende de la Fase 16 (usa `Roster`) y de la Fase 4 (usa `GateLedger`).
 
-- [ ] 17.1 [RED] Escribir `internal/kickoff/closure_test.go`: `IntegrationHandoff` produce un `handoff.Handoff` con `FromPhase: apply`, `ToPhase: verify`, `Status: ready`; las cinco secciones no vacías (`handoff.Validate`, `(read-only)`); consolida los artefactos de **todos** los roles del roster, no solo el último cerrado; regla de resolución de `to_role` en el orden exacto de D-11 — (1) rol `qa` insensible a mayúsculas si existe, (2) roster de un único rol ⇒ ese mismo rol (auto-relevo de `fullstack`), (3) en otro caso, el último rol cerrado; con `wsConfig == nil` o roster vacío, la regla es irrelevante porque `handoff.validateRoles` (`(read-only)`) no comprueba nada.
-- [ ] 17.2 [GREEN] Crear `internal/kickoff/closure.go`: `IntegrationHandoff(changeName string, roster multirole.Roster, gates kickoff.GateLedger, artifacts ArtifactInventory) (*handoff.Handoff, error)`.
-- [ ] 17.3 [REFACTOR] Confirmar que `closure.go` reutiliza `handoff.Handoff`/`handoff.WriteFile` sin duplicar su validación (D-11 rechaza explícitamente un formato de relevo propio).
-- [ ] 17.4 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
+- [x] 17.1 [RED] Escribir `internal/kickoff/closure_test.go`: `IntegrationHandoff` produce un `handoff.Handoff` con `FromPhase: apply`, `ToPhase: verify`, `Status: ready`; las cinco secciones no vacías (`handoff.Validate`, `(read-only)`); consolida los artefactos de **todos** los roles del roster, no solo el último cerrado; regla de resolución de `to_role` en el orden exacto de D-11 — (1) rol `qa` insensible a mayúsculas si existe, (2) roster de un único rol ⇒ ese mismo rol (auto-relevo de `fullstack`), (3) en otro caso, el último rol cerrado; con `wsConfig == nil` o roster vacío, la regla es irrelevante porque `handoff.validateRoles` (`(read-only)`) no comprueba nada.
+- [x] 17.2 [GREEN] Crear `internal/kickoff/closure.go`: `IntegrationHandoff(changeName string, roster multirole.Roster, gates kickoff.GateLedger, artifacts ArtifactInventory) (*handoff.Handoff, error)`.
+- [x] 17.3 [REFACTOR] Confirmar que `closure.go` reutiliza `handoff.Handoff`/`handoff.WriteFile` sin duplicar su validación (D-11 rechaza explícitamente un formato de relevo propio).
+- [x] 17.4 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
 
 ## Fase 18: P5b — Aviso de último rol y cableado del relevo (REQ-21.13, REQ-21.14, REQ-21.15; D-10, D-12)
 
