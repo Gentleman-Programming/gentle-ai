@@ -124,15 +124,30 @@ function Install-ViaGo {
     $goPackage = "$module/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"
 
-    if ($Channel -eq "beta") {
-        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern $module
-        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern $module
-        Add-GoEnvPattern -Name "GONOPROXY" -Pattern $module
+    $goEnvNames = @("GONOSUMDB", "GOPRIVATE", "GONOPROXY")
+    $savedGoEnv = @{}
+    foreach ($name in $goEnvNames) {
+        $savedGoEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
     }
+    try {
+        if ($Channel -eq "beta") {
+            Add-GoEnvPattern -Name "GONOSUMDB" -Pattern $module
+            Add-GoEnvPattern -Name "GOPRIVATE" -Pattern $module
+            Add-GoEnvPattern -Name "GONOPROXY" -Pattern $module
+        }
 
-    & go install $goPackage
-    if ($LASTEXITCODE -ne 0) {
-        Stop-WithError "Failed to install via go install. Make sure Go is properly configured."
+        & go install $goPackage
+        if ($LASTEXITCODE -ne 0) {
+            Stop-WithError "Failed to install via go install. Make sure Go is properly configured."
+        }
+    } finally {
+        foreach ($name in $goEnvNames) {
+            if ($null -eq $savedGoEnv[$name]) {
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            } else {
+                [Environment]::SetEnvironmentVariable($name, $savedGoEnv[$name], "Process")
+            }
+        }
     }
 
     $gobin = & go env GOBIN 2>$null
