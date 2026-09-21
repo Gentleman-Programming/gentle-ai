@@ -132,7 +132,7 @@ jobs:
             const stableTag = process.env.STABLE_TAG;
             const recovery = process.env.RECOVERY_STATE;
             const contractSemver = process.env.PROVIDER_CONTRACT_SEMVER;
-            const expectedAssets = [`gentle-ai_${stableTag.slice(1)}_darwin_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_darwin_arm64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_arm64.tar.gz`, `gentle-ai-review-provider-contract-${contractSemver}.tar.gz`, 'checksums.txt', 'checksums.txt.minisig'].sort().join('\n');
+            const expectedAssets = [`axiom_${stableTag.slice(1)}_darwin_amd64.tar.gz`, `axiom_${stableTag.slice(1)}_darwin_arm64.tar.gz`, `axiom_${stableTag.slice(1)}_linux_amd64.tar.gz`, `axiom_${stableTag.slice(1)}_linux_arm64.tar.gz`, `gentle-ai-review-provider-contract-${contractSemver}.tar.gz`, 'checksums.txt', 'checksums.txt.minisig'].sort().join('\n');
             const optional = async (request) => {
               try { return await request(); } catch (error) {
                 if (error.status === 404) return null;
