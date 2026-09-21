@@ -190,10 +190,17 @@ func TestParseSealArgsCWDAcceptsAnyShape(t *testing.T) {
 	}
 }
 
-// TestChangeNameContainmentRejectsAllEightVectors is T-2/T-7's full table
+// TestChangeNameContainmentRejectsAllTenVectors is T-2/T-7's full table
 // against the single shared validator every parser in this file reuses
-// (task 8.3): none of these strings may ever reach filepath.Join.
-func TestChangeNameContainmentRejectsAllEightVectors(t *testing.T) {
+// (task 8.3): none of these strings may ever reach filepath.Join. Renamed
+// from ...AllEightVectors when an independent validator found two more
+// adversarial vectors this table did not yet cover (remediation, post
+// Phase 8): a bare Windows drive-relative segment, and a reserved device
+// name whose trailing space defeats the first-dot truncation the reserved
+// check used to rely on. Neither escaped openspec/changes/ on its own —
+// this is containment hardening, not a live break — but Phase 8 owns this
+// validator, so the fix and its regression coverage land here.
+func TestChangeNameContainmentRejectsAllTenVectors(t *testing.T) {
 	tests := []struct {
 		name  string
 		value string
@@ -206,6 +213,8 @@ func TestChangeNameContainmentRejectsAllEightVectors(t *testing.T) {
 		{name: "nombre reservado windows nul", value: "nul"},
 		{name: "cadena vacia", value: ""},
 		{name: "cadena de 300 caracteres", value: strings.Repeat("a", 300)},
+		{name: "segmento relativo de unidad windows", value: "C:foo"},
+		{name: "nombre reservado windows con espacio final sin extension", value: "con "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
