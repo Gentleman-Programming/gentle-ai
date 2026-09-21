@@ -3,9 +3,12 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
@@ -100,11 +103,14 @@ func runSDDGateRecord(args []string, stdout io.Writer) error {
 	}
 
 	if isRoleApply && parsed.Decision == kickoff.DecisionApproved && sealed != nil {
-		closed, evalErr := lastRoleJustClosed(changeRoot, roster)
+		closed, ledger, evalErr := lastRoleJustClosed(changeRoot, roster)
 		if evalErr != nil {
 			return evalErr
 		}
 		if closed {
+			if err := writeIntegrationHandoff(changeRoot, parsed.Change, roster, ledger, sealed.Config.Roles); err != nil {
+				return err
+			}
 			if _, err := fmt.Fprintf(stdout, "Aviso: se ha concluido la implementacion del %s del cambio %q; se genera el relevo de integracion para la verificacion global de la solucion (REQ-21.13).\n", lastRoleNoticeMarker, parsed.Change); err != nil {
 				return err
 			}
@@ -188,7 +194,11 @@ func gateKeyInRoster(key kickoff.GateKey, roster []multirole.RoleAssignment) boo
 // lastRoleJustClosed reports whether every role-apply gate in roster is
 // approved in the change's ledger, reusing kickoff.EvaluateGates and
 // kickoff.LastRoleClosed (task 10.2) rather than re-deriving gate status by
-// hand.
+// hand. It also returns the loaded ledger itself: task 18.2's caller needs
+// it again to build the integration handoff (kickoff.IntegrationHandoff
+// derives the last-closed role from this exact same ledger), and loading
+// it twice would risk the two reads observing different states on a
+// concurrently-modified gates.yaml.
 //
 // It marks every roster role as already "reached" (RolePending: 0)
 // because, at this call site, apply-progress tracking is not the question
@@ -199,13 +209,13 @@ func gateKeyInRoster(key kickoff.GateKey, roster []multirole.RoleAssignment) boo
 // last-recorded decision is a rejection is still reported "rejected" by
 // resolveGateStatus regardless of this stand-in RolePending map, so an
 // unresolved role still correctly keeps LastRoleClosed false.
-func lastRoleJustClosed(changeRoot string, roster []multirole.RoleAssignment) (bool, error) {
+func lastRoleJustClosed(changeRoot string, roster []multirole.RoleAssignment) (bool, kickoff.GateLedger, error) {
 	if len(roster) == 0 {
-		return false, nil
+		return false, kickoff.GateLedger{}, nil
 	}
 	ledger, err := kickoff.LoadGates(changeRoot)
 	if err != nil {
-		return false, err
+		return false, kickoff.GateLedger{}, err
 	}
 	rolePending := make(map[string]int, len(roster))
 	for _, r := range roster {
@@ -218,7 +228,63 @@ func lastRoleJustClosed(changeRoot string, roster []multirole.RoleAssignment) (b
 		Ledger:      ledger,
 	})
 	if err != nil {
-		return false, err
+		return false, kickoff.GateLedger{}, err
 	}
-	return kickoff.LastRoleClosed(roster, states), nil
+	return kickoff.LastRoleClosed(roster, states), ledger, nil
+}
+
+// writeIntegrationHandoff builds the integration handoff via
+// kickoff.IntegrationHandoff (Phase 17) and writes it to
+// openspec/changes/<change>/handoff.md, invoked exactly once, right after
+// the last active role's role-apply gate is approved (REQ-21.13,
+// REQ-21.14). It reuses handoff.WriteFile, the same writer
+// cmd/axiom/main.go's runHandoffCreate already uses, so this is not a
+// second handoff-writing code path.
+func writeIntegrationHandoff(changeRoot, changeName string, roster []multirole.RoleAssignment, ledger kickoff.GateLedger, sealedRoles []kickoff.KickoffRole) error {
+	h, err := kickoff.IntegrationHandoff(
+		changeName,
+		multirole.Roster{Roles: roster, Source: multirole.RosterSourceKickoff},
+		ledger,
+		buildIntegrationArtifactInventory(changeRoot, sealedRoles),
+	)
+	if err != nil {
+		return fmt.Errorf("construir el relevo de integracion de %q: %w", changeName, err)
+	}
+	if err := handoff.WriteFile(filepath.Join(changeRoot, "handoff.md"), h); err != nil {
+		return fmt.Errorf("escribir el relevo de integracion de %q: %w", changeName, err)
+	}
+	return nil
+}
+
+// buildIntegrationArtifactInventory resolves, for each sealed role,
+// whether its tasks/verify files actually exist under changeRoot.
+// kickoff.IntegrationHandoff is pure and never touches the filesystem
+// itself (closure.go's own documented contract) — this adapter is the one
+// place that does, exactly like governanceArtifactInputs already does the
+// equivalent resolution for internal/sddstatus's own gate digests.
+func buildIntegrationArtifactInventory(changeRoot string, roles []kickoff.KickoffRole) kickoff.ArtifactInventory {
+	inventory := kickoff.ArtifactInventory{
+		RoleTasksFiles:     make(map[string]string, len(roles)),
+		RoleVerifyFiles:    make(map[string]string, len(roles)),
+		GlobalVerifyReport: "verify-report.md",
+	}
+	for _, role := range roles {
+		if fileHasContent(filepath.Join(changeRoot, role.TasksFile)) {
+			inventory.RoleTasksFiles[role.Role] = role.TasksFile
+		}
+		if fileHasContent(filepath.Join(changeRoot, role.VerifyFile)) {
+			inventory.RoleVerifyFiles[role.Role] = role.VerifyFile
+		}
+	}
+	return inventory
+}
+
+// fileHasContent reports whether path exists, is a regular file, and is
+// non-empty — the same "has this artifact actually been produced" test
+// internal/sddstatus's own hasContent applies, duplicated narrowly here
+// because internal/cli has no dependency on internal/sddstatus's
+// unexported helpers.
+func fileHasContent(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
