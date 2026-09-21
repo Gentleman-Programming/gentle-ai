@@ -108,11 +108,11 @@ Ninguna tarea de implementación de P3 o P4 se considera cerrada si su compuerta
 
 Aditivo puro, sin consumidores todavía. Paquete nuevo `internal/kickoff`.
 
-- [ ] 1.1 [RED] Escribir `internal/kickoff/schema_test.go`: tabla de casos para `Validate()` sobre `flow_mode`, `execution_style`, `handoff_policy`, `gate_policy`, `deployment_target`, `evidence_kind` — valores válidos aceptados, valores desconocidos rechazados con error nombrado, `schema:` desconocido rechazado, documento YAML malformado rechazado (nunca valor cero silencioso). Los tipos/funciones no existen: RED por fallo de compilación.
-- [ ] 1.2 [GREEN] Crear `internal/kickoff/types.go`: `Kickoff`, `FlowMode`, `ExecutionStyle`, `HandoffPolicy`, `Lifecycle`, `Gate`, `GateKey`, `GateDecision`, `EvidenceKind`, `GateRecord`, `GateLedger`, `GateState`, constantes de enum (`FlowODD`, `FlowSDD`, `ExecutionContinuous`, `ExecutionCheckpointed`, `HandoffNone`, `HandoffPerCheckpoint`, `GateSpec`, `GateDesign`, `GateTasks`, `GateIntegration`, `DecisionApproved`, `DecisionRejected`, `EvidencePRMerged`, `EvidenceDeployment`, `EvidenceAttestation`) y `RoleApplyGate(role string) GateKey` como única forma de construir la clave `role-apply:<rol>`.
-- [ ] 1.3 [GREEN] Crear `internal/kickoff/schema.go`: etiquetas YAML de `Kickoff`/`Lifecycle`, listas de valores admitidos por enum, y `Validate() error` que satisface la tabla de 1.1.
-- [ ] 1.4 [REFACTOR] Revisar `types.go`/`schema.go`: comentarios GoDoc en inglés, sin duplicación entre las listas de enum y las constantes declaradas.
-- [ ] 1.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
+- [x] 1.1 [RED] Escribir `internal/kickoff/schema_test.go`: tabla de casos para `Validate()` sobre `flow_mode`, `execution_style`, `handoff_policy`, `gate_policy`, `deployment_target`, `evidence_kind` — valores válidos aceptados, valores desconocidos rechazados con error nombrado, `schema:` desconocido rechazado, documento YAML malformado rechazado (nunca valor cero silencioso). Los tipos/funciones no existen: RED por fallo de compilación.
+- [x] 1.2 [GREEN] Crear `internal/kickoff/types.go`: `Kickoff`, `FlowMode`, `ExecutionStyle`, `HandoffPolicy`, `Lifecycle`, `Gate`, `GateKey`, `GateDecision`, `EvidenceKind`, `GateRecord`, `GateLedger`, `GateState`, constantes de enum (`FlowODD`, `FlowSDD`, `ExecutionContinuous`, `ExecutionCheckpointed`, `HandoffNone`, `HandoffPerCheckpoint`, `GateSpec`, `GateDesign`, `GateTasks`, `GateIntegration`, `DecisionApproved`, `DecisionRejected`, `EvidencePRMerged`, `EvidenceDeployment`, `EvidenceAttestation`) y `RoleApplyGate(role string) GateKey` como única forma de construir la clave `role-apply:<rol>`.
+- [x] 1.3 [GREEN] Crear `internal/kickoff/schema.go`: etiquetas YAML de `Kickoff`/`Lifecycle`, listas de valores admitidos por enum, y `Validate() error` que satisface la tabla de 1.1.
+- [x] 1.4 [REFACTOR] Revisar `types.go`/`schema.go`: comentarios GoDoc en inglés, sin duplicación entre las listas de enum y las constantes declaradas.
+- [x] 1.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
 
 ## Fase 2: P1b — Sellado de kickoff, escritura única (REQ-21.5; D-01, D-02, D-04)
 
