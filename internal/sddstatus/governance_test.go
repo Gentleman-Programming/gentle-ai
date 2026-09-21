@@ -190,6 +190,38 @@ func TestLoadGovernanceReturnsNilWithoutErrorWhenNoKickoffIsSealed(t *testing.T)
 	}
 }
 
+// TestLoadGovernanceReturnsNilForContinuousExecutionStyle is Phase 13's
+// extension of loadGovernance (task 13.2, D-05): a sealed kickoff in
+// continuous mode must report NO governance at all, not a Governance value
+// with an empty Gates slice. kickoff.EvaluateGates already returns an empty
+// slice for continuous mode on its own, so this proves loadGovernance goes
+// one step further and reports structural absence, matching the field-level
+// contract Status.Governance documents.
+func TestLoadGovernanceReturnsNilForContinuousExecutionStyle(t *testing.T) {
+	changeRoot := t.TempDir()
+	writeFile(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
+	_, ok, err := kickoff.Seal(changeRoot, kickoff.Kickoff{
+		Schema: kickoff.KickoffSchemaV1, Change: filepath.Base(changeRoot), SealedBy: "test",
+		Config: kickoff.FlowConfig{
+			FlowMode: kickoff.FlowSDD, ExecutionStyle: kickoff.ExecutionContinuous,
+			ExecutionStyleSource: "explicit", HandoffPolicy: kickoff.HandoffNone,
+			Roles: []kickoff.KickoffRole{{Role: "fullstack", GatePolicy: "blocking", TasksFile: "tasks.md", VerifyFile: "verify-report.md"}},
+		},
+		Lifecycle: kickoff.Lifecycle{DeploymentTarget: "local", PostArchivePolicy: "bug_only"},
+	})
+	if err != nil || !ok {
+		t.Fatalf("kickoff.Seal() = (ok=%v, err=%v), se esperaba un sellado exitoso de preparacion", ok, err)
+	}
+
+	got, err := loadGovernance(changeRoot)
+	if err != nil {
+		t.Fatalf("loadGovernance() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("loadGovernance() = %#v, se esperaba nil para un sello en modo continuo (D-05)", got)
+	}
+}
+
 func TestLoadGovernancePropagatesACorruptKickoffAsANamedError(t *testing.T) {
 	changeRoot := t.TempDir()
 	writeFile(t, filepath.Join(changeRoot, kickoff.KickoffFileName), "{ not: valid: yaml")

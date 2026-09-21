@@ -221,6 +221,14 @@ func loadGovernance(changeRoot string) (*Governance, error) {
 	if sealed == nil {
 		return nil, nil
 	}
+	// D-05: a continuous-execution seal reports NO governance, not a
+	// Governance value with an empty Gates slice. EvaluateGates already
+	// short-circuits to an empty slice for continuous mode on its own, but
+	// this function goes one step further and reports structural absence,
+	// matching what Status.Governance documents for every caller.
+	if sealed.Config.ExecutionStyle == kickoff.ExecutionContinuous {
+		return nil, nil
+	}
 
 	ledger, err := kickoff.LoadGates(changeRoot)
 	if err != nil {

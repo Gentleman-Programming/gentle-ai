@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
 )
 
@@ -172,10 +173,17 @@ type Status struct {
 	// Archived is #4002's positive terminal projection: present exactly when
 	// the named change is already archived, so closure stops answering through
 	// the blocked channel. Structural absence (nil, omitempty) everywhere else.
-	Archived          *ArchivedProjection `json:"archived,omitempty"`
-	PhaseInstructions *PhaseInstructions  `json:"phaseInstructions,omitempty"`
-	NextRecommended   string              `json:"nextRecommended"`
-	BlockedReasons    []string            `json:"blockedReasons"`
+	Archived *ArchivedProjection `json:"archived,omitempty"`
+	// Governance is INC-21's per-change block-review view: present exactly
+	// when the change has a sealed kickoff.yaml AND its execution style is
+	// not continuous (D-05). Structural absence (nil, omitempty) everywhere
+	// else, including every change that was already active before this
+	// increment shipped -- the byte-for-byte regression this increment's own
+	// control gate guards (kickoff_absence_regression_test.go).
+	Governance        *Governance        `json:"governance,omitempty"`
+	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
+	NextRecommended   string             `json:"nextRecommended"`
+	BlockedReasons    []string           `json:"blockedReasons"`
 	// Notes carries non-blocking diagnostics for a consumer to report, never to
 	// gate on: a non-empty Notes never withholds apply, sync, archive, or a
 	// terminal route. Always serialized as an array — `[]` when there is nothing
@@ -551,6 +559,17 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 		return Status{}, err
 	}
 
+	// INC-21 (D-05): loadGovernance itself reports structural absence (nil,
+	// nil) for a change with no sealed kickoff.yaml, and for one sealed in
+	// continuous mode -- the only two cases this resolver must cost nothing
+	// extra for. A corrupt kickoff.yaml or gates.yaml is a named error here,
+	// exactly like every other resolver read in this function: it is never
+	// swallowed into "no governance" (T-10).
+	governance, err := loadGovernance(changeRoot)
+	if err != nil {
+		return Status{}, err
+	}
+
 	// The change-instance identity (#2563, S4b of #2540) binds the runtime
 	// read so persisted grants project only for THIS instance of the change
 	// name; without a marker the replay conservatively projects no granted
@@ -569,7 +588,7 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	}
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
-	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
+	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName, governance)
 	if artifacts["specs"] == ArtifactPartial {
 		blockedReasons.genuine = append(blockedReasons.genuine, openSpecSpecsLayoutReason(changeName))
 	}
@@ -591,9 +610,10 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 		}
 	}
 	dependencies := resolveDependencies(artifacts, applyState, coreReady)
-	nextRecommended := resolveNextRecommended(dependencies, applyState)
+	nextRecommended := resolveNextRecommended(dependencies, applyState, governance)
 	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, grantedRoots, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.Consent = consent
+	status.Governance = governance
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
 	status.Artifacts = artifacts
@@ -671,10 +691,16 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
-	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName)
+	// INC-21's governance is an OpenSpec/hybrid-only concern (design.md S4.3):
+	// kickoff.yaml is sealed under a change's filesystem directory (D-01), and
+	// the Engram store keeps no such directory for this resolver to read
+	// (see the comment above on the change-instance marker for the same
+	// reason). This path passes nil unconditionally rather than resolving a
+	// synthetic changeRoot that loadGovernance was never meant to read.
+	blockedReasons := artifactBlockedReasons(artifacts, taskProgress, changeName, nil)
 	applyState, _ = applyEditAuthorityBlock(applyState, &blockedReasons, artifactsByType["tasks"].Content, workspaceRoot, []string{workspaceRoot})
 	dependencies := resolveDependencies(artifacts, applyState, coreReady)
-	nextRecommended := resolveNextRecommended(dependencies, applyState)
+	nextRecommended := resolveNextRecommended(dependencies, applyState, nil)
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
 	status := baseStatus(ArtifactStoreEngram, workspaceRoot, nil, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
@@ -857,7 +883,14 @@ func projectFromGitConfig(content string) string {
 	return ""
 }
 
-var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|state|archive-report)$`)
+// INC-21 (design.md S5.8): "kickoff" and "gates" are the Engram mirror
+// topic-key suffixes for axiom sdd kickoff seal's payload and axiom sdd
+// gate record's ledger entries, respectively. Recognising them here is
+// purely additive: neither suffix branches specially in
+// collectEngramChanges (it falls into the same "seen" default every other
+// artifact suffix already does) or in engramArtifactsForChange (it is
+// simply keyed into the returned map like any other artifact type).
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|state|archive-report|kickoff|gates)$`)
 
 func collectEngramChanges(observations []engramObservation, project string) []string {
 	// An Engram-backed change has no directory to move, so nothing about the
@@ -1377,7 +1410,7 @@ func fencedCodeRun(line string) string {
 	return trimmed[:len(trimmed)-len(run)]
 }
 
-func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress, changeName string) blockerReasons {
+func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress TaskProgress, changeName string, governance *Governance) blockerReasons {
 	var reasons blockerReasons
 	if changeName == "" {
 		changeName = "<change>"
@@ -1398,7 +1431,35 @@ func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress Tas
 	if artifacts["tasks"] == ArtifactDone && taskProgress.Total == 0 {
 		reasons.genuine = append(reasons.genuine, "tasks.md has no markdown task checkboxes.")
 	}
+	// INC-21 (D-05): a nil governance means no sealed kickoff.yaml, or one
+	// sealed in continuous mode -- both cases add nothing here, unchanged
+	// from the logic above (kickoff_absence_regression_test.go guards this
+	// exact byte-for-byte identity for the unsealed case).
+	if governance != nil {
+		if reason, ok := governanceBlockedReason(governance); ok {
+			reasons.genuine = append(reasons.genuine, reason)
+		}
+	}
 	return reasons
+}
+
+// governanceBlockedReason names the first pending or rejected gate in fixed
+// evaluation order (design.md S4.1's machine.go already returns
+// Governance.Gates in that order), mirroring exactly which gate
+// governanceNextRecommended used to choose its route -- BlockedReasons must
+// never name a different gate than the one nextRecommended is waiting on.
+// A rejected gate's reason is surfaced verbatim (D-09: "the exact registered
+// rejection reason"), never paraphrased.
+func governanceBlockedReason(governance *Governance) (string, bool) {
+	for _, gate := range governance.Gates {
+		switch gate.Status {
+		case "pending":
+			return fmt.Sprintf("Block review gate %q is pending a decision: run `axiom sdd gate record --gate %s --decision approved|rejected ...` to continue.", gate.Key, gate.Key), true
+		case "rejected":
+			return fmt.Sprintf("Block review gate %q was rejected: %s", gate.Key, gate.Reason), true
+		}
+	}
+	return "", false
 }
 
 // openSpecSpecsLayoutReason names the change-local layout when the OpenSpec
@@ -1453,7 +1514,21 @@ func artifactDependency(state ArtifactState) DependencyState {
 	return DependencyBlocked
 }
 
-func resolveNextRecommended(dependencies Dependencies, applyState ApplyState) string {
+func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, governance *Governance) string {
+	// INC-21 (D-05, D-09): a nil governance means no sealed kickoff.yaml, or
+	// one sealed in continuous mode -- both leave every branch below exactly
+	// as it was before this increment (kickoff_absence_regression_test.go
+	// guards that identity byte for byte). A pending or rejected gate takes
+	// precedence over every other route: REQ-21.8-21.11 forbid starting the
+	// NEXT phase (or the next role's apply) while its own gate is
+	// undecided, even when that next phase would otherwise already look
+	// ready by dependency state alone.
+	if governance != nil {
+		if next, ok := governanceNextRecommended(governance); ok {
+			return next
+		}
+	}
+
 	if dependencies.Apply == DependencyReady {
 		return string(PhaseApply)
 	}
@@ -1480,6 +1555,52 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState) st
 	// Genuine anomaly: all planning artifacts are done but apply is still blocked.
 	// This indicates a corrupted or ambiguous state that needs human intervention.
 	return "resolve-blockers"
+}
+
+// governanceNextRecommended inspects governance.Gates in fixed evaluation
+// order (machine.go's own documented order: spec -> design -> tasks ->
+// role-apply:<role...> -> integration) and returns the route for the FIRST
+// gate that is not yet approved: "await-gate" for a pending decision
+// (D-09), or that gate's owning phase for a rejection whose digest still
+// matches the current artifact (remediation reopens it to pending
+// automatically -- D-08 -- so a rejected entry here always means genuine,
+// unremediated rejection). An all-approved or empty gate list reports no
+// override, letting the caller's ordinary routing stand.
+func governanceNextRecommended(governance *Governance) (string, bool) {
+	for _, gate := range governance.Gates {
+		switch gate.Status {
+		case "pending":
+			return "await-gate", true
+		case "rejected":
+			if phase, ok := gateOwningPhase(gate); ok {
+				return phase, true
+			}
+			return "await-gate", true
+		}
+	}
+	return "", false
+}
+
+// gateOwningPhase names the SDD phase (or role apply) whose artifact a gate
+// judges, for redirecting a genuine rejection back to remediation (D-09).
+// It recognises a role-apply gate the same way gateCriteria does --
+// reconstructing its key from state.Blocks rather than re-deriving the
+// "role-apply:" literal a second time in this package.
+func gateOwningPhase(state kickoff.GateState) (string, bool) {
+	switch state.Key {
+	case kickoff.GateSpec:
+		return string(PhaseSpec), true
+	case kickoff.GateDesign:
+		return string(PhaseDesign), true
+	case kickoff.GateTasks:
+		return string(PhaseTasks), true
+	case kickoff.GateIntegration:
+		return string(PhaseArchive), true
+	}
+	if state.Key == kickoff.RoleApplyGate(state.Blocks) {
+		return string(PhaseApply), true
+	}
+	return "", false
 }
 
 // artifactLocator renders the locators the native surface already resolved
