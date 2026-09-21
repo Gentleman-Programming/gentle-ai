@@ -191,9 +191,9 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 			name: "artifact path escapes snapshot directory",
 			mutate: func(t *testing.T, root string) {
 				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"),
-					`"path":"dist/gentle-ai_linux_amd64_v1/gentle-ai"`,
-					`"path":"dist/../outside/gentle-ai"`)
-				outside := filepath.Join(root, "outside", "gentle-ai")
+					`"path":"dist/axiom_linux_amd64_v1/axiom"`,
+					`"path":"dist/../outside/axiom"`)
+				outside := filepath.Join(root, "outside", "axiom")
 				if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -205,7 +205,7 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 		{
 			name: "artifact path resolves through symlink",
 			mutate: func(t *testing.T, root string) {
-				output := filepath.Join(root, "dist", "gentle-ai_linux_amd64_v1", "gentle-ai")
+				output := filepath.Join(root, "dist", "axiom_linux_amd64_v1", "axiom")
 				if err := os.Remove(output); err != nil {
 					t.Fatal(err)
 				}
@@ -510,18 +510,21 @@ func replaceReleasePolicyFile(t *testing.T, root, path, old, replacement string)
 
 const releasePolicyArtifactsFixture = `[
   {"name":"metadata.json","path":"dist/metadata.json","type":"Metadata"},
-  {"name":"gentle-ai","path":"dist/gentle-ai_linux_amd64_v1/gentle-ai","goos":"linux","goarch":"amd64","target":"linux_amd64_v1","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai"}},
-  {"name":"gentle-ai","path":"dist/gentle-ai_linux_arm64_v8.0/gentle-ai","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai"}},
-  {"name":"gentle-ai","path":"dist/gentle-ai_darwin_amd64_v1/gentle-ai","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai"}},
-  {"name":"gentle-ai","path":"dist/gentle-ai_darwin_arm64_v8.0/gentle-ai","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai"}},
-  {"name":"gentle-ai_0.0.0-SNAPSHOT_linux_amd64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_linux_amd64.tar.gz","goos":"linux","goarch":"amd64","target":"linux_amd64_v1","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
-  {"name":"gentle-ai_0.0.0-SNAPSHOT_linux_arm64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_linux_arm64.tar.gz","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
-  {"name":"gentle-ai_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
-  {"name":"gentle-ai_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","path":"dist/gentle-ai_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai"],"Format":"tar.gz","ID":"default"}},
+  {"name":"axiom","path":"dist/axiom_linux_amd64_v1/axiom","goos":"linux","goarch":"amd64","target":"linux_amd64_v1","type":"Binary","extra":{"Binary":"axiom","ID":"axiom"}},
+  {"name":"axiom","path":"dist/axiom_linux_arm64_v8.0/axiom","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Binary","extra":{"Binary":"axiom","ID":"axiom"}},
+  {"name":"axiom","path":"dist/axiom_darwin_amd64_v1/axiom","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Binary","extra":{"Binary":"axiom","ID":"axiom"}},
+  {"name":"axiom","path":"dist/axiom_darwin_arm64_v8.0/axiom","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Binary","extra":{"Binary":"axiom","ID":"axiom"}},
+  {"name":"gentle-ai","path":"dist/gentle-ai-deprecated_linux_amd64_v1/gentle-ai","goos":"linux","goarch":"amd64","target":"linux_amd64_v1","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai-deprecated"}},
+  {"name":"gentle-ai","path":"dist/gentle-ai-deprecated_linux_arm64_v8.0/gentle-ai","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai-deprecated"}},
+  {"name":"gentle-ai","path":"dist/gentle-ai-deprecated_darwin_amd64_v1/gentle-ai","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai-deprecated"}},
+  {"name":"gentle-ai","path":"dist/gentle-ai-deprecated_darwin_arm64_v8.0/gentle-ai","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai-deprecated"}},
+  {"name":"axiom_0.0.0-SNAPSHOT_linux_amd64.tar.gz","path":"dist/axiom_0.0.0-SNAPSHOT_linux_amd64.tar.gz","goos":"linux","goarch":"amd64","target":"linux_amd64_v1","type":"Archive","extra":{"Binaries":["gentle-ai","axiom"],"Format":"tar.gz","ID":"default"}},
+  {"name":"axiom_0.0.0-SNAPSHOT_linux_arm64.tar.gz","path":"dist/axiom_0.0.0-SNAPSHOT_linux_arm64.tar.gz","goos":"linux","goarch":"arm64","target":"linux_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai","axiom"],"Format":"tar.gz","ID":"default"}},
+  {"name":"axiom_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","path":"dist/axiom_0.0.0-SNAPSHOT_darwin_amd64.tar.gz","goos":"darwin","goarch":"amd64","target":"darwin_amd64_v1","type":"Archive","extra":{"Binaries":["gentle-ai","axiom"],"Format":"tar.gz","ID":"default"}},
+  {"name":"axiom_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","path":"dist/axiom_0.0.0-SNAPSHOT_darwin_arm64.tar.gz","goos":"darwin","goarch":"arm64","target":"darwin_arm64_v8.0","type":"Archive","extra":{"Binaries":["gentle-ai","axiom"],"Format":"tar.gz","ID":"default"}},
   {"name":"gentle-ai-review-provider-contract-1.2.0.tar.gz","path":"dist/gentle-ai-review-provider-contract-1.2.0.tar.gz","type":"Archive","extra":{"Binaries":[],"Format":"tar.gz","ID":"review-provider-contract"}},
   {"name":"gentle-ai-release-provenance-v1.tar.gz","path":"dist/gentle-ai-release-provenance-v1.tar.gz","type":"Archive","extra":{"Binaries":[],"Format":"tar.gz","ID":"release-provenance"}},
-  {"name":"checksums.txt","path":"dist/checksums.txt","type":"Checksum","extra":{}},
-  {"name":"gentle-ai.rb","path":"dist/homebrew/Formula/gentle-ai.rb","type":"Homebrew Formula","extra":{"BrewConfig":{"name":"gentle-ai","repository":{"owner":"Gentleman-Programming","name":"homebrew-tap","token":"{{ .Env.HOMEBREW_TAP_TOKEN }}"},"directory":"Formula"}}}
+  {"name":"checksums.txt","path":"dist/checksums.txt","type":"Checksum","extra":{}}
 ]`
 
 const releasePolicyRunID = "release-policy-test-run"

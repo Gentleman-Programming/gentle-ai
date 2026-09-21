@@ -309,7 +309,13 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 	if err := requireJSONEOF(decoder); err != nil {
 		return err
 	}
-	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 6, "Checksum": 1, "Homebrew Formula": 1}
+	// Eight binaries, not four, and no Homebrew formula. Both differences are
+	// this fork's distribution, not drift: D-08 keeps publishing `gentle-ai`
+	// alongside the product's own binary as the deprecation alias that
+	// crosslane's shim depends on, and the upstream tap was withdrawn because
+	// this fork does not own it. Measured against a real snapshot, never
+	// inferred from the configuration.
+	expectedCounts := map[string]int{"Metadata": 1, "Binary": 8, "Archive": 6, "Checksum": 1}
 	byType := make(map[string][]artifact)
 	counts := make(map[string]int)
 	paths := make(map[string]struct{})
@@ -334,6 +340,15 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 		"darwin/amd64": "darwin_amd64_v1",
 		"darwin/arm64": "darwin_arm64_v8.0",
 	}
+	// The matrix is every target times both build IDs. Keying the seen-set on
+	// the platform alone would have reported a repeat for what is a second
+	// legitimate build, so the key carries the ID.
+	//
+	// The path prefix is the build ID, not the binary name. They differ for
+	// the deprecated build -- dist/gentle-ai-deprecated_<target>/gentle-ai --
+	// and a check written against the name would assert a path this
+	// configuration never emits, passing only by never running.
+	expectedBuilds := map[string]string{"axiom": "axiom", "gentle-ai-deprecated": "gentle-ai"}
 	seenBinaries := make(map[string]struct{})
 	for _, item := range byType["Binary"] {
 		platform := item.GOOS + "/" + item.GOARCH
@@ -341,16 +356,22 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 		if !ok || item.Target != target {
 			return fmt.Errorf("resolved binary matrix changed at %s", platform)
 		}
-		expectedPath := fmt.Sprintf("dist/gentle-ai_%s/gentle-ai", target)
-		if item.Name != "gentle-ai" || item.Path != expectedPath || extraString(item.Extra, "Binary") != "gentle-ai" || extraString(item.Extra, "ID") != "gentle-ai" {
-			return fmt.Errorf("resolved binary identity changed at %s", platform)
+		id := extraString(item.Extra, "ID")
+		binary, known := expectedBuilds[id]
+		if !known {
+			return fmt.Errorf("resolved binary build id changed at %s: %q", platform, id)
 		}
-		if _, exists := seenBinaries[platform]; exists {
-			return fmt.Errorf("resolved binary target is repeated: %s", platform)
+		expectedPath := fmt.Sprintf("dist/%s_%s/%s", id, target, binary)
+		if item.Name != binary || item.Path != expectedPath || extraString(item.Extra, "Binary") != binary {
+			return fmt.Errorf("resolved binary identity changed at %s for build %q", platform, id)
 		}
-		seenBinaries[platform] = struct{}{}
+		key := id + " " + platform
+		if _, exists := seenBinaries[key]; exists {
+			return fmt.Errorf("resolved binary target is repeated: %s", key)
+		}
+		seenBinaries[key] = struct{}{}
 	}
-	if len(seenBinaries) != len(expectedTargets) {
+	if len(seenBinaries) != len(expectedTargets)*len(expectedBuilds) {
 		return errors.New("resolved binary matrix is incomplete")
 	}
 
@@ -378,9 +399,11 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 		if !ok || item.Target != target {
 			return fmt.Errorf("resolved archive matrix changed at %s", platform)
 		}
+		// The archive name template is {{ .ProjectName }}_..., and this fork's
+		// project_name is axiom.
 		suffix := fmt.Sprintf("_%s_%s.tar.gz", item.GOOS, item.GOARCH)
-		version := strings.TrimSuffix(strings.TrimPrefix(item.Name, "gentle-ai_"), suffix)
-		if !strings.HasPrefix(item.Name, "gentle-ai_") || !strings.HasSuffix(item.Name, suffix) || !validSnapshotVersion(version) {
+		version := strings.TrimSuffix(strings.TrimPrefix(item.Name, "axiom_"), suffix)
+		if !strings.HasPrefix(item.Name, "axiom_") || !strings.HasSuffix(item.Name, suffix) || !validSnapshotVersion(version) {
 			return fmt.Errorf("resolved archive name changed at %s", platform)
 		}
 		if snapshotVersion == "" {
@@ -388,7 +411,13 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 		} else if version != snapshotVersion {
 			return errors.New("resolved archives do not share one snapshot version")
 		}
-		if item.Path != "dist/"+item.Name || extraString(item.Extra, "Format") != "tar.gz" || extraString(item.Extra, "ID") != "default" || !reflect.DeepEqual(extraStrings(item.Extra, "Binaries"), []string{"gentle-ai"}) {
+		// The default archive carries no ids filter, so it packages both
+		// builds. Sorted before comparing: GoReleaser's own order is an
+		// implementation detail, and pinning it would make this gate fail on a
+		// change that ships exactly the same bytes.
+		archived := append([]string{}, extraStrings(item.Extra, "Binaries")...)
+		sort.Strings(archived)
+		if item.Path != "dist/"+item.Name || extraString(item.Extra, "Format") != "tar.gz" || extraString(item.Extra, "ID") != "default" || !reflect.DeepEqual(archived, []string{"axiom", "gentle-ai"}) {
 			return fmt.Errorf("resolved archive identity changed at %s", platform)
 		}
 		if _, exists := seenArchives[platform]; exists {
@@ -412,16 +441,10 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time, contra
 	if item := byType["Metadata"][0]; item.Name != "metadata.json" || item.Path != "dist/metadata.json" {
 		return errors.New("resolved metadata output changed")
 	}
-	formula := byType["Homebrew Formula"][0]
-	if formula.Name != "gentle-ai.rb" || formula.Path != "dist/homebrew/Formula/gentle-ai.rb" {
-		return errors.New("resolved Homebrew formula output changed")
-	}
-	brewConfig := extraMap(formula.Extra, "BrewConfig")
-	repository := extraMap(brewConfig, "repository")
-	if extraString(brewConfig, "name") != "gentle-ai" || extraString(brewConfig, "directory") != "Formula" ||
-		extraString(repository, "owner") != "Gentleman-Programming" || extraString(repository, "name") != "homebrew-tap" || extraString(repository, "token") != "{{ .Env.HOMEBREW_TAP_TOKEN }}" {
-		return errors.New("resolved Homebrew publisher changed")
-	}
+	// No Homebrew block: the tap belonged to upstream and this fork does not
+	// own it, so the brews: section was withdrawn from .goreleaser.yaml. The
+	// census above is what keeps its absence honest -- a formula reappearing
+	// would change the artifact type counts and fail before reaching here.
 
 	orderedPaths := make([]string, 0, len(paths))
 	for artifactPath := range paths {
@@ -498,11 +521,6 @@ func extraStrings(values map[string]any, key string) []string {
 		result = append(result, value)
 	}
 	return result
-}
-
-func extraMap(values map[string]any, key string) map[string]any {
-	value, _ := values[key].(map[string]any)
-	return value
 }
 
 func validateSnapshotFile(root, artifactPath string, markerTime time.Time) error {
