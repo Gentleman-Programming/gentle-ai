@@ -1,5 +1,25 @@
 package multirole
 
+import "strings"
+
+// RoleFullstack is the reserved role identity the kickoff assigns when a
+// change is not subdivided into specialized roles (REQ-21.6). It is valid
+// in every workspace, declared in axiom.yaml or not, because REQ-21.6
+// requires every SDD change to carry at least one informed role and a
+// workspace cannot be excluded from that guarantee just because its
+// axiom.yaml was never edited to list it (design.md D-07).
+const RoleFullstack = "fullstack"
+
+// IsReservedRole reports whether role names an identity the engine
+// recognises on its own, independent of any workspace's declared roles
+// (currently only RoleFullstack). It is the single, shared predicate both
+// copies of roleExists (this package's detector.go and
+// internal/handoff/validator.go) consult, so the reserved set can never
+// silently diverge between the two (design.md D-07).
+func IsReservedRole(role string) bool {
+	return strings.EqualFold(role, RoleFullstack)
+}
+
 // GatePolicy define la política de compuerta y el nivel de exigencia de un rol frente a la barrera de sincronización.
 type GatePolicy string
 

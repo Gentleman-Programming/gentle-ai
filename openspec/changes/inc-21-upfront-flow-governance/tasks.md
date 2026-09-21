@@ -248,15 +248,15 @@ No depende de las Fases 1–14. Se escribe contra el árbol tal y como está hoy
 
 > **Válvula de alivio:** si el diff real supera holgadamente 400 líneas, separar `internal/handoff/reserved_role_parity_test.go` en una PR inmediatamente posterior (`inc-21/15b-handoff-reserved-role-parity`).
 
-- [ ] 15.1 [Caracterización] Escribir `internal/multirole/req11_characterization_test.go`: los tres escenarios vivos de `multi-role-fan-out-engine` REQ-1.1 sobre `DetectRoles` (`(read-only)` en esta tarea) — multi-rol con políticas distintas (`backend` blocking, `e2e` deferred); rol `database` declarado en `design.md` pero ausente de `axiom.yaml` ⇒ error; modo retrocompatible de rol único (fallback al rol principal del workspace con `blocking`, `tasks.md`, `verify-report.md`). Ejecutar y confirmar que **los tres pasan hoy, sin ningún cambio de producción**.
-- [ ] 15.2 [RED] Escribir en `internal/multirole/types_test.go`: `IsReservedRole("fullstack")` ⇒ `true`; `IsReservedRole("Fullstack")` ⇒ `true` (insensible a mayúsculas); `IsReservedRole("database")` ⇒ `false`.
-- [ ] 15.3 [GREEN] Modificar `internal/multirole/types.go`: añadir `const RoleFullstack = "fullstack"` y `func IsReservedRole(role string) bool`.
-- [ ] 15.4 [RED] Escribir en `internal/multirole/detector_test.go`: `roleExists("fullstack", cfg)` ⇒ `true` aunque `axiom.yaml` no lo declare; `roleExists("database", cfg)` sin declarar ⇒ sigue produciendo el error existente (no debe cambiar).
-- [ ] 15.5 [GREEN] Modificar `internal/multirole/detector.go`: en `roleExists` (`:120-127`), devolver `true` de inmediato cuando `IsReservedRole(role)`, antes de recorrer `cfg.Roles`. `DetectRoles` no se toca en ninguna línea.
-- [ ] 15.6 [RED] Escribir `internal/handoff/reserved_role_parity_test.go`: sobre un corpus compartido de nombres de rol (reservados y no reservados), las dos copias de `roleExists` (`internal/multirole/detector.go` y `internal/handoff/validator.go`) producen exactamente el mismo veredicto para cada nombre.
-- [ ] 15.7 [GREEN] Modificar `internal/handoff/validator.go`: misma rama de dos líneas en su copia de `roleExists` (`:140-147`).
-- [ ] 15.8 [Caracterización — repetición] Reejecutar `internal/multirole/req11_characterization_test.go` tras 15.3–15.7 y confirmar que los tres escenarios siguen en verde, byte a byte respecto a 15.1.
-- [ ] 15.9 [Verificación de cierre] V-A, V-B (`./internal/multirole/... ./internal/handoff/...`), V-C, V-D, V-E (caracterización REQ-1.1 en verde).
+- [x] 15.1 [Caracterización] Escribir `internal/multirole/req11_characterization_test.go`: los tres escenarios vivos de `multi-role-fan-out-engine` REQ-1.1 sobre `DetectRoles` (`(read-only)` en esta tarea) — multi-rol con políticas distintas (`backend` blocking, `e2e` deferred); rol `database` declarado en `design.md` pero ausente de `axiom.yaml` ⇒ error; modo retrocompatible de rol único (fallback al rol principal del workspace con `blocking`, `tasks.md`, `verify-report.md`). Ejecutar y confirmar que **los tres pasan hoy, sin ningún cambio de producción**.
+- [x] 15.2 [RED] Escribir en `internal/multirole/types_test.go`: `IsReservedRole("fullstack")` ⇒ `true`; `IsReservedRole("Fullstack")` ⇒ `true` (insensible a mayúsculas); `IsReservedRole("database")` ⇒ `false`.
+- [x] 15.3 [GREEN] Modificar `internal/multirole/types.go`: añadir `const RoleFullstack = "fullstack"` y `func IsReservedRole(role string) bool`.
+- [x] 15.4 [RED] Escribir en `internal/multirole/detector_test.go`: `roleExists("fullstack", cfg)` ⇒ `true` aunque `axiom.yaml` no lo declare; `roleExists("database", cfg)` sin declarar ⇒ sigue produciendo el error existente (no debe cambiar).
+- [x] 15.5 [GREEN] Modificar `internal/multirole/detector.go`: en `roleExists` (`:120-127`), devolver `true` de inmediato cuando `IsReservedRole(role)`, antes de recorrer `cfg.Roles`. `DetectRoles` no se toca en ninguna línea.
+- [x] 15.6 [RED] Escribir `internal/handoff/reserved_role_parity_test.go`: sobre un corpus compartido de nombres de rol (reservados y no reservados), las dos copias de `roleExists` (`internal/multirole/detector.go` y `internal/handoff/validator.go`) producen exactamente el mismo veredicto para cada nombre.
+- [x] 15.7 [GREEN] Modificar `internal/handoff/validator.go`: misma rama de dos líneas en su copia de `roleExists` (`:140-147`).
+- [x] 15.8 [Caracterización — repetición] Reejecutar `internal/multirole/req11_characterization_test.go` tras 15.3–15.7 y confirmar que los tres escenarios siguen en verde, byte a byte respecto a 15.1.
+- [x] 15.9 [Verificación de cierre] V-A, V-B (`./internal/multirole/... ./internal/handoff/...`), V-C, V-D, V-E (caracterización REQ-1.1 en verde).
 
 ## Fase 16: P4b — Reconciliación de roster (REQ-21.6; D-06)
 
