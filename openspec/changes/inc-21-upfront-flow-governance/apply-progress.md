@@ -3,7 +3,7 @@
 > **Alcance acumulado:** Fases 1 a 7 del documento `tasks.md` (rebanada de diseño P1 completa, dominio puro `internal/kickoff`: tipos, esquema, sellado, retro-sellado, ledger, digest, máquina de compuertas con reapertura y multi-rol, cierre de último rol, guarda de raíz archivada y frontera RDD del dominio). Las Fases 8 a 23 quedan sin empezar para una ejecución posterior.
 > **Modo:** Strict TDD (`openspec/config.yaml: strict_tdd: true`). Cada tarea `[RED]` se escribió y se observó fallar (por fallo de compilación o por aserción) antes de su tarea `[GREEN]` correspondiente.
 > **Rama:** `feature/inc-21-upfront-flow-governance` (tracker, sin merge directo a `main`). Sin push, sin creación de ramas hijas ni PRs — decisiones del usuario.
-> **Este documento es un merge.** La sección de Fases 1-4 se preserva tal cual de la ejecución anterior; las Fases 5-7 son la ejecución actual.
+> **Este documento es un merge.** El listado de tareas de las Fases 1-4 se conserva byte a byte de la ejecución anterior; sus tablas de evidencia y sus notas se reescribieron de forma más compacta al integrarlas, sin alterar ningún hecho, cifra ni conclusión (algunas citas concretas —un nombre de test, una referencia cruzada, un detalle de arnés— sí se perdieron en la condensación). Las Fases 5-7 son la ejecución actual.
 
 ## Estado de Fases y Tareas
 
@@ -185,7 +185,7 @@ Sin desviaciones respecto a D-05, D-08, D-09, D-10, D-14 en su comportamiento ob
 | **Total Fases 5-7 (esta ejecución)** | — | — | 1065 + 16 = **1081**\* | — | — |
 | **Total acumulado (Fases 1-7)** | — | — | **2599** | (presupuesto de intento: 2600 — a 1 línea del límite) | — |
 
-\* Medido con `git diff --stat 56fcb2d8..HEAD` (comparación de extremos, incluye los ajustes de `tasks.md`); la suma aritmética de los cuatro commits individuales (375+220+188+316=1099 inserciones sobre código, más ediciones de `tasks.md` que se solapan entre sí) difiere ligeramente por cómo Git cuenta las ediciones repetidas del mismo bloque de `tasks.md` entre fases — la cifra de `git diff --stat` de extremo a extremo es la autoritativa.
+* Medido con `git diff --shortstat 56fcb2d8..d4aec544`, es decir excluyendo el commit de documentación que cierra la tanda (`acfb1654`), la misma convención usada para el total de las Fases 1-4. El diff de extremo a extremo `56fcb2d8..HEAD`, que sí incluye ese commit de documentación, mide 1191+48=1239 líneas. Los tamaños por commit (`git show --shortstat`) son 375, 220, 188, 316 y 158.
 
 **Aviso para el orquestador**: el total acumulado Fases 1-7 es **2599 de un presupuesto de intento de 2600 líneas** — quedan efectivamente 1 línea de margen. Cualquier ejecución posterior de este intento que toque más código muy probablemente requerirá un nuevo intento (`sdd-attempt`) con presupuesto propio; esto no es una acción mía (no gestiono el ciclo de vida de intentos por instrucción explícita), solo una observación honesta para el ajuste (`settle`/`reset`/`rescope`) que corresponde al orquestador.
 
