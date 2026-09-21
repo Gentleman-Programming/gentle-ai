@@ -138,12 +138,12 @@ Depende de la Fase 1. Independiente de las Fases 2–3.
 
 > **Válvula de alivio:** si el diff real supera holgadamente 400 líneas, separar `digest.go`/`digest_test.go` en una PR inmediatamente posterior (`inc-21/04b-kickoff-digest`), reapuntando la Fase 5 a esa PR en vez de a esta.
 
-- [ ] 4.1 [RED] Escribir `internal/kickoff/ledger_test.go`: anexado preserva registros previos; escritura concurrente desde dos *goroutines* (`sync.WaitGroup`, ejecutar con `-race`) no pierde ningún registro; fichero ausente ⇒ `LoadGates` devuelve ledger vacío sin error.
-- [ ] 4.2 [GREEN] Crear `internal/kickoff/ledger.go`: `AppendGate(changeRoot string, rec GateRecord) error` usando `reviewtransaction.AcquireAuthorityFileLock` (`store_lock.go:54`, `(read-only)`) + `ReplaceFileAtomic` (`store.go:918`, `(read-only)`) + `SyncReviewDirectory` (`store.go:93`, `(read-only)`); `LoadGates(changeRoot string) (GateLedger, error)`.
-- [ ] 4.3 [RED] Escribir `internal/kickoff/digest_test.go`: mismo contenido con CRLF y con LF ⇒ mismo digest; orden de las rutas de entrada no altera el resultado; fichero ausente en la lista ⇒ error nombrado.
-- [ ] 4.4 [GREEN] Crear `internal/kickoff/digest.go`: `ArtifactDigest(paths []string) (string, error)` — SHA-256 estable sobre contenido normalizado (CRLF→LF), en orden de ruta.
-- [ ] 4.5 [REFACTOR] Revisar `ledger.go`/`digest.go`: sin duplicación de la lógica de normalización de fin de línea si ambos la necesitaran; comentarios GoDoc en inglés.
-- [ ] 4.6 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
+- [x] 4.1 [RED] Escribir `internal/kickoff/ledger_test.go`: anexado preserva registros previos; escritura concurrente desde dos *goroutines* (`sync.WaitGroup`, ejecutar con `-race`) no pierde ningún registro; fichero ausente ⇒ `LoadGates` devuelve ledger vacío sin error.
+- [x] 4.2 [GREEN] Crear `internal/kickoff/ledger.go`: `AppendGate(changeRoot string, rec GateRecord) error` usando `reviewtransaction.AcquireAuthorityFileLock` (`store_lock.go:54`, `(read-only)`) + `ReplaceFileAtomic` (`store.go:918`, `(read-only)`) + `SyncReviewDirectory` (`store.go:93`, `(read-only)`); `LoadGates(changeRoot string) (GateLedger, error)`.
+- [x] 4.3 [RED] Escribir `internal/kickoff/digest_test.go`: mismo contenido con CRLF y con LF ⇒ mismo digest; orden de las rutas de entrada no altera el resultado; fichero ausente en la lista ⇒ error nombrado.
+- [x] 4.4 [GREEN] Crear `internal/kickoff/digest.go`: `ArtifactDigest(paths []string) (string, error)` — SHA-256 estable sobre contenido normalizado (CRLF→LF), en orden de ruta.
+- [x] 4.5 [REFACTOR] Revisar `ledger.go`/`digest.go`: sin duplicación de la lógica de normalización de fin de línea si ambos la necesitaran; comentarios GoDoc en inglés.
+- [x] 4.6 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
 
 ## Fase 5: P1e — Máquina de compuertas, mecánica básica (REQ-21.7, REQ-21.8, REQ-21.9, REQ-21.10; D-05, D-08, D-09)
 
