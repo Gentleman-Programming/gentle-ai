@@ -102,7 +102,13 @@ func Build(config []byte, input Input) ([]byte, error) {
 	artifacts := make([]any, 0, len(platforms)+1)
 	for _, platform := range platforms {
 		artifacts = append(artifacts, binaryArtifact{
-			Name: "gentle-ai_" + version + "_" + platform[0] + "_" + platform[1] + ".tar.gz", Kind: "binary",
+			// El nombre del archivo lo da la plantilla {{ .ProjectName }}_... de
+			// .goreleaser.yaml, y este fork se llama axiom. Con el prefijo de
+			// upstream el manifiesto firmado atestiguaba artefactos que el
+			// release no contiene, que es lo contrario de lo que existe para
+			// hacer. El archivo del contrato de proveedor conserva su prefijo
+			// porque su name_template es explicito.
+			Name: "axiom_" + version + "_" + platform[0] + "_" + platform[1] + ".tar.gz", Kind: "binary",
 			GOOS: platform[0], GOARCH: platform[1], CGOEnabled: "0", Trimpath: true,
 		})
 	}
