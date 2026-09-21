@@ -262,11 +262,11 @@ No depende de las Fases 1–14. Se escribe contra el árbol tal y como está hoy
 
 Depende de la Fase 15.
 
-- [ ] 16.1 [RED] Escribir `internal/multirole/roster_test.go`: `sealed` no vacío ⇒ `Source: RosterSourceKickoff`, `Roles: sealed`; si `design.md` declara roles **distintos** de `sealed`, `Conflict` se puebla con el detalle y el roster sellado sigue mandando (nunca se resuelve en silencio); `sealed` vacío ⇒ `ResolveRoster` delega en `DetectRoles` y clasifica el resultado como `RosterSourceDesign` o `RosterSourceCompatibility` según corresponda; con `sealed` vacío, el resultado es **idéntico** al que devolvería `DetectRoles` directamente (test de equivalencia, no solo de forma).
-- [ ] 16.2 [GREEN] Crear `internal/multirole/roster.go`: `RosterSource`, `Roster`, `RosterConflict`, `ResolveRoster(sealed []RoleAssignment, designPath string, wsConfig *workspace.WorkspaceConfig) (Roster, error)`, implementando exactamente las reglas de 16.1.
-- [ ] 16.3 [GREEN] Modificar `cmd/axiom/main.go`: `runRoleList` (`:732`), `runRoleStatus` (`:783`) y `runRoleBarrier` (`:855`) pasan de invocar `DetectRoles` directamente a invocar `ResolveRoster`, mostrando `Source` y `Conflict` cuando `Conflict != nil`.
-- [ ] 16.4 [REFACTOR] Confirmar que `ResolveRoster` no importa nada de `internal/kickoff` (la dirección de la arista es `kickoff → multirole`, nunca al revés — D-06 lo fija explícitamente para evitar un ciclo).
-- [ ] 16.5 [Verificación de cierre] V-A, V-B (`./internal/multirole/... ./cmd/axiom/...`), V-C, V-D, V-E (caracterización REQ-1.1 en verde).
+- [x] 16.1 [RED] Escribir `internal/multirole/roster_test.go`: `sealed` no vacío ⇒ `Source: RosterSourceKickoff`, `Roles: sealed`; si `design.md` declara roles **distintos** de `sealed`, `Conflict` se puebla con el detalle y el roster sellado sigue mandando (nunca se resuelve en silencio); `sealed` vacío ⇒ `ResolveRoster` delega en `DetectRoles` y clasifica el resultado como `RosterSourceDesign` o `RosterSourceCompatibility` según corresponda; con `sealed` vacío, el resultado es **idéntico** al que devolvería `DetectRoles` directamente (test de equivalencia, no solo de forma).
+- [x] 16.2 [GREEN] Crear `internal/multirole/roster.go`: `RosterSource`, `Roster`, `RosterConflict`, `ResolveRoster(sealed []RoleAssignment, designPath string, wsConfig *workspace.WorkspaceConfig) (Roster, error)`, implementando exactamente las reglas de 16.1.
+- [x] 16.3 [GREEN] Modificar `cmd/axiom/main.go`: `runRoleList` (`:732`), `runRoleStatus` (`:783`) y `runRoleBarrier` (`:855`) pasan de invocar `DetectRoles` directamente a invocar `ResolveRoster`, mostrando `Source` y `Conflict` cuando `Conflict != nil`.
+- [x] 16.4 [REFACTOR] Confirmar que `ResolveRoster` no importa nada de `internal/kickoff` (la dirección de la arista es `kickoff → multirole`, nunca al revés — D-06 lo fija explícitamente para evitar un ciclo).
+- [x] 16.5 [Verificación de cierre] V-A, V-B (`./internal/multirole/... ./cmd/axiom/...`), V-C, V-D, V-E (caracterización REQ-1.1 en verde).
 
 ## Fase 17: P5a — Construcción del relevo de integración (REQ-21.14; D-11)
 
