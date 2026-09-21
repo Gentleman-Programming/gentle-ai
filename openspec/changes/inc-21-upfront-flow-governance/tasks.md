@@ -118,10 +118,10 @@ Aditivo puro, sin consumidores todavía. Paquete nuevo `internal/kickoff`.
 
 Depende de la Fase 1.
 
-- [ ] 2.1 [RED] Escribir `internal/kickoff/seal_test.go`: primer sellado escribe y devuelve el valor sellado; segundo sellado con contenido **distinto** no escribe y devuelve el ganador ya escrito; fichero preexistente ilegible ⇒ error nombrado; el fichero temporal no sobrevive al retorno (ni en éxito ni en colisión). Usar `t.TempDir()`.
-- [ ] 2.2 [GREEN] Crear `internal/kickoff/seal.go`: `Seal(changeRoot string, k Kickoff) (Kickoff, bool, error)` usando `reviewtransaction.PublishFileNoReplace` (`internal/reviewtransaction/store.go:913`, `(read-only)`) y relectura del ganador ante `os.ErrExist`, calcado del patrón de `ensureChangeInstanceMarker` (`internal/sddstatus/edit_authority_consent.go:94-125`, `(read-only)`). `Load(changeRoot string) (*Kickoff, error)`: ausencia de fichero ⇒ `nil, nil`, nunca error.
-- [ ] 2.3 [REFACTOR] Confirmar que `Seal` no dependa de estado global ni de reloj salvo `sealed_at`, inyectable para test.
-- [ ] 2.4 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
+- [x] 2.1 [RED] Escribir `internal/kickoff/seal_test.go`: primer sellado escribe y devuelve el valor sellado; segundo sellado con contenido **distinto** no escribe y devuelve el ganador ya escrito; fichero preexistente ilegible ⇒ error nombrado; el fichero temporal no sobrevive al retorno (ni en éxito ni en colisión). Usar `t.TempDir()`.
+- [x] 2.2 [GREEN] Crear `internal/kickoff/seal.go`: `Seal(changeRoot string, k Kickoff) (Kickoff, bool, error)` usando `reviewtransaction.PublishFileNoReplace` (`internal/reviewtransaction/store.go:913`, `(read-only)`) y relectura del ganador ante `os.ErrExist`, calcado del patrón de `ensureChangeInstanceMarker` (`internal/sddstatus/edit_authority_consent.go:94-125`, `(read-only)`). `Load(changeRoot string) (*Kickoff, error)`: ausencia de fichero ⇒ `nil, nil`, nunca error.
+- [x] 2.3 [REFACTOR] Confirmar que `Seal` no dependa de estado global ni de reloj salvo `sealed_at`, inyectable para test.
+- [x] 2.4 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
 
 ## Fase 3: P1c — Regla de retro-sellado (REQ-21.4; D-01 a D-04; §8.1 del diseño; O-1 ya resuelta)
 
