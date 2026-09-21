@@ -1443,23 +1443,20 @@ func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress Tas
 	return reasons
 }
 
-// governanceBlockedReason names the first pending or rejected gate in fixed
-// evaluation order (design.md S4.1's machine.go already returns
-// Governance.Gates in that order), mirroring exactly which gate
-// governanceNextRecommended used to choose its route -- BlockedReasons must
-// never name a different gate than the one nextRecommended is waiting on.
-// A rejected gate's reason is surfaced verbatim (D-09: "the exact registered
-// rejection reason"), never paraphrased.
+// governanceBlockedReason names the same gate firstOpenGate would choose,
+// so BlockedReasons never names a different gate than the one
+// nextRecommended is waiting on. A rejected gate's reason is surfaced
+// verbatim (D-09: "the exact registered rejection reason"), never
+// paraphrased.
 func governanceBlockedReason(governance *Governance) (string, bool) {
-	for _, gate := range governance.Gates {
-		switch gate.Status {
-		case "pending":
-			return fmt.Sprintf("Block review gate %q is pending a decision: run `axiom sdd gate record --gate %s --decision approved|rejected ...` to continue.", gate.Key, gate.Key), true
-		case "rejected":
-			return fmt.Sprintf("Block review gate %q was rejected: %s", gate.Key, gate.Reason), true
-		}
+	gate, ok := firstOpenGate(governance)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	if gate.Status == "rejected" {
+		return fmt.Sprintf("Block review gate %q was rejected: %s", gate.Key, gate.Reason), true
+	}
+	return fmt.Sprintf("Block review gate %q is pending a decision: run `axiom sdd gate record --gate %s --decision approved|rejected ...` to continue.", gate.Key, gate.Key), true
 }
 
 // openSpecSpecsLayoutReason names the change-local layout when the OpenSpec
@@ -1557,28 +1554,24 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, go
 	return "resolve-blockers"
 }
 
-// governanceNextRecommended inspects governance.Gates in fixed evaluation
-// order (machine.go's own documented order: spec -> design -> tasks ->
-// role-apply:<role...> -> integration) and returns the route for the FIRST
-// gate that is not yet approved: "await-gate" for a pending decision
-// (D-09), or that gate's owning phase for a rejection whose digest still
-// matches the current artifact (remediation reopens it to pending
-// automatically -- D-08 -- so a rejected entry here always means genuine,
-// unremediated rejection). An all-approved or empty gate list reports no
-// override, letting the caller's ordinary routing stand.
+// governanceNextRecommended returns the route for firstOpenGate's result:
+// "await-gate" for a pending decision (D-09), or that gate's owning phase
+// for a rejection whose digest still matches the current artifact
+// (remediation reopens it to pending automatically -- D-08 -- so a
+// rejected entry here always means genuine, unremediated rejection). An
+// all-approved or empty gate list reports no override, letting the
+// caller's ordinary routing stand.
 func governanceNextRecommended(governance *Governance) (string, bool) {
-	for _, gate := range governance.Gates {
-		switch gate.Status {
-		case "pending":
-			return "await-gate", true
-		case "rejected":
-			if phase, ok := gateOwningPhase(gate); ok {
-				return phase, true
-			}
-			return "await-gate", true
+	gate, ok := firstOpenGate(governance)
+	if !ok {
+		return "", false
+	}
+	if gate.Status == "rejected" {
+		if phase, ok := gateOwningPhase(gate); ok {
+			return phase, true
 		}
 	}
-	return "", false
+	return "await-gate", true
 }
 
 // gateOwningPhase names the SDD phase (or role apply) whose artifact a gate
@@ -1689,8 +1682,36 @@ func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
 			fmt.Sprintf("- This change is already archived%s; no phase remains and nothing is blocked.", location),
 			fmt.Sprintf("- Start new work with a fresh change: `gentle-ai sdd-status --cwd %s` lists what is active.", pathquote.Quote(status.ActionContext.WorkspaceRoot)),
 		}, true
+	case "await-gate":
+		return awaitGateRoutingInstructions(status), true
 	default:
 		return nil, false
+	}
+}
+
+// awaitGateRoutingInstructions names the two exact executable invocations
+// for the gate firstOpenGate identifies (design.md S4.3, task 14.2): one to
+// inspect its current state, one to record a decision. Both name the real
+// change and gate key; only --decision and --reason are left for the human
+// to fill in, exactly as governanceBlockedReason's own guidance already
+// does for the pending case.
+func awaitGateRoutingInstructions(status Status) []string {
+	change := ""
+	if status.ChangeName != nil {
+		change = *status.ChangeName
+	}
+	gateKey := ""
+	if status.Governance != nil {
+		if gate, ok := firstOpenGate(status.Governance); ok {
+			gateKey = string(gate.Key)
+		}
+	}
+	cwd := pathquote.Quote(status.ActionContext.WorkspaceRoot)
+	return []string{
+		"",
+		"### Next Governance Gate Decision",
+		fmt.Sprintf("- Inspect the pending gate: `%s--cwd %s --change %s`.", gateShowInvocationPrefix, cwd, change),
+		fmt.Sprintf("- Record the decision: `%s--cwd %s --change %s --gate %s --decision approved|rejected --reason <your-reason>`.", gateRecordInvocationPrefix, cwd, change, gateKey),
 	}
 }
 

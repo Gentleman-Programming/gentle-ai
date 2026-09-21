@@ -52,6 +52,13 @@ const (
 	// decision yet always re-enters through native SDD status, never
 	// through a review or edit-authority command.
 	gateStatusInvocationPrefix = "axiom sdd status "
+
+	// gateShowInvocationPrefix names the read-only inspection verb for one
+	// gate's current state and history, distinct from the decision-recording
+	// gateRecordInvocationPrefix. Both prefixes share the single "axiom sdd
+	// gate" root so a caller building either invocation never invents a
+	// third spelling of the same verb family.
+	gateShowInvocationPrefix = "axiom sdd gate show "
 )
 
 // SDDGovernanceGateResult is the typed blocking question one open block
@@ -200,6 +207,23 @@ type GovernanceRoster struct {
 // governanceRosterSourceKickoff is the only GovernanceRoster.Source value
 // this slice ever produces.
 const governanceRosterSourceKickoff = "kickoff"
+
+// firstOpenGate returns the first gate in governance.Gates whose decision
+// is not yet "approved" -- pending or genuinely rejected -- in the fixed
+// evaluation order kickoff.EvaluateGates already returns them in (machine.go:
+// spec -> design -> tasks -> role-apply:<role...> -> integration). Every
+// governance-aware routing and reporting function in this package
+// (resolveNextRecommended, artifactBlockedReasons,
+// nonPhaseRoutingInstructions) shares this single lookup, so none of them
+// can ever name a different gate than the others are reporting on.
+func firstOpenGate(governance *Governance) (kickoff.GateState, bool) {
+	for _, gate := range governance.Gates {
+		if gate.Status != "approved" {
+			return gate, true
+		}
+	}
+	return kickoff.GateState{}, false
+}
 
 // loadGovernance reads the sealed kickoff and its gate ledger for
 // changeRoot and evaluates the current state of every governed gate. It

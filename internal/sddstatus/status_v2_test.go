@@ -1,8 +1,12 @@
 package sddstatus
 
 import (
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 )
 
 func TestProjectStatusV2RejectsUnsupportedValues(t *testing.T) {
@@ -65,5 +69,239 @@ func TestStatusRenderersEmbedOnlyStatusV2Projection(t *testing.T) {
 				t.Fatalf("%s omitted v2 projected SDD status:\n%s", name, output)
 			}
 		})
+	}
+}
+
+// --- INC-21 Phase 14 (P3d): v2 projection and "await-gate" routing
+// (design.md S4.3, S5.4, D-09; spec.md REQ-21.7 to REQ-21.10's BDD
+// scenarios that produce an observable route). Every fixture here builds
+// through the public Resolve pipeline rather than hand-assembling a
+// Status, so these tests exercise the real translation Phase 13 wired,
+// projected through ProjectStatusV2.
+
+// TestProjectStatusV2GovernancePresentWithSealAndPendingGate covers
+// REQ-21.7's first scenario at the v2 boundary: a sealed, checkpointed
+// change with no gate decision yet projects a non-nil Governance carrying
+// kickoff, gates, and roster.
+func TestProjectStatusV2GovernancePresentWithSealAndPendingGate(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-pending"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	projection, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatalf("ProjectStatusV2() error = %v", err)
+	}
+	if projection.Governance == nil {
+		t.Fatal("StatusV2Projection.Governance = nil, want a populated governance block for a sealed checkpointed change")
+	}
+	if projection.Governance.Kickoff.Schema != kickoff.KickoffSchemaV1 {
+		t.Fatalf("Governance.Kickoff.Schema = %q, want %q", projection.Governance.Kickoff.Schema, kickoff.KickoffSchemaV1)
+	}
+	if projection.Governance.Kickoff.ExecutionStyle != string(kickoff.ExecutionCheckpointed) {
+		t.Fatalf("Governance.Kickoff.ExecutionStyle = %q, want %q", projection.Governance.Kickoff.ExecutionStyle, kickoff.ExecutionCheckpointed)
+	}
+	foundPendingSpec := false
+	for _, g := range projection.Governance.Gates {
+		if g.Key == string(kickoff.GateSpec) && g.Status == "pending" {
+			foundPendingSpec = true
+		}
+	}
+	if !foundPendingSpec {
+		t.Fatalf("Governance.Gates = %+v, want a pending spec gate", projection.Governance.Gates)
+	}
+	if projection.Governance.Roster.Source != governanceRosterSourceKickoff ||
+		len(projection.Governance.Roster.Roles) != 1 || projection.Governance.Roster.Roles[0] != "fullstack" {
+		t.Fatalf("Governance.Roster = %+v, want {kickoff [fullstack]}", projection.Governance.Roster)
+	}
+}
+
+// TestProjectStatusV2GovernanceAbsentWithoutSealOmitsJSONKey repeats Phase
+// 11's control-gate assertion at the v2 boundary: an unsealed change never
+// names "governance" in the serialized document (omitempty), not merely a
+// nil Go field.
+func TestProjectStatusV2GovernanceAbsentWithoutSealOmitsJSONKey(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-unsealed"
+	seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	projection, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatalf("ProjectStatusV2() error = %v", err)
+	}
+	if projection.Governance != nil {
+		t.Fatalf("StatusV2Projection.Governance = %+v, want nil for an unsealed change", projection.Governance)
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), `"governance"`) {
+		t.Fatalf("serialized StatusV2Projection names \"governance\" for an unsealed change: %s", encoded)
+	}
+}
+
+// TestProjectStatusV2GovernanceAbsentForContinuousSeal is REQ-21.7's second
+// scenario at the v2 boundary: a continuous-execution seal chains phases
+// without ever presenting a gate, so Governance stays nil there too, not
+// only for a change with no seal at all.
+func TestProjectStatusV2GovernanceAbsentForContinuousSeal(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-continuous"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionContinuous)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	projection, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatalf("ProjectStatusV2() error = %v", err)
+	}
+	if projection.Governance != nil {
+		t.Fatalf("StatusV2Projection.Governance = %+v, want nil for a continuous-execution seal (REQ-21.7)", projection.Governance)
+	}
+	if projection.NextRecommended != "apply" {
+		t.Fatalf("NextRecommended = %q, want apply: continuous mode chains phases without any gate (REQ-21.7)", projection.NextRecommended)
+	}
+}
+
+// TestProjectStatusV2GovernanceSurfacesRejectedGateReason proves the wire
+// shape carries D-09's exact registered rejection reason, not a paraphrase,
+// through the v2 gateV2 projection.
+func TestProjectStatusV2GovernanceSurfacesRejectedGateReason(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-rejected"
+	changeRoot := seedReadyChange(t, root, changeName, "- [x] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	specPath := filepath.Join(changeRoot, "specs", "auth", "spec.md")
+	digest, err := kickoff.ArtifactDigest([]string{specPath})
+	if err != nil {
+		t.Fatalf("kickoff.ArtifactDigest() error = %v", err)
+	}
+	const rejectionReason = "Falta cubrir el caso de sesion expirada"
+	if err := kickoff.AppendGate(changeRoot, kickoff.GateRecord{
+		Gate: kickoff.GateSpec, Decision: kickoff.DecisionRejected, Reason: rejectionReason,
+		ArtifactDigest: digest, Actor: "reviewer",
+	}); err != nil {
+		t.Fatalf("kickoff.AppendGate() error = %v", err)
+	}
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	projection, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatalf("ProjectStatusV2() error = %v", err)
+	}
+	if projection.NextRecommended != "spec" {
+		t.Fatalf("NextRecommended = %q, want spec", projection.NextRecommended)
+	}
+	found := false
+	for _, g := range projection.Governance.Gates {
+		if g.Key == string(kickoff.GateSpec) {
+			found = true
+			if g.Status != "rejected" || g.Reason != rejectionReason {
+				t.Fatalf("gateV2 for spec = %+v, want status=rejected reason=%q", g, rejectionReason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Governance.Gates has no entry for spec")
+	}
+}
+
+// TestProjectStatusV2GovernanceApprovedGatesDoNotOverrideRouting is
+// REQ-21.8/21.9/21.10's "approved habilita la siguiente fase" pattern: once
+// spec, design, and tasks are all approved and no role-apply gate has
+// opened yet, ordinary routing resumes exactly as it would without
+// governance -- an approved gate must never block or reroute.
+func TestProjectStatusV2GovernanceApprovedGatesDoNotOverrideRouting(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-approved"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	for _, approval := range []struct {
+		gate kickoff.GateKey
+		path string
+	}{
+		{kickoff.GateSpec, filepath.Join(changeRoot, "specs", "auth", "spec.md")},
+		{kickoff.GateDesign, filepath.Join(changeRoot, "design.md")},
+		{kickoff.GateTasks, filepath.Join(changeRoot, "tasks.md")},
+	} {
+		digest, err := kickoff.ArtifactDigest([]string{approval.path})
+		if err != nil {
+			t.Fatalf("kickoff.ArtifactDigest(%s) error = %v", approval.path, err)
+		}
+		if err := kickoff.AppendGate(changeRoot, kickoff.GateRecord{
+			Gate: approval.gate, Decision: kickoff.DecisionApproved, Reason: "ok", ArtifactDigest: digest, Actor: "reviewer",
+		}); err != nil {
+			t.Fatalf("kickoff.AppendGate(%s) error = %v", approval.gate, err)
+		}
+	}
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	projection, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatalf("ProjectStatusV2() error = %v", err)
+	}
+	// role-apply:fullstack has not opened yet (its one task is still
+	// pending), so no gate is open at all: ordinary routing must resume.
+	if projection.NextRecommended != "apply" {
+		t.Fatalf("NextRecommended = %q, want apply: three approved gates must never block or reroute once decided", projection.NextRecommended)
+	}
+}
+
+// TestNonPhaseRoutingInstructionsPrintsAwaitGateInvocations is task 14.1's
+// last required case: "await-gate" gains its own case in
+// nonPhaseRoutingInstructions, printing the two exact executable
+// invocations for the specific gate currently open -- one to inspect it,
+// one to record a decision -- exactly as the existing "select-change" case
+// already does for its own two re-entry commands.
+func TestNonPhaseRoutingInstructionsPrintsAwaitGateInvocations(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-instructions"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "await-gate" {
+		t.Fatalf("NextRecommended = %q, want await-gate (fixture precondition)", status.NextRecommended)
+	}
+	if !statusV2NextRecommended(status.NextRecommended) {
+		t.Fatal("statusV2NextRecommended(await-gate) = false, want true: this is an additive v2 enum value")
+	}
+
+	instructions, ok := nonPhaseRoutingInstructions(status)
+	if !ok {
+		t.Fatal("nonPhaseRoutingInstructions() ok = false, want true for await-gate")
+	}
+	joined := strings.Join(instructions, "\n")
+	for _, want := range []string{
+		"axiom sdd gate show", "axiom sdd gate record",
+		"--change " + changeName, "--gate spec",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("instructions = %v, want containing %q", instructions, want)
+		}
 	}
 }
