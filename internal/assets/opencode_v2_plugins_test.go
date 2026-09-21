@@ -92,11 +92,23 @@ const root=await fs.mkdtemp(path.join(os.tmpdir(),'catalog-v2-'));process.env.HO
 let signal,wake;const queue=[];let revision=0;let subscribed=false;
 const location={directory:'/project',workspaceID:'one'};
 const ctx={location,model:{async list(){if(!subscribed)throw Error("snapshot before subscription");return {location:{directory:location.directory},data:[{providerID:'openai',id:'model',variants:[{id:revision?'high':'low'}]}]}}},event:{subscribe(opts){signal=opts.signal;signal.addEventListener('abort',()=>wake?.());return {[Symbol.asyncIterator]:async function*(){subscribed=true;while(!signal.aborted){if(!queue.length)await new Promise(r=>wake=r);while(queue.length)yield queue.shift()}}}}}};
-const cleanup=await plugin.setup(ctx);const tick=()=>new Promise(r=>setTimeout(r,30));await tick();
+// #4846: a fixed 30ms sleep assumes machine speed, not the plugin's async
+// cache-write behavior. Windows runners are ~20x slower because Defender scans
+// every temp write, so poll the real condition until a bounded deadline instead
+// of racing a hard-coded delay. The deadline stays well inside the package
+// timeout (10m default; the Windows shard passes -timeout=30m), and a genuine
+// hang still fails with a diagnostic naming the condition that never became true.
+const waitFor=async(predicate,{timeout,interval,label})=>{const deadline=Date.now()+timeout;let last;for(;;){try{if(await predicate())return}catch(error){last=error}if(Date.now()>=deadline)throw Error(label+' did not become true within '+timeout+'ms'+(last?': '+last:''));await new Promise(r=>setTimeout(r,interval))}};
+const cleanup=await plugin.setup(ctx);
 const dir=path.join(root,'.gentle-ai','cache','opencode-v2');const read=async()=>JSON.parse(await fs.readFile(path.join(dir,(await fs.readdir(dir))[0]),'utf8'));
-if((await read()).openai.model[0]!=='low')throw Error('catalog');revision=1;queue.push({type:'model.updated',location});wake?.();await tick();if((await read()).openai.model[0]!=='high')throw Error('refresh');
+await waitFor(async()=>(await read()).openai.model[0]==='low',{timeout:30000,interval:25,label:'initial catalog cache write'});
+if((await read()).openai.model[0]!=='low')throw Error('catalog');
+revision=1;queue.push({type:'model.updated',location});wake?.();
+await waitFor(async()=>(await read()).openai.model[0]==='high',{timeout:30000,interval:25,label:'catalog refresh to high'});
+if((await read()).openai.model[0]!=='high')throw Error('refresh');
 if(await fs.stat(path.join(root,'.gentle-ai','cache','model-variants.json')).then(()=>true,()=>false))throw Error('legacy cache overwritten');await cleanup();if(!signal.aborted)throw Error('catalog disposal');
-const second=await plugin.setup({location:{...location,workspaceID:'two'},model:ctx.model,event:{subscribe(opts){return {[Symbol.asyncIterator]:async function*(){await new Promise(r=>opts.signal.addEventListener('abort',r))}}}}});await tick();
+const second=await plugin.setup({location:{...location,workspaceID:'two'},model:ctx.model,event:{subscribe(opts){return {[Symbol.asyncIterator]:async function*(){await new Promise(r=>opts.signal.addEventListener('abort',r))}}}}});
+await waitFor(async()=>(await fs.readdir(dir)).filter(name=>name.endsWith('.json')).length===2,{timeout:30000,interval:25,label:'second workspace cache entry'});
 if((await fs.readdir(dir)).length!==2)throw Error('workspace caches collide');await second();await fs.rm(root,{recursive:true});
 `)
 	runV2Plugin(t, "skill-registry", `
