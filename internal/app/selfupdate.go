@@ -13,6 +13,7 @@ import (
 	"github.com/mattn/go-isatty"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
@@ -181,14 +182,9 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	// JSON, permission denied) means an existing file is present — do not
 	// overwrite it and risk dropping unrelated persisted fields.
 	if homeDir != "" {
-		s, readErr := state.Read(homeDir)
-		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			// File exists but is unreadable/corrupt — skip this round to avoid
-			// clobbering installed_agents, model assignments, etc.
-		} else {
-			s.PendingSync = true
-			_ = state.Write(homeDir, s)
-		}
+		// Re-read the latest state inside the canonical lock so a concurrent
+		// writer's changes survive the PendingSync set.
+		_ = markPendingSyncAfterSelfUpdate(homeDir)
 	}
 
 	return restartAfterGentleAIUpgrade(target.LatestVersion, stdout)
@@ -201,6 +197,22 @@ func gentleAIUpgradeSucceeded(report upgrade.UpgradeReport) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// markPendingSyncAfterSelfUpdate sets PendingSync under the canonical
+// install-state lock. It re-reads the latest state inside the lock so changes
+// written by a concurrent writer are preserved. When the state file exists
+// but is unreadable/corrupt (any read error other than ErrNotExist), it does
+// nothing to avoid clobbering installed_agents, model assignments, etc.
+func markPendingSyncAfterSelfUpdate(homeDir string) error {
+	return statecoord.WithLock(homeDir, func() error {
+		s, readErr := state.Read(homeDir)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return nil
+		}
+		s.PendingSync = true
+		return state.Write(homeDir, s)
+	})
 }
 
 func restartAfterGentleAIUpgrade(latestVersion string, stdout io.Writer) error {

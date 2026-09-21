@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -210,19 +211,101 @@ func installGentleLogo(homeDir string) (Result, error) {
 	pluginPath := filepath.Join(opencodeDir, "tui-plugins", gentleLogoPluginFile)
 	tuiPath := filepath.Join(opencodeDir, "tui.json")
 
-	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
+	prior, err := capturePriorFile(pluginPath)
 	if err != nil {
+		return Result{}, fmt.Errorf("capture prior Gentle Logo TUI plugin state: %w", err)
+	}
+	tuiPrior, err := capturePriorFile(tuiPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("capture prior OpenCode TUI config state: %w", err)
+	}
+
+	pluginWrite, err := writeFileAtomicFn(pluginPath, []byte(gentleLogoPluginSource), 0o644)
+	if err != nil {
+		// WriteFileAtomic can publish the replacement and still return an
+		// error (#1676), so compensate the source before returning;
+		// tui.json has not been touched at this point.
+		restoreErr := prior.restore(pluginPath)
+		if restoreErr != nil {
+			return Result{}, errors.Join(
+				fmt.Errorf("write Gentle Logo TUI plugin: %w", err),
+				fmt.Errorf("roll back Gentle Logo TUI plugin, the previous state could not be restored: %w", restoreErr),
+			)
+		}
 		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
 	}
-	tuiChanged, err := ensureTUIPlugin(tuiPath, pluginPath)
+	tuiChanged, err := ensureTUIPluginFn(tuiPath, pluginPath)
 	if err != nil {
-		return Result{}, err
+		// WriteFileAtomic can report the replacement as landed even when it
+		// returns an error (#1676), so compensate both files unconditionally;
+		// restoring a tui.json write that never landed is a no-op.
+		restoreErr := prior.restore(pluginPath)
+		tuiRestoreErr := tuiPrior.restore(tuiPath)
+		if restoreErr != nil || tuiRestoreErr != nil {
+			joined := []error{fmt.Errorf("register Gentle Logo TUI plugin: %w", err)}
+			if restoreErr != nil {
+				joined = append(joined, fmt.Errorf("roll back Gentle Logo TUI plugin, the previous state could not be restored: %w", restoreErr))
+			}
+			if tuiRestoreErr != nil {
+				joined = append(joined, fmt.Errorf("roll back OpenCode TUI config, the previous state could not be restored: %w", tuiRestoreErr))
+			}
+			return Result{}, errors.Join(joined...)
+		}
+		return Result{}, fmt.Errorf("register Gentle Logo TUI plugin: %w", err)
 	}
 
 	return Result{
 		Changed: pluginWrite.Changed || tuiChanged,
 		Files:   []string{pluginPath, tuiPath},
 	}, nil
+}
+
+// ensureTUIPluginFn is a package-level seam so tests can inject a failing
+// registration, mirroring the syncDirFn/renameFn seams in filemerge.
+var ensureTUIPluginFn = ensureTUIPlugin
+
+// writeFileAtomicFn is the source-write seam for installGentleLogo, so tests
+// can exercise the landed-with-error window of WriteFileAtomic (#1676).
+var writeFileAtomicFn = filemerge.WriteFileAtomic
+
+// priorFile captures the prior on-disk state of a file so a multi-step install
+// can compensate as one recoverable operation (#1678): a newly created file is
+// removed and a pre-existing file is restored byte-exactly, including its mode.
+type priorFile struct {
+	existed bool
+	data    []byte
+	mode    os.FileMode
+}
+
+func capturePriorFile(path string) (priorFile, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return priorFile{}, nil
+		}
+		return priorFile{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return priorFile{}, err
+	}
+	return priorFile{existed: true, data: data, mode: info.Mode()}, nil
+}
+
+// restore puts back the captured bytes through the same durable write path used
+// by installs, or removes the file when it did not previously exist. Removing an
+// already-absent file is not an error.
+func (p priorFile) restore(path string) error {
+	if !p.existed {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if _, err := filemerge.WriteFileAtomic(path, p.data, p.mode.Perm()); err != nil {
+		return err
+	}
+	return nil
 }
 
 func ensureTUIPlugin(path, pkg string) (bool, error) {
@@ -251,7 +334,10 @@ func ensureTUIPlugin(path, pkg string) (bool, error) {
 	out = append(out, '\n')
 	wr, err := filemerge.WriteFileAtomic(path, out, 0o644)
 	if err != nil {
-		return false, err
+		// WriteFileAtomic can publish the replacement and still return an error
+		// (#1676), so report wr.Changed truthfully alongside the error instead
+		// of pretending nothing happened.
+		return wr.Changed, err
 	}
 	return wr.Changed, nil
 }

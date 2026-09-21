@@ -418,7 +418,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	if session.binding.Role != "" {
 		closure, err := openCodeTransportCaptureRole(ctx, session.root, store, record, session.binding.Role, hostOutput)
 		if err != nil {
-			return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_provider_role_result_refused")
+			return openCodeTransportEnvelope{}, openCodeTransportCaptureRefusal(err)
 		}
 		if closure != nil {
 			if session.binding.Role == reviewerprovider.RoleRefuter {
@@ -426,7 +426,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 			}
 			payload, err := json.Marshal(closure)
 			if err != nil {
-				return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_provider_role_result_refused")
+				return openCodeTransportEnvelope{}, openCodeTransportCaptureRefusal(err)
 			}
 			output := string(payload)
 			return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
@@ -773,6 +773,27 @@ func boundedOpenCodeTaskPayload(payload []byte) ([]byte, error) {
 
 func openCodeTransportFailure(code string) error {
 	return fmt.Errorf("%s: OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying", code)
+}
+
+// openCodeTransportCaptureRefusalCause classifies a provider-role capture
+// failure into a bounded cause code. The rendered refusal never re-renders raw
+// admission text or reviewer payload bytes: every cause is a fixed enum member
+// (#4599). An inconclusive verdict keeps its native retry ladder, so operators
+// can distinguish "retry the slot STATUS reoffers" from "this payload can
+// never be admitted as-is".
+func openCodeTransportCaptureRefusalCause(err error) string {
+	if errors.Is(err, errReviewTargetedValidationInconclusive) {
+		return "targeted_validation_inconclusive"
+	}
+	var admission *reviewProviderAdmissionError
+	if errors.As(err, &admission) {
+		return "validator_result_not_admissible"
+	}
+	return "role_capture_failed"
+}
+
+func openCodeTransportCaptureRefusal(err error) error {
+	return fmt.Errorf("opencode_provider_role_result_refused (cause: %s): OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying", openCodeTransportCaptureRefusalCause(err))
 }
 
 func openCodeTransportAuthorityUnavailable(cause error) error {

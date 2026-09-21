@@ -619,6 +619,17 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	return result, native, nil
 }
 
+// reviewProviderAdmissionError marks an error raised while admitting provider
+// role bytes against the native result contract. It is transparent: Error()
+// returns the wrapped text unchanged and Unwrap preserves errors.Is/As, so
+// existing callers and tests see identical behavior. Transport boundaries use
+// the marker to classify refusals into bounded cause codes without ever
+// re-rendering raw admission text or reviewer payload bytes (#4599).
+type reviewProviderAdmissionError struct{ err error }
+
+func (e *reviewProviderAdmissionError) Error() string { return e.err.Error() }
+func (e *reviewProviderAdmissionError) Unwrap() error { return e.err }
+
 func reviewProviderCloseTargetedValidatorRaw(ctx context.Context, repo string, store reviewtransaction.CompactStore, state reviewtransaction.CompactState, revision string, raw []byte) (facadeValidationResult, reviewtransaction.ScopedValidationResult, *reviewLastEventClosureResult, error) {
 	correction, err := reviewProviderTargetedValidatorCorrection(ctx, repo, state)
 	if err != nil {
@@ -638,7 +649,7 @@ func reviewProviderCloseTargetedValidatorRaw(ctx context.Context, repo string, s
 				return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, ledgerErr
 			}
 		}
-		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, err
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, nil, &reviewProviderAdmissionError{err}
 	}
 	closure, err := reviewProviderCaptureAdmittedTargetedValidatorResult(ctx, repo, store, state, correction, request, result, native)
 	return result, native, closure, err

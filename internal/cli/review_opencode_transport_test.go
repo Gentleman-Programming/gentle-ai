@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1034,4 +1035,59 @@ func TestOpenCodeReviewTransportBoundsCompletionWaitForSilentlyDeadHost(t *testi
 		t.Fatalf("completion safety bound fired after %s, want a bounded wait", elapsed)
 	}
 	assertOpenCodeRelayLensUncaptured(t, repo, store, record, lens)
+}
+
+func TestOpenCodeReviewTransportRefusalNamesTypedValidatorCause(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
+	reviewEnabledHome(t)
+	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
+	task := openCodeTargetedValidatorTask(t, repo, lineage)
+	issued, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: task.Prompt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A schema-valid Task wrapper whose reviewer payload is not an admissible
+	// targeted-validator result: the refusal must name the typed cause instead
+	// of collapsing into the opaque primary code alone (#4599).
+	output := "<task id=\"t1\" state=\"completed\">\n<task_result>\n{\"hello\":\"world\"}\n</task_result>\n</task>"
+	_, err = openCodeTransportComplete(t.Context(), issued, openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: issued.nonce, Output: &output,
+	})
+	assertOpenCodeTransportRefusal(t, err, []string{
+		"opencode_provider_role_result_refused",
+		"cause: validator_result_not_admissible",
+	})
+}
+
+func TestOpenCodeTransportCaptureRefusalCause(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "inconclusive verdict keeps its retry ladder", err: fmt.Errorf("wrapped: %w", errReviewTargetedValidationInconclusive), want: "targeted_validation_inconclusive"},
+		// Production nesting: reviewProviderCloseTargetedValidatorRaw records the
+		// inconclusive attempt and then wraps the sentinel in the admission
+		// marker, so the classifier's errors.Is-before-errors.As order is
+		// load-bearing, not merely defensive.
+		{name: "admission-wrapped inconclusive still classifies inconclusive", err: &reviewProviderAdmissionError{err: fmt.Errorf("wrapped: %w", errReviewTargetedValidationInconclusive)}, want: "targeted_validation_inconclusive"},
+		{name: "admission contract refusal", err: &reviewProviderAdmissionError{err: errors.New("provider targeted validator result requires passed checks and an explicit follow_ups array")}, want: "validator_result_not_admissible"},
+		{name: "store layer failure", err: errors.New("compact store write failed"), want: "role_capture_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := openCodeTransportCaptureRefusalCause(test.err); got != test.want {
+				t.Fatalf("cause = %q, want %q", got, test.want)
+			}
+			refusal := openCodeTransportCaptureRefusal(test.err)
+			for _, fragment := range []string{"opencode_provider_role_result_refused", "cause: " + test.want, "--next-transition"} {
+				if !strings.Contains(refusal.Error(), fragment) {
+					t.Fatalf("refusal = %v, want fragment %q", refusal, fragment)
+				}
+			}
+		})
+	}
 }
