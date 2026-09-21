@@ -15,7 +15,7 @@ for name in GITHUB_OUTPUT GITHUB_REF GITHUB_REPOSITORY GITHUB_SHA GH_TOKEN RELEA
   require_env "$name"
 done
 
-[[ "$GITHUB_REPOSITORY" == "Gentleman-Programming/gentle-ai" ]] || die "unexpected repository $GITHUB_REPOSITORY"
+[[ "$GITHUB_REPOSITORY" == "IGutierrezZ/axiom" ]] || die "unexpected repository $GITHUB_REPOSITORY"
 [[ "$GITHUB_REF" == "refs/heads/main" ]] || die "promotion must run from main"
 [[ "$RELEASE_ENVIRONMENT_POLICY_ID" =~ ^[1-9][0-9]*$ ]] || die "release environment policy ID is invalid"
 

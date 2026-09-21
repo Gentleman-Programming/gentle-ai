@@ -19,7 +19,7 @@ const (
 	// trigger release.yml, so building one by hand is the documented path, and a
 	// local checkout knows no tag, run or workflow it could honestly name.
 	localSchema         = "gentle-ai.release-provenance/local-build"
-	repository          = "Gentleman-Programming/gentle-ai"
+	repository          = "IGutierrezZ/axiom"
 	goReleaserVersion   = "v2.15.2"
 	providerArchiveKind = "provider-contract"
 )
