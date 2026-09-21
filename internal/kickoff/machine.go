@@ -150,18 +150,35 @@ func groupGateRecordsByKey(records []GateRecord) map[GateKey][]GateRecord {
 }
 
 // resolveGateStatus derives one gate's current status from its recorded
-// history. Phase 5 keeps this deliberately minimal — the digest-based
-// reopening rule of D-08 (an approval is never invalidated; a rejection
-// reopens only when the judged artifact's digest has since changed) lands
-// in Phase 6, driven by its own RED tests. For now: the latest record
-// wins, and a gate with no record yet is freshly pending.
+// history, applying D-08's asymmetric reopening rule:
+//
+//   - An approval anywhere in the history is TERMINAL: it is returned
+//     unconditionally, regardless of the current digest and regardless of
+//     any record appended after it. A rejection describes one concrete
+//     artifact and stops applying once that artifact changes; an approval
+//     authorizes advancing, and advancing implies changing artifacts by
+//     design (alternative 1 rejected in D-08 — invalidating approvals on
+//     every digest change would deadlock sdd-apply against its own
+//     tasks.md checkbox edits).
+//   - Absent an approval, the latest rejection stands as long as digest
+//     still matches the artifact it judged. Once the digest differs,
+//     remediation happened: the gate returns to pending with
+//     Reopened=true, and its prior reason is cleared (design.md S5.3:
+//     Reason is empty in pending) — this is REQ-21.12 satisfied without a
+//     manual "reopen" verb.
+//   - No record at all yet: freshly pending.
 func resolveGateStatus(digest string, records []GateRecord) (status, reason string, reopened bool) {
+	for _, r := range records {
+		if r.Decision == DecisionApproved {
+			return "approved", r.Reason, false
+		}
+	}
 	if len(records) == 0 {
 		return "pending", "", false
 	}
 	last := records[len(records)-1]
-	if last.Decision == DecisionApproved {
-		return "approved", last.Reason, false
+	if last.ArtifactDigest == digest {
+		return "rejected", last.Reason, false
 	}
-	return "rejected", last.Reason, false
+	return "pending", "", true
 }

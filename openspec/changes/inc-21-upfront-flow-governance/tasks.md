@@ -160,10 +160,10 @@ Depende de la Fase 5.
 
 > **Válvula de alivio:** si el diff real supera holgadamente 400 líneas, separar la generación de una `role-apply:<rol>` por rol del roster en una PR inmediatamente posterior (`inc-21/06b-kickoff-gate-machine-roleapply`).
 
-- [ ] 6.1 [RED] Ampliar `internal/kickoff/machine_test.go`: `rejected` + digest actual **igual** al registrado ⇒ sigue `rejected`, `Reopened: false`; `rejected` + digest actual **distinto** ⇒ vuelve a `pending`, `Reopened: true` (REQ-21.12 sin verbo `reopen`); **`approved` no se invalida jamás al cambiar el digest** — caso explícito con digest distinto tras aprobación, la compuerta sigue `approved` (regla normativa de D-08, la más sensible de este incremento); roster multi-rol (`core`, `web`, `qa`) ⇒ se genera exactamente una compuerta `role-apply:<rol>` por rol, con la clave construida únicamente vía `RoleApplyGate`.
-- [ ] 6.2 [GREEN] Completar `internal/kickoff/machine.go`: lógica de comparación de digest contra `Ledger` para decidir `pending`/`approved`/`rejected`/`Reopened`; generación de una `GateState` por cada `RoleApplyGate(rol)` del roster de `Inputs.Roles`, bloqueando `apply` del rol y el aviso de último rol mientras no esté `approved`.
-- [ ] 6.3 [REFACTOR] Confirmar que la función completa sigue siendo pura (sin E/S, sin reloj) y que el criterio "`approved` es terminal" está expresado en un único punto del código, no repetido por cada clave de compuerta.
-- [ ] 6.4 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
+- [x] 6.1 [RED] Ampliar `internal/kickoff/machine_test.go`: `rejected` + digest actual **igual** al registrado ⇒ sigue `rejected`, `Reopened: false`; `rejected` + digest actual **distinto** ⇒ vuelve a `pending`, `Reopened: true` (REQ-21.12 sin verbo `reopen`); **`approved` no se invalida jamás al cambiar el digest** — caso explícito con digest distinto tras aprobación, la compuerta sigue `approved` (regla normativa de D-08, la más sensible de este incremento); roster multi-rol (`core`, `web`, `qa`) ⇒ se genera exactamente una compuerta `role-apply:<rol>` por rol, con la clave construida únicamente vía `RoleApplyGate`.
+- [x] 6.2 [GREEN] Completar `internal/kickoff/machine.go`: lógica de comparación de digest contra `Ledger` para decidir `pending`/`approved`/`rejected`/`Reopened`; generación de una `GateState` por cada `RoleApplyGate(rol)` del roster de `Inputs.Roles`, bloqueando `apply` del rol y el aviso de último rol mientras no esté `approved`.
+- [x] 6.3 [REFACTOR] Confirmar que la función completa sigue siendo pura (sin E/S, sin reloj) y que el criterio "`approved` es terminal" está expresado en un único punto del código, no repetido por cada clave de compuerta.
+- [x] 6.4 [Verificación de cierre] V-A, V-B, V-C, V-D — verde.
 
 ## Fase 7: P1g — Cierre de último rol, guarda de raíz archivada y frontera RDD del dominio (REQ-21.13, REQ-21.18; D-10, D-14; T-9 parcial)
 
