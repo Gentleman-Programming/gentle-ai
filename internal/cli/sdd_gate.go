@@ -87,12 +87,17 @@ func runSDDGateRecord(args []string, stdout io.Writer) error {
 	if actor == "" {
 		actor = "cli"
 	}
+	digest, err := gateArtifactDigest(changeRoot, parsed.Gate, sealed)
+	if err != nil {
+		return err
+	}
 	record := kickoff.GateRecord{
-		Gate:       parsed.Gate,
-		Decision:   parsed.Decision,
-		Reason:     parsed.Reason,
-		Actor:      actor,
-		RecordedAt: time.Now().UTC(),
+		Gate:           parsed.Gate,
+		Decision:       parsed.Decision,
+		Reason:         parsed.Reason,
+		ArtifactDigest: digest,
+		Actor:          actor,
+		RecordedAt:     time.Now().UTC(),
 	}
 	if err := kickoff.AppendGate(changeRoot, record); err != nil {
 		return err
