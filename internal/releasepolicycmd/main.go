@@ -16,5 +16,5 @@ func main() {
 		fmt.Fprintf(os.Stderr, "release distribution policy: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("release distribution policy: exact current Linux/macOS snapshot and sole Homebrew publisher verified")
+	fmt.Println("release distribution policy: exact current Linux/macOS snapshot verified for both published binaries")
 }
