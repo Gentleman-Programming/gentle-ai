@@ -149,6 +149,34 @@ func groupGateRecordsByKey(records []GateRecord) map[GateKey][]GateRecord {
 	return grouped
 }
 
+// LastRoleClosed reports whether every role in roster has its own
+// role-apply gate approved in gates (REQ-21.13). A role whose gate is
+// missing, still pending, or rejected keeps this false — including when
+// every other role is already approved: a single rejected or not-yet-open
+// role-apply gate must never let the last-role notice or the integration
+// handoff fire (REQ-21.13, third scenario). A single-role roster (the
+// fullstack default included) satisfies this the moment that one gate is
+// approved, with no other role to wait for.
+//
+// An empty roster is never "closed": there is no role whose approval could
+// have produced this state, so treating it as true would let a caller with
+// a missing or not-yet-resolved roster fire the notice by accident.
+func LastRoleClosed(roster []multirole.RoleAssignment, gates []GateState) bool {
+	if len(roster) == 0 {
+		return false
+	}
+	statusByKey := make(map[GateKey]string, len(gates))
+	for _, g := range gates {
+		statusByKey[g.Key] = g.Status
+	}
+	for _, role := range roster {
+		if statusByKey[RoleApplyGate(role.Role)] != "approved" {
+			return false
+		}
+	}
+	return true
+}
+
 // resolveGateStatus derives one gate's current status from its recorded
 // history, applying D-08's asymmetric reopening rule:
 //

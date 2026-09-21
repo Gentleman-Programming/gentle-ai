@@ -364,6 +364,61 @@ func TestEvaluateGatesRoleApplyGateReopensWhenRoleTasksDigestChanges(t *testing.
 	}
 }
 
+// TestLastRoleClosedRequiresEveryRoleApproved covers REQ-21.13's core
+// predicate: the notice and the integration handoff must wait for every
+// active role, not just most of them.
+func TestLastRoleClosedRequiresEveryRoleApproved(t *testing.T) {
+	roster := []multirole.RoleAssignment{
+		{Role: "core", GatePolicy: multirole.PolicyBlocking},
+		{Role: "web", GatePolicy: multirole.PolicyBlocking},
+		{Role: "qa", GatePolicy: multirole.PolicyDeferred},
+	}
+
+	t.Run("N-1 of N approved is not closed", func(t *testing.T) {
+		gates := []GateState{
+			{Key: RoleApplyGate("core"), Status: "approved"},
+			{Key: RoleApplyGate("web"), Status: "approved"},
+			{Key: RoleApplyGate("qa"), Status: "pending"},
+		}
+		if LastRoleClosed(roster, gates) {
+			t.Error("LastRoleClosed() = true, se esperaba false con un rol todavia pendiente")
+		}
+	})
+
+	t.Run("all N approved is closed", func(t *testing.T) {
+		gates := []GateState{
+			{Key: RoleApplyGate("core"), Status: "approved"},
+			{Key: RoleApplyGate("web"), Status: "approved"},
+			{Key: RoleApplyGate("qa"), Status: "approved"},
+		}
+		if !LastRoleClosed(roster, gates) {
+			t.Error("LastRoleClosed() = false, se esperaba true con los N roles aprobados")
+		}
+	})
+
+	t.Run("one rejected role stays open even if the rest are approved", func(t *testing.T) {
+		gates := []GateState{
+			{Key: RoleApplyGate("core"), Status: "approved"},
+			{Key: RoleApplyGate("web"), Status: "rejected"},
+			{Key: RoleApplyGate("qa"), Status: "approved"},
+		}
+		if LastRoleClosed(roster, gates) {
+			t.Error("LastRoleClosed() = true, se esperaba false: un rol rechazado nunca cierra el ultimo rol (REQ-21.13, tercer escenario)")
+		}
+	})
+}
+
+// TestLastRoleClosedSingleFullstackRoleClosesImmediately is REQ-21.13's
+// second scenario: a one-role roster satisfies "last role" the moment that
+// single role's own apply gate is approved.
+func TestLastRoleClosedSingleFullstackRoleClosesImmediately(t *testing.T) {
+	roster := []multirole.RoleAssignment{{Role: "fullstack", GatePolicy: multirole.PolicyBlocking}}
+	gates := []GateState{{Key: RoleApplyGate("fullstack"), Status: "approved"}}
+	if !LastRoleClosed(roster, gates) {
+		t.Error("LastRoleClosed() = false, se esperaba true de inmediato para un roster de un unico rol fullstack aprobado")
+	}
+}
+
 // findGateState is the shared table-lookup helper for the tests in this
 // file: it fails the test immediately if the requested key is absent,
 // instead of letting a nil dereference obscure which case failed.
