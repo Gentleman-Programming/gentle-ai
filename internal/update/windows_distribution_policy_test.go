@@ -191,9 +191,9 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 			name: "artifact path escapes snapshot directory",
 			mutate: func(t *testing.T, root string) {
 				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"),
-					`"path":"dist/gentle-ai_linux_amd64_v1/gentle-ai"`,
-					`"path":"dist/../outside/gentle-ai"`)
-				outside := filepath.Join(root, "outside", "gentle-ai")
+					`"path":"dist/axiom_linux_amd64_v1/axiom"`,
+					`"path":"dist/../outside/axiom"`)
+				outside := filepath.Join(root, "outside", "axiom")
 				if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -205,7 +205,7 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 		{
 			name: "artifact path resolves through symlink",
 			mutate: func(t *testing.T, root string) {
-				output := filepath.Join(root, "dist", "gentle-ai_linux_amd64_v1", "gentle-ai")
+				output := filepath.Join(root, "dist", "axiom_linux_amd64_v1", "axiom")
 				if err := os.Remove(output); err != nil {
 					t.Fatal(err)
 				}

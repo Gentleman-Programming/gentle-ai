@@ -477,7 +477,7 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 				`go run ./internal/releasepolicycmd`,
 				`expectedGoReleaserYAML`,
 				`expectedReleaseWorkflowYAML`,
-				`resolved Homebrew publisher changed`,
+				`resolved binary identity changed`,
 				`snapshot output predates the current run marker`,
 				`snapshot output path contains a symlink`,
 			},
