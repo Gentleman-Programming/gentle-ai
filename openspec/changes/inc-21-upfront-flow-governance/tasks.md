@@ -381,7 +381,8 @@ Depende de la Fase 22 (la sección compartida ya existe para poder referenciarla
 | Riesgo de presupuesto de 400 líneas | **High** (agregado del incremento; por PR individual, ninguna se planifica por encima de ~450 y la mayoría son Low/Medium) |
 | PRs encadenados recomendados | **Yes** |
 | Partición sugerida | 23 rebanadas (tabla siguiente) |
-| Estrategia de entrega | `auto-chain` |
+| Estrategia de entrega | `exception-ok` (era `auto-chain`; el usuario aceptó explícitamente `size:exception` el 2026-09-21 tras comprobarse que 4 de 10 commits de feature superaban el presupuesto) |
+| Excepción de tamaño aceptada | `eed8fec5` 539 líneas (Fase 1), `c7c334fa` 875 (Fase 8), `0b866af1` 561 (Fase 9), `6f507862` 482 (Fase 10) — las cuatro fases sin válvula de alivio declarada. Se trocea solo donde este documento ya declara válvula (Fases 4, 6, 7, 15, 16); la Fase 7 la usó y entró en presupuesto (188 + 316). |
 | Estrategia de cadena | `feature-branch-chain` (tracker `feature/inc-21-upfront-flow-governance`) |
 
 Líneas de guarda exactas (contrato de herramienta, no traducir):
