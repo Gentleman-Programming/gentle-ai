@@ -18,7 +18,7 @@ func provenanceArgs(t *testing.T) (string, []string) {
 func ciEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv("GITHUB_ACTIONS", "true")
-	t.Setenv("GITHUB_REPOSITORY", "Gentleman-Programming/gentle-ai")
+	t.Setenv("GITHUB_REPOSITORY", "IGutierrezZ/axiom")
 	t.Setenv("GITHUB_REF_NAME", "v1.2.3-rc.4")
 	t.Setenv("GITHUB_SHA", strings.Repeat("0123456789abcdef", 2)+strings.Repeat("0", 8))
 	t.Setenv("GITHUB_WORKFLOW", "Release candidate")

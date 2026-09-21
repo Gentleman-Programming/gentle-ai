@@ -8,7 +8,7 @@ die() {
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${MINISIGN_PUBLIC_KEYS:?MINISIGN_PUBLIC_KEYS is required}"
-[[ "$GITHUB_REPOSITORY" == "Gentleman-Programming/gentle-ai" ]] || die "unexpected repository"
+[[ "$GITHUB_REPOSITORY" == "IGutierrezZ/axiom" ]] || die "unexpected repository"
 
 if ! canonical_public_keys=$(./scripts/canonicalize-release-public-keys.sh); then
   die "MINISIGN_PUBLIC_KEYS is not canonical"
