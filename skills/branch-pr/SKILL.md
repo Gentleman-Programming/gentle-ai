@@ -18,7 +18,7 @@ Load this skill whenever you need to:
 
 ## Critical Rules
 
-1. **Every PR MUST link an approved issue** — `Closes/Fixes/Resolves #<N>` in the PR body, and that issue MUST have `status:approved`. PRs without this are **automatically rejected** by CI.
+1. **Every PR MUST visibly link an approved base-repository issue** — `Closes/Fixes/Resolves #<N>` closes it on merge; `Refs #<N>` is non-closing. Every accepted reference MUST have `status:approved`; malformed, cross-repository, or mixed closing/non-closing references for the same issue are rejected by CI.
 2. **Ordinary `type:*` categorization** — CI rejects zero or multiple type labels. Route it through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
 3. **Protected policy labels** — Adding or removing `status:approved` or `size:exception` requires verified policy authority from a target-host repository maintainer or repository-authorized approver for the exact target/action, plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`. `size:exception` additionally requires documented over-budget rationale.
 4. **400-line review budget** — keep PRs within 400 changed lines (`additions + deletions`) or document the rationale required for a `size:exception` label.
@@ -86,7 +86,7 @@ The PR body must follow the template at `.github/PULL_REQUEST_TEMPLATE.md`. All 
 ```markdown
 ## 🔗 Linked Issue
 
-Closes #<N>
+Closes #<N> (or `Refs #<N>` for a visible, non-closing link to an approved issue in the base repository)
 
 ## 🏷️ PR Type
 
@@ -150,7 +150,7 @@ These checks run on every PR and **all must pass** before merge:
 | Check | What It Verifies | How to Fix |
 |-------|-----------------|------------|
 | **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) or has `size:exception` | Split the PR, or document the `size:exception` rationale and verify policy authority before its canonical workflow action |
-| **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` | Add `Closes #<N>` to the PR body |
+| **Check Issue Reference** | PR body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or `Refs #N` | Add one valid reference; malformed, cross-repository, and mixed closing/non-closing references for the same issue fail |
 | **Check Issue Has `status:approved`** | Linked issue has the required label | Use the canonical issue-creation workflow contract only when a current direct instruction and target-host capability grant authorize the exact action; otherwise wait |
 | **Check PR Has `type:*` Label** | Exactly one `type:*` label is applied to the PR | Use the canonical issue-creation workflow contract only when a current direct instruction and target-host capability authorize the exact action; otherwise wait |
 | **Unit Tests** | `go test ./...` passes | Fix failing tests before pushing |
