@@ -202,11 +202,11 @@ Depende de las Fases 2, 3 y 8.
 
 Depende de las Fases 4, 6, 7 y 8. Independiente de la Fase 9 salvo por compartir `main.go`.
 
-- [ ] 10.1 [RED] Escribir `internal/cli/sdd_gate_test.go`: `record --decision approved` correcto ⇒ salida 0, registro anexado; `record --decision rejected` sin `--reason` ⇒ salida 1; `record --gate` con clave desconocida ⇒ salida 1 enumerando el vocabulario válido; `record --gate role-apply:<rol>` fuera del roster sellado ⇒ salida 1 nombrando el roster; registro sobre una raíz bajo `archive/` ⇒ salida 1; `gate --help`/subverbo desconocido ⇒ salidas 0/1 respectivamente (T-8); el aviso formal de último rol aparece **exactamente una vez** cuando la última `role-apply` se aprueba (con roster de un único rol `fullstack`, ver Fase 18 para el contenido completo del aviso — aquí solo se verifica el enrutamiento del verbo, no la construcción del relevo).
-- [ ] 10.2 [GREEN] Crear `internal/cli/sdd_gate.go`: `RunSDDGate(args []string, stdout io.Writer) error` con subverbos `record` y `show`, invocando `kickoff.RefuseArchivedRoot`, `kickoff.AppendGate` y `kickoff.EvaluateGates`/`LastRoleClosed` para decidir si emitir el aviso de último rol (el cuerpo del relevo se completa en la Fase 18; aquí se deja el punto de extensión).
-- [ ] 10.3 [GREEN] Modificar `cmd/axiom/main.go`: un `case "gate"` nuevo en `runSDD` y su línea de ayuda, mismo patrón que la Fase 9.
-- [ ] 10.4 [REFACTOR] Confirmar que `sdd_kickoff.go` y `sdd_gate.go` comparten la comprobación de raíz archivada sin duplicar código (extraer un helper común si hiciera falta).
-- [ ] 10.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/... ./internal/cli/... ./cmd/axiom/...`), V-C, V-D.
+- [x] 10.1 [RED] Escribir `internal/cli/sdd_gate_test.go`: `record --decision approved` correcto ⇒ salida 0, registro anexado; `record --decision rejected` sin `--reason` ⇒ salida 1; `record --gate` con clave desconocida ⇒ salida 1 enumerando el vocabulario válido; `record --gate role-apply:<rol>` fuera del roster sellado ⇒ salida 1 nombrando el roster; registro sobre una raíz bajo `archive/` ⇒ salida 1; `gate --help`/subverbo desconocido ⇒ salidas 0/1 respectivamente (T-8); el aviso formal de último rol aparece **exactamente una vez** cuando la última `role-apply` se aprueba (con roster de un único rol `fullstack`, ver Fase 18 para el contenido completo del aviso — aquí solo se verifica el enrutamiento del verbo, no la construcción del relevo).
+- [x] 10.2 [GREEN] Crear `internal/cli/sdd_gate.go`: `RunSDDGate(args []string, stdout io.Writer) error` con subverbos `record` y `show`, invocando `kickoff.RefuseArchivedRoot`, `kickoff.AppendGate` y `kickoff.EvaluateGates`/`LastRoleClosed` para decidir si emitir el aviso de último rol (el cuerpo del relevo se completa en la Fase 18; aquí se deja el punto de extensión).
+- [x] 10.3 [GREEN] Modificar `cmd/axiom/main.go`: un `case "gate"` nuevo en `runSDD` y su línea de ayuda, mismo patrón que la Fase 9.
+- [x] 10.4 [REFACTOR] Confirmar que `sdd_kickoff.go` y `sdd_gate.go` comparten la comprobación de raíz archivada sin duplicar código (extraer un helper común si hiciera falta).
+- [x] 10.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/... ./internal/cli/... ./cmd/axiom/...`), V-C, V-D.
 
 ## Fase 11: P3a — Compuerta de control: regresión byte a byte sin sello (REQ-21.7; D-05 — compuerta de control nº 1)
 

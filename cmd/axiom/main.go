@@ -1734,6 +1734,7 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "  task-result      Valida y extrae el resultado tipado de una fase delegada")
 		fmt.Fprintln(stdout, "  preflight-hook   Ejecuta el hook previo de verificación SDD")
 		fmt.Fprintln(stdout, "  kickoff          Sella la configuración de kickoff de un cambio (seal, show)")
+		fmt.Fprintln(stdout, "  gate             Registra o consulta decisiones de compuertas de revisión por bloque (record, show)")
 		if len(args) < 1 {
 			return 1
 		}
@@ -1759,8 +1760,10 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 		err = cli.RunSDDPreflightHook(subArgs, stdout)
 	case "kickoff":
 		err = cli.RunSDDKickoff(subArgs, stdout)
+	case "gate":
+		err = cli.RunSDDGate(subArgs, stdout)
 	default:
-		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, archive-compose, task-result, preflight-hook, kickoff\n", subCmd)
+		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, archive-compose, task-result, preflight-hook, kickoff, gate\n", subCmd)
 		return 1
 	}
 
