@@ -1,0 +1,38 @@
+{
+  "schema": "gentle-ai.merge-blocking-status-contexts/v1",
+  "required_status_checks": [
+    {
+      "context": "Check Issue Has status:approved",
+      "integration_id": 15368
+    },
+    {
+      "context": "Check Issue Reference",
+      "integration_id": 15368
+    },
+    {
+      "context": "Check PR Has type:* Label",
+      "integration_id": 15368
+    },
+    {
+      "context": "Unit Tests",
+      "integration_id": 15368
+    },
+    {
+      "context": "E2E Tests (ubuntu)",
+      "integration_id": 15368
+    },
+    {
+      "context": "E2E Tests (arch)",
+      "integration_id": 15368
+    },
+    {
+      "context": "E2E Tests (fedora)",
+      "integration_id": 15368
+    },
+    {
+      "context": "Darwin Runtime",
+      "integration_id": 15368
+    },
+    {"context": "Merge Policy Drift", "integration_id": 15368}
+  ]
+}
