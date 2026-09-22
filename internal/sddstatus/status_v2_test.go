@@ -305,3 +305,131 @@ func TestNonPhaseRoutingInstructionsPrintsAwaitGateInvocations(t *testing.T) {
 		}
 	}
 }
+
+// --- Status.GateQuestion / StatusV2Projection.GateQuestion (design.md
+// S5.5): the resolver wiring that turns SDDGovernanceGateResult from a
+// tested-but-never-constructed type into the envelope an "await-gate" route
+// actually carries.
+
+// TestResolveAssignsGateQuestionForPendingGate proves the resolver builds
+// and assigns a valid gate-question envelope for the exact gate
+// firstOpenGate names when NextRecommended is "await-gate".
+func TestResolveAssignsGateQuestionForPendingGate(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-gate-question-pending"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "await-gate" {
+		t.Fatalf("NextRecommended = %q, want await-gate (fixture precondition)", status.NextRecommended)
+	}
+	if status.GateQuestion == nil {
+		t.Fatal("status.GateQuestion = nil, want a populated envelope while a gate is pending")
+	}
+	if err := status.GateQuestion.Validate(); err != nil {
+		t.Fatalf("status.GateQuestion.Validate() error = %v", err)
+	}
+	if status.GateQuestion.Gate != string(kickoff.GateSpec) || status.GateQuestion.Change != changeName {
+		t.Fatalf("status.GateQuestion.Gate/Change = %q/%q, want spec/%q", status.GateQuestion.Gate, status.GateQuestion.Change, changeName)
+	}
+	if len(status.GateQuestion.Criteria) == 0 {
+		t.Fatal("status.GateQuestion.Criteria is empty, want design.md S5.5's spec lenses")
+	}
+}
+
+// TestResolveGateQuestionNilWhenRejectedGateRoutesToOwningPhase proves the
+// envelope is scoped to the exact gate "await-gate" names: a rejected gate
+// whose digest still matches the artifact reroutes to remediation instead
+// (D-09), and must never carry a fresh approve/reject question of its own
+// even though Governance itself stays populated.
+func TestResolveGateQuestionNilWhenRejectedGateRoutesToOwningPhase(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-gate-question-rejected"
+	changeRoot := seedReadyChange(t, root, changeName, "- [x] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	specPath := filepath.Join(changeRoot, "specs", "auth", "spec.md")
+	digest, err := kickoff.ArtifactDigest([]string{specPath})
+	if err != nil {
+		t.Fatalf("kickoff.ArtifactDigest() error = %v", err)
+	}
+	if err := kickoff.AppendGate(changeRoot, kickoff.GateRecord{
+		Gate: kickoff.GateSpec, Decision: kickoff.DecisionRejected, Reason: "falta caso borde",
+		ArtifactDigest: digest, Actor: "reviewer",
+	}); err != nil {
+		t.Fatalf("kickoff.AppendGate() error = %v", err)
+	}
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "spec" {
+		t.Fatalf("NextRecommended = %q, want spec (rejected gate's owning phase, fixture precondition)", status.NextRecommended)
+	}
+	if status.Governance == nil {
+		t.Fatal("status.Governance = nil, want the sealed governance view to stay populated")
+	}
+	if status.GateQuestion != nil {
+		t.Fatalf("status.GateQuestion = %+v, want nil: a rejected gate routed to remediation carries no fresh decision question", status.GateQuestion)
+	}
+}
+
+// TestProjectStatusV2GateQuestionPresentWithPendingGate proves the v2 wire
+// projection carries the same envelope Status.GateQuestion does, reusing
+// SDDGovernanceGateResult directly (no *V2 translation type), exactly as
+// Consent already does for its own sibling schema.
+func TestProjectStatusV2GateQuestionPresentWithPendingGate(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-gate-question-pending"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	projection, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatalf("ProjectStatusV2() error = %v", err)
+	}
+	if projection.GateQuestion == nil {
+		t.Fatal("StatusV2Projection.GateQuestion = nil, want a populated envelope while a gate is pending")
+	}
+	if projection.GateQuestion != status.GateQuestion {
+		t.Fatal("StatusV2Projection.GateQuestion is not the same envelope as Status.GateQuestion: Consent's precedent passes it through unchanged")
+	}
+}
+
+// TestProjectStatusV2GateQuestionAbsentWithoutSealOmitsJSONKey repeats the
+// D-05 control-gate assertion for the new field: an unsealed change never
+// names "gateQuestion" in the serialized document (omitempty), not merely a
+// nil Go field.
+func TestProjectStatusV2GateQuestionAbsentWithoutSealOmitsJSONKey(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-v2-gate-question-unsealed"
+	seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	projection, err := ProjectStatusV2(status)
+	if err != nil {
+		t.Fatalf("ProjectStatusV2() error = %v", err)
+	}
+	if projection.GateQuestion != nil {
+		t.Fatalf("StatusV2Projection.GateQuestion = %+v, want nil for an unsealed change", projection.GateQuestion)
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), `"gateQuestion"`) {
+		t.Fatalf("serialized StatusV2Projection names \"gateQuestion\" for an unsealed change: %s", encoded)
+	}
+}

@@ -180,10 +180,18 @@ type Status struct {
 	// else, including every change that was already active before this
 	// increment shipped -- the byte-for-byte regression this increment's own
 	// control gate guards (kickoff_absence_regression_test.go).
-	Governance        *Governance        `json:"governance,omitempty"`
-	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
-	NextRecommended   string             `json:"nextRecommended"`
-	BlockedReasons    []string           `json:"blockedReasons"`
+	Governance *Governance `json:"governance,omitempty"`
+	// GateQuestion is the typed blocking question for the one gate
+	// firstOpenGate names when NextRecommended is "await-gate" (design.md
+	// S5.5): the same Lossless Blocking Prompt shape as Consent, scoped to
+	// a block-review decision instead of edit-authority escalation.
+	// Structural absence (nil, omitempty) everywhere else, including every
+	// change this increment leaves unsealed -- the same D-05 identity
+	// kickoff_absence_regression_test.go already guards for Governance.
+	GateQuestion      *SDDGovernanceGateResult `json:"gateQuestion,omitempty"`
+	PhaseInstructions *PhaseInstructions       `json:"phaseInstructions,omitempty"`
+	NextRecommended   string                   `json:"nextRecommended"`
+	BlockedReasons    []string                 `json:"blockedReasons"`
 	// Notes carries non-blocking diagnostics for a consumer to report, never to
 	// gate on: a non-empty Notes never withholds apply, sync, archive, or a
 	// terminal route. Always serialized as an array — `[]` when there is nothing
@@ -611,9 +619,25 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	}
 	dependencies := resolveDependencies(artifacts, applyState, coreReady)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, governance)
+	// INC-21 (design.md S5.5): the gate-decision envelope is built only for
+	// the exact gate "await-gate" already names, so it can never disagree
+	// with the route it accompanies -- a rejected gate with a recognised
+	// owning phase routes there instead (governanceNextRecommended), and
+	// carries no fresh approve/reject question of its own.
+	var gateQuestion *SDDGovernanceGateResult
+	if nextRecommended == "await-gate" {
+		if gate, ok := firstOpenGate(governance); ok {
+			envelope, err := newGovernanceGateQuestion(changeName, workspaceRoot, gate, artifactPaths)
+			if err != nil {
+				return Status{}, err
+			}
+			gateQuestion = &envelope
+		}
+	}
 	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, grantedRoots, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.Consent = consent
 	status.Governance = governance
+	status.GateQuestion = gateQuestion
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
 	status.Artifacts = artifacts

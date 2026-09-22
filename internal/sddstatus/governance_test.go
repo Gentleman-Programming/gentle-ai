@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/consentenvelope"
@@ -298,5 +299,111 @@ func TestLoadGovernanceTranslatesSealedKickoffAndLedgerIntoGateStates(t *testing
 	}
 	if statusByKey[kickoff.GateSpec] != "approved" {
 		t.Fatalf("gate spec status tras AppendGate = %q, want approved", statusByKey[kickoff.GateSpec])
+	}
+}
+
+// --- newGovernanceGateQuestion (design.md S5.5): the production
+// constructor that fills SDDGovernanceGateResult for one open gate. Until
+// this constructor existed, gateCriteria and SDDGovernanceGateResult.Validate
+// had no production caller: only governance_test.go referenced them.
+
+func TestNewGovernanceGateQuestionBuildsValidEnvelopeCarryingGateCriteria(t *testing.T) {
+	gate := kickoff.GateState{Key: kickoff.GateSpec, Status: "pending"}
+	artifactPaths := ArtifactPaths{Specs: []string{"openspec/changes/inc-99/specs/example/spec.md"}}
+
+	result, err := newGovernanceGateQuestion("inc-99-example", "/repo", gate, artifactPaths)
+	if err != nil {
+		t.Fatalf("newGovernanceGateQuestion() error = %v, want a valid envelope for a recognised gate key", err)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result.Validate() error = %v, want the constructor to always return a valid envelope", err)
+	}
+	if result.Change != "inc-99-example" || result.Gate != string(kickoff.GateSpec) {
+		t.Fatalf("result.Change/Gate = %q/%q, want inc-99-example/spec", result.Change, result.Gate)
+	}
+	wantCriteria := gateCriteria(gate)
+	if len(result.Criteria) != len(wantCriteria) {
+		t.Fatalf("result.Criteria = %v, want exactly gateCriteria's own lenses %v", result.Criteria, wantCriteria)
+	}
+	for i, criterion := range wantCriteria {
+		if result.Criteria[i] != criterion {
+			t.Fatalf("result.Criteria[%d] = %q, want %q (gateCriteria's own lens)", i, result.Criteria[i], criterion)
+		}
+	}
+	if len(result.Evidence) != 1 || result.Evidence[0] != artifactPaths.Specs[0] {
+		t.Fatalf("result.Evidence = %v, want the spec artifact path %q", result.Evidence, artifactPaths.Specs[0])
+	}
+}
+
+// TestNewGovernanceGateQuestionChoicesCarryRunnableGateRecordInvocations is
+// the orchestrator's second required case: the approved and rejected
+// choices both carry a runnable `axiom sdd gate record` invocation naming
+// their own --decision, never the sdd-attempt vocabulary T-9 guards
+// against.
+func TestNewGovernanceGateQuestionChoicesCarryRunnableGateRecordInvocations(t *testing.T) {
+	gate := kickoff.GateState{Key: kickoff.GateDesign, Status: "pending"}
+	result, err := newGovernanceGateQuestion("inc-99-example", "/repo", gate, ArtifactPaths{})
+	if err != nil {
+		t.Fatalf("newGovernanceGateQuestion() error = %v", err)
+	}
+	if len(result.Choices) != 2 {
+		t.Fatalf("len(result.Choices) = %d, want exactly 2 (approved, rejected)", len(result.Choices))
+	}
+	approved, rejected := result.Choices[0], result.Choices[1]
+	if approved.Answer != gateAnswerApproved || !strings.HasPrefix(approved.Invocation, gateRecordInvocationPrefix) ||
+		!strings.Contains(approved.Invocation, "--decision approved") || !strings.Contains(approved.Invocation, "--gate design") {
+		t.Fatalf("approved choice = %+v, want a runnable %q invocation with --decision approved --gate design", approved, gateRecordInvocationPrefix)
+	}
+	if rejected.Answer != gateAnswerRejected || !strings.HasPrefix(rejected.Invocation, gateRecordInvocationPrefix) ||
+		!strings.Contains(rejected.Invocation, "--decision rejected") || !strings.Contains(rejected.Invocation, "--gate design") {
+		t.Fatalf("rejected choice = %+v, want a runnable %q invocation with --decision rejected --gate design", rejected, gateRecordInvocationPrefix)
+	}
+	if strings.HasPrefix(approved.Invocation, "sdd-attempt") || strings.Contains(approved.Invocation, " sdd-attempt ") {
+		t.Fatalf("approved choice = %+v, must never carry the sdd-attempt vocabulary (T-9)", approved)
+	}
+}
+
+// TestNewGovernanceGateQuestionOffPathReentersNativeStatus is the
+// orchestrator's third required case: the off path never decides the gate,
+// it only re-enters through native SDD status.
+func TestNewGovernanceGateQuestionOffPathReentersNativeStatus(t *testing.T) {
+	gate := kickoff.GateState{Key: kickoff.GateTasks, Status: "pending"}
+	result, err := newGovernanceGateQuestion("inc-99-example", "/repo", gate, ArtifactPaths{})
+	if err != nil {
+		t.Fatalf("newGovernanceGateQuestion() error = %v", err)
+	}
+	if !strings.HasPrefix(result.OffPath.Command, gateStatusInvocationPrefix) {
+		t.Fatalf("result.OffPath.Command = %q, want it to start with %q", result.OffPath.Command, gateStatusInvocationPrefix)
+	}
+	if result.OffPath.Note == "" {
+		t.Fatal("result.OffPath.Note is empty, want an explanation of the deliberate off path")
+	}
+}
+
+// TestNewGovernanceGateQuestionUsesRoleApplyCriteriaForRoleApplyGate proves
+// the constructor recognises a role-apply:<role> gate the same way
+// gateCriteria does, rather than only the four fixed keys.
+func TestNewGovernanceGateQuestionUsesRoleApplyCriteriaForRoleApplyGate(t *testing.T) {
+	gate := kickoff.GateState{Key: kickoff.RoleApplyGate("backend"), Blocks: "backend", Status: "pending"}
+	result, err := newGovernanceGateQuestion("inc-99-example", "/repo", gate, ArtifactPaths{Tasks: []string{"openspec/changes/inc-99/tasks.backend.md"}})
+	if err != nil {
+		t.Fatalf("newGovernanceGateQuestion() error = %v", err)
+	}
+	if len(result.Criteria) != len(roleApplyGateCriteria) {
+		t.Fatalf("result.Criteria = %v, want roleApplyGateCriteria %v", result.Criteria, roleApplyGateCriteria)
+	}
+	if len(result.Evidence) != 1 || result.Evidence[0] != "openspec/changes/inc-99/tasks.backend.md" {
+		t.Fatalf("result.Evidence = %v, want the role's own tasks file", result.Evidence)
+	}
+}
+
+// TestNewGovernanceGateQuestionRejectsUnrecognisedGateKey proves the
+// constructor is validated by construction (design.md S5.5): a gate key
+// that gateCriteria cannot resolve any lenses for must never produce a
+// malformed envelope with empty Criteria -- it must fail loudly instead.
+func TestNewGovernanceGateQuestionRejectsUnrecognisedGateKey(t *testing.T) {
+	gate := kickoff.GateState{Key: kickoff.GateKey("unrecognised-gate"), Status: "pending"}
+	if _, err := newGovernanceGateQuestion("inc-99-example", "/repo", gate, ArtifactPaths{}); err == nil {
+		t.Fatal("newGovernanceGateQuestion() error = nil, want a named error for a gate key gateCriteria cannot resolve")
 	}
 }

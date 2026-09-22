@@ -32,11 +32,16 @@ type StatusV2Projection struct {
 	// when Status.Governance is (design.md S4.3, D-05): a sealed,
 	// non-continuous kickoff. This is an additive v2 field; no existing
 	// value or field changes (task 14.3).
-	Governance        *governanceV2        `json:"governance,omitempty"`
-	PhaseInstructions *phaseInstructionsV2 `json:"phaseInstructions,omitempty"`
-	NextRecommended   string               `json:"nextRecommended"`
-	BlockedReasons    []string             `json:"blockedReasons"`
-	Notes             []string             `json:"notes"`
+	Governance *governanceV2 `json:"governance,omitempty"`
+	// GateQuestion projects Status.GateQuestion unchanged: like Consent, the
+	// wire type already matches the public contract 1:1, so no *V2
+	// translation type is needed (design.md S5.5 defines the wire shape
+	// directly).
+	GateQuestion      *SDDGovernanceGateResult `json:"gateQuestion,omitempty"`
+	PhaseInstructions *phaseInstructionsV2     `json:"phaseInstructions,omitempty"`
+	NextRecommended   string                   `json:"nextRecommended"`
+	BlockedReasons    []string                 `json:"blockedReasons"`
+	Notes             []string                 `json:"notes"`
 }
 
 type planningHomeV2 struct {
@@ -201,6 +206,7 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 		Consent:         status.Consent,
 		Archived:        status.Archived,
 		Governance:      projectGovernanceV2(status.Governance),
+		GateQuestion:    status.GateQuestion,
 		NextRecommended: status.NextRecommended,
 		BlockedReasons:  status.BlockedReasons,
 		Notes:           status.Notes,
