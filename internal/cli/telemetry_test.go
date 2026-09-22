@@ -35,6 +35,7 @@ func TestTelemetryPolicyReadOnly(t *testing.T) {
 		{"null enabled", `{"install_id":"existing","enabled":null,"notice_shown":true}`, "", "", "state", "state_unavailable", false},
 		{"dnt", complete, "DO_NOT_TRACK", "yes", "DO_NOT_TRACK", "disabled", false},
 		{"optout", complete, "GENTLE_AI_TELEMETRY", "0", "GENTLE_AI_TELEMETRY", "disabled", false},
+		{"optout with whitespace", complete, "GENTLE_AI_TELEMETRY", " 0 ", "GENTLE_AI_TELEMETRY", "disabled", false},
 		{"ci", complete, "CI", "1", "CI", "disabled", false},
 		{"actions", complete, "GITHUB_ACTIONS", "true", "CI", "disabled", false},
 		{"false dnt", complete, "DO_NOT_TRACK", " FALSE ", "default", "enabled", true},

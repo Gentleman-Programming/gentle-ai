@@ -34,7 +34,7 @@ func Decide(getenv Getenv, persisted State) Decision {
 	if doNotTrack(getenv("DO_NOT_TRACK")) {
 		return Decision{Enabled: false, Source: SourceDoNotTrack}
 	}
-	if getenv("GENTLE_AI_TELEMETRY") == "0" {
+	if strings.TrimSpace(getenv("GENTLE_AI_TELEMETRY")) == "0" {
 		return Decision{Enabled: false, Source: SourceEnvOptOut}
 	}
 	if truthy(getenv("CI")) || truthy(getenv("GITHUB_ACTIONS")) {
