@@ -759,7 +759,7 @@ func (state CompactState) Validate() error {
 				return errors.New("escalated recovery requires maintainer authorization")
 			}
 		default:
-			return errors.New("compact recovery disposition is invalid")
+			return errors.New(compactRetiredRecoveryDispositionProblem)
 		}
 		if recovery.Evidence != nil && recovery.Disposition != RecoveryEscalated {
 			return errors.New("only escalated recovery may carry predecessor evidence")
@@ -882,6 +882,15 @@ func (state CompactState) Validate() error {
 	if err := validateCompactReviewLifecycle(state, view); err != nil {
 		return err
 	}
+	return validateCompactPostLifecycleState(state)
+}
+
+// validateCompactPostLifecycleState is the post-lifecycle tail of
+// CompactState.Validate, extracted verbatim so the forensic historical
+// classifier can run it directly when a tolerated retired seam (issue #2995)
+// short-circuited Validate at the lifecycle stage. The two must stay in
+// lockstep by construction: Validate calls this exact function.
+func validateCompactPostLifecycleState(state CompactState) error {
 	if state.ProposedCorrectionLines != nil && *state.ProposedCorrectionLines <= 0 {
 		return errors.New("compact correction forecast must be positive")
 	}
@@ -1416,6 +1425,25 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 // narrating them as damage.
 var errCompactSnapshotIdentityMismatch = errors.New("compact snapshot identity does not match its metadata")
 
+// Retired-seam validation problems (issue #2995). Each message fires only
+// because a prior-schema release persisted review or recovery content that
+// the current schema stores elsewhere: admitted reviewer results lived in the
+// retired lens_results/classifications/outcomes/follow_ups projections before
+// the AdmittedRoleResults migration, result_reopens carried slot arrays and
+// authorized_lenses before the payload-free removed-reference audit, and
+// recovery carried the final_verification_retry disposition plus its proof
+// field until v2.5.0 deleted both. Validate must name these seams with these
+// exact strings; the forensic historical classifier (compact_store.go)
+// matches them to tolerate exactly the retired domains -- never live damage
+// -- when proving a record was written by a prior-schema binary.
+const (
+	compactRetiredAdmittedLensViewProblem    = "post-review compact state requires every selected admitted lens result"
+	compactRetiredFixFindingViewProblem      = "compact fix finding IDs must match the admitted review view"
+	compactRetiredApprovedEvidenceProblem    = "approved clean compact state requires admitted review evidence"
+	compactRetiredReopenAuditProblem         = "reviewer result reopen audit record is incomplete"
+	compactRetiredRecoveryDispositionProblem = "compact recovery disposition is invalid"
+)
+
 func validateCompactReviewLifecycle(state CompactState, view CompactReviewView) error {
 	fixFindingIDs, err := canonicalStrings(state.FixFindingIDs, "fix finding id")
 	if err != nil || !equalStrings(fixFindingIDs, state.FixFindingIDs) {
@@ -1423,10 +1451,10 @@ func validateCompactReviewLifecycle(state CompactState, view CompactReviewView) 
 	}
 	completeReview := func() error {
 		if len(view.LensResults) != len(state.SelectedLenses) {
-			return errors.New("post-review compact state requires every selected admitted lens result")
+			return errors.New(compactRetiredAdmittedLensViewProblem)
 		}
 		if !equalStrings(view.FixFindingIDs, state.FixFindingIDs) {
-			return errors.New("compact fix finding IDs must match the admitted review view")
+			return errors.New(compactRetiredFixFindingViewProblem)
 		}
 		return nil
 	}
@@ -1460,7 +1488,7 @@ func validateCompactReviewLifecycle(state CompactState, view CompactReviewView) 
 		}
 		if len(state.CorrectionAttempts) == 0 {
 			if state.EvidenceHash != compactReviewEvidenceHash(view) {
-				return errors.New("approved clean compact state requires admitted review evidence") // refusal:by-design human-authority: an approval without its immutable admitted-result digest requires authority inspection
+				return errors.New(compactRetiredApprovedEvidenceProblem) // refusal:by-design human-authority: an approval without its immutable admitted-result digest requires authority inspection
 			}
 		} else if state.EvidenceHash != "" && !validSHA256(state.EvidenceHash) {
 			return errors.New("approved corrected compact state has invalid historical verification evidence") // refusal:by-design human-authority: malformed historical evidence on an approved authority requires maintainer inspection
@@ -1912,7 +1940,7 @@ func validateCompactResultReopens(state CompactState) error {
 		if !validSHA256(reopen.PreviousRevision) || reopen.TargetIdentity != state.InitialSnapshot.Identity || err != nil ||
 			strings.TrimSpace(reopen.Reason) == "" || strings.TrimSpace(reopen.Actor) == "" ||
 			strings.TrimSpace(reopen.MaintainerAuthorization) == "" || reopen.ReopenedAt.IsZero() || len(reopen.Removed) < len(lenses) {
-			return errors.New("reviewer result reopen audit record is incomplete")
+			return errors.New(compactRetiredReopenAuditProblem)
 		}
 		for index, lens := range lenses {
 			reference := reopen.Removed[index]

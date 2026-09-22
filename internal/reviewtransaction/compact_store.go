@@ -121,10 +121,11 @@ var ErrHistoricalCompatReadOnly = errors.New("historical compatibility authority
 
 // compactRetiredStateFieldPaths lists dot-separated compact state field paths
 // persisted by older builds and removed from the current schema. Each path is
-// tolerated only at its exact nesting level: top-level entries remain top-level
-// and "recovery.review_start" remains nested inside recovery provenance.
-// Historical records that carry them load read-only with the retired content
-// dropped from the in-memory view only; persisted bytes remain untouched
+// tolerated only at its exact nesting level: top-level entries remain top-level,
+// "recovery.review_start" remains nested inside recovery provenance, and the
+// "result_reopens.*" slot paths remain nested inside each result_reopens array
+// element. Historical records that carry them load read-only with the retired
+// content dropped from the in-memory view only; persisted bytes remain untouched
 // because the tolerant read never rewrites authority. New authority state never
 // persists these fields.
 var compactRetiredStateFieldPaths = map[string]struct{}{
@@ -142,7 +143,29 @@ var compactRetiredStateFieldPaths = map[string]struct{}{
 	// bytes exactly (issue 2399).
 	"risk_source":           {},
 	"recovery.review_start": {},
+	// result_dispositions was the top-level audit array of disposed reviewer
+	// results until v2.5.0 moved disposition auditing out of compact state.
+	// Released v2.2.x escalated records carry it; retirement keeps them on the
+	// read-only historical path instead of misattributing their bytes to a
+	// newer release (issue #2995).
+	"result_dispositions": {},
+	// result_reopens entries carried the quarantined/retained slot arrays and
+	// authorized_lenses until v2.5.0 replaced them with the payload-free
+	// removed-reference audit. Retirement drops the slot content from the
+	// in-memory view only, inside each result_reopens array element.
+	"result_reopens.quarantined":       {},
+	"result_reopens.retained":          {},
+	"result_reopens.authorized_lenses": {},
+	// recovery.final_verification_retry was the proof field of the retired
+	// final_verification_retry recovery disposition, both deleted in v2.5.0.
+	"recovery.final_verification_retry": {},
 }
+
+// retiredRecoveryFinalVerificationRetry is the v2.5.0-deleted recovery
+// disposition value. The current schema refuses it, so a persisted record
+// carrying it was necessarily written by a prior-schema binary; the value
+// survives here only as the forensic retirement marker.
+const retiredRecoveryFinalVerificationRetry RecoveryDisposition = "final_verification_retry"
 
 // LegacyReadOnlyError is the typed ordinary-mutation denial for historical
 // legacy-v1 authority. Legacy authority remains available for read-only
@@ -1969,29 +1992,27 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 }
 
 func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historicalCompactForensicRecord, bool) {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var record CompactRecord
-	if err := decoder.Decode(&record); err != nil {
+	// The decode is the same tolerant read the load path uses: retired state
+	// field paths are dropped from the in-memory view only, and the persisted
+	// revision must bind the exact as-persisted state bytes. That binding is
+	// what makes the fingerprint below mean "written by a prior-schema
+	// binary": a v2.2.x writer minted these identities and bound this exact
+	// revision over these exact bytes.
+	view, err := decodeTolerantCompactStateView(payload)
+	if err != nil || view.schema != compactRecordSchema || !validSHA256(view.revision) || view.state.LineageID != lineageID {
 		return historicalCompactForensicRecord{}, false
 	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF || record.Schema != compactRecordSchema || !validSHA256(record.Revision) || record.State.LineageID != lineageID {
-		return historicalCompactForensicRecord{}, false
-	}
-	want, _, err := makeCompactRecord(record.State)
-	if err != nil || want.Revision != record.Revision || !errors.Is(record.State.Validate(), errCompactSnapshotIdentityMismatch) {
-		return historicalCompactForensicRecord{}, false
-	}
-	state := record.State
+	state := view.state
 	// The proof is a coherent re-mint of the retired identity domain: every
 	// snapshot identity the record froze must equal the retired formula's own
 	// recomputation (Initial/Current unconditionally; correction snapshots may
 	// already carry a current-formula identity and then stay untouched), and
 	// every binding that pins one of those identities — the verification
-	// evidence target and each correction attempt's frozen correction target —
-	// is remapped through the exact same bijection, never invented. A record
-	// that still fails validation after that is not prior-schema.
+	// evidence target, each correction attempt's frozen correction target, and
+	// each result reopen's frozen target — is remapped through the exact same
+	// bijection, never invented. A record whose identities are not genuinely
+	// retired-formula values (a forged identity, or current-formula bytes)
+	// fails the fingerprint and is never classified as prior-schema.
 	reminted := map[string]string{}
 	remint := func(snapshot *Snapshot) {
 		minted := snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
@@ -2017,15 +2038,84 @@ func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historic
 			state.CorrectionAttempts[index].CorrectionTargetIdentity = minted
 		}
 	}
-	if state.Validate() != nil {
+	for index := range state.ResultReopens {
+		if minted, seen := reminted[state.ResultReopens[index].TargetIdentity]; seen {
+			state.ResultReopens[index].TargetIdentity = minted
+		}
+	}
+	if !forensicRemintedStateValid(state, view) {
 		return historicalCompactForensicRecord{}, false
 	}
 	predecessor := ""
-	if state.Recovery != nil {
-		predecessor = state.Recovery.PredecessorLineageID
+	if view.state.Recovery != nil {
+		predecessor = view.state.Recovery.PredecessorLineageID
 	}
 	sum := sha256.Sum256(payload)
 	return historicalCompactForensicRecord{RawDigest: "sha256:" + hex.EncodeToString(sum[:]), PredecessorLineageID: predecessor}, true
+}
+
+// forensicRemintedStateValid validates a reminted prior-schema state. After
+// the identity re-mint the state can still fail at the seams where the
+// current schema demands content the writer stored in retired fields: the
+// admitted-review view (a pre-migration record's admitted results live in the
+// retired projections, so the view is empty while selected lenses are not),
+// the payload-free reopen audit (retired slot arrays were dropped from the
+// view), and the retired recovery disposition (deleted from the schema in
+// v2.5.0, so no current binary could even write it). Each seam is tolerated
+// only when the record actually carried that retired domain, only within
+// already-fingerprinted prior-schema bytes, and only by projecting the seam
+// away and re-validating everything that remains — retired content is never
+// adopted, completed, or validated semantically. Any failure that is not an
+// exactly-matched retired seam (truncated bytes, checksum drift, forged
+// identities, or ordinary semantic damage) refuses the classification.
+func forensicRemintedStateValid(state CompactState, view tolerantCompactStateView) bool {
+	for iteration := 0; ; iteration++ {
+		validateErr := state.Validate()
+		if validateErr == nil {
+			return true
+		}
+		if iteration >= len(compactRetiredStateFieldPaths) {
+			return false // every seam projection is a strict subset drop; this cannot loop forever
+		}
+		message := validateErr.Error()
+		switch {
+		case len(state.AdmittedRoleResults) == 0 && message == compactRetiredAdmittedLensViewProblem,
+			len(state.AdmittedRoleResults) == 0 && message == compactRetiredFixFindingViewProblem:
+			// The lifecycle stage short-circuited Validate, so run its
+			// post-lifecycle tail directly; everything before the lifecycle
+			// stage already ran.
+			return validateCompactPostLifecycleState(state) == nil
+		case len(state.AdmittedRoleResults) == 0 && message == compactRetiredApprovedEvidenceProblem && validSHA256(state.EvidenceHash):
+			// The record carries its own (retired-formula) evidence binding;
+			// the current view formula cannot re-derive it without the retired
+			// admitted results, so the shape check is the honest bound.
+			return validateCompactPostLifecycleState(state) == nil
+		case view.retiredResultReopenSlots && message == compactRetiredReopenAuditProblem && forensicRetiredReopenAuditCoherent(state):
+			state.ResultReopens = nil // proof-only projection; never persisted, never loaded
+		case view.retiredFinalVerificationRetry && message == compactRetiredRecoveryDispositionProblem &&
+			state.Recovery != nil && state.Recovery.Disposition == retiredRecoveryFinalVerificationRetry &&
+			strings.TrimSpace(state.Recovery.MaintainerAuthorization) != "" && state.Recovery.Evidence == nil:
+			state.Recovery = nil // proof-only projection; predecessor provenance is read from the unprojected view
+		default:
+			return false
+		}
+	}
+}
+
+// forensicRetiredReopenAuditCoherent re-checks, by hand, the surviving audit
+// fields of reopen entries whose retired slot arrays were dropped from the
+// view: the exact fields validateCompactResultReopens checks and can still
+// see, minus the lens derivation that exists only because retirement emptied
+// the quarantine selection.
+func forensicRetiredReopenAuditCoherent(state CompactState) bool {
+	for _, reopen := range state.ResultReopens {
+		if !validSHA256(reopen.PreviousRevision) || reopen.TargetIdentity != state.InitialSnapshot.Identity ||
+			strings.TrimSpace(reopen.Reason) == "" || strings.TrimSpace(reopen.Actor) == "" ||
+			strings.TrimSpace(reopen.MaintainerAuthorization) == "" || reopen.ReopenedAt.IsZero() {
+			return false
+		}
+	}
+	return true
 }
 
 func retiredCompactSnapshotIdentity(snapshot Snapshot) string {
@@ -2092,13 +2182,29 @@ func retiredCompactFieldError(err error) bool {
 	return false
 }
 
-// parseHistoricalCompactRecord tolerates only retired state field paths from
-// older builds, each removed at its exact nesting level. The persisted
-// revision must bind the exact historical state bytes, so loading preserves
-// revisions and provenance without ever rewriting or re-hashing persisted
-// authority; retired content such as recovery.review_start stays intact on
-// disk and is only dropped from the decoded in-memory view.
-func parseHistoricalCompactRecord(payload []byte) (CompactRecord, error) {
+// tolerantCompactStateView is the in-memory result of decoding a persisted
+// compact record with every retired state field path removed from the state
+// view. The persisted revision and raw state bytes are never rewritten; only
+// the decoded view drops retired content. The retired* flags record which
+// retired domains the original bytes actually carried, so the forensic
+// classifier can later tolerate exactly those domains and nothing else.
+type tolerantCompactStateView struct {
+	schema   string
+	revision string
+	state    CompactState
+	retiredFields                 int
+	retiredResultReopenSlots      bool
+	retiredFinalVerificationRetry bool
+}
+
+// decodeTolerantCompactStateView decodes a compact record envelope strictly,
+// drops every retired state field path from the in-memory state view, decodes
+// the remaining state strictly, and verifies that the persisted revision
+// binds the exact as-persisted state bytes under the historical writer's
+// formula. Retirement therefore never loosens the tamper guard: any byte
+// drift between the record and its revision fails here before anything else
+// can be classified.
+func decodeTolerantCompactStateView(payload []byte) (tolerantCompactStateView, error) {
 	var envelope struct {
 		Schema   string          `json:"schema"`
 		Revision string          `json:"revision"`
@@ -2107,42 +2213,45 @@ func parseHistoricalCompactRecord(payload []byte) (CompactRecord, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&envelope); err != nil {
-		return CompactRecord{}, err
+		return tolerantCompactStateView{}, err
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return CompactRecord{}, errors.New("multiple JSON values in compact review state")
+		return tolerantCompactStateView{}, errors.New("multiple JSON values in compact review state")
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(envelope.State, &fields); err != nil {
-		return CompactRecord{}, err
+		return tolerantCompactStateView{}, err
 	}
-	retired := false
+	view := tolerantCompactStateView{schema: envelope.Schema, revision: envelope.Revision}
 	for path := range compactRetiredStateFieldPaths {
 		deleted, deleteErr := deleteRetiredCompactField(fields, strings.Split(path, "."))
 		if deleteErr != nil {
-			return CompactRecord{}, deleteErr
+			return tolerantCompactStateView{}, deleteErr
 		}
-		if deleted {
-			retired = true
+		if !deleted {
+			continue
 		}
-	}
-	if !retired {
-		return CompactRecord{}, errors.New("compact review state has no tolerated retired fields")
+		view.retiredFields++
+		switch path {
+		case "result_reopens.quarantined", "result_reopens.retained", "result_reopens.authorized_lenses":
+			view.retiredResultReopenSlots = true
+		case "recovery.final_verification_retry":
+			view.retiredFinalVerificationRetry = true
+		}
 	}
 	remaining, err := json.Marshal(fields)
 	if err != nil {
-		return CompactRecord{}, err
+		return tolerantCompactStateView{}, err
 	}
 	stateDecoder := json.NewDecoder(bytes.NewReader(remaining))
 	stateDecoder.DisallowUnknownFields()
-	var state CompactState
-	if err := stateDecoder.Decode(&state); err != nil {
-		return CompactRecord{}, err
+	if err := stateDecoder.Decode(&view.state); err != nil {
+		return tolerantCompactStateView{}, err
 	}
 	var compacted bytes.Buffer
 	if err := json.Compact(&compacted, envelope.State); err != nil {
-		return CompactRecord{}, err
+		return tolerantCompactStateView{}, err
 	}
 	// makeCompactRecord hashes json.Marshal(state) while the record file is
 	// written with json.MarshalIndent, which is marshal-then-indent; Compact
@@ -2150,15 +2259,34 @@ func parseHistoricalCompactRecord(payload []byte) (CompactRecord, error) {
 	// writer's exact revision preimage without re-marshaling the struct.
 	sum := sha256.Sum256(append([]byte(CompactStateSchema+"\x00"), compacted.Bytes()...))
 	if envelope.Revision != "sha256:"+hex.EncodeToString(sum[:]) {
-		return CompactRecord{}, errors.New("compact review state checksum mismatch")
+		return tolerantCompactStateView{}, errors.New("compact review state checksum mismatch")
 	}
-	return CompactRecord{Schema: envelope.Schema, Revision: envelope.Revision, State: state, HistoricalCompat: true}, nil
+	return view, nil
+}
+
+// parseHistoricalCompactRecord tolerates only retired state field paths from
+// older builds, each removed at its exact nesting level. The persisted
+// revision must bind the exact historical state bytes, so loading preserves
+// revisions and provenance without ever rewriting or re-hashing persisted
+// authority; retired content such as recovery.review_start stays intact on
+// disk and is only dropped from the decoded in-memory view.
+func parseHistoricalCompactRecord(payload []byte) (CompactRecord, error) {
+	view, err := decodeTolerantCompactStateView(payload)
+	if err != nil {
+		return CompactRecord{}, err
+	}
+	if view.retiredFields == 0 {
+		return CompactRecord{}, errors.New("compact review state has no tolerated retired fields")
+	}
+	return CompactRecord{Schema: view.schema, Revision: view.revision, State: view.state, HistoricalCompat: true}, nil
 }
 
 // deleteRetiredCompactField removes one retired field at the exact nesting
 // level its dot-path names, mutating only the in-memory field view used for
 // the tolerant re-decode. A retired leaf name appearing at any other level
-// stays in place and keeps failing strict decoding.
+// stays in place and keeps failing strict decoding. An intermediate value
+// may also be an array (the result_reopens slot paths), in which case the
+// remainder of the path is applied inside every object element.
 func deleteRetiredCompactField(fields map[string]json.RawMessage, path []string) (bool, error) {
 	name := path[0]
 	raw, exists := fields[name]
@@ -2171,7 +2299,39 @@ func deleteRetiredCompactField(fields map[string]json.RawMessage, path []string)
 	}
 	var nested map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &nested); err != nil {
-		return false, err
+		var elements []json.RawMessage
+		if arrayErr := json.Unmarshal(raw, &elements); arrayErr != nil {
+			return false, err
+		}
+		deleted := false
+		for index, element := range elements {
+			var elementFields map[string]json.RawMessage
+			if elementErr := json.Unmarshal(element, &elementFields); elementErr != nil {
+				return false, elementErr
+			}
+			elementDeleted, deleteErr := deleteRetiredCompactField(elementFields, path[1:])
+			if deleteErr != nil {
+				return false, deleteErr
+			}
+			if !elementDeleted {
+				continue
+			}
+			deleted = true
+			updatedElement, marshalErr := json.Marshal(elementFields)
+			if marshalErr != nil {
+				return false, marshalErr
+			}
+			elements[index] = updatedElement
+		}
+		if !deleted {
+			return false, nil
+		}
+		updated, marshalErr := json.Marshal(elements)
+		if marshalErr != nil {
+			return false, marshalErr
+		}
+		fields[name] = updated
+		return true, nil
 	}
 	deleted, err := deleteRetiredCompactField(nested, path[1:])
 	if err != nil || !deleted {
