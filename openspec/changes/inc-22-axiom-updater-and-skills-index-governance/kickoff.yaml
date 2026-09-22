@@ -1,0 +1,17 @@
+schema: axiom.sdd-kickoff/v1
+change: inc-22-axiom-updater-and-skills-index-governance
+sealed_at: 2026-09-22T12:04:42.9154762Z
+sealed_by: inferred
+kickoff:
+    flow_mode: sdd
+    execution_style: continuous
+    execution_style_source: inferred
+    handoff_policy: none
+    roles:
+        - role: fullstack
+          gate_policy: blocking
+          tasks_file: tasks.md
+          verify_file: verify-report.md
+lifecycle:
+    deployment_target: local
+    post_archive_policy: bug_only
