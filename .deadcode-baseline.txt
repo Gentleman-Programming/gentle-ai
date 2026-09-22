@@ -88,6 +88,7 @@ internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
 internal/livingdoc/service.go	Service.GetIndexPath
 internal/livingdoc/service.go	Service.GetSpecsRoot
+internal/multirole/detector.go	RoleExists
 internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
 internal/reviewerprovider/windows_batch_cmdline.go	isWindowsBatchFile
 internal/reviewerprovider/windows_batch_cmdline.go	quoteWindowsArgument
