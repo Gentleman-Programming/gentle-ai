@@ -29,7 +29,7 @@ func RunSDDKickoff(args []string, stdout io.Writer) error {
 	case "show":
 		return runSDDKickoffShow(rest, stdout)
 	default:
-		return fmt.Errorf("subcomando %q no reconocido para kickoff; opciones: seal, show", sub)
+		return fmt.Errorf("subcomando %q no reconocido para kickoff; opciones: seal, show; ejecuta `axiom sdd kickoff --help`", sub)
 	}
 }
 

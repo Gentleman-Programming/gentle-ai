@@ -149,9 +149,16 @@ const refusalRatchetMarkerHint = "refusal:by-design"
 var refusalRatchetMarkerRegexp = regexp.MustCompile(`^refusal:by-design\s+([a-z-]+):\s*(\S.*)$`)
 
 // refusalRatchetNamedContinuationRegexp matches an explicit runnable
-// continuation. Requiring a lowercase letter directly after "gentle-ai "
+// continuation. Requiring a lowercase letter directly after the binary name
 // excludes prose that mentions the product name without naming a command.
-var refusalRatchetNamedContinuationRegexp = regexp.MustCompile(`gentle-ai [a-z][a-z-]*`)
+// Both "gentle-ai " (the upstream binary) and "axiom " (this fork's binary)
+// satisfy it: the fork renamed the binary but this detector still checked
+// only the old name, so a refusal correctly naming `axiom sdd kickoff
+// --help` (sdd_kickoff.go, sdd_gate.go -- the only production sites naming
+// "axiom" in a refusal) was invisible to it. Widening the accepted prefixes
+// closes that gap without weakening the guard: a message naming no command
+// at all, under either name, still fails exactly as before.
+var refusalRatchetNamedContinuationRegexp = regexp.MustCompile(`(?:gentle-ai|axiom) [a-z][a-z-]*`)
 
 // refusalRatchetErrorMethodOrigin labels a refusal returned from an
 // `Error() string` method. It sits in the same slot as the constructor name so
@@ -341,6 +348,17 @@ func TestRefusalRatchetClassifiesSyntheticSites(t *testing.T) {
 	t.Run("naming a gentle-ai continuation satisfies", func(t *testing.T) {
 		analysis := refusalRatchetMustAnalyze(t, header+
 			"func f(l string) error {\n\treturn fmt.Errorf(\"blocked: run `gentle-ai review reopen-results --lineage %s`\", l)\n}\n")
+		if len(analysis.violations) != 0 || analysis.satisfiedNamed != 1 {
+			t.Fatalf("want 1 named satisfaction and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("naming an axiom continuation satisfies", func(t *testing.T) {
+		// This fork's binary is `axiom`, not `gentle-ai`; the detector must
+		// recognize both names or a genuinely runnable `axiom ...`
+		// continuation is misreported as a violation.
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"func f() error {\n\treturn errors.New(\"kickoff requiere un subcomando: seal o show; ejecuta `axiom sdd kickoff --help`\")\n}\n")
 		if len(analysis.violations) != 0 || analysis.satisfiedNamed != 1 {
 			t.Fatalf("want 1 named satisfaction and no violations, got %+v", analysis)
 		}

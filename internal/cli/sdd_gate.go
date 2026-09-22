@@ -8,6 +8,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
 )
 
 // lastRoleNoticeMarker is the stable phrase RunSDDGate's last-role notice
@@ -37,7 +38,7 @@ func RunSDDGate(args []string, stdout io.Writer) error {
 	case "show":
 		return runSDDGateShow(rest, stdout)
 	default:
-		return fmt.Errorf("subcomando %q no reconocido para gate; opciones: record, show", sub)
+		return fmt.Errorf("subcomando %q no reconocido para gate; opciones: record, show; ejecuta `axiom sdd gate --help`", sub)
 	}
 }
 
@@ -53,7 +54,7 @@ func runSDDGateRecord(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, changeRoot, err := resolveGovernanceChangeRoot(parsed.CWD, parsed.Change)
+	workspaceRoot, changeRoot, err := resolveGovernanceChangeRoot(parsed.CWD, parsed.Change)
 	if err != nil {
 		return err
 	}
@@ -70,9 +71,11 @@ func runSDDGateRecord(args []string, stdout io.Writer) error {
 	isRoleApply := isRoleApplyGate(parsed.Gate)
 	if isRoleApply {
 		if sealed == nil {
-			return fmt.Errorf("no se puede registrar %q: el cambio %q no tiene un kickoff sellado con roster de roles", parsed.Gate, parsed.Change)
+			return fmt.Errorf("no se puede registrar %q: el cambio %q no tiene un kickoff sellado con roster de roles; sella el kickoff primero, por ejemplo con `axiom sdd kickoff seal --cwd %s --change %s --execution-style checkpointed --handoff-policy none`",
+				parsed.Gate, parsed.Change, pathquote.Quote(workspaceRoot), pathquote.Quote(parsed.Change))
 		}
 		if !gateKeyInRoster(parsed.Gate, roster) {
+			// refusal:by-design operator-knowledge: only the operator knows which sealed role they meant to target; the message already lists the complete valid roster, and no runnable command can pick a role for them -- the roster is fixed at kickoff time and this verb never re-seals it
 			return fmt.Errorf("%q no pertenece al roster sellado de %q (roster: %s)", parsed.Gate, parsed.Change, strings.Join(rosterRoleNames(roster), ", "))
 		}
 	}

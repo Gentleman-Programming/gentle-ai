@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
 )
 
 // resolveGovernanceChangeRoot resolves the workspace root from cwd
@@ -45,6 +46,7 @@ func resolveGovernanceChangeRoot(cwd, change string) (workspaceRoot, changeRoot 
 		return "", "", fmt.Errorf("--cwd %q no existe o no es accesible: %w", cwd, statErr)
 	}
 	if !info.IsDir() {
+		// refusal:by-design operator-knowledge: only the operator knows what path they meant to pass; no command can repair a --cwd value that names a file instead of a directory
 		return "", "", fmt.Errorf("--cwd %q no es un directorio", cwd)
 	}
 
@@ -57,7 +59,8 @@ func resolveGovernanceChangeRoot(cwd, change string) (workspaceRoot, changeRoot 
 	case isDirectory(archivedRoot):
 		changeRoot = archivedRoot
 	default:
-		return "", "", fmt.Errorf("el cambio %q no existe en %q ni en %q; estos verbos escriben dentro de un cambio ya creado, nunca crean uno nuevo", change, activeRoot, archivedRoot)
+		return "", "", fmt.Errorf("el cambio %q no existe en %q ni en %q; estos verbos escriben dentro de un cambio ya creado, nunca crean uno nuevo; ejecuta `axiom sdd status --cwd %s` para ver los cambios activos",
+			change, activeRoot, archivedRoot, pathquote.Quote(absRoot))
 	}
 
 	if err := kickoff.RefuseArchivedRoot(absRoot, changeRoot); err != nil {
