@@ -47,6 +47,11 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	// projection (organic-agent-trigger-rules, ADDED requirement).
 	output.WriteString("Organic Driven Development (ODD) is the predefined workflow of this orchestrator. Every request enters it, on every runtime, without the user asking for a workflow, a plan, or task tracking. SDD is a branch inside ODD, entered only by an explicit request or an accepted proposal. Never describe this workflow only when asked about it: run it.\n\n")
 	output.WriteString("### ODD protocol (MANDATORY, in this order, on every request)\n\n")
+	// Step 0: absorbed from INC-21 (design.md S1.2/S4.7, H-2; REQ-21.1-21.3).
+	// It stays numbered zero, ahead of the seven-step protocol below, instead
+	// of renumbering steps 1-7: those numbers are already cross-referenced
+	// verbatim elsewhere in this doctrine and in SDD's own shared sections.
+	output.WriteString("0. **Evaluate scope and lane.** Before creating any work artifact — `odd/tasks/<feature-name>.md` or `openspec/changes/<change>/proposal.md` — evaluate the scope of the request. For a bounded scope that reasonably admits both lanes, ask the blocking lane-selection question — do you want to approach this through the agile ODD lane or the formal SDD lane? — and STOP to wait for the answer; create no work artifact while it is pending. For a scope that is unambiguously architectural or large, skip that binary question and enter the SDD pre-flight questionnaire directly, without asking it. If the user chooses ODD, do not ask any further governance question: proceed straight into step 1 below, work it through without dividing it into roles, and keep it exclusively in `odd/tasks/<feature-name>.md`.\n")
 	output.WriteString("1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change. Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only unless the user explicitly requests implementation or another mutation.\n")
 	output.WriteString("   - Read-only work may inspect, explain, compare, and recommend, but must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts.\n")
 	output.WriteString("   - If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.\n")

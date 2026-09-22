@@ -540,7 +540,16 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Root4b replaces shared research admission prose; Kilocode permissions stay unchanged.
 	// Root4c scopes research above the generic gate; Kilocode inherits only that shared prose.
 	// No other content moved beyond the above. Deliberate, not drift.
-	const want = "770f9320edcac11c31cfd23a9a77f2dc985413238cf35ae291c40f2c9918d136"
+	// INC-21 rederives this baseline once more. The Fase 23 doctrine work added
+	// the kickoff/block-gates marker to internal/assets/opencode/sdd-orchestrator.md
+	// (+4 lines) and extended internal/assets/skills/_shared/openspec-convention.md
+	// (+12/-3), both of which feed this hash. Kilocode embeds the OpenCode
+	// orchestrator asset wholesale but is NOT among the twelve agents Fase 23
+	// enumerates, so nothing recomputed its baseline at the time; the closing
+	// check ran `go test ./internal/components/` without `/...`, which never
+	// reaches this subpackage. Kilocode gains no native governance capability
+	// from this: it inherits the shared prose only. Deliberate, not drift.
+	const want = "f3397aa3383e9c80ee8167f39fe7c0812a116b3d46e818295bc53756ab9d49e9"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

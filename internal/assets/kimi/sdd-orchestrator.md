@@ -150,6 +150,10 @@ Do NOT invent custom `/sdd-*` command files. On Kimi, user-facing entrypoints ar
 
 {{GENTLE_AI_SDD_SECTION:Native SDD Dispatcher Guard}}
 
+### SDD Change Kickoff and Block Gates
+
+{{GENTLE_AI_SDD_SECTION:SDD Change Kickoff and Block Gates}}
+
 ### SDD Init Guard (MANDATORY)
 
 Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-status`, `/skill:sdd-init`, `/skill:sdd-explore`, `/skill:sdd-propose`, `/skill:sdd-spec`, `/skill:sdd-design`, `/skill:sdd-tasks`, `/skill:sdd-apply`, `/skill:sdd-verify`, `/skill:sdd-archive`, `/skill:sdd-onboard`), check if `sdd-init` has been run for this project:

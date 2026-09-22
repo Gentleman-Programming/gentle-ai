@@ -946,6 +946,35 @@ func (builder SnapshotBuilder) WorktreeClean(ctx context.Context) (bool, error) 
 	return len(output) == 0, nil
 }
 
+// RevisionIsAncestor reports whether ancestor is reachable from descendant in
+// the LOCAL commit graph. It never consults any remote: it never runs fetch
+// or ls-remote, so it never requires remote authorization or credentials
+// (INC-21 design.md S5.6, S1.3). It runs over this package's hardened
+// executor, with LocalGitCommandTimeout, the shared output limit, and the
+// existing graft guards already in force.
+//
+// The check is read-only over the commit graph: a dirty or staged worktree
+// never changes the verdict, because `git merge-base --is-ancestor` never
+// touches the index. Exit code 0 means true; exit code 1 means false; any
+// other outcome -- a nonexistent revision, a missing git binary, a cancelled
+// context, or an unrecognized exit code -- is reported as an error, never
+// coerced into true or false.
+func (builder SnapshotBuilder) RevisionIsAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return false, err
+	}
+	_, _, err = runGitCapturedRangeWithTimeout(ctx, root, nil, nil, 0, defaultGitOutputLimit, false, false, false, 0, "merge-base", "--is-ancestor", ancestor, descendant)
+	if err == nil {
+		return true, nil
+	}
+	var commandErr *GitCommandError
+	if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
 // RebuildCommittedBaseDiffCorrectionCandidate derives a committed correction
 // from the immutable initial boundary, never from the mutable original ref.
 func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo string, state CompactState) (Snapshot, error) {

@@ -195,6 +195,49 @@ func TestRenderRoutingProjectsODDProtocolBeforeTopology(t *testing.T) {
 	}
 }
 
+// TestRenderRoutingAsksLaneSelectionBeforeAuthorize guards INC-21's Step 0
+// (REQ-21.1-21.3, design.md S4.7/H-2): the ODD/SDD lane-selection blocking
+// question, and ODD's own "no additional questions" instruction (REQ-21.2),
+// must both render BEFORE "1. **Authorize.**" so no adapter reads the
+// existing seven-step protocol as the entry point into a request whose lane
+// has not been decided yet.
+func TestRenderRoutingAsksLaneSelectionBeforeAuthorize(t *testing.T) {
+	t.Parallel()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+
+			authorizeOffset := strings.Index(rendered, "1. **Authorize.**")
+			if authorizeOffset < 0 {
+				t.Fatalf("RenderRouting(%q) is missing the existing \"1. **Authorize.**\" step:\n%s", agent.ID, rendered)
+			}
+
+			for _, want := range []string{
+				"0. **Evaluate scope and lane.**",
+				"agile ODD lane or the formal SDD lane",
+				"STOP",
+				"unambiguously architectural",
+				"enter the SDD pre-flight questionnaire directly",
+				"do not ask any further governance question",
+			} {
+				offset := strings.Index(rendered, want)
+				if offset < 0 {
+					t.Fatalf("RenderRouting(%q) is missing Step 0 clause %q:\n%s", agent.ID, want, rendered)
+				}
+				if offset > authorizeOffset {
+					t.Fatalf("RenderRouting(%q) renders Step 0 clause %q AFTER \"1. **Authorize.**\", want before:\n%s", agent.ID, want, rendered)
+				}
+			}
+		})
+	}
+}
+
 // TestRenderRoutingRendersMandatoryDelegationTriggers guards the upstream
 // dcd2fa07 absorption: delegation triggers must be behavioral (rendered as
 // mandatory stop-and-delegate rules keyed to the canonical manifest

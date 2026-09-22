@@ -20,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/dashboard"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/hub"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/semantic"
@@ -729,15 +730,18 @@ func runRoleList(args []string) {
 	}
 
 	designFile := filepath.Join(changeDir, "design.md")
-	roles, err := multirole.DetectRoles(designFile, wsConfig)
+	roster, err := resolveCLIRoster(changeDir, designFile, wsConfig)
 	if err != nil {
 		fmt.Printf("[ERROR] No se pudieron detectar los roles del cambio %q:\n  %v\n", changeName, err)
 		os.Exit(1)
 	}
+	roles := roster.Roles
 
 	fmt.Println("================================================================================")
 	fmt.Printf("Axiom Roles Participantes: %s\n", changeName)
 	fmt.Println("================================================================================")
+	fmt.Printf("Fuente del roster: %s\n", roster.Source)
+	printRosterConflictWarning(roster)
 	fmt.Printf("Total de roles asignados: %d\n\n", len(roles))
 
 	for i, r := range roles {
@@ -780,11 +784,12 @@ func runRoleStatus(args []string) {
 	}
 
 	designFile := filepath.Join(changeDir, "design.md")
-	roles, err := multirole.DetectRoles(designFile, wsConfig)
+	roster, err := resolveCLIRoster(changeDir, designFile, wsConfig)
 	if err != nil {
 		fmt.Printf("[ERROR] No se pudieron detectar los roles del cambio %q:\n  %v\n", changeName, err)
 		os.Exit(1)
 	}
+	roles := roster.Roles
 
 	report, err := multirole.EvaluateBarrier(changeDir, changeName, roles)
 	if err != nil {
@@ -795,6 +800,8 @@ func runRoleStatus(args []string) {
 	fmt.Println("================================================================================")
 	fmt.Printf("Axiom Estado de Roles: %s\n", changeName)
 	fmt.Println("================================================================================")
+	fmt.Printf("Fuente del roster: %s\n", roster.Source)
+	printRosterConflictWarning(roster)
 
 	for i, r := range report.Roles {
 		policyLabel := strings.ToUpper(string(r.Assignment.GatePolicy))
@@ -852,11 +859,13 @@ func runRoleBarrier(args []string) {
 	}
 
 	designFile := filepath.Join(changeDir, "design.md")
-	roles, err := multirole.DetectRoles(designFile, wsConfig)
+	roster, err := resolveCLIRoster(changeDir, designFile, wsConfig)
 	if err != nil {
 		fmt.Printf("[ERROR] No se pudieron detectar los roles del cambio %q:\n  %v\n", changeName, err)
 		os.Exit(1)
 	}
+	roles := roster.Roles
+	printRosterConflictWarning(roster)
 
 	report, err := multirole.EvaluateBarrier(changeDir, changeName, roles)
 	if err != nil {
@@ -916,6 +925,52 @@ func runRoleBarrier(args []string) {
 
 	fmt.Println("\nResultado: SATISFIED (Autorizado para despliegue en staging y PR a main)")
 	os.Exit(0)
+}
+
+// resolveCLIRoster is the single call site `role list`/`role status`/`role
+// barrier` share to obtain the reconciled roster (D-06): it reads any
+// sealed kickoff.yaml for changeDir, converts its roles to
+// multirole.RoleAssignment, and delegates the actual precedence and
+// classification logic entirely to multirole.ResolveRoster. It never
+// imports internal/kickoff's decision-making — only kickoff.Load, a pure
+// read.
+func resolveCLIRoster(changeDir, designFile string, wsConfig *workspace.WorkspaceConfig) (multirole.Roster, error) {
+	sealedRoles, err := loadSealedRosterRoles(changeDir)
+	if err != nil {
+		return multirole.Roster{}, fmt.Errorf("leer el kickoff sellado: %w", err)
+	}
+	return multirole.ResolveRoster(sealedRoles, designFile, wsConfig)
+}
+
+// loadSealedRosterRoles converts a sealed kickoff's role entries to
+// multirole.RoleAssignment for ResolveRoster's "sealed" parameter. A change
+// with no sealed kickoff.yaml (kickoff.Load returns nil, nil) resolves to
+// an empty roster, which ResolveRoster's own contract treats as "no seal
+// yet" and falls back to DetectRoles.
+func loadSealedRosterRoles(changeDir string) ([]multirole.RoleAssignment, error) {
+	sealed, err := kickoff.Load(changeDir)
+	if err != nil {
+		return nil, err
+	}
+	if sealed == nil {
+		return nil, nil
+	}
+	roles := make([]multirole.RoleAssignment, 0, len(sealed.Config.Roles))
+	for _, r := range sealed.Config.Roles {
+		roles = append(roles, multirole.RoleAssignment{Role: r.Role, GatePolicy: r.GatePolicy})
+	}
+	return roles, nil
+}
+
+// printRosterConflictWarning prints the one-line warning naming a sealed
+// roster's discrepancy against design.md, when ResolveRoster found one. It
+// is a no-op for a nil Conflict (the overwhelmingly common case: no sealed
+// kickoff, or a sealed kickoff that agrees with design.md).
+func printRosterConflictWarning(roster multirole.Roster) {
+	if roster.Conflict == nil {
+		return
+	}
+	fmt.Printf("[AVISO] %s\n", roster.Conflict.Detail)
 }
 
 func resolveChangeDir(baseDir, change string) (string, string, string, error) {
@@ -1733,6 +1788,8 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "  archive-compose  Compone el reporte de archivado formal y actualiza las especificaciones vivas")
 		fmt.Fprintln(stdout, "  task-result      Valida y extrae el resultado tipado de una fase delegada")
 		fmt.Fprintln(stdout, "  preflight-hook   Ejecuta el hook previo de verificación SDD")
+		fmt.Fprintln(stdout, "  kickoff          Sella la configuración de kickoff de un cambio (seal, show)")
+		fmt.Fprintln(stdout, "  gate             Registra o consulta decisiones de compuertas de revisión por bloque (record, show)")
 		if len(args) < 1 {
 			return 1
 		}
@@ -1756,8 +1813,12 @@ func runSDD(args []string, stdout, stderr io.Writer) int {
 		err = cli.RunSDDTaskResult(subArgs, stdout)
 	case "preflight-hook":
 		err = cli.RunSDDPreflightHook(subArgs, stdout)
+	case "kickoff":
+		err = cli.RunSDDKickoff(subArgs, stdout)
+	case "gate":
+		err = cli.RunSDDGate(subArgs, stdout)
 	default:
-		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, archive-compose, task-result, preflight-hook\n", subCmd)
+		fmt.Fprintf(stderr, "Error: subcomando '%s' no reconocido para sdd. Opciones: status, continue, attempt, archive-compose, task-result, preflight-hook, kickoff, gate\n", subCmd)
 		return 1
 	}
 

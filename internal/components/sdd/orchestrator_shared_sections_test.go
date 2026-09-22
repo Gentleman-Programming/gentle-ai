@@ -116,6 +116,32 @@ var sharedOrchestratorSectionNames = []string{
 	// Form)".
 	"Delegated Verification Gate (MANDATORY)",
 	"Delegated Verification Gate (Reduced Form)",
+	// INC-21 (design.md S4.7, H-2): the per-change kickoff questionnaire and
+	// the four block-review gates, plus their normative boundary against
+	// RDD (design.md S1.3). Registered here, in Phase 22, ahead of Phase
+	// 23 inserting the {{GENTLE_AI_SDD_SECTION:...}} marker into the
+	// twelve per-agent orchestrator assets: TestEveryRuntimeRendersTheSharedSections'
+	// own "continue" guard keeps this registration a no-op for every
+	// runtime until that marker exists.
+	"SDD Change Kickoff and Block Gates",
+}
+
+// TestSDDChangeKickoffAndBlockGatesSectionIsDeterministic is task 22.3's own
+// case: the new shared section renders the same content across repeated
+// reads. sharedOrchestratorSection is a pure lookup over an embedded asset,
+// so determinism holds by construction; this test makes that property
+// observable instead of merely assumed.
+func TestSDDChangeKickoffAndBlockGatesSectionIsDeterministic(t *testing.T) {
+	const name = "SDD Change Kickoff and Block Gates"
+	first := sharedOrchestratorSection(name)
+	if strings.TrimSpace(first) == "" {
+		t.Fatalf("shared asset carries no body for %q", name)
+	}
+	for i := 0; i < 5; i++ {
+		if again := sharedOrchestratorSection(name); again != first {
+			t.Fatalf("shared section %q is not deterministic across repeated reads (iteration %d):\nfirst:\n%s\nagain:\n%s", name, i, first, again)
+		}
+	}
 }
 
 // TestSharedOrchestratorSectionsHaveOneSource pins that each shared section

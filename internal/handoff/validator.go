@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
@@ -138,6 +139,9 @@ func validateRoles(h *Handoff, wsConfig *workspace.WorkspaceConfig) error {
 }
 
 func roleExists(cfg *workspace.WorkspaceConfig, role string) bool {
+	if multirole.IsReservedRole(role) {
+		return true
+	}
 	for k, v := range cfg.Roles {
 		if strings.EqualFold(k, role) || strings.EqualFold(v.Name, role) {
 			return true

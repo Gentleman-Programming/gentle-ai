@@ -11,6 +11,8 @@ openspec/
 └── changes/                 <- Active changes
     ├── archive/             <- Completed changes (YYYY-MM-DD-{change-name}/)
     └── {change-name}/       <- Active change folder
+        ├── kickoff.yaml     <- sealed by `axiom sdd kickoff seal` (INC-21, REQ-21.5/21.6); write-once
+        ├── gates.yaml       <- append-only block-review-gate ledger, written by `axiom sdd gate record` (INC-21, REQ-21.8-21.12)
         ├── state.yaml       <- optional recovery hint; may contain dependsOn
         ├── exploration.md   <- (optional) from sdd-explore
         ├── research.md      <- (optional) source-backed research notes
@@ -19,8 +21,9 @@ openspec/
         │   └── {domain}/
         │       └── spec.md  <- Delta spec
         ├── design.md        <- from sdd-design
-        ├── tasks.md         <- from sdd-tasks (updated by sdd-apply)
-        └── verify-report.md <- from sdd-verify
+        ├── tasks.md         <- from sdd-tasks (updated by sdd-apply); or tasks.<role>.md per role when kickoff.yaml seals more than one role (REQ-21.10)
+        ├── verify-report.md <- from sdd-verify
+        └── handoff.md       <- integration handoff written when the last active role's role-apply gate is approved (INC-21, REQ-21.13/21.14)
 ```
 
 ## Artifact File Paths
@@ -29,14 +32,17 @@ openspec/
 |-------|----------------|------|
 | orchestrator | Optional recovery hint | `openspec/changes/{change-name}/state.yaml` |
 | sdd-init | Creates | `openspec/config.yaml`, `openspec/specs/`, `openspec/changes/`, `openspec/changes/archive/` |
+| orchestrator | Seals once (`axiom sdd kickoff seal`) | `openspec/changes/{change-name}/kickoff.yaml` |
+| orchestrator | Appends (`axiom sdd gate record`) | `openspec/changes/{change-name}/gates.yaml` |
 | sdd-explore | Creates (optional) | `openspec/changes/{change-name}/exploration.md` |
 | orchestrator | Creates optional research notes | `openspec/changes/{change-name}/research.md` |
 | sdd-propose | Creates | `openspec/changes/{change-name}/proposal.md` |
 | sdd-spec | Creates | `openspec/changes/{change-name}/specs/{domain}/spec.md` |
 | sdd-design | Creates | `openspec/changes/{change-name}/design.md` |
-| sdd-tasks | Creates | `openspec/changes/{change-name}/tasks.md` |
+| sdd-tasks | Creates | `openspec/changes/{change-name}/tasks.md`, or `tasks.<role>.md` per role when `kickoff.yaml` seals more than one role |
 | sdd-apply | Updates | `openspec/changes/{change-name}/tasks.md` (marks `[x]`) |
 | sdd-verify | Creates | `openspec/changes/{change-name}/verify-report.md` |
+| orchestrator | Creates when the last active role's role-apply gate is approved | `openspec/changes/{change-name}/handoff.md` |
 | sdd-archive | Moves | `openspec/changes/{change-name}/` → `openspec/changes/archive/YYYY-MM-DD-{change-name}/` |
 | sdd-archive | Updates | `openspec/specs/{domain}/spec.md` (merges deltas into main specs) |
 

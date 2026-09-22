@@ -2371,3 +2371,143 @@ func TestRebuildCurrentSnapshotEvidenceAcceptsHistoricalInterpretation(t *testin
 		t.Fatalf("historical authority rejected against an unchanged repository: %v", err)
 	}
 }
+
+// TestRevisionIsAncestor covers INC-21 phase 19 (P6a): RevisionIsAncestor is
+// the single new git-plumbing addition design.md S5.6 sanctions. It must stay
+// local and read-only over the commit graph -- never fetch, never ls-remote,
+// never influenced by index/worktree state (T-3) -- and must never coerce a
+// timeout, a missing binary, a cancelled context, or an unrecognized exit
+// code into true or false: those are always errors (T-6).
+func TestRevisionIsAncestor(t *testing.T) {
+	requireSnapshotGit(t)
+
+	t.Run("real ancestor commit reports true", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		ancestor := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		writeSnapshotFile(t, repo, "descendant.txt", "descendant\n")
+		gitSnapshot(t, repo, "add", "--", "descendant.txt")
+		gitSnapshot(t, repo, "commit", "-m", "descendant")
+		descendant := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+		ok, err := (SnapshotBuilder{Repo: repo}).RevisionIsAncestor(context.Background(), ancestor, descendant)
+		if err != nil || !ok {
+			t.Fatalf("RevisionIsAncestor(ancestor, descendant) = (%v, %v), want (true, nil)", ok, err)
+		}
+	})
+
+	t.Run("commit on a divergent branch reports false without error", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		gitSnapshot(t, repo, "checkout", "-b", "branch-a")
+		writeSnapshotFile(t, repo, "a.txt", "a\n")
+		gitSnapshot(t, repo, "add", "--", "a.txt")
+		gitSnapshot(t, repo, "commit", "-m", "a")
+		branchA := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		gitSnapshot(t, repo, "checkout", base)
+		gitSnapshot(t, repo, "checkout", "-b", "branch-b")
+		writeSnapshotFile(t, repo, "b.txt", "b\n")
+		gitSnapshot(t, repo, "add", "--", "b.txt")
+		gitSnapshot(t, repo, "commit", "-m", "b")
+		branchB := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+		ok, err := (SnapshotBuilder{Repo: repo}).RevisionIsAncestor(context.Background(), branchA, branchB)
+		if err != nil || ok {
+			t.Fatalf("RevisionIsAncestor(sibling branches) = (%v, %v), want (false, nil)", ok, err)
+		}
+	})
+
+	t.Run("nonexistent revision reports a named error, never true", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		head := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		missing := strings.Repeat("a", 40)
+
+		ok, err := (SnapshotBuilder{Repo: repo}).RevisionIsAncestor(context.Background(), missing, head)
+		if err == nil || ok {
+			t.Fatalf("RevisionIsAncestor(nonexistent revision) = (%v, %v), want (false, non-nil error)", ok, err)
+		}
+		var commandErr *GitCommandError
+		if !errors.As(err, &commandErr) {
+			t.Fatalf("RevisionIsAncestor(nonexistent revision) error = %T, want *GitCommandError", err)
+		}
+	})
+
+	t.Run("cancelled context reports an error, never true", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		head := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		ok, err := (SnapshotBuilder{Repo: repo}).RevisionIsAncestor(ctx, head, head)
+		if err == nil || ok {
+			t.Fatalf("RevisionIsAncestor(cancelled context) = (%v, %v), want (false, non-nil error)", ok, err)
+		}
+	})
+
+	t.Run("missing git binary reports a named error, never panics", func(t *testing.T) {
+		originalCommand := gitCommandContext
+		t.Cleanup(func() { gitCommandContext = originalCommand })
+		missing := filepath.Join(t.TempDir(), "missing-git-binary")
+		gitCommandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, missing, args...)
+		}
+
+		ok, err := (SnapshotBuilder{Repo: t.TempDir()}).RevisionIsAncestor(context.Background(), "HEAD~1", "HEAD")
+		if err == nil || ok {
+			t.Fatalf("RevisionIsAncestor(missing git binary) = (%v, %v), want (false, non-nil error)", ok, err)
+		}
+		var control *GitProcessControlError
+		if !errors.As(err, &control) {
+			t.Fatalf("RevisionIsAncestor(missing git binary) error = %T, want *GitProcessControlError", err)
+		}
+	})
+
+	t.Run("subprocess exit code other than 0 or 1 reports an error, never true", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		head := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+		originalCommand := gitCommandContext
+		t.Cleanup(func() { gitCommandContext = originalCommand })
+		t.Setenv("GENTLE_AI_GIT_TIMEOUT_HELPER", "exit")
+		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			for _, arg := range args {
+				if arg == "merge-base" {
+					return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRunGitTimeoutHelper$", "--")
+				}
+			}
+			return exec.CommandContext(ctx, name, args...)
+		}
+
+		ok, err := (SnapshotBuilder{Repo: repo}).RevisionIsAncestor(context.Background(), head, head)
+		if err == nil || ok {
+			t.Fatalf("RevisionIsAncestor(non-0/1 exit code) = (%v, %v), want (false, non-nil error)", ok, err)
+		}
+		var commandErr *GitCommandError
+		if !errors.As(err, &commandErr) || commandErr.ExitCode == 0 || commandErr.ExitCode == 1 {
+			t.Fatalf("RevisionIsAncestor(non-0/1 exit code) error = %#v, want *GitCommandError with ExitCode outside {0,1}", err)
+		}
+	})
+
+	t.Run("dirty worktree produces the same verdict as a clean tree", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		ancestor := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		writeSnapshotFile(t, repo, "descendant.txt", "descendant\n")
+		gitSnapshot(t, repo, "add", "--", "descendant.txt")
+		gitSnapshot(t, repo, "commit", "-m", "descendant")
+		descendant := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+		cleanResult, cleanErr := (SnapshotBuilder{Repo: repo}).RevisionIsAncestor(context.Background(), ancestor, descendant)
+		if cleanErr != nil {
+			t.Fatalf("RevisionIsAncestor(clean worktree) error = %v", cleanErr)
+		}
+
+		// Modify a tracked file without staging or committing: T-3 requires the
+		// same verdict, because the check reads the commit graph, never the
+		// index or worktree.
+		writeSnapshotFile(t, repo, "tracked.txt", "modified without committing\n")
+
+		dirtyResult, dirtyErr := (SnapshotBuilder{Repo: repo}).RevisionIsAncestor(context.Background(), ancestor, descendant)
+		if dirtyErr != nil || dirtyResult != cleanResult {
+			t.Fatalf("RevisionIsAncestor(dirty worktree) = (%v, %v), want (%v, nil)", dirtyResult, dirtyErr, cleanResult)
+		}
+	})
+}
