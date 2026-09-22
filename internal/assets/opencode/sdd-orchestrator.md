@@ -161,6 +161,10 @@ Meta-commands (type directly - orchestrator handles them, won't appear in autoco
 
 {{GENTLE_AI_SDD_SECTION:Native SDD Dispatcher Guard}}
 
+### SDD Change Kickoff and Block Gates
+
+{{GENTLE_AI_SDD_SECTION:SDD Change Kickoff and Block Gates}}
+
 
 ### SDD Entry Routing (MANDATORY)
 

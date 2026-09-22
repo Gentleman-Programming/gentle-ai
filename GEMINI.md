@@ -32,12 +32,16 @@ Reservado para grandes incrementos del sistema, cambios estructurales profundos 
 ```
 1. **File-System como Fuente de la Verdad:** El estado de las fases reside en `openspec/` y `.openspec/`.
 2. **Lossless Blocking Prompts:** Antes de pasar de propuesta a especificación o de diseño a implementación, presentar las decisiones al usuario en español y esperar confirmación.
-3. **Comandos Canónicos de Axiom:** Utilizar los comandos integrados en la CLI `axiom`:
+3. **Determinación temprana de carril y cuestionario de pre-vuelo (INC-21):** antes de crear `proposal.md`, sellar la modalidad de avance (continua o con paradas), la política de relevos y el roster de roles con `axiom sdd kickoff seal`; sin subdivisión de roles se asigna obligatoriamente el rol único `fullstack`. En modalidad con paradas, cuatro compuertas de bloque (`spec`, `design`, `tasks`, `apply` por rol) exigen una decisión explícita con `axiom sdd gate record --gate <clave> --decision approved|rejected --reason "<motivo>"` antes de avanzar a la siguiente fase o rol; un rechazo exige remediación y vuelve a presentar la misma compuerta. Esta gobernanza es distinta de RDD: una compuerta aprobada nunca es un recibo ni autoriza la entrega por sí misma.
+4. **Comandos Canónicos de Axiom:** Utilizar los comandos integrados en la CLI `axiom`:
+   - `axiom sdd kickoff seal|show [cambio]`
+   - `axiom sdd gate record|show [cambio]`
    - `axiom sdd status [cambio]`
    - `axiom sdd continue [cambio]`
    - `axiom sdd archive-compose [cambio]`
    - O bien gestionar el ciclo interactivamente desde el Dashboard Web local: `axiom ui`.
-4. **Verificación Formal Obligatoria:** A diferencia de upstream, en Axiom la verificación con tests automatizados y reporte formal (`verify-report.md`) es un pilar innegociable antes del archivado.
+5. **Verificación Formal Obligatoria:** A diferencia de upstream, en Axiom la verificación con tests automatizados y reporte formal (`verify-report.md`) es un pilar innegociable antes del archivado.
+6. **Precondición de integración o despliegue para `archive` (INC-21):** `archive` no procede como paso inmediato tras `verify-report.md` favorable; exige evidencia de integración o despliegue registrada con `axiom sdd gate record --gate integration --decision approved --evidence-kind pr_merged|deployment|attestation [--commit <sha>]`. Un incremento ya archivado queda congelado: cualquier corrección posterior se gestiona mediante un ticket de bug o un nuevo incremento, nunca modificando directamente `openspec/changes/archive/`.
 
 ---
 

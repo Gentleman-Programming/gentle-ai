@@ -198,6 +198,26 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 	}
 }
 
+// TestSDDOrchestratorAssetsCarryTheKickoffAndBlockGatesMarker is task 23.1:
+// each of the twelve SDD-orchestrator assets carries the shared-section
+// placeholder that resolves to INC-21's per-change kickoff and block-gates
+// doctrine (REQ-21.5, REQ-21.6, REQ-21.10). internal/components/sdd owns
+// substitution and cannot be imported here without a cycle; its own
+// TestEveryRuntimeRendersTheSharedSections confirms the resolved body
+// actually reaches the rendered prompt once this marker exists.
+func TestSDDOrchestratorAssetsCarryTheKickoffAndBlockGatesMarker(t *testing.T) {
+	const marker = "{{GENTLE_AI_SDD_SECTION:SDD Change Kickoff and Block Gates}}"
+	paths := allSDDOrchestratorAssetPaths(t)
+	if len(paths) != 12 {
+		t.Fatalf("orchestrator coverage sees %d assets, want 12", len(paths))
+	}
+	for _, path := range paths {
+		if content := MustRead(path); !strings.Contains(content, marker) {
+			t.Fatalf("%s is missing the %q marker", path, marker)
+		}
+	}
+}
+
 func TestAllShippedOrchestratorsKeepDeliveryUnmanaged(t *testing.T) {
 	const ordinaryDelivery = "Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content."
 	const receiptValidation = "Commit, push, PR, direct-main, emergency, and release gates validate the same exact owner-issued receipt/authorization"

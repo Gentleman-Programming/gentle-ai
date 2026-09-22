@@ -71,6 +71,8 @@ openspec/changes/{change-name}/
 └── tasks.md               ← You create this
 ```
 
+**Multi-role sealed roster (REQ-21.10):** when `kickoff.yaml` seals more than one role, produce one `tasks.<role>.md` per sealed role instead of a single `tasks.md` — each role's own breakdown, scoped to that role's assignment. Present every role's file together at the `tasks` block-review gate; never gate `apply` on one role's file alone. A single-role seal (including the default `fullstack`) keeps the plain `tasks.md`.
+
 **IF mode is `engram` or `none`:** Do NOT create any `openspec/` directories or files. Compose the tasks content in memory — you will persist it in Step 4.
 
 #### Task File Format
