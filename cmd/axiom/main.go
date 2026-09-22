@@ -30,26 +30,37 @@ import (
 )
 
 func init() {
-	// Desacoplar el comprobador de actualizaciones del upstream de Gentle AI:
-	// Axiom es un fork independiente (IGutierrezZ/axiom) y no debe comparar
-	// su versión contra Gentleman-Programming/gentle-ai ni forzar upgrades ajenos.
-	for i, t := range update.Tools {
-		if t.Name == "gentle-ai" {
-			update.Tools[i] = update.ToolInfo{
-				Name:          "axiom",
-				Owner:         "IGutierrezZ",
-				Repo:          "axiom",
-				DetectCmd:     nil, // versión resuelta desde build-time (app.Version)
-				VersionPrefix: "v",
-				InstallMethod: update.InstallBinary,
-				GoImportPath:  "github.com/IGutierrezZ/axiom/cmd/axiom",
-			}
+	// Decouple the update checker from upstream Gentle AI:
+	// Axiom is an independent fork (IGutierrezZ/axiom) and must not compare
+	// its version against Gentleman-Programming/gentle-ai nor force foreign upgrades.
+	//
+	// Invariant: mutate field by field — never replace the whole ToolInfo
+	// struct — so that GoModulePath and any future registry fields survive
+	// the rename (D-01).
+	for i := range update.Tools {
+		if update.IsSelfToolName(update.Tools[i].Name) {
+			update.Tools[i].Name = "axiom"
+			update.Tools[i].Owner = "IGutierrezZ"
+			update.Tools[i].Repo = "axiom"
+			update.Tools[i].DetectCmd = nil // version resolved from build-time (app.Version)
+			update.Tools[i].VersionPrefix = "v"
+			update.Tools[i].InstallMethod = update.InstallBinary
+			update.Tools[i].GoImportPath = "github.com/IGutierrezZ/axiom/cmd/axiom"
+			// GoModulePath is intentionally preserved: it is the declared module
+			// of the published source and is NOT rewritten by this rename (D-01).
 		}
 	}
 }
 
+// version is the build-time version symbol, injectable via
+// -X main.version=<value> (same symbol name as cmd/gentle-ai/main.go).
+// A compilation without injection reports "v0.1.0" (O-1, D-05).
+var version = "v0.1.0"
+
+// Version is the exported alias used by cli.AppVersion, app.Version, and tests.
+var Version = version
+
 const (
-	Version   = "v0.1.0"
 	Platform  = "axiom"
 	GitCommit = "dev"
 )
