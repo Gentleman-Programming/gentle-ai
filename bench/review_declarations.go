@@ -116,7 +116,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
 	"j125-claude-code-stop-hook-reminds-once-per-candidate":                     reviewOptedIn,
 	"j126-selected-untracked-terminal-status-resumes-without-flags":             reviewOptedIn,
-	"j2995-selector-scoped-historical-disposition-quarantine":                  reviewOptedIn,
+	"j2995-selector-scoped-historical-disposition-quarantine":                   reviewOptedIn,
 }
 
 func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
