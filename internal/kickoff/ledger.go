@@ -3,6 +3,7 @@ package kickoff
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,15 +17,22 @@ const GatesFileName = "gates.yaml"
 
 const gatesLockFileName = ".gates.lock"
 
-// gateLockAcquireAttempts and gateLockRetryDelay bound how long AppendGate
-// spins against a busy advisory lock before giving up. AcquireAuthorityFileLock
-// is non-blocking (store_lock.go): a contended lock returns immediately, so
-// the caller — not the primitive — owns retrying. A single AppendGate holds
-// the lock only for a short read-append-write cycle, so a bounded, short-sleep
-// retry is enough to serialize concurrent recorders without losing a record.
+// gateLockAcquireAttempts, gateLockRetryDelay and gateLockMaxRetryDelay bound
+// how long AppendGate spins against a busy advisory lock before giving up.
+// AcquireAuthorityFileLock is non-blocking (store_lock.go): a contended lock
+// returns immediately, so the caller — not the primitive — owns retrying.
+//
+// The delay grows exponentially and carries jitter, rather than being a flat
+// sleep. A flat delay makes every contender retry in lockstep, so the same
+// goroutines keep colliding on the same tick and the budget drains without
+// anyone making progress; that thundering herd is what exhausted a 200 × 2ms
+// budget under twenty-way contention on a loaded CI machine. Backoff spreads
+// the retries out, and jitter stops two contenders that started together from
+// staying in phase.
 const (
 	gateLockAcquireAttempts = 200
 	gateLockRetryDelay      = 2 * time.Millisecond
+	gateLockMaxRetryDelay   = 100 * time.Millisecond
 )
 
 // Test seams over the reviewtransaction primitives, mirroring the pattern
@@ -34,6 +42,9 @@ var (
 	replaceGateLedgerFile = reviewtransaction.ReplaceFileAtomic
 	syncGateLedgerDir     = reviewtransaction.SyncReviewDirectory
 	sleepBeforeLockRetry  = time.Sleep
+	// randomInt63n is a seam so the jitter in gateLockRetryBackoff can be
+	// pinned in tests; production uses the runtime's own source.
+	randomInt63n = rand.Int63n
 )
 
 func gatesPath(changeRoot string) string {
@@ -131,7 +142,30 @@ func acquireGateLedgerLockWithRetry(lockPath string) (*reviewtransaction.Authori
 			return nil, err
 		}
 		lastErr = err
-		sleepBeforeLockRetry(gateLockRetryDelay)
+		sleepBeforeLockRetry(gateLockRetryBackoff(attempt))
 	}
 	return nil, fmt.Errorf("cerrojo de gates.yaml ocupado tras %d intentos: %w", gateLockAcquireAttempts, lastErr)
+}
+
+// gateLockRetryBackoff returns how long to wait before retry number attempt
+// (zero-based): the base delay doubled per attempt, capped, then reduced by a
+// random fraction of itself. Jitter subtracts rather than adds so the cap is
+// a real ceiling on the wait. The result is never below the base delay, so a
+// retry always yields the processor instead of spinning hot.
+func gateLockRetryBackoff(attempt int) time.Duration {
+	delay := gateLockRetryDelay
+	for i := 0; i < attempt && delay < gateLockMaxRetryDelay; i++ {
+		delay *= 2
+	}
+	if delay > gateLockMaxRetryDelay {
+		delay = gateLockMaxRetryDelay
+	}
+	if delay <= gateLockRetryDelay {
+		return gateLockRetryDelay
+	}
+	jittered := delay - time.Duration(randomInt63n(int64(delay-gateLockRetryDelay)))
+	if jittered < gateLockRetryDelay {
+		return gateLockRetryDelay
+	}
+	return jittered
 }

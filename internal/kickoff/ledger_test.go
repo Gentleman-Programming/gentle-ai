@@ -96,3 +96,49 @@ func TestAppendGateRejectsInvalidRecord(t *testing.T) {
 		t.Fatalf("Records = %+v, un registro invalido no debio anexarse", ledger.Records)
 	}
 }
+
+// TestGateLockRetryBackoffGrowsCapsAndStaysAboveBase pins the three
+// properties AppendGate's contention retry depends on. A flat delay makes
+// every contender retry on the same tick and keep colliding, which is what
+// drained the budget under twenty-way contention on a loaded CI machine.
+func TestGateLockRetryBackoffGrowsCapsAndStaysAboveBase(t *testing.T) {
+	original := randomInt63n
+	t.Cleanup(func() { randomInt63n = original })
+
+	// No jitter: the raw backoff curve is what this case pins.
+	randomInt63n = func(int64) int64 { return 0 }
+
+	first := gateLockRetryBackoff(0)
+	if first != gateLockRetryDelay {
+		t.Fatalf("gateLockRetryBackoff(0) = %v, se esperaba el retardo base %v", first, gateLockRetryDelay)
+	}
+
+	previous := first
+	for attempt := 1; attempt <= 6; attempt++ {
+		got := gateLockRetryBackoff(attempt)
+		if got < previous {
+			t.Fatalf("gateLockRetryBackoff(%d) = %v, menor que el intento anterior %v: el backoff debe crecer", attempt, got, previous)
+		}
+		previous = got
+	}
+
+	for _, attempt := range []int{20, 100, gateLockAcquireAttempts - 1} {
+		if got := gateLockRetryBackoff(attempt); got > gateLockMaxRetryDelay {
+			t.Fatalf("gateLockRetryBackoff(%d) = %v, por encima del techo %v", attempt, got, gateLockMaxRetryDelay)
+		}
+	}
+
+	// Maximum jitter must never drive a retry below the base delay, or a
+	// contender would spin hot instead of yielding.
+	randomInt63n = func(n int64) int64 {
+		if n <= 0 {
+			return 0
+		}
+		return n - 1
+	}
+	for attempt := 0; attempt <= 12; attempt++ {
+		if got := gateLockRetryBackoff(attempt); got < gateLockRetryDelay {
+			t.Fatalf("con jitter maximo, gateLockRetryBackoff(%d) = %v, por debajo del retardo base %v", attempt, got, gateLockRetryDelay)
+		}
+	}
+}
