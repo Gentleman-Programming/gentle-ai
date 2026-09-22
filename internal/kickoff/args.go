@@ -37,8 +37,8 @@ func validateChangeName(name string) error {
 	if len(name) > maxChangeNameLength {
 		return fmt.Errorf("--change supera la longitud maxima de %d caracteres", maxChangeNameLength)
 	}
-	if strings.ContainsAny(name, "/\\") {
-		return fmt.Errorf("--change no puede contener separadores de ruta: %q", name)
+	if strings.ContainsAny(name, "/\\:") {
+		return fmt.Errorf("--change no puede contener separadores de ruta ni ':': %q", name)
 	}
 	if name == ".." || name == "." {
 		return fmt.Errorf("--change no puede ser un segmento de navegacion: %q", name)
@@ -50,6 +50,12 @@ func validateChangeName(name string) error {
 	if idx := strings.Index(name, "."); idx >= 0 {
 		base = name[:idx]
 	}
+	// Windows strips trailing spaces from a file name before comparing it
+	// against a reserved device name, so a bare first-dot split alone lets
+	// "con " (trailing space, no extension) slip past this check even though
+	// Windows treats it as the same reserved name as "con" (remediation,
+	// post Phase 8: an independent validator found this gap).
+	base = strings.TrimRight(base, " ")
 	if reservedWindowsNames[strings.ToLower(base)] {
 		return fmt.Errorf("--change no puede usar el nombre reservado de Windows %q", name)
 	}

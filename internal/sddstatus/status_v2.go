@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 const StatusContractV2 = "gentle-ai.sdd-status/v2"
@@ -11,26 +12,36 @@ const StatusContractV2 = "gentle-ai.sdd-status/v2"
 // only SDD planning, task, verification, action, and relationship truth; native
 // runtime bookkeeping remains internal to Resolve.
 type StatusV2Projection struct {
-	SchemaName        string                       `json:"schemaName"`
-	SchemaVersion     int                          `json:"schemaVersion"`
-	ChangeName        *string                      `json:"changeName"`
-	ArtifactStore     ArtifactStore                `json:"artifactStore"`
-	PlanningHome      planningHomeV2               `json:"planningHome"`
-	ChangeRoot        *string                      `json:"changeRoot"`
-	ArtifactPaths     artifactPathsV2              `json:"artifactPaths"`
-	ContextFiles      artifactPathsV2              `json:"contextFiles"`
-	Artifacts         map[string]ArtifactState     `json:"artifacts"`
-	TaskProgress      taskProgressV2               `json:"taskProgress"`
-	Dependencies      dependenciesV2               `json:"dependencies"`
-	ApplyState        ApplyState                   `json:"applyState"`
-	ActionContext     actionContextV2              `json:"actionContext"`
-	Relationships     relationshipsV2              `json:"relationships"`
-	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	Archived          *ArchivedProjection          `json:"archived,omitempty"`
-	PhaseInstructions *phaseInstructionsV2         `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                       `json:"nextRecommended"`
-	BlockedReasons    []string                     `json:"blockedReasons"`
-	Notes             []string                     `json:"notes"`
+	SchemaName    string                       `json:"schemaName"`
+	SchemaVersion int                          `json:"schemaVersion"`
+	ChangeName    *string                      `json:"changeName"`
+	ArtifactStore ArtifactStore                `json:"artifactStore"`
+	PlanningHome  planningHomeV2               `json:"planningHome"`
+	ChangeRoot    *string                      `json:"changeRoot"`
+	ArtifactPaths artifactPathsV2              `json:"artifactPaths"`
+	ContextFiles  artifactPathsV2              `json:"contextFiles"`
+	Artifacts     map[string]ArtifactState     `json:"artifacts"`
+	TaskProgress  taskProgressV2               `json:"taskProgress"`
+	Dependencies  dependenciesV2               `json:"dependencies"`
+	ApplyState    ApplyState                   `json:"applyState"`
+	ActionContext actionContextV2              `json:"actionContext"`
+	Relationships relationshipsV2              `json:"relationships"`
+	Consent       *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	Archived      *ArchivedProjection          `json:"archived,omitempty"`
+	// Governance is INC-21's per-change block-review view, present exactly
+	// when Status.Governance is (design.md S4.3, D-05): a sealed,
+	// non-continuous kickoff. This is an additive v2 field; no existing
+	// value or field changes (task 14.3).
+	Governance *governanceV2 `json:"governance,omitempty"`
+	// GateQuestion projects Status.GateQuestion unchanged: like Consent, the
+	// wire type already matches the public contract 1:1, so no *V2
+	// translation type is needed (design.md S5.5 defines the wire shape
+	// directly).
+	GateQuestion      *SDDGovernanceGateResult `json:"gateQuestion,omitempty"`
+	PhaseInstructions *phaseInstructionsV2     `json:"phaseInstructions,omitempty"`
+	NextRecommended   string                   `json:"nextRecommended"`
+	BlockedReasons    []string                 `json:"blockedReasons"`
+	Notes             []string                 `json:"notes"`
 }
 
 type planningHomeV2 struct {
@@ -84,6 +95,78 @@ type phaseInstructionsV2 struct {
 	Archive []string `json:"archive"`
 }
 
+// governanceV2 is INC-21's public shape for one change's sealed kickoff and
+// block-review gate ledger (design.md S5.4). It intentionally does not
+// reuse the internal kickoff.Kickoff/kickoff.GateState types directly: the
+// wire contract stays independent of that domain package's own evolution,
+// the same discipline every other *V2 type in this file already applies to
+// its internal counterpart.
+type governanceV2 struct {
+	Kickoff kickoffV2 `json:"kickoff"`
+	Gates   []gateV2  `json:"gates"`
+	Roster  rosterV2  `json:"roster"`
+}
+
+type kickoffV2 struct {
+	Schema         string `json:"schema"`
+	FlowMode       string `json:"flowMode"`
+	ExecutionStyle string `json:"executionStyle"`
+	HandoffPolicy  string `json:"handoffPolicy"`
+	SealedAt       string `json:"sealedAt"`
+	SealedBy       string `json:"sealedBy"`
+}
+
+type gateV2 struct {
+	Key      string `json:"key"`
+	Status   string `json:"status"`
+	Blocks   string `json:"blocks"`
+	Reason   string `json:"reason,omitempty"`
+	Reopened bool   `json:"reopened,omitempty"`
+}
+
+// rosterV2 projects GovernanceRoster. Conflict stays nil (omitempty) in
+// this slice: D-06's multirole.ResolveRoster stratification, the only
+// producer of a genuine kickoff/design conflict, is Phase 16's job. The
+// field exists now so Phase 16 only has to populate it, not add it.
+type rosterV2 struct {
+	Source   string   `json:"source"`
+	Roles    []string `json:"roles"`
+	Conflict *string  `json:"conflict,omitempty"`
+}
+
+// projectGovernanceV2 translates the internal Governance view into its
+// public wire shape, or reports nil when governance is nil -- exactly the
+// D-05 structural absence Status.Governance and StatusV2Projection.Governance
+// both document.
+func projectGovernanceV2(governance *Governance) *governanceV2 {
+	if governance == nil {
+		return nil
+	}
+	gates := make([]gateV2, 0, len(governance.Gates))
+	for _, gate := range governance.Gates {
+		gates = append(gates, gateV2{
+			Key: string(gate.Key), Status: gate.Status, Blocks: gate.Blocks,
+			Reason: gate.Reason, Reopened: gate.Reopened,
+		})
+	}
+	sealedAt := ""
+	if !governance.Kickoff.SealedAt.IsZero() {
+		sealedAt = governance.Kickoff.SealedAt.Format(time.RFC3339)
+	}
+	return &governanceV2{
+		Kickoff: kickoffV2{
+			Schema:         governance.Kickoff.Schema,
+			FlowMode:       string(governance.Kickoff.Config.FlowMode),
+			ExecutionStyle: string(governance.Kickoff.Config.ExecutionStyle),
+			HandoffPolicy:  string(governance.Kickoff.Config.HandoffPolicy),
+			SealedAt:       sealedAt,
+			SealedBy:       governance.Kickoff.SealedBy,
+		},
+		Gates:  gates,
+		Roster: rosterV2{Source: governance.Roster.Source, Roles: governance.Roster.Roles},
+	}
+}
+
 // ProjectStatusV2 rejects unsupported internal values rather than exposing
 // internal runtime state or silently broadening the public document.
 func ProjectStatusV2(status Status) (StatusV2Projection, error) {
@@ -122,6 +205,8 @@ func ProjectStatusV2(status Status) (StatusV2Projection, error) {
 		Relationships:   projectRelationshipsV2(status.Relationships),
 		Consent:         status.Consent,
 		Archived:        status.Archived,
+		Governance:      projectGovernanceV2(status.Governance),
+		GateQuestion:    status.GateQuestion,
 		NextRecommended: status.NextRecommended,
 		BlockedReasons:  status.BlockedReasons,
 		Notes:           status.Notes,
@@ -210,8 +295,11 @@ func statusV2NextRecommended(value string) bool {
 	// "archived" is #4002's positive terminal route: the change is closed, no
 	// phase remains, and the archived block carries the location fact. This is
 	// an additive v2 enum value; no existing value or field changes.
+	// "await-gate" is INC-21's own additive v2 enum value (D-09): a block
+	// review gate is pending a decision. Same discipline: no existing value
+	// or field changes (task 14.3).
 	switch value {
-	case "apply", "verify", "archive", "archived", "resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
+	case "apply", "verify", "archive", "archived", "resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks", "await-gate":
 		return true
 	default:
 		return false

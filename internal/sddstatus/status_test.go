@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 )
 
 func TestResolvePreservesNormalizedWorkspace(t *testing.T) {
@@ -882,7 +884,7 @@ func TestResolveNestedSpecsLayoutReportsDoneWithoutLayoutGuidance(t *testing.T) 
 
 func TestArtifactBlockedReasonsNamesChangeLocalSpecPath(t *testing.T) {
 	artifacts := map[string]ArtifactState{"proposal": ArtifactDone, "specs": ArtifactMissing, "design": ArtifactDone, "tasks": ArtifactDone}
-	reasons := artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "thin")
+	reasons := artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "thin", nil)
 	want := []string{"openspec/changes/thin/specs/<domain>/spec.md is missing or partial."}
 	if !reflect.DeepEqual(reasons.expectedPlanning, want) {
 		t.Fatalf("expectedPlanning = %v, want %v", reasons.expectedPlanning, want)
@@ -891,7 +893,7 @@ func TestArtifactBlockedReasonsNamesChangeLocalSpecPath(t *testing.T) {
 		t.Fatalf("genuine = %v, want none for a missing specs directory", reasons.genuine)
 	}
 
-	reasons = artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "")
+	reasons = artifactBlockedReasons(artifacts, TaskProgress{Total: 1, Pending: 1}, "", nil)
 	if want := []string{"openspec/changes/<change>/specs/<domain>/spec.md is missing or partial."}; !reflect.DeepEqual(reasons.expectedPlanning, want) {
 		t.Fatalf("expectedPlanning without a change name = %v, want %v", reasons.expectedPlanning, want)
 	}
@@ -922,5 +924,133 @@ func TestResolveEngramPartialSpecOmitsOpenSpecLayoutGuidance(t *testing.T) {
 	}
 	if want := []string{}; !reflect.DeepEqual(status.BlockedReasons, want) {
 		t.Fatalf("BlockedReasons = %v, want %v", status.BlockedReasons, want)
+	}
+}
+
+// --- INC-21 Phase 13 (P3c): governance wiring in the OpenSpec/hybrid
+// resolver (design.md S4.3, D-05, D-09, D-13; T-10). Every test below is
+// re-run, unmodified, by Phase 14: this section is the resolver-level proof
+// that governance changes routing ONLY with a sealed, non-continuous
+// kickoff, exactly as Phase 11's byte-for-byte control gate guards for the
+// unsealed case.
+
+// sealFullstackKickoff seals a single-role "fullstack" kickoff for
+// changeRoot with the given execution style, reusing the same
+// blocking/local/bug_only defaults sdd_kickoff.go's ToKickoff already
+// applies for an explicit seal (args.go).
+func sealFullstackKickoff(t *testing.T, changeRoot, changeName string, style kickoff.ExecutionStyle) {
+	t.Helper()
+	_, ok, err := kickoff.Seal(changeRoot, kickoff.Kickoff{
+		Schema: kickoff.KickoffSchemaV1, Change: changeName, SealedBy: "test",
+		Config: kickoff.FlowConfig{
+			FlowMode: kickoff.FlowSDD, ExecutionStyle: style, ExecutionStyleSource: "explicit",
+			HandoffPolicy: kickoff.HandoffNone,
+			Roles:         []kickoff.KickoffRole{{Role: "fullstack", GatePolicy: "blocking", TasksFile: "tasks.md", VerifyFile: "verify-report.md"}},
+		},
+		Lifecycle: kickoff.Lifecycle{DeploymentTarget: "local", PostArchivePolicy: "bug_only"},
+	})
+	if err != nil || !ok {
+		t.Fatalf("sealFullstackKickoff: kickoff.Seal() = (ok=%v, err=%v), want a successful preparation seal", ok, err)
+	}
+}
+
+// TestResolveRoutesToAwaitGateWhenABlockReviewGateIsPending covers tasks.md
+// 13.1's first two required cases together: a sealed, checkpointed change
+// with every core artifact done and no gate decision recorded yet routes to
+// "await-gate" (D-09) instead of "apply", names the genuine pending-gate
+// reason in BlockedReasons, and leaves dependencies.Archive exactly as
+// today's logic computes it (13.1's last bullet: the full integration-gate
+// condition is Phase 21's job, not this one's).
+func TestResolveRoutesToAwaitGateWhenABlockReviewGateIsPending(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-pending"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "await-gate" {
+		t.Fatalf("NextRecommended = %q, want await-gate", status.NextRecommended)
+	}
+	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), `gate "spec"`) {
+		t.Fatalf("BlockedReasons = %v, want a genuine reason naming the pending spec gate", status.BlockedReasons)
+	}
+	if status.Dependencies.Archive != DependencyReady {
+		t.Fatalf("Dependencies.Archive = %q, want ready: today's logic is unchanged by a pending gate until Phase 21", status.Dependencies.Archive)
+	}
+}
+
+// TestResolveRoutesRejectedGateToOwningPhaseWithExactReason covers tasks.md
+// 13.1's third required case: a rejected gate whose recorded digest still
+// matches the current artifact routes back to that gate's owning phase
+// (D-09) and surfaces the EXACT registered rejection reason, not a
+// paraphrase of it.
+func TestResolveRoutesRejectedGateToOwningPhaseWithExactReason(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-rejected"
+	changeRoot := seedReadyChange(t, root, changeName, "- [x] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+
+	specPath := filepath.Join(changeRoot, "specs", "auth", "spec.md")
+	digest, err := kickoff.ArtifactDigest([]string{specPath})
+	if err != nil {
+		t.Fatalf("kickoff.ArtifactDigest() error = %v", err)
+	}
+	const rejectionReason = "Falta cubrir el caso de sesion expirada"
+	if err := kickoff.AppendGate(changeRoot, kickoff.GateRecord{
+		Gate: kickoff.GateSpec, Decision: kickoff.DecisionRejected, Reason: rejectionReason,
+		ArtifactDigest: digest, Actor: "reviewer",
+	}); err != nil {
+		t.Fatalf("kickoff.AppendGate() error = %v", err)
+	}
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "spec" {
+		t.Fatalf("NextRecommended = %q, want spec (the rejected gate's owning phase)", status.NextRecommended)
+	}
+	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), rejectionReason) {
+		t.Fatalf("BlockedReasons = %v, want the exact registered rejection reason %q", status.BlockedReasons, rejectionReason)
+	}
+}
+
+// TestResolveReturnsErrorForCorruptKickoffNeverSilentlyUnsealed is T-10's
+// named case: an unreadable kickoff.yaml must fail the resolver with a
+// named error, never degrade in silence to "no governance" (which would be
+// indistinguishable from a change that never sealed one at all).
+func TestResolveReturnsErrorForCorruptKickoffNeverSilentlyUnsealed(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-corrupt"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	writeFile(t, filepath.Join(changeRoot, kickoff.KickoffFileName), "{ not: valid: yaml")
+
+	if _, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName}); err == nil {
+		t.Fatal(`Resolve() = nil error, want a named error for a corrupt kickoff.yaml (T-10: never silently degrade to "unsealed")`)
+	}
+}
+
+// TestResolveContinuousExecutionStyleNeverEvaluatesGates is D-05's
+// end-to-end proof through the public resolver: a continuous-execution seal
+// must never surface a Governance block, and routing stays exactly what it
+// would be without any seal at all.
+func TestResolveContinuousExecutionStyleNeverEvaluatesGates(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-continuous"
+	changeRoot := seedReadyChange(t, root, changeName, "- [ ] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionContinuous)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Governance != nil {
+		t.Fatalf("Status.Governance = %#v, want nil for a continuous-execution sealed change (D-05)", status.Governance)
+	}
+	if status.NextRecommended != "apply" {
+		t.Fatalf("NextRecommended = %q, want apply unchanged by an ungated continuous seal", status.NextRecommended)
 	}
 }
