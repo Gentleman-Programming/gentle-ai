@@ -118,10 +118,24 @@ func normalizeRoles(roles []RoleAssignment) ([]RoleAssignment, error) {
 }
 
 func roleExists(cfg *workspace.WorkspaceConfig, role string) bool {
+	if IsReservedRole(role) {
+		return true
+	}
 	for k, v := range cfg.Roles {
 		if strings.EqualFold(k, role) || strings.EqualFold(v.Name, role) {
 			return true
 		}
 	}
 	return false
+}
+
+// RoleExists is the exported form of roleExists: it reports whether role is
+// declared in cfg's role map (matching by key or display name,
+// case-insensitively) or is a reserved identity (IsReservedRole). It exists
+// so a consumer outside this package — currently
+// internal/handoff/reserved_role_parity_test.go — can invoke the real
+// predicate DetectRoles uses internally, instead of re-deriving a second,
+// driftable copy of it.
+func RoleExists(cfg *workspace.WorkspaceConfig, role string) bool {
+	return roleExists(cfg, role)
 }

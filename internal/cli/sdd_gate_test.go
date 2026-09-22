@@ -2,9 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 )
 
@@ -183,12 +186,12 @@ func TestRunSDDGateShowOnEmptyLedger(t *testing.T) {
 }
 
 // TestRunSDDGateRecordEmitsLastRoleNoticeExactlyOnceForSingleFullstackRole
-// is task 10.1's routing check for REQ-21.13: approving the sole
-// fullstack role's role-apply gate emits the last-role notice exactly
-// once. This phase only verifies routing — the full handoff body is
-// completed in Phase 18.
+// is task 18.1's base case (routing already confirmed in task 10.1):
+// approving the sole fullstack role's role-apply gate emits the last-role
+// notice exactly once AND writes handoff.md with status ready (REQ-21.13,
+// REQ-21.14).
 func TestRunSDDGateRecordEmitsLastRoleNoticeExactlyOnceForSingleFullstackRole(t *testing.T) {
-	root, _ := newGovernanceWorkspace(t, "inc-99-example")
+	root, changeRoot := newGovernanceWorkspace(t, "inc-99-example")
 	sealForGateTest(t, root, "inc-99-example")
 
 	var out bytes.Buffer
@@ -203,13 +206,24 @@ func TestRunSDDGateRecordEmitsLastRoleNoticeExactlyOnceForSingleFullstackRole(t 
 	if occurrences != 1 {
 		t.Fatalf("el aviso de ultimo rol aparecio %d veces, se esperaba exactamente 1:\n%s", occurrences, out.String())
 	}
+
+	h, parseErr := handoff.ParseFile(filepath.Join(changeRoot, "handoff.md"))
+	if parseErr != nil {
+		t.Fatalf("handoff.ParseFile() error = %v, se esperaba que gate record escribiese handoff.md", parseErr)
+	}
+	if h.Metadata.Status != handoff.StatusReady {
+		t.Fatalf("handoff.md Status = %q, se esperaba ready", h.Metadata.Status)
+	}
+	if h.Metadata.FromPhase != handoff.PhaseApply || h.Metadata.ToPhase != handoff.PhaseVerify {
+		t.Fatalf("handoff.md transicion = %s -> %s, se esperaba apply -> verify", h.Metadata.FromPhase, h.Metadata.ToPhase)
+	}
 }
 
 // TestRunSDDGateRecordNoNoticeWithRolesStillPending is the mirror case: a
 // multi-role roster with only one role approved must never fire the
-// notice.
+// notice, and must never write handoff.md either.
 func TestRunSDDGateRecordNoNoticeWithRolesStillPending(t *testing.T) {
-	root, _ := newGovernanceWorkspace(t, "inc-99-example")
+	root, changeRoot := newGovernanceWorkspace(t, "inc-99-example")
 	sealForGateTest(t, root, "inc-99-example", "--role", "core", "--role", "web")
 
 	var out bytes.Buffer
@@ -223,13 +237,16 @@ func TestRunSDDGateRecordNoNoticeWithRolesStillPending(t *testing.T) {
 	if strings.Contains(out.String(), lastRoleNoticeMarker) {
 		t.Fatalf("aviso de ultimo rol emitido con el rol %q aun pendiente:\n%s", "web", out.String())
 	}
+	if _, statErr := os.Stat(filepath.Join(changeRoot, "handoff.md")); statErr == nil {
+		t.Fatal("handoff.md fue escrito con un rol aun pendiente; se esperaba que no existiese")
+	}
 }
 
 // TestRunSDDGateRecordRejectedRoleApplyNeverEmitsNotice is REQ-21.13's
 // third scenario: a rejection never fires the notice, even for the only
-// pending role.
+// pending role, and never writes handoff.md.
 func TestRunSDDGateRecordRejectedRoleApplyNeverEmitsNotice(t *testing.T) {
-	root, _ := newGovernanceWorkspace(t, "inc-99-example")
+	root, changeRoot := newGovernanceWorkspace(t, "inc-99-example")
 	sealForGateTest(t, root, "inc-99-example")
 
 	var out bytes.Buffer
@@ -242,5 +259,8 @@ func TestRunSDDGateRecordRejectedRoleApplyNeverEmitsNotice(t *testing.T) {
 	}
 	if strings.Contains(out.String(), lastRoleNoticeMarker) {
 		t.Fatalf("aviso de ultimo rol emitido pese a un rechazo (REQ-21.13, tercer escenario):\n%s", out.String())
+	}
+	if _, statErr := os.Stat(filepath.Join(changeRoot, "handoff.md")); statErr == nil {
+		t.Fatal("handoff.md fue escrito pese a un rechazo; se esperaba que no existiese")
 	}
 }

@@ -618,6 +618,11 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 		}
 	}
 	dependencies := resolveDependencies(artifacts, applyState, coreReady)
+	verifyState, verifyReason := verifyDependencyFromHandoff(governance, changeRoot, dependencies.Verify)
+	dependencies.Verify = verifyState
+	if verifyReason != "" {
+		blockedReasons.genuine = append(blockedReasons.genuine, verifyReason)
+	}
 	nextRecommended := resolveNextRecommended(dependencies, applyState, governance)
 	// INC-21 (design.md S5.5): the gate-decision envelope is built only for
 	// the exact gate "await-gate" already names, so it can never disagree

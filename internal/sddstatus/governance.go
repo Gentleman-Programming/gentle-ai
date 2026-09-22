@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/consentenvelope"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
@@ -446,4 +447,69 @@ func setGovernanceArtifactDigest(key string, paths []string, artifacts map[strin
 	}
 	artifacts[key] = digest
 	return nil
+}
+
+// verifyDependencyFromHandoff is D-12's rule: REQ-21.15 forbids starting
+// the global "verify" phase before the integration handoff says it is
+// ready. It only ever CONSULTS openspec/changes/<change>/handoff.md when
+// the sealed kickoff's roster is multi-role or its handoff_policy is
+// per_checkpoint; every other sealed change (a single role with the
+// fullstack default's handoff_policy: none) keeps baseline exactly as
+// resolveDependencies already computed it — this is a deliberate,
+// documented cost boundary (design.md S4.5/D-12), not an oversight: a
+// single-role, no-intermediate-handoff change never produces a handoff.md
+// to read until the very last (and only) role closes, at which point
+// coreReady/applyState already govern Verify through the existing logic.
+//
+// It returns the adjusted DependencyState and a non-empty genuine reason
+// exactly when it blocks Verify for a cause the caller must surface in
+// BlockedReasons; an unchanged baseline always pairs with an empty reason.
+func verifyDependencyFromHandoff(governance *Governance, changeRoot string, baseline DependencyState) (DependencyState, string) {
+	if governance == nil {
+		return baseline, ""
+	}
+	multiRole := len(governance.Roster.Roles) > 1
+	perCheckpoint := governance.Kickoff.Config.HandoffPolicy == kickoff.HandoffPerCheckpoint
+	if !multiRole && !perCheckpoint {
+		return baseline, ""
+	}
+
+	h, err := handoff.ParseFile(filepath.Join(changeRoot, "handoff.md"))
+	if err != nil {
+		// Absent or unreadable handoff.md is "no relay produced yet", not a
+		// block -- UNLESS every role already closed (LastRoleClosed): the
+		// relay SHOULD exist by then, and reporting Verify "ready" anyway
+		// would let it start without the consolidated instructions REQ-21.14
+		// promises it.
+		if lastRoleClosedForGovernance(governance) {
+			return DependencyBlocked, "El relevo de integracion openspec/changes/.../handoff.md no existe o no se pudo leer, pese a que todos los roles del roster ya estan cerrados; genera el relevo antes de iniciar la fase verify global (REQ-21.14, REQ-21.15)."
+		}
+		return baseline, ""
+	}
+
+	switch h.Metadata.Status {
+	case handoff.StatusReady:
+		if h.Metadata.ToPhase == handoff.PhaseVerify {
+			return DependencyReady, ""
+		}
+		return baseline, ""
+	case handoff.StatusBlocked, handoff.StatusNeedsClarification:
+		return DependencyBlocked, fmt.Sprintf(
+			"El relevo de integracion tiene status %q; la fase verify global no puede iniciarse hasta resolver ese bloqueo (REQ-21.15).",
+			h.Metadata.Status,
+		)
+	default:
+		return baseline, ""
+	}
+}
+
+// lastRoleClosedForGovernance reuses kickoff.LastRoleClosed against the
+// governance snapshot's own roster and already-evaluated gate states,
+// rather than re-deriving "every role-apply gate approved" a second way.
+func lastRoleClosedForGovernance(governance *Governance) bool {
+	roster := make([]multirole.RoleAssignment, 0, len(governance.Roster.Roles))
+	for _, role := range governance.Roster.Roles {
+		roster = append(roster, multirole.RoleAssignment{Role: role})
+	}
+	return kickoff.LastRoleClosed(roster, governance.Gates)
 }
