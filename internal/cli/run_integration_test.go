@@ -194,6 +194,7 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 		return filepath.Join(home, "bin", name), nil
 	})
 	t.Cleanup(restorePreflightLookPath)
+	stubPiPreflight(t)
 
 	var commands []string
 	runCommand = func(name string, args ...string) error {
@@ -258,9 +259,20 @@ func TestAgentInstallStepSkipsMissingNonPiRuntime(t *testing.T) {
 	}
 }
 
+// stubPiPreflight keeps the Pi preflight off the host: no real `pi --version`
+// and no registry call for gentle-pi's peer floor.
+func stubPiPreflight(t *testing.T) {
+	t.Helper()
+	t.Cleanup(installcmd.OverridePiVersion(func() ([]byte, error) { return []byte("0.87.0\n"), nil }))
+	t.Cleanup(installcmd.OverrideNpmView(func(...string) ([]byte, error) {
+		return []byte(`{"@earendil-works/pi-coding-agent":">=0.85.1"}`), nil
+	}))
+}
+
 func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
 	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) { return name, nil })
 	t.Cleanup(restorePreflightLookPath)
+	stubPiPreflight(t)
 
 	restoreCommand := runCommand
 	t.Cleanup(func() { runCommand = restoreCommand })
@@ -351,6 +363,7 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		}
 	})
 	t.Cleanup(restorePreflightLookPath)
+	stubPiPreflight(t)
 
 	restoreCommand := runCommand
 	t.Cleanup(func() { runCommand = restoreCommand })

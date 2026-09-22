@@ -27,3 +27,17 @@ func OverrideGetenv(fn func(string) string) (restore func()) {
 	osGetenv = fn
 	return func() { osGetenv = prev }
 }
+
+// OverridePiVersion replaces cmdPiVersion with fn and returns a restore function.
+func OverridePiVersion(fn func() ([]byte, error)) (restore func()) {
+	prev := cmdPiVersion
+	cmdPiVersion = fn
+	return func() { cmdPiVersion = prev }
+}
+
+// OverrideNpmView replaces cmdNpmView with fn and returns a restore function.
+func OverrideNpmView(fn func(args ...string) ([]byte, error)) (restore func()) {
+	prev := cmdNpmView
+	cmdNpmView = fn
+	return func() { cmdNpmView = prev }
+}

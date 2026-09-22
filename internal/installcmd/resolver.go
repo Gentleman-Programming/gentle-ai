@@ -1,12 +1,19 @@
 package installcmd
 
 import (
+	"cmp"
+	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
@@ -19,6 +26,128 @@ var osStat = os.Stat
 var osGetenv = os.Getenv
 var cmdGoVersion = func() ([]byte, error) {
 	return exec.Command("go", "version").Output()
+}
+
+// cmdPiVersion and cmdNpmView are the Pi preflight probes; package-level vars
+// for testability.
+var cmdPiVersion = func() ([]byte, error) { return probe("pi", "--version") }
+var cmdNpmView = func(args ...string) ([]byte, error) {
+	return probe("npm", slices.Concat([]string{"view"}, args)...)
+}
+
+// probeTimeout bounds each preflight probe so a hung `pi` or a slow registry
+// cannot stall the install; a timeout reads as an unavailable probe.
+const probeTimeout = 30 * time.Second
+
+// probe runs name with args under probeTimeout and returns its stdout.
+func probe(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 5 * time.Second
+	system.EnsureCommandDir(cmd)
+	return cmd.Output()
+}
+
+var (
+	semverPattern  = regexp.MustCompile(`\bv?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?\b`)
+	npmNamePattern = regexp.MustCompile(`^(@[a-z0-9._~-]+/)?[a-z0-9._~-]+$`)
+)
+
+// gentlePiPackage publishes the peer floor; piPackageSuffix picks the Pi
+// package out of its peerDependencies, whatever scope it is published under.
+const (
+	gentlePiPackage = "gentle-pi"
+	piPackageSuffix = "/pi-coding-agent"
+)
+
+// semver is one x.y.z[-prerelease] match in comparable form.
+type semver struct {
+	text  string
+	parts [3]int
+	pre   string
+}
+
+// parseSemver extracts the first whole x.y.z[-prerelease] in s ("Pi v0.87.0",
+// ">=0.85.1 <1.0.0", "0.88.0-beta.1"); ok is false when there is none, when
+// the match runs into other text ("0.73.1broken") or when a part overflows.
+func parseSemver(s string) (v semver, ok bool) {
+	match := semverPattern.FindStringSubmatch(s)
+	if match == nil {
+		return semver{}, false
+	}
+	v = semver{text: strings.TrimPrefix(match[0], "v"), pre: match[4]}
+	for i := range 3 {
+		n, err := strconv.Atoi(match[i+1])
+		if err != nil {
+			return semver{}, false
+		}
+		v.parts[i] = n
+	}
+	return v, true
+}
+
+// less reports whether v precedes w by SemVer 2.0 precedence: numeric parts,
+// then a prerelease before the same release, then identifiers in order.
+func (v semver) less(w semver) bool {
+	if c := slices.Compare(v.parts[:], w.parts[:]); c != 0 {
+		return c < 0
+	}
+	if (v.pre == "") != (w.pre == "") {
+		return v.pre != ""
+	}
+	return slices.CompareFunc(strings.Split(v.pre, "."), strings.Split(w.pre, "."), compareIdentifier) < 0
+}
+
+// floorOf returns the lowest version an npm range admits: the strongest
+// inclusive lower bound of each `||` alternative, then the lowest of those.
+// An alternative with no inclusive lower bound admits anything, so no floor.
+func floorOf(constraint string) (floor semver, ok bool) {
+	for alternative := range strings.SplitSeq(constraint, "||") {
+		bound, found := semver{}, false
+		for token := range strings.FieldsSeq(alternative) {
+			if v, isBound := lowerBound(token); isBound && (!found || bound.less(v)) {
+				bound, found = v, true
+			}
+		}
+		if !found {
+			return semver{}, false
+		}
+		if !ok || bound.less(floor) {
+			floor, ok = bound, true
+		}
+	}
+	return floor, ok
+}
+
+// lowerBound reads a token that admits its own version and everything above
+// within its comparator set (">=x", "=x", "^x", "~x", "x", "vx").
+func lowerBound(token string) (semver, bool) {
+	switch token[0] {
+	case '^', '~', '=', 'v', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return parseSemver(token)
+	case '>':
+		if strings.HasPrefix(token, ">=") {
+			return parseSemver(token)
+		}
+	}
+	return semver{}, false
+}
+
+// compareIdentifier orders prerelease identifiers: numeric ones numerically
+// and before alphanumeric ones, which compare lexically.
+func compareIdentifier(a, b string) int {
+	an, aErr := strconv.Atoi(a)
+	bn, bErr := strconv.Atoi(b)
+	switch {
+	case aErr == nil && bErr == nil:
+		return cmp.Compare(an, bn)
+	case aErr == nil:
+		return -1
+	case bErr == nil:
+		return 1
+	}
+	return cmp.Compare(a, b)
 }
 
 // CommandSequence represents an ordered list of commands to run in sequence.
@@ -128,18 +257,62 @@ func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.A
 	case model.AgentKimi:
 		return validateKimiInstallPreflight(profile)
 	case model.AgentPi:
-		return validatePiInstallPreflight()
+		return validatePiInstallPreflight(profile)
 	default:
 		return nil
 	}
 }
 
-func validatePiInstallPreflight() error {
+// validatePiInstallPreflight refuses a Pi older than the floor gentle-pi
+// declares, so a deprecated Pi does not accept the packages and then fail to
+// load them. An unreadable version or an unreachable registry never blocks.
+func validatePiInstallPreflight(profile system.PlatformProfile) error {
 	if _, err := cmdLookPath("pi"); err != nil {
 		return fmt.Errorf("Pi requires the `pi` executable in PATH before installing Gentle AI Pi packages")
 	}
+	out, err := cmdPiVersion()
+	installed, ok := parseSemver(string(out))
+	if err != nil || !ok {
+		return nil
+	}
+	pkg, constraint := piPeerFloor()
+	floor, ok := floorOf(constraint)
+	if pkg == "" || !ok || !installed.less(floor) {
+		return nil
+	}
+	return fmt.Errorf(
+		"Pi %s is older than the %s gentle-pi requires.\nUpgrade Pi and retry:\n  %s",
+		installed.text, floor.text, npmGlobalInstallHint(profile, pkg+"@latest"),
+	)
+}
 
-	return nil
+// piPeerFloor reads the Pi package and its version constraint from gentle-pi's
+// peerDependencies on the registry; both are empty when npm cannot answer or
+// the name is not a valid npm package name.
+func piPeerFloor() (pkg, constraint string) {
+	out, err := cmdNpmView(gentlePiPackage, "peerDependencies", "--json")
+	if err != nil {
+		return "", ""
+	}
+	var peers map[string]string
+	if err := json.Unmarshal(out, &peers); err != nil {
+		return "", ""
+	}
+	for _, name := range slices.Sorted(maps.Keys(peers)) {
+		if strings.HasSuffix(name, piPackageSuffix) && npmNamePattern.MatchString(name) {
+			return name, peers[name]
+		}
+	}
+	return "", ""
+}
+
+// npmGlobalInstallHint is the global npm install a user can paste; Linux with
+// a system npm needs sudo, version managers and other platforms do not.
+func npmGlobalInstallHint(profile system.PlatformProfile, pkg string) string {
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return "sudo npm install -g " + pkg
+	}
+	return "npm install -g " + pkg
 }
 
 // validateNpmInstallPreflight ensures npm (and therefore Node.js) is available
