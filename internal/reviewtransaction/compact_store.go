@@ -2079,20 +2079,20 @@ func forensicRemintedStateValid(state CompactState, view tolerantCompactStateVie
 		}
 		message := validateErr.Error()
 		switch {
-		case len(state.AdmittedRoleResults) == 0 && message == compactRetiredAdmittedLensViewProblem,
-			len(state.AdmittedRoleResults) == 0 && message == compactRetiredFixFindingViewProblem:
+		case len(state.AdmittedRoleResults) == 0 && message == errCompactRetiredAdmittedLensView.Error(),
+			len(state.AdmittedRoleResults) == 0 && message == errCompactRetiredFixFindingView.Error():
 			// The lifecycle stage short-circuited Validate, so run its
 			// post-lifecycle tail directly; everything before the lifecycle
 			// stage already ran.
 			return validateCompactPostLifecycleState(state) == nil
-		case len(state.AdmittedRoleResults) == 0 && message == compactRetiredApprovedEvidenceProblem && validSHA256(state.EvidenceHash):
+		case len(state.AdmittedRoleResults) == 0 && message == errCompactRetiredApprovedEvidence.Error() && validSHA256(state.EvidenceHash):
 			// The record carries its own (retired-formula) evidence binding;
 			// the current view formula cannot re-derive it without the retired
 			// admitted results, so the shape check is the honest bound.
 			return validateCompactPostLifecycleState(state) == nil
-		case view.retiredResultReopenSlots && message == compactRetiredReopenAuditProblem && forensicRetiredReopenAuditCoherent(state):
+		case view.retiredResultReopenSlots && message == errCompactRetiredReopenAudit.Error() && forensicRetiredReopenAuditCoherent(state):
 			state.ResultReopens = nil // proof-only projection; never persisted, never loaded
-		case view.retiredFinalVerificationRetry && message == compactRetiredRecoveryDispositionProblem &&
+		case view.retiredFinalVerificationRetry && message == errCompactRetiredRecoveryDisposition.Error() &&
 			state.Recovery != nil && state.Recovery.Disposition == retiredRecoveryFinalVerificationRetry &&
 			strings.TrimSpace(state.Recovery.MaintainerAuthorization) != "" && state.Recovery.Evidence == nil:
 			state.Recovery = nil // proof-only projection; predecessor provenance is read from the unprojected view
@@ -2189,9 +2189,9 @@ func retiredCompactFieldError(err error) bool {
 // retired domains the original bytes actually carried, so the forensic
 // classifier can later tolerate exactly those domains and nothing else.
 type tolerantCompactStateView struct {
-	schema   string
-	revision string
-	state    CompactState
+	schema                        string
+	revision                      string
+	state                         CompactState
 	retiredFields                 int
 	retiredResultReopenSlots      bool
 	retiredFinalVerificationRetry bool
