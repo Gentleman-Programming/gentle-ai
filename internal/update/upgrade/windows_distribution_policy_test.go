@@ -22,8 +22,17 @@ func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 		name          string
 		latestVersion string
 		wantTarget    string
+		wantInstall   string
 	}{
-		{name: "stable release", latestVersion: "2.2.0", wantTarget: "@v2.2.0"},
+		{
+			name:          "stable release",
+			latestVersion: "2.2.0",
+			wantTarget:    "v2.2.0",
+			// No declared GoModulePath: REQ-22.2 forbids emitting a go install
+			// the toolchain cannot resolve, so the manual way degrades to
+			// clone-and-build (D-04) and must stay off any releases page.
+			wantInstall: "git clone --branch v2.2.0 https://github.com/Gentleman-Programming/gentle-ai && cd gentle-ai && go build -o gentle-ai ./cmd/gentle-ai",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,11 +58,14 @@ func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 			}
 			for _, required := range []string{
 				"Windows binary distribution and Scoop are temporarily unavailable",
-				"go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai" + tc.wantTarget,
+				tc.wantInstall,
 			} {
 				if !strings.Contains(hint, required) {
 					t.Errorf("manual hint is missing %q: %s", required, hint)
 				}
+			}
+			if strings.Contains(hint, "go install") {
+				t.Fatalf("manual hint must not offer an unresolvable go install: %s", hint)
 			}
 			if strings.Contains(hint, "/releases") || strings.Contains(hint, "install.ps1") {
 				t.Fatalf("manual hint recommends forbidden Windows distribution: %s", hint)

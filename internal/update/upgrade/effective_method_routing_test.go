@@ -433,6 +433,7 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
 			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
+			GoModulePath:  "github.com/gentleman-programming/gentle-ai/v3",
 		},
 		LatestVersion: "2.2.0",
 		Status:        update.UpdateAvailable,

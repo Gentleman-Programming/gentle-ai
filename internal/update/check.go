@@ -171,8 +171,11 @@ func usesBetaMainHeadCheck(tool ToolInfo, currentVersion string) bool {
 	return isGentleAIRepo(tool) && (isBetaUpdateChannel() || isGoPseudoVersionWithCommit(currentVersion))
 }
 
+// isGentleAIRepo reports whether tool is the primary CLI product. It delegates
+// to the shared identity predicate so the rename to "axiom" can never disable
+// the beta main-head check (REQ-22.3, D-01).
 func isGentleAIRepo(tool ToolInfo) bool {
-	return tool.Name == "gentle-ai" && strings.EqualFold(tool.Owner, "Gentleman-Programming") && tool.Repo == "gentle-ai"
+	return IsSelfTool(tool)
 }
 
 func isBetaUpdateChannel() bool {
@@ -195,10 +198,11 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 	result.LatestVersion = "main@" + shortRemote
 	result.ReleaseURL = strings.TrimSpace(commit.HTMLURL)
 	// Derive the instruction from the advertised target: the only installer
-	// that delivers main@<sha> is `go install ...@main`. The per-OS stable
+	// that delivers main@<sha> is `go install ...@main` (or its clone-and-build
+	// equivalent when the module is not resolvable). The per-OS stable
 	// hint would silently replace this beta build with the latest stable
 	// release (issue #2323).
-	result.UpdateHint = GentleAISourceInstallCommand(result.LatestVersion)
+	result.UpdateHint = SourceInstallCommand(result.Tool, result.LatestVersion)
 
 	if strings.TrimSpace(localVersion) == "" {
 		result.Status = VersionUnknown

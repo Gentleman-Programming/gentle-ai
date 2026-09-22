@@ -632,7 +632,7 @@ func gentleAIWindowsGoInstallProvenanceHint(r update.UpdateResult, destination, 
 	} else {
 		hint += "Confirm the active installation, then intentionally migrate with:\n  "
 	}
-	hint += update.GentleAISourceInstallCommand(r.LatestVersion)
+	hint += update.SourceInstallCommand(r.Tool, r.LatestVersion)
 	if destination != "" {
 		hint += fmt.Sprintf("\nAfter a successful migration, ensure only %s resolves for gentle-ai on PATH.", destination)
 	}
@@ -764,7 +764,7 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 func gentleAIWindowsSourceInstallHint(r update.UpdateResult) string {
 	return update.WindowsDistributionHoldMessage + " " +
 		"No binary or remote script was downloaded or executed. Install/update from source with Go 1.25.10+:\n  " +
-		update.GentleAISourceInstallCommand(r.LatestVersion)
+		update.SourceInstallCommand(r.Tool, r.LatestVersion)
 }
 
 // engramBinaryUpgrade downloads or installs the latest engram binary.
