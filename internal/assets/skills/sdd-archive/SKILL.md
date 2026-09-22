@@ -73,6 +73,8 @@ This hierarchy governs reporting, not admission. Missing, stale, malformed, or f
 
 Before any spec sync or archive move, require structured status. Use refreshed native SDD status and preserve actual edit permissions. Completed implementation normally recommends archive; an explicit archive request may close unfinished work without a verification certificate. SDD never offers or launches RDD; review mode is not archive state.
 
+For a change with a sealed `kickoff.yaml`, archive additionally requires the "integration" block-review gate approved: evidence that the change actually merged or deployed toward a preproduction or production environment, never a substitute for or a shortcut past a favorable local `verify-report.md` (REQ-21.16). Native status reports this as `dependencies.archive`; when blocked, it names the missing gate and the exact command that satisfies it. Record that evidence with `axiom sdd gate record --cwd <repo> --change <name> --gate integration --decision approved --evidence-kind pr_merged|deployment|attestation [--commit <sha>] [--base-ref <ref>] [--evidence "<text>"]` before retrying archive: `pr_merged` is verified against the local commit graph, while `deployment` and `attestation` are honestly recorded as declared, not checked. Archiving with this precondition unmet is refused explicitly, and the change stays out of `openspec/changes/archive/` (REQ-21.17 introduces no new archive mechanism — only this precondition ahead of the existing one).
+
 Archive records actual progress and findings; ordinary repository policy decides delivery.
 
 ### Honest Partial Archive
