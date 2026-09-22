@@ -627,7 +627,7 @@ func (s *Server) handleEcosystemUpgrade(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	resp, err := s.service.RunUpgrade()
+	resp, err := s.service.RunUpgradeSequence()
 	if err != nil {
 		s.respondJSON(w, http.StatusInternalServerError, resp)
 		return

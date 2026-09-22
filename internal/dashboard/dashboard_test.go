@@ -839,3 +839,43 @@ func TestEcosystemEndpoints(t *testing.T) {
 		t.Errorf("código inesperado para upgrade: %d", rr7.Code)
 	}
 }
+
+// TestEcosystemUpgradePresentsBothPhases verifica la presentación web de la
+// cadena upgrade->sync (REQ-22.4): el resultado de "Actualizar Herramientas"
+// presenta el estado de phases.upgrade y phases.sync, el motivo de omisión de
+// sync (restart-required / upgrade-failed) y la instrucción de reinicio cuando
+// el binario en ejecución fue reemplazado.
+func TestEcosystemUpgradePresentsBothPhases(t *testing.T) {
+	raw, err := AssetsFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("leer assets/app.js: %v", err)
+	}
+	js := string(raw)
+
+	markers := []struct {
+		name string
+		want string
+	}{
+		{name: "formatter wired into the upgrade action", want: "formatEcosystemUpgradeSequence(data)"},
+		{name: "reads phased DTO", want: "data.phases"},
+		{name: "presents upgrade phase", want: "Fase upgrade: "},
+		{name: "presents sync phase", want: "Fase sync: "},
+		{name: "restart-required skip reason", want: "'restart-required'"},
+		{name: "upgrade-failed skip reason", want: "'upgrade-failed'"},
+		{name: "restart instruction", want: "reinicia axiom"},
+		{name: "manual hint presentation", want: "Actualización manual requerida"},
+		{name: "executed sync presentation", want: "ejecutada"},
+	}
+	for _, marker := range markers {
+		if !strings.Contains(js, marker.want) {
+			t.Errorf("la presentación web no incluye %s (%q)", marker.name, marker.want)
+		}
+	}
+
+	// The presentation must not invent states the DTO does not declare.
+	for _, forbidden := range []string{"pending-required", "upgrade-skipped"} {
+		if strings.Contains(js, forbidden) {
+			t.Errorf("la presentación web inventa el estado %q, que el DTO no declara", forbidden)
+		}
+	}
+}

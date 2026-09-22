@@ -1091,30 +1091,129 @@ func (s *Service) RunSync() (*EcosystemActionResponse, error) {
 	}, nil
 }
 
-// RunUpgrade ejecuta la comprobación y actualización de herramientas del ecosistema.
-func (s *Service) RunUpgrade() (*EcosystemActionResponse, error) {
-	var buf bytes.Buffer
-	err := app.RunArgs([]string{"upgrade", "--yes"}, &buf)
-	rawOut := strings.TrimSpace(buf.String())
-	var lines []string
-	if rawOut != "" {
-		lines = strings.Split(rawOut, "\n")
-	}
-	if err != nil {
+// upgradeSequenceReportFn y upgradeSequenceSyncFn son las dos primitivas que
+// compone la cadena upgrade->sync (D-06). Son seams a nivel de paquete para que
+// los tests fijen la regla de salto sin sustituir binarios ni invocar un sync
+// real.
+var (
+	upgradeSequenceReportFn = app.RunUpgradeReport
+	upgradeSequenceSyncFn   = func(s *Service) (*EcosystemActionResponse, error) { return s.RunSync() }
+)
+
+// upgradeSequenceLiteral es el identificador de la cadena que este endpoint
+// ejecuta (spec §2.2).
+const upgradeSequenceLiteral = "upgrade->sync"
+
+// RunUpgradeSequence ejecuta la cadena upgrade -> sync (REQ-22.4) y devuelve el
+// reporte consolidado de ambas fases.
+//
+// La fase upgrade es solo-binario: corresponde exactamente al comportamiento de
+// `axiom upgrade`, que NO invoca install ni sync (REQ-22.5). La fase sync se
+// ejecuta solo cuando la regla de salto compartida lo permite; en caso contrario
+// queda `executed: false` con su motivo explícito (REQ-22.6, D-08).
+//
+// Devuelve error solo cuando el servicio no logra producir reporte alguno
+// (spec §2.4): un fallo de la fase upgrade es un reporte válido, no un 500.
+func (s *Service) RunUpgradeSequence() (*EcosystemActionResponse, error) {
+	var upBuf bytes.Buffer
+	upReport, upErr := upgradeSequenceReportFn(context.Background(), &upBuf)
+	upLines := outputLines(upBuf.String())
+
+	if upErr != nil && upReport.Status == "" {
+		// Sin reporte alguno: ni siquiera el resultado de la primera fase.
 		return &EcosystemActionResponse{
 			Success: false,
 			Action:  "upgrade",
 			Message: "Error durante la actualización de herramientas",
-			Error:   err.Error(),
-			Output:  lines,
-		}, nil
+			Error:   upErr.Error(),
+			Output:  upLines,
+		}, upErr
 	}
-	return &EcosystemActionResponse{
-		Success: true,
-		Action:  "upgrade",
-		Message: "Actualización procesada exitosamente",
-		Output:  lines,
-	}, nil
+
+	upgradePhase := UpgradePhaseReport{
+		Success:         upReport.Status != app.UpgradeStatusFailed,
+		Status:          upReport.Status,
+		RestartRequired: upReport.RestartRequired,
+		ManualHint:      upReport.ManualHint,
+		Output:          upLines,
+	}
+	if upErr != nil {
+		upgradePhase.Success = false
+		upgradePhase.Error = upErr.Error()
+		if upgradePhase.Status == "" {
+			upgradePhase.Status = app.UpgradeStatusFailed
+		}
+	}
+
+	skip, reason := app.ResolveSyncSkip(upReport)
+	syncPhase := SyncPhaseReport{Success: false, SkippedReason: reason}
+	if !skip {
+		syncPhase.Executed = true
+		syncPhase.SkippedReason = ""
+		syncResp, syncErr := upgradeSequenceSyncFn(s)
+		if syncErr != nil {
+			syncPhase.Error = syncErr.Error()
+		} else if syncResp != nil {
+			syncPhase.Success = syncResp.Success
+			syncPhase.Output = syncResp.Output
+			syncPhase.Error = syncResp.Error
+		}
+	}
+
+	// Regla §2.3.5: el éxito superior es true cuando toda fase ejecutada tuvo
+	// éxito, incluso si sync quedó omitido por restart-required; false si alguna
+	// fase ejecutada falló o si sync quedó omitido por upgrade-failed.
+	overallSuccess := upgradePhase.Success && (syncPhase.Success || syncPhase.SkippedReason == "restart-required")
+
+	resp := &EcosystemActionResponse{
+		Success:  overallSuccess,
+		Action:   "upgrade",
+		Message:  upgradeSequenceMessage(upgradePhase, syncPhase),
+		Output:   append(append([]string{}, upLines...), syncPhase.Output...),
+		Sequence: upgradeSequenceLiteral,
+		Phases: &EcosystemPhases{
+			Upgrade: upgradePhase,
+			Sync:    syncPhase,
+		},
+	}
+	if !upgradePhase.Success && upgradePhase.Error != "" {
+		resp.Error = upgradePhase.Error
+	}
+	if syncPhase.Executed && !syncPhase.Success && syncPhase.Error != "" {
+		if resp.Error != "" {
+			resp.Error += "; "
+		}
+		resp.Error += syncPhase.Error
+	}
+	return resp, nil
+}
+
+// upgradeSequenceMessage resume la cadena para el consumidor del DTO.
+func upgradeSequenceMessage(upgrade UpgradePhaseReport, sync SyncPhaseReport) string {
+	switch {
+	case !upgrade.Success:
+		return "Error durante la actualización de herramientas"
+	case sync.SkippedReason == "restart-required":
+		return "Upgrade completado; sync omitido — reinicia axiom antes de sincronizar"
+	case sync.SkippedReason == "upgrade-failed":
+		return "Upgrade falló; sync no se ejecutó"
+	case sync.Executed && !sync.Success:
+		return "Upgrade completado; sync con errores"
+	case sync.Executed:
+		return "Upgrade y sync completados"
+	default:
+		return "Actualización procesada exitosamente"
+	}
+}
+
+// outputLines parte la salida ya renderizada en líneas no vacías, igual que
+// hacen los endpoints de ecosistema existentes.
+func outputLines(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, "\n")
 }
 
 // GetBackups retorna los respaldos existentes registrados en el sistema.

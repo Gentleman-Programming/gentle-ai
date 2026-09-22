@@ -1488,7 +1488,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const res = await fetch('/api/ecosystem/upgrade', { method: 'POST' });
         const data = await res.json();
-        showConsoleOutput('Resultado de Actualización', (data.output || []).join('\n') || data.message);
+        showConsoleOutput('Resultado de Actualización', formatEcosystemUpgradeSequence(data));
         btnEcoUpgrade.textContent = data.success ? '✓ Actualizado' : '✕ Error';
         setTimeout(() => {
           btnEcoUpgrade.disabled = false;
@@ -1531,6 +1531,51 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ecoActionTitle) ecoActionTitle.textContent = title;
     if (ecoConsoleContent) ecoConsoleContent.textContent = content;
     if (ecoActionOutput) ecoActionOutput.classList.remove('hidden');
+  }
+
+  // Presenta el resultado de ambas fases de la cadena upgrade->sync (REQ-22.4),
+  // incluida la omisión de sync con su motivo y la instrucción de reinicio
+  // cuando el binario en ejecución fue reemplazado. No inventa estados que el
+  // DTO no declara: lee exactamente phases.upgrade y phases.sync.
+  function formatEcosystemUpgradeSequence(data) {
+    if (!data || !data.phases) {
+      return ((data && data.output) || []).join('\n') || (data && data.message) || '';
+    }
+    const upgrade = data.phases.upgrade || {};
+    const sync = data.phases.sync || {};
+    const lines = [];
+
+    let upgradeLine = 'Fase upgrade: ' + (upgrade.status || 'desconocido');
+    if (upgrade.restart_required) {
+      upgradeLine += ' — binario axiom reemplazado';
+    }
+    lines.push(upgradeLine);
+    if (upgrade.manual_hint) {
+      lines.push('Actualización manual requerida: ' + upgrade.manual_hint);
+    }
+    if (upgrade.error) {
+      lines.push('Error de upgrade: ' + upgrade.error);
+    }
+    if (upgrade.output && upgrade.output.length) {
+      lines.push.apply(lines, upgrade.output);
+    }
+
+    if (sync.executed) {
+      lines.push('Fase sync: ejecutada ' + (sync.success ? 'con éxito' : 'con errores'));
+      if (sync.output && sync.output.length) {
+        lines.push.apply(lines, sync.output);
+      }
+      if (sync.error) {
+        lines.push('Error de sync: ' + sync.error);
+      }
+    } else {
+      const skipReasons = {
+        'restart-required': 'omitida — reinicia axiom para continuar; después ejecuta sync',
+        'upgrade-failed': 'omitida — la fase upgrade falló'
+      };
+      lines.push('Fase sync: ' + (skipReasons[sync.skipped_reason] || ('omitida (' + (sync.skipped_reason || '') + ')')));
+    }
+    return lines.join('\n');
   }
 
   async function loadEcosystem() {

@@ -515,63 +515,13 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 // Issue #535: runUpgrade consumes a structured upgradeArgs value parsed once
 // in RunArgs. It forwards the parsed flags and tool filters to the update
 // check and executor exactly once and never reparses raw CLI arguments.
+//
+// The implementation lives in runUpgradeReport so the dashboard can obtain the
+// structured outcome (D-06) without duplicating the run; this wrapper keeps the
+// CLI error contract and the exact same stdout bytes (REQ-22.5).
 func runUpgrade(ctx context.Context, args upgradeArgs, detection system.DetectionResult, stdout io.Writer) error {
-	dryRun := args.dryRun
-	noBackup := args.noBackup
-	toolFilter := args.toolFilter
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	profile := cli.ResolveInstallProfile(detection)
-
-	// Check for available updates (filtered to requested tools if specified).
-	sp := upgrade.NewSpinner(stdout, "Checking for updates")
-	checkResults := updateCheckFiltered(ctx, Version, profile, toolFilter)
-	checkErr := updateCheckError(checkResults)
-	sp.Finish(checkErr == nil)
-	if checkErr != nil {
-		_, _ = fmt.Fprint(stdout, update.RenderCLI(checkResults))
-		return checkErr
-	}
-
-	// Execute upgrades (no-op if nothing is UpdateAvailable). Use the options
-	// seam so CLI-only flags (e.g. --no-backup) remain testable without invoking
-	// real package-manager strategies.
-	report := upgradeExecuteWithOptions(ctx, checkResults, profile, homeDir, dryRun, upgrade.ExecuteOptions{
-		Progress:          stdout,
-		BackupDiagnostics: stdout,
-		SkipBackup:        noBackup,
-	})
-
-	_, _ = fmt.Fprint(stdout, upgrade.RenderUpgradeReport(report))
-
-	// Return error only if any tool failed (not for skipped/manual).
-	var errs []error
-	for _, r := range report.Results {
-		if r.Status == upgrade.UpgradeFailed && r.Err != nil {
-			errs = append(errs, fmt.Errorf("upgrade failed for %q: %w", r.ToolName, r.Err))
-		}
-	}
-
-	if err := errors.Join(errs...); err != nil {
-		return err
-	}
-	if !dryRun {
-		if latestVersion, ok := gentleAIUpgradeSucceeded(report); ok {
-			if err := restartAfterGentleAIUpgrade(latestVersion, stdout); err != nil {
-				return err
-			}
-			// CLI upgrade path: print the doctor advisory so the user can verify
-			// ecosystem health against the post-upgrade state. Informational only;
-			// does not run any checks or change exit status.
-			printPostUpgradeDoctorAdvisory(stdout)
-			return nil
-		}
-	}
-	return nil
+	_, err := runUpgradeReport(ctx, args, detection, stdout)
+	return err
 }
 
 func updateCheckError(results []update.UpdateResult) error {
