@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-18 09:45:00 UTC
-> **Total Dominios:** 49 | **Total Requerimientos:** 321 | **Total Escenarios BDD:** 524
+> **Última Sincronización:** 2026-09-22 13:45:00 UTC
+> **Total Dominios:** 54 | **Total Requerimientos:** 339 | **Total Escenarios BDD:** 560
 
 ---
 
@@ -51,8 +51,13 @@
 | `rdd-simplification-design` | RDD Simplification Design Specification | 9 | 14 | [Ver Spec](specs/rdd-simplification-design/spec.md) |
 | `rdd-transport-capability` | RDD Transport Capability Specification | 4 | 8 | [Ver Spec](specs/rdd-transport-capability/spec.md) |
 | `review-findings-ledger` | Bounded Review Transaction and Findings Ledger | 18 | 24 | [Ver Spec](specs/review-findings-ledger/spec.md) |
+| `sdd-archive-lifecycle` | Ciclo de Vida de Archive, Integración Formal y Sellado Inmutable | 3 | 5 | [Ver Spec](specs/sdd-archive-lifecycle/spec.md) |
+| `sdd-block-review-gates` | Compuertas de Revisión por Bloque (spec, design, tasks, apply) | 6 | 12 | [Ver Spec](specs/sdd-block-review-gates/spec.md) |
+| `sdd-lane-kickoff` | Selección Temprana y Bloqueante de Carril ODD/SDD en el Kickoff | 4 | 8 | [Ver Spec](specs/sdd-lane-kickoff/spec.md) |
 | `sdd-orchestrator-assets` | SDD Orchestrator Assets Specification | 17 | 39 | [Ver Spec](specs/sdd-orchestrator-assets/spec.md) |
+| `sdd-preflight-configuration` | Cuestionario Pre-Vuelo de SDD, Modalidad de Avance y Asignación Obligatoria de Roles | 2 | 5 | [Ver Spec](specs/sdd-preflight-configuration/spec.md) |
 | `sdd-research` | sdd-research Specification | 3 | 8 | [Ver Spec](specs/sdd-research/spec.md) |
+| `sdd-role-closure-handoff` | Cierre de Último Rol, Aviso Formal y Relevo de Integración | 3 | 6 | [Ver Spec](specs/sdd-role-closure-handoff/spec.md) |
 | `semantic-code` | Especificación de Requerimientos: Conector Semántico de Código (Serena MCP & CodeGraph) (INC-06) | 11 | 14 | [Ver Spec](specs/semantic-code/spec.md) |
 | `structured-handoffs` | Especificación Viva: Handoffs Estructurados y Ciclo de Vida de Transición | 7 | 13 | [Ver Spec](specs/structured-handoffs/spec.md) |
 | `tui-spanish-localization` | Especificación Viva: Localización Integral al Castellano y Desacoplamiento de Avisos en la TUI (Axiom) | 4 | 9 | [Ver Spec](specs/tui-spanish-localization/spec.md) |
@@ -1249,4 +1254,103 @@ Definir de forma canónica el comportamiento del punto de entrada CLI `axiom` y 
   - *Escenario BDD:* Repositorio asignado a un rol no existe físicamente
 - **[REQ-2.5]** Reporte de Validación Estructurado
   - *Escenario BDD:* Generación de reporte completo en caso de fallo
+
+---
+
+### Dominio: `sdd-archive-lifecycle` — Ciclo de Vida de Archive, Integración Formal y Sellado Inmutable
+
+Definir el ciclo de vida terminal `archive` del SDD: precondición de integración o despliegue formal antes de ejecutarla, contenido y sincronización de especificaciones vivas, y semántica de sellado inmutable post-archive.
+
+**Archivo:** [`specs/sdd-archive-lifecycle/spec.md`](specs/sdd-archive-lifecycle/spec.md)
+
+- **[REQ-21.16]** Precondición de Integración o Despliegue para Ejecutar `archive`
+  - *Escenario BDD:* PR fusionado habilita el archivado
+  - *Escenario BDD:* Archive solicitado sin integración ni despliegue se rechaza explícitamente
+- **[REQ-21.17]** Contenido del Archivado
+  - *Escenario BDD:* Archivado exitoso actualiza incremento, especificación viva e inventario
+- **[REQ-21.18]** Sellado Inmutable Post-Archive y Gestión Exclusiva vía Bug o Nuevo Incremento
+  - *Escenario BDD:* Intento de reabrir un incremento archivado se rechaza
+  - *Escenario BDD:* Regresión post-archive se gestiona mediante bug o nuevo incremento
+
+---
+
+### Dominio: `sdd-block-review-gates` — Compuertas de Revisión por Bloque (spec, design, tasks, apply)
+
+Definir las cuatro compuertas de revisión por bloque que operan cuando un cambio SDD se sella en modalidad "con paradas y reviews": validación de `spec`, validación de `design`, validación de `tasks`, y validación de `apply` por rol.
+
+**Archivo:** [`specs/sdd-block-review-gates/spec.md`](specs/sdd-block-review-gates/spec.md)
+
+- **[REQ-21.7]** Aplicabilidad de las Compuertas Condicionada a la Modalidad Sellada
+  - *Escenario BDD:* Modalidad con paradas detiene el flujo entre spec y design
+  - *Escenario BDD:* Modalidad continua encadena las fases sin compuertas
+- **[REQ-21.8]** Compuerta de `spec`
+  - *Escenario BDD:* Spec completo aprobado habilita design
+  - *Escenario BDD:* Huecos detectados se enumeran explícitamente en la compuerta
+- **[REQ-21.9]** Compuerta de `design`
+  - *Escenario BDD:* Diseño conforme aprobado habilita tasks
+  - *Escenario BDD:* Desviación arquitectónica se señala explícitamente en la compuerta
+- **[REQ-21.10]** Compuerta de `tasks`
+  - *Escenario BDD:* Tasks de un único rol aprobadas habilitan apply
+  - *Escenario BDD:* Tasks multi-rol se presentan juntas antes de iniciar cualquier apply
+- **[REQ-21.11]** Compuerta de `apply` por Rol
+  - *Escenario BDD:* Rol concluido y aprobado habilita el siguiente rol pendiente
+  - *Escenario BDD:* Incumplimiento de calidad bloquea la conclusión del rol
+- **[REQ-21.12]** Rechazo de una Compuerta Bloquea el Avance y Exige Remediación
+  - *Escenario BDD:* Rechazo de la compuerta de spec exige remediación antes de reintentar
+  - *Escenario BDD:* Rechazo de la compuerta de apply de un rol impide el cierre de ese rol
+
+---
+
+### Dominio: `sdd-lane-kickoff` — Selección Temprana y Bloqueante de Carril ODD/SDD en el Kickoff
+
+Definir la compuerta temprana y bloqueante que determina si una solicitud de trabajo nueva se aborda mediante el carril ágil (ODD) o el carril formal (SDD), sellando esa decisión para todo el ciclo de vida del cambio.
+
+**Archivo:** [`specs/sdd-lane-kickoff/spec.md`](specs/sdd-lane-kickoff/spec.md)
+
+- **[REQ-21.1]** Evaluación de Alcance y Pregunta Bloqueante de Selección de Carril
+  - *Escenario BDD:* Alcance acotado formula la pregunta y bloquea hasta obtener respuesta
+  - *Escenario BDD:* Alcance inequívocamente arquitectónico evita la pregunta binaria
+- **[REQ-21.2]** Carril ODD sin Fricción Adicional
+  - *Escenario BDD:* Elección de ODD sin preguntas adicionales
+  - *Escenario BDD:* Trabajo ODD multi-área sigue sin roles ni handoff
+- **[REQ-21.3]** Entrada al Cuestionario de Pre-Vuelo de SDD
+  - *Escenario BDD:* Entrada al pre-vuelo tras elección explícita o alcance ya determinado
+- **[REQ-21.4]** Idempotencia del Kickoff ante un Cambio con Artefactos o Configuración Ya Sellada
+  - *Escenario BDD:* Reanudación de un cambio con kickoff ya sellado
+  - *Escenario BDD:* Cambio preexistente con artefactos pero sin kickoff sellado infiere un valor por defecto sin bloquear
+  - *Escenario BDD:* El retro-sello no altera qué `tasks.<rol>.md` consulta la barrera
+
+---
+
+### Dominio: `sdd-preflight-configuration` — Cuestionario Pre-Vuelo de SDD, Modalidad de Avance y Asignación Obligatoria de Roles
+
+Definir el cuestionario de pre-vuelo que sella, antes de crear la propuesta SDD, la modalidad de avance del cambio, la política de relevos y la asignación de roles, incluyendo la asignación obligatoria del rol `fullstack`.
+
+**Archivo:** [`specs/sdd-preflight-configuration/spec.md`](specs/sdd-preflight-configuration/spec.md)
+
+- **[REQ-21.5]** Bloqueo de Avance sin Modalidad y Política de Relevos Selladas
+  - *Escenario BDD:* Modalidad y política de relevos selladas antes de crear la propuesta
+  - *Escenario BDD:* Respuesta ambigua o ausente no crea la propuesta ni asume un valor por defecto
+- **[REQ-21.6]** Asignación Obligatoria del Rol `fullstack` sin Subdivisión Especializada
+  - *Escenario BDD:* Sin roles declarados, se asigna fullstack por defecto
+  - *Escenario BDD:* Un único rol especializado declarado no se combina con fullstack
+  - *Escenario BDD:* Varios roles especializados declarados tampoco activan fullstack
+
+---
+
+### Dominio: `sdd-role-closure-handoff` — Cierre de Último Rol, Aviso Formal y Relevo de Integración
+
+Definir el cierre determinista del último rol activo en un cambio SDD, incluyendo el aviso formal al usuario, la generación del artefacto `handoff.md` de integración y la transición hacia la fase `verify` global.
+
+**Archivo:** [`specs/sdd-role-closure-handoff/spec.md`](specs/sdd-role-closure-handoff/spec.md)
+
+- **[REQ-21.13]** Aviso Formal de Conclusión del Último Rol Activo
+  - *Escenario BDD:* Último de varios roles activa el aviso y el relevo
+  - *Escenario BDD:* Rol único fullstack satisface la condición de último rol de inmediato
+  - *Escenario BDD:* Compuerta rechazada no dispara el cierre aunque sea el único rol pendiente
+- **[REQ-21.14]** Generación del `handoff.md` de Integración
+  - *Escenario BDD:* Handoff de integración consolida todos los roles participantes
+- **[REQ-21.15]** Ejecución de la Fase `verify` Global tras el Handoff
+  - *Escenario BDD:* Verify global emite un informe consolidado distinto de los informes por rol
+  - *Escenario BDD:* Handoff bloqueado impide iniciar el verify global
 
