@@ -63,16 +63,26 @@ func TestKickoffAbsenceRegressionMatchesPreGovernanceGolden(t *testing.T) {
 	}
 }
 
-// scrubKickoffAbsenceWorkspaceRoot replaces every occurrence of the
-// t.TempDir()-generated workspace root with a fixed placeholder, in both its
-// raw and its JSON-string-escaped form (Windows paths carry backslashes,
-// which json.Marshal escapes as "\\"), so the comparison is stable across
-// runs and platforms without weakening it: every byte the workspace root
-// does not touch is still compared literally.
+// scrubKickoffAbsenceWorkspaceRoot removes the two run- and host-dependent
+// facts from the projection text so the frozen golden below can be compared
+// literally anywhere: the t.TempDir()-generated workspace root, which changes
+// every run, and the OS path separator, which json.Marshal emits as an escaped
+// backslash on Windows and as a forward slash everywhere else.
+//
+// Both are normalizations of the COMPARISON, never of the projection. The
+// golden still pins key order, field presence, indentation and every value
+// byte, including the structural absence of the "governance" key that D-05
+// requires. The separator normalization is what makes this a gate at all:
+// without it the golden only ever held on the platform that captured it, and
+// the control gate passed on Windows while failing in CI on Linux.
 func scrubKickoffAbsenceWorkspaceRoot(jsonText, root string) string {
 	escaped := strings.ReplaceAll(root, `\`, `\\`)
 	scrubbed := strings.ReplaceAll(jsonText, escaped, "<WORKSPACE_ROOT>")
-	return strings.ReplaceAll(scrubbed, root, "<WORKSPACE_ROOT>")
+	scrubbed = strings.ReplaceAll(scrubbed, root, "<WORKSPACE_ROOT>")
+	// The JSON-escaped pair first: collapsing lone backslashes ahead of it
+	// would turn each escaped separator into two forward slashes.
+	scrubbed = strings.ReplaceAll(scrubbed, `\\`, "/")
+	return strings.ReplaceAll(scrubbed, `\`, "/")
 }
 
 // kickoffAbsenceRegressionGolden was captured by running this test against
@@ -86,37 +96,37 @@ const kickoffAbsenceRegressionGolden = `{
   "artifactStore": "openspec",
   "planningHome": {
     "mode": "repo-local",
-    "path": "<WORKSPACE_ROOT>\\openspec"
+    "path": "<WORKSPACE_ROOT>/openspec"
   },
-  "changeRoot": "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff",
+  "changeRoot": "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff",
   "artifactPaths": {
     "proposal": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\proposal.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/proposal.md"
     ],
     "specs": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\specs\\auth\\spec.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/specs/auth/spec.md"
     ],
     "design": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\design.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/design.md"
     ],
     "tasks": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\tasks.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/tasks.md"
     ],
     "applyProgress": [],
     "verifyReport": []
   },
   "contextFiles": {
     "proposal": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\proposal.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/proposal.md"
     ],
     "specs": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\specs\\auth\\spec.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/specs/auth/spec.md"
     ],
     "design": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\design.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/design.md"
     ],
     "tasks": [
-      "<WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\tasks.md"
+      "<WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/tasks.md"
     ],
     "applyProgress": [],
     "verifyReport": []
@@ -165,7 +175,7 @@ const kickoffAbsenceRegressionGolden = `{
       "State: ready",
       "Read proposal, specs, design, and tasks before editing.",
       "Artifact store: openspec; read the file at that path.",
-      "Tasks locator: <WORKSPACE_ROOT>\\openspec\\changes\\regression-no-kickoff\\tasks.md",
+      "Tasks locator: <WORKSPACE_ROOT>/openspec/changes/regression-no-kickoff/tasks.md",
       "Apply-progress locator: <unresolved>",
       "Resume from the apply-progress locator when it resolves; implement only unchecked tasks and mark each complete at the tasks locator as work completes."
     ],
