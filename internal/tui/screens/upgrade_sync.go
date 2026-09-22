@@ -81,7 +81,7 @@ func renderUpgradeSyncConfirm(results []update.UpdateResult, updateCheckDone boo
 
 	b.WriteString("  " + styles.WarningStyle.Render("1.") + " " + styles.HeadingStyle.Render("Upgrade tools"))
 	b.WriteString("\n")
-	b.WriteString("     " + styles.SubtextStyle.Render("Updates gentle-ai, engram, and gga to latest versions"))
+	b.WriteString("     " + styles.SubtextStyle.Render("Updates axiom, engram, and gga to latest versions"))
 	b.WriteString("\n\n")
 
 	b.WriteString("  " + styles.WarningStyle.Render("2.") + " " + styles.HeadingStyle.Render("Sync configurations"))
@@ -185,10 +185,10 @@ func renderUpgradeSyncResult(report *upgrade.UpgradeReport, syncFiles []string, 
 	b.WriteString(styles.HeadingStyle.Render("Sync Results"))
 	b.WriteString("\n\n")
 
-	if reportUpgradedGentleAI(report) {
-		b.WriteString("  " + styles.WarningStyle.Render("⚠ Sync skipped because gentle-ai was upgraded."))
+	if reportUpgradedSelfTool(report) {
+		b.WriteString("  " + styles.WarningStyle.Render("⚠ Sync skipped because axiom was upgraded."))
 		b.WriteString("\n")
-		b.WriteString("  " + styles.SubtextStyle.Render("Restart gentle-ai, then run sync with the new binary."))
+		b.WriteString("  " + styles.SubtextStyle.Render("Restart axiom, then run sync with the new binary."))
 	} else if syncErr != nil {
 		b.WriteString("  " + styles.ErrorStyle.Render("✗ Sync failed: "+syncErr.Error()))
 	} else if len(syncFiles) == 0 {
