@@ -3,6 +3,7 @@ package skillregistry
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -405,6 +406,13 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 	home := t.TempDir()
 	dirs := UserSkillDirs(home)
 
+	// Hermes resolves %LOCALAPPDATA%\hermes on Windows (sandboxed home keeps
+	// ambient env out, so only the platform fallback applies here).
+	hermesHome := filepath.Join(home, ".hermes")
+	if runtime.GOOS == "windows" {
+		hermesHome = filepath.Join(home, "AppData", "Local", "hermes")
+	}
+
 	for _, want := range []string{
 		filepath.Join(home, ".config", "opencode", "skills"),
 		filepath.Join(home, ".config", "kilo", "skills"),
@@ -424,7 +432,7 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 		filepath.Join(home, ".openclaw", "skills"),
 		filepath.Join(home, ".pi", "agent", "skills"),
 		filepath.Join(home, ".agents", "skills"),
-		filepath.Join(home, ".hermes", "skills"),
+		filepath.Join(hermesHome, "skills"),
 	} {
 		if !containsPath(dirs, want) {
 			t.Fatalf("UserSkillDirs() missing %q in %#v", want, dirs)

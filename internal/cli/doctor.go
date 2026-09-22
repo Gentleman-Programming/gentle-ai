@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
@@ -527,6 +528,8 @@ func agentConfigDir(homeDir, agentID string) string {
 		return filepath.Join(homeDir, ".codex")
 	case "kiro":
 		return filepath.Join(homeDir, ".kiro")
+	case "hermes":
+		return hermes.ResolveHome(homeDir)
 	default:
 		return ""
 	}

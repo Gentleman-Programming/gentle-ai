@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -77,8 +78,37 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".qwen", "skills"),
 		filepath.Join(home, ".kiro", "skills"),
 		filepath.Join(home, ".openclaw", "skills"),
-		filepath.Join(home, ".hermes", "skills"),
+		hermesSkillsDir(home),
 	}
+}
+
+// hermesSkillsDir mirrors the Hermes adapter's home resolution
+// (internal/agents/hermes ResolveHome): HERMES_HOME first, then
+// %LOCALAPPDATA%\hermes on Windows, then ~/.hermes. Duplicated here because
+// importing the agents package would create an import cycle.
+//
+// Environment overrides are honored only when home is the real user home so
+// sandboxed callers stay contained inside the root they pass in.
+func hermesSkillsDir(home string) string {
+	return filepath.Join(resolveHermesHome(home), "skills")
+}
+
+func resolveHermesHome(homeDir string) string {
+	if hermesHome := strings.TrimSpace(os.Getenv("HERMES_HOME")); filepath.IsAbs(hermesHome) && isRealUserHome(homeDir) {
+		return hermesHome
+	}
+	if runtime.GOOS == "windows" {
+		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); filepath.IsAbs(localAppData) && isRealUserHome(homeDir) {
+			return filepath.Join(localAppData, "hermes")
+		}
+		return filepath.Join(homeDir, "AppData", "Local", "hermes")
+	}
+	return filepath.Join(homeDir, ".hermes")
+}
+
+func isRealUserHome(homeDir string) bool {
+	userHome, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
 }
 
 func ProjectSkillDirs(cwd string) []string {

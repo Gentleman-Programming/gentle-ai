@@ -3023,7 +3023,7 @@ func TestInjectHermesGentlemanWritesSOULMD(t *testing.T) {
 		t.Fatal("Inject(hermes, gentleman) changed = false")
 	}
 
-	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	soulPath := filepath.Join(hermes.ResolveHome(home), "SOUL.md")
 	content, err := os.ReadFile(soulPath)
 	if err != nil {
 		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
@@ -3058,7 +3058,7 @@ func TestInjectHermesNeutralWritesSOULMD(t *testing.T) {
 		t.Fatal("Inject(hermes, neutral) changed = false")
 	}
 
-	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	soulPath := filepath.Join(hermes.ResolveHome(home), "SOUL.md")
 	content, err := os.ReadFile(soulPath)
 	if err != nil {
 		t.Fatalf("ReadFile(SOUL.md) error = %v", err)

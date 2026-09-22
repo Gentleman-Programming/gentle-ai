@@ -2302,7 +2302,7 @@ func TestInjectEngramHermesYAMLOverlay(t *testing.T) {
 		t.Fatal("Inject(hermes) first run: changed = false, want true")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(hermes.ResolveHome(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) error = %v", err)
@@ -2335,7 +2335,7 @@ func TestEngramYAMLCommandRecoveryCustomPath(t *testing.T) {
 	home := t.TempDir()
 	SetLookPathForTest(t, "engram", "")
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(hermes.ResolveHome(home), "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2367,7 +2367,7 @@ func TestEngramYAMLCommandRecoveryVersionedCellar(t *testing.T) {
 	home := t.TempDir()
 	SetLookPathForTest(t, "engram", "")
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(hermes.ResolveHome(home), "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2412,7 +2412,7 @@ func TestEngramYAMLCommandRecoveryAbsent(t *testing.T) {
 		t.Fatal("Inject(hermes) changed = false")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(hermes.ResolveHome(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -2429,7 +2429,7 @@ func TestEngramYAMLCommandRecoveryListShape(t *testing.T) {
 	home := t.TempDir()
 	SetLookPathForTest(t, "engram", "")
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(hermes.ResolveHome(home), "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

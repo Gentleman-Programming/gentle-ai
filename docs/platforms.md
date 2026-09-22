@@ -79,4 +79,4 @@ Restart OpenCode after enabling managed activation. Restart the shell if the lau
 | OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped SDD skills |
 | Trae | `%USERPROFILE%\.trae\` (skills) + `%APPDATA%\Trae\User\user_rules.md` (rules) + `%APPDATA%\Trae\User\mcp.json` (MCP) |
 | Pi | `%USERPROFILE%\.pi\` (Pi config, project agents/chains, Gentle AI support assets) |
-| Hermes | `%USERPROFILE%\.hermes\` (config.yaml, SOUL.md, skills/) |
+| Hermes | `%LOCALAPPDATA%\hermes\` (config.yaml, SOUL.md, skills/; `HERMES_HOME` wins when set) |

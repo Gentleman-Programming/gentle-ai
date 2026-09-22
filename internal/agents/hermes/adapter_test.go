@@ -5,12 +5,23 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
+
+// wantHermesHome is the expected ResolveHome result for a sandboxed homeDir
+// that is never the real user home: environment overrides must not apply, so
+// the result depends only on GOOS.
+func wantHermesHome(homeDir string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(homeDir, "AppData", "Local", "hermes")
+	}
+	return filepath.Join(homeDir, ".hermes")
+}
 
 func TestDetect(t *testing.T) {
 	tests := []struct {
@@ -91,7 +102,7 @@ func TestDetect(t *testing.T) {
 				t.Fatalf("Detect() binaryPath = %q, want %q", binaryPath, tt.wantBinaryPath)
 			}
 
-			wantConfigPath := filepath.Join(homeDir, ".hermes")
+			wantConfigPath := wantHermesHome(homeDir)
 			if configPath != wantConfigPath {
 				t.Fatalf("Detect() configPath = %q, want %q", configPath, wantConfigPath)
 			}
@@ -126,7 +137,7 @@ func TestInstallCommand(t *testing.T) {
 func TestConfigPaths(t *testing.T) {
 	a := NewAdapter()
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
-	configDir := filepath.Join(homeDir, ".hermes")
+	configDir := wantHermesHome(homeDir)
 	configYAML := filepath.Join(configDir, "config.yaml")
 	soulMD := filepath.Join(configDir, "SOUL.md")
 	skillsDir := filepath.Join(configDir, "skills")
@@ -152,6 +163,79 @@ func TestConfigPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveHome(t *testing.T) {
+	t.Run("sandbox home ignores HERMES_HOME", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", filepath.Join(t.TempDir(), "hermes"))
+		homeDir := filepath.Join(string(filepath.Separator), "home", "sandbox")
+		if got := ResolveHome(homeDir); got != wantHermesHome(homeDir) {
+			t.Fatalf("ResolveHome(%q) = %q, want %q (ambient env must not escape a sandbox root)", homeDir, got, wantHermesHome(homeDir))
+		}
+	})
+
+	t.Run("sandbox home ignores LOCALAPPDATA", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", filepath.Join(t.TempDir(), "local"))
+		homeDir := filepath.Join(string(filepath.Separator), "home", "sandbox")
+		if got := ResolveHome(homeDir); got != wantHermesHome(homeDir) {
+			t.Fatalf("ResolveHome(%q) = %q, want %q (ambient env must not escape a sandbox root)", homeDir, got, wantHermesHome(homeDir))
+		}
+	})
+
+	t.Run("real home honors HERMES_HOME", func(t *testing.T) {
+		realHome, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("os.UserHomeDir unavailable")
+		}
+		want := filepath.Join(t.TempDir(), "hermes-home")
+		t.Setenv("HERMES_HOME", want)
+		if got := ResolveHome(realHome); got != want {
+			t.Fatalf("ResolveHome(realHome) = %q, want HERMES_HOME %q", got, want)
+		}
+	})
+
+	t.Run("real home ignores relative HERMES_HOME", func(t *testing.T) {
+		realHome, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("os.UserHomeDir unavailable")
+		}
+		t.Setenv("HERMES_HOME", filepath.Join("relative", "hermes"))
+		var want string
+		if runtime.GOOS == "windows" {
+			t.Setenv("LOCALAPPDATA", "")
+			want = filepath.Join(realHome, "AppData", "Local", "hermes")
+		} else {
+			want = filepath.Join(realHome, ".hermes")
+		}
+		if got := ResolveHome(realHome); got != want {
+			t.Fatalf("ResolveHome(realHome) = %q, want %q (relative HERMES_HOME must be ignored)", got, want)
+		}
+	})
+
+	t.Run("real home honors LOCALAPPDATA on Windows", func(t *testing.T) {
+		if runtime.GOOS != "windows" {
+			t.Skip("Windows-only resolution")
+		}
+		realHome, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("os.UserHomeDir unavailable")
+		}
+		t.Setenv("HERMES_HOME", "")
+		localAppData := filepath.Join(t.TempDir(), "local")
+		t.Setenv("LOCALAPPDATA", localAppData)
+		want := filepath.Join(localAppData, "hermes")
+		if got := ResolveHome(realHome); got != want {
+			t.Fatalf("ResolveHome(realHome) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("ConfigPath stays POSIX", func(t *testing.T) {
+		homeDir := filepath.Join(string(filepath.Separator), "home", "test")
+		if got, want := ConfigPath(homeDir), filepath.Join(homeDir, ".hermes"); got != want {
+			t.Fatalf("ConfigPath() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestCapabilities(t *testing.T) {

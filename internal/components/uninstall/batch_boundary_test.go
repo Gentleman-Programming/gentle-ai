@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
@@ -20,8 +21,8 @@ import (
 func TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails(t *testing.T) {
 	home := t.TempDir()
 	claudeSettings := filepath.Join(home, ".claude", "settings.json")
-	hermesConfig := filepath.Join(home, ".hermes", "config.yaml")
-	hermesSoul := filepath.Join(home, ".hermes", "SOUL.md")
+	hermesConfig := filepath.Join(hermes.ResolveHome(home), "config.yaml")
+	hermesSoul := filepath.Join(hermes.ResolveHome(home), "SOUL.md")
 
 	writeBatchFile(t, claudeSettings, `{"theme":"gentleman","outputStyle":"gentleman","env":{"MY_VAR":"1"}}`)
 	writeBatchFile(t, hermesConfig, "providers:\n  - name: hermes\n")
@@ -196,7 +197,7 @@ func TestBuildPlanAttributesOperationsToTheAgentsThatContributedThem(t *testing.
 	}
 
 	claudeSettings := filepath.Join(home, ".claude", "settings.json")
-	hermesConfig := filepath.Join(home, ".hermes", "config.yaml")
+	hermesConfig := filepath.Join(hermes.ResolveHome(home), "config.yaml")
 	assertOperationAgents(t, built, claudeSettings, []model.AgentID{model.AgentClaudeCode})
 	assertOperationAgents(t, built, hermesConfig, []model.AgentID{model.AgentHermes})
 }

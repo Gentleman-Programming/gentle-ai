@@ -23,7 +23,7 @@
 | OpenClaw        | `openclaw`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.openclaw`                       |
 | Trae            | `trae-ide`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.trae`                           |
 | Pi              | `pi`             | Yes          | Yes | Full (package-managed subagents) | No            | Yes            | `~/.pi`                             |
-| Hermes          | `hermes`         | Yes          | Yes | Full (delegate_task ephemeral)   | No            | No             | `~/.hermes`                         |
+| Hermes          | `hermes`         | Yes          | Yes | Full (delegate_task ephemeral)   | No            | No             | effective Hermes home (`HERMES_HOME`, else `%LOCALAPPDATA%\hermes` on Windows, `~/.hermes` on POSIX) |
 
 Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI™ installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. Everyday work follows [ODD](usage.md#organic-driven-development-odd), using direct or delegated implementation. SDD is selected only by an explicit request or accepted proposal, never automatically because of task size or risk.
 
@@ -317,12 +317,12 @@ The full delegation decision table lives in `~/.hermes/skills/hermes-ephemeral-d
 
 ### Hermes
 
-- **Detection**: gentle-ai reports the `hermes` binary on `PATH` and the config root at `~/.hermes` independently; the config directory drives install detection (the binary can be absent and Hermes is still detected as configured).
+- **Detection**: gentle-ai reports the `hermes` binary on `PATH` and the config root at the effective Hermes home independently; the config directory drives install detection (the binary can be absent and Hermes is still detected as configured).
 - **Install**: detect-only — gentle-ai cannot install Hermes. Install Hermes manually first, then run `gentle-ai install --agent hermes`.
-- **Config path**: `~/.hermes/` (config.yaml, SOUL.md, skills/)
-- **MCP config**: Engram and Context7 are injected as YAML blocks under `mcp_servers:` in `~/.hermes/config.yaml` (`StrategyMergeIntoYAML`). Pre-existing top-level keys (e.g. `model:`) are preserved verbatim.
-- **System prompt**: SDD orchestrator and persona are written to `~/.hermes/SOUL.md` via markdown section markers (`<!-- gentle-ai:sdd-orchestrator -->`, `<!-- gentle-ai:persona -->`).
-- **Skills**: `~/.hermes/skills/` — gentle-ai writes SDD phase skills; the skill registry also scans this path.
+- **Config path**: the effective Hermes home — `HERMES_HOME` when set, `%LOCALAPPDATA%\hermes\` on native Windows, `~/.hermes/` on Linux and macOS — holding config.yaml, SOUL.md, skills/
+- **MCP config**: Engram and Context7 are injected as YAML blocks under `mcp_servers:` in the effective home's `config.yaml` (`StrategyMergeIntoYAML`). Pre-existing top-level keys (e.g. `model:`) are preserved verbatim.
+- **System prompt**: SDD orchestrator and persona are written to the effective home's `SOUL.md` via markdown section markers (`<!-- gentle-ai:sdd-orchestrator -->`, `<!-- gentle-ai:persona -->`).
+- **Skills**: `<hermes-home>/skills/` — gentle-ai writes SDD phase skills; the skill registry also scans this path.
 - **Permissions**: Hermes uses an undocumented permission format. gentle-ai skips permission injection for Hermes.
 - **Profiles**: Hermes does not support multi-mode SDD (no per-phase model routing). Single-mode only.
 - **Memory**: Hermes has a native memory and skill-learning loop. Engram complements it — Engram provides cross-agent, cross-session memory protocol so knowledge is portable across all agents, not just Hermes.

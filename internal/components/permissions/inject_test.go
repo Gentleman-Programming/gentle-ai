@@ -194,7 +194,7 @@ func TestInjectHermesSkipsPermissions(t *testing.T) {
 	}
 
 	// Confirm no config.yaml or settings file was created.
-	hermesDir := filepath.Join(home, ".hermes")
+	hermesDir := hermes.ResolveHome(home)
 	if _, err := os.Stat(hermesDir); err == nil {
 		t.Fatal("Inject(hermes) created ~/.hermes directory, want no files written")
 	}

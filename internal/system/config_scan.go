@@ -3,6 +3,8 @@ package system
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.
@@ -44,8 +46,34 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "openclaw", Path: filepath.Join(homeDir, ".openclaw")},
 		{Agent: "pi", Path: filepath.Join(homeDir, ".pi")},
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
-		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
+		{Agent: "hermes", Path: hermesConfigDir(homeDir)},
 	}
+}
+
+// hermesConfigDir mirrors the Hermes adapter's home resolution
+// (internal/agents/hermes ResolveHome): HERMES_HOME first, then
+// %LOCALAPPDATA%\hermes on Windows, then ~/.hermes. Duplicated here because
+// importing the agents package would create an import cycle
+// (system ← agents ← system).
+//
+// Environment overrides are honored only when homeDir is the real user home
+// so sandboxed callers stay contained inside the root they pass in.
+func hermesConfigDir(homeDir string) string {
+	if hermesHome := strings.TrimSpace(os.Getenv("HERMES_HOME")); filepath.IsAbs(hermesHome) && isHermesRealUserHome(homeDir) {
+		return hermesHome
+	}
+	if runtime.GOOS == "windows" {
+		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); filepath.IsAbs(localAppData) && isHermesRealUserHome(homeDir) {
+			return filepath.Join(localAppData, "hermes")
+		}
+		return filepath.Join(homeDir, "AppData", "Local", "hermes")
+	}
+	return filepath.Join(homeDir, ".hermes")
+}
+
+func isHermesRealUserHome(homeDir string) bool {
+	userHome, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
 }
 
 // vscodeCopilotGlobalConfigDir returns ~/.copilot, the GlobalConfigDir used by

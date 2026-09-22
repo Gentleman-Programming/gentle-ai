@@ -318,7 +318,7 @@ func TestInjectHermesWritesSDDOrchestratorToSOULMD(t *testing.T) {
 		t.Fatal("Inject(hermes) first run: changed = false, want true")
 	}
 
-	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	soulPath := filepath.Join(hermes.ResolveHome(home), "SOUL.md")
 	content, err := os.ReadFile(soulPath)
 	if err != nil {
 		t.Fatalf("ReadFile(SOUL.md) error = %v", err)

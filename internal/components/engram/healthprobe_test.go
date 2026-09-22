@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
 )
 
 // setStdioHelperProcess routes the execCommandContext seam through this test
@@ -748,6 +750,13 @@ unclosed = [
 
 func TestReadPersistedStdioCommands_PreservesConfiguredCommandAndArguments(t *testing.T) {
 	homeDir := t.TempDir()
+	// The Hermes fixture must live where the adapter resolves it: ~/.hermes
+	// on POSIX, %LOCALAPPDATA%\hermes on Windows (sandboxed home keeps
+	// ambient env out, so only the platform fallback applies here).
+	hermesConfigPath := ".hermes/config.yaml"
+	if runtime.GOOS == "windows" {
+		hermesConfigPath = filepath.Join(hermes.ResolveHome(homeDir), "config.yaml")
+	}
 	cases := []struct {
 		name    string
 		agentID string
@@ -783,7 +792,7 @@ func TestReadPersistedStdioCommands_PreservesConfiguredCommandAndArguments(t *te
 		{
 			name:    "Hermes YAML configuration",
 			agentID: "hermes",
-			path:    ".hermes/config.yaml",
+			path:    hermesConfigPath,
 			content: "mcp_servers:\n  engram:\n    command: /configured/hermes-engram\n    args:\n      - mcp\n      - --tools=hermes\n",
 			command: "/configured/hermes-engram",
 			args:    []string{"mcp", "--tools=hermes"},
@@ -792,7 +801,10 @@ func TestReadPersistedStdioCommands_PreservesConfiguredCommandAndArguments(t *te
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(homeDir, tt.path)
+			path := tt.path
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(homeDir, path)
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				t.Fatal(err)
 			}

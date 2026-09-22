@@ -237,7 +237,7 @@ Matcher fixtures follow OpenCode [v1.2.27 wildcard matching](https://github.com/
 
 For OpenClaw, sync reads the active workspace from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`). It writes `AGENTS.md` / `SOUL.md` into that workspace, while MCP servers stay in the global OpenClaw config under `mcp.servers`.
 
-For Hermes, gentle-ai is detect-only: it cannot install Hermes. Install Hermes manually first. Detection is driven by the `~/.hermes` config directory (the binary being on `PATH` is reported separately). Once Hermes is detected, `gentle-ai install --agent hermes` injects context7 and Engram™ MCP blocks into `~/.hermes/config.yaml`, writes the SDD orchestrator and persona into `~/.hermes/SOUL.md`, and copies skills to `~/.hermes/skills/`. Use `gentle-ai sync --agent hermes` to update the managed configuration after upgrades.
+For Hermes, gentle-ai is detect-only: it cannot install Hermes. Install Hermes manually first. Detection is driven by the effective Hermes home directory (`HERMES_HOME` when set, `%LOCALAPPDATA%\hermes` on native Windows, `~/.hermes` on Linux and macOS; the binary being on `PATH` is reported separately). Once Hermes is detected, `gentle-ai install --agent hermes` injects context7 and Engram™ MCP blocks into the effective home's `config.yaml`, writes the SDD orchestrator and persona into its `SOUL.md`, and copies skills to its `skills/`. Use `gentle-ai sync --agent hermes` to update the managed configuration after upgrades.
 
 ### uninstall
 
