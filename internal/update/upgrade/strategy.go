@@ -80,7 +80,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 			return false, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
 		}
 	}
-	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
+	if IsSelfBetaUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
 		return false, goInstallMainUpgrade(r.Tool)
 	}
 
@@ -94,6 +94,12 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		return false, brewUpgrade(ctx, r, ownership)
 	case update.InstallGoInstall:
 		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
+	case update.InstallSourceBuild:
+		targetRef := "refs/tags/v" + r.LatestVersion
+		if IsSelfBetaUpgrade(r) {
+			targetRef = "refs/heads/main"
+		}
+		return false, sourceBuildUpgrade(ctx, r, profile, targetRef)
 	case update.InstallBinary:
 		return false, binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
@@ -111,8 +117,8 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		return false, err
 	default:
 		return false, &ManualFallbackError{
-			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
-				r.Tool.Name, method, r.Tool.Repo),
+			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q - please update manually. See: https://github.com/%s/%s",
+				r.Tool.Name, method, r.Tool.Owner, r.Tool.Repo),
 		}
 	}
 }
@@ -552,9 +558,13 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	destDir := preflightDestination
 	var destErr error
 	if destDir == "" {
-		destDir, destErr = goInstallDestinationDir()
-		if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
-			return err
+		var pErr error
+		destDir, pErr = preflightWindowsSelfBinaryWrite(tool, profile)
+		if pErr != nil {
+			return pErr
+		}
+		if destDir == "" {
+			destDir, destErr = goInstallDestinationDir()
 		}
 	}
 
@@ -562,13 +572,13 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	// main@<sha>, which Go installs by resolving the main branch, not by
 	// prepending a v to that display value.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
-	betaGentleAI := isBetaGentleAIUpgrade(r)
-	if betaGentleAI {
+	betaSelf := IsSelfBetaUpgrade(r)
+	if betaSelf {
 		target = tool.GoImportPath + "@main"
 	}
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
-	if betaGentleAI {
+	if betaSelf {
 		cmd.Env = goProxyBypassEnv(cmd.Env, gentleAIModulePath(tool))
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -579,17 +589,6 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	return nil
 }
 
-func preflightWindowsGentleAIGoInstall(r update.UpdateResult, profile system.PlatformProfile) (string, error) {
-	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
-		return "", nil
-	}
-	destDir, destErr := goInstallDestinationDir()
-	if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
-		return "", err
-	}
-	return destDir, nil
-}
-
 func firstString(values []string) string {
 	if len(values) == 0 {
 		return ""
@@ -597,65 +596,33 @@ func firstString(values []string) string {
 	return values[0]
 }
 
-func preflightWindowsGentleAIGoInstallWithDestination(r update.UpdateResult, profile system.PlatformProfile, destDir string, destErr error) error {
-	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
-		return nil
-	}
-	if destErr != nil {
-		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, "", "")}
-	}
-
-	destination := absoluteBinaryPath(filepath.Join(destDir, goInstallBinaryName(r.Tool.Name, profile.OS)))
-	active, err := lookPathFn(r.Tool.Name)
-	if err != nil {
-		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, "")}
-	}
-	active = absoluteBinaryPath(active)
-	if !sameBinaryPathForOS(destination, active, profile.OS) {
-		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, active)}
-	}
-	return nil
-}
-
-func gentleAIWindowsGoInstallProvenanceHint(r update.UpdateResult, destination, active string) string {
-	details := "could not determine the Go installation destination"
-	switch {
-	case destination != "" && active == "":
-		details = fmt.Sprintf("could not resolve the active gentle-ai executable before Go would write to %s", destination)
-	case destination != "" && active != "":
-		details = fmt.Sprintf("resolves gentle-ai to %s, but Go would write to %s", active, destination)
-	}
-
-	hint := fmt.Sprintf("Windows self-upgrade %s. No files were changed. ", details)
-	if active != "" {
-		hint += fmt.Sprintf("Keep %s as the active installation, or intentionally migrate to %s with:\n  ", active, destination)
-	} else {
-		hint += "Confirm the active installation, then intentionally migrate with:\n  "
-	}
-	hint += update.SourceInstallCommand(r.Tool, r.LatestVersion)
-	if destination != "" {
-		hint += fmt.Sprintf("\nAfter a successful migration, ensure only %s resolves for gentle-ai on PATH.", destination)
-	}
-	return hint
-}
-
-func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
-	return r.Tool.Name == "gentle-ai" &&
-		strings.EqualFold(r.Tool.Owner, "Gentleman-Programming") &&
-		r.Tool.Repo == "gentle-ai" &&
+// IsSelfBetaUpgrade reports whether the update result targets the self-tool's
+// beta channel (a main-head build advertised as main@<sha>). It detects the
+// channel for both historical names: axiom and gentle-ai (REQ-22.3).
+func IsSelfBetaUpgrade(r update.UpdateResult) bool {
+	return update.IsSelfTool(r.Tool) &&
 		strings.HasPrefix(strings.TrimSpace(r.LatestVersion), "main@")
 }
 
-// goInstallMainUpgrade installs gentle-ai from HEAD on the beta channel. It runs
-// the same `go install` mechanism as goInstallUpgrade and therefore carries the
-// same risk of writing somewhere the shell does not resolve, so it performs the
-// same non-fatal destination verification.
+// goInstallMainUpgrade installs the self-tool from HEAD on the beta channel.
+// It composes `go install <GoImportPath>@main` ONLY when GoInstallResolvable()
+// is true (REQ-22.2); otherwise it returns a manual fallback without emitting
+// any go install the toolchain cannot resolve.
 func goInstallMainUpgrade(tool update.ToolInfo) error {
+	if !tool.GoInstallResolvable() {
+		return &ManualFallbackError{
+			Hint: fmt.Sprintf(
+				"beta upgrade for %s cannot use go install: the declared module does not resolve %s. Update manually with:\n  %s",
+				tool.Name, tool.GoImportPath, update.SourceInstallCommand(tool, "main"),
+			),
+		}
+	}
+
 	module := gentleAIModulePath(tool)
 
 	destDir, destErr := goInstallDestinationDir()
 
-	target := module + "/cmd/gentle-ai@main"
+	target := tool.GoImportPath + "@main"
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
 	cmd.Env = goProxyBypassEnv(cmd.Env, module)
@@ -667,16 +634,10 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 	return nil
 }
 
+// gentleAIModulePath returns the declared GoModulePath (D-01). It never derives
+// the module from Owner/Repo — only the declared module decides resolvability.
 func gentleAIModulePath(tool update.ToolInfo) string {
-	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
-	if repository == "github.com//" {
-		repository = "github.com/gentleman-programming/gentle-ai"
-	}
-	// Go derives the module path from the repository plus the major-version
-	// suffix: for major 2 and above the module path must end in /vN or the
-	// toolchain refuses every resolution of that repository, including the
-	// branch pseudo-versions this beta path installs.
-	return repository + "/v3"
+	return strings.TrimSpace(tool.GoModulePath)
 }
 
 func goProxyBypassEnv(base []string, module string) []string {
@@ -734,7 +695,7 @@ func prependGoPattern(existing, pattern string) string {
 // works on all platforms including Windows. Other Windows binary upgrades return
 // ManualFallbackError so the executor surfaces them as UpgradeSkipped.
 func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
-	if profile.OS == "windows" && r.Tool.Name == "gentle-ai" {
+	if profile.OS == "windows" && update.IsSelfTool(r.Tool) {
 		return &ManualFallbackError{Hint: gentleAIWindowsSourceInstallHint(r)}
 	}
 
@@ -750,7 +711,7 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 		// with an actionable hint — NOT as UpgradeFailed.
 		hint := r.UpdateHint
 		if hint == "" {
-			hint = fmt.Sprintf("Download manually from https://github.com/Gentleman-Programming/%s/releases", r.Tool.Repo)
+			hint = fmt.Sprintf("Download manually from https://github.com/%s/%s/releases", r.Tool.Owner, r.Tool.Repo)
 		}
 		return &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q on Windows requires manual update: %s", r.Tool.Name, hint),

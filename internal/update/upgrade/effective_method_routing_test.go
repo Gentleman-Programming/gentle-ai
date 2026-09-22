@@ -42,16 +42,16 @@ func TestEffectiveMethodWindowsPrecedenceIsUnchanged(t *testing.T) {
 			want:          update.InstallBrew,
 		},
 		{
-			name:    "no Go on Windows keeps the declared method",
+			name:    "no Go on Windows routes to source build",
 			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: false},
-			want:    update.InstallBinary,
+			want:    update.InstallSourceBuild,
 		},
 		{
-			name:    "no import path on Windows keeps the declared method",
+			name:    "no import path on Windows routes to source build",
 			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true},
-			want:    update.InstallBinary,
+			want:    update.InstallSourceBuild,
 		},
 	}
 
@@ -155,11 +155,12 @@ func TestGentleAILegacyScriptDeclarationNeverReachesScriptUpgradeOnWindows(t *te
 		name         string
 		goAvailable  bool
 		goImportPath string
+		goModulePath string
 		want         update.InstallMethod
 	}{
-		{name: "with Go available", goAvailable: true, goImportPath: gentleAIImportPath, want: update.InstallGoInstall},
-		{name: "without Go available", goAvailable: false, goImportPath: gentleAIImportPath, want: update.InstallBinary},
-		{name: "without an import path", goAvailable: true, want: update.InstallBinary},
+		{name: "with Go available and resolvable module routes to go install", goAvailable: true, goImportPath: gentleAIImportPath, goModulePath: "github.com/gentleman-programming/gentle-ai/v3", want: update.InstallGoInstall},
+		{name: "without Go available routes to source build", goAvailable: false, goImportPath: gentleAIImportPath, want: update.InstallSourceBuild},
+		{name: "without an import path routes to source build", goAvailable: true, want: update.InstallSourceBuild},
 	}
 
 	for _, tc := range tests {
@@ -170,6 +171,7 @@ func TestGentleAILegacyScriptDeclarationNeverReachesScriptUpgradeOnWindows(t *te
 				Repo:          "gentle-ai",
 				InstallMethod: update.InstallScript,
 				GoImportPath:  tc.goImportPath,
+				GoModulePath:  tc.goModulePath,
 			}
 			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: tc.goAvailable}
 			got := effectiveMethod(tool, profile)
@@ -421,8 +423,19 @@ func TestGentleAIUpgradeWindowsRefusesUnresolvedGoProvenance(t *testing.T) {
 func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 	origExec := execCommand
 	t.Cleanup(func() { execCommand = origExec })
+	origLookPathCommand := lookPathCommand
+	t.Cleanup(func() { lookPathCommand = origLookPathCommand })
+	lookPathCommand = func(string) (string, error) { return "", exec.ErrNotFound }
+
+	origLookPath := lookPathFn
+	t.Cleanup(func() { lookPathFn = origLookPath })
+	lookPathFn = func(string) (string, error) { return t.TempDir() + `\axiom.exe`, nil }
+
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		t.Fatalf("Windows refusal executed %s %v", name, args)
+		if name == "go" && len(args) == 2 && args[0] == "env" {
+			return mockCmd("echo", "")
+		}
+		t.Fatalf("source-build fallback executed %s %v", name, args)
 		return nil
 	}
 
@@ -440,8 +453,8 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: false}
 
-	if got := effectiveMethod(r.Tool, profile); got != update.InstallBinary {
-		t.Fatalf("effectiveMethod without Go = %q, want %q", got, update.InstallBinary)
+	if got := effectiveMethod(r.Tool, profile); got != update.InstallSourceBuild {
+		t.Fatalf("effectiveMethod without resolvable go install = %q, want %q", got, update.InstallSourceBuild)
 	}
 
 	result := executeOne(context.Background(), r, profile, false)
@@ -449,8 +462,7 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 		t.Fatalf("executeOne = %#v, want a non-error skip", result)
 	}
 	for _, required := range []string{
-		"Windows binary distribution and Scoop are temporarily unavailable",
-		"go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v2.2.0",
+		"go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest",
 	} {
 		if !strings.Contains(result.ManualHint, required) {
 			t.Errorf("manual hint is missing %q: %s", required, result.ManualHint)

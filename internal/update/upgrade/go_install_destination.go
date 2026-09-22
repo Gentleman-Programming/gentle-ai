@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 )
 
 // `go install` writes the built binary to GOBIN, or to the first GOPATH entry's
@@ -153,4 +156,57 @@ func warnGoInstallDestination(toolName, osName, destDir string, destErr error) {
 	if notice := goInstallDestinationNotice(toolName, osName, destDir, destErr); notice != "" {
 		fmt.Fprintf(os.Stderr, "WARNING: %s\n", notice)
 	}
+}
+
+// preflightWindowsSelfBinaryWrite is the single provenance gate for every
+// upgrade path that writes the self-tool binary on Windows (D-03, T-5).
+// It resolves where the write would land (GOBIN/GOPATH) and where the shell
+// currently resolves the binary, and refuses the upgrade when they differ —
+// preventing a second PATH-visible binary (REQ-22.1).
+//
+// Returns nil when the tool is not the self-tool or the platform is not
+// Windows. On success returns the resolved destination directory.
+func preflightWindowsSelfBinaryWrite(tool update.ToolInfo, profile system.PlatformProfile) (string, error) {
+	if profile.OS != "windows" || !update.IsSelfTool(tool) {
+		return "", nil
+	}
+	destDir, destErr := goInstallDestinationDir()
+	if destErr != nil {
+		return "", &ManualFallbackError{Hint: selfBinaryWriteProvenanceHint(tool, "", "")}
+	}
+	destination := absoluteBinaryPath(filepath.Join(destDir, goInstallBinaryName(tool.Name, profile.OS)))
+	active, err := lookPathFn(tool.Name)
+	if err != nil {
+		return "", &ManualFallbackError{Hint: selfBinaryWriteProvenanceHint(tool, destination, "")}
+	}
+	active = absoluteBinaryPath(active)
+	if !sameBinaryPathForOS(destination, active, profile.OS) {
+		return "", &ManualFallbackError{Hint: selfBinaryWriteProvenanceHint(tool, destination, active)}
+	}
+	return destDir, nil
+}
+
+// selfBinaryWriteProvenanceHint builds the manual-fallback message for a
+// refused Windows self-binary write. It names both paths and the intentional
+// migration command (D-03).
+func selfBinaryWriteProvenanceHint(tool update.ToolInfo, destination, active string) string {
+	details := "could not determine the Go installation destination"
+	switch {
+	case destination != "" && active == "":
+		details = fmt.Sprintf("could not resolve the active %s executable before Go would write to %s", tool.Name, destination)
+	case destination != "" && active != "":
+		details = fmt.Sprintf("resolves %s to %s, but Go would write to %s", tool.Name, active, destination)
+	}
+
+	hint := fmt.Sprintf("Windows self-upgrade %s. No files were changed. ", details)
+	if active != "" {
+		hint += fmt.Sprintf("Keep %s as the active installation, or intentionally migrate to %s with:\n  ", active, destination)
+	} else {
+		hint += "Confirm the active installation, then intentionally migrate with:\n  "
+	}
+	hint += update.SourceInstallCommand(tool, "")
+	if destination != "" {
+		hint += fmt.Sprintf("\nAfter a successful migration, ensure only %s resolves for %s on PATH.", destination, tool.Name)
+	}
+	return hint
 }

@@ -312,6 +312,8 @@ func TestBetaGoInstallMainUpgradeWarnsWhenDestinationDiffers(t *testing.T) {
 			Owner:         "Gentleman-Programming",
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
+			GoModulePath:  "github.com/gentleman-programming/gentle-ai/v3",
 		},
 		LatestVersion: "main@abc1234",
 		Status:        update.UpdateAvailable,

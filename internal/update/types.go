@@ -50,6 +50,10 @@ const (
 	// InstallOpenCodePlugin is a manual upgrade method: Gentle AI registers the
 	// package in tui.json, and OpenCode owns package resolution on restart/reload.
 	InstallOpenCodePlugin InstallMethod = "opencode-plugin"
+	// InstallSourceBuild compiles the tool from a controlled source clone
+	// (git clone of the exact tag, then go build). Used as the resilient
+	// Windows path when `go install` is not resolvable (REQ-22.1, D-02).
+	InstallSourceBuild InstallMethod = "source-build"
 )
 
 // ToolInfo describes a managed tool that can be checked for updates.
