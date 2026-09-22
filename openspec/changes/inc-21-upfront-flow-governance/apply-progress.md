@@ -1089,3 +1089,37 @@ Verificación externa (`grep -rn "SDDGovernanceGateResult" --include=*.go intern
 **Total de líneas cambiadas de esta ejecución**: 1086 (1065 inserciones + 21 eliminaciones; 988+20 de autoría y 97+1 generadas en *goldens*, ver nota `*****` de la sección "Estimación de Líneas Cambiadas por PR"), medido con `git diff --shortstat 3bc4229d..a1a5e55c` — HEAD real al inicio de esta ejecución (`3bc4229d`, el mismo commit que el prompt de lanzamiento citó como HEAD) hasta el cierre de la Fase 23 (`a1a5e55c`, el último commit de esta ejecución). Del presupuesto de intento de 2600 líneas (`token: sha256:980b1344947e03ed24c8e5ec8e29e57bbd750713203f8afc7ea60361b62f1395`), quedan 1514 líneas de margen. Esta ejecutora no liquida (`settle`) el intento — corresponde al orquestador, que ya lo adquirió.
 
 **Cierre del incremento**: con esta ejecución, `openspec/changes/inc-21-upfront-flow-governance/tasks.md` queda con sus 23 fases y 114 tareas marcadas `[x]`. Esto **no** implica que el propio incremento INC-21 esté listo para su fase `sdd-verify`/`sdd-archive` — esas dos fases del ciclo SDD que gobierna este propio cambio son responsabilidad de fases posteriores del pipeline SDD, no de `sdd-apply`, y `archive` en particular exigirá, por la propia precondición que este incremento introduce (REQ-21.16), evidencia de integración o despliegue verificable una vez el cambio se fusione — la misma honestidad que el incremento le pide a todo el ecosistema que gobierna.
+
+---
+
+## Correcciones exigidas por CI tras abrir la cadena de PRs
+
+Al abrir los ocho PRs encadenados, la CI encontró tres defectos reales que ninguna verificación local había detectado. Se documentan aquí con su causa, porque el patrón importa más que los arreglos: **los tres estaban en huecos declarados explícitamente como cobertura no establecida.**
+
+### 1. El ratchet de rechazos no reconocía el binario del fork
+
+`TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign` marcaba ocho rechazos nuevos de los verbos `kickoff` y `gate` como "sin salida nombrada", incluidos dos que sí nombraban `axiom sdd ... --help`. La causa: `refusalRatchetNamedContinuationRegexp` detectaba continuaciones con `gentle-ai [a-z][a-z-]*`, solo el nombre antiguo. `sdd_gate.go` y `sdd_kickoff.go` eran el único código de producción del fork que nombraba `axiom` en un rechazo.
+
+Decisión del mantenedor: ampliar el detector a `(?:gentle-ai|axiom)`, con test propio. Seis sitios nombran ahora una continuación verificada contra el binario compilado; dos quedan anotados `refusal:by-design operator-knowledge` porque ninguna orden arregla una ruta mal escrita ni elige el rol por el operador. **La línea base del ratchet no se tocó**: existía un `GENTLE_AI_REFUSAL_RATCHET_UPDATE=1` que la habría regenerado blanqueando las ocho violaciones, y no se usó.
+
+Se escondía en la suite completa de `internal/cli`, que se cuelga en Windows por un defecto preexistente y ajeno.
+
+### 2. El golden de la compuerta de control dependía de la plataforma
+
+`TestKickoffAbsenceRegressionMatchesPreGovernanceGolden` —la compuerta de control de la Fase 11, la que garantiza que un cambio sin sellar no ve ningún cambio de comportamiento— pasaba en Windows y fallaba en Linux. Su golden se capturó con los separadores de ruta que `json.Marshal` escapa como barra invertida.
+
+Se validó cuatro veces en verde durante la implementación, siempre en la misma plataforma. Una compuerta que solo se sostiene en la máquina que capturó su golden no es una compuerta. El escrubado normaliza ahora también el separador, igual que ya normalizaba la raíz temporal del workspace. Antes de aceptar el golden nuevo se verificó contra el anterior: mismo número de líneas y diferencias exclusivamente en separadores, cero deriva estructural.
+
+### 3. El sobre de compuerta no se emitía en producción
+
+El ratchet de código muerto marcó `SDDGovernanceGateResult.Validate` y `gateCriteria` como inalcanzables **en el estado final**, no solo en una rebanada intermedia. La investigación encontró la causa real: el tipo estaba declarado, documentado y testeado, pero **nadie lo construía**, así que las lentes de revisión por compuerta que definen REQ-21.8 y REQ-21.9 no llegaban nunca a su destinatario.
+
+Cerrado con `newGovernanceGateQuestion`, calcado de `newEditAuthorityConsent`: construye el sobre de la compuerta abierta, rellena `Criteria` desde `gateCriteria`, se valida al construirse y se proyecta en v2 como `gateQuestion` con `omitempty`. D-05 se preserva —puntero nulo para un cambio sin sellar— y la compuerta de la Fase 11 sigue verde con su golden intacto. El informe de verificación corrige en su §0.2 los veredictos de REQ-21.7 a 21.9 y la razón por la que su primera evidencia era insuficiente.
+
+### Sobre la línea base de código muerto
+
+Las entradas se editaron **a mano**, con separador Unix y orden `LC_ALL=C`. Ejecutar `scripts/deadcode-ratchet.sh --update` en Windows produce rutas con barra invertida y reescribiría las 263 entradas en un formato que CI no puede comparar: comprobado. `ArtifactDigest` y `normalizeLineEndings` se baselinan en la rebanada de los verbos de CLI, donde son genuinamente inalcanzables, y se retiran en la del roster, donde aparece su llamador, de modo que ninguna rebanada arrastra una línea base inexacta.
+
+### Sobre el binario instalado
+
+Todo el enrutamiento nativo de este incremento se leyó de un `axiom` instalado en `PATH` que estaba desfasado respecto al árbol, y que exigía un sobre de verificación ya retirado y una API de intentos (`sdd-attempt acquire`/`settle`) que el código ya no tiene. Un binario desfasado no falla de forma visible: emite un veredicto plausible y equivocado. Detalle en `verify-report.md` §0.1.
