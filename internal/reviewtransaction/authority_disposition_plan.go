@@ -102,6 +102,83 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 	return selectors, nil
 }
 
+// isHistoricalDispositionSelector reports whether selector carries the
+// successor-only shape historicalDispositionSelectors emits (#2995). A
+// historical entry is a forensic byte payload, not a graph node: it names no
+// predecessor whose revision a plan could bind, so its selector's
+// predecessor side stays empty and the entry's own raw-byte digest is the
+// expected revision. Any selector with a predecessor field set is an edge
+// selector; any selector with an empty successor is malformed and never
+// historical.
+func isHistoricalDispositionSelector(selector AuthorityDispositionSelector) bool {
+	return selector.PredecessorLineageID == "" && selector.PredecessorExpectedRevision == "" && selector.SuccessorLineageID != ""
+}
+
+// historicalDispositionSelectors enumerates one exact selector per historical
+// (outdated) authority entry, sorted by lineage — the per-entry analog of
+// authorityDispositionSelectors' per-edge enumeration. Enumeration is always
+// safe: a selector only ever NAMES an entry. Minting stays gated elsewhere —
+// derivation refuses unless the named entry is itself historical, and the
+// selectorless historical gate keeps refusing every multi-diagnostic store.
+func historicalDispositionSelectors(report CompactRecoveryInspectionReport) []AuthorityDispositionSelector {
+	selectors := make([]AuthorityDispositionSelector, 0, len(report.historical))
+	for lineage, historical := range report.historical {
+		selectors = append(selectors, AuthorityDispositionSelector{SuccessorLineageID: lineage, SuccessorExpectedRevision: historical.RawDigest})
+	}
+	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
+		return cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID)
+	})
+	return selectors
+}
+
+// historicalDispositionPlanForSelector mints the historical disposition plan
+// for exactly the entry an exact selector names, even when sibling authority
+// diagnostics exist (#2995): the selector — not diagnostic cardinality — is
+// the scoping device. The selectorless gate
+// (historicalAuthorityDispositionPlanRecord) keeps refusing every store whose
+// total diagnostics exceed one, so the j92 posture is unchanged; only a
+// named entry becomes individually reachable. The named entry MUST be
+// historical (outdated): a malformed, unreadable, missing, or still-loadable
+// entry refuses by name, and a stale expected revision refuses as
+// concurrent-update drift, mirroring the edge path's exact-selector
+// semantics. The plan binds the selector (Plan Field Set), so its digest
+// covers exactly the entry this derivation scoped — and the executor's
+// fresh re-derivation under lock re-passes the same selector and reproduces
+// the same digest.
+func historicalDispositionPlanForSelector(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, selector AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
+	lineage := selector.SuccessorLineageID
+	historical, found := report.historical[lineage]
+	if !found {
+		for _, diagnostic := range report.EntryDiagnostics {
+			if diagnostic.LineageID != lineage || diagnostic.Problem == compactInspectionEntryOutdated {
+				continue
+			}
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names %s entry %q; only an outdated historical entry admits this plan", errAuthorityDispositionPlanNotDerivable, diagnostic.Problem, lineage)
+		}
+		if _, loaded := records[lineage]; loaded {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names loadable operational authority %q; this plan is scoped to outdated historical entries", errAuthorityDispositionPlanNotDerivable, lineage)
+		}
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names lineage %q, which carries no authority entry in this store", errAuthorityDispositionPlanNotDerivable, lineage)
+	}
+	if selector.SuccessorExpectedRevision != historical.RawDigest {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector no longer matches the inspected entry %q", ErrConcurrentUpdate, lineage)
+	}
+	inventory, err := authorityInventoryRevision(records, report.historical)
+	if err != nil {
+		return AuthorityDispositionPlan{}, err
+	}
+	plan := AuthorityDispositionPlan{
+		Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding,
+		AuthorityInventoryRevision: inventory, AnomalyClass: compactHistoricalSnapshotIdentityClass,
+		Selector: &selector,
+		SeedSet:  []string{lineage}, Closure: []string{lineage},
+		ExpectedRevisions: map[string]string{lineage: historical.RawDigest},
+		Actor:             strings.TrimSpace(actor), Reason: strings.TrimSpace(reason),
+	}
+	plan.PlanDigest, err = authorityDispositionPlanDigest(plan)
+	return plan, err
+}
+
 // historicalAuthorityDispositionPlanRecord returns the one released authority
 // record that can be planned for quarantine. Its own outdated diagnostic is the
 // sole admissible diagnostic: any malformed, unreadable, missing, or unexpected
@@ -130,6 +207,12 @@ func historicalAuthorityDispositionPlanRecord(report CompactRecoveryInspectionRe
 func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	if len(requested) > 1 {
 		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
+	}
+	// A successor-only selector never names a content-mismatch edge: it names
+	// one historical entry (#2995), and is derived through its own gated path
+	// before edge enumeration can misread it as an unmatched edge selector.
+	if len(requested) == 1 && isHistoricalDispositionSelector(requested[0]) {
+		return historicalDispositionPlanForSelector(report, records, binding, actor, reason, requested[0])
 	}
 	selectors, err := authorityDispositionSelectors(report, records)
 	if err != nil {
@@ -393,7 +476,12 @@ func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason, requested...)
 }
 
-// ListAuthorityDispositionSelectorsAtRepo exposes exact choices for multi-edge content mismatch.
+// ListAuthorityDispositionSelectorsAtRepo exposes exact choices for multi-edge
+// content mismatch (#2014) AND per-entry historical repair (#2995): every
+// closed content-mismatch edge and every historical (outdated) entry yields
+// one exact selector an operator can re-run `review repair --preflight`
+// with. Sorted by (predecessor, successor): historical selectors carry an
+// empty predecessor side, so they enumerate first.
 func ListAuthorityDispositionSelectorsAtRepo(ctx context.Context, repo string) ([]AuthorityDispositionSelector, error) {
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -403,5 +491,13 @@ func ListAuthorityDispositionSelectorsAtRepo(ctx context.Context, repo string) (
 	if err != nil {
 		return nil, err
 	}
-	return authorityDispositionSelectors(report, records)
+	edgeSelectors, err := authorityDispositionSelectors(report, records)
+	if err != nil {
+		return nil, err
+	}
+	selectors := append(edgeSelectors, historicalDispositionSelectors(report)...)
+	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
+		return cmp.Or(cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID), cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID))
+	})
+	return selectors, nil
 }

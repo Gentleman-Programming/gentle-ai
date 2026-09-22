@@ -210,8 +210,23 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// it just means no edge advertises review repair this round, exactly like
 	// InspectCompactPristineAbandonment's per-edge eligibility below never
 	// aborts the whole exit computation.
+	//
+	// historicalExits (#2995) lists every historical (outdated) entry when the
+	// store's ONLY diagnostics are historical: each entry then has a reachable
+	// selector-scoped repair, so inspection surfaces one exit per entry. A
+	// store with ANY non-historical diagnostic keeps today's stricter posture —
+	// no historical exit is advertised unless the selectorless derivation
+	// itself closes (the N=1 j92 case, unchanged below) — because a mixed
+	// store's selectorless preflight still refuses and this surface must never
+	// advertise a continuation the very next command would refuse. Malformed,
+	// unreadable, missing, and unexpected entries never gain an exit.
+	historicalExits := historicalDispositionExitLineages(report)
 	dispositionSeed := ""
-	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
+	if len(historicalExits) > 0 {
+		for _, lineage := range historicalExits {
+			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: lineage, Operation: CompactRecoveryEdgeExitRepair})
+		}
+	} else if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
 		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
 			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
 		} else {
@@ -271,6 +286,30 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		exits = append(exits, exit)
 	}
 	return exits, nil
+}
+
+// historicalDispositionExitLineages returns every historical (outdated)
+// entry lineage, sorted, when the report's diagnostics are ALL historical —
+// the one store shape where every diagnostic has a reachable selector-scoped
+// repair (#2995). Any other shape returns nil: malformed, unreadable,
+// missing, and unexpected entries never gain an exit, and a store that mixes
+// them with historical entries keeps its existing exits unchanged.
+func historicalDispositionExitLineages(report CompactRecoveryInspectionReport) []string {
+	if len(report.historical) == 0 || len(report.historical) != len(report.EntryDiagnostics) {
+		return nil
+	}
+	lineages := make([]string, 0, len(report.EntryDiagnostics))
+	for _, diagnostic := range report.EntryDiagnostics {
+		if diagnostic.Problem != compactInspectionEntryOutdated {
+			return nil
+		}
+		if _, found := report.historical[diagnostic.LineageID]; !found {
+			return nil
+		}
+		lineages = append(lineages, diagnostic.LineageID)
+	}
+	slices.Sort(lineages)
+	return lineages
 }
 
 // compactRecoveryReconciliationAnomalyClass reports whether edge carries
