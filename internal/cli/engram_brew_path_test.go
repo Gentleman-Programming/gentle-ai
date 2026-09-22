@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -246,5 +247,55 @@ func TestResolveBrewCommandRejectsNonExecutableStandardPrefix(t *testing.T) {
 
 	if got := resolveBrewCommand(); got != "brew" {
 		t.Fatalf("resolveBrewCommand() = %q, want bare brew for a non-executable file", got)
+	}
+}
+
+func TestWithResolvedBrewCommandDropsTrustWithoutSubcommand(t *testing.T) {
+	restoreLookPath, restoreTrust := cmdLookPath, brewSupportsTrust
+	t.Cleanup(func() { cmdLookPath, brewSupportsTrust = restoreLookPath, restoreTrust })
+	cmdLookPath = func(string) (string, error) { return "/opt/homebrew/bin/brew", nil }
+
+	commands := [][]string{
+		{"brew", "trust", "--formula", "gentleman-programming/tap/gga"},
+		{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
+		{"brew", "reinstall", "gga"},
+	}
+	for _, tc := range []struct {
+		name  string
+		trust bool
+		want  [][]string
+	}{
+		{
+			name:  "homebrew 7 keeps the trust step on the resolved executable",
+			trust: true,
+			want: [][]string{
+				{"/opt/homebrew/bin/brew", "trust", "--formula", "gentleman-programming/tap/gga"},
+				{"/opt/homebrew/bin/brew", "tap", "Gentleman-Programming/homebrew-tap"},
+				{"/opt/homebrew/bin/brew", "reinstall", "gga"},
+			},
+		},
+		{
+			name:  "older homebrew drops the trust step",
+			trust: false,
+			want: [][]string{
+				{"/opt/homebrew/bin/brew", "tap", "Gentleman-Programming/homebrew-tap"},
+				{"/opt/homebrew/bin/brew", "reinstall", "gga"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var probed string
+			brewSupportsTrust = func(brewPath string) bool {
+				probed = brewPath
+				return tc.trust
+			}
+			got := withResolvedBrewCommand(commands)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("withResolvedBrewCommand() = %v, want %v", got, tc.want)
+			}
+			if probed != "/opt/homebrew/bin/brew" {
+				t.Fatalf("brewSupportsTrust probed %q, want the resolved executable", probed)
+			}
+		})
 	}
 }

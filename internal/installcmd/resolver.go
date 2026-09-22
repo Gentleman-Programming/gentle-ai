@@ -26,6 +26,19 @@ var cmdGoVersion = func() ([]byte, error) {
 // Multi-step installs (e.g., tap + install) are expressed as multiple entries.
 type CommandSequence = [][]string
 
+const gentlemanTap = "Gentleman-Programming/homebrew-tap"
+
+// brewTapInstall trusts one formula, taps and runs verb on it. Homebrew 7
+// refuses untrusted tap formulae; the runner drops the trust step when the
+// resolved brew has no `trust` subcommand.
+func brewTapInstall(verb, formula string) CommandSequence {
+	return CommandSequence{
+		{"brew", "trust", "--formula", "gentleman-programming/tap/" + formula},
+		{"brew", "tap", gentlemanTap},
+		{"brew", verb, formula},
+	}
+}
+
 type Resolver interface {
 	ResolveAgentInstall(profile system.PlatformProfile, agent model.AgentID) (CommandSequence, error)
 	ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error)
@@ -276,15 +289,12 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 }
 
 // resolveGGAInstall returns the correct install command sequence for GGA per platform.
-// - darwin: brew tap + brew install (via Gentleman-Programming/homebrew-tap)
+// - darwin: brew trust + tap + reinstall (via Gentleman-Programming/homebrew-tap)
 // - linux: git clone + install.sh (GGA is a pure Bash project, NOT a Go module)
 func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) {
 	switch profile.PackageManager {
 	case "brew":
-		return CommandSequence{
-			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
-			{"brew", "reinstall", "gga"},
-		}, nil
+		return brewTapInstall("reinstall", "gga"), nil
 	case "winget":
 		// On Windows, use Git Bash explicitly to avoid bare "bash" resolving to
 		// C:\Windows\System32\bash.exe (WSL), which cannot run the script.
@@ -421,7 +431,7 @@ func validateGoForModuleInstall(profile system.PlatformProfile) error {
 }
 
 // resolveEngramInstall returns the correct install command sequence for Engram per platform.
-// - darwin (brew): brew tap + brew install (via Gentleman-Programming/homebrew-tap)
+// - darwin (brew): brew trust + tap + install (via Gentleman-Programming/homebrew-tap)
 // - linux/windows: returns an error — callers must use engram.DownloadLatestBinary() instead.
 //
 // The go install method has been removed because it required Go 1.24+ which most
@@ -431,10 +441,7 @@ func resolveEngramInstall(profile system.PlatformProfile) (CommandSequence, erro
 	switch profile.PackageManager {
 	case "brew":
 		// macOS (or Linux with Homebrew): brew manages Go transitively — no preflight needed.
-		return CommandSequence{
-			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
-			{"brew", "install", "engram"},
-		}, nil
+		return brewTapInstall("install", "engram"), nil
 	default:
 		return nil, fmt.Errorf(
 			"engram on %q/%q uses direct binary download — use engram.DownloadLatestBinary() instead of CommandSequence",

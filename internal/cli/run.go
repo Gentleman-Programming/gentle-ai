@@ -1792,7 +1792,7 @@ func (s componentApplyStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 			}
-			installErr := runCommandSequence(commands)
+			installErr := runCommandSequence(withResolvedBrewCommand(commands))
 			if installErr != nil {
 				if ggaAvailable(s.profile) {
 					// The GGA install script uses `set -e` and `read -p` for
@@ -2055,18 +2055,31 @@ func resolveBrewCommand() string {
 	return "brew"
 }
 
+// brewSupportsTrust reports whether brewPath has the `brew trust` subcommand
+// (Homebrew 7+). Package-level var for tests.
+var brewSupportsTrust = func(brewPath string) bool {
+	cmd := exec.Command(brewPath, "help", "trust")
+	system.EnsureCommandDir(cmd)
+	return cmd.Run() == nil
+}
+
+// withResolvedBrewCommand routes every brew command through the resolved
+// executable and drops `brew trust` steps the resolved Homebrew cannot run.
 func withResolvedBrewCommand(commands [][]string) [][]string {
 	brewPath := ""
-	rewritten := make([][]string, len(commands))
-	for i, command := range commands {
-		if len(command) > 0 && command[0] == "brew" {
-			if brewPath == "" {
-				brewPath = resolveBrewCommand()
-			}
-			rewritten[i] = append([]string{brewPath}, command[1:]...)
+	rewritten := make([][]string, 0, len(commands))
+	for _, command := range commands {
+		if len(command) == 0 || command[0] != "brew" {
+			rewritten = append(rewritten, command)
 			continue
 		}
-		rewritten[i] = command
+		if brewPath == "" {
+			brewPath = resolveBrewCommand()
+		}
+		if len(command) > 1 && command[1] == "trust" && !brewSupportsTrust(brewPath) {
+			continue
+		}
+		rewritten = append(rewritten, slices.Concat([]string{brewPath}, command[1:]))
 	}
 	return rewritten
 }

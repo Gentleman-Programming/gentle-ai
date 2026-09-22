@@ -63,7 +63,7 @@ func TestInstallCommandByProfile(t *testing.T) {
 		{
 			name:    "darwin uses brew tap and reinstall",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"brew", "tap", "Gentleman-Programming/homebrew-tap"}, {"brew", "reinstall", "gga"}},
+			want:    [][]string{{"brew", "trust", "--formula", "gentleman-programming/tap/gga"}, {"brew", "tap", "Gentleman-Programming/homebrew-tap"}, {"brew", "reinstall", "gga"}},
 		},
 		{
 			name:    "ubuntu uses git clone and install.sh",
