@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"strings"
 	"time"
 )
 
@@ -50,7 +52,11 @@ func SendRuntimeWithDeliveryID(ctx context.Context, home string, getenv func(str
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Opaque != "" {
 		return "discarded"
 	}
-	endpoint.Path = "/v1/runtime-events"
+	base := strings.TrimRight(endpoint.Path, "/")
+	base = strings.TrimSuffix(base, "/events")
+	base = strings.TrimRight(base, "/")
+	base = strings.TrimSuffix(base, "/v1")
+	endpoint.Path = path.Join("/", base, "v1", "runtime-events")
 	endpoint.RawPath = ""
 	endpoint.RawQuery = ""
 	endpoint.ForceQuery = false

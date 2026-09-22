@@ -247,3 +247,36 @@ func TestRuntimeSendRefusesRedirectAndUserinfo(t *testing.T) {
 		t.Fatal("followed redirect or accepted userinfo/http")
 	}
 }
+
+func TestRuntimeSendPreservesSubpathPrefix(t *testing.T) {
+	home := runtimeHome(t)
+	var observedPath string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observedPath = r.URL.Path
+		_, _ = io.WriteString(w, runtimeAck)
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		suffix string
+		want   string
+	}{
+		{"/custom-proxy/v1/events", "/custom-proxy/v1/runtime-events"},
+		{"/custom-proxy/v1/events/", "/custom-proxy/v1/runtime-events"},
+		{"/custom-proxy/events/", "/custom-proxy/v1/runtime-events"},
+		{"/events/", "/v1/runtime-events"},
+		{"", "/v1/runtime-events"},
+	}
+
+	for _, tc := range tests {
+		observedPath = ""
+		customEndpoint := server.URL + tc.suffix
+		got := SendRuntime(context.Background(), home, runtimeEndpoint(customEndpoint), strings.NewReader(runtimeFixture), server.Client())
+		if got != "stored" {
+			t.Fatalf("expected stored for %q, got %s", tc.suffix, got)
+		}
+		if observedPath != tc.want {
+			t.Fatalf("for suffix %q: observed path = %q, want %q", tc.suffix, observedPath, tc.want)
+		}
+	}
+}
