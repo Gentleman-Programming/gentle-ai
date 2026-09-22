@@ -96,13 +96,27 @@ Conforme al principio final-state de "no descartar hallazgos abiertos, sino regi
 
 ## 4. Sincronización de Especificaciones Vivas
 
-**Acción:** Ninguna.
+**Acción:** Creadas 5 especificaciones vivas nuevas en `openspec/specs/`.
 
-**Razón:** El incremento INC-21 define comportamiento de gobernanza SDD (determinación temprana de carril, compuertas de revisión, relevo de integración, sellado de archive) mediante doctrina en `internal/components/agentguidance/` y estado en `internal/kickoff/`. No crea un nuevo **dominio de especificación viva**. 
+**Dominios creados:**
+1. `openspec/specs/sdd-archive-lifecycle/spec.md` — REQ-21.16 a REQ-21.18 (3 requerimientos, 5 escenarios)
+2. `openspec/specs/sdd-block-review-gates/spec.md` — REQ-21.7 a REQ-21.12 (6 requerimientos, 12 escenarios)
+3. `openspec/specs/sdd-lane-kickoff/spec.md` — REQ-21.1 a REQ-21.4 (4 requerimientos, 8 escenarios)
+4. `openspec/specs/sdd-preflight-configuration/spec.md` — REQ-21.5 a REQ-21.6 (2 requerimientos, 5 escenarios)
+5. `openspec/specs/sdd-role-closure-handoff/spec.md` — REQ-21.13 a REQ-21.15 (3 requerimientos, 6 escenarios)
 
-Las 18 especificaciones de requerimientos viven en los artefactos del cambio (proposal.md, spec.md, design.md, tasks.md) como ciclo de vida del incremento mismo, no como especificaciones vivas publicadas en `openspec/specs/{dominio}/spec.md`.
+**Razón:** Siguiendo el precedente de INC-19 (`odd-living-document`, `odd-cli-commands`, `odd-sdd-promotion`, `odd-ui-integration`), las cinco capacidades del incremento INC-21 se promocionan a especificaciones vivas. Aunque la implementación es de gobernanza interna (`internal/kickoff`, `internal/components/agentguidance/`), el contrato REQ-21.16 de este mismo incremento exige "actualizar la especificación viva en `openspec/specs/`" durante el archivado. Las 5 capacidades definen comportamiento observable y verificable en escenarios BDD, por tanto cumplen los criterios de especificación viva.
 
-**Verificación:** `ls openspec/changes/inc-21-upfront-flow-governance/specs/ 2>/dev/null || echo "no delta specs"` confirma la ausencia de delta specs. Ninguna invocación de `sdd-archive-compose` es necesaria.
+**Formato:** Cada spec sigue el patrón de INC-19:
+- Comentario HTML de procedencia: `<!-- Especificación Viva generada a partir de '2026-09-22-inc-21-upfront-flow-governance' -->`
+- Título con numeración INC-21
+- Sección `## Propósito`
+- Requerimientos y escenarios BDD originales, preservando numeración REQ-21.N y nota correctiva de O-1 en REQ-21.4
+
+**Actualización de inventarios:** `openspec/INDEX.md` actualizado con:
+- Totales: 54 dominios (+5), 339 requerimientos (+18), 560 escenarios (+36)
+- Tabla resumen con 5 nuevas entradas en orden alfabético (sdd-archive-lifecycle, sdd-block-review-gates, sdd-lane-kickoff, sdd-preflight-configuration, sdd-role-closure-handoff)
+- Secciones detalladas para cada capacidad (5 nuevas secciones "### Dominio:")
 
 ---
 
