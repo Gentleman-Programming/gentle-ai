@@ -183,30 +183,30 @@ Depende de la Fase 6.
 
 Depende de la Fase 1 (usa los tipos de enum para validar banderas).
 
-- [ ] 8.1 [RED] Escribir `internal/kickoff/args_test.go`: banderas conocidas y desconocidas para `seal`/`gate record`/`show`; `--decision rejected` sin `--reason` ⇒ error (REQ-21.12 exige motivo registrado); `--from-session-pace` y `--execution-style` explícitos a la vez ⇒ el explícito gana y se registra como sobrescritura deliberada (D-03); `role-apply:` sin nombre de rol ⇒ error; `--cwd` relativo, absoluto e inexistente; `--change` con `..`, `/`, `\`, ruta absoluta, nombres reservados de Windows (`con`, `nul`), cadena vacía y una cadena de 300 caracteres ⇒ rechazo por contención antes de construir ninguna ruta de escritura (T-2, T-7 — vectores completos de la tabla de ocho).
-- [ ] 8.2 [GREEN] Crear `internal/kickoff/args.go`: `ParseSealArgs`, `ParseGateRecordArgs`, `ParseShowArgs`, parseo puro sin `io.Writer`, siguiendo el precedente de `sddstatus.ParseCommandArgs` (`internal/sddstatus/status.go:225`, `(read-only)`). El nombre del cambio se resuelve contra los directorios **ya existentes** bajo `openspec/changes/` — nunca se usa para crear un directorio nuevo.
-- [ ] 8.3 [REFACTOR] Confirmar que los tres parseadores comparten la validación de contención de `--change`/`--cwd` sin duplicar la comprobación de `filepath.Rel`.
-- [ ] 8.4 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
+- [x] 8.1 [RED] Escribir `internal/kickoff/args_test.go`: banderas conocidas y desconocidas para `seal`/`gate record`/`show`; `--decision rejected` sin `--reason` ⇒ error (REQ-21.12 exige motivo registrado); `--from-session-pace` y `--execution-style` explícitos a la vez ⇒ el explícito gana y se registra como sobrescritura deliberada (D-03); `role-apply:` sin nombre de rol ⇒ error; `--cwd` relativo, absoluto e inexistente; `--change` con `..`, `/`, `\`, ruta absoluta, nombres reservados de Windows (`con`, `nul`), cadena vacía y una cadena de 300 caracteres ⇒ rechazo por contención antes de construir ninguna ruta de escritura (T-2, T-7 — vectores completos de la tabla de ocho).
+- [x] 8.2 [GREEN] Crear `internal/kickoff/args.go`: `ParseSealArgs`, `ParseGateRecordArgs`, `ParseShowArgs`, parseo puro sin `io.Writer`, siguiendo el precedente de `sddstatus.ParseCommandArgs` (`internal/sddstatus/status.go:225`, `(read-only)`). El nombre del cambio se resuelve contra los directorios **ya existentes** bajo `openspec/changes/` — nunca se usa para crear un directorio nuevo.
+- [x] 8.3 [REFACTOR] Confirmar que los tres parseadores comparten la validación de contención de `--change`/`--cwd` sin duplicar la comprobación de `filepath.Rel`.
+- [x] 8.4 [Verificación de cierre] V-A, V-B (`./internal/kickoff/...`), V-C, V-D.
 
 ## Fase 9: P2b — Verbo `axiom sdd kickoff` (REQ-21.4, REQ-21.5, REQ-21.14 parcial; D-04; T-8)
 
 Depende de las Fases 2, 3 y 8.
 
-- [ ] 9.1 [RED] Escribir `internal/cli/sdd_kickoff_test.go` (`bytes.Buffer` como `stdout`, al estilo de `internal/cli/sdd_archive_compose_test.go` `(read-only)`): `seal` correcto ⇒ salida 0 con resumen; `seal` sobre un cambio ya sellado ⇒ salida 0 con la configuración ganadora, **sin volver a escribir**; `seal --infer` sobre los tres casos de la Fase 3; sellado sobre una raíz bajo `archive/` ⇒ salida 1 nombrando la vía de bug/nuevo incremento (D-14); subverbo desconocido de `kickoff` ⇒ salida 1; `kickoff --help`/`kickoff -h` ⇒ salida 0 (T-8); `show` sobre un cambio sin sellar ⇒ salida explícita de "sin kickoff".
-- [ ] 9.2 [GREEN] Crear `internal/cli/sdd_kickoff.go`: `RunSDDKickoff(args []string, stdout io.Writer) error` con subverbos `seal` (incluida la rama `--infer` que invoca `kickoff.InferKickoff` antes de `kickoff.Seal`) y `show`, adaptador fino al estilo de `internal/cli/sdd_status.go:12-39` (`(read-only)`). Antes de escribir, invoca `kickoff.RefuseArchivedRoot`.
-- [ ] 9.3 [GREEN] Modificar `cmd/axiom/main.go`: un `case "kickoff"` nuevo en `runSDD` (`:1746-1762`) y una línea de ayuda (`:1730-1735`), calcados del patrón de los `case` ya existentes en ese `switch`. Confirmar antes de escribir que no existe ya ningún `case "kickoff"`.
-- [ ] 9.4 [REFACTOR] Confirmar que `RunSDDKickoff` no contiene lógica de decisión (esa vive en `internal/kickoff`); es puro adaptador de E/S y formato.
-- [ ] 9.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/... ./internal/cli/... ./cmd/axiom/...`), V-C, V-D.
+- [x] 9.1 [RED] Escribir `internal/cli/sdd_kickoff_test.go` (`bytes.Buffer` como `stdout`, al estilo de `internal/cli/sdd_archive_compose_test.go` `(read-only)`): `seal` correcto ⇒ salida 0 con resumen; `seal` sobre un cambio ya sellado ⇒ salida 0 con la configuración ganadora, **sin volver a escribir**; `seal --infer` sobre los tres casos de la Fase 3; sellado sobre una raíz bajo `archive/` ⇒ salida 1 nombrando la vía de bug/nuevo incremento (D-14); subverbo desconocido de `kickoff` ⇒ salida 1; `kickoff --help`/`kickoff -h` ⇒ salida 0 (T-8); `show` sobre un cambio sin sellar ⇒ salida explícita de "sin kickoff".
+- [x] 9.2 [GREEN] Crear `internal/cli/sdd_kickoff.go`: `RunSDDKickoff(args []string, stdout io.Writer) error` con subverbos `seal` (incluida la rama `--infer` que invoca `kickoff.InferKickoff` antes de `kickoff.Seal`) y `show`, adaptador fino al estilo de `internal/cli/sdd_status.go:12-39` (`(read-only)`). Antes de escribir, invoca `kickoff.RefuseArchivedRoot`.
+- [x] 9.3 [GREEN] Modificar `cmd/axiom/main.go`: un `case "kickoff"` nuevo en `runSDD` (`:1746-1762`) y una línea de ayuda (`:1730-1735`), calcados del patrón de los `case` ya existentes en ese `switch`. Confirmar antes de escribir que no existe ya ningún `case "kickoff"`.
+- [x] 9.4 [REFACTOR] Confirmar que `RunSDDKickoff` no contiene lógica de decisión (esa vive en `internal/kickoff`); es puro adaptador de E/S y formato.
+- [x] 9.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/... ./internal/cli/... ./cmd/axiom/...`), V-C, V-D.
 
 ## Fase 10: P2c — Verbo `axiom sdd gate` (REQ-21.10, REQ-21.11, REQ-21.12; T-8)
 
 Depende de las Fases 4, 6, 7 y 8. Independiente de la Fase 9 salvo por compartir `main.go`.
 
-- [ ] 10.1 [RED] Escribir `internal/cli/sdd_gate_test.go`: `record --decision approved` correcto ⇒ salida 0, registro anexado; `record --decision rejected` sin `--reason` ⇒ salida 1; `record --gate` con clave desconocida ⇒ salida 1 enumerando el vocabulario válido; `record --gate role-apply:<rol>` fuera del roster sellado ⇒ salida 1 nombrando el roster; registro sobre una raíz bajo `archive/` ⇒ salida 1; `gate --help`/subverbo desconocido ⇒ salidas 0/1 respectivamente (T-8); el aviso formal de último rol aparece **exactamente una vez** cuando la última `role-apply` se aprueba (con roster de un único rol `fullstack`, ver Fase 18 para el contenido completo del aviso — aquí solo se verifica el enrutamiento del verbo, no la construcción del relevo).
-- [ ] 10.2 [GREEN] Crear `internal/cli/sdd_gate.go`: `RunSDDGate(args []string, stdout io.Writer) error` con subverbos `record` y `show`, invocando `kickoff.RefuseArchivedRoot`, `kickoff.AppendGate` y `kickoff.EvaluateGates`/`LastRoleClosed` para decidir si emitir el aviso de último rol (el cuerpo del relevo se completa en la Fase 18; aquí se deja el punto de extensión).
-- [ ] 10.3 [GREEN] Modificar `cmd/axiom/main.go`: un `case "gate"` nuevo en `runSDD` y su línea de ayuda, mismo patrón que la Fase 9.
-- [ ] 10.4 [REFACTOR] Confirmar que `sdd_kickoff.go` y `sdd_gate.go` comparten la comprobación de raíz archivada sin duplicar código (extraer un helper común si hiciera falta).
-- [ ] 10.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/... ./internal/cli/... ./cmd/axiom/...`), V-C, V-D.
+- [x] 10.1 [RED] Escribir `internal/cli/sdd_gate_test.go`: `record --decision approved` correcto ⇒ salida 0, registro anexado; `record --decision rejected` sin `--reason` ⇒ salida 1; `record --gate` con clave desconocida ⇒ salida 1 enumerando el vocabulario válido; `record --gate role-apply:<rol>` fuera del roster sellado ⇒ salida 1 nombrando el roster; registro sobre una raíz bajo `archive/` ⇒ salida 1; `gate --help`/subverbo desconocido ⇒ salidas 0/1 respectivamente (T-8); el aviso formal de último rol aparece **exactamente una vez** cuando la última `role-apply` se aprueba (con roster de un único rol `fullstack`, ver Fase 18 para el contenido completo del aviso — aquí solo se verifica el enrutamiento del verbo, no la construcción del relevo).
+- [x] 10.2 [GREEN] Crear `internal/cli/sdd_gate.go`: `RunSDDGate(args []string, stdout io.Writer) error` con subverbos `record` y `show`, invocando `kickoff.RefuseArchivedRoot`, `kickoff.AppendGate` y `kickoff.EvaluateGates`/`LastRoleClosed` para decidir si emitir el aviso de último rol (el cuerpo del relevo se completa en la Fase 18; aquí se deja el punto de extensión).
+- [x] 10.3 [GREEN] Modificar `cmd/axiom/main.go`: un `case "gate"` nuevo en `runSDD` y su línea de ayuda, mismo patrón que la Fase 9.
+- [x] 10.4 [REFACTOR] Confirmar que `sdd_kickoff.go` y `sdd_gate.go` comparten la comprobación de raíz archivada sin duplicar código (extraer un helper común si hiciera falta).
+- [x] 10.5 [Verificación de cierre] V-A, V-B (`./internal/kickoff/... ./internal/cli/... ./cmd/axiom/...`), V-C, V-D.
 
 ## Fase 11: P3a — Compuerta de control: regresión byte a byte sin sello (REQ-21.7; D-05 — compuerta de control nº 1)
 
@@ -381,7 +381,8 @@ Depende de la Fase 22 (la sección compartida ya existe para poder referenciarla
 | Riesgo de presupuesto de 400 líneas | **High** (agregado del incremento; por PR individual, ninguna se planifica por encima de ~450 y la mayoría son Low/Medium) |
 | PRs encadenados recomendados | **Yes** |
 | Partición sugerida | 23 rebanadas (tabla siguiente) |
-| Estrategia de entrega | `auto-chain` |
+| Estrategia de entrega | `exception-ok` (era `auto-chain`; el usuario aceptó explícitamente `size:exception` el 2026-09-21 tras comprobarse que 4 de 10 commits de feature superaban el presupuesto) |
+| Excepción de tamaño aceptada | `eed8fec5` 539 líneas (Fase 1), `c7c334fa` 875 (Fase 8), `0b866af1` 561 (Fase 9), `6f507862` 482 (Fase 10) — las cuatro fases sin válvula de alivio declarada. Se trocea solo donde este documento ya declara válvula (Fases 4, 6, 7, 15, 16); la Fase 7 la usó y entró en presupuesto (188 + 316). |
 | Estrategia de cadena | `feature-branch-chain` (tracker `feature/inc-21-upfront-flow-governance`) |
 
 Líneas de guarda exactas (contrato de herramienta, no traducir):

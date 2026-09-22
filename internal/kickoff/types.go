@@ -7,6 +7,7 @@
 package kickoff
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -168,4 +169,21 @@ type GateState struct {
 	Reason   string
 	Blocks   string
 	Reopened bool
+}
+
+// defaultRoleArtifactFiles derives the tasks/verify file names a role uses
+// under the one naming convention this package applies everywhere a
+// KickoffRole is built: the single "fullstack" role keeps the plain
+// tasks.md/verify-report.md pair every existing verb already looks for; any
+// other role gets the tasks.<role>.md/verify-report.<role>.md pair the
+// multi-role barrier (multirole.EvaluateBarrier) already tries first. Both
+// InferKickoff's retro-seal (infer.go) and an explicit `axiom sdd kickoff
+// seal` (args.go, SealArgs.ToKickoff) build their KickoffRole entries
+// through this single function, so the two paths can never silently
+// diverge on which file a role's gate is judged against.
+func defaultRoleArtifactFiles(role string) (tasksFile, verifyFile string) {
+	if role == "fullstack" {
+		return "tasks.md", "verify-report.md"
+	}
+	return fmt.Sprintf("tasks.%s.md", role), fmt.Sprintf("verify-report.%s.md", role)
 }
