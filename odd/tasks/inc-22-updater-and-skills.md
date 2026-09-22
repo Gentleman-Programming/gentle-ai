@@ -36,8 +36,8 @@ Las fases 1-2 se implementaron ya en el carril SDD (`901c8f88`, `ce5e7e85`, inte
 Referencia cruzada: `F<n>` = fase `n` de `tasks.md` del cambio SDD.
 
 - [ ] **ODD-0 — Decisión O-2 (F9).** Formato de la columna `Path` en la tabla `## Skills` regenerada de `AGENTS.md`. **Bloquea ODD-3, ODD-5 y ODD-6.** Es decisión de producto humana; ver §8.
-- [ ] **ODD-1 — Pila de actualización (F3, F4, F5, F6).** `init()` campo a campo en `cmd/axiom`; preflight compartido de escritura del binario + enum `InstallSourceBuild`; `sourceBuildUpgrade` y ruteo Windows; salvaguardas de actualización ancladas a la identidad del fork (`IsSelfToolName`/`IsSelfTool`).
-- [ ] **ODD-2 — Identidad TUI y versión (F7, F8).** Branding de la vista combinada `upgrade_sync.go` nombrando `axiom`; `var version = "v0.1.0"` en `cmd/axiom` (mismo símbolo que ya inyecta el linker).
+- [x] **ODD-1 — Pila de actualización (F3, F4, F5, F6).** `init()` campo a campo en `cmd/axiom`; preflight compartido de escritura del binario + enum `InstallSourceBuild`; `sourceBuildUpgrade` y ruteo Windows; salvaguardas de actualización ancladas a la identidad del fork (`IsSelfToolName`/`IsSelfTool`).
+- [x] **ODD-2 — Identidad TUI y versión (F7, F8).** Branding de la vista combinada `upgrade_sync.go` nombrando `axiom`; `var version = "v0.1.0"` en `cmd/axiom` (mismo símbolo que ya inyecta el linker).
 - [ ] **ODD-3 — Motor del índice de skills (F10, F11, F12).** Requiere ODD-0. Tipos del motor, puerto de espejo y renderizador único de tabla; adopción de marcadores `<!-- axiom:skills-index -->` en `AGENTS.md`; regeneración unificada de los tres destinos desde un único escaneo.
 - [ ] **ODD-4 — Cliente MCP stdio (F13, F14).** Cliente acotado `SaveTopic` para el espejo Engram, con modos de fallo y terminación garantizada del hijo.
 - [ ] **ODD-5 — CLI `axiom skill index` (F16, F17).** Requiere ODD-3. `runSkillIndex` y parsers compartidos por verbo; enrutado, ayuda y compatibilidad byte a byte de `axiom skill-registry`.
@@ -70,11 +70,13 @@ Referencia cruzada: `F<n>` = fase `n` de `tasks.md` del cambio SDD.
 | Unidad | Estado | Commit | Verificación observada |
 |---|---|---|---|
 | F1–F2 (SDD, ya en `main`) | ✅ | `901c8f88`, `ce5e7e85` | 20/20 y 15/15 tests nuevos en verde; cero regresiones; compuertas PASS |
-| ODD-0 … ODD-8 | ⬜ pendientes | — | — |
+| ODD-1 (F3–F6) | ✅ | `dd65cfd0`, `c4cca1db` | `go test ./internal/update/...`: 10 fallos preexistentes idénticos a la línea base; `go test ./internal/update/upgrade/...`: 1 fallo preexistente; `go vet ./...` limpio; `go build ./...` limpio; `gofmt -l` limpio en tocados. Compuerta 1 PASS (sin literales `"gentle-ai"` en mensajes de `strategy.go`) |
+| ODD-2 (F7–F8) | ✅ | `1a5d12f1`, `dd65cfd0` | `go test ./internal/tui/...` y `./cmd/...` en verde; `TestAppVersionInitialization` sin modificar sigue en verde; compuerta 2 PASS (`upgrade_sync_test.go` conserva `"sync skipped"` y texts nombran `axiom`) |
+| ODD-0 · ODD-3 · ODD-4 · ODD-5 · ODD-6 · ODD-7 · ODD-8 | ⬜ pendientes | — | — |
 
 ## 10. Próximo paso
 
-Resolver O-2 (§8) y ejecutar **ODD-1 + ODD-2** como una sola unidad de trabajo delegada. ODD-4 y ODD-7 son independientes de O-2 y pueden correr en paralelo o después.
+Resolver O-2 (§8). ODD-4 y ODD-7 son independientes de O-2 y pueden ejecutarse en paralelo. ODD-3, ODD-5 y ODD-6 requieren O-2.
 
 ## 11. Racional de cambios aceptados
 
