@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -262,5 +263,136 @@ func TestRunSDDGateRecordRejectedRoleApplyNeverEmitsNotice(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(changeRoot, "handoff.md")); statErr == nil {
 		t.Fatal("handoff.md fue escrito pese a un rechazo; se esperaba que no existiese")
+	}
+}
+
+// --- INC-21 Phase 21 (P6c): integration evidence flags wired into `gate
+// record` (design.md S4.6, S5.7; D-13). newGovernanceGitWorkspace and
+// runGateTestGit exist only for this section: it is the first one in this
+// file that needs a real, hermetic local commit graph for the CLI's real
+// AncestryChecker (reviewtransaction.SnapshotBuilder.RevisionIsAncestor,
+// phase 19) to run against.
+
+// newGovernanceGitWorkspace mirrors newGovernanceWorkspace but additionally
+// makes root a real, hermetic local git repository on a "main" branch with
+// one commit: t.TempDir() + a local `git init`, never a network operation
+// (T-4/T-5 stay N/A for this increment).
+func newGovernanceGitWorkspace(t *testing.T, change string) (root, changeRoot string) {
+	t.Helper()
+	root, changeRoot = newGovernanceWorkspace(t, change)
+	runGateTestGit(t, root, "init", "-q", "-b", "main")
+	runGateTestGit(t, root, "config", "user.email", "gate-evidence-test@example.com")
+	runGateTestGit(t, root, "config", "user.name", "Gate Evidence Test")
+	writeCLIFixture(t, filepath.Join(root, "README.md"), "root\n")
+	runGateTestGit(t, root, "add", "--", "README.md")
+	runGateTestGit(t, root, "commit", "-q", "-m", "root")
+	return root, changeRoot
+}
+
+func runGateTestGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+	return string(output)
+}
+
+// TestRunSDDGateRecordIntegrationPRMergedConfirmedAncestorRecordsVerifiedTrue
+// is task 21.1's first case: a pr_merged commit confirmed as a real local
+// ancestor of main records verified: true.
+func TestRunSDDGateRecordIntegrationPRMergedConfirmedAncestorRecordsVerifiedTrue(t *testing.T) {
+	root, changeRoot := newGovernanceGitWorkspace(t, "inc-99-example")
+	commit := strings.TrimSpace(runGateTestGit(t, root, "rev-parse", "HEAD"))
+
+	var out bytes.Buffer
+	err := RunSDDGate([]string{
+		"record", "--cwd", root, "--change", "inc-99-example",
+		"--gate", "integration", "--decision", "approved", "--reason", "PR fusionado en main",
+		"--evidence-kind", "pr_merged", "--commit", commit,
+	}, &out)
+	if err != nil {
+		t.Fatalf("RunSDDGate() error = %v", err)
+	}
+	ledger, loadErr := kickoff.LoadGates(changeRoot)
+	if loadErr != nil {
+		t.Fatalf("kickoff.LoadGates() error = %v", loadErr)
+	}
+	if len(ledger.Records) != 1 {
+		t.Fatalf("gates.yaml records = %d, want exactly 1", len(ledger.Records))
+	}
+	if rec := ledger.Records[0]; !rec.Verified || rec.EvidenceRef != commit || rec.EvidenceBaseRef != "main" {
+		t.Fatalf("record = %#v, want Verified=true, EvidenceRef=%q, EvidenceBaseRef=main", rec, commit)
+	}
+}
+
+// TestRunSDDGateRecordIntegrationPRMergedWithoutConfirmedAncestorAppendsNothing
+// is task 21.1's second case: a pr_merged commit that is NOT a real
+// ancestor of main is refused explicitly, naming both revisions compared,
+// and nothing is appended to gates.yaml.
+func TestRunSDDGateRecordIntegrationPRMergedWithoutConfirmedAncestorAppendsNothing(t *testing.T) {
+	root, changeRoot := newGovernanceGitWorkspace(t, "inc-99-example")
+	runGateTestGit(t, root, "checkout", "-q", "-b", "feature-x")
+	writeCLIFixture(t, filepath.Join(root, "feature.txt"), "feature\n")
+	runGateTestGit(t, root, "add", "--", "feature.txt")
+	runGateTestGit(t, root, "commit", "-q", "-m", "feature")
+	divergent := strings.TrimSpace(runGateTestGit(t, root, "rev-parse", "HEAD"))
+	runGateTestGit(t, root, "checkout", "-q", "main")
+
+	var out bytes.Buffer
+	err := RunSDDGate([]string{
+		"record", "--cwd", root, "--change", "inc-99-example",
+		"--gate", "integration", "--decision", "approved", "--reason", "PR fusionado en main",
+		"--evidence-kind", "pr_merged", "--commit", divergent,
+	}, &out)
+	if err == nil {
+		t.Fatal("RunSDDGate() error = nil, want a rejection naming the unconfirmed commit and branch compared")
+	}
+	if !strings.Contains(err.Error(), divergent) || !strings.Contains(err.Error(), "main") {
+		t.Fatalf("error = %q, want it to name both the commit and the branch compared", err.Error())
+	}
+	ledger, loadErr := kickoff.LoadGates(changeRoot)
+	if loadErr != nil {
+		t.Fatalf("kickoff.LoadGates() error = %v", loadErr)
+	}
+	if len(ledger.Records) != 0 {
+		t.Fatalf("gates.yaml records = %d, want 0: an unconfirmed pr_merged ancestor must append nothing", len(ledger.Records))
+	}
+}
+
+// TestRunSDDGateRecordIntegrationDeploymentAndAttestationRecordVerifiedFalse
+// is task 21.1's third case: deployment and attestation evidence, without
+// --commit, always exit 0 with verified: false and the actor/reason/
+// reference fields all populated — a declaration, not a check (D-13, T-11).
+func TestRunSDDGateRecordIntegrationDeploymentAndAttestationRecordVerifiedFalse(t *testing.T) {
+	for _, kind := range []string{"deployment", "attestation"} {
+		t.Run(kind, func(t *testing.T) {
+			root, changeRoot := newGovernanceWorkspace(t, "inc-99-example")
+
+			var out bytes.Buffer
+			err := RunSDDGate([]string{
+				"record", "--cwd", root, "--change", "inc-99-example",
+				"--gate", "integration", "--decision", "approved", "--reason", "desplegado en staging",
+				"--evidence-kind", kind, "--evidence", "https://deploys.example/42", "--actor", "release-manager",
+			}, &out)
+			if err != nil {
+				t.Fatalf("RunSDDGate() error = %v", err)
+			}
+			ledger, loadErr := kickoff.LoadGates(changeRoot)
+			if loadErr != nil {
+				t.Fatalf("kickoff.LoadGates() error = %v", loadErr)
+			}
+			if len(ledger.Records) != 1 {
+				t.Fatalf("gates.yaml records = %d, want exactly 1", len(ledger.Records))
+			}
+			rec := ledger.Records[0]
+			if rec.Verified {
+				t.Fatalf("Verified = true for %q evidence, want false: Axiom cannot prove it happened", kind)
+			}
+			if rec.Actor != "release-manager" || rec.Reason != "desplegado en staging" || rec.EvidenceRef != "https://deploys.example/42" {
+				t.Fatalf("record = %#v, want actor/reason/reference all populated from the CLI flags", rec)
+			}
+		})
 	}
 }

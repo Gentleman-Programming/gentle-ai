@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -957,10 +958,18 @@ func sealFullstackKickoff(t *testing.T, changeRoot, changeName string, style kic
 // TestResolveRoutesToAwaitGateWhenABlockReviewGateIsPending covers tasks.md
 // 13.1's first two required cases together: a sealed, checkpointed change
 // with every core artifact done and no gate decision recorded yet routes to
-// "await-gate" (D-09) instead of "apply", names the genuine pending-gate
-// reason in BlockedReasons, and leaves dependencies.Archive exactly as
-// today's logic computes it (13.1's last bullet: the full integration-gate
-// condition is Phase 21's job, not this one's).
+// "await-gate" (D-09) instead of "apply", and names the genuine
+// pending-gate reason in BlockedReasons.
+//
+// Updated by Phase 21 (P6c): this test originally asserted
+// dependencies.Archive == ready here, with a comment explicitly deferring
+// "the full integration-gate condition" to Phase 21 — see git history for
+// the original assertion. Now that archiveDependencyFromGovernance wires
+// that condition in, a sealed change with no approved "integration" gate is
+// correctly blocked from archiving regardless of what else is pending
+// (REQ-21.16): this fixture has neither a favorable verify-report.md nor
+// any integration-gate decision, so archive is doubly ungrounded here, not
+// merely "not yet checked".
 func TestResolveRoutesToAwaitGateWhenABlockReviewGateIsPending(t *testing.T) {
 	root := t.TempDir()
 	changeName := "governed-pending"
@@ -977,8 +986,8 @@ func TestResolveRoutesToAwaitGateWhenABlockReviewGateIsPending(t *testing.T) {
 	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), `gate "spec"`) {
 		t.Fatalf("BlockedReasons = %v, want a genuine reason naming the pending spec gate", status.BlockedReasons)
 	}
-	if status.Dependencies.Archive != DependencyReady {
-		t.Fatalf("Dependencies.Archive = %q, want ready: today's logic is unchanged by a pending gate until Phase 21", status.Dependencies.Archive)
+	if status.Dependencies.Archive != DependencyBlocked {
+		t.Fatalf("Dependencies.Archive = %q, want blocked: no integration gate is approved yet (REQ-21.16, Phase 21)", status.Dependencies.Archive)
 	}
 }
 
@@ -1052,5 +1061,150 @@ func TestResolveContinuousExecutionStyleNeverEvaluatesGates(t *testing.T) {
 	}
 	if status.NextRecommended != "apply" {
 		t.Fatalf("NextRecommended = %q, want apply unchanged by an ungated continuous seal", status.NextRecommended)
+	}
+}
+
+// --- INC-21 Phase 21 (P6c): archive precondition wired into
+// dependencies.Archive (design.md S4.6, D-13; REQ-21.16). Every fixture
+// below seals a checkpointed, single-role fullstack kickoff with every core
+// artifact done, every task checked off, and a favorable local
+// verify-report.md -- exactly the state
+// TestResolveRoutesToAwaitGateWhenABlockReviewGateIsPending's own comment
+// already promised dependencies.Archive would reach "exactly as today's
+// logic computes it" before this phase wired the missing half in.
+
+// writeFavorableVerifyReport seeds verify-report.md so machine.go's
+// VerifyFound input opens the "integration" gate at all: EvaluateGates
+// never surfaces it otherwise (machine.go, Phase 5). REQ-21.16 itself
+// presupposes a favorable local verify report already exists before
+// archive's own integration/deployment precondition is even asked about.
+func writeFavorableVerifyReport(t *testing.T, changeRoot string) {
+	t.Helper()
+	write(t, filepath.Join(changeRoot, "verify-report.md"), "# Verify Report\n\nVerdict: pass\n")
+}
+
+// TestArchiveDependencyBlockedWithoutApprovedIntegrationGate is task 21.3's
+// first case: a sealed, checkpointed change with every core artifact done,
+// every task checked off, and a favorable local verify-report.md still
+// reports dependencies.Archive blocked while no "integration" gate is
+// approved -- naming the missing precondition and the exact invocation that
+// satisfies it (REQ-21.16, second scenario).
+func TestArchiveDependencyBlockedWithoutApprovedIntegrationGate(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-archive-pending"
+	changeRoot := seedReadyChange(t, root, changeName, "- [x] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+	writeFavorableVerifyReport(t, changeRoot)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Dependencies.Archive != DependencyBlocked {
+		t.Fatalf("Dependencies.Archive = %q, want blocked without an approved integration gate (REQ-21.16)", status.Dependencies.Archive)
+	}
+	joined := strings.Join(status.BlockedReasons, "\n")
+	if !strings.Contains(joined, `"integration"`) {
+		t.Fatalf("BlockedReasons = %v, want a genuine reason naming the missing integration gate", status.BlockedReasons)
+	}
+	if !strings.Contains(joined, "axiom sdd gate record --gate integration --decision approved") {
+		t.Fatalf("BlockedReasons = %v, want the exact executable invocation that satisfies the precondition", status.BlockedReasons)
+	}
+}
+
+// TestArchiveDependencyReadyWithApprovedIntegrationGate is task 21.3's
+// second case: once the "integration" gate is approved, dependencies.Archive
+// becomes ready (REQ-21.16, first scenario).
+func TestArchiveDependencyReadyWithApprovedIntegrationGate(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-archive-approved"
+	changeRoot := seedReadyChange(t, root, changeName, "- [x] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+	writeFavorableVerifyReport(t, changeRoot)
+	if err := kickoff.AppendGate(changeRoot, kickoff.GateRecord{
+		Gate: kickoff.GateIntegration, Decision: kickoff.DecisionApproved,
+		Reason: "PR #41 fusionado en main", EvidenceKind: kickoff.EvidencePRMerged,
+		EvidenceRef: "abc123def", EvidenceBaseRef: "main", Verified: true, Actor: "maintainer",
+	}); err != nil {
+		t.Fatalf("kickoff.AppendGate() error = %v", err)
+	}
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Dependencies.Archive != DependencyReady {
+		t.Fatalf("Dependencies.Archive = %q, want ready once the integration gate is approved", status.Dependencies.Archive)
+	}
+}
+
+// TestArchiveDependencyUnsealedChangeUnaffectedByGovernance repeats Phase
+// 11's byte-for-byte control gate against this specific new branch: an
+// unsealed change keeps resolveDependencies' existing dependencies.Archive
+// computation exactly as it was before this increment (D-13's own
+// documented zero-cost boundary).
+func TestArchiveDependencyUnsealedChangeUnaffectedByGovernance(t *testing.T) {
+	root := t.TempDir()
+	changeName := "unsealed-archive"
+	changeRoot := seedReadyChange(t, root, changeName, "- [x] 1.1 Wire routes\n")
+	writeFavorableVerifyReport(t, changeRoot)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Dependencies.Archive != DependencyReady {
+		t.Fatalf("Dependencies.Archive = %q, want ready: an unsealed change must keep resolveDependencies' existing behavior byte for byte (D-13)", status.Dependencies.Archive)
+	}
+}
+
+// TestArchivePreconditionIntegrationEndToEnd is task 21.5's integration
+// test: over one full OpenSpec tree, resolving status is read-only either
+// way, so a change with no approved "integration" gate stays exactly where
+// it was -- never moved under openspec/changes/archive/, and
+// openspec/specs/ is never touched -- while dependencies.Archive reports
+// blocked (REQ-21.16, second scenario); once the gate is approved, the same
+// tree, still untouched by Resolve itself, projects dependencies.Archive
+// ready (REQ-21.16, first scenario).
+func TestArchivePreconditionIntegrationEndToEnd(t *testing.T) {
+	root := t.TempDir()
+	changeName := "governed-archive-e2e"
+	changeRoot := seedReadyChange(t, root, changeName, "- [x] 1.1 Wire routes\n")
+	sealFullstackKickoff(t, changeRoot, changeName, kickoff.ExecutionCheckpointed)
+	writeFavorableVerifyReport(t, changeRoot)
+	archivedRoot := filepath.Join(root, "openspec", "changes", "archive", changeName)
+	liveSpecsRoot := filepath.Join(root, "openspec", "specs")
+
+	before, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if before.Dependencies.Archive != DependencyBlocked {
+		t.Fatalf("Dependencies.Archive (before) = %q, want blocked without integration evidence", before.Dependencies.Archive)
+	}
+	if _, statErr := os.Stat(changeRoot); statErr != nil {
+		t.Fatalf("change root %q no longer exists after a read-only status resolve: %v", changeRoot, statErr)
+	}
+	if _, statErr := os.Stat(archivedRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("change unexpectedly present under openspec/changes/archive/ before archive ran: stat error = %v", statErr)
+	}
+	if _, statErr := os.Stat(liveSpecsRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("openspec/specs/ unexpectedly exists before archive ran: stat error = %v", statErr)
+	}
+
+	if err := kickoff.AppendGate(changeRoot, kickoff.GateRecord{
+		Gate: kickoff.GateIntegration, Decision: kickoff.DecisionApproved,
+		Reason: "PR #41 fusionado en main", EvidenceKind: kickoff.EvidencePRMerged,
+		EvidenceRef: "abc123def", EvidenceBaseRef: "main", Verified: true, Actor: "maintainer",
+	}); err != nil {
+		t.Fatalf("kickoff.AppendGate() error = %v", err)
+	}
+
+	after, err := Resolve(ResolveOptions{CWD: root, ChangeName: changeName})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if after.Dependencies.Archive != DependencyReady {
+		t.Fatalf("Dependencies.Archive (after) = %q, want ready once integration evidence is approved", after.Dependencies.Archive)
 	}
 }
