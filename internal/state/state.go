@@ -16,6 +16,12 @@ const stateDir = ".axiom"
 const legacyStateDir = ".gentle-ai"
 const stateFile = "state.json"
 
+// DefaultUpstreamVersion is the frozen upstream ceiling this fork is reconciled
+// against: upstream tag v3.4.0 / commit 82a6de96, decision D4 of INC-20
+// (docs/upstream-absorption-ledger.md). Audit-only metadata: no update, upgrade
+// or sync path may read it to trigger anything (REQ-22.9).
+const DefaultUpstreamVersion = "3.4.0"
+
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
 // used by OpenCode-style model assignments. It mirrors model.ModelAssignment
 // but lives in the state package to avoid an import cycle.
@@ -144,6 +150,14 @@ type InstallState struct {
 	// persisted separately from the OpenCode field because each key is part of
 	// an independent state contract.
 	PiBackgroundIntent model.PiBackgroundIntent `json:"pi_background_subagents,omitempty"`
+
+	// UpstreamVersion records the upstream version this fork is reconciled
+	// against. Write and WriteReconciled backfill DefaultUpstreamVersion when
+	// the incoming value is empty and never overwrite a value already present,
+	// so every state document written by this version carries the key
+	// (decision D-14 of INC-22). Audit-only metadata: no update, upgrade or
+	// sync path may read it to trigger anything (REQ-22.9).
+	UpstreamVersion string `json:"upstream_version,omitempty"`
 }
 
 // UnmarshalJSON preserves whether the persisted persona field was present.
@@ -274,6 +288,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 		BackgroundIntent:   existing.BackgroundIntent,
 		PiBackgroundIntent: existing.PiBackgroundIntent,
+		UpstreamVersion:    existing.UpstreamVersion,
 	}
 }
 
@@ -311,6 +326,12 @@ func WriteReconciled(homeDir string, s InstallState) error {
 }
 
 func marshal(s InstallState) ([]byte, error) {
+	// Write-side backfill (decision D-14 of INC-22): a state document written
+	// by this version always carries upstream_version, and a value already
+	// present is never overwritten with the default.
+	if s.UpstreamVersion == "" {
+		s.UpstreamVersion = DefaultUpstreamVersion
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return nil, err
