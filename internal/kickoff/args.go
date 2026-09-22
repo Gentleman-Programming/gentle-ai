@@ -301,9 +301,10 @@ func (a SealArgs) ToKickoff(change string) Kickoff {
 }
 
 // GateRecordArgs is the parsed, validated result of `axiom sdd gate
-// record`. Evidence-related flags (--evidence-kind, --commit, --base-ref,
-// --evidence) are deliberately absent here: tasks.md assigns them to Phase
-// 21, alongside the real AncestryChecker they exist to feed.
+// record`. The four evidence-related fields (EvidenceKind, Commit, BaseRef,
+// Evidence) are only ever populated together with a non-empty EvidenceKind
+// (design.md S5.7); a gate approval that declares none of them behaves
+// exactly as it did before Phase 21.
 type GateRecordArgs struct {
 	CWD      string
 	Change   string
@@ -312,6 +313,18 @@ type GateRecordArgs struct {
 	Reason   string
 	Actor    string
 	JSON     bool
+
+	// EvidenceKind classifies the integration evidence this decision
+	// attaches, when any. Commit feeds the local ancestry check for
+	// EvidencePRMerged (the only kind Axiom can verify); BaseRef is the
+	// branch it must be an ancestor of, defaulting to "main" when omitted;
+	// Evidence is the free-text reference an operator supplies for
+	// EvidenceDeployment/EvidenceAttestation, neither of which Axiom can
+	// check locally (D-13, T-11).
+	EvidenceKind EvidenceKind
+	Commit       string
+	BaseRef      string
+	Evidence     string
 }
 
 // validateGateKey checks --gate against the closed vocabulary: the four
@@ -395,6 +408,38 @@ func ParseGateRecordArgs(args []string) (GateRecordArgs, error) {
 			}
 			parsed.Actor = value
 			i = next
+		case "--evidence-kind":
+			value, next, err := requireFlagValue(args, i, "--evidence-kind")
+			if err != nil {
+				return GateRecordArgs{}, err
+			}
+			kind := EvidenceKind(value)
+			if !validEvidenceKinds[kind] {
+				return GateRecordArgs{}, fmt.Errorf("--evidence-kind desconocido %q; opciones: pr_merged, deployment, attestation", value)
+			}
+			parsed.EvidenceKind = kind
+			i = next
+		case "--commit":
+			value, next, err := requireFlagValue(args, i, "--commit")
+			if err != nil {
+				return GateRecordArgs{}, err
+			}
+			parsed.Commit = value
+			i = next
+		case "--base-ref":
+			value, next, err := requireFlagValue(args, i, "--base-ref")
+			if err != nil {
+				return GateRecordArgs{}, err
+			}
+			parsed.BaseRef = value
+			i = next
+		case "--evidence":
+			value, next, err := requireFlagValue(args, i, "--evidence")
+			if err != nil {
+				return GateRecordArgs{}, err
+			}
+			parsed.Evidence = value
+			i = next
 		default:
 			return GateRecordArgs{}, fmt.Errorf("bandera desconocida %q para gate record", arg)
 		}
@@ -411,6 +456,14 @@ func ParseGateRecordArgs(args []string) (GateRecordArgs, error) {
 	}
 	if parsed.Decision == DecisionRejected && strings.TrimSpace(parsed.Reason) == "" {
 		return GateRecordArgs{}, fmt.Errorf("gate record --decision rejected requiere --reason (REQ-21.12 exige registrar el motivo)")
+	}
+	if parsed.EvidenceKind == EvidencePRMerged {
+		if strings.TrimSpace(parsed.Commit) == "" {
+			return GateRecordArgs{}, fmt.Errorf("gate record --evidence-kind pr_merged requiere --commit")
+		}
+		if parsed.BaseRef == "" {
+			parsed.BaseRef = "main"
+		}
 	}
 
 	return parsed, nil

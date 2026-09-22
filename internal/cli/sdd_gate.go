@@ -47,7 +47,7 @@ func RunSDDGate(args []string, stdout io.Writer) error {
 
 func renderSDDGateHelp(stdout io.Writer) error {
 	_, _ = fmt.Fprintln(stdout, "Uso: axiom sdd gate <record|show> [argumentos]")
-	_, _ = fmt.Fprintln(stdout, "  record --cwd <ruta> --change <nombre> --gate spec|design|tasks|role-apply:<rol>|integration --decision approved|rejected [--reason \"<texto>\"] [--actor <id>] [--json]")
+	_, _ = fmt.Fprintln(stdout, "  record --cwd <ruta> --change <nombre> --gate spec|design|tasks|role-apply:<rol>|integration --decision approved|rejected [--reason \"<texto>\"] [--evidence-kind pr_merged|deployment|attestation] [--commit <sha>] [--base-ref <ref>] [--evidence \"<texto>\"] [--actor <id>] [--json]")
 	_, _ = fmt.Fprintln(stdout, "  show --cwd <ruta> --change <nombre> [--json]")
 	return nil
 }
@@ -98,6 +98,19 @@ func runSDDGateRecord(args []string, stdout io.Writer) error {
 		ArtifactDigest: digest,
 		Actor:          actor,
 		RecordedAt:     time.Now().UTC(),
+	}
+	// Evidence verification runs, and can refuse, BEFORE kickoff.AppendGate:
+	// an unconfirmed pr_merged ancestor must append nothing to gates.yaml
+	// (task 21.1's second case), which is only guaranteed by checking first.
+	if parsed.EvidenceKind != "" {
+		evidence, evidenceErr := verifyGateEvidence(workspaceRoot, parsed)
+		if evidenceErr != nil {
+			return evidenceErr
+		}
+		record.EvidenceKind = evidence.Kind
+		record.EvidenceRef = evidence.Ref
+		record.EvidenceBaseRef = evidence.BaseRef
+		record.Verified = evidence.Verified
 	}
 	if err := kickoff.AppendGate(changeRoot, record); err != nil {
 		return err

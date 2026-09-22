@@ -54,6 +54,10 @@ When native SDD status reports `blocked(edit_authority_missing)`, its structured
 
 {{GENTLE_AI_SDD_SECTION:Language Domain Contract}}
 
+### SDD Change Kickoff and Block Gates
+
+{{GENTLE_AI_SDD_SECTION:SDD Change Kickoff and Block Gates}}
+
 ### Delegation Rules
 
 These rules select execution topology, not the implementation method. Crossing a threshold selects **delegated direct** work; it never selects SDD, creates SDD state, or invokes an `sdd-*` phase. Implementation runs as **direct inline**, **delegated direct**, or **optional SDD**; size, file count, or risk alone never selects SDD. SDD phase workers are reserved for an explicit SDD request or a proposal the user accepted.

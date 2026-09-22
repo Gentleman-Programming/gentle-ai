@@ -164,6 +164,10 @@ Meta-commands (type directly — orchestrator handles them, will not appear in a
 
 {{GENTLE_AI_SDD_SECTION:Native SDD Dispatcher Guard}}
 
+### SDD Change Kickoff and Block Gates
+
+{{GENTLE_AI_SDD_SECTION:SDD Change Kickoff and Block Gates}}
+
 ### SDD Init Guard (MANDATORY)
 
 Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:

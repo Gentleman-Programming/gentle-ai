@@ -623,6 +623,11 @@ func resolveByPreferenceOrder(options ResolveOptions) (Status, error) {
 	if verifyReason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, verifyReason)
 	}
+	archiveState, archiveReason := archiveDependencyFromGovernance(governance, changeName, dependencies.Archive)
+	dependencies.Archive = archiveState
+	if archiveReason != "" {
+		blockedReasons.genuine = append(blockedReasons.genuine, archiveReason)
+	}
 	nextRecommended := resolveNextRecommended(dependencies, applyState, governance)
 	// INC-21 (design.md S5.5): the gate-decision envelope is built only for
 	// the exact gate "await-gate" already names, so it can never disagree

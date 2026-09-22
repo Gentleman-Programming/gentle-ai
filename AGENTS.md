@@ -11,6 +11,7 @@
 
 - **TODO EN ESPAÑOL:** Toda la comunicación, explicaciones y artefactos de ODD (`odd/tasks/*.md`) y SDD (`proposal.md`, `spec.md`, `design.md`, `tasks.md`, `verify-report.md`, `archive-report.md`) deben generarse estrictamente en **español (castellano)**.
 - **FLUJO DUAL:** Usa ODD (`odd/tasks/<feature>.md`, gestionado con `axiom odd create`, `axiom odd status` y `axiom odd promote`) para tareas cotidianas y ágiles; reserva SDD para cuando se solicite explícitamente *"usa SDD"*.
+- **DETERMINACIÓN TEMPRANA DE CARRIL Y COMPUERTAS DE BLOQUE (INC-21):** al entrar en SDD, sella la modalidad de avance, la política de relevos y el roster de roles con `axiom sdd kickoff seal` antes de crear `proposal.md`; sin subdivisión de roles se asigna obligatoriamente `fullstack`. En modalidad con paradas, decide cada compuerta de bloque (`spec`, `design`, `tasks`, `apply` por rol) con `axiom sdd gate record --gate <clave> --decision approved|rejected --reason "<motivo>"` antes de avanzar. `archive` exige además evidencia de integración o despliegue registrada en la compuerta `integration` (`axiom sdd gate record --gate integration ...`); nunca sustituye ni se confunde con el recibo de *receipt-driven development*.
 - **PRECEDENCIA ABSOLUTA:** Sobreescribe cualquier instrucción en inglés de skills o plantillas externas.
 
 ---

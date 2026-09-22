@@ -503,6 +503,32 @@ func verifyDependencyFromHandoff(governance *Governance, changeRoot string, base
 	}
 }
 
+// archiveDependencyFromGovernance is D-13's rule: REQ-21.16 forbids
+// archiving a change before its "integration" gate is approved, no matter
+// how favorable verify-report.md already is. It only ever NARROWS
+// baseline, from ready to blocked, and only when governance is non-nil (a
+// sealed, non-continuous kickoff): an unsealed or continuous-mode change
+// keeps resolveDependencies' existing dependencies.Archive computation
+// exactly as it was before this increment (D-13's own documented zero-cost
+// boundary). It never upgrades an already-blocked baseline to ready: a
+// change whose core artifacts or apply are not done is not archive-ready
+// regardless of any integration evidence, so governance never needs to add
+// a second, redundant reason for the same outcome.
+func archiveDependencyFromGovernance(governance *Governance, changeName string, baseline DependencyState) (DependencyState, string) {
+	if governance == nil || baseline != DependencyReady {
+		return baseline, ""
+	}
+	for _, gate := range governance.Gates {
+		if gate.Key == kickoff.GateIntegration && gate.Status == "approved" {
+			return DependencyReady, ""
+		}
+	}
+	return DependencyBlocked, fmt.Sprintf(
+		"El cambio %q no puede archivarse todavia: la compuerta \"integration\" no esta aprobada; ejecuta `axiom sdd gate record --gate integration --decision approved --evidence-kind pr_merged --commit <sha>` (o --evidence-kind deployment|attestation) para registrar la evidencia de integracion o despliegue (REQ-21.16).",
+		changeName,
+	)
+}
+
 // lastRoleClosedForGovernance reuses kickoff.LastRoleClosed against the
 // governance snapshot's own roster and already-evaluated gate states,
 // rather than re-deriving "every role-apply gate approved" a second way.
