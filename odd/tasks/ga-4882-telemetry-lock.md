@@ -21,8 +21,8 @@ Claimed 2026-09-23 (issuecomment-5796980665). Branch fix/4882-telemetry-incremen
 2. [done] Implement: 1-byte range at offset 0 (lock+unlock), path-keyed same-process
    mutex hybrid in lockState, EnsureState under-Update invariant comment.
 3. [pending] GREEN + full internal/telemetry suite + gofmt/vet (delegated).
-4. [pending] Work-unit commit + push; PR (Closes #4882).
-5. [pending] Native review preflight for the candidate.
+4. [done] Commit 7ce9baa7 + push; PR #4914 opened (Closes #4882, type:bug requested from maintainer).
+5. [done] Native review lineage review-d61a45dd63798350 (medium, 1 lens): approved + acknowledged/burned. Advisories: R3-1 WARNING state_lock_windows.go:27, R3-2/R3-3 SUGGESTION state_lock.go:50-64 — all informational, separate later work.
 
 ## Evidence
 
@@ -40,3 +40,5 @@ Claimed 2026-09-23 (issuecomment-5796980665). Branch fix/4882-telemetry-incremen
   state_lock_unix.go (rename only), state.go (EnsureState concurrency invariant comment).
   Focused run all PASS; suite ok 8.2s; lane test -count=5 ok; gofmt empty; vet clean;
   go build ./... ok; supplementary GOOS=windows build of internal/telemetry ok.
+
+- 2026-09-23: worker RED `Counters.Syncs = 1, want 20` (broken-lock sabotage, Linux); GREEN zero lost both configs; suite ok 8.2s; gofmt/vet/GOOS=windows clean. Review approved+burned same day. Pending external: type:bug label + Windows lane on PR #4914.
