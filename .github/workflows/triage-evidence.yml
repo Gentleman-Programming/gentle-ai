@@ -1,0 +1,74 @@
+name: Triage Evidence
+
+# Manually triggered, read-only evidence report over the open
+# status:needs-review backlog (plus unlabeled open issues). It never comments,
+# labels, closes, reopens, edits, or creates anything: the report is a job
+# summary and one downloaded artifact for maintainers.
+#
+# See docs/triage-evidence.md for usage and outcome semantics.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "OWNER/REPO to analyze"
+        required: false
+        default: "Gentleman-Programming/gentle-ai"
+      max-issues:
+        description: "Issues kept in the report (bounded)"
+        required: false
+        default: "40"
+      max-searches:
+        description: "Total related-search API calls (bounded)"
+        required: false
+        default: "30"
+      generated-at:
+        description: "Pinned report timestamp for deterministic output (ISO-8601)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: triage-evidence
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Generate triage evidence report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_MAX_ISSUES: ${{ inputs.max-issues }}
+          INPUT_MAX_SEARCHES: ${{ inputs.max-searches }}
+          INPUT_GENERATED_AT: ${{ inputs.generated-at }}
+        run: |
+          set -euo pipefail
+          go run ./cmd/gentle-triage \
+            --repo "$INPUT_REPO" \
+            --max-issues "$INPUT_MAX_ISSUES" \
+            --max-searches "$INPUT_MAX_SEARCHES" \
+            --generated-at "$INPUT_GENERATED_AT" \
+            --output "$RUNNER_TEMP/triage-evidence.md"
+
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+        with:
+          name: triage-evidence
+          path: "${{ runner.temp }}/triage-evidence.md"
+          retention-days: 7
