@@ -91,7 +91,7 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			view := RenderWelcomeWithAdvisory(0, "dev", tc.updateBanner, nil, true, false, 0, true, tc.width, tc.height, tc.advisory)
+			view := RenderWelcomeWithAdvisory(0, "dev", tc.updateBanner, nil, true, false, 0, true, true, tc.width, tc.height, tc.advisory)
 
 			if got := lipgloss.Width(view); got > tc.width {
 				t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, tc.width, view)
