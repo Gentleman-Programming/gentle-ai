@@ -42,8 +42,9 @@ Claimed 2026-09-23 (issuecomment-5796980665). Branch fix/4882-telemetry-incremen
   Focused run all PASS; suite ok 8.2s; lane test -count=5 ok; gofmt empty; vet clean;
   go build ./... ok; supplementary GOOS=windows build of internal/telemetry ok.
 
-- 2026-09-23: worker RED `Counters.Syncs = 1, want 20` (broken-lock sabotage, Linux); GREEN zero lost both configs; suite ok 8.2s; gofmt/vet/GOOS=windows clean. Review approved+burned same day. Windows lane on PR #4914 completed green
-  (CI run 35883778782: Unit Tests, Windows Runtime, Darwin, E2E all pass). Only pending
-  external: type:bug label (maintainer-side).
+- 2026-09-23: worker RED `Counters.Syncs = 1, want 20` (broken-lock sabotage, Linux); GREEN zero lost both configs; suite ok 8.2s; gofmt/vet/GOOS=windows clean. Review approved+burned same day. Windows lane green on the PR #4914 branch only
+  (CI run 35883778782: Unit Tests, Windows Runtime, Darwin, E2E all pass); this does not
+  establish the Windows suite on main, which stays pending until a passing main run is
+  recorded. Also pending external: type:bug label (maintainer-side).
 
 - CI 2026-09-23: Unit Tests red once on TestDocumentedInvocationsRunAsDocumented/executed/sync_# (TempDir RemoveAll cleanup race, internal/app). Triaged as pre-existing environment flake: telemetry writer dev-gated off in this job, diff adds no writer/file, local x15 green branch+base. Triage comment on PR (issuecomment-5797855289). type:bug label pending maintainer.
