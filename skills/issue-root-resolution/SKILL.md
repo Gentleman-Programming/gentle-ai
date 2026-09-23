@@ -42,7 +42,7 @@ Load when auditing a defect backlog for shared root causes, proposing a fix for 
 2. Classify each issue against the real diff/code; separate closes-via-X, improved-not-closed, unrelated, blocker.
 3. Map mechanisms read-only with anchors; flag mismatches.
 4. Rank fixes deletion-first; name D-items; get maintainer answers.
-5. Implement in slices (issue-first: every PR links a `status:approved` issue), audit each worker report.
+5. Implement in slices, audit each worker report.
 6. Hygiene pass: evidence-gated closures, stale-repro re-verification requests, meta-issue update with what changed and why.
 
 ## Output Contract

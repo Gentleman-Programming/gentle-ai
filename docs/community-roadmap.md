@@ -11,14 +11,11 @@ it can never go stale the way a copied table does.
 
 ## What `up-for-grabs` guarantees
 
-An issue carries this label only when all three are true:
+An issue carries this label only when both are true:
 
 1. **It is scoped.** The problem is stated, the failure is reproducible or the
    behaviour is specified, and the issue names where in the tree to look.
-2. **It is approved.** It also carries `status:approved`, which is what lets a
-   PR be opened at all — see [CONTRIBUTING.md](../CONTRIBUTING.md). Without it
-   your PR is rejected before review, no matter how good the code is.
-3. **Nobody is on it.** If a maintainer or contributor picks it up, the label
+2. **Nobody is on it.** If a maintainer or contributor picks it up, the label
    comes off, so you are not racing someone silently.
 
 An issue without the label is not closed to you — it usually means it is still
@@ -31,16 +28,14 @@ opening a PR; the decision has to land first or the work gets thrown away.
 1. Comment that you are taking it. That is all the claim needed.
 2. Read the issue's "where it comes from" section if it has one — most name the
    exact file and line, and several already contain the diagnosis.
-3. Open a PR that links the issue. CI checks the link and the
-   `status:approved` label automatically.
+3. Open a PR with your change.
 
 ## Reading the labels
 
 | Label | Meaning |
 | --- | --- |
-| `up-for-grabs` | Ready for you. Scoped, approved, unclaimed. |
+| `up-for-grabs` | Ready for you. Scoped, unclaimed. |
 | `help wanted` | The maintainers would especially like outside help here. Often the larger ones. |
-| `status:approved` | A PR may be opened. Required. |
 | `status:needs-design` | Valid, but an architectural decision comes first. Discuss, do not implement. |
 | `status:needs-info` | Waiting on the reporter. |
 | `priority:high` / `medium` / `low` | Maintainer ordering, not difficulty. |

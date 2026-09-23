@@ -51,15 +51,6 @@ jobs:
 
             core.setFailed(`❌ ${message}`);
 
-  check-workflow-scripts:
-    name: Check Workflow Scripts
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
-      - name: Run workflow script tests
-        run: node --test .github/scripts/parse-linked-issues.test.cjs
-
   check-type-label:
     name: Check PR Has type:* Label
     runs-on: ubuntu-latest

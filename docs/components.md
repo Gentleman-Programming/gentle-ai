@@ -83,7 +83,7 @@ which is the authority for this list.
 
 | Skill | ID | Description |
 |-------|-----|-------------|
-| Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
+| Branch & PR | `branch-pr` | PR creation workflow with conventional commits and branch naming |
 | Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
 | Comment Writer | `comment-writer` | Draft warm, direct collaboration comments and review replies |
 | RDD Defect Workflow | `rdd-defect-workflow` | Guide receipt-driven defect work with truthful evidence and authority boundaries |
