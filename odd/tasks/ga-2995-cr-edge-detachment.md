@@ -58,3 +58,5 @@ refuse" (SanctionedCompactRecoveryExits doc, compact_inspect.go).
 - Worker deviations, all accepted: RecoveryInvalidated instead of RecoveryEscalated
   (Validate() requires authorization for escalated; inspectRecoveryCycle precedent),
   vacuity guard in the N=1 test, shared helper instead of duplicated loops.
+
+- 2026-09-23: user re-confirmed size:exception at the grown measured count (2508 lines) instead of splitting the CR follow-up; decision recorded in the PR body (Size decision section, Re-confirmed paragraph).
