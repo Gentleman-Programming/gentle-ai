@@ -143,7 +143,9 @@ func historicalDispositionSelectors(report CompactRecoveryInspectionReport) []Au
 // concurrent-update drift, and an entry any retained report edge still
 // references refuses fail-closed (the per-entry plan assumes the forensic
 // entry is edge-detached and verifies that assumption instead of trusting
-// it), mirroring the edge path's exact-selector
+// it), a reference reachable in real stores when a loaded successor names
+// the now-historical entry as its edge predecessor (#2995) — mirroring the
+// edge path's exact-selector
 // semantics. The plan binds the selector (Plan Field Set), so its digest
 // covers exactly the entry this derivation scoped — and the executor's
 // fresh re-derivation under lock re-passes the same selector and reproduces
@@ -168,12 +170,14 @@ func historicalDispositionPlanForSelector(report CompactRecoveryInspectionReport
 	}
 	// Fail-closed edge-detachment check: a historical entry any retained
 	// report edge still names (on either side) must not be individually
-	// dispositioned while the graph still references it. Real stores cannot
-	// produce this shape today — edges are classified only between loaded
-	// records and a historical entry is forensic bytes — so this guard is
-	// drift hardening: it verifies the derivation's edge-detached assumption
-	// instead of silently trusting it if a future caller ever desynchronizes
-	// the report.
+	// dispositioned while the graph still references it. The predecessor
+	// side of the reference is reachable in real stores — edges are built
+	// from loaded successors, so a loaded successor naming a now-historical
+	// predecessor produces it (#2995). The successor side stays drift
+	// hardening — a historical entry never loads and can never be an edge
+	// successor — and the guard verifies the derivation's edge-detached
+	// assumption instead of silently trusting it if a future caller ever
+	// desynchronizes the report.
 	for _, edge := range report.Edges {
 		if edge.PredecessorLineageID == lineage || edge.SuccessorLineageID == lineage {
 			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names entry %q, which retained recovery edge %s -> %s still references; resolve that edge before any per-entry disposition", errAuthorityDispositionPlanNotDerivable, lineage, edge.PredecessorLineageID, edge.SuccessorLineageID)
@@ -199,13 +203,18 @@ func historicalDispositionPlanForSelector(report CompactRecoveryInspectionReport
 // record that can be planned for quarantine. Its own outdated diagnostic is the
 // sole admissible diagnostic: any malformed, unreadable, missing, or unexpected
 // additional authority entry prevents a historical plan from being published.
+// So does a retained report edge still referencing the lineage (either side):
+// the selectorless plan is the per-entry plan without a selector, so it
+// inherits the exact-selector path's edge-detachment requirement — the
+// predecessor side of the reference is reachable in real stores through a
+// loaded successor naming a now-historical predecessor (#2995).
 func historicalAuthorityDispositionPlanRecord(report CompactRecoveryInspectionReport) (string, historicalCompactForensicRecord, bool) {
 	if len(report.historical) != 1 || len(report.EntryDiagnostics) != 1 {
 		return "", historicalCompactForensicRecord{}, false
 	}
 	for lineage, historical := range report.historical {
 		diagnostic := report.EntryDiagnostics[0]
-		if diagnostic.LineageID == lineage && diagnostic.Problem == compactInspectionEntryOutdated {
+		if diagnostic.LineageID == lineage && diagnostic.Problem == compactInspectionEntryOutdated && !historicalLineageEdgeReferenced(report, lineage) {
 			return lineage, historical, true
 		}
 	}

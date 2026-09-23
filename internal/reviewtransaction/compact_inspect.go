@@ -213,7 +213,12 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	//
 	// historicalExits (#2995) lists every historical (outdated) entry when the
 	// store's ONLY diagnostics are historical: each entry then has a reachable
-	// selector-scoped repair, so inspection surfaces one exit per entry. A
+	// selector-scoped repair, so inspection surfaces one exit per entry —
+	// unless a retained edge still references the entry, which the
+	// exact-selector derivation refuses, so the exit is withheld individually
+	// (unreferenced siblings stay advertised). The reference is reachable:
+	// edges are built from loaded successors, so a loaded successor naming a
+	// now-historical predecessor produces it. A
 	// store with ANY non-historical diagnostic keeps today's stricter posture —
 	// no historical exit is advertised unless the selectorless derivation
 	// itself closes (the N=1 j92 case, unchanged below) — because a mixed
@@ -305,7 +310,11 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 // historicalDispositionExitLineages returns every historical (outdated)
 // entry lineage, sorted, when the report's diagnostics are ALL historical —
 // the one store shape where every diagnostic has a reachable selector-scoped
-// repair (#2995). Any other shape returns nil: malformed, unreadable,
+// repair (#2995). A diagnostic lineage any retained report edge still
+// references (on either side) is excluded individually: the exact-selector
+// derivation refuses that repair, and this surface must never advertise a
+// continuation the very next command refuses — unreferenced siblings stay
+// advertised. Any other shape returns nil: malformed, unreadable,
 // missing, and unexpected entries never gain an exit, and a store that mixes
 // them with historical entries keeps its existing exits unchanged.
 func historicalDispositionExitLineages(report CompactRecoveryInspectionReport) []string {
@@ -320,10 +329,25 @@ func historicalDispositionExitLineages(report CompactRecoveryInspectionReport) [
 		if _, found := report.historical[diagnostic.LineageID]; !found {
 			return nil
 		}
+		if historicalLineageEdgeReferenced(report, diagnostic.LineageID) {
+			continue
+		}
 		lineages = append(lineages, diagnostic.LineageID)
 	}
 	slices.Sort(lineages)
 	return lineages
+}
+
+// historicalLineageEdgeReferenced reports whether any retained report edge
+// still names lineage on either side. The predecessor side of the reference
+// is reachable in real stores — edges are built from loaded successors, so a
+// loaded successor naming a now-historical predecessor yields the edge
+// (#2995) — while the successor side stays drift hardening: a historical
+// entry never loads and can never be an edge successor.
+func historicalLineageEdgeReferenced(report CompactRecoveryInspectionReport, lineage string) bool {
+	return slices.ContainsFunc(report.Edges, func(edge CompactRecoveryEdgeInspection) bool {
+		return edge.PredecessorLineageID == lineage || edge.SuccessorLineageID == lineage
+	})
 }
 
 // compactRecoveryReconciliationAnomalyClass reports whether edge carries

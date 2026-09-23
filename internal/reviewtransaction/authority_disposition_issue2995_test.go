@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Issue #2995 work-unit 2: selector-scoped historical disposition exits.
@@ -312,6 +313,94 @@ func TestIssue2995HistoricalSanctionedExitsArePerEntryAndConservative(t *testing
 			t.Fatalf("malformed entry gained an exit: %+v", exits)
 		}
 	})
+}
+
+// issue2995StageEdgeSuccessor writes a LOADED successor record whose recovery
+// provenance names the given (historical) lineage as its edge predecessor —
+// the reachable store shape behind the #2995 edge-detachment regression:
+// inspectCompactRecoveryRecordSet builds edges from loaded successors only,
+// so the historical entry surfaces as a referenced-but-missing edge
+// predecessor while its own outdated diagnostic keeps the store's
+// diagnostics all-historical. Modeled on inspectRecoveryCycle, whose
+// invalidated disposition carries no maintainer authorization.
+func issue2995StageEdgeSuccessor(t *testing.T, repo, lineage, predecessorLineage, predecessorRevision string) CompactRecord {
+	t.Helper()
+	state := newCompactTestState(t, repo, lineage)
+	state.Recovery = &CompactRecoveryProvenance{
+		PredecessorLineageID: predecessorLineage, PredecessorRevision: predecessorRevision,
+		Disposition: RecoveryInvalidated, Reason: "cr edge-detachment regression", Actor: "maintainer@example.com",
+		RecoveredAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeCompactFixtureRecord(t, store, state)
+}
+
+// TestIssue2995SanctionedExitsExcludeEdgeReferencedHistoricalEntry pins the
+// #2995 edge-detachment invariant on the sanctioned-exit surface: a
+// historical entry a retained edge still references (here on the PREDECESSOR
+// side, the reachable side — edges are built from loaded successors naming a
+// now-historical predecessor) must not be advertised as a `review repair`
+// exit, because the exact-selector derivation refuses that repair and this
+// surface must never advertise a continuation the very next command refuses.
+func TestIssue2995SanctionedExitsExcludeEdgeReferencedHistoricalEntry(t *testing.T) {
+	repo, _ := issue2995StageFixtureStore(t, issue2995ApprovedFixtureName)
+	issue2995StageEdgeSuccessor(t, repo, "issue2995-edge-successor", issue2995ApprovedLineage, issue2995ApprovedDigest)
+	report, err := InspectCompactRecoveryEdges(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Vacuity guard: the fixture really produced the retained reference, so a
+	// pass below cannot be explained by a silently missing edge.
+	if !slices.ContainsFunc(report.Edges, func(edge CompactRecoveryEdgeInspection) bool {
+		return edge.PredecessorLineageID == issue2995ApprovedLineage && !edge.Valid
+	}) {
+		t.Fatalf("fixture produced no retained edge naming historical predecessor %q: %+v", issue2995ApprovedLineage, report.Edges)
+	}
+	exits, err := SanctionedCompactRecoveryExits(context.Background(), repo, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, exit := range exits {
+		if exit.SuccessorLineageID == issue2995ApprovedLineage {
+			t.Fatalf("edge-referenced historical entry %q still advertised %+v; the exact-selector derivation refuses that repair", issue2995ApprovedLineage, exit)
+		}
+	}
+}
+
+// TestIssue2995SanctionedExitsKeepOnlyUnreferencedHistoricalSibling pins the
+// per-entry scope of the exclusion: with two historical entries and a loaded
+// successor referencing only one of them, exactly ONE historical repair exit
+// remains — the unreferenced sibling's — and the referenced entry gains no
+// exit at all. Unreferenced siblings must stay advertised.
+func TestIssue2995SanctionedExitsKeepOnlyUnreferencedHistoricalSibling(t *testing.T) {
+	repo, _ := issue2995StageFixtureStore(t, issue2995ApprovedFixtureName, issue2995EscalatedFixtureName)
+	issue2995StageEdgeSuccessor(t, repo, "issue2995-edge-successor", issue2995ApprovedLineage, issue2995ApprovedDigest)
+	report, err := InspectCompactRecoveryEdges(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exits, err := SanctionedCompactRecoveryExits(context.Background(), repo, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairs := 0
+	for _, exit := range exits {
+		if exit.SuccessorLineageID == issue2995ApprovedLineage {
+			t.Fatalf("edge-referenced historical entry %q still advertised %+v", issue2995ApprovedLineage, exit)
+		}
+		if exit.Operation == CompactRecoveryEdgeExitRepair {
+			repairs++
+			if exit.SuccessorLineageID != issue2995EscalatedLineage {
+				t.Fatalf("repair exit %+v does not name the unreferenced sibling %q", exit, issue2995EscalatedLineage)
+			}
+		}
+	}
+	if repairs != 1 {
+		t.Fatalf("edge-referenced store carries %d repair exits, want exactly the unreferenced sibling's one historical repair: %+v", repairs, exits)
+	}
 }
 
 func TestIssue2995SelectorScopedHistoricalExecutionQuarantinesExactlySelectedEntry(t *testing.T) {
