@@ -484,7 +484,7 @@ func tuiExecuteWithBackground(
 			claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
 			installState, readErr := state.Read(homeDir)
 			if errors.Is(readErr, os.ErrNotExist) {
-				installState = state.InstallState{}
+				installState = state.NewInstallState()
 			} else if readErr != nil {
 				return fmt.Errorf("read persisted install state: %w", readErr)
 			}
@@ -808,7 +808,7 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		current = state.InstallState{}
+		current = state.NewInstallState()
 	}
 	if selection.ClaudeModelAssignments != nil {
 		if len(selection.ClaudeModelAssignments) > 0 {

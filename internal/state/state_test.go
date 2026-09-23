@@ -1220,11 +1220,16 @@ var persistFuncs = []struct {
 // TestUpstreamVersion_DefaultBackfillOnWrite verifies that writing a state
 // without the field leaves upstream_version == DefaultUpstreamVersion ("3.4.0")
 // in ~/.axiom/state.json (REQ-22.9 scenario "El estado expone upstream_version").
-func TestUpstreamVersion_DefaultBackfillOnWrite(t *testing.T) {
+// TestUpstreamVersion_InitialValueFromNewInstallState pins REQ-22.9: the
+// ecosystem state established by this version records upstream_version with its
+// initial value 3.4.0. The value comes from NewInstallState, never from a
+// write-side backfill: writes must stay lossless and never invent a field the
+// caller did not set.
+func TestUpstreamVersion_InitialValueFromNewInstallState(t *testing.T) {
 	for _, tt := range persistFuncs {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			if err := tt.run(home, InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
+			if err := tt.run(home, NewInstallState()); err != nil {
 				t.Fatalf("persist error = %v", err)
 			}
 			data, err := os.ReadFile(Path(home))
@@ -1243,6 +1248,21 @@ func TestUpstreamVersion_DefaultBackfillOnWrite(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a write without the field does not invent it", func(t *testing.T) {
+		home := t.TempDir()
+		want := InstallState{InstalledAgents: []string{"opencode"}}
+		if err := Write(home, want); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Read(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.UpstreamVersion != "" {
+			t.Errorf("UpstreamVersion = %q, want empty: Write must not invent the field", got.UpstreamVersion)
+		}
+	})
 }
 
 // TestUpstreamVersion_ValueHasNoVPrefix pins the persisted format: the spec
@@ -1309,7 +1329,8 @@ func TestUpstreamVersion_SurvivesWriteRead(t *testing.T) {
 		want     string
 	}{
 		{name: "explicit value survives rewrite", incoming: "3.3.9", want: "3.3.9"},
-		{name: "backfilled default survives rewrite", incoming: "", want: "3.4.0"},
+		{name: "initial default survives rewrite", incoming: DefaultUpstreamVersion, want: DefaultUpstreamVersion},
+		{name: "absent value stays absent (no write-side backfill)", incoming: "", want: ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()

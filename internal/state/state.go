@@ -22,6 +22,14 @@ const stateFile = "state.json"
 // or sync path may read it to trigger anything (REQ-22.9).
 const DefaultUpstreamVersion = "3.4.0"
 
+// NewInstallState returns the state for a freshly established ecosystem. It is
+// the only place the initial upstream_version is set: writes stay lossless and
+// never invent a field the caller did not set (REQ-22.9 records the "valor
+// inicial"; it does not authorize mutating every later write).
+func NewInstallState() InstallState {
+	return InstallState{UpstreamVersion: DefaultUpstreamVersion}
+}
+
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
 // used by OpenCode-style model assignments. It mirrors model.ModelAssignment
 // but lives in the state package to avoid an import cycle.
@@ -326,12 +334,11 @@ func WriteReconciled(homeDir string, s InstallState) error {
 }
 
 func marshal(s InstallState) ([]byte, error) {
-	// Write-side backfill (decision D-14 of INC-22): a state document written
-	// by this version always carries upstream_version, and a value already
-	// present is never overwritten with the default.
-	if s.UpstreamVersion == "" {
-		s.UpstreamVersion = DefaultUpstreamVersion
-	}
+	// Deliberately no write-side backfill (decision D-14 of INC-22): Write and
+	// Read must stay a lossless round-trip, and the preservation contracts
+	// (PreservesCompletePersistedState, OptionalAndLossless, …) require that a
+	// write never invents a field the caller did not set. The initial value
+	// comes from NewInstallState when the ecosystem state is established.
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return nil, err
