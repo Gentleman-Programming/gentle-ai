@@ -87,8 +87,7 @@ func composeOrchestratorPrompt(agent model.AgentID, options ...OrchestratorRende
 	}
 	content = replacePiClosedSingleSelectRoute(content, agent)
 	content = replaceOpenCodeConsentV3QuestionRoute(content, agent)
-	content = renderBoundedReviewAssetBodyFromContent(agent, path, content)
-	return bindRuntimeAgentIdentity(content, agent)
+	return injectEngramProjectIdentityContract(bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent, path, content), agent))
 }
 
 // Generic is also consumed by Pi, OpenClaw, and Trae. Select by identity,

@@ -43,7 +43,9 @@ func TestCanonicalCompositionAddsOnlyItsKnownSteps(t *testing.T) {
 				content = strings.Replace(content, testGenericFallbackOnlyNativeRoute, testPiClosedSingleSelectNativeRoute, 1)
 			}
 			content = replaceOpenCodeConsentV3QuestionRoute(content, agent.ID)
-			before := bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent.ID, path, content), agent.ID)
+			// #702 adds the Engram project identity contract to the canonical
+			// composition, so the expected side applies the same injection.
+			before := injectEngramProjectIdentityContract(bindRuntimeAgentIdentity(renderBoundedReviewAssetBodyFromContent(agent.ID, path, content), agent.ID))
 			after := composeOrchestratorPrompt(agent.ID)
 			if after != before {
 				t.Fatalf("canonical composition changed %s orchestrator bytes", agent.ID)

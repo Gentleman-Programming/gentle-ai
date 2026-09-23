@@ -525,7 +525,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// "Organic Driven Development Is The Default Workflow (MANDATORY)" shared
 	// section before any SDD-specific instruction. Kilo renders that section
 	// through the OpenCode orchestrator asset, so the baseline is rederived.
-	const want = "10c086f0e8205ed96c55713f03ac1ae98e17f95d91d902ea0ce7cc94398382bf"
+	// #702 injects the canonical Engram project identity contract into every
+	// rendered orchestrator, so the hash moved. Deliberate, not drift. Later
+	// #702 slices (SDD commands, phase and subagent prompts) move it again.
+	const want = "f0fd15538c83f2a9e48c3fcffd5e0e30e60b11816dea78d615fd2dbdfafc8199"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
