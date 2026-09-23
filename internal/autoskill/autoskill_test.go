@@ -280,9 +280,12 @@ func TestManagerLifecycle(t *testing.T) {
 
 	// 4. Approve
 	approvedSkill := inbox[0].Metadata.Name
-	err = manager.Approve(approvedSkill)
+	outcome, err := manager.Approve(approvedSkill)
 	if err != nil {
 		t.Fatalf("manager.Approve(%s) falló: %v", approvedSkill, err)
+	}
+	if !outcome.Promoted {
+		t.Fatalf("manager.Approve(%s) no reportó promoción: %+v", approvedSkill, outcome)
 	}
 
 	// Verificar que está en skills/ y ya no en inbox/

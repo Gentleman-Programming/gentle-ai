@@ -55,7 +55,7 @@ func NewService(rootPath string) *Service {
 		rootPath:         rootPath,
 		hubManager:       hubMgr,
 		hubDetector:      hubDet,
-		autoskillManager: autoskill.NewManager(rootPath, nil, nil, nil),
+		autoskillManager: newAutoskillManager(rootPath),
 		semanticService:  semantic.NewService(rootPath, nil, nil),
 		livingdocService: livingdoc.NewService(rootPath, nil, nil),
 	}
@@ -83,7 +83,7 @@ func NewServiceWithHub(rootPath string, hubMgr *hub.Manager) *Service {
 		rootPath:         rootPath,
 		hubManager:       hubMgr,
 		hubDetector:      hubDet,
-		autoskillManager: autoskill.NewManager(rootPath, nil, nil, nil),
+		autoskillManager: newAutoskillManager(rootPath),
 		semanticService:  semantic.NewService(rootPath, nil, nil),
 		livingdocService: livingdoc.NewService(rootPath, nil, nil),
 	}
@@ -482,14 +482,32 @@ func (s *Service) GetSkillsInbox() ([]SkillProposalDTO, error) {
 	return dtos, nil
 }
 
+// newAutoskillManager builds the autoskill manager with the production index
+// regenerator wired in (REQ-22.13): Manager.Approve refreshes the unified
+// skills index so a promoted skill is available immediately.
+func newAutoskillManager(rootPath string) *autoskill.Manager {
+	manager := autoskill.NewManager(rootPath, nil, nil, nil)
+	manager.RegenerateIndex = app.RegenerateSkillsIndex
+	return manager
+}
+
 // ScanSkills ejecuta el escaneo de tecnologías y minería heurística depositando candidatos en el buzón.
 func (s *Service) ScanSkills(ctx context.Context, role string, offline bool) (*autoskill.ScanReport, error) {
 	return s.autoskillManager.Scan(ctx, role, offline)
 }
 
-// ApproveSkill aprueba y promociona una skill del buzón a skills/.
-func (s *Service) ApproveSkill(name string) error {
-	return s.autoskillManager.Approve(name)
+// ApproveSkill aprueba y promociona una skill del buzón a skills/. La
+// regeneración del índice vive en Manager.Approve (REQ-22.13); su fallo se
+// devuelve como aviso y nunca deshace la promoción (D-12).
+func (s *Service) ApproveSkill(name string) (warning string, err error) {
+	outcome, err := s.autoskillManager.Approve(name)
+	if err != nil {
+		return "", err
+	}
+	if outcome.RegenerateError != nil {
+		return outcome.RegenerateError.Error(), nil
+	}
+	return "", nil
 }
 
 // RejectSkill descarta y purga una propuesta del buzón.
@@ -541,7 +559,7 @@ func (s *Service) SwitchWorkspace(targetPath string) (*WorkspaceDTO, error) {
 
 	s.mu.Lock()
 	s.rootPath = absPath
-	s.autoskillManager = autoskill.NewManager(absPath, nil, nil, nil)
+	s.autoskillManager = newAutoskillManager(absPath)
 	s.semanticService = semantic.NewService(absPath, nil, nil)
 	s.livingdocService = livingdoc.NewService(absPath, nil, nil)
 	s.mu.Unlock()
