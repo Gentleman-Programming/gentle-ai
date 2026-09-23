@@ -18,6 +18,7 @@ func TestDecidePrecedence(t *testing.T) {
 	}{
 		{"do not track wins over everything", map[string]string{"DO_NOT_TRACK": "1", "GENTLE_AI_TELEMETRY": "1", "CI": "false"}, enabledState, SourceDoNotTrack},
 		{"env opt-out wins over CI and state", map[string]string{"GENTLE_AI_TELEMETRY": "0", "CI": "false"}, enabledState, SourceEnvOptOut},
+		{"env opt-out trims whitespace", map[string]string{"GENTLE_AI_TELEMETRY": " 0 "}, enabledState, SourceEnvOptOut},
 		{"CI true wins over state", map[string]string{"CI": "true"}, enabledState, SourceCI},
 		{"CI is case-insensitive", map[string]string{"CI": "True"}, enabledState, SourceCI},
 		{"state disable is the last resort", map[string]string{}, disabledState, SourceStateDisable},
