@@ -253,9 +253,12 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(adapter.Agent())...) {
 			add(filepath.Join(pluginsDir, name))
 		}
+		// The V1 logo writer still owns HOME's JSON config independently of
+		// the theme's adapter-resolved JSON/JSONC target.
 		add(
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+			theme.TUIConfigPath(homeDir, adapter),
 		)
 		for _, phase := range sdd.SharedPromptPhases() {
 			add(filepath.Join(sdd.SharedPromptDir(homeDir), phase+".md"))

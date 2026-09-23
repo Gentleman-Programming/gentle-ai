@@ -22,6 +22,55 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 )
 
+func TestConfigPathsForBackupThemeExternalXDG(t *testing.T) {
+	for _, name := range []string{"missing", "json", "jsonc", "both", "home-jsonc", "home-json"} {
+		t.Run(name, func(t *testing.T) {
+			home, xdg := t.TempDir(), t.TempDir()
+			if name == "home-jsonc" || name == "home-json" {
+				xdg = filepath.Join(home, ".config")
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", xdg)
+			if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentOpenCode)}}); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(xdg, "opencode")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if name == "json" || name == "both" || name == "home-json" {
+				if err := os.WriteFile(filepath.Join(dir, "tui.json"), []byte(`{}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantName := "tui.json"
+			if name == "jsonc" || name == "both" || name == "home-jsonc" {
+				wantName = "tui.jsonc"
+				if err := os.WriteFile(filepath.Join(dir, wantName), []byte("// config\n{}"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			paths := configPathsForBackup(home)
+			for _, want := range []string{filepath.Join(home, ".config", "opencode", "tui.json"), filepath.Join(dir, wantName), filepath.Join(dir, "themes", "gentleman.json"), filepath.Join(dir, "themes", "gentleman-cute.json")} {
+				count := 0
+				for _, path := range paths {
+					if path == want {
+						count++
+					}
+				}
+				if count != 1 {
+					t.Fatalf("backup occurrences of %s = %d; paths=%v", want, count, paths)
+				}
+			}
+			for _, path := range paths {
+				if xdg != filepath.Join(home, ".config") && path == filepath.Join(home, ".config", "opencode", "themes", "gentleman.json") {
+					t.Fatalf("hardcoded theme backup: %s", path)
+				}
+			}
+		})
+	}
+}
+
 // --- helpers ---
 
 func brewProfile() system.PlatformProfile {
@@ -732,6 +781,7 @@ func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 		".config/opencode/opencode.json":              `{"model":"claude"}`,
 		".gemini/GEMINI.md":                           "# Gemini",
 		".cursor/rules/gentle-ai.mdc":                 "# Cursor rules",
+		".config/opencode/tui.json":                   `{"theme":"gentleman"}`,
 	}
 	unmanagedFile := filepath.Join(homeDir, ".claude", "conversation-transcript.md")
 
