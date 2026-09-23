@@ -35,10 +35,16 @@ refuse" (SanctionedCompactRecoveryExits doc, compact_inspect.go).
 2. [pending] Implement: exclude edge-referenced lineages in historicalDispositionExitLineages;
    not-eligible in historicalAuthorityDispositionPlanRecord; update 3 stale comments.
 3. [pending] GREEN + full package suite + gofmt/vet (delegated to gentle-ai-worker).
-4. [pending] Work-unit commit + push on fix/2995-review-store-exit.
-5. [pending] Reply CodeRabbit finding as addressed; maintainer comment requesting
-   type:bug + size:exception labels (cognitive-load check needs the label).
-6. [pending] Native review preflight for the new candidate (RDD switch on).
+4. [done] Work-unit commit 5971f43d + push on fix/2995-review-store-exit (2026-09-23).
+5. [done] CodeRabbit reply posted (discussion_r4082914808); maintainer label comment
+   posted (issuecomment-5795666701) requesting type:bug + size:exception.
+6. [done] Native review: full-branch candidate stopped terminal at
+   lens_context_budget_exceeded (preflight, no authority created). User chose the
+   increment scope: START baseRef=806b2dfa committed-only -> lineage
+   review-843eacd1c1b7fc99, tier medium, 1 lens (review-reliability), 233 lines.
+   Approved + acknowledged/burned same day. One informational advisory finding:
+   R3-successor-side-guard-coverage (compact_inspect.go:347-351, SUGGESTION) —
+   separate later work, no correction opened.
 
 ## Evidence
 
