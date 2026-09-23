@@ -321,6 +321,26 @@ func (err *StoreResetIncompleteError) Error() string {
 	return message
 }
 
+// ErrStoreResetRequiresGitRepository reports that review store reset was attempted outside a Git repository.
+// refusal:by-design operator-knowledge: review store-reset requires a Git repository; only the operator knows where the Git repository checkout is located
+var ErrStoreResetRequiresGitRepository = errors.New("review store-reset requires a Git repository")
+
+// StoreResetRepositoryRequiredError represents a failure when store reset is executed outside a Git repository.
+type StoreResetRepositoryRequiredError struct {
+	Cause error
+}
+
+func (err *StoreResetRepositoryRequiredError) Unwrap() error { return err.Cause }
+
+func (err *StoreResetRepositoryRequiredError) Error() string {
+	// refusal:by-design operator-knowledge: running store-reset requires an existing Git repository; only the operator knows where the repository checkout is located
+	return "review store-reset requires a Git repository; rerun the command from inside a Git repository, or rerun with --cwd pointing at one"
+}
+
+func (err *StoreResetRepositoryRequiredError) Is(target error) bool {
+	return target == ErrStoreResetRequiresGitRepository
+}
+
 // storeResetRoot resolves <git-common-dir>/gentle-ai for one clone.
 //
 // It deliberately does not apply the receipt-driven-development gate. The kill
@@ -332,6 +352,9 @@ func (err *StoreResetIncompleteError) Error() string {
 func storeResetRoot(ctx context.Context, repo string) (root, repository string, err error) {
 	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
+		if ReviewRootResolutionReportsNoRepository(err) {
+			return "", "", &StoreResetRepositoryRequiredError{Cause: err}
+		}
 		return "", "", err
 	}
 	identity := lease.Identity()
@@ -613,6 +636,9 @@ func ResetReviewStore(ctx context.Context, repo string, request StoreResetReques
 	defer cancel()
 	lock, err := storeResetAcquireLease(lockCtx, repo)
 	if err != nil {
+		if ReviewRootResolutionReportsNoRepository(err) {
+			return StoreResetReport{}, &StoreResetRepositoryRequiredError{Cause: err}
+		}
 		// No report is returned with this. Nothing was read under the lease, so
 		// there is no classification this command is entitled to state, and a
 		// report rendered from an unleased read is the same stale picture the
