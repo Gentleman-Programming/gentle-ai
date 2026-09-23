@@ -30,11 +30,14 @@ refuse" (SanctionedCompactRecoveryExits doc, compact_inspect.go).
 
 ## Tasks
 
-1. [in_progress] RED tests: inspection regressions (N=1 and N=2 edge-referenced) +
-   selectorless derivation refusal; update stale guard-test comment.
-2. [pending] Implement: exclude edge-referenced lineages in historicalDispositionExitLineages;
-   not-eligible in historicalAuthorityDispositionPlanRecord; update 3 stale comments.
-3. [pending] GREEN + full package suite + gofmt/vet (delegated to gentle-ai-worker).
+1. [done] RED tests: inspection regressions (N=1 and N=2 edge-referenced) +
+   selectorless derivation refusal; update stale guard-test comment (RED captured on all
+   three, then GREEN).
+2. [done] Implement: exclude edge-referenced lineages in historicalDispositionExitLineages;
+   not-eligible in historicalAuthorityDispositionPlanRecord; update 3 stale comments
+   (landed in 5971f43d).
+3. [done] GREEN + full package suite + gofmt/vet (delegated to gentle-ai-worker):
+   suite ok 319s, gofmt/vet clean, parent re-verified four key tests focused.
 4. [done] Work-unit commit 5971f43d + push on fix/2995-review-store-exit (2026-09-23).
 5. [done] CodeRabbit reply posted (discussion_r4082914808); maintainer label comment
    posted (issuecomment-5795666701) requesting type:bug + size:exception.
