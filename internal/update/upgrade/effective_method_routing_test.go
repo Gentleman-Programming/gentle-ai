@@ -66,8 +66,9 @@ func TestEffectiveMethodWindowsPrecedenceIsUnchanged(t *testing.T) {
 
 // gentleAIImportPath is the module path gentle-ai publishes its command under.
 // It is asserted against the registry below so the tests and the shipped
-// declaration cannot drift apart.
-const gentleAIImportPath = "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai"
+// declaration cannot drift apart. The /vN suffix is not stored here; it is
+// derived at composition time via update.ModulePathForVersion.
+const gentleAIImportPath = "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai"
 
 // registryGentleAI returns the shipped gentle-ai registry entry. Routing tests
 // use the real declaration rather than a hand-built ToolInfo so a regression in
@@ -448,7 +449,7 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 	}
 	for _, required := range []string{
 		"Windows binary distribution and Scoop are temporarily unavailable",
-		"go install " + update.ModulePathForVersion("github.com/gentleman-programming/gentle-ai/cmd/gentle-ai", "gentle-ai", "2.2.0") + "@v2.2.0",
+		"go install " + update.ModulePathForVersion(gentleAIImportPath, "gentle-ai", "2.2.0") + "@v2.2.0",
 	} {
 		if !strings.Contains(result.ManualHint, required) {
 			t.Errorf("manual hint is missing %q: %s", required, result.ManualHint)

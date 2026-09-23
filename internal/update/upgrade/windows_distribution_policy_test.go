@@ -114,7 +114,7 @@ func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 		t.Fatalf("runStrategy beta Windows self-upgrade: %v", err)
 	}
 
-	wantTarget := tool.GoImportPath + "@main"
+	wantTarget := update.ModulePathForVersion(tool.GoImportPath, tool.Repo, r.LatestVersion) + "@main"
 	if gotName != "go" || len(gotArgs) != 2 || gotArgs[0] != "install" || gotArgs[1] != wantTarget {
 		t.Fatalf("go command = %q %v, want go install %s", gotName, gotArgs, wantTarget)
 	}

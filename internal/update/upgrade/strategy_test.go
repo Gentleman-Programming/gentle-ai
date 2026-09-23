@@ -106,6 +106,130 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	}
 }
 
+// TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion is the
+// acceptance scenario for issue #4687: a stable-channel upgrade target whose
+// major differs from the running binary's major must compose a /vN suffix
+// matching the TARGET version, not the running binary. This is what makes a
+// cross-major upgrade resolvable: a v3 binary targeting v4.0.0 composes
+// .../v4/... and a v3 binary targeting v2.0.0 composes .../v2/....
+//
+// The composition happens inside goInstallUpgrade, which is reached from
+// runStrategy only on a Windows profile with Go on PATH and a declared
+// GoImportPath — gentleAISelfUpgradeMethod routes gentle-ai on Linux and
+// macOS to InstallBinary (the minisign-verified release download) and the
+// beta channel bypasses this path through goInstallMainUpgrade. The previous
+// rewrite used a Linux profile and never reached the composition: the
+// routing went straight to binaryUpgrade and the test failed on
+// ErrReleaseTrustUnavailable. The preflight gate inside goInstallUpgrade is
+// satisfied the same way as
+// TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget: a fake binary
+// is written into a temp GOBIN, lookPathFn resolves "gentle-ai" to that
+// path, and execCommand hands a synthetic GOBIN back to goInstallDestinationDir.
+func TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion(t *testing.T) {
+	var tool update.ToolInfo
+	for _, candidate := range update.Tools {
+		if candidate.Name == "gentle-ai" {
+			tool = candidate
+			break
+		}
+	}
+	if tool.GoImportPath == "" {
+		t.Fatal("shipped gentle-ai registry entry must declare GoImportPath")
+	}
+
+	tests := []struct {
+		name       string
+		latestVer  string
+		wantTarget string
+	}{
+		{
+			name:       "v3 binary targeting v4.0.0 composes /v4",
+			latestVer:  "4.0.0",
+			wantTarget: "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0",
+		},
+		{
+			name:       "v3 binary targeting v2.0.0 composes /v2",
+			latestVer:  "2.0.0",
+			wantTarget: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.0.0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gobin := t.TempDir()
+			destination := writeFakeBinary(t, gobin, "gentle-ai.exe")
+
+			origLookPath := lookPathFn
+			t.Cleanup(func() { lookPathFn = origLookPath })
+			lookPathFn = func(string) (string, error) { return destination, nil }
+
+			origExec := execCommand
+			t.Cleanup(func() { execCommand = origExec })
+
+			var gotName string
+			var gotArgs []string
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				if name == "go" && len(args) == 2 && args[0] == "env" {
+					return mockCmd("echo", gobin)
+				}
+				gotName = name
+				gotArgs = args
+				return mockCmd("true")
+			}
+
+			r := update.UpdateResult{
+				Tool:          tool,
+				LatestVersion: tc.latestVer,
+				Status:        update.UpdateAvailable,
+			}
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true, Supported: true}
+
+			if _, err := runStrategy(context.Background(), r, profile); err != nil {
+				t.Fatalf("runStrategy: %v", err)
+			}
+
+			wantArgs := []string{"install", tc.wantTarget}
+			if gotName != "go" || len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
+				t.Fatalf("exec command = %q %v, want %v", gotName, gotArgs, wantArgs)
+			}
+		})
+	}
+}
+
+// TestGentleAIModulePathVersionAware pins the helper used by goProxyBypassEnv
+// and the beta target composition. The /vN suffix tracks the version (D1-A)
+// and an empty version falls back to the running binary's major (D2-A). The
+// test relies on the v3 test binary so the running-major fallback is 3 — no
+// explicit seam pin is needed from the upgrade package because the helper's
+// runningGoMajor is private to internal/update.
+func TestGentleAIModulePathVersionAware(t *testing.T) {
+	tool := update.ToolInfo{
+		Owner: "Gentleman-Programming",
+		Repo:  "gentle-ai",
+	}
+
+	tests := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{name: "explicit v4 target composes /v4", version: "v4.0.0", want: "github.com/gentleman-programming/gentle-ai/v4"},
+		{name: "explicit v2 target composes /v2", version: "v2.0.0", want: "github.com/gentleman-programming/gentle-ai/v2"},
+		{name: "v1 target stays unsuffixed", version: "v1.9.0", want: "github.com/gentleman-programming/gentle-ai"},
+		{name: "empty version falls back to running major /v3", version: "", want: "github.com/gentleman-programming/gentle-ai/v3"},
+		{name: "unparseable main@<sha> falls back to running major /v3", version: "main@abc", want: "github.com/gentleman-programming/gentle-ai/v3"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gentleAIModulePath(tool, tc.version)
+			if got != tc.want {
+				t.Errorf("gentleAIModulePath(_, %q) = %q, want %q", tc.version, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })

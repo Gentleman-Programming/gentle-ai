@@ -558,18 +558,24 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 		}
 	}
 
-	// Pin release installs to their exact version. Beta checks advertise
-	// main@<sha>, which Go installs by resolving the main branch, not by
-	// prepending a v to that display value.
-	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
+	// Pin release installs to their exact version. The /vN suffix is derived
+	// from the target version via ModulePathForVersion so a v2 binary
+	// composing "go install ...@v3.0.1" resolves to .../v3/... and not the
+	// unresolvable /v2 path (issue #4687).
+	target := fmt.Sprintf("%s@v%s", update.ModulePathForVersion(tool.GoImportPath, tool.Repo, latestVersion), latestVersion)
 	betaGentleAI := isBetaGentleAIUpgrade(r)
 	if betaGentleAI {
-		target = tool.GoImportPath + "@main"
+		// Beta: the version advertised is main@<sha>, which is unparseable as
+		// a major number, so the helper falls back to the running binary's
+		// major (D2-A). A cross-major beta upgrade is not client-side
+		// derivable without probing main's go.mod; the running-major fallback
+		// is the honest behavior we can deliver here.
+		target = update.ModulePathForVersion(tool.GoImportPath, tool.Repo, r.LatestVersion) + "@main"
 	}
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
 	if betaGentleAI {
-		cmd.Env = goProxyBypassEnv(cmd.Env, gentleAIModulePath(tool))
+		cmd.Env = goProxyBypassEnv(cmd.Env, gentleAIModulePath(tool, latestVersion))
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
@@ -651,7 +657,10 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 // same risk of writing somewhere the shell does not resolve, so it performs the
 // same non-fatal destination verification.
 func goInstallMainUpgrade(tool update.ToolInfo) error {
-	module := gentleAIModulePath(tool)
+	// The HEAD beta target is unparseable as a version, so the helper falls
+	// back to the running binary's major (D2-A). See goInstallUpgrade for the
+	// cross-major caveat.
+	module := gentleAIModulePath(tool, "")
 
 	destDir, destErr := goInstallDestinationDir()
 
@@ -667,16 +676,18 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 	return nil
 }
 
-func gentleAIModulePath(tool update.ToolInfo) string {
+// gentleAIModulePath returns the module root (github.com/<owner>/<repo>[/vN])
+// for the gentle-ai tool. It does NOT include any /cmd/<tool> subpath — the
+// caller appends "/cmd/gentle-ai@main" when composing the beta install target,
+// and goProxyBypassEnv needs the module root to scope GONOSUMDB/GOPRIVATE/
+// GONOPROXY. The /vN suffix is derived from version via ModulePathForVersion
+// (issue #4687); passing "" forces the running-major fallback.
+func gentleAIModulePath(tool update.ToolInfo, version string) string {
 	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
 	if repository == "github.com//" {
 		repository = "github.com/gentleman-programming/gentle-ai"
 	}
-	// Go derives the module path from the repository plus the major-version
-	// suffix: for major 2 and above the module path must end in /vN or the
-	// toolchain refuses every resolution of that repository, including the
-	// branch pseudo-versions this beta path installs.
-	return repository + "/v3"
+	return update.ModulePathForVersion(repository, tool.Repo, version)
 }
 
 func goProxyBypassEnv(base []string, module string) []string {
