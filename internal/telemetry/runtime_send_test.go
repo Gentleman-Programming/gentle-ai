@@ -247,3 +247,22 @@ func TestRuntimeSendRefusesRedirectAndUserinfo(t *testing.T) {
 		t.Fatal("followed redirect or accepted userinfo/http")
 	}
 }
+
+func TestRuntimeSendPreservesSubpathPrefix(t *testing.T) {
+	home := runtimeHome(t)
+	var observedPath string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observedPath = r.URL.Path
+		_, _ = io.WriteString(w, runtimeAck)
+	}))
+	defer server.Close()
+
+	customEndpoint := server.URL + "/custom-proxy/v1/events"
+	got := SendRuntime(context.Background(), home, runtimeEndpoint(customEndpoint), strings.NewReader(runtimeFixture), server.Client())
+	if got != "stored" {
+		t.Fatalf("expected stored, got %s", got)
+	}
+	if want := "/custom-proxy/v1/runtime-events"; observedPath != want {
+		t.Fatalf("observed path = %q, want %q", observedPath, want)
+	}
+}
