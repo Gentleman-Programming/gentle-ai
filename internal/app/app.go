@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +18,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
@@ -362,8 +360,9 @@ func runSkillRegistry(args []string, stdout io.Writer) error {
 }
 
 // resolveSkillRegistryDirs resolves the working directory (defaulting to the
-// process cwd) and the user home directory used to locate skills.
-func resolveSkillRegistryDirs(cwd string) (string, string, error) {
+// process cwd) and the user home directory used to locate skills. An empty
+// home resolves the process user home directory.
+func resolveSkillRegistryDirs(cwd, home string) (string, string, error) {
 	if cwd == "" {
 		var err error
 		cwd, err = os.Getwd()
@@ -371,124 +370,39 @@ func resolveSkillRegistryDirs(cwd string) (string, string, error) {
 			return "", "", fmt.Errorf("resolve cwd: %w", err)
 		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", fmt.Errorf("resolve home directory: %w", err)
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve home directory: %w", err)
+		}
 	}
 	return cwd, home, nil
 }
 
+// runSkillRegistryRefresh keeps the legacy surface byte-identical (REQ-22.14):
+// primary line only, no per-destination lines and no mirror warning. The
+// engine underneath is the shared unified one (D-13).
 func runSkillRegistryRefresh(args []string, stdout io.Writer) error {
-	cwd := ""
-	force := false
-	quiet := false
-	ensureGitignore := true
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--force", "-f":
-			force = true
-		case "--quiet", "-q":
-			quiet = true
-		case "--no-gitignore":
-			ensureGitignore = false
-		case "--cwd":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--cwd requires a value")
-			}
-			cwd = args[i+1]
-			i++
-		default:
-			return fmt.Errorf("unknown skill-registry refresh argument %q", args[i])
-		}
-	}
-	cwd, home, err := resolveSkillRegistryDirs(cwd)
+	parsed, err := parseSkillIndexRefreshFlags(skillIndexSurfaceLegacy, args)
 	if err != nil {
 		return err
 	}
-	// Startup hooks run refresh from whatever directory the host resolved; a
-	// brand-new non-project directory can resolve to "/", $HOME, or a
-	// markerless folder. Never initialize there: skip silently under --quiet
-	// (a startup hook must not scream) and with a one-line notice otherwise.
-	if reason := skillregistry.RefreshSkip(cwd, home); reason != skillregistry.SkipNone {
-		if !quiet {
-			_, _ = fmt.Fprintf(stdout, "Skill registry refresh skipped (%s): %s is not a project root; run it from a project directory (one containing .git or .atl), or create the project first.\n", reason, cwd)
-		}
+	result, skipped, err := runSharedRefresh(parsed, stdout)
+	if err != nil {
+		return err
+	}
+	if skipped || parsed.quiet {
 		return nil
 	}
-	if ensureGitignore {
-		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
-			return err
-		}
-	}
-	result, err := skillregistry.Regenerate(cwd, home, force)
-	if err != nil {
-		return err
-	}
-	if !quiet {
-		if result.Regenerated {
-			_, _ = fmt.Fprintf(stdout, "Skill registry refreshed (%d skills): %s\n", result.SkillCount, result.Registry)
-		} else {
-			_, _ = fmt.Fprintf(stdout, "Skill registry up to date (%s): %s\n", result.Reason, result.Registry)
-		}
-	}
+	writePrimaryRefreshLine(stdout, result)
 	return nil
 }
 
+// runSkillRegistryList keeps the legacy list output byte-identical
+// (REQ-22.14) over the shared read-only engine.
 func runSkillRegistryList(args []string, stdout io.Writer) error {
-	cwd := ""
-	asJSON := false
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--json":
-			asJSON = true
-		case "--cwd":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--cwd requires a value")
-			}
-			cwd = args[i+1]
-			i++
-		default:
-			return fmt.Errorf("unknown skill-registry list argument %q", args[i])
-		}
-	}
-	cwd, home, err := resolveSkillRegistryDirs(cwd)
-	if err != nil {
-		return err
-	}
-	entries := skillregistry.List(cwd, home)
-
-	if asJSON {
-		type row struct {
-			Name        string `json:"name"`
-			Scope       string `json:"scope"`
-			Description string `json:"description"`
-			Path        string `json:"path"`
-		}
-		rows := make([]row, 0, len(entries))
-		for _, e := range entries {
-			rows = append(rows, row{
-				Name:        e.Name,
-				Scope:       skillregistry.ScopeForPath(cwd, e.Path),
-				Description: e.Description,
-				Path:        e.Path,
-			})
-		}
-		data, err := json.MarshalIndent(rows, "", "  ")
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintln(stdout, string(data))
-		return nil
-	}
-
-	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(stdout, "No skills found.")
-		return nil
-	}
-	for _, e := range entries {
-		_, _ = fmt.Fprintf(stdout, "%s\t%s\t%s\n", e.Name, skillregistry.ScopeForPath(cwd, e.Path), e.Path)
-	}
-	return nil
+	return writeSkillIndexList(skillIndexSurfaceLegacy, args, stdout)
 }
 
 func runUpdate(ctx context.Context, currentVersion string, profile system.PlatformProfile, stdout io.Writer) error {
