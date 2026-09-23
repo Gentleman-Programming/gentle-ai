@@ -556,3 +556,49 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 		t.Fatalf("packages = %#v", settings.Packages)
 	}
 }
+
+func TestReadPiJSONObjectPreservesLargeIntegers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi.json")
+	initial := `{"unrelated_id":9007199254740993}`
+
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	obj, err := readPiJSONObject(path)
+	if err != nil {
+		t.Fatalf("readPiJSONObject() error = %v", err)
+	}
+
+	num, ok := obj["unrelated_id"].(json.Number)
+	if !ok {
+		t.Fatalf("readPiJSONObject() unrelated_id type = %T, want json.Number", obj["unrelated_id"])
+	}
+	if num.String() != "9007199254740993" {
+		t.Fatalf("readPiJSONObject() unrelated_id = %s, want 9007199254740993", num.String())
+	}
+}
+
+func TestMergePiSettingsFilePreservesLargeIntegers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	initial := `{"packages":["npm:other@1.0.0"],"unrelated_id":9007199254740993}`
+
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := mergePiSettingsFile(path); err != nil {
+		t.Fatalf("mergePiSettingsFile() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	if !strings.Contains(string(data), "9007199254740993") {
+		t.Fatalf("merged settings lost integer precision:\n%s", string(data))
+	}
+}

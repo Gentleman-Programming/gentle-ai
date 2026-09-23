@@ -1,6 +1,7 @@
 package filemerge
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -596,4 +597,87 @@ func TestMergeJSONObjects_Issue278_ReplaceSentinelFixesWildcard(t *testing.T) {
 	}
 
 	t.Logf("CONFIRMED: __replace__ produces exactly %d task keys (no wildcard)", len(task))
+}
+
+func TestMergeJSONObjectsPreservesLargeIntegers(t *testing.T) {
+	base := []byte(`{"unrelated_id":9007199254740993,"name":"test"}`)
+	overlay := []byte(`{"other_key":"val"}`)
+
+	merged, err := MergeJSONObjects(base, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjects() error = %v", err)
+	}
+
+	var obj map[string]any
+	dec := json.NewDecoder(bytes.NewReader(merged))
+	dec.UseNumber()
+	if err := dec.Decode(&obj); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+
+	num, ok := obj["unrelated_id"].(json.Number)
+	if !ok {
+		t.Fatalf("unrelated_id type = %T, want json.Number", obj["unrelated_id"])
+	}
+	if num.String() != "9007199254740993" {
+		t.Fatalf("unrelated_id = %s, want 9007199254740993", num.String())
+	}
+}
+
+func TestMergeJSONObjectsPreservesLargeIntegers_Triangulation(t *testing.T) {
+	tests := []struct {
+		name      string
+		base      string
+		overlay   string
+		checkKey  string
+		wantValue string
+	}{
+		{
+			name:      "negative large integer",
+			base:      `{"unrelated_id":-9007199254740993}`,
+			overlay:   `{"touch":"yes"}`,
+			checkKey:  "unrelated_id",
+			wantValue: "-9007199254740993",
+		},
+		{
+			name:      "max int64",
+			base:      `{"max_int64":9223372036854775807}`,
+			overlay:   `{"touch":"yes"}`,
+			checkKey:  "max_int64",
+			wantValue: "9223372036854775807",
+		},
+		{
+			name:      "float preserved",
+			base:      `{"pi_float":3.141592653589793}`,
+			overlay:   `{"touch":"yes"}`,
+			checkKey:  "pi_float",
+			wantValue: "3.141592653589793",
+		},
+		{
+			name:      "nested inside array in object",
+			base:      `{"items":[{"id":9007199254740993}]}`,
+			overlay:   `{"touch":"yes"}`,
+			checkKey:  "items",
+			wantValue: "9007199254740993",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, err := MergeJSONObjects([]byte(tc.base), []byte(tc.overlay))
+			if err != nil {
+				t.Fatalf("MergeJSONObjects() error = %v", err)
+			}
+			if !strings.Contains(string(merged), tc.wantValue) {
+				t.Fatalf("merged JSON does not contain %q:\n%s", tc.wantValue, string(merged))
+			}
+		})
+	}
+}
+
+func TestUnmarshalJSONObjectRejectsTrailingPayload(t *testing.T) {
+	_, err := unmarshalJSONObject([]byte(`{"one":1}{"two":2}`))
+	if err == nil {
+		t.Fatal("unmarshalJSONObject() error = nil, want rejection for trailing JSON payload")
+	}
 }
