@@ -14,6 +14,10 @@ import (
 // every known agent. The shim must enumerate all adapters from the default
 // registry, not just the ones that are installed.
 func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
+	// Pin the hermes scanner entry under the temp home: on machines with
+	// Hermes installed the overrides would point outside of it.
+	t.Setenv("HERMES_HOME", "")
+	t.Setenv("LOCALAPPDATA", "")
 	home := t.TempDir()
 
 	// Create only claude-code config dir — others intentionally absent.
@@ -117,6 +121,9 @@ func TestScanConfigs_PathFieldIsNonEmpty(t *testing.T) {
 // TestScanConfigs_ExistsFalseWhenDirAbsent verifies that agents whose
 // GlobalConfigDir does not exist on disk have Exists=false.
 func TestScanConfigs_ExistsFalseWhenDirAbsent(t *testing.T) {
+	// Same pinning as above: no created dir may resolve to an existing one.
+	t.Setenv("HERMES_HOME", "")
+	t.Setenv("LOCALAPPDATA", "")
 	home := t.TempDir()
 	// No dirs created — all agents should have Exists=false.
 
@@ -174,4 +181,58 @@ func agentNames(configs []ConfigState) []string {
 		names[i] = c.Agent
 	}
 	return names
+}
+
+// TestHermesGlobalConfigDirResolution verifies the hermes scanner entry
+// follows the same resolution order as the hermes adapter: HERMES_HOME first,
+// then the Windows local app data dir, then ~/.hermes. The platform is passed
+// explicitly so every branch is covered on any OS runner.
+func TestHermesGlobalConfigDirResolution(t *testing.T) {
+	homeDir := t.TempDir()
+	localAppData := filepath.Join(t.TempDir(), "LocalAppData")
+
+	t.Run("HERMES_HOME override takes precedence on every platform", func(t *testing.T) {
+		custom := filepath.Join(t.TempDir(), "custom-hermes")
+		t.Setenv("HERMES_HOME", custom)
+		t.Setenv("LOCALAPPDATA", localAppData)
+		for _, goos := range []string{"windows", "linux", "darwin"} {
+			if got := hermesGlobalConfigDirForGOOS(homeDir, goos); got != filepath.Clean(custom) {
+				t.Fatalf("hermesGlobalConfigDirForGOOS(%q) with HERMES_HOME = %q, want %q", goos, got, filepath.Clean(custom))
+			}
+		}
+	})
+
+	t.Run("Windows LOCALAPPDATA fallback when HERMES_HOME unset", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", localAppData)
+		want := filepath.Join(localAppData, "hermes")
+		if got := hermesGlobalConfigDirForGOOS(homeDir, "windows"); got != want {
+			t.Fatalf("hermesGlobalConfigDirForGOOS(windows) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("default fallback without HERMES_HOME", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		for _, goos := range []string{"windows", "linux", "darwin"} {
+			want := filepath.Join(homeDir, ".hermes")
+			if got := hermesGlobalConfigDirForGOOS(homeDir, goos); got != want {
+				t.Fatalf("hermesGlobalConfigDirForGOOS(%q) default = %q, want %q", goos, got, want)
+			}
+		}
+	})
+
+	t.Run("scanner entry matches the helper", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		var hermesPath string
+		for _, c := range knownAgentConfigDirs(homeDir) {
+			if c.Agent == "hermes" {
+				hermesPath = c.Path
+			}
+		}
+		if want := hermesGlobalConfigDir(homeDir); hermesPath != want {
+			t.Fatalf("knownAgentConfigDirs hermes = %q, want %q", hermesPath, want)
+		}
+	})
 }

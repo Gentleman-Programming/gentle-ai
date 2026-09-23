@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,10 @@ import (
 )
 
 func TestDetect(t *testing.T) {
+	// Detect asserts the default config path, so clear the overrides that
+	// would redirect it on real machines (notably LOCALAPPDATA on Windows).
+	t.Setenv("HERMES_HOME", "")
+	t.Setenv("LOCALAPPDATA", "")
 	tests := []struct {
 		name            string
 		lookPathPath    string
@@ -124,9 +129,10 @@ func TestInstallCommand(t *testing.T) {
 }
 
 func TestConfigPaths(t *testing.T) {
+	t.Setenv("HERMES_HOME", "")
 	a := NewAdapter()
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
-	configDir := filepath.Join(homeDir, ".hermes")
+	configDir := ConfigPath(homeDir)
 	configYAML := filepath.Join(configDir, "config.yaml")
 	soulMD := filepath.Join(configDir, "SOUL.md")
 	skillsDir := filepath.Join(configDir, "skills")
@@ -152,6 +158,57 @@ func TestConfigPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigPathResolution(t *testing.T) {
+	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
+	localAppData := filepath.Join(string(filepath.Separator), "LocalAppData", "hermes_appdata")
+
+	t.Run("HERMES_HOME override takes precedence on every platform", func(t *testing.T) {
+		custom := filepath.Join(string(filepath.Separator), "custom", "hermes")
+		t.Setenv("HERMES_HOME", custom)
+		t.Setenv("LOCALAPPDATA", localAppData)
+		for _, goos := range []string{"windows", "linux", "darwin"} {
+			if got := configPathForGOOS(homeDir, goos); got != filepath.Clean(custom) {
+				t.Fatalf("configPathForGOOS(%q) with HERMES_HOME = %q, want %q", goos, got, filepath.Clean(custom))
+			}
+		}
+	})
+
+	t.Run("Windows LOCALAPPDATA fallback when HERMES_HOME unset", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", localAppData)
+		want := filepath.Join(localAppData, "hermes")
+		if got := configPathForGOOS(homeDir, "windows"); got != want {
+			t.Fatalf("configPathForGOOS(windows) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("Windows falls back to home when LOCALAPPDATA empty", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		want := filepath.Join(homeDir, ".hermes")
+		if got := configPathForGOOS(homeDir, "windows"); got != want {
+			t.Fatalf("configPathForGOOS(windows) without LOCALAPPDATA = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("default fallback without HERMES_HOME", func(t *testing.T) {
+		t.Setenv("HERMES_HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		for _, goos := range []string{"windows", "linux", "darwin"} {
+			want := filepath.Join(homeDir, ".hermes")
+			if got := configPathForGOOS(homeDir, goos); got != want {
+				t.Fatalf("configPathForGOOS(%q) default = %q, want %q", goos, got, want)
+			}
+		}
+	})
+
+	t.Run("ConfigPath follows the runtime platform", func(t *testing.T) {
+		if got, want := ConfigPath(homeDir), configPathForGOOS(homeDir, runtime.GOOS); got != want {
+			t.Fatalf("ConfigPath() = %q, want %q (runtime %q)", got, want, runtime.GOOS)
+		}
+	})
 }
 
 func TestCapabilities(t *testing.T) {
