@@ -43,14 +43,14 @@ func stubUpgradeSeams(t *testing.T, check []update.UpdateResult, report upgrade.
 
 func TestRunUpgradeReport_ClassifiesOutcomes(t *testing.T) {
 	tests := []struct {
-		name            string
-		results         []upgrade.ToolUpgradeResult
-		wantStatus      string
-		wantRestart     bool
-		wantManualHint  string
-		wantErr         bool
-		wantToolStatus  []string
-		wantToolCount   int
+		name           string
+		results        []upgrade.ToolUpgradeResult
+		wantStatus     string
+		wantRestart    bool
+		wantManualHint string
+		wantErr        bool
+		wantToolStatus []string
+		wantToolCount  int
 	}{
 		{
 			name: "all tools succeeded without self-tool restart",

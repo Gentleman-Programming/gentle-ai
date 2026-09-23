@@ -279,11 +279,11 @@ func TestSaveTopic_FailureModesAlwaysTerminateChild(t *testing.T) {
 			}
 
 			err := SaveTopic(context.Background(), "engram", []string{"mcp"}, SaveTopicRequest{
-				Title:     "t",
-				Content:   "c",
-				Type:      "config",
-				Project:   "axiom",
-				TopicKey:  "skill-registry",
+				Title:    "t",
+				Content:  "c",
+				Type:     "config",
+				Project:  "axiom",
+				TopicKey: "skill-registry",
 			})
 			if err == nil {
 				t.Fatal("SaveTopic() error = nil, want failure")
