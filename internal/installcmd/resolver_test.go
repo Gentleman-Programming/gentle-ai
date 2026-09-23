@@ -446,11 +446,23 @@ func TestResolveAgentInstall(t *testing.T) {
 }
 
 func TestValidateAgentInstallPreflight(t *testing.T) {
+	t.Cleanup(OverrideNpmView(func(...string) ([]byte, error) {
+		return []byte(`{"typebox":"*","@earendil-works/pi-coding-agent":">=0.85.1"}`), nil
+	}))
+	t.Cleanup(OverridePiVersion(func() ([]byte, error) { return []byte("0.87.0\n"), nil }))
+	piAndNpm := func(file string) (string, error) {
+		if file == "pi" || file == "npm" {
+			return "/usr/bin/" + file, nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+
 	tests := []struct {
 		name        string
 		profile     system.PlatformProfile
 		agent       model.AgentID
 		lookPath    func(string) (string, error)
+		piVersion   func() ([]byte, error)
 		wantErr     bool
 		errContains string
 	}{
@@ -515,6 +527,44 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 				return "", fmt.Errorf("not found")
 			},
 			wantErr: false,
+		},
+		{
+			// A Pi below gentle-pi's peer floor accepts every `pi install` step and
+			// then loads nothing (issue #4508): stop before installing.
+			name:      "pi below the gentle-pi peer floor returns upgrade remediation",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", Supported: true},
+			agent:     model.AgentPi,
+			lookPath:  piAndNpm,
+			piVersion: func() ([]byte, error) { return []byte("0.73.1\n"), nil },
+			wantErr:   true,
+			errContains: "Pi 0.73.1 is older than the 0.85.1 gentle-pi requires.\n" +
+				"Upgrade Pi and retry:\n  sudo npm install -g @earendil-works/pi-coding-agent@latest",
+		},
+		{
+			name:      "pi prerelease of the floor release is still below it",
+			profile:   system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true, NpmWritable: true},
+			agent:     model.AgentPi,
+			lookPath:  piAndNpm,
+			piVersion: func() ([]byte, error) { return []byte("Pi v0.85.1-beta.1\n"), nil },
+			wantErr:   true,
+			errContains: "Pi 0.85.1-beta.1 is older than the 0.85.1 gentle-pi requires.\n" +
+				"Upgrade Pi and retry:\n  npm install -g @earendil-works/pi-coding-agent@latest",
+		},
+		{
+			name:      "pi at the peer floor passes preflight",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", Supported: true},
+			agent:     model.AgentPi,
+			lookPath:  piAndNpm,
+			piVersion: func() ([]byte, error) { return []byte("0.85.1\n"), nil },
+		},
+		{
+			// `pi` is present but its version is unreadable: the install steps
+			// stay the source of truth.
+			name:      "pi with unreadable version passes preflight",
+			profile:   system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true},
+			agent:     model.AgentPi,
+			lookPath:  piAndNpm,
+			piVersion: func() ([]byte, error) { return []byte("unknown\n"), nil },
 		},
 		{
 			// Pi npm gate: pi present but npm absent must fail with Node.js remediation.
@@ -605,6 +655,9 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			origLookPath := cmdLookPath
 			cmdLookPath = wrappedLookPath
 			t.Cleanup(func() { cmdLookPath = origLookPath })
+			if tt.piVersion != nil {
+				t.Cleanup(OverridePiVersion(tt.piVersion))
+			}
 
 			err := ValidateAgentInstallPreflight(tt.profile, tt.agent)
 			if (err != nil) != tt.wantErr {

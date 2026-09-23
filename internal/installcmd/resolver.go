@@ -1,12 +1,20 @@
 package installcmd
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
+
+	"golang.org/x/mod/semver"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
@@ -20,6 +28,26 @@ var osGetenv = os.Getenv
 var cmdGoVersion = func() ([]byte, error) {
 	return exec.Command("go", "version").Output()
 }
+var cmdPiVersion = func() ([]byte, error) { return probe("pi", "--version") }
+var cmdNpmView = func(args ...string) ([]byte, error) {
+	return probe("npm", slices.Concat([]string{"view"}, args)...)
+}
+
+// probe bounds a preflight command so a hung `pi` or a slow registry cannot
+// stall the install; a timeout reads as an unavailable probe.
+func probe(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 5 * time.Second
+	system.EnsureCommandDir(cmd)
+	return cmd.Output()
+}
+
+var (
+	piVersionPattern = regexp.MustCompile(`\bv?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\b`)
+	npmNamePattern   = regexp.MustCompile(`^(@[a-z0-9._~-]+/)?[a-z0-9._~-]+$`)
+)
 
 // CommandSequence represents an ordered list of commands to run in sequence.
 // Each inner slice is a single command with its arguments (e.g., ["brew", "install", "engram"]).
@@ -128,18 +156,62 @@ func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.A
 	case model.AgentKimi:
 		return validateKimiInstallPreflight(profile)
 	case model.AgentPi:
-		return validatePiInstallPreflight()
+		return validatePiInstallPreflight(profile)
 	default:
 		return nil
 	}
 }
 
-func validatePiInstallPreflight() error {
+// validatePiInstallPreflight refuses a Pi below the floor gentle-pi declares,
+// so a deprecated Pi does not accept the packages and then fail to load them.
+// An unreadable version or an unreachable registry never blocks.
+func validatePiInstallPreflight(profile system.PlatformProfile) error {
 	if _, err := cmdLookPath("pi"); err != nil {
 		return fmt.Errorf("Pi requires the `pi` executable in PATH before installing Gentle AI Pi packages")
 	}
+	out, err := cmdPiVersion()
+	installed := "v" + strings.TrimPrefix(piVersionPattern.FindString(string(out)), "v")
+	if err != nil || !semver.IsValid(installed) {
+		return nil
+	}
+	pkg, floor := piPeerFloor()
+	if pkg == "" || semver.Compare(installed, floor) >= 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"Pi %s is older than the %s gentle-pi requires.\nUpgrade Pi and retry:\n  %s",
+		installed[1:], floor[1:], npmGlobalInstallHint(profile, pkg+"@latest"),
+	)
+}
 
-	return nil
+// piPeerFloor reads the Pi package and the ">=x.y.z" floor gentle-pi declares
+// in its peerDependencies; both are empty when npm cannot answer, the name is
+// not an npm package name or the constraint has another shape.
+func piPeerFloor() (pkg, floor string) {
+	out, err := cmdNpmView("gentle-pi", "peerDependencies", "--json")
+	if err != nil {
+		return "", ""
+	}
+	var peers map[string]string
+	if err := json.Unmarshal(out, &peers); err != nil {
+		return "", ""
+	}
+	for _, name := range slices.Sorted(maps.Keys(peers)) {
+		floor, ok := strings.CutPrefix(peers[name], ">=")
+		if ok && strings.HasSuffix(name, "/pi-coding-agent") && npmNamePattern.MatchString(name) && semver.IsValid("v"+floor) {
+			return name, "v" + floor
+		}
+	}
+	return "", ""
+}
+
+// npmGlobalInstallHint is the global npm install a user can paste; Linux with
+// a system npm needs sudo, version managers and other platforms do not.
+func npmGlobalInstallHint(profile system.PlatformProfile, pkg string) string {
+	if profile.OS == "linux" && !profile.NpmWritable {
+		return "sudo npm install -g " + pkg
+	}
+	return "npm install -g " + pkg
 }
 
 // validateNpmInstallPreflight ensures npm (and therefore Node.js) is available
