@@ -222,13 +222,27 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// unreadable, missing, and unexpected entries never gain an exit.
 	historicalExits := historicalDispositionExitLineages(report)
 	dispositionSeed := ""
-	if len(historicalExits) > 0 {
-		for _, lineage := range historicalExits {
-			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: lineage, Operation: CompactRecoveryEdgeExitRepair})
-		}
-	} else if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
+	for _, lineage := range historicalExits {
+		exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: lineage, Operation: CompactRecoveryEdgeExitRepair})
+	}
+	// The derivation runs UNCONDITIONALLY, decoupled from historicalExits:
+	// with historical exits present it must not append a second repair exit
+	// for a historical-class plan (the per-entry exits above already cover
+	// every historical lineage), but a non-historical admitted plan still
+	// feeds dispositionSeed below. That branch is reachable: a store mixing
+	// forensic historical entries (the only diagnostics, so historicalExits
+	// is non-empty) with a loaded content-mismatch pair closes the selectorless
+	// derivation on the EDGE plan. When historicalExits is empty the behavior
+	// is exactly the historical snapshot-identity exit or the seed, unchanged.
+	// A derivation refusal is still not propagated —
+	// it just means no extra plan exists this round, exactly like
+	// InspectCompactPristineAbandonment's per-edge eligibility below never
+	// aborts the whole exit computation.
+	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
 		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
-			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+			if len(historicalExits) == 0 {
+				exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+			}
 		} else {
 			dispositionSeed = plan.SeedSet[0]
 		}

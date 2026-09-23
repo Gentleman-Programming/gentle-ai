@@ -139,8 +139,11 @@ func historicalDispositionSelectors(report CompactRecoveryInspectionReport) []Au
 // total diagnostics exceed one, so the j92 posture is unchanged; only a
 // named entry becomes individually reachable. The named entry MUST be
 // historical (outdated): a malformed, unreadable, missing, or still-loadable
-// entry refuses by name, and a stale expected revision refuses as
-// concurrent-update drift, mirroring the edge path's exact-selector
+// entry refuses by name, a stale expected revision refuses as
+// concurrent-update drift, and an entry any retained report edge still
+// references refuses fail-closed (the per-entry plan assumes the forensic
+// entry is edge-detached and verifies that assumption instead of trusting
+// it), mirroring the edge path's exact-selector
 // semantics. The plan binds the selector (Plan Field Set), so its digest
 // covers exactly the entry this derivation scoped — and the executor's
 // fresh re-derivation under lock re-passes the same selector and reproduces
@@ -162,6 +165,19 @@ func historicalDispositionPlanForSelector(report CompactRecoveryInspectionReport
 	}
 	if selector.SuccessorExpectedRevision != historical.RawDigest {
 		return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector no longer matches the inspected entry %q", ErrConcurrentUpdate, lineage)
+	}
+	// Fail-closed edge-detachment check: a historical entry any retained
+	// report edge still names (on either side) must not be individually
+	// dispositioned while the graph still references it. Real stores cannot
+	// produce this shape today — edges are classified only between loaded
+	// records and a historical entry is forensic bytes — so this guard is
+	// drift hardening: it verifies the derivation's edge-detached assumption
+	// instead of silently trusting it if a future caller ever desynchronizes
+	// the report.
+	for _, edge := range report.Edges {
+		if edge.PredecessorLineageID == lineage || edge.SuccessorLineageID == lineage {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names entry %q, which retained recovery edge %s -> %s still references; resolve that edge before any per-entry disposition", errAuthorityDispositionPlanNotDerivable, lineage, edge.PredecessorLineageID, edge.SuccessorLineageID)
+		}
 	}
 	inventory, err := authorityInventoryRevision(records, report.historical)
 	if err != nil {
