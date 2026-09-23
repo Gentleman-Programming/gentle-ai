@@ -114,8 +114,19 @@ func ProjectSkillDirs(cwd string) []string {
 // destination is written and all three stay byte-identical (Reason ==
 // "cache-hit"). A cwd that does not resolve to an existing directory fails
 // before any write (T-1 path containment).
+// cleanPathArg normalizes a user-supplied path argument (--cwd and the home
+// root) before any filesystem work. Windows accepts both separators in one
+// path while filepath.Clean only applies the *host* separator rules, so on a
+// non-Windows host a backslash-separated argument would resolve to a
+// completely different location. Fold the separators first so the argument
+// resolves identically on every host; --cwd is user input, never a literal
+// filename discovered on disk.
+func cleanPathArg(path string) string {
+	return filepath.Clean(strings.ReplaceAll(path, "\\", "/"))
+}
+
 func Regenerate(cwd, home string, opts RegenerateOptions) (Result, error) {
-	cwd = filepath.Clean(cwd)
+	cwd = cleanPathArg(cwd)
 	home = filepath.Clean(home)
 	if !dirExists(cwd) {
 		return Result{}, fmt.Errorf("workspace root does not exist: %s", cwd)
@@ -226,7 +237,7 @@ func runMirror(mirror MirrorFunc, cwd string, entries []SkillEntry) MirrorOutcom
 // index, without writing the registry, cache, or .gitignore. It is the
 // read-only inspection path behind `gentle-ai skill-registry list`.
 func List(cwd, home string) []SkillEntry {
-	cwd = filepath.Clean(cwd)
+	cwd = cleanPathArg(cwd)
 	home = filepath.Clean(home)
 	existingDirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
 	files, err := findAllSkillFiles(existingDirs)

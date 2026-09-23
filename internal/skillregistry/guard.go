@@ -34,7 +34,7 @@ const (
 // RefreshSkip reports whether a refresh at cwd must be skipped and why.
 // It never writes to the filesystem.
 func RefreshSkip(cwd, home string) SkipReason {
-	cwd = filepath.Clean(cwd)
+	cwd = cleanPathArg(cwd)
 	home = filepath.Clean(home)
 	if cwd == filepath.Dir(cwd) {
 		// "/" on POSIX, a volume root on Windows.
