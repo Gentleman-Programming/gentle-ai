@@ -269,30 +269,32 @@ install_brew() {
 install_go() {
     step "Installing via go install"
 
-    local version="latest"
+    local version
     if [ "${CHANNEL}" = "beta" ]; then
-        version="main"
+        local ref
+        ref="$(git ls-remote --exit-code "https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git" refs/heads/main)" || fatal "Failed to resolve main"
+        version="${ref%%$'\t'*}"
+        if [[ ! "$version" =~ ^[0-9a-f]{40}$ || "$ref" != "$version"$'\t'"refs/heads/main" ]]; then
+            fatal "Could not determine a single main commit"
+        fi
+    else
+        get_latest_version
+        version="$LATEST_VERSION"
     fi
-    # Lowercase the owner portably: ${var,,} needs bash 4+, but macOS ships
-    # bash 3.2, so piping `| bash` would fail with "bad substitution".
-    local owner_lc
-    owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
-    # /v3 is part of the module path, not decoration: Go refuses to resolve a
-    # module whose tags are v3.x unless the import path carries the major
-    # version suffix.
-    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/v3/cmd/${BINARY_NAME}@${version}"
+    local module
+    module="$(resolve_go_module "$version")" || fatal "Failed to resolve Go module"
+    local go_package="${module}/cmd/${BINARY_NAME}@${version}"
 
     info "Running: go install ${go_package}"
-    if [ "${CHANNEL}" = "beta" ]; then
-        prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3
-        prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3
-        prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3
-        export GONOSUMDB GOPRIVATE GONOPROXY
-
-        if ! go install "$go_package"; then
-            fatal "Failed to install via go install. Make sure Go is properly configured."
+    if ! (
+        if [ "${CHANNEL}" = "beta" ]; then
+            prepend_go_env_pattern GONOSUMDB "$module"
+            prepend_go_env_pattern GOPRIVATE "$module"
+            prepend_go_env_pattern GONOPROXY "$module"
+            export GONOSUMDB GOPRIVATE GONOPROXY
         fi
-    elif ! go install "$go_package"; then
+        go install "$go_package"
+    ); then
         fatal "Failed to install via go install. Make sure Go is properly configured."
     fi
 
@@ -310,6 +312,22 @@ install_go() {
 
     success "Installed ${BINARY_NAME} via go install"
 }
+
+# Keep metadata cleanup scoped to this resolver, including failed downloads/parses.
+resolve_go_module() (
+    local version="$1" file metadata module
+    file="$(mktemp)" || fatal "Failed to create Go module metadata file"
+    trap 'rm -f "$file"' EXIT
+    curl -sfL -o "$file" "https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${version}/go.mod" || fatal "Failed to fetch go.mod for ${version}"
+    # Parse syntax without loading dependencies or switching toolchains. A newer
+    # numeric go directive alone does not require the newer toolchain to parse it.
+    metadata="$(GOTOOLCHAIN=local GOWORK=off GOFLAGS='' go mod edit -json "$file")" || fatal "Failed to parse go.mod"
+    module="$(printf '%s\n' "$metadata" | sed -n '/"Module": {/,/^[[:space:]]*},/s/^[[:space:]]*"Path": "\([^"]*\)".*/\1/p')"
+    if [[ ! "$module" =~ ^github\.com/gentleman-programming/gentle-ai(/v([2-9]|[1-9][0-9]+))?$ ]]; then
+        fatal "Unexpected Go module path: ${module}"
+    fi
+    printf '%s\n' "$module"
+)
 
 prepend_go_env_pattern() {
     local name="$1"
