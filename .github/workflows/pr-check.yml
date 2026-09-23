@@ -88,3 +88,44 @@ jobs:
             } else {
               console.log(`✅ PR has type label: ${typeLabels[0]}`);
             }
+
+  check-trusted-author:
+    name: Verify PR Origin & Authority
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR author
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const trustedAuthors = ['igutierrezz', 'igutierrezz-hiberuscom'];
+            const author = (pr.user && pr.user.login ? pr.user.login : '').toLowerCase();
+            const labels = (pr.labels || []).map(l => (l.name || '').toLowerCase());
+            const isAuthorizedExternal = labels.includes('safe:external');
+
+            console.log(`PR Author: ${pr.user ? pr.user.login : 'unknown'}`);
+            console.log(`PR Labels: ${labels.join(', ') || '(none)'}`);
+
+            if (trustedAuthors.includes(author)) {
+              console.log('✅ Autor de confianza verificado (propietario / colaborador principal).');
+              return;
+            }
+
+            if (isAuthorizedExternal) {
+              console.log('✅ PR externa autorizada expresamente mediante la etiqueta "safe:external".');
+              return;
+            }
+
+            core.setFailed(
+              `⛔ PR EXTERNA BLOQUEADA: Creada por @${pr.user ? pr.user.login : 'desconocido'}.\n\n` +
+              'Por seguridad contra merges accidentales de automatizaciones e IA,\n' +
+              'este PR requiere revisión explícita del propietario.\n' +
+              'Para autorizar su merge, @IGutierrezZ debe revisar el código y aplicar la etiqueta "safe:external".'
+            );
+
