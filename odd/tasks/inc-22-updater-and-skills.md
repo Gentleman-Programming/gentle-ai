@@ -35,13 +35,13 @@ Las fases 1-2 se implementaron ya en el carril SDD (`901c8f88`, `ce5e7e85`, inte
 
 Referencia cruzada: `F<n>` = fase `n` de `tasks.md` del cambio SDD.
 
-- [ ] **ODD-0 — Decisión O-2 (F9).** Formato de la columna `Path` en la tabla `## Skills` regenerada de `AGENTS.md`. **Bloquea ODD-3, ODD-5 y ODD-6.** Es decisión de producto humana; ver §8.
+- [x] **ODD-0 — Decisión O-2 (F9).** Formato de la columna `Path` en la tabla `## Skills` regenerada de `AGENTS.md`. **Bloquea ODD-3, ODD-5 y ODD-6.** Es decisión de producto humana; ver §8 (resuelta: ruta relativa).
 - [x] **ODD-1 — Pila de actualización (F3, F4, F5, F6).** `init()` campo a campo en `cmd/axiom`; preflight compartido de escritura del binario + enum `InstallSourceBuild`; `sourceBuildUpgrade` y ruteo Windows; salvaguardas de actualización ancladas a la identidad del fork (`IsSelfToolName`/`IsSelfTool`).
 - [x] **ODD-2 — Identidad TUI y versión (F7, F8).** Branding de la vista combinada `upgrade_sync.go` nombrando `axiom`; `var version = "v0.1.0"` en `cmd/axiom` (mismo símbolo que ya inyecta el linker).
-- [ ] **ODD-3 — Motor del índice de skills (F10, F11, F12).** Requiere ODD-0. Tipos del motor, puerto de espejo y renderizador único de tabla; adopción de marcadores `<!-- axiom:skills-index -->` en `AGENTS.md`; regeneración unificada de los tres destinos desde un único escaneo.
+- [x] **ODD-3 — Motor del índice de skills (F10, F11, F12).** Requiere ODD-0. Tipos del motor, puerto de espejo y renderizador único de tabla; adopción de marcadores `<!-- axiom:skills-index -->` en `AGENTS.md`; regeneración unificada de los tres destinos desde un único escaneo.
 - [x] **ODD-4 — Cliente MCP stdio (F13, F14).** Cliente acotado `SaveTopic` para el espejo Engram, con modos de fallo y terminación garantizada del hijo.
-- [ ] **ODD-5 — CLI `axiom skill index` (F16, F17).** Requiere ODD-3. `runSkillIndex` y parsers compartidos por verbo; enrutado, ayuda y compatibilidad byte a byte de `axiom skill-registry`.
-- [ ] **ODD-6 — Gancho en autoskill (F18).** Requiere ODD-3. Regeneración automática desde `Manager.Approve()` tras promover una skill del buzón.
+- [x] **ODD-5 — CLI `axiom skill index` (F16, F17).** Requiere ODD-3. `runSkillIndex` y parsers compartidos por verbo; enrutado, ayuda y compatibilidad byte a byte de `axiom skill-registry`.
+- [x] **ODD-6 — Gancho en autoskill (F18).** Requiere ODD-3. Regeneración automática desde `Manager.Approve()` tras promover una skill del buzón.
 - [x] **ODD-7 — Cadena Web `upgrade`→`sync` y upstream (F19, F20, F21, F22).** Compuerta de control solo-binario y reporte estructurado; DTO por fases y `RunUpgradeSequence`; presentación web de ambas fases; registro durable `upstream_version: "3.4.0"`.
 - [x] **ODD-8 — Guarda estructural de alcance (F15).** Comprobación de que no se ha tocado superficie prohibida (S1, S5). Se ejecuta como verificación, no como implementación.
 
@@ -62,7 +62,7 @@ Referencia cruzada: `F<n>` = fase `n` de `tasks.md` del cambio SDD.
 
 ## 8. Decisiones abiertas
 
-- **O-2 (bloqueante para ODD-3/5/6):** formato de la columna `Path` de la tabla `## Skills` regenerada de `AGENTS.md`. Alternativa A: ruta descubierta (absoluta), alineada con `.atl/skill-registry.md` y con la «ruta exacta» de la propuesta. Alternativa B: ruta relativa navegable en GitHub. **Pendiente de decisión humana.** Consecuencia ligada: R-3 — la primera regeneración reescribe la tabla de 3 columnas con enlaces a 4 con código.
+- **O-2 (resuelta, 2026-09-23, decisión humana — NO reabrir):** formato de la columna `Path` de la tabla `## Skills` regenerada de `AGENTS.md`: **ruta relativa a la raíz del repositorio** (separada con `/`) para skills de scope `project`; scope `user` conserva la ruta descubierta (absoluta), porque vive fuera del repositorio. `.atl/skill-registry.md` y `axiom skill index list`/`--json` conservan la **ruta descubierta** (absoluta), que es su papel de índice local de máquina. Ambas tablas salen del mismo renderizador (`skillregistry.renderSkillsTable`) con el formato de ruta como parámetro (`PathRepoRelative` para `AGENTS.md`, `PathDiscovered` para el registro). Consecuencia ligada: R-3 — la primera regeneración reescribe la tabla de 3 columnas con enlaces a 4 con código.
 - Resuelta y NO reabrir: el símbolo de versión es `var version = "v0.1.0"` en `cmd/axiom` (REQ-22.8 + cierre de O-1 del diseño).
 
 ## 9. Progreso
@@ -76,12 +76,14 @@ Referencia cruzada: `F<n>` = fase `n` de `tasks.md` del cambio SDD.
 | ODD-7 (F19, F20, F21) | ✅ | `14eaddce` | `go test ./internal/app/...` (142 s, incluye la compuerta solo-binario `TestRunArgs_UpgradeDryRun` y `TestRunArgs_UpgradeOutput_BinariesOnly`) y `./internal/dashboard/...`: en verde |
 | ODD-7 (F22, `upstream_version`) | ✅ | `73c3d952` | `go test ./internal/state/...`: 6 pruebas nuevas en verde; `upstream_version` por defecto `"3.4.0"` sin prefijo `v`; respaldo al escribir; cero consumidores en update/upgrade/sync |
 | ODD-8 (F15, guarda estructural) | ✅ | `14eaddce` | `go test ./internal/skillregistry/...`: en verde |
-| ODD-0 | ⬜ pendiente (decisión humana) | — | — |
-| ODD-3 · ODD-5 · ODD-6 | ⬜ pendientes (requieren O-2) | — | — |
+| ODD-0 (decisión O-2) | ✅ | — (decisión de producto, sin código) | Ruta relativa en `AGENTS.md` (project) / descubierta en `.atl/skill-registry.md`; aplicada como parámetro de `renderSkillsTable` |
+| ODD-3 (F10–F12) | ✅ | `12eb1233` | `go test ./internal/skillregistry/...`: en verde (tabla, literales de estado, adopción de marcadores, tres destinos, contención T-1); `go test ./internal/components/filemerge/...`: en verde con el motor sin tocar |
+| ODD-5 (F16–F17) | ✅ | `12eb1233`, `8709a6fb` | `go test ./internal/app/...` (180 s) y `go test ./cmd/axiom/...`: en verde; compuerta 4 PASS (`skill-registry refresh --quiet --no-gitignore --cwd <ruta>` ⇒ 0 y salida sin `--quiet` = solo la línea primaria) |
+| ODD-6 (F18) | ✅ | `8709a6fb` | `go test ./internal/autoskill/...` y `./cmd/axiom/...` (`TestRunSkillApprove`): en verde; fallo de regeneración ⇒ aviso y exit 0; `Reject` no regenera |
 
 ## 10. Próximo paso
 
-**Resolver O-2 (§8)** — es lo único que falta para poder cerrar ODD-3, ODD-5 y ODD-6. Tras esa decisión, una unidad delegada única implementa el motor del índice de skills, el CLI `axiom skill index` y el gancho en autoskill. ODD-4, ODD-7 y ODD-8 ya están cerrados.
+**Cierre del incremento y PR único** (`exception-ok`): ODD-0 a ODD-8 están todos cerrados. Falta únicamente la decisión humana de abrir el PR único contra `main` (fuera del alcance de las unidades de implementación).
 
 ## 11. Racional de cambios aceptados
 
