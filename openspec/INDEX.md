@@ -1,8 +1,8 @@
 # Catálogo Maestro de Especificaciones Vivas — Axiom
 
 > **Proyecto:** Axiom (Spec-Driven Development Platform)
-> **Última Sincronización:** 2026-09-23 07:40:47 UTC
-> **Total Dominios:** 54 | **Total Requerimientos:** 340 | **Total Escenarios BDD:** 532
+> **Última Sincronización:** 2026-09-23 12:58:17 UTC
+> **Total Dominios:** 59 | **Total Requerimientos:** 370 | **Total Escenarios BDD:** 565
 
 ---
 
@@ -12,8 +12,12 @@
 | :--- | :--- | :---: | :---: | :--- |
 | `antigravity-support` | Antigravity support | 4 | 4 | [Ver Spec](specs/antigravity-support/spec.md) |
 | `autoskills` | Especificación de Requerimientos: Autoskills (midudev/autoskills) y Minería Heurística con Gobernanza Human-in-the-Loop | 13 | 17 | [Ver Spec](specs/autoskills/spec.md) |
+| `axiom-binary-ci-coverage` | Especificación Viva: Cobertura de Integración Continua sobre el Binario Canónico | 2 | 2 | [Ver Spec](specs/axiom-binary-ci-coverage/spec.md) |
+| `axiom-distribution-identity` | Especificación Viva: Identidad de Distribución de Axiom | 8 | 8 | [Ver Spec](specs/axiom-distribution-identity/spec.md) |
 | `axiom-sdd-cli-integration` | Especificación de Requerimientos: Integración de Comandos SDD en la CLI axiom (INC-13) | 4 | 6 | [Ver Spec](specs/axiom-sdd-cli-integration/spec.md) |
+| `axiom-skills-index-governance` | Especificación Viva: Gobernanza del Índice Unificado de Skills | 5 | 5 | [Ver Spec](specs/axiom-skills-index-governance/spec.md) |
 | `axiom-tui-branding` | Especificación de Requerimientos: Unificación de TUI Bubbletea, Comandos de Ecosistema en CLI axiom y Pasarela de gentle-ai (INC-14) | 4 | 9 | [Ver Spec](specs/axiom-tui-branding/spec.md) |
+| `axiom-updater-resilience` | Especificación Viva: Resiliencia y Gobernanza del Actualizador Autónomo de Axiom | 9 | 9 | [Ver Spec](specs/axiom-updater-resilience/spec.md) |
 | `axiom-user-state-and-env` | Especificación de Requerimientos: Unificación de Estado en ~/.axiom y Variables AXIOM_* (INC-12) | 3 | 5 | [Ver Spec](specs/axiom-user-state-and-env/spec.md) |
 | `dashboard-sdd-orchestration` | Especificación de Requerimientos: Orquestación Interactiva SDD y Creación de Cambios en Dashboard Web y CLI (INC-15) | 5 | 10 | [Ver Spec](specs/dashboard-sdd-orchestration/spec.md) |
 | `engram-protocol-injection` | Engram protocol injection Specification | 5 | 12 | [Ver Spec](specs/engram-protocol-injection/spec.md) |
@@ -62,6 +66,7 @@
 | `structured-handoffs` | Especificación Viva: Handoffs Estructurados y Ciclo de Vida de Transición | 7 | 13 | [Ver Spec](specs/structured-handoffs/spec.md) |
 | `tui-spanish-localization` | Especificación Viva: Localización Integral al Castellano y Desacoplamiento de Avisos en la TUI (Axiom) | 4 | 9 | [Ver Spec](specs/tui-spanish-localization/spec.md) |
 | `tui-ui-parity` | Especificación Viva: Paridad Bidireccional entre TUI y Web UI | 10 | 11 | [Ver Spec](specs/tui-ui-parity/spec.md) |
+| `upstream-absorption-protocol` | Especificación Viva: Protocolo de Absorción por Tandas desde Upstream | 6 | 9 | [Ver Spec](specs/upstream-absorption-protocol/spec.md) |
 | `visual-decoupling` | Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom) | 4 | 7 | [Ver Spec](specs/visual-decoupling/spec.md) |
 | `workspace-topology` | Especificación Viva: Topología de Workspace y CLI de Axiom | 7 | 15 | [Ver Spec](specs/workspace-topology/spec.md) |
 
@@ -121,6 +126,40 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-6.2]** Interfaz Web SPA para el Buzón de Skills
   - *Escenario BDD:* Aprobación visual de una skill desde la interfaz web
 
+### Dominio: `axiom-binary-ci-coverage` — Especificación Viva: Cobertura de Integración Continua sobre el Binario Canónico
+
+El pipeline de CI DEBE construir y ejercitar el binario canónico `cmd/axiom`, incluida su superficie exclusiva, asegurando que los comandos propios del fork no regresionen ni dependan exclusivamente del shim de compatibilidad.
+
+**Archivo:** [`specs/axiom-binary-ci-coverage/spec.md`](specs/axiom-binary-ci-coverage/spec.md)
+
+- **[REQ-20.15]** Construcción y ejercicio bloqueante de la superficie exclusiva de axiom
+  - *Escenario BDD:* Humo bloqueante sobre la superficie exclusiva
+- **[REQ-20.16]** Ventana informativa acotada y registrada para superficie roja
+  - *Escenario BDD:* Ventana informativa con inventario e incremento sucesor
+
+### Dominio: `axiom-distribution-identity` — Especificación Viva: Identidad de Distribución de Axiom
+
+Contrato de nombre publicado por clase de superficie: instalador y tap, compuertas de release, workflows de CI, shim de `crosslane`, namespace de protocolo en `contracts/**`, ruta de módulo Go y nombres de servicio de telemetría de despliegue. Distingue interoperabilidad (lo que lee una máquina, no renombrable sin romper consumidores) de identidad (lo que lee un humano, renombrable).
+
+**Archivo:** [`specs/axiom-distribution-identity/spec.md`](specs/axiom-distribution-identity/spec.md)
+
+- **[REQ-20.7]** Taxonomía de interoperabilidad vs. identidad
+  - *Escenario BDD:* El namespace de contracts/** se clasifica como interoperabilidad
+- **[REQ-20.8]** Publicación y compuertas de release bajo identidad propia
+  - *Escenario BDD:* Los activos publicados usan la identidad de Axiom
+- **[REQ-20.9]** Ruta de módulo Go migrada a /v3
+  - *Escenario BDD:* Migración mecánica completa de la ruta de módulo
+- **[REQ-20.10]** Namespace de protocolo en contracts/** sin cambios
+  - *Escenario BDD:* contracts/** permanece sin cambios
+- **[REQ-20.11]** Pasarela gentle-ai y shim de crosslane conservados
+  - *Escenario BDD:* cmd/gentle-ai emite su aviso de deprecación
+- **[REQ-20.12]** Nombres de servicio de telemetría de despliegue
+  - *Escenario BDD:* Los nombres de servicio de telemetría se renombran
+- **[REQ-20.13]** Raíz de respaldos resuelta exclusivamente a través de internal/backup
+  - *Escenario BDD:* Un escritor de producción resuelve la raíz a través del paquete
+- **[REQ-20.14]** Guarda ejecutable contra rutas literales de raíz de respaldos
+  - *Escenario BDD:* La guarda pasa cuando todos los escritores usan la función canónica
+
 ### Dominio: `axiom-sdd-cli-integration` — Especificación de Requerimientos: Integración de Comandos SDD en la CLI axiom (INC-13)
 
 <!-- Especificación Viva generada a partir de '2026-09-16-inc-13-sdd-commands-axiom-cli-integration' -->
@@ -137,6 +176,23 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
 - **[REQ-13.4]** Referencia exclusiva a la CLI axiom en prompts
   - *Escenario BDD:* Verificación de sintaxis de comandos en sdd-orchestrator-sections.md
   - *Escenario BDD:* Comandos slash de OpenCode apuntando a axiom
+
+### Dominio: `axiom-skills-index-governance` — Especificación Viva: Gobernanza del Índice Unificado de Skills
+
+Gobernanza del catálogo de habilidades (skills) de agentes en tres destinos sincronizados desde un único escaneo (`.atl/skill-registry.md`, sección gestionada `## Skills` en `AGENTS.md` y tópico persistente en Engram MCP), con soporte de adopción atómica mediante marcadores canónicos y gancho no transaccional tras promociones en `autoskill`.
+
+**Archivo:** [`specs/axiom-skills-index-governance/spec.md`](specs/axiom-skills-index-governance/spec.md)
+
+- **[REQ-22.10]** Superficie CLI del índice de skills
+  - *Escenario BDD:* Consulta del índice desde CLI
+- **[REQ-22.11]** Regeneración unificada en tres destinos desde un único escaneo
+  - *Escenario BDD:* Regeneración exitosa en los tres destinos
+- **[REQ-22.12]** Reemplazo atómico y marcado de ## Skills en AGENTS.md
+  - *Escenario BDD:* Idempotencia en la sustitución de marcadores
+- **[REQ-22.13]** Disparo automático del índice desde autoskill
+  - *Escenario BDD:* Aprobación de skill promueve e indexa
+- **[REQ-22.14]** Compatibilidad del verbo skill-registry
+  - *Escenario BDD:* Invocación por scripts externos
 
 ### Dominio: `axiom-tui-branding` — Especificación de Requerimientos: Unificación de TUI Bubbletea, Comandos de Ecosistema en CLI axiom y Pasarela de gentle-ai (INC-14)
 
@@ -157,6 +213,31 @@ Definir de forma rigurosa, ejecutable y verificable los requerimientos funcional
   - *Escenario BDD:* Diagnóstico del ecosistema mediante axiom doctor
 - **[REQ-14.4]** Pasarela de compatibilidad y deprecación de gentle-ai
   - *Escenario BDD:* Advertencia informativa de deprecación al invocar gentle-ai
+
+### Dominio: `axiom-updater-resilience` — Especificación Viva: Resiliencia y Gobernanza del Actualizador Autónomo de Axiom
+
+Estrategias y salvaguardas de actualización del binario `axiom` para entornos Windows, macOS y Linux: resolución segura del destino de instalación, vía resiliente `sourceBuildUpgrade`, encadenamiento `upgrade` ➔ `sync` en Web UI y TUI, y preservación del contrato CLI solo-binario.
+
+**Archivo:** [`specs/axiom-updater-resilience/spec.md`](specs/axiom-updater-resilience/spec.md)
+
+- **[REQ-22.1]** Ejecución segura de la actualización en Windows
+  - *Escenario BDD:* Degradación manual segura ante destinos disjuntos
+- **[REQ-22.2]** Predicado de identidad del módulo para Go install
+  - *Escenario BDD:* Ruteo condicionado por resolubilidad de módulo
+- **[REQ-22.3]** Salvaguardas de actualización ancladas a la identidad del fork
+  - *Escenario BDD:* Verificación de binario en ejecución
+- **[REQ-22.4]** Endpoint Web UI encadena upgrade ➔ sync con reporte consolidado
+  - *Escenario BDD:* Secuencia completada en el Dashboard
+- **[REQ-22.5]** No-regresión del verbo CLI axiom upgrade
+  - *Escenario BDD:* Ejecución de axiom upgrade desde consola
+- **[REQ-22.6]** Paridad TUI: encadenamiento y protección de reinicio
+  - *Escenario BDD:* Vista de actualización en TUI
+- **[REQ-22.7]** Identidad visible del fork en vistas de actualización
+  - *Escenario BDD:* Textos de interfaz limpios
+- **[REQ-22.8]** Versión de build visible y consistente
+  - *Escenario BDD:* Inyección de versión en tiempo de enlace
+- **[REQ-22.9]** Registro durable de la versión upstream de referencia
+  - *Escenario BDD:* Conservación de la versión upstream de referencia
 
 ### Dominio: `axiom-user-state-and-env` — Especificación de Requerimientos: Unificación de Estado en ~/.axiom y Variables AXIOM_* (INC-12)
 
@@ -1252,7 +1333,7 @@ Permite a los usuarios operar las tareas de mantenimiento, diagnóstico y config
   - *Escenario BDD:* Consulta de diagnóstico de salud del sistema
 - **[REQ-17.2]** Sincronización y Actualización Reactiva de Herramientas en Web UI
   - *Escenario BDD:* Ejecución de sincronización de configuraciones
-  - *Escenario BDD:* Ejecución de comprobación y actualización de herramientas
+  - *Escenario BDD:* Ejecución de actualización encadenada a sincronización
 - **[REQ-17.3]** Gestión Visual de Respaldos en Web UI
   - *Escenario BDD:* Listado y creación de un respaldo desde el navegador
 - **[REQ-17.4]** Inspección y Configuración de Modelos de IA en Web UI
@@ -1269,6 +1350,28 @@ Permite a los usuarios operar las tareas de mantenimiento, diagnóstico y config
   - *Escenario BDD:* Inspección de relevo formal en la TUI
 - **[REQ-17.10]** Pantalla de Catálogo de Especificaciones Vivas en TUI
   - *Escenario BDD:* Sincronización del catálogo maestro desde la TUI
+
+### Dominio: `upstream-absorption-protocol` — Especificación Viva: Protocolo de Absorción por Tandas desde Upstream
+
+Método normativo de absorción de commits de upstream por tandas temáticas: deriva obligatoriamente la lista de ficheros de cada tanda desde el commit de origen, exige verificación sin filtrar, comprueba el inventario de no-reversión y las rutas protegidas en cada tanda, y sostiene el registro durable de absorción con su espejo en Engram.
+
+**Archivo:** [`specs/upstream-absorption-protocol/spec.md`](specs/upstream-absorption-protocol/spec.md)
+
+- **[REQ-20.1]** Derivación obligatoria de la lista de ficheros de una tanda
+  - *Escenario BDD:* Lista de ficheros derivada aceptada
+  - *Escenario BDD:* Lista de ficheros fijada a mano rechazada
+- **[REQ-20.2]** Verificación sin filtrar
+  - *Escenario BDD:* Verificación completa aceptada
+  - *Escenario BDD:* Verificación filtrada rechazada
+- **[REQ-20.3]** Inventario de no-reversión por tanda
+  - *Escenario BDD:* Reversión de una divergencia firme rechazada
+- **[REQ-20.4]** Rutas protegidas fuera de alcance
+  - *Escenario BDD:* Diff que toca una ruta protegida rechazado
+- **[REQ-20.5]** Estructura y estados del registro durable de absorción
+  - *Escenario BDD:* Fila completa para un commit absorbido
+  - *Escenario BDD:* Fila con motivo para un commit descartado
+- **[REQ-20.6]** Completitud del registro al cierre, espejo en Engram e inmutabilidad de las filas
+  - *Escenario BDD:* Registro completo con 91 filas al cierre
 
 ### Dominio: `visual-decoupling` — Especificación de Requerimientos: Desacoplamiento Visual y Limpieza de Marca (Axiom)
 

@@ -1,0 +1,12 @@
+schema: axiom.sdd-gate-ledger/v1
+change: inc-22-axiom-updater-and-skills-index-governance
+records:
+    - gate: integration
+      decision: approved
+      reason: 'PR #45 fusionado en main'
+      evidence_kind: pr_merged
+      evidence_ref: d3c640fd
+      evidence_base_ref: main
+      verified: true
+      actor: cli
+      recorded_at: 2026-09-23T12:52:48.9976894Z

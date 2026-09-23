@@ -23,7 +23,7 @@ El servidor HTTP local DEBE exponer el endpoint `GET /api/ecosystem/doctor` que 
 ---
 
 ### Requirement: Sincronización y Actualización Reactiva de Herramientas en Web UI (REQ-17.2)
-El servidor HTTP local DEBE exponer los endpoints `POST /api/ecosystem/sync` y `POST /api/ecosystem/upgrade` para disparar las operaciones equivalentes a `axiom sync` y `axiom upgrade`. El frontend web DEBE ofrecer botones de acción interactiva en la pestaña `⚙️ Ecosistema & Herramientas` y mostrar un registro de salida con los resultados de la operación.
+El servidor HTTP local DEBE exponer los endpoints `POST /api/ecosystem/sync` y `POST /api/ecosystem/upgrade`. El endpoint `POST /api/ecosystem/upgrade` DEBE ejecutar secuencialmente la cadena `upgrade` ➔ `sync` con reporte estructurado por fases (`phases.upgrade`, `phases.sync`), omitiendo `sync` de forma segura si `upgrade` exige reinicio del proceso (`restart_required: true`). El frontend web DEBE ofrecer botones de acción interactiva en la pestaña `⚙️ Ecosistema & Herramientas` y mostrar un registro de salida con los resultados detallados de la operación.
 
 #### Scenario: Ejecución de sincronización de configuraciones
 - **DADO** la pestaña de Ecosistema en el Dashboard Web
@@ -32,12 +32,12 @@ El servidor HTTP local DEBE exponer los endpoints `POST /api/ecosystem/sync` y `
 - **ENTONCES** el servidor ejecuta la sincronización de archivos gestionados y reglas de agentes
 - **Y** responde con código `200 OK` y el resumen de archivos sincronizados en formato JSON
 
-#### Scenario: Ejecución de comprobación y actualización de herramientas
+#### Scenario: Ejecución de actualización encadenada a sincronización
 - **DADO** la pestaña de Ecosistema en el Dashboard Web
 - **CUANDO** el usuario pulsa el botón "Actualizar Herramientas"
 - **Y** se envía una petición `POST /api/ecosystem/upgrade`
-- **ENTONCES** el servidor comprueba versiones disponibles y actualiza componentes si procede
-- **Y** retorna el informe de actualización en formato JSON
+- **ENTONCES** el servidor comprueba versiones, actualiza binarios y encadena la sincronización de agentes si no se requiere reinicio
+- **Y** retorna el informe consolidado por fases en formato JSON
 
 ---
 
