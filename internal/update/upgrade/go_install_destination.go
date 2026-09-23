@@ -83,6 +83,14 @@ func normalizeBinaryPathForOS(path, osName string) string {
 	if path == "" {
 		return ""
 	}
+	// Windows accepts both separators inside one path, but filepath.Clean only
+	// applies the *host* separator rules: on a non-Windows test host a
+	// backslash path never collapses onto its slash twin. Fold the separators
+	// explicitly whenever the compared platform is Windows so the comparison
+	// is byte-identical on every host (osName is a parameter for exactly this).
+	if osName == "windows" {
+		path = strings.ReplaceAll(path, "\\", "/")
+	}
 	path = absoluteBinaryPath(path)
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved

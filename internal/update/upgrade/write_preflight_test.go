@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,8 +49,10 @@ func TestPreflightWindowsSelfBinaryWrite(t *testing.T) {
 
 	t.Run("destination and active both resolvable and distinct returns ManualFallbackError naming both paths", func(t *testing.T) {
 		goPath := t.TempDir()
-		destination := goPath + `\bin\axiom.exe`
-		active := t.TempDir() + `\active\axiom.exe`
+		// filepath.Join so the expectation is exactly what
+		// preflightWindowsSelfBinaryWrite computes on the running host.
+		destination := filepath.Join(goPath, "bin", "axiom.exe")
+		active := filepath.Join(t.TempDir(), "active", "axiom.exe")
 
 		execCommand = mockGoEnv(map[string]string{"GOBIN": "", "GOPATH": goPath})
 		lookPathFn = func(string) (string, error) { return active, nil }
@@ -99,6 +102,10 @@ func TestPreflightWindowsSelfBinaryWrite(t *testing.T) {
 
 	t.Run("same path returns nil", func(t *testing.T) {
 		goPath := t.TempDir()
+		// Deliberately backslash-separated: the same path as the filepath.Join
+		// form preflightWindowsSelfBinaryWrite computes for the destination.
+		// Windows folds both separators into one path, so the comparison has to
+		// as well — on every host, not only on Windows.
 		destination := goPath + `\bin\axiom.exe`
 		execCommand = mockGoEnv(map[string]string{"GOBIN": "", "GOPATH": goPath})
 		lookPathFn = func(string) (string, error) { return destination, nil }

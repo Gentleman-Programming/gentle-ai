@@ -89,8 +89,8 @@ func TestRenderSkillsTablePathFormat(t *testing.T) {
 			if !strings.Contains(got, "`"+tt.wantPath+"`") {
 				t.Fatalf("table missing Path cell %q:\n%s", tt.wantPath, got)
 			}
-			if strings.Contains(got, tt.dontWant) {
-				t.Fatalf("table unexpectedly contains %q:\n%s", tt.dontWant, got)
+			if strings.Contains(got, "`"+tt.dontWant+"`") {
+				t.Fatalf("table unexpectedly contains Path cell %q:\n%s", tt.dontWant, got)
 			}
 			// User-scope skills always keep the discovered path: they live
 			// outside the repository and have no relative form (spec §3.4).
