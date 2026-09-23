@@ -254,6 +254,36 @@ Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/ge
 
 <div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
+## Built with Gentle-AI
+
+Shipped something with Gentle-AI? Wear the rose. Paste this into your README and the badge links back here:
+
+<div align="center">
+
+<a href="https://github.com/Gentleman-Programming/gentle-ai">
+  <img width="280" src="docs/assets/brand/built-with-gentle-ai.png" alt="Built with Gentle-AI" />
+</a>
+
+</div>
+
+```html
+<a href="https://github.com/Gentleman-Programming/gentle-ai">
+  <img width="220" src="https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png" alt="Built with Gentle-AI" />
+</a>
+```
+
+Prefer plain Markdown?
+
+```markdown
+[![Built with Gentle-AI](https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png)](https://github.com/Gentleman-Programming/gentle-ai)
+```
+
+Keep the image URL exactly as shown — it is how I find and feature the projects that carry the badge.
+
+<div align="right"><a href="#top">Back to top</a></div>
+
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+
 ## About the author
 
 Built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming): 15 years of enterprise architecture, a community of thousands of developers testing these tools daily, and one rule for AI-assisted work — **verifying beats generating**.
