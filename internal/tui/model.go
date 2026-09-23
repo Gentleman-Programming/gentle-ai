@@ -1021,6 +1021,18 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(updateCmd, advisoryCmd, openCodePresentationCommand())
 }
 
+func (m *Model) syncModelPickerViewport() {
+	reservedRows := 0
+	if m.Screen == ScreenProfileCreate {
+		reservedRows = 7
+	}
+	m.ModelPicker.Viewport = screens.ModelPickerViewport{
+		Width:        m.Width,
+		Height:       m.Height,
+		ReservedRows: reservedRows,
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case openCodePresentationMsg:
@@ -1029,6 +1041,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
+		m.syncModelPickerViewport()
 		m.clampAdvisoryScroll()
 		return m, nil
 	case TickMsg:
@@ -4230,6 +4243,7 @@ func (m *Model) setScreen(next Screen) {
 	}
 	m.PreviousScreen = m.Screen
 	m.Screen = next
+	m.syncModelPickerViewport()
 	m.Cursor = 0
 	// Safe default: start on "Keep current version" (index 2) so an accidental
 	// Enter press does not trigger an upgrade.
