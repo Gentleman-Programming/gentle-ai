@@ -42,3 +42,5 @@ Claimed 2026-09-23 (issuecomment-5796980665). Branch fix/4882-telemetry-incremen
   go build ./... ok; supplementary GOOS=windows build of internal/telemetry ok.
 
 - 2026-09-23: worker RED `Counters.Syncs = 1, want 20` (broken-lock sabotage, Linux); GREEN zero lost both configs; suite ok 8.2s; gofmt/vet/GOOS=windows clean. Review approved+burned same day. Pending external: type:bug label + Windows lane on PR #4914.
+
+- CI 2026-09-23: Unit Tests red once on TestDocumentedInvocationsRunAsDocumented/executed/sync_# (TempDir RemoveAll cleanup race, internal/app). Triaged as pre-existing environment flake: telemetry writer dev-gated off in this job, diff adds no writer/file, local x15 green branch+base. Triage comment on PR (issuecomment-5797855289). type:bug label pending maintainer.
