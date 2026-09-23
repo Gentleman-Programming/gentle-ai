@@ -196,7 +196,9 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 
 func gentleAIUpgradeSucceeded(report upgrade.UpgradeReport) (string, bool) {
 	for _, r := range report.Results {
-		if r.ToolName == "gentle-ai" && r.Status == upgrade.UpgradeSucceeded {
+		// Identity predicate (D-01/D-08): must survive the init() rename to
+		// "axiom", exactly like every other self-tool safeguard (REQ-22.3).
+		if update.IsSelfToolName(r.ToolName) && r.Status == upgrade.UpgradeSucceeded {
 			return strings.TrimPrefix(r.NewVersion, "v"), true
 		}
 	}

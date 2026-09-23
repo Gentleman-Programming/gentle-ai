@@ -3880,7 +3880,7 @@ func (m Model) startUpgradeSync() tea.Cmd {
 
 func reportUpgradedGentleAI(report upgrade.UpgradeReport) bool {
 	for _, result := range report.Results {
-		if result.ToolName == "gentle-ai" && result.Status == upgrade.UpgradeSucceeded {
+		if update.IsSelfToolName(result.ToolName) && result.Status == upgrade.UpgradeSucceeded {
 			return true
 		}
 	}
@@ -3894,7 +3894,7 @@ func (m Model) GentleAIUpgradeVersion() (string, bool) {
 		return "", false
 	}
 	for _, result := range m.UpgradeReport.Results {
-		if result.ToolName == "gentle-ai" && result.Status == upgrade.UpgradeSucceeded {
+		if update.IsSelfToolName(result.ToolName) && result.Status == upgrade.UpgradeSucceeded {
 			return strings.TrimPrefix(result.NewVersion, "v"), true
 		}
 	}

@@ -465,13 +465,19 @@ func (s *Server) handleSkillsApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.service.ApproveSkill(req.Name); err != nil {
+	warning, err := s.service.ApproveSkill(req.Name)
+	if err != nil {
 		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	message := fmt.Sprintf("Skill '%s' aprobada e instalada con éxito", req.Name)
+	if warning != "" {
+		// Warning, never an error: the promotion stands (REQ-22.13).
+		message += " (aviso: " + warning + ")"
+	}
 	s.respondJSON(w, http.StatusOK, map[string]string{
 		"status":  "approved",
-		"message": fmt.Sprintf("Skill '%s' aprobada e instalada con éxito", req.Name),
+		"message": message,
 	})
 }
 
@@ -627,7 +633,7 @@ func (s *Server) handleEcosystemUpgrade(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	resp, err := s.service.RunUpgrade()
+	resp, err := s.service.RunUpgradeSequence()
 	if err != nil {
 		s.respondJSON(w, http.StatusInternalServerError, resp)
 		return

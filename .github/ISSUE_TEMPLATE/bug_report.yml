@@ -9,10 +9,6 @@ body:
         ## 📋 How this works
 
         1. **Submit** this bug report → it gets the `status:needs-review` label automatically
-        2. A **maintainer reviews** it and adds `status:approved` (or closes it as invalid/duplicate)
-        3. **Only then** should you (or anyone) open a PR to fix it
-
-        PRs that fix issues without `status:approved` will be automatically rejected.
 
   - type: checkboxes
     id: preflight
@@ -20,8 +16,6 @@ body:
       label: Pre-flight Checklist
       options:
         - label: I have searched [existing issues](https://github.com/Gentleman-Programming/gentle-ai/issues) and this is not a duplicate
-          required: true
-        - label: I understand that PRs will be rejected if the linked issue does not have `status:approved`
           required: true
 
   - type: textarea

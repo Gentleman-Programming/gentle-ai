@@ -1,6 +1,6 @@
 ---
 name: gentle-ai-collab-perfect
-description: "Trigger: contributing to Gentleman-Programming/gentle-ai as an external collaborator. Strict issue-first workflow, honest PR bodies, contributor-vs-maintainer scope, chained-PR strategy, verification protocol, docstring coverage. Load whenever the active repo is Gentleman-Programming/gentle-ai and any part of the contribution flow is in scope: opening an issue, drafting or editing a PR body, splitting a change into chained/stacked PRs, or auditing a PR before requesting review."
+description: "Trigger: contributing to Gentleman-Programming/gentle-ai as an external collaborator. Honest PR bodies, contributor-vs-maintainer scope, chained-PR strategy, verification protocol, docstring coverage. Load whenever the active repo is Gentleman-Programming/gentle-ai and any part of the contribution flow is in scope: opening an issue, drafting or editing a PR body, splitting a change into chained/stacked PRs, or auditing a PR before requesting review."
 license: Apache-2.0
 metadata:
   author: ardelperal
@@ -33,11 +33,11 @@ Before recommending any contribution action, inspect the relevant current source
 
 | Source | What it tells you |
 |---|---|
-| `CONTRIBUTING.md` | Issue-first workflow, label taxonomy, branch naming regex `^(feat\|fix\|chore\|docs\|style\|refactor\|perf\|test\|build\|ci\|revert)\/[a-z0-9._-]+$`, Conventional Commits format, 400-line review budget |
-| `.github/PULL_REQUEST_TEMPLATE.md` | Required PR body sections (Linked Issue, PR Type, Summary, Changes, Test Plan, Automated Checks, Contributor Checklist, Notes for Reviewers) |
+| `CONTRIBUTING.md` | Contribution workflow, label taxonomy, branch naming regex `^(feat\|fix\|chore\|docs\|style\|refactor\|perf\|test\|build\|ci\|revert)\/[a-z0-9._-]+$`, Conventional Commits format, 400-line review budget |
+| `.github/PULL_REQUEST_TEMPLATE.md` | Required PR body sections (PR Type, Summary, Changes, AI Assistance, Test Plan, Automated Checks, Contributor Checklist, Notes for Reviewers) |
 | `.github/ISSUE_TEMPLATE` | Current issue templates, forms, and routing policy |
 | Discovered GitHub labels | Current label names and availability; do not infer them from this skill |
-| `.github/workflows/pr-check.yml` | Automated gates: `Check Issue Reference`, `Check Issue Has status:approved`, `Check PR Has type:* Label`, `Check PR Cognitive Load` |
+| `.github/workflows/pr-check.yml` | Automated gates: `Check PR Has type:* Label`, `Check PR Cognitive Load` |
 | `skills/branch-pr/SKILL.md` | Branch + PR creation mechanics |
 | `skills/chained-pr/SKILL.md` | Chained vs Stacked PR strategy mechanics |
 | `internal/assets/skills/issue-creation/SKILL.md` | Canonical issue discovery, drafting, privacy review, and publication authority |
@@ -50,16 +50,14 @@ These files evolve. Re-read them at the start of every contribution.
 
 ## Hard rules (do not negotiate)
 
-1. **Issue-first is mandatory.** No PR opens without an issue that already has `status:approved` under the canonical issue-creation workflow contract. Enforced by `pr-check.yml` and CONTRIBUTING.md.
-2. **Use `Closes/Fixes/Resolves #N`** in the PR body. `Refs #N` does NOT satisfy `Check Issue Reference`. Verified empirically on this repo.
-3. **Ordinary `type:*` categorization** — zero or multiple labels fail the check. Route it through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
-4. **Protected policy labels** — adding or removing `status:approved` or `size:exception` requires verified policy authority from a target-host repository maintainer or repository-authorized approver for the exact target/action, plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`. `size:exception` additionally requires documented over-budget rationale.
-5. **400-line budget per PR** (`additions + deletions`). Above that, `size:exception` additionally requires documented over-budget rationale.
-6. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
-7. **No force-push to `main`.** It is protected.
-8. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — record the pending canonical PR-label action instead.
-9. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
-10. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
+1. **Ordinary `type:*` categorization** — zero or multiple labels fail the check. Route it through the canonical issue-creation workflow contract: a current direct human instruction binds the exact target/action, target-host capability is verified, and it uses one bounded mutation and target-host readback; otherwise wait without mutation.
+2. **Protected policy labels** — adding or removing `size:exception` requires verified policy authority from a target-host repository maintainer or repository-authorized approver for the exact target/action, plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`. `size:exception` additionally requires documented over-budget rationale.
+3. **400-line budget per PR** (`additions + deletions`). Above that, `size:exception` additionally requires documented over-budget rationale.
+4. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
+5. **No force-push to `main`.** It is protected.
+6. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — record the pending canonical PR-label action instead.
+7. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
+8. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
 
 ---
 
@@ -75,7 +73,7 @@ This split catches external contributors most often. Verify with `gh` before rec
 | Push commits to own branches | ✅ | — |
 | Apply/remove ordinary existing issue labels | Only under the canonical issue-creation workflow contract and target-host capability grant | Same; verify the target host grants the action |
 | Apply/remove ordinary `type:*` PR categorization | Only under the canonical issue-creation workflow contract: current direct human instruction, exact target/action, target-host capability, one bounded mutation and target-host readback | Same; verify the target host grants the action |
-| Add/remove protected `status:approved` or `size:exception` | Verified policy authority from a repository maintainer or repository-authorized approver plus actor `MAINTAIN`/`ADMIN`; `size:exception` also needs documented rationale | Same verified policy authority, actor capability, and rationale |
+| Add/remove protected `size:exception` | Verified policy authority from a repository maintainer or repository-authorized approver plus actor `MAINTAIN`/`ADMIN`; documented rationale required | Same verified policy authority, actor capability, and rationale |
 | Approve `action_required` fork-PR workflows (fork approval gate) | ❌ | ✅ |
 | Review a PR (approve / request changes) | ❌ | ✅ |
 | Merge a PR | ❌ | ✅ |
@@ -89,13 +87,13 @@ If a PR-label action lacks a current direct instruction or verified target-host 
 
 Use the canonical `issue-creation` skill at `internal/assets/skills/issue-creation/SKILL.md` for duplicate discovery, template handling, privacy review, and publication. Apply Gentle AI's current repository policy from `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE`, and discovered GitHub labels rather than copying form fields, label names, or commands here.
 
-After submission, return to this collaboration workflow for the contributor/maintainer boundary and the approved-issue gate before PR work. If a maintainer requests technical sub-slices, keep them within the approved issue structure required by the current repository policy and checks.
+After submission, return to this collaboration workflow for the contributor/maintainer boundary before PR work. If a maintainer requests technical sub-slices, keep each slice one reviewable work unit.
 
 ---
 
 ## PR workflow
 
-End-to-end steps once the issue (or chain of sub-issues) is approved.
+End-to-end steps for one work unit.
 
 1. **Branch.**
    ```
@@ -112,7 +110,6 @@ End-to-end steps once the issue (or chain of sub-issues) is approved.
    - `go test ./internal/...` with pre-existing failures acknowledged via `git stash` baseline. The repo has known pre-existing failures in `internal/components/communitytool/pi_codegraph`, `internal/tui/sync`, and similar — confirm they exist with `git stash` AND `git stash pop`, then name them in the PR body's Test Plan.
 
 4. **Open the PR with `gh pr create`.** Body matches `.github/PULL_REQUEST_TEMPLATE.md`:
-   - `## 🔗 Linked Issue` → `Closes #N` (or `Fixes`/`Resolves`). Never `Refs`.
    - `## 🏷️ PR Type` → exactly one `[x] type:*` matching the actual type
    - `## 📝 Summary` → one paragraph: what + why
    - `## 📂 Changes` → file table with line counts from `gh pr view --json additions,deletions,changedFiles`
@@ -200,25 +197,19 @@ Before recommending any action that touches permissions, label state, or commit 
 2. **Cross-check PR body claims against the GitHub API.**
    ```bash
    gh pr view <N> --json \
-     labels,closingIssuesReferences,additions,deletions,changedFiles,\
+     labels,additions,deletions,changedFiles,\
      headRefName,baseRefName,isCrossRepository,headRepository,maintainerCanModify,\
      reviewDecision,statusCheckRollup
    ```
 
-3. **Cross-check the linked issue state.**
-   ```bash
-   gh issue view <N> --json number,title,state,labels,comments
-   ```
-
-4. **After applying a body rewrite**, round-trip the body and confirm `closingIssuesReferences` is populated for the linked issue:
+3. **After applying a body rewrite**, round-trip the body and confirm it landed:
    ```bash
    gh pr view <N> --json body --jq '.body'             # round-trip
-   gh pr view <N> --json closingIssuesReferences        # confirm linkage parsed
    ```
 
-5. **Trust the contributor's lived permissions over inferred defaults.** If they say "I can only do X", route everything else to the maintainer — don't waste their PR review budget on GraphQL 403s.
+4. **Trust the contributor's lived permissions over inferred defaults.** If they say "I can only do X", route everything else to the maintainer — don't waste their PR review budget on GraphQL 403s.
 
-6. **Always run the actual test command before claiming it passes.** "Tests pass" must reflect `go test ./path/to/pkg -v` output, not hope.
+5. **Always run the actual test command before claiming it passes.** "Tests pass" must reflect `go test ./path/to/pkg -v` output, not hope.
 
 ---
 
@@ -226,9 +217,7 @@ Before recommending any action that touches permissions, label state, or commit 
 
 Run this in your head (or print and tick) before requesting review:
 
-- [ ] Linked issue has `status:approved` (and the linked PR uses `Closes/Fixes/Resolves`)
 - [ ] PR title follows `^(type)(\(single-scope\))?!?: <description>` — no comma in scope
-- [ ] Body uses `Closes/Fixes/Resolves #N`, not `Refs`
 - [ ] Line counts in `## 📂 Changes` match `gh pr view --json additions,deletions,changedFiles`
 - [ ] No `[x]` claims contradict what the API shows; moves pending actions to `## Pending repository workflow actions`
 - [ ] Pre-existing failures named with verification method
@@ -249,7 +238,6 @@ Run this in your head (or print and tick) before requesting review:
 | Anti-pattern | Symptom | Fix |
 |---|---|---|
 | "type:* added" checkbox while `labels: []` | CodeRabbit or maintainer catches the lie on first read | Record the pending canonical PR-label action |
-| `Refs #N` instead of `Closes #N` | `Check Issue Reference` fails; PR auto-rejected | Use `Closes`/`Fixes`/`Resolves` keyword |
 | `[x] PR stays within 400 changed lines` for a 3,200-line PR | `Check PR Cognitive Load` fails; `size:exception` not requested | Compute real totals, document the rationale and verified policy authority in Pending repository workflow actions |
 | `feat(tui,cli): wire...` title | Title fails the single-scope regex | Use one of `feat(tui): ...`, `feat(cli): ...`, `feat(tui-cli): ...` (dash, not comma) |
 | Slice branches all base on `main` with stale carry-over commits | Reviewers can't isolate slice-specific changes; `size:exception` needed | Accept Stacked to main (request exception) OR ask maintainer to push slice branches upstream and use Feature Branch Chain |

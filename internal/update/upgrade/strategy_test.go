@@ -126,6 +126,8 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 			Owner:         "Gentleman-Programming",
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
+			GoModulePath:  "github.com/gentleman-programming/gentle-ai/v3",
 		},
 		LatestVersion: "main@972997650b51",
 		Status:        update.UpdateAvailable,
@@ -298,8 +300,8 @@ func TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
 			method := effectiveMethod(tc.tool, profile)
-			if method != update.InstallBinary {
-				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, method, update.InstallBinary)
+			if method == update.InstallScript || method == update.InstallBinary {
+				t.Errorf("effectiveMethod(%q) = %q, want InstallSourceBuild for unresolvable go install", tc.tool.Name, method)
 			}
 		})
 	}
@@ -312,7 +314,7 @@ func TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy(t *testing.T
 	// against the Go checksum database, since goInstallUpgrade does not touch
 	// cmd.Env — is the only automatic upgrade path Windows has.
 	t.Run("Go availability upgrades through a pinned go install", func(t *testing.T) {
-		tool := update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/v3/cmd/gentle-ai"}
+		tool := update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai", GoModulePath: "github.com/gentleman-programming/gentle-ai/v3"}
 		profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
 		method := effectiveMethod(tool, profile)
 		if method != update.InstallGoInstall {

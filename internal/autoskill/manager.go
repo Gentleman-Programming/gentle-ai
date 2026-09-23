@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// IndexRegenerator refreshes the unified skills index after a successful
+// promotion (REQ-22.13). It is a plain func so this package never imports
+// skillregistry internals (D-12).
+type IndexRegenerator func(cwd, home string) error
+
 // Manager gestiona el ciclo de vida del buzón transitorio de skills y la promoción a producción.
 type Manager struct {
 	workspaceRoot string
@@ -21,6 +26,22 @@ type Manager struct {
 	client        *Client
 	detector      *Detector
 	miner         *Miner
+	// RegenerateIndex refreshes the unified skills index after a successful
+	// promotion. A nil regenerator is reported through
+	// ApproveOutcome.RegenerateError and never reverts the promotion
+	// (D-12).
+	RegenerateIndex IndexRegenerator
+}
+
+// ApproveOutcome reports a promotion and its derived index refresh. The index
+// is a derived view of the filesystem, never a transaction participant
+// (D-12): a refresh failure leaves the promotion intact.
+type ApproveOutcome struct {
+	// Promoted is true when the skill now lives in skills/.
+	Promoted bool
+	// RegenerateError is non-nil when the index refresh failed after a
+	// completed promotion. The promotion stands (REQ-22.13).
+	RegenerateError error
 }
 
 // NewManager inicializa el gestor de gobernanza de skills.
@@ -253,21 +274,24 @@ func (m *Manager) ListInbox() ([]SkillProposal, error) {
 	return list, nil
 }
 
-// Approve promueve atómicamente la skill del buzón transitorio al directorio canónico skills/.
-func (m *Manager) Approve(skillName string) error {
+// Approve promueve atómicamente la skill del buzón transitorio al directorio canónico skills/
+// y después regenera el índice unificado de skills (REQ-22.13). El error de
+// retorno corresponde solo a fallos de promoción: un fallo de indexación queda
+// en ApproveOutcome.RegenerateError, sin deshacer la promoción (D-12).
+func (m *Manager) Approve(skillName string) (ApproveOutcome, error) {
 	skillName = strings.TrimSpace(skillName)
 	if skillName == "" {
-		return errors.New("nombre de skill no puede estar vacío")
+		return ApproveOutcome{}, errors.New("nombre de skill no puede estar vacío")
 	}
 
 	sourceDir := filepath.Join(m.inboxDir, skillName)
 	if _, err := os.Stat(sourceDir); os.IsNotExist(err) {
-		return fmt.Errorf("la propuesta '%s' no existe en el buzón transitorio", skillName)
+		return ApproveOutcome{}, fmt.Errorf("la propuesta '%s' no existe en el buzón transitorio", skillName)
 	}
 
 	destDir := filepath.Join(m.skillsDir, skillName)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("error creando directorio destino %s: %w", destDir, err)
+		return ApproveOutcome{}, fmt.Errorf("error creando directorio destino %s: %w", destDir, err)
 	}
 
 	// Copiar archivos (excepto metadata.json)
@@ -290,12 +314,29 @@ func (m *Manager) Approve(skillName string) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("error promocionando skill a %s: %w", destDir, err)
+		return ApproveOutcome{}, fmt.Errorf("error promocionando skill a %s: %w", destDir, err)
 	}
 
 	// Eliminar de inbox tras promoción exitosa
 	_ = os.RemoveAll(sourceDir)
-	return nil
+
+	outcome := ApproveOutcome{Promoted: true}
+	outcome.RegenerateError = m.regenerateIndex()
+	return outcome, nil
+}
+
+// regenerateIndex runs the injected regenerator after a completed promotion.
+// A missing regenerator is itself a reported failure: the index is stale and
+// the caller must not be told otherwise (D-12).
+func (m *Manager) regenerateIndex() error {
+	if m.RegenerateIndex == nil {
+		return errors.New("index regenerator not configured")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	return m.RegenerateIndex(m.workspaceRoot, home)
 }
 
 // Reject purga de forma permanente una propuesta del buzón transitorio.

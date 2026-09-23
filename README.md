@@ -187,7 +187,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 
 ## Community
 
-Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, approved and unclaimed — pick one and it's yours.
+Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped and unclaimed — pick one and it's yours.
 
 <div align="center">
 

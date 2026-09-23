@@ -1,6 +1,6 @@
 ---
 name: branch-pr
-description: "Create Gentle AI pull requests with issue-first checks. Trigger: creating, opening, or preparing PRs for review."
+description: "Create Gentle AI pull requests. Trigger: creating, opening, or preparing PRs for review."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
@@ -18,23 +18,20 @@ Use this skill when:
 
 ## Critical Rules
 
-1. **Every PR MUST link an approved issue** — no exceptions
-2. **Every PR MUST have exactly one `type:*` label**
-3. **Automated checks must pass** before merge is possible
-4. **Blank PRs without issue linkage will be blocked** by GitHub Actions
+1. **Every PR MUST have exactly one `type:*` label**
+2. **Automated checks must pass** before merge is possible
 
 ---
 
 ## Workflow
 
 ```
-1. Verify issue has `status:approved` label
-2. Create branch: type/description (see Branch Naming below)
-3. Implement changes with conventional commits
-4. Run shellcheck on modified scripts
-5. Open PR using the template
-6. Add exactly one type:* label
-7. Wait for automated checks to pass
+1. Create branch: type/description (see Branch Naming below)
+2. Implement changes with conventional commits
+3. Run shellcheck on modified scripts
+4. Open PR using the template
+5. Add exactly one type:* label
+6. Wait for automated checks to pass
 ```
 
 ---
@@ -69,16 +66,7 @@ Branch names MUST match this regex:
 
 The PR template is at `.github/PULL_REQUEST_TEMPLATE.md`. Every PR body MUST contain:
 
-### 1. Linked Issue (REQUIRED)
-
-```markdown
-Closes #<issue-number>
-```
-
-Valid keywords: `Closes #N`, `Fixes #N`, `Resolves #N` (case insensitive).
-The linked issue MUST have the `status:approved` label.
-
-### 2. PR Type (REQUIRED)
+### 1. PR Type (REQUIRED)
 
 Check exactly ONE in the template and add the matching label:
 
@@ -91,11 +79,11 @@ Check exactly ONE in the template and add the matching label:
 | Maintenance/tooling | `type:chore` |
 | Breaking change | `type:breaking-change` |
 
-### 3. Summary
+### 2. Summary
 
 1-3 bullet points of what the PR does.
 
-### 4. Changes Table
+### 3. Changes Table
 
 ```markdown
 | File | Change |
@@ -103,7 +91,7 @@ Check exactly ONE in the template and add the matching label:
 | `path/to/file` | What changed |
 ```
 
-### 5. Test Plan
+### 4. Test Plan
 
 ```markdown
 - [x] Scripts run without errors: `shellcheck scripts/*.sh`
@@ -111,10 +99,9 @@ Check exactly ONE in the template and add the matching label:
 - [x] Skills load correctly in target agent
 ```
 
-### 6. Contributor Checklist
+### 5. Contributor Checklist
 
 All boxes must be checked:
-- Linked an approved issue
 - Added exactly one `type:*` label
 - Ran shellcheck on modified scripts
 - Skills tested in at least one agent
@@ -128,8 +115,6 @@ All boxes must be checked:
 
 | Check | Job name | What it verifies |
 |-------|----------|-----------------|
-| PR Validation | `Check Issue Reference` | Body contains `Closes/Fixes/Resolves #N` |
-| PR Validation | `Check Issue Has status:approved` | Linked issue has `status:approved` |
 | PR Validation | `Check PR Has type:* Label` | PR has exactly one `type:*` label |
 | CI | `Shellcheck` | Shell scripts pass `shellcheck` |
 
@@ -195,7 +180,7 @@ shellcheck scripts/*.sh
 
 # Push and create PR
 git push -u origin feat/my-feature
-gh pr create --title "feat(scope): description" --body "Closes #N"
+gh pr create --title "feat(scope): description" --body "Summary of the change"
 
 # Add type label to PR
 gh pr edit <pr-number> --add-label "type:feature"

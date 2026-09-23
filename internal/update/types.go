@@ -1,5 +1,22 @@
 package update
 
+import "strings"
+
+// selfToolNames is the closed set of on-disk/registry names that identify the
+// primary CLI product across its rename. `init()` in cmd/axiom/main.go rewrites
+// the shipped "gentle-ai" registry entry to "axiom"; every upgrade safeguard
+// MUST route through IsSelfToolName so that rename can never disable one (REQ-22.3).
+var selfToolNames = map[string]bool{"axiom": true, "gentle-ai": true}
+
+// IsSelfToolName reports whether name identifies the primary CLI product.
+// Matching is case- and edge-whitespace-insensitive.
+func IsSelfToolName(name string) bool {
+	return selfToolNames[strings.ToLower(strings.TrimSpace(name))]
+}
+
+// IsSelfTool reports whether tool is the primary CLI product (D-01).
+func IsSelfTool(tool ToolInfo) bool { return IsSelfToolName(tool.Name) }
+
 // UpdateStatus represents the outcome of a single tool version check.
 type UpdateStatus string
 
@@ -33,6 +50,10 @@ const (
 	// InstallOpenCodePlugin is a manual upgrade method: Gentle AI registers the
 	// package in tui.json, and OpenCode owns package resolution on restart/reload.
 	InstallOpenCodePlugin InstallMethod = "opencode-plugin"
+	// InstallSourceBuild compiles the tool from a controlled source clone
+	// (git clone of the exact tag, then go build). Used as the resilient
+	// Windows path when `go install` is not resolvable (REQ-22.1, D-02).
+	InstallSourceBuild InstallMethod = "source-build"
 )
 
 // ToolInfo describes a managed tool that can be checked for updates.
@@ -47,6 +68,11 @@ type ToolInfo struct {
 	GoImportPath      string        // for go-install tools (e.g. "github.com/.../cmd/engram")
 	NpmPackage        string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
 
+	// GoModulePath is the `module` directive the published source actually
+	// declares. It is the single source of truth for whether `go install
+	// <GoImportPath>@ver` is resolvable by the toolchain (REQ-22.2).
+	GoModulePath string
+
 	// FallbackPaths returns a list of absolute paths to check when exec.LookPath
 	// fails. This covers the Windows scenario where AddToUserPath updates the
 	// registry but the running process PATH is stale after install. When a path
@@ -56,6 +82,45 @@ type ToolInfo struct {
 	// The function receives the user home directory and the value of LOCALAPPDATA
 	// (empty on non-Windows). May be nil when no fallback is needed.
 	FallbackPaths func(homeDir, localAppData string) []string
+}
+
+// GoInstallResolvable reports whether a `go install` naming GoImportPath can be
+// resolved against the declared module path. It reads ONLY GoModulePath and
+// GoImportPath; it never derives the module from Owner/Repo (D-01). For the
+// fork this is false while go.mod declares the upstream module, and the system
+// MUST NOT emit or run any `go install` for it (REQ-22.2).
+func (t ToolInfo) GoInstallResolvable() bool {
+	m := strings.TrimSpace(t.GoModulePath)
+	p := strings.TrimSpace(t.GoImportPath)
+	if m == "" || p == "" {
+		return false
+	}
+	if p == m {
+		return true
+	}
+	if !strings.HasPrefix(p, m+"/") {
+		return false
+	}
+	// A major-version suffix (v2, v3, ...) immediately after the declared
+	// module makes `go install` resolve a DIFFERENT module (m + "/" + suffix).
+	// `.../gentle-ai` therefore does not make `.../gentle-ai/v3/...` resolvable.
+	rest := p[len(m)+1:]
+	seg, _, _ := strings.Cut(rest, "/")
+	return !isGoMajorVersionSuffix(seg)
+}
+
+// isGoMajorVersionSuffix reports whether seg is a Go major-version module
+// suffix (v2, v3, ...). v0 and v1 are un-suffixed and never match.
+func isGoMajorVersionSuffix(seg string) bool {
+	if len(seg) < 2 || seg[0] != 'v' {
+		return false
+	}
+	for _, c := range seg[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return seg != "v0" && seg != "v1"
 }
 
 // UpdateResult holds the result of checking a single tool for updates.

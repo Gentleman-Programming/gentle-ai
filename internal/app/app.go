@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +18,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
@@ -362,8 +360,9 @@ func runSkillRegistry(args []string, stdout io.Writer) error {
 }
 
 // resolveSkillRegistryDirs resolves the working directory (defaulting to the
-// process cwd) and the user home directory used to locate skills.
-func resolveSkillRegistryDirs(cwd string) (string, string, error) {
+// process cwd) and the user home directory used to locate skills. An empty
+// home resolves the process user home directory.
+func resolveSkillRegistryDirs(cwd, home string) (string, string, error) {
 	if cwd == "" {
 		var err error
 		cwd, err = os.Getwd()
@@ -371,124 +370,39 @@ func resolveSkillRegistryDirs(cwd string) (string, string, error) {
 			return "", "", fmt.Errorf("resolve cwd: %w", err)
 		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", fmt.Errorf("resolve home directory: %w", err)
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return "", "", fmt.Errorf("resolve home directory: %w", err)
+		}
 	}
 	return cwd, home, nil
 }
 
+// runSkillRegistryRefresh keeps the legacy surface byte-identical (REQ-22.14):
+// primary line only, no per-destination lines and no mirror warning. The
+// engine underneath is the shared unified one (D-13).
 func runSkillRegistryRefresh(args []string, stdout io.Writer) error {
-	cwd := ""
-	force := false
-	quiet := false
-	ensureGitignore := true
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--force", "-f":
-			force = true
-		case "--quiet", "-q":
-			quiet = true
-		case "--no-gitignore":
-			ensureGitignore = false
-		case "--cwd":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--cwd requires a value")
-			}
-			cwd = args[i+1]
-			i++
-		default:
-			return fmt.Errorf("unknown skill-registry refresh argument %q", args[i])
-		}
-	}
-	cwd, home, err := resolveSkillRegistryDirs(cwd)
+	parsed, err := parseSkillIndexRefreshFlags(skillIndexSurfaceLegacy, args)
 	if err != nil {
 		return err
 	}
-	// Startup hooks run refresh from whatever directory the host resolved; a
-	// brand-new non-project directory can resolve to "/", $HOME, or a
-	// markerless folder. Never initialize there: skip silently under --quiet
-	// (a startup hook must not scream) and with a one-line notice otherwise.
-	if reason := skillregistry.RefreshSkip(cwd, home); reason != skillregistry.SkipNone {
-		if !quiet {
-			_, _ = fmt.Fprintf(stdout, "Skill registry refresh skipped (%s): %s is not a project root; run it from a project directory (one containing .git or .atl), or create the project first.\n", reason, cwd)
-		}
+	result, skipped, err := runSharedRefresh(parsed, stdout)
+	if err != nil {
+		return err
+	}
+	if skipped || parsed.quiet {
 		return nil
 	}
-	if ensureGitignore {
-		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
-			return err
-		}
-	}
-	result, err := skillregistry.Regenerate(cwd, home, force)
-	if err != nil {
-		return err
-	}
-	if !quiet {
-		if result.Regenerated {
-			_, _ = fmt.Fprintf(stdout, "Skill registry refreshed (%d skills): %s\n", result.SkillCount, result.Registry)
-		} else {
-			_, _ = fmt.Fprintf(stdout, "Skill registry up to date (%s): %s\n", result.Reason, result.Registry)
-		}
-	}
+	writePrimaryRefreshLine(stdout, result)
 	return nil
 }
 
+// runSkillRegistryList keeps the legacy list output byte-identical
+// (REQ-22.14) over the shared read-only engine.
 func runSkillRegistryList(args []string, stdout io.Writer) error {
-	cwd := ""
-	asJSON := false
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--json":
-			asJSON = true
-		case "--cwd":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--cwd requires a value")
-			}
-			cwd = args[i+1]
-			i++
-		default:
-			return fmt.Errorf("unknown skill-registry list argument %q", args[i])
-		}
-	}
-	cwd, home, err := resolveSkillRegistryDirs(cwd)
-	if err != nil {
-		return err
-	}
-	entries := skillregistry.List(cwd, home)
-
-	if asJSON {
-		type row struct {
-			Name        string `json:"name"`
-			Scope       string `json:"scope"`
-			Description string `json:"description"`
-			Path        string `json:"path"`
-		}
-		rows := make([]row, 0, len(entries))
-		for _, e := range entries {
-			rows = append(rows, row{
-				Name:        e.Name,
-				Scope:       skillregistry.ScopeForPath(cwd, e.Path),
-				Description: e.Description,
-				Path:        e.Path,
-			})
-		}
-		data, err := json.MarshalIndent(rows, "", "  ")
-		if err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintln(stdout, string(data))
-		return nil
-	}
-
-	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(stdout, "No skills found.")
-		return nil
-	}
-	for _, e := range entries {
-		_, _ = fmt.Fprintf(stdout, "%s\t%s\t%s\n", e.Name, skillregistry.ScopeForPath(cwd, e.Path), e.Path)
-	}
-	return nil
+	return writeSkillIndexList(skillIndexSurfaceLegacy, args, stdout)
 }
 
 func runUpdate(ctx context.Context, currentVersion string, profile system.PlatformProfile, stdout io.Writer) error {
@@ -515,63 +429,13 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 // Issue #535: runUpgrade consumes a structured upgradeArgs value parsed once
 // in RunArgs. It forwards the parsed flags and tool filters to the update
 // check and executor exactly once and never reparses raw CLI arguments.
+//
+// The implementation lives in runUpgradeReport so the dashboard can obtain the
+// structured outcome (D-06) without duplicating the run; this wrapper keeps the
+// CLI error contract and the exact same stdout bytes (REQ-22.5).
 func runUpgrade(ctx context.Context, args upgradeArgs, detection system.DetectionResult, stdout io.Writer) error {
-	dryRun := args.dryRun
-	noBackup := args.noBackup
-	toolFilter := args.toolFilter
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	profile := cli.ResolveInstallProfile(detection)
-
-	// Check for available updates (filtered to requested tools if specified).
-	sp := upgrade.NewSpinner(stdout, "Checking for updates")
-	checkResults := updateCheckFiltered(ctx, Version, profile, toolFilter)
-	checkErr := updateCheckError(checkResults)
-	sp.Finish(checkErr == nil)
-	if checkErr != nil {
-		_, _ = fmt.Fprint(stdout, update.RenderCLI(checkResults))
-		return checkErr
-	}
-
-	// Execute upgrades (no-op if nothing is UpdateAvailable). Use the options
-	// seam so CLI-only flags (e.g. --no-backup) remain testable without invoking
-	// real package-manager strategies.
-	report := upgradeExecuteWithOptions(ctx, checkResults, profile, homeDir, dryRun, upgrade.ExecuteOptions{
-		Progress:          stdout,
-		BackupDiagnostics: stdout,
-		SkipBackup:        noBackup,
-	})
-
-	_, _ = fmt.Fprint(stdout, upgrade.RenderUpgradeReport(report))
-
-	// Return error only if any tool failed (not for skipped/manual).
-	var errs []error
-	for _, r := range report.Results {
-		if r.Status == upgrade.UpgradeFailed && r.Err != nil {
-			errs = append(errs, fmt.Errorf("upgrade failed for %q: %w", r.ToolName, r.Err))
-		}
-	}
-
-	if err := errors.Join(errs...); err != nil {
-		return err
-	}
-	if !dryRun {
-		if latestVersion, ok := gentleAIUpgradeSucceeded(report); ok {
-			if err := restartAfterGentleAIUpgrade(latestVersion, stdout); err != nil {
-				return err
-			}
-			// CLI upgrade path: print the doctor advisory so the user can verify
-			// ecosystem health against the post-upgrade state. Informational only;
-			// does not run any checks or change exit status.
-			printPostUpgradeDoctorAdvisory(stdout)
-			return nil
-		}
-	}
-	return nil
+	_, err := runUpgradeReport(ctx, args, detection, stdout)
+	return err
 }
 
 func updateCheckError(results []update.UpdateResult) error {
@@ -620,7 +484,7 @@ func tuiExecuteWithBackground(
 			claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
 			installState, readErr := state.Read(homeDir)
 			if errors.Is(readErr, os.ErrNotExist) {
-				installState = state.InstallState{}
+				installState = state.NewInstallState()
 			} else if readErr != nil {
 				return fmt.Errorf("read persisted install state: %w", readErr)
 			}
@@ -944,7 +808,7 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		current = state.InstallState{}
+		current = state.NewInstallState()
 	}
 	if selection.ClaudeModelAssignments != nil {
 		if len(selection.ClaudeModelAssignments) > 0 {

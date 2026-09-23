@@ -26,7 +26,7 @@ description: React patterns
 	if err := EnsureATLIgnored(cwd); err != nil {
 		t.Fatalf("EnsureATLIgnored() error = %v", err)
 	}
-	first, err := Regenerate(cwd, home, false)
+	first, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatalf("Regenerate() error = %v", err)
 	}
@@ -49,7 +49,7 @@ description: React patterns
 		t.Fatalf("cache missing: %v", err)
 	}
 
-	second, err := Regenerate(cwd, home, false)
+	second, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatalf("second Regenerate() error = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRegenerateContentOnlyMetadataPreservingChangeInvalidatesCache(t *testin
 	if err != nil {
 		t.Fatalf("stat original skill: %v", err)
 	}
-	first, err := Regenerate(cwd, home, false)
+	first, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatalf("first Regenerate() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestRegenerateContentOnlyMetadataPreservingChangeInvalidatesCache(t *testin
 		t.Fatalf("test setup changed metadata: first=%+v second=%+v", firstInfo, secondInfo)
 	}
 
-	changed, err := Regenerate(cwd, home, false)
+	changed, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatalf("changed Regenerate() error = %v", err)
 	}
@@ -101,7 +101,7 @@ func TestRegenerateContentOnlyMetadataPreservingChangeInvalidatesCache(t *testin
 		t.Fatalf("registry did not reflect changed skill content:\n%s", registry)
 	}
 
-	unchanged, err := Regenerate(cwd, home, false)
+	unchanged, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatalf("unchanged Regenerate() error = %v", err)
 	}
@@ -151,14 +151,14 @@ description: project copy
 - Project rule.
 `)
 
-	first, err := Regenerate(cwd, home, false)
+	first, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.SkillCount != 1 {
 		t.Fatalf("SkillCount = %d, want 1", first.SkillCount)
 	}
-	forced, err := Regenerate(cwd, home, true)
+	forced, err := Regenerate(cwd, home, RegenerateOptions{Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ description: project OpenCode copy
 - Project OpenCode rule.
 `)
 
-	result, err := Regenerate(cwd, home, false)
+	result, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ description: OpenCode copy
 - OpenCode rule.
 `)
 
-	result, err := Regenerate(cwd, home, false)
+	result, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 			})
 
 			t.Run("Regenerate", func(t *testing.T) {
-				first, err := Regenerate(cwd, home, false)
+				first, err := Regenerate(cwd, home, RegenerateOptions{})
 				if err != nil {
 					t.Fatalf("Regenerate() error = %v", err)
 				}
@@ -375,7 +375,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
 				assertRegistrySkills(t, registry, want, all)
 
-				second, err := Regenerate(cwd, home, false)
+				second, err := Regenerate(cwd, home, RegenerateOptions{})
 				if err != nil {
 					t.Fatalf("second Regenerate() error = %v", err)
 				}
@@ -386,7 +386,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 					t.Fatal("registry changed on deterministic cache-hit run")
 				}
 
-				forced, err := Regenerate(cwd, home, true)
+				forced, err := Regenerate(cwd, home, RegenerateOptions{Force: true})
 				if err != nil {
 					t.Fatalf("forced Regenerate() error = %v", err)
 				}
@@ -489,7 +489,7 @@ Use this for Go tests.
 - This should not be copied.
 `)
 
-	result, err := Regenerate(cwd, home, false)
+	result, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +525,7 @@ license: Apache-2.0
 - Do not copy this rule into the registry.
 `)
 
-	result, err := Regenerate(cwd, home, false)
+	result, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +574,7 @@ name: go-testing
 ## Compact Rules
 - yes
 `)
-	result, err := Regenerate(cwd, home, false)
+	result, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +655,7 @@ description: linked via symlink
 		t.Skipf("symlink unsupported on this platform: %v", err)
 	}
 
-	result, err := Regenerate(cwd, home, false)
+	result, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -691,7 +691,7 @@ description: should not be indexed
 - no
 `)
 
-	result, err := Regenerate(cwd, home, false)
+	result, err := Regenerate(cwd, home, RegenerateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,6 +736,11 @@ func writeSkill(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// minimalSkill returns a tiny valid SKILL.md body for the given skill name.
+func minimalSkill(name string) string {
+	return "---\nname: " + name + "\ndescription: \"Trigger: " + name + ".\"\n---\n\nBody.\n"
 }
 
 func readFile(t *testing.T, path string) string {

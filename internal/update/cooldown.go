@@ -101,7 +101,7 @@ func persistLastUpdateCheckWithWriter(homeDir string, timestamp time.Time, write
 			if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			current = state.InstallState{}
+			current = state.NewInstallState()
 		}
 		current.LastUpdateCheck = &timestamp
 		return write(homeDir, current)

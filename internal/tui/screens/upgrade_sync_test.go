@@ -133,13 +133,13 @@ func TestRenderUpgradeSync_SkipsSyncWhenGentleAIUpgraded(t *testing.T) {
 	out := RenderUpgradeSync(nil, report, nil, nil, nil, false, true, 0, 0)
 	lower := strings.ToLower(out)
 	if !strings.Contains(lower, "sync skipped") {
-		t.Fatalf("RenderUpgradeSync() should say sync was skipped after gentle-ai upgrade:\n%s", out)
+		t.Fatalf("RenderUpgradeSync() should say sync was skipped after self-tool upgrade:\n%s", out)
 	}
-	if !strings.Contains(lower, "restart gentle-ai") {
-		t.Fatalf("RenderUpgradeSync() should ask for restart after gentle-ai upgrade:\n%s", out)
+	if !strings.Contains(lower, "restart axiom") {
+		t.Fatalf("RenderUpgradeSync() should ask for restart after self-tool upgrade:\n%s", out)
 	}
 	if strings.Contains(lower, "no files needed updating") {
-		t.Fatalf("RenderUpgradeSync() should not pretend sync ran after gentle-ai upgrade:\n%s", out)
+		t.Fatalf("RenderUpgradeSync() should not pretend sync ran after self-tool upgrade:\n%s", out)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestRenderUpgrade_ShowsRestartNoticeWhenGentleAIUpgraded(t *testing.T) {
 	}}
 
 	out := RenderUpgrade(nil, report, nil, false, true, 0, 0)
-	if !strings.Contains(strings.ToLower(out), "restart gentle-ai") {
-		t.Fatalf("RenderUpgrade() should show restart notice after gentle-ai upgrade:\n%s", out)
+	if !strings.Contains(strings.ToLower(out), "restart axiom") {
+		t.Fatalf("RenderUpgrade() should show restart notice after self-tool upgrade:\n%s", out)
 	}
 }
 

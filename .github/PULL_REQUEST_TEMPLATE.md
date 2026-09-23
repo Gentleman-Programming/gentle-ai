@@ -1,14 +1,4 @@
-<!-- ⚠️ READ BEFORE SUBMITTING
-  Every PR must be linked to an issue that has the "status:approved" label.
-  PRs without a linked approved issue will be automatically rejected by CI.
-  See CONTRIBUTING.md for the full contribution workflow.
--->
-
-## 🔗 Linked Issue
-
-Closes #
-
-<!-- Replace the # above with the issue number, e.g.: Closes #42 -->
+<!-- This repository does not require a linked issue. -->
 
 ---
 
@@ -93,8 +83,6 @@ The following checks run automatically on this PR:
 | Check | Status | Description |
 |-------|--------|-------------|
 | Check PR Cognitive Load | ⏳ | PR should stay within 400 changed lines (`additions + deletions`) or use `size:exception` |
-| Check Issue Reference | ⏳ | PR body must contain `Closes/Fixes/Resolves #N` |
-| Check Issue Has `status:approved` | ⏳ | Linked issue must have been approved before work began |
 | Check PR Has `type:*` Label | ⏳ | Exactly one `type:*` label must be applied |
 | Unit Tests | ⏳ | `go test ./...` must pass |
 | Go Format | ⏳ | `go run ./internal/gofmtcheck` must pass |
@@ -104,7 +92,6 @@ The following checks run automatically on this PR:
 
 ## ✅ Contributor Checklist
 
-- [ ] PR is linked to an issue with `status:approved`
 - [ ] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied `size:exception` with rationale documented
 - [ ] I have added the appropriate `type:*` label to this PR
 - [ ] Unit tests pass (`go test ./...`)

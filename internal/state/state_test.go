@@ -1,10 +1,12 @@
 package state
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +87,9 @@ func fullyPopulatedInstallState() InstallState {
 		RDDMode:           "off",
 		RDDModeRecordedAt: &rddModeRecordedAt,
 		BackgroundIntent:  model.OpenCodeBackgroundOn,
+		// Non-default on purpose: round-trip and MergeAgents must preserve this
+		// exact value, never fall back to DefaultUpstreamVersion.
+		UpstreamVersion: "3.3.9",
 	}
 }
 
@@ -486,7 +491,7 @@ func TestWriteOverwrite(t *testing.T) {
 
 func TestWriteFailurePreservesExistingState(t *testing.T) {
 	home := t.TempDir()
-	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral", PersonaPresent: true}
+	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral", PersonaPresent: true, UpstreamVersion: "3.3.9"}
 	if err := Write(home, original); err != nil {
 		t.Fatal(err)
 	}
@@ -1197,6 +1202,263 @@ func TestMergeAgents_PreservesRDDMode(t *testing.T) {
 	merged := MergeAgents(existing, []string{"opencode"})
 	if merged.RDDMode != "off" || merged.RDDModeRecordedAt == nil || !merged.RDDModeRecordedAt.Equal(recorded) {
 		t.Errorf("MergeAgents dropped the global mode: %q/%v", merged.RDDMode, merged.RDDModeRecordedAt)
+	}
+}
+
+// ─── REQ-22.9 / D-14: upstream_version durable audit record ─────────────────
+
+// persistFuncs lists both write paths named by decision D-14: a document
+// written by either one must carry upstream_version.
+var persistFuncs = []struct {
+	name string
+	run  func(home string, s InstallState) error
+}{
+	{name: "Write", run: func(home string, s InstallState) error { return Write(home, s) }},
+	{name: "WriteReconciled", run: func(home string, s InstallState) error { return WriteReconciled(home, s) }},
+}
+
+// TestUpstreamVersion_DefaultBackfillOnWrite verifies that writing a state
+// without the field leaves upstream_version == DefaultUpstreamVersion ("3.4.0")
+// in ~/.axiom/state.json (REQ-22.9 scenario "El estado expone upstream_version").
+// TestUpstreamVersion_InitialValueFromNewInstallState pins REQ-22.9: the
+// ecosystem state established by this version records upstream_version with its
+// initial value 3.4.0. The value comes from NewInstallState, never from a
+// write-side backfill: writes must stay lossless and never invent a field the
+// caller did not set.
+func TestUpstreamVersion_InitialValueFromNewInstallState(t *testing.T) {
+	for _, tt := range persistFuncs {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := tt.run(home, NewInstallState()); err != nil {
+				t.Fatalf("persist error = %v", err)
+			}
+			data, err := os.ReadFile(Path(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !contains(string(data), `"upstream_version": "3.4.0"`) {
+				t.Errorf("state.json must contain upstream_version 3.4.0; got:\n%s", data)
+			}
+			got, err := Read(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.UpstreamVersion != "3.4.0" {
+				t.Errorf("UpstreamVersion = %q, want %q", got.UpstreamVersion, "3.4.0")
+			}
+		})
+	}
+
+	t.Run("a write without the field does not invent it", func(t *testing.T) {
+		home := t.TempDir()
+		want := InstallState{InstalledAgents: []string{"opencode"}}
+		if err := Write(home, want); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Read(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.UpstreamVersion != "" {
+			t.Errorf("UpstreamVersion = %q, want empty: Write must not invent the field", got.UpstreamVersion)
+		}
+	})
+}
+
+// TestUpstreamVersion_ValueHasNoVPrefix pins the persisted format: the spec
+// fixes "3.4.0" without a "v" prefix even though the proposal said v3.4.0.
+func TestUpstreamVersion_ValueHasNoVPrefix(t *testing.T) {
+	if DefaultUpstreamVersion != "3.4.0" {
+		t.Fatalf("DefaultUpstreamVersion = %q, want %q", DefaultUpstreamVersion, "3.4.0")
+	}
+	if strings.HasPrefix(DefaultUpstreamVersion, "v") {
+		t.Fatalf("DefaultUpstreamVersion = %q, must not carry a %q prefix", DefaultUpstreamVersion, "v")
+	}
+
+	home := t.TempDir()
+	if err := Write(home, InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(got.UpstreamVersion, "v") {
+		t.Fatalf("persisted UpstreamVersion = %q, must not carry a %q prefix", got.UpstreamVersion, "v")
+	}
+}
+
+// TestUpstreamVersion_ExplicitValueNotOverwritten verifies the write-side
+// backfill never overwrites a value already present in the state being written
+// (decision D-14: "nunca sobrescriben uno ya presente").
+func TestUpstreamVersion_ExplicitValueNotOverwritten(t *testing.T) {
+	for _, tt := range persistFuncs {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := tt.run(home, InstallState{
+				InstalledAgents: []string{"opencode"},
+				UpstreamVersion: "3.3.9",
+			}); err != nil {
+				t.Fatalf("persist error = %v", err)
+			}
+			data, err := os.ReadFile(Path(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !contains(string(data), `"upstream_version": "3.3.9"`) {
+				t.Errorf("state.json must keep the explicit upstream_version 3.3.9; got:\n%s", data)
+			}
+			got, err := Read(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.UpstreamVersion != "3.3.9" {
+				t.Errorf("UpstreamVersion = %q, want %q (must not be overwritten)", got.UpstreamVersion, "3.3.9")
+			}
+		})
+	}
+}
+
+// TestUpstreamVersion_SurvivesWriteRead verifies the audit record survives
+// write/read cycles: it round-trips unchanged and carries over when the state
+// read back is written again (REQ-22.9, durable record).
+func TestUpstreamVersion_SurvivesWriteRead(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		incoming string
+		want     string
+	}{
+		{name: "explicit value survives rewrite", incoming: "3.3.9", want: "3.3.9"},
+		{name: "initial default survives rewrite", incoming: DefaultUpstreamVersion, want: DefaultUpstreamVersion},
+		{name: "absent value stays absent (no write-side backfill)", incoming: "", want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := Write(home, InstallState{
+				InstalledAgents: []string{"opencode"},
+				UpstreamVersion: tt.incoming,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Read(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.UpstreamVersion != tt.want {
+				t.Fatalf("UpstreamVersion after first round-trip = %q, want %q", got.UpstreamVersion, tt.want)
+			}
+
+			got.InstalledAgents = []string{"opencode", "codex"}
+			if err := Write(home, got); err != nil {
+				t.Fatal(err)
+			}
+			again, err := Read(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.UpstreamVersion != tt.want {
+				t.Fatalf("UpstreamVersion after rewrite = %q, want %q (record must survive write/read)", again.UpstreamVersion, tt.want)
+			}
+		})
+	}
+}
+
+// TestUpstreamVersion_WriteFailurePreservesRecord verifies that a failed write
+// does not lose the previously persisted audit record. Failure is injected by
+// making state.json read-only so the atomic replacement is refused; on hosts
+// that replace read-only files anyway the injection is unavailable and the test
+// skips rather than asserting about a write that did not fail.
+func TestUpstreamVersion_WriteFailurePreservesRecord(t *testing.T) {
+	home := t.TempDir()
+	original := InstallState{
+		InstalledAgents: []string{"opencode"},
+		UpstreamVersion: "3.3.9",
+	}
+	if err := Write(home, original); err != nil {
+		t.Fatal(err)
+	}
+	statePath := Path(home)
+	if err := os.Chmod(statePath, 0o444); err != nil {
+		t.Skipf("cannot make state.json read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(statePath, 0o644) })
+
+	err := Write(home, InstallState{
+		InstalledAgents: []string{"claude-code"},
+		UpstreamVersion: "9.9.9",
+	})
+	if err == nil {
+		t.Skip("host replaced a read-only state file; write-failure injection unavailable")
+	}
+
+	got, readErr := Read(home)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !reflect.DeepEqual(got, original) {
+		t.Fatalf("state after failed Write() = %#v, want %#v", got, original)
+	}
+	if got.UpstreamVersion != "3.3.9" {
+		t.Fatalf("UpstreamVersion after failed write = %q, want %q (previous record must survive)", got.UpstreamVersion, "3.3.9")
+	}
+}
+
+// TestUpstreamVersion_NoUpdateUpgradeSyncConsumer is the structural
+// non-consumption assertion for REQ-22.9 ("El registro no dispara
+// sincronización"): no file on the update/upgrade/sync decision surface may
+// reference the register. Scope follows INC-22 tasks.md Fase 22.1
+// (internal/update including internal/update/upgrade, and the sync verb), plus
+// the verb entry points in internal/app (runUpdate/runUpgrade/sync dispatch).
+func TestUpstreamVersion_NoUpdateUpgradeSyncConsumer(t *testing.T) {
+	tokens := []string{"UpstreamVersion", "upstream_version"}
+	roots := []string{
+		filepath.Join("..", "..", "internal", "update"),
+		filepath.Join("..", "..", "internal", "app"),
+	}
+
+	var offenders []string
+	scanFile := func(path string) error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, tok := range tokens {
+			if contains(string(data), tok) {
+				offenders = append(offenders, path+" references "+tok)
+			}
+		}
+		return nil
+	}
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(path, ".go") {
+				return nil
+			}
+			return scanFile(path)
+		})
+		if err != nil {
+			t.Fatalf("scan %s: %v", root, err)
+		}
+	}
+
+	syncFiles, err := filepath.Glob(filepath.Join("..", "..", "internal", "cli", "sync*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(syncFiles) == 0 {
+		t.Fatal("sync verb files not found; scan scope is stale")
+	}
+	for _, path := range syncFiles {
+		if err := scanFile(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(offenders) > 0 {
+		t.Fatalf("update/upgrade/sync must not consume upstream_version (REQ-22.9):\n%s", strings.Join(offenders, "\n"))
 	}
 }
 

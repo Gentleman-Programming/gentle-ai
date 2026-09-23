@@ -627,7 +627,7 @@ func TestCheckSingleToolGentleAIBetaHintNamesAdvertisedTarget(t *testing.T) {
 	if result.LatestVersion != "main@972997650b51" {
 		t.Fatalf("LatestVersion = %q, want main@972997650b51", result.LatestVersion)
 	}
-	derived := GentleAISourceInstallCommand(result.LatestVersion)
+	derived := SourceInstallCommand(result.Tool, result.LatestVersion)
 	if result.UpdateHint != derived {
 		t.Fatalf("UpdateHint = %q, want the instruction derived from the advertised target: %q", result.UpdateHint, derived)
 	}
@@ -1196,26 +1196,26 @@ func TestUpdateHint(t *testing.T) {
 	}{
 		{
 			name:          "gentle-ai macOS brew-owned",
-			tool:          ToolInfo{Name: "gentle-ai"},
+			tool:          upstreamSourceTool,
 			profile:       system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			brewInstalled: true,
 			want:          "brew upgrade gentle-ai",
 		},
 		{
 			name:    "gentle-ai macOS non-brew",
-			tool:    ToolInfo{Name: "gentle-ai"},
+			tool:    upstreamSourceTool,
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "gentle-ai linux",
-			tool:    ToolInfo{Name: "gentle-ai"},
+			tool:    upstreamSourceTool,
 			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt"},
 			want:    "curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash",
 		},
 		{
 			name:    "gentle-ai windows",
-			tool:    ToolInfo{Name: "gentle-ai"},
+			tool:    upstreamSourceTool,
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Install/update from source with Go 1.25.10+: go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest",
 		},

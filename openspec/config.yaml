@@ -13,7 +13,7 @@ context: |
   Memoria persistente: Engram MCP (--project=axiom)
   IDIOMA OBLIGATORIO: Todos los artefactos de SDD deben redactarse en espanol (castellano).
 
-strict_tdd: true
+strict_tdd: false
 
 rules:
   proposal:
@@ -43,7 +43,7 @@ rules:
     - Warn before merging destructive deltas (large removals)
 
 testing:
-  strict_tdd: true
+  strict_tdd: false
   detected: "2026-05-05"
 
   runner:

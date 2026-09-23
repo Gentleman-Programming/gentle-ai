@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,14 +40,6 @@ type SkillEntry struct {
 	Name        string
 	Path        string
 	Description string
-}
-
-type Result struct {
-	Regenerated bool
-	SkillCount  int
-	Reason      string
-	Registry    string
-	Cache       string
 }
 
 type cacheFile struct {
@@ -106,9 +99,38 @@ func ProjectSkillDirs(cwd string) []string {
 	}
 }
 
-func Regenerate(cwd, home string, force bool) (Result, error) {
-	cwd = filepath.Clean(cwd)
+// Regenerate runs the single scan and writes the unified skills index to its
+// destinations (REQ-22.11, D-09), in this order:
+//
+//  1. .atl/skill-registry.md (fatal)
+//  2. .atl/.skill-registry.cache.json (fatal)
+//  3. the managed `## Skills` section of AGENTS.md (fatal when the file exists;
+//     omitted when it does not — spec §3.6)
+//  4. the Engram `skill-registry` topic through opts.Mirror (never fatal:
+//     `mirror failed` with exit 0 for the caller — REQ-22.11)
+//
+// The exclusion filter is applied once, inside the scan (LoadSkill), upstream
+// of every destination. When the fingerprint matches and Force is false, no
+// destination is written and all three stay byte-identical (Reason ==
+// "cache-hit"). A cwd that does not resolve to an existing directory fails
+// before any write (T-1 path containment).
+// cleanPathArg normalizes a user-supplied path argument (--cwd and the home
+// root) before any filesystem work. Windows accepts both separators in one
+// path while filepath.Clean only applies the *host* separator rules, so on a
+// non-Windows host a backslash-separated argument would resolve to a
+// completely different location. Fold the separators first so the argument
+// resolves identically on every host; --cwd is user input, never a literal
+// filename discovered on disk.
+func cleanPathArg(path string) string {
+	return filepath.Clean(strings.ReplaceAll(path, "\\", "/"))
+}
+
+func Regenerate(cwd, home string, opts RegenerateOptions) (Result, error) {
+	cwd = cleanPathArg(cwd)
 	home = filepath.Clean(home)
+	if !dirExists(cwd) {
+		return Result{}, fmt.Errorf("workspace root does not exist: %s", cwd)
+	}
 
 	existingDirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
 	files, err := findAllSkillFiles(existingDirs)
@@ -118,10 +140,18 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 
 	registryPath := filepath.Join(cwd, RegistryRelPath)
 	cachePath := filepath.Join(cwd, CacheRelPath)
+	agentsPath := filepath.Join(cwd, AgentsRelPath)
 	fp := Fingerprint(files)
 	cached := readCachedFingerprint(cachePath)
-	if !force && cached == fp && fileExists(registryPath) {
-		return Result{Regenerated: false, Reason: "cache-hit", Registry: registryPath, Cache: cachePath}, nil
+	if !opts.Force && cached == fp && fileExists(registryPath) {
+		return Result{
+			Regenerated: false,
+			Reason:      "cache-hit",
+			Registry:    registryPath,
+			Cache:       cachePath,
+			Agents:      agentsCacheOutcome(agentsPath),
+			// Mirror stays zero: no write was attempted (T-8).
+		}, nil
 	}
 
 	entries := make([]SkillEntry, 0, len(files))
@@ -161,18 +191,53 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 		return Result{}, fmt.Errorf("write registry cache: %w", err)
 	}
 
-	reason := "fingerprint-changed"
-	if force {
-		reason = "forced"
+	agentsOutcome, agentsErr := writeAgentsIndex(agentsPath, cwd, entries)
+	result := Result{
+		Regenerated: true,
+		SkillCount:  len(entries),
+		Reason:      "fingerprint-changed",
+		Registry:    registryPath,
+		Cache:       cachePath,
+		Agents:      agentsOutcome,
 	}
-	return Result{Regenerated: true, SkillCount: len(entries), Reason: reason, Registry: registryPath, Cache: cachePath}, nil
+	if opts.Force {
+		result.Reason = "forced"
+	}
+	if agentsErr != nil {
+		// Fatal destination: earlier destinations already wrote ("partial
+		// already emitted"); the error names the destination (spec §1.1).
+		return result, agentsErr
+	}
+	result.Mirror = runMirror(opts.Mirror, cwd, entries)
+	return result, nil
+}
+
+// runMirror attempts the Engram mirror and reports it as data: a mirror
+// failure is never fatal (REQ-22.11). A nil MirrorFunc reports MirrorFailed
+// with "mirror not configured" — the command must never claim `mirror ok` for
+// a write it never attempted (T-8).
+func runMirror(mirror MirrorFunc, cwd string, entries []SkillEntry) MirrorOutcome {
+	if mirror == nil {
+		return MirrorOutcome{Status: MirrorFailed, Err: errors.New("mirror not configured")}
+	}
+	req := MirrorRequest{
+		TopicKey:      MirrorTopicKey,
+		Type:          MirrorType,
+		Title:         "Skill registry — " + filepath.Base(cwd),
+		Content:       mirrorContent(cwd, entries),
+		CapturePrompt: false,
+	}
+	if err := mirror(req); err != nil {
+		return MirrorOutcome{Status: MirrorFailed, Err: err}
+	}
+	return MirrorOutcome{Status: MirrorOK}
 }
 
 // List resolves the deduplicated, sorted set of skills that Regenerate would
 // index, without writing the registry, cache, or .gitignore. It is the
 // read-only inspection path behind `gentle-ai skill-registry list`.
 func List(cwd, home string) []SkillEntry {
-	cwd = filepath.Clean(cwd)
+	cwd = cleanPathArg(cwd)
 	home = filepath.Clean(home)
 	existingDirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
 	files, err := findAllSkillFiles(existingDirs)
@@ -268,12 +333,7 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 	lines = append(lines, "**Delegator use only.** This registry is an index, not a summary. Any agent that launches subagents reads it to select relevant skills, then passes exact `SKILL.md` paths for the subagent to read before work.", "")
 	lines = append(lines, "`SKILL.md` remains the source of truth. Do not inject generated summaries or compact rules by default; pass paths so subagents load the full runtime contract and preserve author intent.", "")
 	lines = append(lines, sectionMarker, "")
-	lines = append(lines, "| Skill | Trigger / description | Scope | Path |")
-	lines = append(lines, "| --- | --- | --- | --- |")
-	for _, entry := range entries {
-		scope := ScopeForPath(cwd, entry.Path)
-		lines = append(lines, fmt.Sprintf("| `%s` | %s | %s | `%s` |", markdownCell(entry.Name), markdownCell(entry.Description), markdownCell(scope), markdownCell(entry.Path)))
-	}
+	lines = append(lines, renderSkillsTable(cwd, entries, PathDiscovered))
 	lines = append(lines, "", "## Loading protocol", "")
 	lines = append(lines, "1. Match task context and target files against the `Trigger / description` column.")
 	lines = append(lines, "2. Pass only the matching `Path` values to the subagent under `## Skills to load before work`.")
@@ -403,16 +463,6 @@ func ScopeForPath(cwd, path string) string {
 		return "project"
 	}
 	return "user"
-}
-
-func markdownCell(value string) string {
-	value = strings.ReplaceAll(value, "\n", " ")
-	value = strings.ReplaceAll(value, "|", "\\|")
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "—"
-	}
-	return trimmed
 }
 
 func readCachedFingerprint(path string) string {

@@ -203,12 +203,53 @@ type BackupActionRequest struct {
 }
 
 // EcosystemActionResponse reporta el resultado de operaciones como Sync o Upgrade.
+//
+// Sequence y Phases son adiciones opcionales (D-07): solo el endpoint encadenado
+// upgrade->sync los puebla. Cualquier otro consumidor del DTO (por ejemplo
+// POST /api/ecosystem/backups/restore) no se ve obligado a poblarlos y los
+// lectores que no conozcan phases leen exactamente el documento anterior.
 type EcosystemActionResponse struct {
-	Success bool     `json:"success"`
-	Action  string   `json:"action"`
-	Message string   `json:"message"`
-	Output  []string `json:"output,omitempty"`
-	Error   string   `json:"error,omitempty"`
+	Success  bool             `json:"success"`
+	Action   string           `json:"action"`
+	Message  string           `json:"message"`
+	Output   []string         `json:"output,omitempty"`
+	Error    string           `json:"error,omitempty"`
+	Sequence string           `json:"sequence,omitempty"`
+	Phases   *EcosystemPhases `json:"phases,omitempty"`
+}
+
+// EcosystemPhases agrupa el reporte por fases de la cadena upgrade->sync,
+// en orden de ejecución (D-07, REQ-22.4).
+type EcosystemPhases struct {
+	Upgrade UpgradePhaseReport `json:"upgrade"`
+	Sync    SyncPhaseReport    `json:"sync"`
+}
+
+// UpgradePhaseReport describe la fase upgrade de la cadena.
+//
+// Los campos obligatorios del contrato (success, status, restart_required,
+// manual_hint) van SIN omitempty para que siempre estén presentes en el JSON
+// (D-07).
+type UpgradePhaseReport struct {
+	Success         bool     `json:"success"`
+	Status          string   `json:"status"`
+	RestartRequired bool     `json:"restart_required"`
+	ManualHint      string   `json:"manual_hint"`
+	Output          []string `json:"output,omitempty"`
+	Error           string   `json:"error,omitempty"`
+}
+
+// SyncPhaseReport describe la fase sync de la cadena.
+//
+// Los campos obligatorios del contrato (success, executed, skipped_reason) van
+// SIN omitempty para que siempre estén presentes en el JSON (D-07).
+type SyncPhaseReport struct {
+	Success       bool     `json:"success"`
+	Executed      bool     `json:"executed"`
+	SkippedReason string   `json:"skipped_reason"`
+	Files         []string `json:"files,omitempty"`
+	Output        []string `json:"output,omitempty"`
+	Error         string   `json:"error,omitempty"`
 }
 
 // ModelConfigItem describe la configuración o asignación de un modelo de IA.

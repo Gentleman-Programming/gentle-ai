@@ -475,7 +475,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 
 	var preflightSkips []ToolUpgradeResult
 	if !dryRun {
-		executable, preflightSkips = preflightWindowsGentleAIUpgrades(executable, profile)
+		executable, preflightSkips = preflightWindowsSelfBinaryUpgrades(executable, profile)
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
@@ -528,7 +528,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 			NewVersion: r.LatestVersion,
 			Method:     effectiveMethod(r.Tool, profile),
 			Status:     UpgradeSkipped,
-			ManualHint: fmt.Sprintf("source build — upgrade manually or install a release binary from https://github.com/Gentleman-Programming/%s/releases", r.Tool.Repo),
+			ManualHint: fmt.Sprintf("source build — upgrade manually or install a release binary from https://github.com/%s/%s/releases", r.Tool.Owner, r.Tool.Repo),
 		})
 	}
 
@@ -591,20 +591,20 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 }
 
-// preflightWindowsGentleAIUpgrades removes unsafe Windows self-upgrades before
+// preflightWindowsSelfBinaryUpgrades removes unsafe Windows self-upgrades before
 // the backup phase. A manual fallback must not create or prune a backup because
 // no upgrade will be attempted.
-func preflightWindowsGentleAIUpgrades(executable []executableUpdate, profile system.PlatformProfile) ([]executableUpdate, []ToolUpgradeResult) {
+func preflightWindowsSelfBinaryUpgrades(executable []executableUpdate, profile system.PlatformProfile) ([]executableUpdate, []ToolUpgradeResult) {
 	remaining := make([]executableUpdate, 0, len(executable))
 	skipped := make([]ToolUpgradeResult, 0)
 	for _, candidate := range executable {
 		r := candidate.result
-		if profile.OS != "windows" || r.Tool.Name != "gentle-ai" || effectiveMethod(r.Tool, profile) != update.InstallGoInstall {
+		if profile.OS != "windows" || !update.IsSelfTool(r.Tool) || effectiveMethod(r.Tool, profile) != update.InstallGoInstall {
 			remaining = append(remaining, candidate)
 			continue
 		}
 
-		destination, err := preflightWindowsGentleAIGoInstall(r, profile)
+		destination, err := preflightWindowsSelfBinaryWrite(r.Tool, profile)
 		if err != nil {
 			if hint, ok := AsManualFallback(err); ok {
 				skipped = append(skipped, ToolUpgradeResult{
@@ -692,7 +692,7 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	if profile.PackageManager == "brew" && homebrewPackageInstalled(tool.Name) {
 		return update.InstallBrew
 	}
-	if tool.Name == "gentle-ai" {
+	if update.IsSelfTool(tool) {
 		return gentleAISelfUpgradeMethod(tool, profile)
 	}
 	if profile.GoAvailable && tool.GoImportPath != "" {
@@ -701,45 +701,23 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	return tool.InstallMethod
 }
 
-// gentleAISelfUpgradeMethod resolves how gentle-ai upgrades itself, once
+// gentleAISelfUpgradeMethod resolves how the self-tool upgrades itself, once
 // Homebrew ownership has already been ruled out.
 //
-// Trust anchors differ by platform, and that is the whole point of this
-// function:
+// Trust anchors differ by platform (D-02):
 //
-//   - Linux and macOS publish signed release binaries. Those are downloaded over
-//     an authenticated connection and verified with minisign, so they always
-//     return InstallBinary. This function is the ONLY place gentle-ai's method is
-//     decided, which is what makes that guarantee structural rather than
-//     incidental: gentle-ai never reaches the generic
-//     `GoAvailable && GoImportPath != ""` rule, so declaring a GoImportPath for
-//     the Windows path below cannot silently move Linux or macOS off minisign.
-//     Regression guards: TestGentleAIOnLinuxNeverRoutesToGoInstall and
-//     TestGentleAIOnMacOSNeverRoutesToGoInstall.
+//   - Linux and macOS publish signed release binaries → InstallBinary.
+//   - Windows with GoInstallResolvable() → InstallGoInstall (checksum-verified).
+//   - Windows without resolvable go install → InstallSourceBuild (clone + build).
 //
-//   - Windows publishes no official binary and no Scoop manifest while publicly
-//     trusted Authenticode signing is pending, so there is no signed asset to
-//     download and minisign is not an option there. With Go on PATH, a pinned
-//     `go install <importPath>@vX.Y.Z` is the automatic upgrade. That is not an
-//     unverified install: goInstallUpgrade deliberately does not touch cmd.Env,
-//     so the Go checksum database (sum.golang.org) still verifies the module
-//     against its transparency log. The trust anchor moves from our minisign key
-//     to Go's checksum log — a different anchor, not a missing one. (The `@main`
-//     beta path in goInstallMainUpgrade DOES bypass sumdb via goProxyBypassEnv;
-//     that is a separate, opt-in channel and is not this path.)
-//     `go install` can write somewhere the shell does not resolve, which is why
-//     goInstallUpgrade verifies the destination afterwards and warns on mismatch.
-//
-//   - Windows without Go on PATH, or without a declared GoImportPath, returns
-//     InstallBinary, which binaryUpgrade turns into an explicit refusal naming
-//     the runnable source-install command. Nothing is downloaded or executed.
-//
-// Returning InstallBinary in every non-go-install case is also what disables a
-// legacy InstallScript declaration on Windows, where scriptUpgrade has no bash
-// and would point the user at a releases page that publishes no Windows assets.
+// This function is the ONLY place the self-tool's method is decided, which
+// keeps the routing structural rather than incidental.
 func gentleAISelfUpgradeMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
-	if profile.OS == "windows" && profile.GoAvailable && tool.GoImportPath != "" {
-		return update.InstallGoInstall
+	if profile.OS == "windows" {
+		if profile.GoAvailable && tool.GoInstallResolvable() {
+			return update.InstallGoInstall
+		}
+		return update.InstallSourceBuild
 	}
 	return update.InstallBinary
 }
