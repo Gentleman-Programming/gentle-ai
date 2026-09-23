@@ -11,6 +11,8 @@ const WindowsDistributionHoldMessage = "Windows binary distribution and Scoop ar
 
 // GentleAISourceInstallCommand returns the safe source-install fallback for an
 // exact release, beta main build, or the latest release when version is empty.
+// The /vN suffix is derived from version via ModulePathForVersion (issue
+// #4687); see its doc comment for the unparseable-version fallback.
 func GentleAISourceInstallCommand(version string) string {
 	target := "latest"
 	version = strings.TrimSpace(version)
@@ -19,7 +21,8 @@ func GentleAISourceInstallCommand(version string) string {
 	} else if version != "" {
 		target = "v" + strings.TrimPrefix(version, "v")
 	}
-	return "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@" + target
+	module := ModulePathForVersion("github.com/gentleman-programming/gentle-ai/cmd/gentle-ai", "gentle-ai", version)
+	return "go install " + module + "@" + target
 }
 
 // updateHint returns a platform-specific instruction string for updating the given tool.
