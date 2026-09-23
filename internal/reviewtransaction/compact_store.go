@@ -104,7 +104,7 @@ func (err *CompactRecoveryAuthorizationInexactError) Error() string {
 	if projection == "" {
 		projection = ProjectionWorkspace
 	}
-	return fmt.Sprintf("%s (projection=%s target_identity=%s)", ErrCompactRecoveryAuthorizationInexact, projection, err.TargetIdentity)
+	return fmt.Sprintf("%s (schema %s: key=value LF lines for predecessor_lineage, predecessor_revision, target_identity, actor, reason) (projection=%s target_identity=%s)", ErrCompactRecoveryAuthorizationInexact, compactRecoveryAuthorizationSchema, projection, err.TargetIdentity)
 }
 
 func (err *CompactRecoveryAuthorizationInexactError) Unwrap() error {
