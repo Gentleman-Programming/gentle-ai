@@ -217,6 +217,15 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Run native Windows private report refusal tests
+        shell: pwsh
+        run: |
+          $test = 'TestWriteNewReportUnsupportedDoesNotWrite'
+          $selected = @(go test ./internal/privatefile -list "^$test$" | Where-Object { $_ -ceq $test })
+          if ($LASTEXITCODE -ne 0 -or $selected.Count -ne 1) { throw 'Missing native Windows private report refusal test' }
+          go test ./internal/privatefile -count=1 -timeout=300s
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run native Windows junction parent tests
         shell: pwsh
         timeout-minutes: 5
@@ -343,6 +352,13 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
+
+      - name: Run native Darwin private report refusal tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./internal/privatefile -list '^TestWriteNewReportUnsupportedDoesNotWrite$' | grep -Fxq 'TestWriteNewReportUnsupportedDoesNotWrite'
+          go test ./internal/privatefile -count=1 -timeout=300s
 
       # Fails loudly if any manifest entry names a test that no longer exists:
       # `go test -run` with a pattern matching nothing exits 0, which would rot
