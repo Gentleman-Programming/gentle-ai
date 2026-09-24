@@ -11,7 +11,7 @@ Establish PR-run Linux, macOS, and Windows evidence for the optional local failu
 ## Tasks
 - [x] Bring the self-contained Linux owner-only report writer and its tests into this clean branch; retain non-Linux `ErrUnsupported` with no destination creation.
 - [x] Add focused PR CI steps on native macOS and Windows runners with an exact test-selection guard (not yet executed on CI).
-- [ ] Independently verify locally, then inspect native CI results; independent local package/vet/cross-compile checks passed, native CI pending.
+- [ ] Independently verify locally, then inspect native CI results; initial CI failed in the Darwin guard, corrected candidate independently checked, native rerun pending.
 - [ ] Parent: commit the independently verified work unit, use applicable native review, and open the linked draft PR; no merge approval.
 
 ## Scope and limits
@@ -29,6 +29,7 @@ Local evidence (uncommitted; no CI run IDs):
   execution is pending. `gofmt -l` on touched Go files, `git diff --check`,
   and untracked whitespace inspection were clean.
 - Independent read-only verifier confirmed all five source files match the source-only originals byte-for-byte, package tests/vet/format/whitespace pass, and macOS/Windows compile-only checks pass. Full repository suite remains pending CI; native runtime behavior has not been observed.
+- Initial draft PR #4936 run `35949091000`: Windows private report refusal step passed. Darwin test-presence guard exited 141 before tests: quiet grep closed the pipe under `pipefail`. A one-line full-consuming grep correction passed an independent Linux pipefail simulation; native Darwin rerun remains pending.
 - Runtime harness: N/A; no launcher/Apply route is present in this slice.
 - Rollback boundary: remove `internal/privatefile/`, the two CI steps, and
   this tracker update; no other worktree or actual user home was changed.

@@ -357,7 +357,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./internal/privatefile -list '^TestWriteNewReportUnsupportedDoesNotWrite$' | grep -Fxq 'TestWriteNewReportUnsupportedDoesNotWrite'
+          go test ./internal/privatefile -list '^TestWriteNewReportUnsupportedDoesNotWrite$' | grep -Fx 'TestWriteNewReportUnsupportedDoesNotWrite' >/dev/null
           go test ./internal/privatefile -count=1 -timeout=300s
 
       # Fails loudly if any manifest entry names a test that no longer exists:
