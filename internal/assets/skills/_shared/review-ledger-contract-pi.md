@@ -4,7 +4,7 @@ Pi uses the compact gentle-pi facade for this lifecycle: `gentle_review` for ins
 
 ## Entry rule
 
-After authorized source-mutating implementation is complete and normalized, and before reporting it complete, call `gentle_review` with {"operation":"inspect"}. Do this once per candidate whenever the user-owned review switch is enabled (`gentle-ai review mode status` reads it without changing it). The facade returns the only offered START route; do not infer, reconstruct, or replace it. Never skip the preflight because the user did not ask for a review: the START consent envelope lets the human decide this candidate. Skip it only for a trivial passive documentation-only edit, when the user explicitly left this candidate unreviewed, or while a transaction is already bound to it.
+After authorized source-mutating implementation is complete and normalized, and before reporting it complete, call `gentle_review` with {"operation":"inspect"}. Do this once per candidate whenever the user-owned review switch is enabled (`axiom review mode status` reads it without changing it). The facade returns the only offered START route; do not infer, reconstruct, or replace it. Never skip the preflight because the user did not ask for a review: the START consent envelope lets the human decide this candidate. Skip it only for a trivial passive documentation-only edit, when the user explicitly left this candidate unreviewed, or while a transaction is already bound to it.
 
 ## Atomic lifecycle
 
@@ -36,7 +36,7 @@ A session in repository A may review an explicitly selected nested target in unr
 
 ### Continue after a stop reason code
 
-A `stop` ends its transition, never approves delivery. `D` means the human disables the review switch for this clone with `gentle-ai review mode disable --scope clone`; ordinary policy then decides delivery. `S` means re-query bound facade STATUS with the retained `lineageId` and `workspaceRoot`.
+A `stop` ends its transition, never approves delivery. `D` means the human disables the review switch for this clone with `axiom review mode disable --scope clone`; ordinary policy then decides delivery. `S` means re-query bound facade STATUS with the retained `lineageId` and `workspaceRoot`.
 
 | Reason codes | Continuation |
 | --- | --- |
@@ -44,7 +44,7 @@ A `stop` ends its transition, never approves delivery. `D` means the human disab
 | `empty_base_diff_bootstrap_required` | Terminal: authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal: reduce the candidate scope and start a new transaction, or `D`. |
 | `correction_context_budget_exceeded` | Terminal: this authority has to be released rather than left in place, and invalidation refuses here. The maintainer runs the release command the stop's `continuation` names, exactly as printed; it is the preparatory step its `detail` describes, and its refusal prints the binding the full release needs. A stop with no `continuation` means the authority is not releasable in its current state: the maintainer inspects it, or `D`. Then review as smaller candidates, or `D`. |
-| `managed_assets_outdated` | Run the `gentle-ai sync` command from the stop's `continuation`, then `S`. |
+| `managed_assets_outdated` | Run the `axiom sync` command from the stop's `continuation`, then `S`. |
 | `staged_workspace_overlay_recovery_unavailable` | Call facade `recover` with the retained `lineageId`, or start a fresh transaction; otherwise `D`. |
 | `corrected_candidate_unavailable` | Change the correction candidate, then `S`; do not reuse the pre-correction target. |
 | `correction_repository_verification_failed` | Change the correction candidate within the same open budget, then `S`. |
@@ -52,7 +52,7 @@ A `stop` ends its transition, never approves delivery. `D` means the human disab
 | `staged_delivery_candidate_required` | Stage every reviewed path exactly as reviewed, then `S`. |
 | `recovery_scope_unchanged` | Change the target identity, then retry the facade `recover` route the stop returned. |
 | `unchanged_or_unverified_authority` | Change the candidate content, then start a new transaction, or `D`. |
-| `rdd_disabled` | Run the exact source-scoped `gentle-ai review mode enable` command rendered by bound facade STATUS, then `S`. |
+| `rdd_disabled` | Run the exact source-scoped `axiom review mode enable` command rendered by bound facade STATUS, then `S`. |
 
 ## Delivery follows ordinary repository policy
 

@@ -33,7 +33,7 @@ func stubUpgradeSequence(
 		upgradeSequenceSyncFn = origSync
 	})
 
-	upgradeSequenceReportFn = func(context.Context, io.Writer) (app.UpgradeRunReport, error) {
+	upgradeSequenceReportFn = func(_ context.Context, _ io.Writer, _ ...string) (app.UpgradeRunReport, error) {
 		return report, reportErr
 	}
 	upgradeSequenceSyncFn = func(*Service) (*EcosystemActionResponse, error) {
@@ -297,5 +297,57 @@ func TestEcosystemSyncEndpointContractUnchanged(t *testing.T) {
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /api/ecosystem/sync = %d, want 405", rr.Code)
+	}
+}
+
+func TestRunUpgradeSequence_PropagatesChannel(t *testing.T) {
+	var capturedChannel string
+	origReport := upgradeSequenceReportFn
+	origSync := upgradeSequenceSyncFn
+	t.Cleanup(func() {
+		upgradeSequenceReportFn = origReport
+		upgradeSequenceSyncFn = origSync
+	})
+
+	upgradeSequenceReportFn = func(_ context.Context, _ io.Writer, ch ...string) (app.UpgradeRunReport, error) {
+		if len(ch) > 0 {
+			capturedChannel = ch[0]
+		}
+		return app.UpgradeRunReport{Status: app.UpgradeStatusSucceeded}, nil
+	}
+	upgradeSequenceSyncFn = func(*Service) (*EcosystemActionResponse, error) {
+		return &EcosystemActionResponse{Success: true}, nil
+	}
+
+	svc := NewService(t.TempDir())
+	_, err := svc.RunUpgradeSequence("main")
+	if err != nil {
+		t.Fatalf("RunUpgradeSequence error: %v", err)
+	}
+	if capturedChannel != "main" {
+		t.Fatalf("capturedChannel = %q, want %q", capturedChannel, "main")
+	}
+}
+
+func TestEcosystemEndpointsAcceptOptionalPayloads(t *testing.T) {
+	svc := NewService(t.TempDir())
+	router := NewServer(svc).Router()
+
+	// Test POST /api/ecosystem/upgrade with channel payload
+	body := strings.NewReader(`{"channel":"main"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ecosystem/upgrade", body)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK && rr.Code != http.StatusInternalServerError {
+		t.Fatalf("POST /api/ecosystem/upgrade with channel = %d, want 200 or 500", rr.Code)
+	}
+
+	// Test POST /api/ecosystem/sync with scope payload
+	body = strings.NewReader(`{"scope":"workspace"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/ecosystem/sync", body)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK && rr.Code != http.StatusInternalServerError {
+		t.Fatalf("POST /api/ecosystem/sync with scope = %d, want 200 or 500", rr.Code)
 	}
 }

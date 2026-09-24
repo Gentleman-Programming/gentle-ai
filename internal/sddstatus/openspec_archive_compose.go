@@ -242,6 +242,39 @@ func ensureTrailingNewline(text string) string {
 	return text + "\n"
 }
 
+// ComposeOptions configura el comportamiento opcional de poda progresiva y archivado (ODD-4.1).
+type ComposeOptions struct {
+	// SupersedeRemoved marca los requisitos de REMOVED con [SUPERSEDED / DEPRECADO] en lugar de borrarlos físicamente.
+	SupersedeRemoved bool
+	// ExplicitSuperseded lista nombres de requisitos adicionales que deben marcarse como superados.
+	ExplicitSuperseded []string
+}
+
+func extractReason(text string) string {
+	match := openSpecReasonNote.FindString(text)
+	if match != "" {
+		match = strings.TrimSpace(match)
+		match = strings.TrimPrefix(match, "(Reason:")
+		match = strings.TrimPrefix(match, "(Reason :")
+		match = strings.TrimSuffix(match, ")")
+		return strings.TrimSpace(match)
+	}
+	return "Requisito superado durante la consolidación de especificaciones"
+}
+
+func annotateRequirementSuperseded(text, name, reason string) string {
+	replaced := false
+	out := openSpecReqHeadingLine.ReplaceAllStringFunc(text, func(line string) string {
+		if replaced {
+			return line
+		}
+		replaced = true
+		note := fmt.Sprintf("\n> [!CAUTION]\n> **REQUISITO HISTÓRICO SUPERADO / DEPRECADO:** Este requisito ha sido superado o deprecado.\n> Motivo: %s\n", reason)
+		return "### Requirement: " + name + " [SUPERSEDED / DEPRECADO]" + note
+	})
+	return ensureTrailingNewline(out)
+}
+
 // ComposeOpenSpecCanonicalSpec merges an OpenSpec delta spec into a canonical
 // spec's byte content. Every unrelated canonical requirement is preserved
 // verbatim; RENAMED, MODIFIED, REMOVED, then ADDED delta requirements are
@@ -252,6 +285,12 @@ func ensureTrailingNewline(text string) string {
 // malformed delta requirement returns *UnappliedDeltaError instead (#4119 —
 // archive previously reported success on exactly this kind of drift).
 func ComposeOpenSpecCanonicalSpec(canonical, delta string) (string, error) {
+	return ComposeOpenSpecCanonicalSpecWithOptions(canonical, delta, ComposeOptions{})
+}
+
+// ComposeOpenSpecCanonicalSpecWithOptions soporta opciones adicionales como la
+// preservación de requisitos deprecados ([SUPERSEDED / DEPRECADO]) para poda progresiva.
+func ComposeOpenSpecCanonicalSpecWithOptions(canonical, delta string, opts ComposeOptions) (string, error) {
 	canonicalDoc := parseSpecDocument(canonical)
 	if !canonicalDoc.hasRequirement() {
 		return "", &UnappliedDeltaError{Section: "CANONICAL", Reason: `canonical spec has no "### Requirement:" headings to compose against`}
@@ -326,6 +365,12 @@ func ComposeOpenSpecCanonicalSpec(canonical, delta string) (string, error) {
 		if i == -1 {
 			return "", &UnappliedDeltaError{Section: "REMOVED", Requirement: r.Name, Reason: fmt.Sprintf("no canonical requirement named %q", r.Name)}
 		}
+		if opts.SupersedeRemoved {
+			reason := extractReason(r.Text)
+			segments[i].Text = annotateRequirementSuperseded(segments[i].Text, r.Name, reason)
+			segments[i].Name = r.Name + " [SUPERSEDED / DEPRECADO]"
+			continue
+		}
 		switch {
 		case i == addAnchor:
 			addAnchor = i - 1
@@ -333,6 +378,14 @@ func ComposeOpenSpecCanonicalSpec(canonical, delta string) (string, error) {
 			addAnchor--
 		}
 		segments = append(segments[:i], segments[i+1:]...)
+	}
+
+	for _, name := range opts.ExplicitSuperseded {
+		i := indexOf(name)
+		if i != -1 {
+			segments[i].Text = annotateRequirementSuperseded(segments[i].Text, name, "Superado por consolidación de arquitectura")
+			segments[i].Name = name + " [SUPERSEDED / DEPRECADO]"
+		}
 	}
 
 	for _, r := range deltaDoc.Added {

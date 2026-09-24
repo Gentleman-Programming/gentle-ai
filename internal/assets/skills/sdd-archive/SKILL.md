@@ -142,6 +142,21 @@ axiom sdd archive-compose \
 - Only a zero exit is composition evidence. Include the command invocation
   in the phase result.
 
+##### Poda Progresiva y Deprecación (ODD-4.1)
+
+Cuando un incremento reemplaza o vuelve obsoletos requisitos de la especificación viva canonical, se debe usar la bandera `--supersede` en `axiom sdd archive-compose` en lugar de purgarlos en silencio. Esto preserva el requisito marcándolo con `[SUPERSEDED / DEPRECADO]` y su `(Reason: ...)`, evitando la doble fuente de la verdad sin romper la auditoría histórica:
+
+```bash
+axiom sdd archive-compose \
+  --canonical "openspec/specs/{domain}/spec.md" \
+  --delta "openspec/changes/{change-name}/specs/{domain}/spec.md" \
+  --supersede \
+  --output "openspec/specs/{domain}/spec.md.compose-tmp" \
+&& mv "openspec/specs/{domain}/spec.md.compose-tmp" "openspec/specs/{domain}/spec.md"
+```
+
+Si además existen requisitos de especificaciones monolíticas previas que quedan superados fuera de la sección `REMOVED`, especifícalos con `--superseded-requirements "Nombre Req 1, Nombre Req 2"`.
+
 #### If Main Spec Does NOT Exist
 
 The delta spec IS a full spec (not a delta). Copy it mechanically with the shell — do NOT Read the file and Write its content back, which routes bytes through the model and can truncate silently:
@@ -309,6 +324,30 @@ Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
 - artifact: `archive-report`
 - topic_key: `sdd/{change-name}/archive-report`
 - type: `architecture`
+
+En proyectos gobernados por Axiom, el informe `archive-report.md` (o en Engram) DEBE redactarse en español y contener obligatoriamente la sección de trazabilidad de poda histórica (ODD-4.2):
+
+```markdown
+# Reporte de Archivado Formal: {change-name}
+
+## Resumen de Cierre
+- Fecha de Archivado: {YYYY-MM-DD}
+- Estado de Verificación: {Aprobado (PASS) con evidencias formales}
+- Destino en Archivo: `openspec/changes/archive/{YYYY-MM-DD}-{change-name}/`
+
+## Especificaciones Históricas Superadas (ODD-4.2)
+| Dominio | Requisito Previo | Estado | Razón de la Poda / Superación | Nueva Referencia |
+|---------|------------------|--------|-------------------------------|------------------|
+| {dominio} | {Requisito previo} | [SUPERSEDED] | {Explicación del reemplazo o deprecación} | `{dominio}/spec.md#{requisito}` |
+*(Si no se superó ningún requisito previo, indicar explícitamente: "Ninguno. Incremento puramente aditivo.")*
+
+## Artefactos Consolidados
+- `proposal.md`
+- `spec.md`
+- `design.md`
+- `tasks.md`
+- `verify-report.md`
+```
 
 ### Step 6: Return Summary
 

@@ -20,7 +20,7 @@ Resolution order:
 1. Use the session cache if present.
 2. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full content.
 3. Fallback: read `.atl/skill-registry.md` from the project root.
-4. No registry found → proceed without project skills and warn the user to run `gentle-ai skill-registry refresh`.
+4. No registry found → proceed without project skills and warn the user to run `axiom skill index refresh`.
 
 ### Step 2: Match Relevant Skills
 

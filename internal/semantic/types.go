@@ -77,3 +77,12 @@ type SemanticQuery struct {
 	Kind  SymbolKind `json:"kind,omitempty"`
 	Role  string     `json:"role,omitempty"`
 }
+
+// ReindexResult reporta el resultado de la reindexación de CodeGraph.
+type ReindexResult struct {
+	Success   bool   `json:"success"`
+	Connector string `json:"connector"`
+	Message   string `json:"message"`
+	Output    string `json:"output,omitempty"`
+	Duration  string `json:"duration"`
+}

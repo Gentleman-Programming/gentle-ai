@@ -29,11 +29,11 @@ const (
 	CheckStatusFail = doctor.StatusFail
 )
 
-// coreTools are ecosystem-level binaries that gentle-ai always requires
+// coreTools are ecosystem-level binaries that axiom always requires
 // regardless of which agents the user installed. Agent-specific binaries are
 // derived from state.json's InstalledAgents field (see #709) so the doctor
 // only reports missing agents the user actually selected.
-var coreTools = []string{"gentle-ai", "gga", "engram"}
+var coreTools = []string{"axiom", "gga", "engram"}
 
 // agentToolBinaries maps an agent ID from state.json's InstalledAgents to the
 // CLI binary name exec.LookPath should resolve. An empty string means "no CLI
@@ -178,7 +178,7 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		// against (organic-dx recovery: the clause must render on every
 		// derivable gentle-ai branch, not only the healthy one).
 		detail := tool + " not found in PATH"
-		if tool == "gentle-ai" {
+		if tool == "axiom" || tool == "gentle-ai" {
 			detail += doctorInvokedGentleAIClause(resolved)
 		}
 		return CheckResult{
@@ -195,7 +195,7 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		// is running is guaranteed, so this is the branch that most needs
 		// the invoked-executable clause -- it must not be dropped here.
 		detail := fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", "))
-		if tool == "gentle-ai" {
+		if tool == "axiom" || tool == "gentle-ai" {
 			detail += doctorInvokedGentleAIClause(resolved)
 		}
 		return CheckResult{
@@ -210,7 +210,7 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	if shim != "" {
 		detail += " (" + shim + ")"
 	}
-	if tool == "gentle-ai" {
+	if tool == "axiom" || tool == "gentle-ai" {
 		detail += doctorInvokedGentleAIClause(resolved)
 	}
 	return CheckResult{
@@ -265,17 +265,17 @@ func doctorSameExecutable(a, b string) bool {
 
 func resolveDoctorTool(tool string) (string, string, error) {
 	resolved, err := lookPathFn(tool)
-	if err == nil {
+	if err == nil || errors.Is(err, exec.ErrDot) {
 		return resolved, "", nil
 	}
 	if doctorGOOS != "windows" {
 		return "", "", err
 	}
 	resolved, ps1Err := lookPathFn(tool + ".ps1")
-	if ps1Err != nil {
-		return "", "", err
+	if ps1Err == nil || errors.Is(ps1Err, exec.ErrDot) {
+		return resolved, "PowerShell shim", nil
 	}
-	return resolved, "PowerShell shim", nil
+	return "", "", err
 }
 
 func doctorToolCopies(tool string, pathDirs []string) []string {
@@ -385,14 +385,14 @@ func checkStateJSON(homeDir string) CheckResult {
 				Name:   id,
 				Status: CheckStatusWarn,
 				Detail: "state file not found at " + statePath + " (expected for first-time install)",
-				Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to create initial state"),
+				Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'axiom install' to create initial state"),
 			}
 		}
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusFail,
 			Detail: "failed to parse " + statePath + ": " + err.Error(),
-			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Delete or repair "+statePath+", then re-run 'gentle-ai install'"),
+			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Delete or repair "+statePath+", then re-run 'axiom install'"),
 		}
 	}
 
@@ -401,7 +401,7 @@ func checkStateJSON(homeDir string) CheckResult {
 			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: "state file found at " + statePath + " with no installed agents",
-			Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to configure agents"),
+			Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'axiom install' to configure agents"),
 		}
 	}
 
@@ -420,7 +420,7 @@ func checkStateJSON(homeDir string) CheckResult {
 					return CheckResult{
 						Name:   id,
 						Status: CheckStatusWarn,
-						Detail: fmt.Sprintf("managed config path %s could not be inspected: %v; inspect or repair it manually, then re-run 'gentle-ai doctor'", dir, ancestorErr),
+						Detail: fmt.Sprintf("managed config path %s could not be inspected: %v; inspect or repair it manually, then re-run 'axiom doctor'", dir, ancestorErr),
 					}
 				}
 				if ancestor != "" {
@@ -434,21 +434,21 @@ func checkStateJSON(homeDir string) CheckResult {
 				return CheckResult{
 					Name:   id,
 					Status: CheckStatusWarn,
-					Detail: fmt.Sprintf("managed config path %s could not be inspected: %v; inspect or repair it manually, then re-run 'gentle-ai doctor'", dir, lstatErr),
+					Detail: fmt.Sprintf("managed config path %s could not be inspected: %v; inspect or repair it manually, then re-run 'axiom doctor'", dir, lstatErr),
 				}
 			}
 			if info.Mode()&os.ModeSymlink != 0 {
 				if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 					dangling = append(dangling, dir)
 				} else if statErr != nil {
-					return CheckResult{Name: id, Status: CheckStatusWarn, Detail: fmt.Sprintf("managed config symlink target %s could not be inspected: %v; inspect or repair it manually, then re-run 'gentle-ai doctor'", dir, statErr)}
+					return CheckResult{Name: id, Status: CheckStatusWarn, Detail: fmt.Sprintf("managed config symlink target %s could not be inspected: %v; inspect or repair it manually, then re-run 'axiom doctor'", dir, statErr)}
 				}
 			}
 		}
 	}
 
 	if len(dangling) > 0 {
-		detail := fmt.Sprintf("state lists %d agent(s) whose managed config paths are dangling symlinks: %s; inspect or repair these paths manually, then re-run 'gentle-ai doctor'", len(dangling), strings.Join(dangling, ", "))
+		detail := fmt.Sprintf("state lists %d agent(s) whose managed config paths are dangling symlinks: %s; inspect or repair these paths manually, then re-run 'axiom doctor'", len(dangling), strings.Join(dangling, ", "))
 		if len(missing) > 0 {
 			detail += "; genuinely absent config dirs: " + strings.Join(missing, ", ")
 		}
@@ -460,7 +460,7 @@ func checkStateJSON(homeDir string) CheckResult {
 			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: fmt.Sprintf("state lists %d agent(s) whose config dirs are missing: %s", len(missing), strings.Join(missing, ", ")),
-			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files"),
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'axiom sync' to restore missing config files"),
 		}
 	}
 
@@ -497,7 +497,7 @@ func danglingAncestor(homeDir, path string) (string, error) {
 			// sync cannot mkdir below a regular file. POSIX surfaces this as
 			// ENOTDIR at the final lstat, but Windows reports it as not-exist,
 			// which is how the walk gets here.
-			return "", fmt.Errorf("ancestor %s is not a directory", ancestor) // refusal:by-design world-action: the caller embeds this cause in a warn that already names the continuation (inspect or repair the path, re-run 'gentle-ai doctor'); the repair itself happens on the filesystem, not through a command
+			return "", fmt.Errorf("ancestor %s is not a directory", ancestor) // refusal:by-design world-action: the caller embeds this cause in a warn that already names the continuation (inspect or repair the path, re-run 'axiom doctor'); the repair itself happens on the filesystem, not through a command
 		}
 		if _, err := os.Stat(ancestor); os.IsNotExist(err) {
 			return ancestor, nil
@@ -549,7 +549,7 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 			Name:   id,
 			Status: CheckStatusFail,
 			Detail: "engram MCP persisted configuration is invalid: " + err.Error(),
-			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Repair the persisted Engram MCP configuration, then run 'gentle-ai sync'"),
+			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Repair the persisted Engram MCP configuration, then run 'axiom sync'"),
 		}
 	}
 	if len(commands) == 0 {
@@ -557,7 +557,7 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: "engram MCP not probed: no persisted MCP configuration found for installed agents",
-			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore the Engram MCP configuration"),
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'axiom sync' to restore the Engram MCP configuration"),
 		}
 	}
 
@@ -690,7 +690,7 @@ func renderDoctorReport(w io.Writer, report DoctorReport) {
 		}
 	}
 
-	fmt.Fprintln(w, "gentle-ai doctor — system health check")
+	fmt.Fprintln(w, "axiom doctor — system health check")
 	fmt.Fprintln(w, "=======================================")
 	fmt.Fprintln(w)
 
@@ -743,7 +743,7 @@ func checkInstalledAssetVersion(homeDir string) CheckResult {
 	if s.InstalledBinaryVersion != AppVersion {
 		return CheckResult{
 			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — run 'gentle-ai sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
+			Detail: fmt.Sprintf("installed assets were configured by %s, but running binary is %s — run 'axiom sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
 		}
 	}
 	return CheckResult{

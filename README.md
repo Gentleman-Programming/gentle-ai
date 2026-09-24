@@ -18,6 +18,7 @@
 </p>
 
 <p>
+<a href="docs/manual-de-inicio.md"><strong>Manual de Inicio</strong></a> &bull;
 <a href="docs/quickstart.md"><strong>Guía Rápida</strong></a> &bull;
 <a href="docs/architecture.md"><strong>Arquitectura</strong></a> &bull;
 <a href="docs/agents.md"><strong>Agentes</strong></a> &bull;

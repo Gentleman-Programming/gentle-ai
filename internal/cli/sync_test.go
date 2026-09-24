@@ -6491,3 +6491,121 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
 }
+
+func TestParseSyncFlagsScope(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantScope string
+		wantErr   bool
+	}{
+		{
+			name:      "default scope is empty (resolved by ResolveInstallScope)",
+			args:      []string{},
+			wantScope: "",
+		},
+		{
+			name:      "explicit workspace scope",
+			args:      []string{"--scope", "workspace"},
+			wantScope: "workspace",
+		},
+		{
+			name:      "explicit global scope",
+			args:      []string{"--scope", "global"},
+			wantScope: "global",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags, err := ParseSyncFlags(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseSyncFlags(%v) error = %v, wantErr = %t", tt.args, err, tt.wantErr)
+			}
+			if flags.Scope != tt.wantScope {
+				t.Errorf("ParseSyncFlags(%v).Scope = %q, want %q", tt.args, flags.Scope, tt.wantScope)
+			}
+		})
+	}
+}
+
+func TestSyncBackupTargetsScopedWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	// Create workspace opencode.json so OpenCode settings authority resolves to workspace
+	if err := os.WriteFile(filepath.Join(workspace, "opencode.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode, model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentSkills, model.ComponentPersona},
+		SDDMode:    model.SDDModeSingle,
+		Persona:    model.PersonaNeutral,
+	}
+
+	adapters := resolveAdapters(selection.Agents)
+	for _, comp := range []model.ComponentID{model.ComponentSDD, model.ComponentSkills} {
+		for _, p := range syncComponentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, adapters, comp) {
+			if strings.HasPrefix(p, home) {
+				t.Errorf("component %s path %q is under home, expected under workspace %q", comp, p, workspace)
+			}
+		}
+	}
+
+	targets, err := syncBackupTargetsScoped(home, workspace, ScopeWorkspace, selection, adapters)
+	if err != nil {
+		t.Fatalf("syncBackupTargetsScoped() error = %v", err)
+	}
+
+	if len(targets) == 0 {
+		t.Fatal("expected non-empty targets for workspace scope")
+	}
+
+	claudeAdapter, _ := agents.NewAdapter(model.AgentClaudeCode)
+	claudePrompt := claudeAdapter.SystemPromptFile(workspace)
+	if !containsPath(targets, claudePrompt) {
+		t.Errorf("targets missing Claude workspace prompt %q: %v", claudePrompt, targets)
+	}
+}
+
+func TestRunSyncWithSelectionScopedWorkspaceDoesNotTouchHomeState(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	// Setup OpenCode settings in workspace to avoid missing authority errors
+	opencodeDir := filepath.Join(workspace, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "opencode.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSkills},
+		Skills:     []model.SkillID{"issue-creation"},
+		Persona:    model.PersonaNeutral,
+	}
+
+	result, err := RunSyncWithSelectionScoped(home, workspace, ScopeWorkspace, selection)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelectionScoped() error = %v", err)
+	}
+
+	if result.FilesChanged == 0 {
+		t.Log("No files changed or files written in workspace")
+	}
+
+	// Verify global state was NOT created in home
+	statePath := filepath.Join(home, ".axiom", "state.json")
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Errorf("global state file %q was created during workspace-scoped sync", statePath)
+	}
+	legacyStatePath := filepath.Join(home, ".gentle-ai", "state.json")
+	if _, err := os.Stat(legacyStatePath); !os.IsNotExist(err) {
+		t.Errorf("legacy global state file %q was created during workspace-scoped sync", legacyStatePath)
+	}
+}
+

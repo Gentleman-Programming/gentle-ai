@@ -68,3 +68,35 @@ func writeCLIFixture(t *testing.T, path, content string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+func TestRunSDDArchiveComposeSupersedeFlag(t *testing.T) {
+	root := t.TempDir()
+	canonicalPath := filepath.Join(root, "openspec", "specs", "widgets", "spec.md")
+	deltaPath := filepath.Join(root, "openspec", "changes", "prune-widgets", "specs", "widgets", "spec.md")
+
+	writeCLIFixture(t, canonicalPath, "## Requirements\n\n"+
+		"### Requirement: Old Feature\n\nOld body.\n\n"+
+		"### Requirement: Active Feature\n\nActive body.\n")
+	writeCLIFixture(t, deltaPath, "## REMOVED Requirements\n\n"+
+		"### Requirement: Old Feature\n\n(Reason: Reemplazado por nueva arquitectura)\n")
+
+	var output bytes.Buffer
+	err := runSDDArchiveCompose([]string{
+		"--canonical", canonicalPath,
+		"--delta", deltaPath,
+		"--supersede",
+		"--superseded-requirements", "Active Feature",
+	}, &output)
+	if err != nil {
+		t.Fatalf("runSDDArchiveCompose() error = %v", err)
+	}
+
+	composed := output.String()
+	if !strings.Contains(composed, "### Requirement: Old Feature [SUPERSEDED / DEPRECADO]") {
+		t.Errorf("se esperaba Old Feature marcado como SUPERSEDED:\n%s", composed)
+	}
+	if !strings.Contains(composed, "### Requirement: Active Feature [SUPERSEDED / DEPRECADO]") {
+		t.Errorf("se esperaba Active Feature marcado como SUPERSEDED:\n%s", composed)
+	}
+}
+

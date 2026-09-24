@@ -78,6 +78,9 @@ If the proposal has no Capabilities section (older format), fall back to inferri
 
 ### Step 4: Write Delta Specs
 
+**Directiva de Interrogación Exhaustiva (Funcional y Criterios BDD — ODD-1.1):**
+Todo requerimiento debe detallar escenarios Given/When/Then verificables para casos de éxito (*happy paths*), errores y casos extremos (*edge cases*). No des por supuestas respuestas no especificadas sobre validaciones, frecuencias, bloqueos o reintentos: formula preguntas interactivas al usuario antes de redactar los escenarios definitivos.
+
 **IF mode is `openspec` or `hybrid`:** Create specs inside the change folder:
 
 ```
@@ -220,8 +223,17 @@ Return to the orchestrator:
 - Edge cases: {covered/missing}
 - Error states: {covered/missing}
 
-### Next Step
+### Next Step & Bifurcación Post-Spec (ODD-1.2)
 Ready for design (sdd-design). If design already exists, ready for tasks (sdd-tasks).
+
+**Pregunta de Transición al Usuario:**
+Al validar la especificación funcional, formula explícitamente la siguiente pregunta al usuario:
+> *«¿Deseas generar un relevo formal (`handoff.md`) para el Arquitecto o continuar directamente hacia `design.md`?»*
+
+Si el usuario elige generar `handoff.md`:
+1. Verifica que los cambios en `spec.md` estén registrados en el repositorio de especificaciones (ODD-5.2).
+2. Como política obligatoria (ODD-5.1), el repositorio de especificaciones (`specs_repository`) opera SIEMPRE directo en la rama principal (`main`/`master`), sin ramas ni worktrees.
+3. Asegura o solicita ejecutar `git commit` y `git push` en `specs_repository` antes de emitir y entregar formalmente el `handoff.md` al siguiente rol.
 ```
 
 ## Rules
@@ -241,6 +253,8 @@ Ready for design (sdd-design). If design already exists, ready for tasks (sdd-ta
 - RENAMED requirements MUST state both old and new names explicitly and SHOULD include Migration guidance for references/tests/docs
 - Apply any `rules.specs` from `openspec/config.yaml`
 - **Sufficient detail**: Preserve complete requirements and testable Given/When/Then scenarios, including relevant edge cases. Use the detail each scenario needs to make its expected behavior unambiguous. Do not truncate required detail to meet a word or line cap.
+- ODD-5.1: El repositorio de especificaciones opera siempre directo en la rama principal (main/master). Jamás crees ramas ni worktrees en él.
+- ODD-5.2: Antes de ceder el testigo en handoff.md, confirma que las especificaciones están commiteadas y pusheadas a remoto.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
 
 ## RFC 2119 Keywords Quick Reference

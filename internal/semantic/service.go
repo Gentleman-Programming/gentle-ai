@@ -1,12 +1,16 @@
 package semantic
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
@@ -231,3 +235,64 @@ func (s *Service) loadWorkspaceConfig() (*workspace.WorkspaceConfig, error) {
 	}
 	return workspace.LoadConfig(configPath)
 }
+
+// ReindexCodeGraph dispara la reindexación de CodeGraph bajo demanda (ODD-3.1).
+// Si CodeGraph CLI está disponible, ejecuta 'codegraph index' en la raíz del workspace.
+// En caso de que no esté instalado, notifica el estado del motor semántico nativo sin error fatal.
+func (s *Service) ReindexCodeGraph(ctx context.Context) (*ReindexResult, error) {
+	start := time.Now()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Timeout de seguridad de 60 segundos si el contexto no tiene límite
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+	}
+
+	bin, err := exec.LookPath("codegraph")
+	if err != nil {
+		duration := time.Since(start).Round(time.Millisecond).String()
+		return &ReindexResult{
+			Success:   true,
+			Connector: string(ConnectorNativeAST),
+			Message:   "CodeGraph CLI no se encuentra en el PATH. El motor semántico activo Native AST y Serena MCP operan dinámicamente en memoria sin requerir reindexación estática.",
+			Duration:  duration,
+		}, nil
+	}
+
+	cmd := exec.CommandContext(ctx, bin, "index")
+	cmd.Dir = s.workspaceRoot
+
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+
+	runErr := cmd.Run()
+	duration := time.Since(start).Round(time.Millisecond).String()
+	outStr := strings.TrimSpace(outBuf.String())
+
+	if runErr != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("reindexación de CodeGraph excedió el tiempo límite (60s)")
+		}
+		return &ReindexResult{
+			Success:   false,
+			Connector: string(ConnectorCodeGraph),
+			Message:   fmt.Sprintf("Fallo al ejecutar 'codegraph index': %v", runErr),
+			Output:    outStr,
+			Duration:  duration,
+		}, runErr
+	}
+
+	return &ReindexResult{
+		Success:   true,
+		Connector: string(ConnectorCodeGraph),
+		Message:   "Reindexación de CodeGraph completada con éxito.",
+		Output:    outStr,
+		Duration:  duration,
+	}, nil
+}
+

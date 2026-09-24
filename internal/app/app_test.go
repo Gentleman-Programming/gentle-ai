@@ -1528,8 +1528,8 @@ func TestVersionBeforeSystemGuards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version should not fail: %v", err)
 	}
-	if !strings.Contains(buf.String(), "gentle-ai") {
-		t.Error("version output should contain 'gentle-ai'")
+	if !strings.Contains(buf.String(), "gentle-ai") && !strings.Contains(buf.String(), "axiom") {
+		t.Error("version output should contain 'axiom' or 'gentle-ai'")
 	}
 }
 
@@ -1554,15 +1554,15 @@ func TestHelpCommand(t *testing.T) {
 }
 
 // TestUnknownCommandSuggestsHelp verifies that an unrecognised command returns
-// an error whose message suggests running 'gentle-ai help'.
+// an error whose message suggests running 'axiom help' or 'gentle-ai help'.
 func TestUnknownCommandSuggestsHelp(t *testing.T) {
 	var buf bytes.Buffer
 	err := RunArgs([]string{"notacommand"}, &buf)
 	if err == nil {
 		t.Fatal("unknown command should return error")
 	}
-	if !strings.Contains(err.Error(), "gentle-ai help") {
-		t.Error("unknown command error should suggest 'gentle-ai help'")
+	if !strings.Contains(err.Error(), "axiom help") && !strings.Contains(err.Error(), "gentle-ai help") {
+		t.Error("unknown command error should suggest 'axiom help'")
 	}
 }
 

@@ -43,6 +43,13 @@ Reservado para grandes incrementos del sistema, cambios estructurales profundos 
 5. **Verificación Formal Obligatoria:** A diferencia de upstream, en Axiom la verificación con tests automatizados y reporte formal (`verify-report.md`) es un pilar innegociable antes del archivado.
 6. **Precondición de integración o despliegue para `archive` (INC-21):** `archive` no procede como paso inmediato tras `verify-report.md` favorable; exige evidencia de integración o despliegue registrada con `axiom sdd gate record --gate integration --decision approved --evidence-kind pr_merged|deployment|attestation [--commit <sha>]`. Un incremento ya archivado queda congelado: cualquier corrección posterior se gestiona mediante un ticket de bug o un nuevo incremento, nunca modificando directamente `openspec/changes/archive/`.
 
+### C. Política Git Diferencial, Sincronización Continua y Worktrees (ODD-5)
+1. **Repositorio de Especificaciones (Directo a Main):** El repositorio `specs_repository` opera SIEMPRE en la rama principal (`main`/`master`), sin ramas ni worktrees. Al emitir relevos inter-fase (`handoff.md`), es obligatorio confirmar commit y push de las especificaciones y diseños.
+2. **Sincronización al Inicio de Sesión del Agente:** Al iniciar una sesión de trabajo, el agente ejecuta pasivamente `git fetch` en el repositorio de specs. Si detecta commits remotos entrantes (`behind > 0`), avisa de inmediato al usuario y solicita autorización para ejecutar `git pull` antes de operar.
+3. **Repositorios de Código (Worktrees y Ramas Aisladas):** En repositorios de código fuente, los roles aplican un pre-vuelo interactivo: (1) worktree aislado vs árbol actual, (2) nombre de rama (`feat/...`), (3) rama base (`main`, `develop`, etc.).
+4. **Cierre de Rol con Selección de Rama Destino en PR:** Al validar el informe del rol en PASS, se ofrece registrar el commit y se consulta la rama destino del Pull Request (`develop`, `main`, etc.) antes de proponer `gh pr create --base <rama-destino>`.
+5. **Limpieza Post-Merge:** Uso de los scripts auxiliares (`scripts/cleanup-worktree.sh` y `.ps1`) para eliminar limpiamente el worktree y la rama local tras el merge.
+
 ---
 
 ## 2. Protocolo de Memoria Persistente (Engram MCP)

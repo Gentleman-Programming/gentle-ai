@@ -289,3 +289,35 @@ func TestComposeOpenSpecCanonicalSpecKeepsFencedHeadingInsideRequirementBody(t *
 		t.Fatalf("composed spec has an unterminated fence:\n%s", composed)
 	}
 }
+
+func TestComposeOpenSpecCanonicalSpecSupersedePruning(t *testing.T) {
+	delta := `## REMOVED Requirements
+
+### Requirement: Unrelated Listing
+
+(Reason: Reemplazado por el nuevo catálogo unificado)
+`
+	// 1. Probar con SupersedeRemoved=true
+	opts := ComposeOptions{
+		SupersedeRemoved:   true,
+		ExplicitSuperseded: []string{"Widget Expiration"},
+	}
+	composed, err := ComposeOpenSpecCanonicalSpecWithOptions(composeCanonicalFixture, delta, opts)
+	if err != nil {
+		t.Fatalf("error en ComposeOpenSpecCanonicalSpecWithOptions: %v", err)
+	}
+
+	// El requisito de REMOVED no debe borrarse, debe tener la anotación [SUPERSEDED / DEPRECADO]
+	if !strings.Contains(composed, "### Requirement: Unrelated Listing [SUPERSEDED / DEPRECADO]") {
+		t.Errorf("se esperaba que Unrelated Listing estuviera marcado como SUPERSEDED / DEPRECADO:\n%s", composed)
+	}
+	if !strings.Contains(composed, "Reemplazado por el nuevo catálogo unificado") {
+		t.Errorf("se esperaba el motivo de la deprecación en el texto:\n%s", composed)
+	}
+
+	// El requisito de ExplicitSuperseded también debe marcarse
+	if !strings.Contains(composed, "### Requirement: Widget Expiration [SUPERSEDED / DEPRECADO]") {
+		t.Errorf("se esperaba que Widget Expiration estuviera marcado como SUPERSEDED / DEPRECADO:\n%s", composed)
+	}
+}
+

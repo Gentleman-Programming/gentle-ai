@@ -28,13 +28,19 @@ type RoleMeta struct {
 
 // IncrementSummaryDTO resume el estado y progreso de un cambio SDD.
 type IncrementSummaryDTO struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"` // "active" o "archived"
-	Phase          string `json:"phase"`
-	TasksTotal     int    `json:"tasks_total"`
-	TasksCompleted int    `json:"tasks_completed"`
-	ProgressPct    int    `json:"progress_pct"`
-	Date           string `json:"date,omitempty"`
+	Name                 string   `json:"name"`
+	Type                 string   `json:"type"` // "active" o "archived"
+	Phase                string   `json:"phase"`
+	TasksTotal           int      `json:"tasks_total"`
+	TasksCompleted       int      `json:"tasks_completed"`
+	ProgressPct          int      `json:"progress_pct"`
+	Date                 string   `json:"date,omitempty"`
+	PendingSpec          bool     `json:"pending_spec"`
+	ReadyForDesign       bool     `json:"ready_for_design"`
+	WaitingRoles         bool     `json:"waiting_roles"`
+	PendingRoles         []string `json:"pending_roles,omitempty"`
+	ReadyForGlobalVerify bool     `json:"ready_for_global_verify"`
+	ReadyForArchive      bool     `json:"ready_for_archive"`
 }
 
 // IncrementDetailDTO contiene el detalle estructurado de un cambio y sus artefactos.
@@ -202,6 +208,16 @@ type BackupActionRequest struct {
 	Description string `json:"description,omitempty"`
 }
 
+// EcosystemSyncRequest encapsula los parámetros de sincronización desde la API.
+type EcosystemSyncRequest struct {
+	Scope string `json:"scope,omitempty"`
+}
+
+// EcosystemUpgradeRequest encapsula los parámetros de actualización de herramientas desde la API.
+type EcosystemUpgradeRequest struct {
+	Channel string `json:"channel,omitempty"`
+}
+
 // EcosystemActionResponse reporta el resultado de operaciones como Sync o Upgrade.
 //
 // Sequence y Phases son adiciones opcionales (D-07): solo el endpoint encadenado
@@ -266,3 +282,23 @@ type ModelAssignmentsDTO struct {
 	ActivePersona string            `json:"active_persona"`
 	Assignments   []ModelConfigItem `json:"assignments"`
 }
+
+// SpecsSyncStatusDTO reporta el estado de sincronización Git del repositorio de especificaciones (ODD-5.4).
+type SpecsSyncStatusDTO struct {
+	IsGitRepo   bool   `json:"is_git_repo"`
+	Path        string `json:"path"`
+	Branch      string `json:"branch"`
+	Remote      string `json:"remote"`
+	Behind      int    `json:"behind"`
+	Ahead       int    `json:"ahead"`
+	SyncWarning string `json:"sync_warning,omitempty"`
+	LastChecked string `json:"last_checked"`
+}
+
+// SpecsPullResultDTO describe el resultado de ejecutar pull sobre el repositorio de specs.
+type SpecsPullResultDTO struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Output  string `json:"output,omitempty"`
+}
+

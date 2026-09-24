@@ -390,6 +390,23 @@ func TestSemanticEndpoints(t *testing.T) {
 	if err := json.Unmarshal(rrDeps.Body.Bytes(), &deps); err != nil {
 		t.Fatalf("JSON inválido en /api/semantic/dependencies: %v", err)
 	}
+
+	// 4. POST /api/semantic/reindex
+	reqReindex := httptest.NewRequest(http.MethodPost, "/api/semantic/reindex", nil)
+	rrReindex := httptest.NewRecorder()
+	router.ServeHTTP(rrReindex, reqReindex)
+
+	if rrReindex.Code != http.StatusOK {
+		t.Fatalf("POST /api/semantic/reindex retornó %d: %s", rrReindex.Code, rrReindex.Body.String())
+	}
+
+	var reindexRes map[string]interface{}
+	if err := json.Unmarshal(rrReindex.Body.Bytes(), &reindexRes); err != nil {
+		t.Fatalf("JSON inválido en /api/semantic/reindex: %v", err)
+	}
+	if success, ok := reindexRes["success"].(bool); !ok || !success {
+		t.Errorf("se esperaba success=true en respuesta de reindexación")
+	}
 }
 
 func TestArchiveEndpoints(t *testing.T) {
@@ -879,3 +896,148 @@ func TestEcosystemUpgradePresentsBothPhases(t *testing.T) {
 		}
 	}
 }
+
+// TestIncrementSummaryOperationalFlagsAndRoleFiltering verifica que inspectIncrement y GetIncrements
+// clasifiquen fielmente los incrementos según las banderas operacionales de ODD-2.1 y ODD-2.2.
+func TestIncrementSummaryOperationalFlagsAndRoleFiltering(t *testing.T) {
+	tmp := t.TempDir()
+	changesDir := filepath.Join(tmp, "openspec", "changes")
+
+	// 1. Inc-01: Pendiente Spec
+	inc1 := filepath.Join(changesDir, "inc-01-spec-pending")
+	if err := os.MkdirAll(inc1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(inc1, "proposal.md"), []byte("# Proposal 01\n"), 0o644)
+
+	// 2. Inc-02: Listo para Design
+	inc2 := filepath.Join(changesDir, "inc-02-ready-design")
+	if err := os.MkdirAll(inc2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(inc2, "proposal.md"), []byte("# Proposal 02\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc2, "spec.md"), []byte("# Spec 02\n"), 0o644)
+
+	// 3. Inc-03: Esperando Roles (Backend y Frontend)
+	inc3 := filepath.Join(changesDir, "inc-03-waiting-roles")
+	if err := os.MkdirAll(inc3, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(inc3, "proposal.md"), []byte("# Proposal 03\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc3, "spec.md"), []byte("# Spec 03\n"), 0o644)
+	designContent := "# Design 03\n\n```yaml\nroles:\n  - role: backend\n    gate_policy: blocking\n  - role: frontend\n    gate_policy: blocking\n```\n"
+	_ = os.WriteFile(filepath.Join(inc3, "design.md"), []byte(designContent), 0o644)
+	// tasks.backend.md con 1 tarea pendiente
+	_ = os.WriteFile(filepath.Join(inc3, "tasks.backend.md"), []byte("# Tasks Backend\n- [ ] T-01 Crear API\n"), 0o644)
+	// frontend ni siquiera ha creado su tasks.frontend.md
+
+	// 4. Inc-04: Listo para Verificación Global
+	inc4 := filepath.Join(changesDir, "inc-04-global-verify")
+	if err := os.MkdirAll(inc4, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(inc4, "proposal.md"), []byte("# Proposal 04\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc4, "spec.md"), []byte("# Spec 04\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc4, "design.md"), []byte("# Design 04\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc4, "tasks.md"), []byte("# Tasks\n- [x] T-01 Implementado\n"), 0o644)
+
+	// 5. Inc-05: Listo para Archivar
+	inc5 := filepath.Join(changesDir, "inc-05-ready-archive")
+	if err := os.MkdirAll(inc5, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(inc5, "proposal.md"), []byte("# Proposal 05\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc5, "spec.md"), []byte("# Spec 05\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc5, "design.md"), []byte("# Design 05\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc5, "tasks.md"), []byte("# Tasks\n- [x] T-01 Implementado\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(inc5, "verify-report.md"), []byte("# Verify\nverdict: pass\n"), 0o644)
+
+	svc := NewService(tmp)
+	increments, err := svc.GetIncrements()
+	if err != nil {
+		t.Fatalf("GetIncrements() error: %v", err)
+	}
+	if len(increments) != 5 {
+		t.Fatalf("se esperaban 5 incrementos, obtenidos %d", len(increments))
+	}
+
+	byName := make(map[string]IncrementSummaryDTO)
+	for _, inc := range increments {
+		byName[inc.Name] = inc
+	}
+
+	// Comprobación inc-01
+	i1 := byName["inc-01-spec-pending"]
+	if !i1.PendingSpec || i1.ReadyForDesign || i1.WaitingRoles {
+		t.Errorf("inc-01 falló en banderas: %+v", i1)
+	}
+
+	// Comprobación inc-02
+	i2 := byName["inc-02-ready-design"]
+	if i2.PendingSpec || !i2.ReadyForDesign || i2.WaitingRoles {
+		t.Errorf("inc-02 falló en banderas: %+v", i2)
+	}
+
+	// Comprobación inc-03
+	i3 := byName["inc-03-waiting-roles"]
+	if !i3.WaitingRoles {
+		t.Errorf("inc-03 debería tener WaitingRoles=true: %+v", i3)
+	}
+	if len(i3.PendingRoles) != 2 {
+		t.Errorf("inc-03 debería tener 2 roles pendientes (backend, frontend), obtenidos: %v", i3.PendingRoles)
+	}
+
+	// Comprobación inc-04
+	i4 := byName["inc-04-global-verify"]
+	if !i4.ReadyForGlobalVerify || i4.ReadyForArchive {
+		t.Errorf("inc-04 falló en banderas: %+v", i4)
+	}
+
+	// Comprobación inc-05
+	i5 := byName["inc-05-ready-archive"]
+	if !i5.ReadyForArchive || i5.ReadyForGlobalVerify {
+		t.Errorf("inc-05 falló en banderas: %+v", i5)
+	}
+
+	// Comprobación de filtrado por rol dinámico (ODD-2.2)
+	var backendPending []IncrementSummaryDTO
+	for _, inc := range increments {
+		for _, r := range inc.PendingRoles {
+			if r == "backend" {
+				backendPending = append(backendPending, inc)
+				break
+			}
+		}
+	}
+	if len(backendPending) != 1 || backendPending[0].Name != "inc-03-waiting-roles" {
+		t.Errorf("filtrado por rol 'backend' falló: %+v", backendPending)
+	}
+}
+
+func TestSpecsSyncStatusEndpoint(t *testing.T) {
+	svc := NewService("../..")
+	server := NewServer(svc)
+	router := server.Router()
+
+	// 1. GET /api/workspace/specs/sync-status
+	reqStatus := httptest.NewRequest(http.MethodGet, "/api/workspace/specs/sync-status", nil)
+	rrStatus := httptest.NewRecorder()
+	router.ServeHTTP(rrStatus, reqStatus)
+
+	if rrStatus.Code != http.StatusOK {
+		t.Fatalf("GET /api/workspace/specs/sync-status retornó %d: %s", rrStatus.Code, rrStatus.Body.String())
+	}
+
+	var status SpecsSyncStatusDTO
+	if err := json.Unmarshal(rrStatus.Body.Bytes(), &status); err != nil {
+		t.Fatalf("JSON inválido en /api/workspace/specs/sync-status: %v", err)
+	}
+	if !status.IsGitRepo {
+		t.Errorf("se esperaba que el repositorio fuera un repo git")
+	}
+	if status.Branch == "" {
+		t.Errorf("se esperaba nombre de rama")
+	}
+}
+
+

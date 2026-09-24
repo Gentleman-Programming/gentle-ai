@@ -29,7 +29,7 @@ const installChannelHelp = "Axiom channel: stable (default), beta, or nightly (a
 
 func PrintInstallHelp(w io.Writer) {
 	fmt.Fprint(w, `USAGE
-  gentle-ai install [flags]
+  axiom install [flags]
 
 FLAGS
   --agent, --agents <list>           Agents to install

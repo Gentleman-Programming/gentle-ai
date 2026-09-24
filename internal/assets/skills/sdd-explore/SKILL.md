@@ -58,11 +58,17 @@ The orchestrator will give you:
 ### Step 1: Load Skills
 Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
 
-### Step 2: Understand the Request
+### Step 2: Understand the Request & Interrogate Actively
 
 Parse what the user wants to explore:
 - Is this a new feature? A bug fix? A refactor?
 - What domain does it touch?
+
+**Directiva de Interrogación Exhaustiva (Funcional — ODD-1.1):**
+No asumas requerimientos ni comportamientos ambiguos. Interroga activamente al usuario antes de emitir conclusiones técnicas sobre:
+- Casos límite (*edge cases*), cuotas y tasas de uso.
+- Comportamientos ante errores, fallos de red y contingencias.
+- Restricciones de negocio y criterios de aceptación funcionales.
 
 ### Step 3: Investigate the Codebase
 
@@ -141,6 +147,7 @@ Return EXACTLY this format to the orchestrator (and write the same content to `e
 - DO NOT modify any existing code or files
 - ALWAYS read real code, never guess about the codebase
 - Keep your analysis CONCISE - the orchestrator needs a summary, not a novel
+- INTERROGATION RULE: Actively interrogate underspecified functional aspects and edge cases before closing exploration
 - If you can't find enough information, say so clearly
 - If the request is too vague to explore, say what clarification is needed
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.

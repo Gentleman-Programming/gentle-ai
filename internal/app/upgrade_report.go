@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
@@ -73,18 +74,34 @@ func ResolveSyncSkip(u UpgradeRunReport) (bool, string) {
 }
 
 // RunUpgradeReport runs the same binary-only upgrade the `upgrade` verb runs
-// (never install, never sync) and returns the structured outcome. It performs
-// system detection internally so the dashboard upgrade->sync sequence can call
-// it without reproducing RunArgs dispatch. stdout receives exactly the bytes
-// the upgrade verb prints.
-//
-// The returned error is the upgrade verb's error: only per-tool failures are
-// fatal. Manual fallbacks are "skipped", never "failed".
+// (never install, never sync) and returns the structured outcome.
 func RunUpgradeReport(ctx context.Context, stdout io.Writer) (UpgradeRunReport, error) {
+	return RunUpgradeReportWithChannel(ctx, stdout, "")
+}
+
+// RunUpgradeReportWithChannel runs the binary-only upgrade with an optional channel override (e.g. "main", "beta", "stable").
+func RunUpgradeReportWithChannel(ctx context.Context, stdout io.Writer, channel string) (UpgradeRunReport, error) {
 	detection, err := detectSystem(ctx)
 	if err != nil {
 		return UpgradeRunReport{Status: UpgradeStatusFailed}, fmt.Errorf("detect system: %w", err)
 	}
+
+	if channel != "" {
+		normalized := channel
+		if strings.EqualFold(channel, "main") || strings.EqualFold(channel, "nightly") {
+			normalized = "beta"
+		}
+		origAxiom, hadAxiom := os.LookupEnv("AXIOM_CHANNEL")
+		_ = os.Setenv("AXIOM_CHANNEL", normalized)
+		defer func() {
+			if hadAxiom {
+				_ = os.Setenv("AXIOM_CHANNEL", origAxiom)
+			} else {
+				_ = os.Unsetenv("AXIOM_CHANNEL")
+			}
+		}()
+	}
+
 	return runUpgradeReport(ctx, upgradeArgs{}, detection, stdout)
 }
 

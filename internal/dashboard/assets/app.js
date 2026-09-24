@@ -94,15 +94,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Filtro de Incrementos
-  document.querySelectorAll('#tab-increments .filter-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#tab-increments .filter-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentFilter = btn.getAttribute('data-filter');
-      renderIncrements();
+  // Filtro de Incrementos Operacionales
+  function bindFilterButtons() {
+    document.querySelectorAll('#increments-filter-group .filter-btn').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('#increments-filter-group .filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.getAttribute('data-filter');
+        renderIncrements();
+      };
     });
-  });
+  }
+  bindFilterButtons();
 
   // Botón Actualizar
   document.getElementById('btn-refresh').addEventListener('click', () => {
@@ -576,7 +579,8 @@ document.addEventListener('DOMContentLoaded', () => {
       loadSkillsInbox(),
       loadSemanticData(),
       loadLivingDocs(),
-      loadEcosystem()
+      loadEcosystem(),
+      checkSpecsSync()
     ]);
     renderIncrements();
   }
@@ -647,12 +651,67 @@ document.addEventListener('DOMContentLoaded', () => {
           tbody.appendChild(tr);
         });
       }
+      updateRoleFilterButtons();
 
     } catch (err) {
       console.error(err);
       wsNameEl.textContent = 'Error al conectar';
     }
   }
+
+  // Sincronización Remota de Especificaciones (ODD-5.4)
+  async function checkSpecsSync() {
+    const banner = document.getElementById('specs-sync-banner');
+    const textEl = document.getElementById('specs-sync-text');
+    if (!banner) return;
+
+    try {
+      const res = await fetch('/api/workspace/specs/sync-status');
+      if (!res.ok) return;
+      const status = await res.json();
+      if (!status.is_git_repo) {
+        banner.classList.add('hidden');
+        return;
+      }
+      if (status.behind > 0) {
+        banner.classList.remove('hidden');
+        if (textEl) {
+          textEl.textContent = `⚠️ El repositorio de especificaciones está ${status.behind} commit(s) por detrás del remoto (${escapeHtml(status.branch)} @ ${escapeHtml(status.remote)}). Haz pull antes de operar.`;
+        }
+      } else {
+        banner.classList.add('hidden');
+      }
+    } catch (e) {
+      console.debug('Error comprobando sincronización de specs:', e);
+    }
+  }
+
+  const btnSpecsPull = document.getElementById('btn-specs-pull');
+  if (btnSpecsPull) {
+    btnSpecsPull.addEventListener('click', async () => {
+      btnSpecsPull.disabled = true;
+      btnSpecsPull.textContent = '⏳ Sincronizando...';
+      try {
+        const res = await fetch('/api/workspace/specs/pull', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          alert('Error haciendo pull: ' + (data.message || 'Fallo desconocido'));
+        } else {
+          alert('✓ Repositorio de especificaciones sincronizado con éxito.');
+          await checkSpecsSync();
+          await loadWorkspace();
+        }
+      } catch (e) {
+        alert('Error conectando con el servidor: ' + e.message);
+      } finally {
+        btnSpecsPull.disabled = false;
+        btnSpecsPull.textContent = '⬇ Hacer Pull (Sincronizar Specs)';
+      }
+    });
+  }
+
+  // Comprobar sincronización remota periódicamente cada 60s
+  setInterval(checkSpecsSync, 60000);
 
   // 2. Cargar Incrementos
   async function loadIncrements() {
@@ -703,11 +762,38 @@ document.addEventListener('DOMContentLoaded', () => {
     if (handoffModalChange && prevModalHoVal) handoffModalChange.value = prevModalHoVal;
   }
 
+  function updateRoleFilterButtons() {
+    const container = document.getElementById('role-filters-container');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!workspaceData || !workspaceData.roles) return;
+
+    Object.keys(workspaceData.roles).forEach(roleId => {
+      const btn = document.createElement('button');
+      btn.className = 'filter-btn';
+      btn.setAttribute('data-filter', `role:${roleId.toLowerCase()}`);
+      btn.textContent = `[${roleId.charAt(0).toUpperCase() + roleId.slice(1)}]`;
+      container.appendChild(btn);
+    });
+
+    bindFilterButtons();
+  }
+
   function renderIncrements() {
     incrementsContainer.innerHTML = '';
     const filtered = incrementsData.filter(i => {
+      if (currentFilter === 'all') return true;
       if (currentFilter === 'active') return i.type === 'active';
       if (currentFilter === 'archived') return i.type === 'archived';
+      if (currentFilter === 'spec_pending') return i.pending_spec;
+      if (currentFilter === 'ready_for_design') return i.ready_for_design;
+      if (currentFilter === 'ready_for_global_verify') return i.ready_for_global_verify;
+      if (currentFilter === 'ready_for_archive') return i.ready_for_archive;
+      if (currentFilter.startsWith('role:')) {
+        const targetRole = currentFilter.split(':')[1].toLowerCase();
+        if (!i.pending_roles || i.pending_roles.length === 0) return false;
+        return i.pending_roles.some(r => r.toLowerCase() === targetRole);
+      }
       return true;
     });
 
@@ -721,6 +807,19 @@ document.addEventListener('DOMContentLoaded', () => {
       card.className = `inc-card ${inc.type}`;
       const isArchived = inc.type === 'archived';
 
+      let operationalBadge = '';
+      if (inc.ready_for_design) {
+        operationalBadge = `<span class="badge" style="background:#2563eb;color:#fff;" title="Especificación completa, listo para diseño de arquitectura">Listo Design</span>`;
+      } else if (inc.pending_spec) {
+        operationalBadge = `<span class="badge" style="background:#0284c7;color:#fff;" title="Fase funcional: pendiente cerrar especificación">Pendiente Spec</span>`;
+      } else if (inc.waiting_roles && inc.pending_roles && inc.pending_roles.length > 0) {
+        operationalBadge = `<span class="badge" style="background:#d97706;color:#fff;" title="Roles técnicos con tareas pendientes">Pendiente: ${inc.pending_roles.join(', ')}</span>`;
+      } else if (inc.ready_for_global_verify) {
+        operationalBadge = `<span class="badge" style="background:#7c3aed;color:#fff;" title="Todos los roles terminados, pendiente verificación global">Verif. Global</span>`;
+      } else if (inc.ready_for_archive) {
+        operationalBadge = `<span class="badge" style="background:#059669;color:#fff;" title="Verificación superada, listo para archivar">Listo Archivar</span>`;
+      }
+
       card.innerHTML = `
         <div>
           <div class="card-header">
@@ -728,6 +827,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="card-badges">
               <span class="badge badge-${inc.type}">${isArchived ? 'Archivado' : 'Activo'}</span>
               <span class="badge badge-phase">${inc.phase}</span>
+              ${operationalBadge}
             </div>
           </div>
           <div class="progress-container">
@@ -1297,6 +1397,38 @@ document.addEventListener('DOMContentLoaded', () => {
     btnRefreshSemantic.addEventListener('click', () => loadSemanticData());
   }
 
+  const btnReindexCodegraph = document.getElementById('btn-reindex-codegraph');
+  const reindexFeedback = document.getElementById('reindex-feedback');
+  if (btnReindexCodegraph) {
+    btnReindexCodegraph.addEventListener('click', async () => {
+      btnReindexCodegraph.disabled = true;
+      btnReindexCodegraph.textContent = '⏳ Reindexando...';
+      if (reindexFeedback) {
+        reindexFeedback.classList.remove('hidden');
+        reindexFeedback.innerHTML = '⚡ Ejecutando reindexación semántica de CodeGraph en el workspace...';
+      }
+      try {
+        const res = await fetch('/api/semantic/reindex', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || 'Error en la reindexación de CodeGraph');
+        }
+        if (reindexFeedback) {
+          reindexFeedback.innerHTML = `<strong>✓ ${escapeHtml(data.message || 'Reindexación completada')}</strong> (${escapeHtml(data.duration || '')})`;
+        }
+        await loadSemanticData();
+      } catch (err) {
+        console.error(err);
+        if (reindexFeedback) {
+          reindexFeedback.innerHTML = `<span class="text-danger">Error: ${escapeHtml(err.message)}</span>`;
+        }
+      } finally {
+        btnReindexCodegraph.disabled = false;
+        btnReindexCodegraph.textContent = '⚡ Reindexar CodeGraph';
+      }
+    });
+  }
+
   const searchInput = document.getElementById('semantic-search-input');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
@@ -1434,6 +1566,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnRefreshEcosystem = document.getElementById('btn-refresh-ecosystem');
   const btnEcoSync = document.getElementById('btn-eco-sync');
   const btnEcoUpgrade = document.getElementById('btn-eco-upgrade');
+  const selectEcoChannel = document.getElementById('select-eco-channel');
   const btnEcoCreateBackup = document.getElementById('btn-eco-create-backup');
   const ecoActionOutput = document.getElementById('eco-action-output');
   const ecoActionTitle = document.getElementById('eco-action-title');
@@ -1462,31 +1595,40 @@ document.addEventListener('DOMContentLoaded', () => {
     btnEcoSync.addEventListener('click', async () => {
       btnEcoSync.disabled = true;
       btnEcoSync.textContent = '⏳ Sincronizando...';
-      showConsoleOutput('Sincronizando Configuraciones', 'Ejecutando axiom sync...');
+      showConsoleOutput('Sincronizando Workspace', 'Ejecutando axiom sync --scope=workspace...');
       try {
-        const res = await fetch('/api/ecosystem/sync', { method: 'POST' });
+        const res = await fetch('/api/ecosystem/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: 'workspace' })
+        });
         const data = await res.json();
         showConsoleOutput('Resultado de Sincronización', (data.output || []).join('\n') || data.message);
         btnEcoSync.textContent = data.success ? '✓ Sincronizado' : '✕ Error';
         setTimeout(() => {
           btnEcoSync.disabled = false;
-          btnEcoSync.textContent = '🔄 Sincronizar Configuraciones';
+          btnEcoSync.textContent = '🔄 Sincronizar Workspace';
         }, 2500);
       } catch (err) {
         showConsoleOutput('Error en Sincronización', err.message);
         btnEcoSync.disabled = false;
-        btnEcoSync.textContent = '🔄 Sincronizar Configuraciones';
+        btnEcoSync.textContent = '🔄 Sincronizar Workspace';
       }
     });
   }
 
   if (btnEcoUpgrade) {
     btnEcoUpgrade.addEventListener('click', async () => {
+      const channel = selectEcoChannel ? selectEcoChannel.value : 'stable';
       btnEcoUpgrade.disabled = true;
       btnEcoUpgrade.textContent = '⏳ Actualizando...';
-      showConsoleOutput('Actualizando Herramientas', 'Ejecutando comprobación y actualización...');
+      showConsoleOutput('Actualizando Herramientas (' + channel + ')', 'Ejecutando comprobación y actualización en canal ' + channel + '...');
       try {
-        const res = await fetch('/api/ecosystem/upgrade', { method: 'POST' });
+        const res = await fetch('/api/ecosystem/upgrade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel: channel })
+        });
         const data = await res.json();
         showConsoleOutput('Resultado de Actualización', formatEcosystemUpgradeSequence(data));
         btnEcoUpgrade.textContent = data.success ? '✓ Actualizado' : '✕ Error';

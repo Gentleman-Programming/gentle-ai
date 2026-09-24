@@ -114,6 +114,22 @@ Before starting work, check for existing apply-progress:
 
 **CRITICAL**: If the orchestrator told you previous progress exists, you MUST read it. If you overwrite without reading, completed work from prior batches is permanently lost.
 
+#### Step 2c: Pre-vuelo de Aislamiento de Repositorio & Worktrees (ODD-5.5)
+
+Si tu rol opera sobre un repositorio de código (backend, frontend, apps, etc.):
+1. **Diferenciación de Repositorios (ODD-5.1)**:
+   - El repositorio de especificaciones (`specs_repository`) opera SIEMPRE en la rama principal (`main`/`master`), sin ramas ni worktrees.
+   - Los repositorios de código deben aislar sus cambios para evitar interferir con ramas de trabajo activas o concurrentes.
+2. **Cuestionario Interactivo de Pre-vuelo**: Antes de escribir la primera línea de código o test, formula obligatoriamente al usuario:
+   - *«¿Deseas crear un git worktree aislado o trabajar en el árbol de trabajo actual?»*
+   - *«¿Qué nombre deseas para la rama?»* (ej. `feat/{change-name}-{rol}`).
+   - *«¿Cuál es la rama base de origen?»* (ofrecer `main`, `develop` o la que el usuario indique).
+3. Si el usuario confirma worktree:
+   ```bash
+   git worktree add -b feat/{change-name}-{rol} ../wt-{change-name}-{rol} origin/<rama-base>
+   ```
+   y ejecuta el trabajo dentro del directorio del worktree.
+
 ### Step 3: Read Testing Capabilities and Resolve Mode
 
 Read the cached testing capabilities to determine implementation mode:
@@ -249,6 +265,17 @@ If none, say "None."}
 
 ### Status
 {N}/{total} tasks complete. {Ready for next batch / Ready for archive / Blocked by X}
+
+### Cierre de Rol y Apertura de Pull Request (ODD-5.6)
+Si las tareas del rol se han completado y validado satisfactoriamente:
+1. **Oferta de Commit**: Pregunta al usuario si desea crear un commit formal con mensaje semántico (`feat(rol): ...`).
+2. **Selección de Rama Destino**: Formula al usuario la pregunta de destino:
+   - *«¿Hacia qué rama base deseas dirigir el Pull Request? [main / develop / otra]»*
+3. **Propuesta de Creación de PR**: Con la rama confirmada, formula la sugerencia de comando:
+   ```bash
+   gh pr create --base <rama-destino> --head <rama-actual> --title "<título>" --body "<resumen de cambios y verificación>"
+   ```
+4. **Limpieza posterior**: Recuerda al usuario que tras el merge podrá ejecutar `scripts/cleanup-worktree.sh` para desmantelar el worktree y borrar la rama local de forma limpia.
 ```
 
 ## Rules
@@ -270,6 +297,9 @@ If none, say "None."}
 - Apply any `rules.apply` from `openspec/config.yaml`
 - If Strict TDD Mode is active (Step 3), load `strict-tdd.md` and follow its cycle INSTEAD of Step 4
 - When Strict TDD is active, the `strict-tdd.md` module's rules OVERRIDE Step 4 entirely
+- ODD-5.1: En el repositorio de especificaciones (`specs_repository`) NUNCA crees ramas ni worktrees; trabaja siempre directo en `main`/`master`.
+- ODD-5.5: En repositorios de código, formula el cuestionario interactivo de pre-vuelo (worktree sí/no, nombre de rama y rama base) antes de implementar.
+- ODD-5.6: Al finalizar la verificación en PASS, ofrece commit y pregunta interactivamente la rama destino del PR (`develop`, `main`, etc.) antes de proponer `gh pr create`.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
 <!-- /section:model-capable -->
 

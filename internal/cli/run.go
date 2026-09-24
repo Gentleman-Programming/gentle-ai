@@ -906,7 +906,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return err
 	}
 
-	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
+	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, s.scope, adapter)
 	var injected agentguidance.Result
 	if options.SettingsPath == "" {
 		injected, err = agentguidance.InjectRouting(targetDir, s.agent)
@@ -1780,6 +1780,9 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentGGA:
+		if s.scope == ScopeWorkspace {
+			return nil
+		}
 		if !ggaAvailable(s.profile) {
 			// GGA not found on any known PATH — install it.
 			if s.profile.OS == "windows" {
@@ -2331,7 +2334,7 @@ func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adap
 			continue
 		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
-		options := routingGuidanceOptions(homeDir, workspaceDir, adapter)
+		options := routingGuidanceOptions(homeDir, workspaceDir, scope, adapter)
 		var routing []string
 		var err error
 		if options.SettingsPath == "" {
@@ -2540,6 +2543,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, p)
 			}
 		case model.ComponentGGA:
+			if scope == ScopeWorkspace {
+				break
+			}
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
@@ -2587,15 +2593,14 @@ func effectiveOpenCodeSettingsPath(homeDir, workspaceDir string, scope InstallSc
 }
 
 // routingGuidanceOptions carries OpenCode's caller-resolved effective settings
-// authority into the routing-guidance adapter. Routing remains global because
-// OpenCode does not load workspace-scoped orchestrator guidance; other agents
-// retain their existing targetDir-derived routing path.
-func routingGuidanceOptions(homeDir, workspaceDir string, adapter agents.Adapter) agentguidance.RoutingOptions {
+// authority into the routing-guidance adapter. In workspace scope, guidance
+// targets the workspace settings; global install/sync targets effective global settings.
+func routingGuidanceOptions(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) agentguidance.RoutingOptions {
 	if adapter.Agent() != model.AgentOpenCode {
 		return agentguidance.RoutingOptions{}
 	}
 	return agentguidance.RoutingOptions{
-		SettingsPath: effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter),
+		SettingsPath: effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter),
 	}
 }
 
@@ -2604,14 +2609,9 @@ func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter)
 }
 
 // routingGuidanceDir resolves the installation root routing guidance is
-// delivered under. Orchestrator-prompt adapters retain their home-level adapter
-// root for legacy cleanup and ordinary delivery; OpenCode's effective settings
-// authority is supplied separately through routingGuidanceOptions. Every other
-// agent keeps the ordinary scoped resolution. The guidance step and the backup
-// contract both resolve through here so the snapshot cannot drift from what
-// the injector writes.
+// delivered under. Under ScopeWorkspace, all agents deliver under workspaceDir.
 func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
-	if agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) {
+	if scope != ScopeWorkspace && agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) {
 		return homeDir
 	}
 	return componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)

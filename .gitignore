@@ -34,6 +34,10 @@ dist/
 .atl/
 .pi/
 .axiom/
+.claude/
+.config/
+.opencode/
+.mcp.json
 
 # Engram local runtime state (project sync chunks are intentionally versioned)
 .engram/engram.db

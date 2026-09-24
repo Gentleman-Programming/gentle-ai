@@ -1050,19 +1050,19 @@ func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(
 	paths := routingGuidancePaths(home, workspace, ScopeWorkspace, adapters)
 
 	for _, want := range []string{
-		filepath.Join(home, ".config", "opencode", "opencode.json"),
-		filepath.Join(home, ".config", "kilo", "opencode.json"),
-	} {
-		if !containsPath(paths, want) {
-			t.Fatalf("routingGuidancePaths(workspace) missing home settings path %q\npaths=%v", want, paths)
-		}
-	}
-	for _, unwanted := range []string{
 		filepath.Join(workspace, ".config", "opencode", "opencode.json"),
 		filepath.Join(workspace, ".config", "kilo", "opencode.json"),
 	} {
+		if !containsPath(paths, want) {
+			t.Fatalf("routingGuidancePaths(workspace) missing workspace settings path %q\npaths=%v", want, paths)
+		}
+	}
+	for _, unwanted := range []string{
+		filepath.Join(home, ".config", "opencode", "opencode.json"),
+		filepath.Join(home, ".config", "kilo", "opencode.json"),
+	} {
 		if containsPath(paths, unwanted) {
-			t.Fatalf("routingGuidancePaths(workspace) reported %q, a path the agent never loads\npaths=%v", unwanted, paths)
+			t.Fatalf("routingGuidancePaths(workspace) reported home path %q under workspace scope\npaths=%v", unwanted, paths)
 		}
 	}
 

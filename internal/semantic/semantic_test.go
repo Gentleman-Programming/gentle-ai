@@ -249,3 +249,26 @@ func NewHandler() *Handler { return &Handler{} }
 		t.Errorf("filtro no retornó el símbolo esperado: %v", symbols)
 	}
 }
+
+func TestServiceReindexCodeGraph(t *testing.T) {
+	tempWorkspace := t.TempDir()
+	detector := NewDetectorWithCustomHome(t.TempDir(), func(file string) (string, error) {
+		return "", os.ErrNotExist
+	})
+	srv := NewService(tempWorkspace, detector, NewEngine())
+
+	res, err := srv.ReindexCodeGraph(context.Background())
+	if err != nil {
+		t.Fatalf("error inesperado en ReindexCodeGraph: %v", err)
+	}
+	if !res.Success {
+		t.Errorf("se esperaba éxito en la respuesta de reindexación informativa")
+	}
+	if res.Message == "" {
+		t.Errorf("se esperaba mensaje en el resultado de reindexación")
+	}
+	if res.Duration == "" {
+		t.Errorf("se esperaba duración en el resultado de reindexación")
+	}
+}
+

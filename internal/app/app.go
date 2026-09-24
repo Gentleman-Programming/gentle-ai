@@ -80,7 +80,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "version", "--version", "-v":
-			_, _ = fmt.Fprintf(stdout, "gentle-ai %s\n", Version)
+			_, _ = fmt.Fprintf(stdout, "axiom %s\n", Version)
 			return nil
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
@@ -133,6 +133,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "review-validate":
 			return cli.RunReviewValidateNonDeciding(args[1:], stdout)
 		case "install":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintInstallHelp(stdout)
+				return nil
+			}
+		case "setup":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintInstallHelp(stdout)
 				return nil
@@ -296,6 +301,21 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 
 		return nil
+	case "setup":
+		setupArgs := append([]string{"--scope", "workspace"}, args[1:]...)
+		installResult, err := cli.RunInstall(setupArgs, result)
+		if err != nil {
+			return err
+		}
+
+		if installResult.DryRun {
+			_, _ = fmt.Fprintln(stdout, cli.RenderDryRun(installResult))
+		} else {
+			_, _ = fmt.Fprint(stdout, verify.RenderReport(installResult.Verify))
+			_, _ = fmt.Fprint(stdout, cli.RenderInstallManualActions(installResult))
+		}
+
+		return nil
 	case "sync":
 		syncResult, err := cli.RunSync(args[1:])
 		if err != nil {
@@ -309,7 +329,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "doctor":
 		return cli.RunDoctor(context.Background(), stdout)
 	default:
-		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
+		return fmt.Errorf("unknown command %q — run 'axiom help' for available commands", args[0])
 	}
 }
 
@@ -571,15 +591,23 @@ func tuiSync(homeDir string) tui.SyncFunc {
 
 		applyOverrides(&selection, overrides)
 
-		result, err := cli.RunSyncWithSelection(homeDir, selection)
+		workspaceDir, _ := os.Getwd()
+		scope, _ := cli.ResolveInstallScope("")
+		if _, statErr := os.Stat(filepath.Join(workspaceDir, "axiom.yaml")); statErr == nil || scope == cli.ScopeWorkspace {
+			scope = cli.ScopeWorkspace
+		}
+
+		result, err := cli.RunSyncWithSelectionScoped(homeDir, workspaceDir, scope, selection)
 		if err != nil {
 			return nil, err
 		}
 
 		// Persist model assignments that were actually used (from overrides
 		// or loaded from state) so the next sync preserves them too.
-		if err := persistAssignments(homeDir, selection); err != nil {
-			return nil, fmt.Errorf("persist model assignments: %w", err)
+		if scope != cli.ScopeWorkspace {
+			if err := persistAssignments(homeDir, selection); err != nil {
+				return nil, fmt.Errorf("persist model assignments: %w", err)
+			}
 		}
 
 		return result.ChangedFiles, nil

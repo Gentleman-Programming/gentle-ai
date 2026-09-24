@@ -34,6 +34,16 @@
       </div>
     </header>
 
+    <!-- Alerta de Sincronización Remota de Especificaciones (ODD-5.4) -->
+    <div id="specs-sync-banner" class="specs-sync-banner hidden">
+      <div class="sync-banner-content">
+        <span class="sync-banner-icon">⚠️</span>
+        <span id="specs-sync-text">Hay cambios remotos pendientes en el repositorio de especificaciones.</span>
+      </div>
+      <div class="sync-banner-actions">
+        <button id="btn-specs-pull" class="btn btn-sm btn-primary">⬇ Hacer Pull (Sincronizar Specs)</button>
+      </div>
+    </div>
 
     <!-- Main Navigation Tabs -->
     <nav class="main-nav">
@@ -88,9 +98,13 @@
             <h2>Ciclo de Vida de Incrementos SDD</h2>
             <p class="description">Seguimiento en tiempo real de cambios activos y especificaciones vivas archivadas.</p>
           </div>
-          <div class="filter-group">
+          <div class="filter-group" id="increments-filter-group">
             <button class="filter-btn active" data-filter="all">Todos</button>
-            <button class="filter-btn" data-filter="active">Activos</button>
+            <button class="filter-btn" data-filter="spec_pending">Pendiente Spec</button>
+            <button class="filter-btn" data-filter="ready_for_design">Listo para Design</button>
+            <span id="role-filters-container" style="display: inline-flex; gap: 0.25rem;"></span>
+            <button class="filter-btn" data-filter="ready_for_global_verify">Pendiente Verif. Global</button>
+            <button class="filter-btn" data-filter="ready_for_archive">Listo para Archivar</button>
             <button class="filter-btn" data-filter="archived">Archivados</button>
             <button id="btn-new-increment" class="btn btn-primary" style="margin-left: 0.75rem;" title="Crear un nuevo incremento SDD">+ Nuevo Incremento</button>
           </div>
@@ -256,9 +270,12 @@
             <p class="description">Diagnóstico de conectores Serena MCP / CodeGraph y catálogo estructurado de símbolos, tipos y dependencias del workspace.</p>
           </div>
           <div class="filter-group">
+            <button class="btn btn-primary" id="btn-reindex-codegraph" title="Ejecutar reindexación de CodeGraph bajo demanda">⚡ Reindexar CodeGraph</button>
             <button class="btn btn-secondary" id="btn-refresh-semantic">↻ Recargar Semántica</button>
           </div>
         </div>
+
+        <div id="reindex-feedback" class="scan-feedback hidden" style="margin-bottom: 1.5rem;"></div>
 
         <!-- Tarjetas de Estado del Conector -->
         <div class="semantic-status-cards" id="semantic-status-cards">
@@ -377,9 +394,17 @@
         <div class="card" style="margin-top: 1rem;">
           <h3 class="subsection-title">⚡ Operaciones del Ecosistema</h3>
           <div style="display: flex; gap: 1rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap;">
-            <button id="btn-eco-sync" class="btn btn-primary" title="Sincronizar configuraciones y reglas de agentes">🔄 Sincronizar Configuraciones</button>
+            <button id="btn-eco-sync" class="btn btn-primary" title="Sincronizar configuraciones y reglas de agentes en el workspace">🔄 Sincronizar Workspace</button>
+            <div style="display: inline-flex; align-items: center; gap: 0.5rem; background: var(--bg-secondary); padding: 0.35rem 0.75rem; border-radius: 4px; border: 1px solid var(--border-color);">
+              <label for="select-eco-channel" style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">Canal:</label>
+              <select id="select-eco-channel" style="background: transparent; border: none; color: var(--text-color); font-size: 0.85rem; outline: none; cursor: pointer;">
+                <option value="stable">Estable (Releases)</option>
+                <option value="main">Main (Desarrollo Continuo)</option>
+              </select>
+            </div>
             <button id="btn-eco-upgrade" class="btn btn-secondary" title="Comprobar y actualizar herramientas">★ Actualizar Herramientas</button>
             <button id="btn-eco-create-backup" class="btn btn-outline" title="Crear un nuevo snapshot de respaldo">+ Crear Respaldo Ahora</button>
+            <span class="badge" style="background: var(--bg-tertiary); color: var(--text-muted); font-size: 0.75rem; border: 1px solid var(--border-color);" title="Sincronización acotada al proyecto activo">Ámbito: Workspace</span>
           </div>
           <div id="eco-action-output" class="console-box hidden" style="margin-top: 1rem;">
             <div class="console-header">

@@ -109,6 +109,7 @@ COMANDOS DE GOBERNANZA Y WORKSPACE:
   semantic status      Diagnostica los conectores semánticos (Serena, CodeGraph, AST) y salud del workspace
   semantic symbols     Consulta y filtra símbolos de código (struct, interface, func, method)
   semantic inspect     Inspecciona el grafo de dependencias entre paquetes del workspace
+  semantic reindex     Dispara la reindexación de CodeGraph bajo demanda en el workspace
   archive sync         Sincroniza y regenera el catálogo maestro openspec/INDEX.md desde openspec/specs/
   archive list         Lista las especificaciones vivas consolidadas y sus versiones
   archive show         Muestra el contenido Markdown de una especificación viva por dominio
@@ -122,6 +123,7 @@ COMANDOS DE GOBERNANZA Y WORKSPACE:
 
 COMANDOS DE GESTIÓN DE AGENTES Y TUI:
   tui                  Abre la interfaz gráfica interactiva de terminal (TUI) de Axiom
+  setup                Configura y aprovisiona agentes para el workspace actual (--scope workspace)
   install              Instala agentes y configura el ecosistema en la máquina
   sync                 Sincroniza y re-aplica configuraciones, skills y reglas en los agentes
   upgrade              Actualiza herramientas y componentes gestionados del ecosistema
@@ -221,7 +223,7 @@ func main() {
 		}
 		os.Exit(0)
 
-	case "install", "sync", "upgrade", "update", "doctor", "restore", "uninstall":
+	case "install", "setup", "sync", "upgrade", "update", "doctor", "restore", "uninstall":
 		if err := app.RunArgs(os.Args[1:], os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -319,7 +321,7 @@ func main() {
 
 	case "semantic":
 		if len(os.Args) < 3 {
-			fmt.Println("Error: subcomando de 'semantic' requerido. Opciones: status, symbols, inspect")
+			fmt.Println("Error: subcomando de 'semantic' requerido. Opciones: status, symbols, inspect, reindex")
 			os.Exit(1)
 		}
 
@@ -331,8 +333,10 @@ func main() {
 			runSemanticSymbols(os.Args[3:])
 		case "inspect":
 			runSemanticInspect(os.Args[3:])
+		case "reindex":
+			runSemanticReindex(os.Args[3:])
 		default:
-			fmt.Printf("Error: subcomando '%s' no reconocido para semantic. Usa 'axiom semantic [status|symbols|inspect]'.\n", subCmd)
+			fmt.Printf("Error: subcomando '%s' no reconocido para semantic. Usa 'axiom semantic [status|symbols|inspect|reindex]'.\n", subCmd)
 			os.Exit(1)
 		}
 
@@ -1522,6 +1526,34 @@ func runSemanticInspect(args []string) {
 		fmt.Printf("%-25s ➔    %-45s %s\n", d.SourcePackage, d.TargetPackage, typ)
 	}
 	fmt.Println()
+}
+
+func runSemanticReindex(args []string) {
+	fs := flag.NewFlagSet("semantic reindex", flag.ExitOnError)
+	pathFlag := fs.String("path", ".", "Ruta a la carpeta raíz del workspace")
+	_ = fs.Parse(args)
+
+	baseDir, err := filepath.Abs(*pathFlag)
+	if err != nil {
+		fmt.Printf("Error resolviendo ruta: %v\n", err)
+		os.Exit(1)
+	}
+
+	svc := semantic.NewService(baseDir, nil, nil)
+	fmt.Println("Ejecutando reindexación semántica en el workspace...")
+	res, err := svc.ReindexCodeGraph(context.Background())
+	if err != nil {
+		fmt.Printf("[ERROR] Reindexación fallida (%s): %v\n", res.Duration, err)
+		if res.Output != "" {
+			fmt.Printf("Detalle del error:\n%s\n", res.Output)
+		}
+		os.Exit(1)
+	}
+
+	fmt.Printf("[OK] %s (%s)\n", res.Message, res.Duration)
+	if res.Output != "" {
+		fmt.Printf("Salida de reindexación:\n%s\n", res.Output)
+	}
 }
 
 func boolToStatus(b bool) string {

@@ -538,6 +538,32 @@ body {
   border-color: var(--border-light);
 }
 
+/* Specs Remote Sync Banner (ODD-5.4) */
+.specs-sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 2rem;
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+  color: #f59e0b;
+  font-size: 0.88rem;
+  transition: all 0.2s ease;
+}
+
+.specs-sync-banner .sync-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-weight: 500;
+}
+
+.specs-sync-banner .sync-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 /* Barrier Banner */
 .barrier-banner {
   display: flex;

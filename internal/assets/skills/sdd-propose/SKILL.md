@@ -73,6 +73,9 @@ openspec/changes/{change-name}/
 
 ### Step 4: Write proposal.md
 
+**Directiva de Interrogación Exhaustiva (Funcional — ODD-1.1):**
+Antes de redactar la propuesta definitiva, si el alcance, los límites o los criterios de aceptación no son completamente unívocos, interroga activamente al usuario sobre casos límite, dependencias críticas y elementos fuera de alcance (*Out of Scope*). No asumas decisiones funcionales críticas sin confirmación.
+
 ```markdown
 # Proposal: {Change Title}
 

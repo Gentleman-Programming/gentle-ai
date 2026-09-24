@@ -12,7 +12,7 @@ import (
 func RenderDryRun(result InstallResult) string {
 	b := &strings.Builder{}
 
-	_, _ = fmt.Fprintln(b, "AI Gentle Stack dry-run")
+	_, _ = fmt.Fprintln(b, "Axiom Stack dry-run")
 	_, _ = fmt.Fprintln(b, "=====================")
 	_, _ = fmt.Fprintf(b, "Agents: %s\n", joinAgentIDs(result.Resolved.Agents))
 	_, _ = fmt.Fprintf(b, "Unsupported agents: %s\n", joinAgentIDs(result.Resolved.UnsupportedAgents))

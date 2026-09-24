@@ -44,6 +44,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/projects/add", s.handleProjectsAdd)
 	s.mux.HandleFunc("/api/projects/init", s.handleProjectsInit)
 	s.mux.HandleFunc("/api/workspace", s.handleWorkspace)
+	s.mux.HandleFunc("/api/workspace/specs/sync-status", s.handleSpecsSyncStatus)
+	s.mux.HandleFunc("/api/workspace/specs/pull", s.handleSpecsPull)
 	s.mux.HandleFunc("/api/increments", s.handleIncrements)
 	s.mux.HandleFunc("/api/increments/continue", s.handleIncrementContinue)
 	s.mux.HandleFunc("/api/increments/verify", s.handleIncrementVerify)
@@ -59,6 +61,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/semantic/status", s.handleSemanticStatus)
 	s.mux.HandleFunc("/api/semantic/symbols", s.handleSemanticSymbols)
 	s.mux.HandleFunc("/api/semantic/dependencies", s.handleSemanticDependencies)
+	s.mux.HandleFunc("/api/semantic/reindex", s.handleSemanticReindex)
 	s.mux.HandleFunc("/api/archive/specs", s.handleArchiveSpecs)
 	s.mux.HandleFunc("/api/archive/specs/", s.handleArchiveSpecDetail)
 	s.mux.HandleFunc("/api/archive/sync", s.handleArchiveSync)
@@ -246,6 +249,33 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.respondJSON(w, http.StatusOK, dto)
 }
+
+func (s *Server) handleSpecsSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	dto, err := s.service.GetSpecsSyncStatus(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, dto)
+}
+
+func (s *Server) handleSpecsPull(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	dto, err := s.service.PullSpecsRepository(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, dto)
+		return
+	}
+	s.respondJSON(w, http.StatusOK, dto)
+}
+
 
 func (s *Server) handleIncrements(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -554,6 +584,19 @@ func (s *Server) handleSemanticDependencies(w http.ResponseWriter, r *http.Reque
 	s.respondJSON(w, http.StatusOK, deps)
 }
 
+func (s *Server) handleSemanticReindex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	res, err := s.service.ReindexCodeGraph(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusInternalServerError, res)
+		return
+	}
+	s.respondJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleArchiveSpecs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
@@ -620,7 +663,15 @@ func (s *Server) handleEcosystemSync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	resp, err := s.service.RunSync()
+	var req EcosystemSyncRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	scope := "workspace"
+	if strings.TrimSpace(req.Scope) != "" {
+		scope = strings.TrimSpace(req.Scope)
+	}
+	resp, err := s.service.RunSync(scope)
 	if err != nil {
 		s.respondJSON(w, http.StatusInternalServerError, resp)
 		return
@@ -633,7 +684,11 @@ func (s *Server) handleEcosystemUpgrade(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	resp, err := s.service.RunUpgradeSequence()
+	var req EcosystemUpgradeRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	resp, err := s.service.RunUpgradeSequence(req.Channel)
 	if err != nil {
 		s.respondJSON(w, http.StatusInternalServerError, resp)
 		return

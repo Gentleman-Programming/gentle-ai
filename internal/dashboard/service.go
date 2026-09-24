@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/handoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/hub"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/kickoff"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/semantic"
@@ -208,10 +212,52 @@ func (s *Service) inspectIncrement(path, name, kind string) IncrementSummaryDTO 
 
 	hasProposal := fileExists(filepath.Join(path, "proposal.md"))
 	hasSpec := fileExists(filepath.Join(path, "spec.md"))
+	if !hasSpec && dirExists(filepath.Join(path, "specs")) {
+		if entries, err := os.ReadDir(filepath.Join(path, "specs")); err == nil && len(entries) > 0 {
+			hasSpec = true
+		}
+	}
 	hasDesign := fileExists(filepath.Join(path, "design.md"))
 	hasTasks := fileExists(filepath.Join(path, "tasks.md"))
 	hasVerify := fileExists(filepath.Join(path, "verify-report.md"))
 	hasArchive := fileExists(filepath.Join(path, "archive-report.md"))
+
+	// Detección exhaustiva de archivos de tareas y progreso por rol
+	roleTaskFiles := make(map[string]string)
+	if entries, err := os.ReadDir(path); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			nm := e.Name()
+			if nm != "tasks.md" && strings.HasPrefix(nm, "tasks.") && strings.HasSuffix(nm, ".md") {
+				hasTasks = true
+				role := strings.TrimSuffix(strings.TrimPrefix(nm, "tasks."), ".md")
+				if role != "" {
+					roleTaskFiles[role] = filepath.Join(path, nm)
+				}
+			}
+		}
+	}
+
+	tasksTotal, tasksCompleted, pct := 0, 0, 0
+	if fileExists(filepath.Join(path, "tasks.md")) {
+		if data, err := os.ReadFile(filepath.Join(path, "tasks.md")); err == nil {
+			prog := multirole.CountTasks(string(data))
+			tasksTotal += prog.Total
+			tasksCompleted += prog.Completed
+		}
+	}
+	for _, fPath := range roleTaskFiles {
+		if data, err := os.ReadFile(fPath); err == nil {
+			prog := multirole.CountTasks(string(data))
+			tasksTotal += prog.Total
+			tasksCompleted += prog.Completed
+		}
+	}
+	if tasksTotal > 0 {
+		pct = int((float64(tasksCompleted) / float64(tasksTotal)) * 100.0)
+	}
 
 	if kind == "archived" || hasArchive {
 		phase = "archive"
@@ -227,24 +273,108 @@ func (s *Service) inspectIncrement(path, name, kind string) IncrementSummaryDTO 
 		phase = "spec"
 	}
 
-	tasksTotal, tasksCompleted, pct := 0, 0, 0
-	if hasTasks {
-		if data, err := os.ReadFile(filepath.Join(path, "tasks.md")); err == nil {
-			prog := multirole.CountTasks(string(data))
-			tasksTotal = prog.Total
-			tasksCompleted = prog.Completed
-			pct = int(prog.Percent)
+	// Roles asignados y resolución de pendientes (ODD-2.1 y ODD-2.2)
+	var assignedRoles []string
+	k, _ := kickoff.Load(path)
+	if k != nil && len(k.Config.Roles) > 0 {
+		for _, r := range k.Config.Roles {
+			assignedRoles = append(assignedRoles, r.Role)
+		}
+	} else if hasDesign {
+		if data, err := os.ReadFile(filepath.Join(path, "design.md")); err == nil {
+			if dRoles, err2 := multirole.ParseRolesMarkdown(string(data)); err2 == nil {
+				for _, r := range dRoles {
+					assignedRoles = append(assignedRoles, r.Role)
+				}
+			}
+		}
+	}
+	if len(assignedRoles) == 0 && len(roleTaskFiles) > 0 {
+		for r := range roleTaskFiles {
+			assignedRoles = append(assignedRoles, r)
+		}
+	}
+	if len(assignedRoles) == 0 {
+		assignedRoles = []string{"fullstack"}
+	}
+
+	ledger, _ := kickoff.LoadGates(path)
+	isCheckpointed := (k != nil && k.Config.ExecutionStyle == kickoff.ExecutionCheckpointed)
+
+	var pendingRoles []string
+	if kind == "active" && hasDesign {
+		for _, role := range assignedRoles {
+			rolePending := false
+			tFile, hasTFile := roleTaskFiles[role]
+			if !hasTFile && role == "fullstack" && fileExists(filepath.Join(path, "tasks.md")) {
+				tFile = filepath.Join(path, "tasks.md")
+				hasTFile = true
+			}
+
+			if !hasTFile {
+				rolePending = true
+			} else if data, err := os.ReadFile(tFile); err == nil {
+				prog := multirole.CountTasks(string(data))
+				if prog.Pending > 0 || prog.Total == 0 {
+					rolePending = true
+				}
+			}
+
+			// Verificación de reporte por rol en entornos multi-rol
+			if len(assignedRoles) > 1 || (len(assignedRoles) == 1 && assignedRoles[0] != "fullstack") {
+				vFile := filepath.Join(path, fmt.Sprintf("verify-report.%s.md", role))
+				if !fileExists(vFile) {
+					rolePending = true
+				} else if data, err := os.ReadFile(vFile); err == nil {
+					if !strings.Contains(strings.ToLower(string(data)), "verdict: pass") {
+						rolePending = true
+					}
+				}
+			}
+
+			// Verificación de compuerta role-apply si el flujo es con paradas (checkpointed)
+			if isCheckpointed {
+				gateKey := kickoff.RoleApplyGate(role)
+				approved := false
+				for i := len(ledger.Records) - 1; i >= 0; i-- {
+					if ledger.Records[i].Gate == gateKey {
+						if ledger.Records[i].Decision == kickoff.DecisionApproved {
+							approved = true
+						}
+						break
+					}
+				}
+				if !approved {
+					rolePending = true
+				}
+			}
+
+			if rolePending {
+				pendingRoles = append(pendingRoles, role)
+			}
 		}
 	}
 
+	pendingSpec := (kind == "active" && !hasSpec && (hasProposal || phase == "explore" || phase == "spec"))
+	readyForDesign := (kind == "active" && hasSpec && !hasDesign)
+	waitingRoles := (kind == "active" && hasDesign && len(pendingRoles) > 0)
+	readyForGlobalVerify := (kind == "active" && hasDesign && hasTasks && len(pendingRoles) == 0 && !hasVerify && !hasArchive)
+	readyForArchive := (kind == "active" && hasVerify && !hasArchive)
+
 	return IncrementSummaryDTO{
-		Name:           name,
-		Type:           kind,
-		Phase:          phase,
-		TasksTotal:     tasksTotal,
-		TasksCompleted: tasksCompleted,
-		ProgressPct:    pct,
-		Date:           date,
+		Name:                 name,
+		Type:                 kind,
+		Phase:                phase,
+		TasksTotal:           tasksTotal,
+		TasksCompleted:       tasksCompleted,
+		ProgressPct:          pct,
+		Date:                 date,
+		PendingSpec:          pendingSpec,
+		ReadyForDesign:       readyForDesign,
+		WaitingRoles:         waitingRoles,
+		PendingRoles:         pendingRoles,
+		ReadyForGlobalVerify: readyForGlobalVerify,
+		ReadyForArchive:      readyForArchive,
 	}
 }
 
@@ -528,6 +658,11 @@ func (s *Service) FindSemanticSymbols(query semantic.SemanticQuery) ([]semantic.
 // InspectSemanticDependencies obtiene las relaciones de dependencia entre paquetes.
 func (s *Service) InspectSemanticDependencies(role string) ([]semantic.DependencyRelation, error) {
 	return s.semanticService.InspectDependencies(role)
+}
+
+// ReindexCodeGraph dispara la reindexación de CodeGraph bajo demanda (ODD-3.1 y ODD-3.3).
+func (s *Service) ReindexCodeGraph(ctx context.Context) (*semantic.ReindexResult, error) {
+	return s.semanticService.ReindexCodeGraph(ctx)
 }
 
 // GetLivingSpecs obtiene el catálogo maestro de especificaciones vivas.
@@ -1084,9 +1219,23 @@ func (s *Service) GetDoctorDiagnostics() (*DoctorReport, error) {
 }
 
 // RunSync ejecuta la sincronización de configuraciones y reglas de agentes.
-func (s *Service) RunSync() (*EcosystemActionResponse, error) {
+// Por defecto aplica el ámbito 'workspace' para aislar las configuraciones al repositorio activo.
+func (s *Service) RunSync(scopeOpt ...string) (*EcosystemActionResponse, error) {
+	scope := "workspace"
+	if len(scopeOpt) > 0 && strings.TrimSpace(scopeOpt[0]) != "" {
+		scope = strings.TrimSpace(scopeOpt[0])
+	}
+
+	origWd, err := os.Getwd()
+	targetPath := s.getRootPath()
+	if err == nil && targetPath != "" && targetPath != origWd {
+		if cherr := os.Chdir(targetPath); cherr == nil {
+			defer func() { _ = os.Chdir(origWd) }()
+		}
+	}
+
 	var buf bytes.Buffer
-	err := app.RunArgs([]string{"sync"}, &buf)
+	err = app.RunArgs([]string{"sync", "--scope", scope}, &buf)
 	rawOut := strings.TrimSpace(buf.String())
 	var lines []string
 	if rawOut != "" {
@@ -1114,8 +1263,14 @@ func (s *Service) RunSync() (*EcosystemActionResponse, error) {
 // los tests fijen la regla de salto sin sustituir binarios ni invocar un sync
 // real.
 var (
-	upgradeSequenceReportFn = app.RunUpgradeReport
-	upgradeSequenceSyncFn   = func(s *Service) (*EcosystemActionResponse, error) { return s.RunSync() }
+	upgradeSequenceReportFn = func(ctx context.Context, stdout io.Writer, channel ...string) (app.UpgradeRunReport, error) {
+		ch := ""
+		if len(channel) > 0 {
+			ch = channel[0]
+		}
+		return app.RunUpgradeReportWithChannel(ctx, stdout, ch)
+	}
+	upgradeSequenceSyncFn = func(s *Service) (*EcosystemActionResponse, error) { return s.RunSync("workspace") }
 )
 
 // upgradeSequenceLiteral es el identificador de la cadena que este endpoint
@@ -1132,9 +1287,14 @@ const upgradeSequenceLiteral = "upgrade->sync"
 //
 // Devuelve error solo cuando el servicio no logra producir reporte alguno
 // (spec §2.4): un fallo de la fase upgrade es un reporte válido, no un 500.
-func (s *Service) RunUpgradeSequence() (*EcosystemActionResponse, error) {
+func (s *Service) RunUpgradeSequence(channelOpt ...string) (*EcosystemActionResponse, error) {
+	channel := ""
+	if len(channelOpt) > 0 {
+		channel = strings.TrimSpace(channelOpt[0])
+	}
+
 	var upBuf bytes.Buffer
-	upReport, upErr := upgradeSequenceReportFn(context.Background(), &upBuf)
+	upReport, upErr := upgradeSequenceReportFn(context.Background(), &upBuf, channel)
 	upLines := outputLines(upBuf.String())
 
 	if upErr != nil && upReport.Status == "" {
@@ -1359,3 +1519,111 @@ func (s *Service) GetModelAssignments() (*ModelAssignmentsDTO, error) {
 		Assignments:   assignments,
 	}, nil
 }
+
+// GetSpecsSyncStatus consulta el estado de sincronización Git del repositorio de especificaciones (ODD-5.4).
+func (s *Service) GetSpecsSyncStatus(ctx context.Context) (*SpecsSyncStatusDTO, error) {
+	root := s.getRootPath()
+	specsDir := root
+	if cfg, err := workspace.LoadConfig(filepath.Join(root, "axiom.yaml")); err == nil && cfg.Workspace.SpecsRepository != "" {
+		if filepath.IsAbs(cfg.Workspace.SpecsRepository) {
+			specsDir = cfg.Workspace.SpecsRepository
+		} else {
+			specsDir = filepath.Join(root, cfg.Workspace.SpecsRepository)
+		}
+	}
+
+	result := &SpecsSyncStatusDTO{
+		Path:        specsDir,
+		LastChecked: time.Now().Format(time.RFC3339),
+	}
+
+	// 1. Verificar si es un repositorio git
+	gitDir := filepath.Join(specsDir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		if _, errRoot := os.Stat(filepath.Join(root, ".git")); errRoot != nil {
+			result.IsGitRepo = false
+			return result, nil
+		}
+	}
+	result.IsGitRepo = true
+
+	// 2. Obtener rama actual
+	cmdBranch := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmdBranch.Dir = specsDir
+	if out, err := cmdBranch.Output(); err == nil {
+		result.Branch = strings.TrimSpace(string(out))
+	} else {
+		result.Branch = "main"
+	}
+
+	// 3. Obtener remoto asociado
+	cmdRemote := exec.CommandContext(ctx, "git", "remote")
+	cmdRemote.Dir = specsDir
+	if out, err := cmdRemote.Output(); err == nil {
+		remotes := strings.Fields(string(out))
+		if len(remotes) > 0 {
+			result.Remote = remotes[0]
+		}
+	}
+
+	if result.Remote == "" {
+		return result, nil
+	}
+
+	// 4. Ejecutar git fetch pasivo con timeout corto para no bloquear la UI si no hay conexión
+	fetchCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	cmdFetch := exec.CommandContext(fetchCtx, "git", "fetch", "--quiet")
+	cmdFetch.Dir = specsDir
+	if err := cmdFetch.Run(); err != nil {
+		result.SyncWarning = "No se pudo contactar con el repositorio remoto (posible modo offline o sin red)."
+	}
+
+	// 5. Contar commits por delante / por detrás respecto al tracking upstream (@{u})
+	cmdCount := exec.CommandContext(ctx, "git", "rev-list", "--left-right", "--count", "HEAD...@{u}")
+	cmdCount.Dir = specsDir
+	if out, err := cmdCount.Output(); err == nil {
+		parts := strings.Fields(string(out))
+		if len(parts) >= 2 {
+			ahead, _ := strconv.Atoi(parts[0])
+			behind, _ := strconv.Atoi(parts[1])
+			result.Ahead = ahead
+			result.Behind = behind
+		}
+	}
+
+	return result, nil
+}
+
+// PullSpecsRepository ejecuta git pull --ff-only sobre el repositorio de especificaciones (ODD-5.4).
+func (s *Service) PullSpecsRepository(ctx context.Context) (*SpecsPullResultDTO, error) {
+	root := s.getRootPath()
+	specsDir := root
+	if cfg, err := workspace.LoadConfig(filepath.Join(root, "axiom.yaml")); err == nil && cfg.Workspace.SpecsRepository != "" {
+		if filepath.IsAbs(cfg.Workspace.SpecsRepository) {
+			specsDir = cfg.Workspace.SpecsRepository
+		} else {
+			specsDir = filepath.Join(root, cfg.Workspace.SpecsRepository)
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "pull", "--ff-only")
+	cmd.Dir = specsDir
+	out, err := cmd.CombinedOutput()
+	outputStr := strings.TrimSpace(string(out))
+
+	if err != nil {
+		return &SpecsPullResultDTO{
+			Success: false,
+			Message: fmt.Sprintf("Error actualizando especificaciones: %v", err),
+			Output:  outputStr,
+		}, err
+	}
+
+	return &SpecsPullResultDTO{
+		Success: true,
+		Message: "Repositorio de especificaciones sincronizado exitosamente con el remoto.",
+		Output:  outputStr,
+	}, nil
+}
+

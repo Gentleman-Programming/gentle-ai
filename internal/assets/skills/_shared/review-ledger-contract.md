@@ -6,11 +6,11 @@ The parent orchestrator coordinates one native transaction; reviewers, refuters,
 
 ## Entry rule
 
-Enter this lifecycle once per candidate, after an authorized source-mutating implementation is complete and normalized and before reporting it complete, whenever the user-owned review switch is enabled (`gentle-ai review mode status` reads it without changing it). Run the selectorless STATUS in step 1 and route only from its returned `next_transition`; the START consent envelope lets the human decide this candidate, so never skip the preflight because the user did not ask for a review. Skip it only for a trivial passive documentation-only edit, when the user explicitly left this candidate unreviewed, or while a transaction is already bound to it. A runtime that runs this preflight itself hands the agent the exact returned START tokens and never runs START.
+Enter this lifecycle once per candidate, after an authorized source-mutating implementation is complete and normalized and before reporting it complete, whenever the user-owned review switch is enabled (`axiom review mode status` reads it without changing it). Run the selectorless STATUS in step 1 and route only from its returned `next_transition`; the START consent envelope lets the human decide this candidate, so never skip the preflight because the user did not ask for a review. Skip it only for a trivial passive documentation-only edit, when the user explicitly left this candidate unreviewed, or while a transaction is already bound to it. A runtime that runs this preflight itself hands the agent the exact returned START tokens and never runs START.
 
 ## Atomic lifecycle
 
-1. **Preflight only.** Selectorless STATUS only preflights the current worktree candidate and returns one exact START invocation. It never discovers, resumes, recovers, or evaluates ambient authority from another lineage or worktree: `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition`.
+1. **Preflight only.** Selectorless STATUS only preflights the current worktree candidate and returns one exact START invocation. It never discovers, resumes, recovers, or evaluates ambient authority from another lineage or worktree: `axiom review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition`.
 
 2. **Freeze once.** Invoke only the returned START operation and its ordered tokens unchanged. START freezes one compact atomic transaction with an explicit lineage, worktree, and target binding. It ignores every other lineage and worktree. Capture the returned lineage, revision, and target tokens. An exact replay of an active START may return `replayed`; a genuinely new START is independent.
 
@@ -69,7 +69,7 @@ Reviewers inspect only the provider-bound immutable trees. Never hand candidate 
 
 ### Continue after a stop reason code
 
-A `stop` ends its transition, never approves delivery. Complete atomic inventory: B stays target root; gates stay unmanaged. `D` means `gentle-ai review mode disable --scope clone --cwd <B>`; B ordinary policy decides delivery. `S` means re-query the exact captured target-root STATUS command with lineage and target.
+A `stop` ends its transition, never approves delivery. Complete atomic inventory: B stays target root; gates stay unmanaged. `D` means `axiom review mode disable --scope clone --cwd <B>`; B ordinary policy decides delivery. `S` means re-query the exact captured target-root STATUS command with lineage and target.
 
 | Reason codes | Continuation |
 | --- | --- |
@@ -79,14 +79,14 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 | `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal — maintainer inspects authority/lineage, or `D`. |
 | `empty_base_diff_bootstrap_required` | Terminal — authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal — reduce B scope and start a new transaction, or `D`. |
-| `correction_context_budget_exceeded` | Release B authority with `gentle-ai review abandon` (run it with no flags for the binding template); `gentle-ai review invalidate` refuses here. Then review B as smaller candidates, or `D`. |
-| `managed_assets_outdated` | Run the `gentle-ai sync` command from the stop's `continuation`, then `S`. |
+| `correction_context_budget_exceeded` | Release B authority with `axiom review abandon` (run it with no flags for the binding template); `axiom review invalidate` refuses here. Then review B as smaller candidates, or `D`. |
+| `managed_assets_outdated` | Run the `axiom sync` command from the stop's `continuation`, then `S`. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover, or drop `--workspace-overlay` and start fresh; otherwise `D`. |
 | `corrected_candidate_unavailable` | Change B correction candidate, then `S`; do not reuse the pre-correction target. |
-| `recovery_scope_unchanged` | Change B target identity, then retry the exact returned `gentle-ai review recover`. |
-| `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable. If transient, re-run `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the slot. If not, reduce B scope and start a new `gentle-ai review start`, or `D`. |
-| `target_already_acknowledged` | Terminal: this exact target was already acknowledged and its review authority burned. No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target. |
-| `rdd_disabled` | `--scope clone` only clears a clone-local off; `gentle-ai review mode enable --scope global`, then `S`. |
+| `recovery_scope_unchanged` | Change B target identity, then retry the exact returned `axiom review recover`. |
+| `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable. If transient, re-run `axiom review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the slot. If not, reduce B scope and start a new `axiom review start`, or `D`. |
+| `target_already_acknowledged` | Terminal: this exact target was already acknowledged and its review authority burned. No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. Only when deliberately requesting a new independent review, use `axiom review start`; do not automatically restart this consumed target. |
+| `rdd_disabled` | `--scope clone` only clears a clone-local off; `axiom review mode enable --scope global`, then `S`. |
 
 ## Delivery follows ordinary repository policy
 
