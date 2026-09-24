@@ -26,8 +26,13 @@ const ownershipMarker = "// gentle-ai:managed telemetry-runtime/v1\n"
 // 902fe09299c0bb04590f12ba993a196b838e1fbbd8a94e96100ea3d5f30182b7.
 const priorPluginDigestA9cab7dd = "902fe09299c0bb04590f12ba993a196b838e1fbbd8a94e96100ea3d5f30182b7"
 
+// Upstream Gentle-AI v3.0.2 embedded telemetry-runtime.ts with SHA-256
+// 54150f7d76d684c39d2567312d22bd5a188390be5d98da16eb1e8833f9665bd4.
+const priorPluginDigestGentleAIV3 = "54150f7d76d684c39d2567312d22bd5a188390be5d98da16eb1e8833f9665bd4"
+
 var approvedPriorPluginDigests = map[string]struct{}{
-	priorPluginDigestA9cab7dd: {},
+	priorPluginDigestA9cab7dd:   {},
+	priorPluginDigestGentleAIV3: {},
 }
 
 // Windows exposes writable regular files as 0666 regardless of the requested
