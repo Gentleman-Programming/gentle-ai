@@ -360,6 +360,16 @@ jobs:
           go test ./internal/privatefile -list '^TestWriteNewReportUnsupportedDoesNotWrite$' | grep -Fx 'TestWriteNewReportUnsupportedDoesNotWrite' >/dev/null
           go test ./internal/privatefile -count=1 -timeout=300s
 
+      - name: Register Darwin owner-only ACL replacement experiment (dispatch only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            exit 0
+          fi
+          go test -tags privatefileowneraclexperiment ./internal/privatefile -list '^TestDarwinOwnerOnlyACLReplacesInheritedExperiment$' | grep -Fx 'TestDarwinOwnerOnlyACLReplacesInheritedExperiment' >/dev/null
+          go test -tags privatefileowneraclexperiment ./internal/privatefile -run '^TestDarwinOwnerOnlyACLReplacesInheritedExperiment$' -count=1 -v -timeout=300s
+
       # Fails loudly if any manifest entry names a test that no longer exists:
       # `go test -run` with a pattern matching nothing exits 0, which would rot
       # the manifest invisibly. Native `go test -list` here is authoritative,
