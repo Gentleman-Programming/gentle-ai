@@ -33,6 +33,10 @@ const (
 	// InstallOpenCodePlugin is a manual upgrade method: Gentle AI registers the
 	// package in tui.json, and OpenCode owns package resolution on restart/reload.
 	InstallOpenCodePlugin InstallMethod = "opencode-plugin"
+	// InstallNpmGlobal is for CLI tools installed globally via npm
+	// (`npm install -g <pkg>`). The latest version is resolved directly from the
+	// npm registry over HTTPS, and upgrades run `npm install -g <pkg>@latest`.
+	InstallNpmGlobal InstallMethod = "npm-global"
 )
 
 // ToolInfo describes a managed tool that can be checked for updates.
@@ -45,7 +49,7 @@ type ToolInfo struct {
 	ReleaseTagPattern string        // optional regexp for selecting the correct GitHub release channel
 	InstallMethod     InstallMethod // how this tool is installed (used by upgrade executor)
 	GoImportPath      string        // for go-install tools (e.g. "github.com/.../cmd/engram")
-	NpmPackage        string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
+	NpmPackage        string        // npm package name: for OpenCode community plugins (materialized in ~/.config/opencode/node_modules) and for npm-global tools (resolved on the npm registry)
 
 	// FallbackPaths returns a list of absolute paths to check when exec.LookPath
 	// fails. This covers the Windows scenario where AddToUserPath updates the
