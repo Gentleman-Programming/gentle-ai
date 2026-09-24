@@ -40,6 +40,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
@@ -1320,6 +1321,10 @@ type componentApplyStep struct {
 	channel      InstallChannel
 	state        *runtimeState
 
+	// observeGGAExternalRoute is a package-local test seam for determinate route
+	// observations around an external GGA installer invocation.
+	observeGGAExternalRoute func(route string, paths []string) (gga.RouteQueryResult, error)
+
 	backgroundPolicy bool
 }
 
@@ -1701,18 +1706,46 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentGGA:
 		if !ggaAvailable(s.profile) {
-			// GGA not found on any known PATH — install it.
-			if s.profile.OS == "windows" {
-				if err := cleanupGGAInstallDir(); err != nil {
-					return err
-				}
-			}
 			commands, err := gga.InstallCommand(s.profile)
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 			}
+
+			route := ggaExternalInstallRoute(s.profile)
+			paths := ggaExternalInstallPaths(route, s.profile, s.homeDir)
+			observeRoute := s.observeGGAExternalRoute
+			if observeRoute == nil {
+				observeRoute = func(route string, paths []string) (gga.RouteQueryResult, error) {
+					return gga.QueryExternalRoute(s.profile.OS, route, paths, ggaExternalRouteOutputRunner{})
+				}
+			}
+			before, err := observeRoute(route, paths)
+			if err != nil {
+				return fmt.Errorf("observe GGA external install route before command: %w", err)
+			}
+			if len(before.UnknownPaths) > 0 {
+				// refusal:by-design operator-knowledge: exact pre-install ownership is unknown, so the installer must not claim provenance.
+				return fmt.Errorf("observe GGA external install route before command: exact path state is indeterminate")
+			}
+
+			operation := ggaExternalInstallOperation(route, paths, before)
+			if err := statecoord.BeginExternalOperation(s.homeDir, operation); err != nil {
+				return fmt.Errorf("record GGA external install intent: %w", err)
+			}
+
+			if s.profile.OS == "windows" {
+				if err := cleanupGGAInstallDir(); err != nil {
+					if manualErr := markGGAExternalInstallManual(s.homeDir, operation); manualErr != nil {
+						return fmt.Errorf("clean GGA install directory: %v; %w", err, manualErr)
+					}
+					return err
+				}
+			}
 			installErr := runCommandSequence(commands)
 			if installErr != nil {
+				if err := markGGAExternalInstallManual(s.homeDir, operation); err != nil {
+					return fmt.Errorf("run GGA install command: %v; %w", installErr, err)
+				}
 				if ggaAvailable(s.profile) {
 					// The GGA install script uses `set -e` and `read -p` for
 					// the "already installed" confirmation. Without a TTY
@@ -1720,10 +1753,31 @@ func (s componentApplyStep) Run() error {
 					// with exit code 1 and `set -e` kills the script before
 					// it can exit 0. If GGA is actually available after the
 					// script ran, the install succeeded functionally — treat
-					// as success but warn the user.
+					// as success but warn the user while preserving the manual
+					// journal because ownership is indeterminate.
 					fmt.Fprintf(os.Stderr, "WARNING: gga install command reported an error but gga is available — continuing. Error was: %v\n", installErr)
 				} else {
 					return installErr
+				}
+			} else {
+				after, err := observeRoute(route, paths)
+				if err != nil {
+					postObservationErr := fmt.Errorf("observe GGA external install route after command: %w", err)
+					if manualErr := markGGAExternalInstallManual(s.homeDir, operation); manualErr != nil {
+						return fmt.Errorf("%v; %w", postObservationErr, manualErr)
+					}
+					return postObservationErr
+				}
+				if len(after.UnknownPaths) > 0 {
+					// refusal:by-design operator-knowledge: exact post-install ownership is unknown, so the durable journal remains manual.
+					postObservationErr := errors.New("observe GGA external install route after command: exact path state is indeterminate")
+					if manualErr := markGGAExternalInstallManual(s.homeDir, operation); manualErr != nil {
+						return fmt.Errorf("%v; %w", postObservationErr, manualErr)
+					}
+					return postObservationErr
+				}
+				if err := settleGGAExternalInstall(s.homeDir, operation, after); err != nil {
+					return err
 				}
 			}
 		}
@@ -1917,6 +1971,100 @@ func ggaAvailable(profile system.PlatformProfile) bool {
 		}
 	}
 	return false
+}
+
+// ggaExternalRouteOutputRunner performs the exact read-only Homebrew formula
+// query outside any install-state lock.
+type ggaExternalRouteOutputRunner struct{}
+
+func (ggaExternalRouteOutputRunner) Output(name string, args ...string) ([]byte, error) {
+	command := exec.Command(name, args...)
+	system.EnsureCommandDir(command)
+	return command.Output()
+}
+
+func ggaExternalInstallRoute(profile system.PlatformProfile) string {
+	if profile.OS == "darwin" && profile.PackageManager == "brew" {
+		return "brew"
+	}
+	return "script"
+}
+
+func ggaExternalInstallPaths(route string, profile system.PlatformProfile, homeDir string) []string {
+	if route != "script" {
+		return nil
+	}
+	return gga.ExternalInstallPaths(profile.OS, homeDir)
+}
+
+func ggaExternalInstallOperation(route string, paths []string, before gga.RouteQueryResult) state.ExternalOperation {
+	operation := state.ExternalOperation{
+		Tool:          state.ExternalToolGGA,
+		Action:        state.ExternalActionInstall,
+		Route:         route,
+		Paths:         append([]string(nil), paths...),
+		BeforePresent: before.FormulaPresent,
+		Phase:         state.ExternalPhaseIntent,
+	}
+	for _, path := range paths {
+		operation.PathBeforePresence = append(operation.PathBeforePresence, state.ExternalPathPresence{
+			Path:    path,
+			Present: containsGGARoutePath(before.PresentPaths, path),
+		})
+	}
+	return operation
+}
+
+func settleGGAExternalInstall(homeDir string, operation state.ExternalOperation, after gga.RouteQueryResult) error {
+	fresh := state.GGAProvenance{}
+	switch operation.Route {
+	case "script":
+		for _, path := range operation.Paths {
+			if containsGGARoutePath(after.PresentPaths, path) && !ggaExternalPathWasPresent(operation, path) {
+				fresh.ScriptInstallPaths = append(fresh.ScriptInstallPaths, path)
+			}
+		}
+	case "brew":
+		if after.FormulaPresent && !operation.BeforePresent {
+			fresh.PackageManager = "brew"
+		}
+	}
+
+	if fresh.PackageManager == "" && len(fresh.ScriptInstallPaths) == 0 {
+		if err := statecoord.ClearExternalOperation(homeDir, operation); err != nil {
+			return fmt.Errorf("clear GGA external install journal without ownership claim: %w", err)
+		}
+		return nil
+	}
+	if err := statecoord.SettleExternalOperation(homeDir, operation, func(persisted *state.InstallState) error {
+		persisted.GGA = state.MergeGGAProvenance(persisted.GGA, fresh)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("settle GGA external install provenance: %w", err)
+	}
+	return nil
+}
+
+func markGGAExternalInstallManual(homeDir string, operation state.ExternalOperation) error {
+	operation.Phase = state.ExternalPhaseManual
+	operation.Continuation = "inspect the exact GGA install route before retrying"
+	if err := statecoord.AdvanceExternalOperation(homeDir, operation); err != nil {
+		return fmt.Errorf("record GGA external install as manual: %w", err)
+	}
+	return nil
+}
+
+func ggaExternalPathWasPresent(operation state.ExternalOperation, path string) bool {
+	for _, presence := range operation.PathBeforePresence {
+		if presence.Path == path {
+			return presence.Present
+		}
+	}
+	return false
+}
+
+func containsGGARoutePath(paths []string, candidate string) bool {
+	return slices.Contains(paths, candidate)
 }
 
 // runCommandSequence runs each command in the sequence one at a time, stopping on first error.
