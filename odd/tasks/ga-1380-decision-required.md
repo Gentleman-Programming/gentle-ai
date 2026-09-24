@@ -59,8 +59,19 @@ internal/reviewtransaction since 2026-09-21).
    decision-v1 (consent precedent), gofmt/vet/build clean.
 8. [x] Docs: this feature doc evidence; short docs update only if a natural review-commands
    doc home exists (no new docs surface invented).
-9. [x] Work-unit commit 18e282a3; native review BLOCKED by consent TTL loop (gentle-shell#748 repro posted; lineage_created:false both attempts, no residue); PR https://github.com/Gentleman-Programming/gentle-ai/pull/4941 (size:exception 1857 documented, maintainer labels flagged)
-   and documented).
+9. [x] Work-unit commit 18e282a3; native review BLOCKED by consent TTL loop (gentle-shell#748 repro posted; lineage_created:false both attempts, no residue); PR https://github.com/Gentleman-Programming/gentle-ai/pull/4941 (size:exception 1857 documented, maintainer labels flagged).
+
+## PR #4941 correction round (2026-09-24)
+
+- [x] B: Derive missing-evidence labels per finding, reuse one refuter-outcome map, pin mixed-cause cases. Focused RED→GREEN and reviewtransaction suite PASS.
+- [x] C: Reject forged complete-review escalations and pause records not derived from admitted evidence; preserve decision epoch/history across unrelated completion operations. Forged successors RED, legitimate transitions GREEN.
+- [x] D: Reject successor mutation of authority fields not owned by review/decide and review completion, with table-driven counterexamples. Six field mutations RED, legitimate correction completions GREEN.
+- [x] CI: Regenerated six rendered SDD/combined goldens through the repository's `-update` path (one new ledger row each), inspected the diff, adjusted standard/full-4R cost pins to +249 chars and reran the seven tests without `-update` (PASS).
+- [ ] A: Resolve `continue` on unknown_causality/insufficient_evidence after Alan answers https://github.com/Gentleman-Programming/gentle-ai/issues/1380#issuecomment-5809958961; do not claim WU1 complete with a no-op consumer.
+- [x] Independent verification of B/C/D and CI drift: engine suite, components suite with `TMPDIR` under `/var/tmp`, CLI suite (`-timeout 40m`), vet/build/gofmt passed. A separate verifier found a forged `validating` bypass; a RED→GREEN guard now pins the route from admitted evidence. A second B pass now emits both causal and concrete-evidence gaps on the same finding.
+- [ ] Correction work-unit commit; check the >400-line size gate before any later push. A remains pending Alan's answer, so this correction does not claim the PR is ready for merge.
+
+CI run 35964900085: six golden tests and TestOpenCodeRenderedReviewProtocolCost failed; reviewtransaction package passed. The CodeRabbit review at 2026-09-24T06:55:25Z has four actionables. Labels type:feature and size:exception are maintainer-side.
 
 ## Evidence
 

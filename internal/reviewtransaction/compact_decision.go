@@ -84,29 +84,27 @@ func deriveCompactDecisionEvidence(view CompactReviewView) *CompactDecisionEvide
 		decision.FindingIDs = unresolvedIDs
 		attempted := []string{}
 		missing := []string{}
-		fixSet := make(map[string]struct{}, len(view.FixFindingIDs))
-		for _, id := range view.FixFindingIDs {
-			fixSet[id] = struct{}{}
-		}
+		outcomes := refuterOutcomesByID(refuterOutcomes)
 		for _, id := range unresolvedIDs {
-			if _, found := view.Classifications[id]; found {
+			classification, classified := view.Classifications[id]
+			if classified {
 				attempted = append(attempted, "classification:"+id)
 			}
-			switch cause {
-			case "missing_refuter_outcome":
-				if _, refuted := refuterOutcomesByID(refuterOutcomes)[id]; !refuted {
-					missing = append(missing, "refuter_outcome:"+id)
-				}
-			case "insufficient_evidence":
-				missing = append(missing, "concrete_evidence:"+id)
-			case "unknown_causality":
+			_, refuted := outcomes[id]
+			before := len(missing)
+			if classified && classification.Causality == CausalUnknown {
 				missing = append(missing, "causal_disposition:"+id)
-			default:
-				if _, fixing := fixSet[id]; !fixing {
-					missing = append(missing, "conclusive_outcome:"+id)
-				}
 			}
-			if _, refuted := refuterOutcomesByID(refuterOutcomes)[id]; refuted {
+			if classified && classification.Class == EvidenceInsufficient {
+				missing = append(missing, "concrete_evidence:"+id)
+			}
+			if classified && classification.Class == EvidenceInferential && !refuted {
+				missing = append(missing, "refuter_outcome:"+id)
+			}
+			if len(missing) == before {
+				missing = append(missing, "conclusive_outcome:"+id)
+			}
+			if refuted {
 				attempted = append(attempted, "refuter_outcome:"+id)
 			}
 		}

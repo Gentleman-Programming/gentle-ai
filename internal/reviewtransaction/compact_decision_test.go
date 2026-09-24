@@ -122,6 +122,39 @@ func TestCompleteReviewUnresolvedEvidencePausesForDecision(t *testing.T) {
 	}
 }
 
+func TestDecisionEvidenceAttributesEachUnresolvedFinding(t *testing.T) {
+	for _, withRefuter := range []bool{false, true} {
+		view := CompactReviewView{Outcomes: map[string]EvidenceOutcome{"A": OutcomeInconclusive, "B": OutcomeInconclusive}, Classifications: map[string]FindingEvidence{
+			"A": {FindingID: "A", Class: EvidenceInsufficient, Causality: CausalUnknown},
+			"B": {FindingID: "B", Class: EvidenceInferential, Causality: CausalIntroduced},
+		}}
+		if withRefuter {
+			view.RefuterOutcomes = []EvidenceResult{{FindingID: "B"}}
+		}
+		evidence := deriveCompactDecisionEvidence(view)
+		want := []string{"causal_disposition:A", "concrete_evidence:A"}
+		if !withRefuter {
+			want = append(want, "refuter_outcome:B")
+		} else {
+			want = append(want, "conclusive_outcome:B")
+		}
+		if !reflect.DeepEqual(evidence.MissingEvidence, want) {
+			t.Fatalf("refuter=%v missing=%v want=%v", withRefuter, evidence.MissingEvidence, want)
+		}
+	}
+}
+
+func TestDecisionEvidenceFallsBackOnlyWithoutSpecificFacet(t *testing.T) {
+	view := CompactReviewView{Outcomes: map[string]EvidenceOutcome{"A": OutcomeInconclusive, "B": OutcomeInconclusive}, Classifications: map[string]FindingEvidence{
+		"A": {FindingID: "A", Class: EvidenceInsufficient, Causality: CausalIntroduced},
+	}}
+	evidence := deriveCompactDecisionEvidence(view)
+	want := []string{"concrete_evidence:A", "conclusive_outcome:B"}
+	if !reflect.DeepEqual(evidence.MissingEvidence, want) {
+		t.Fatalf("missing=%v want=%v", evidence.MissingEvidence, want)
+	}
+}
+
 func TestCompleteReviewCleanPathStaysValidating(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
@@ -137,6 +170,196 @@ func TestCompleteReviewCleanPathStaysValidating(t *testing.T) {
 	}
 	if completed.Decision != nil || completed.DecisionEpoch != 0 || len(completed.DecisionHistory) != 0 {
 		t.Fatalf("clean review must stay decision-free: block=%#v epoch=%d history=%#v", completed.Decision, completed.DecisionEpoch, completed.DecisionHistory)
+	}
+}
+
+func TestCompleteReviewSuccessorRejectsUnresolvedValidatingRoute(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	paused, _, started := decisionFindingFixture(t, repo, "unresolved-validating-forgery")
+	forged := paused
+	setCompactStateExit(&forged, StateValidating)
+	forged.Decision = nil
+	forged.DecisionEpoch = started.State.DecisionEpoch
+	forged.DecisionHistory = started.State.DecisionHistory
+	if err := forged.Validate(); err != nil {
+		t.Fatalf("forgery must be structurally valid: %v", err)
+	}
+	if err := validateCompactSuccessor(started.Revision, started.State, forged, "review/complete-review"); err == nil {
+		t.Fatal("accepted unresolved review routed to validating")
+	}
+}
+
+func TestCompleteReviewSuccessorRejectsForgedDecision(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	paused, store, started := decisionFindingFixture(t, repo, "completion-forgery")
+	previous := started.State
+	if err := validateCompactSuccessor(started.Revision, previous, paused, "review/complete-review"); err != nil {
+		view, viewErr := previous.CompactReviewView()
+		t.Fatalf("legitimate pause: %v; viewErr=%v unresolved=%v expected=%#v actual=%#v", err, viewErr, compactReviewViewHasUnresolvedFindings(view), deriveCompactDecisionEvidence(view), paused.Decision)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*CompactState)
+	}{
+		{"escalated", func(s *CompactState) {
+			setCompactStateExit(s, StateEscalated)
+			s.Decision = nil
+			s.DecisionEpoch = 0
+			s.DecisionHistory = nil
+		}},
+		{"unrelated question", func(s *CompactState) {
+			altered := *s.Decision
+			altered.Cause = "insufficient_evidence"
+			s.Decision = &altered
+		}},
+		{"forged history", func(s *CompactState) {
+			s.DecisionHistory = append(s.DecisionHistory, decisionEntry(CompactDecisionPause, CompactDecisionSystemActor, CompactDecisionReasonEvidenceInconclusive, ""))
+			s.DecisionEpoch++
+		}},
+		{"forged epoch", func(s *CompactState) { s.DecisionEpoch++ }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := paused
+			tc.change(&next)
+			if err := validateCompactSuccessor(started.Revision, previous, next, "review/complete-review"); err == nil {
+				t.Fatal("accepted forged completion")
+			}
+		})
+	}
+	// A re-paused lineage must keep its preceding human decisions intact.
+	if _, err := store.Replace(started.Revision, "review/complete-review", paused); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCorrectionStartPreservesDecisionJournal(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	previous, _, record := correctionRequiredCompactAuthority(t, repo, "correction-decision-continuity")
+	next := previous
+	if err := next.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCompactSuccessor(record.Revision, previous, next, "review/begin-fix"); err != nil {
+		t.Fatalf("legitimate correction: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*CompactState)
+	}{
+		{"epoch", func(s *CompactState) { s.DecisionEpoch++ }},
+		{"history", func(s *CompactState) {
+			s.DecisionEpoch++
+			s.DecisionHistory = []CompactDecisionEntry{decisionEntry(CompactDecisionPause, CompactDecisionSystemActor, CompactDecisionReasonEvidenceInconclusive, "")}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			forged := next
+			tc.change(&forged)
+			if err := validateCompactSuccessor(record.Revision, previous, forged, "review/begin-fix"); err == nil {
+				t.Fatal("accepted decision mutation")
+			}
+		})
+	}
+}
+
+func TestCompleteReviewPreservesUnownedAuthority(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	paused, _, started := decisionFindingFixture(t, repo, "completion-unowned-fields")
+	for _, tc := range []struct {
+		name   string
+		change func(*CompactState)
+	}{
+		{"result reopens", func(s *CompactState) { s.ResultReopens = []CompactResultReopen{{}} }},
+		{"correction attempts", func(s *CompactState) { s.CorrectionAttempts = []CompactCorrectionAttempt{{}} }},
+		{"cumulative lines", func(s *CompactState) { s.CumulativeCorrectionLines++ }},
+		{"recovery", func(s *CompactState) { s.Recovery = &CompactRecoveryProvenance{} }},
+		{"added paths", func(s *CompactState) { s.CorrectionAddedPaths = []string{"extra.txt"} }},
+		{"invalidation reason", func(s *CompactState) { s.InvalidationReason = "forged" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := paused
+			tc.change(&next)
+			if err := validateCompactSuccessor(started.Revision, started.State, next, "review/complete-review"); err == nil {
+				t.Fatal("accepted unowned completion mutation")
+			}
+		})
+	}
+}
+
+func TestCorrectionCompletionsPreserveDecisionAuthority(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	previous, fix := pendingCompactCorrection(t, repo, "completion-decision-continuity")
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := bindTargetedValidationForTest(ScopedValidationResult{
+		LedgerIDs: previous.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
+	}, fix)
+	for _, tc := range []struct {
+		name, operation string
+		complete        func(*CompactState) error
+	}{
+		{"complete-fix", "review/complete-fix", func(s *CompactState) error { return s.CompleteCorrection(fix, 1, validation) }},
+		{"complete-correction-verification", "review/complete-correction-verification", func(s *CompactState) error { return s.CompleteCorrectionVerification(fix, 1, validation) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := previous
+			if err := tc.complete(&next); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateCompactSuccessor(hash("decision-predecessor"), previous, next, tc.operation); err != nil {
+				t.Fatalf("legitimate completion refused: %v", err)
+			}
+			for _, mutation := range []struct {
+				name   string
+				change func(*CompactState)
+			}{
+				{"epoch", func(s *CompactState) { s.DecisionEpoch++ }},
+				{"history", func(s *CompactState) {
+					s.DecisionEpoch++
+					s.DecisionHistory = []CompactDecisionEntry{decisionEntry(CompactDecisionPause, CompactDecisionSystemActor, CompactDecisionReasonEvidenceInconclusive, "")}
+				}},
+			} {
+				t.Run(mutation.name, func(t *testing.T) {
+					forged := next
+					mutation.change(&forged)
+					if err := validateCompactSuccessor(hash("decision-predecessor"), previous, forged, tc.operation); err == nil {
+						t.Fatal("accepted decision mutation")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDecisionSuccessorRejectsUnownedAuthorityMutation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	paused, store, started := decisionFindingFixture(t, repo, "decision-unowned")
+	if _, err := store.Replace(started.Revision, "review/complete-review", paused); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*CompactState)
+	}{
+		{"result reopens", func(s *CompactState) { s.ResultReopens = append(s.ResultReopens, CompactResultReopen{}) }},
+		{"correction attempts", func(s *CompactState) { s.CorrectionAttempts = append(s.CorrectionAttempts, CompactCorrectionAttempt{}) }},
+		{"recovery", func(s *CompactState) { s.Recovery = &CompactRecoveryProvenance{} }},
+		{"correction lines", func(s *CompactState) { s.CumulativeCorrectionLines++ }},
+		{"invalidation reason", func(s *CompactState) { s.InvalidationReason = "forged" }},
+		{"added paths", func(s *CompactState) { s.CorrectionAddedPaths = []string{"forged.txt"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := decideSuccessor(record.State, CompactDecisionStop, "maintainer", "stop", record.Revision)
+			tc.mutate(&next)
+			if err := validateCompactSuccessor(record.Revision, record.State, next, "review/decide"); err == nil {
+				t.Fatal("accepted unowned mutation")
+			}
+		})
 	}
 }
 
