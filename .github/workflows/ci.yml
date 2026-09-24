@@ -230,7 +230,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for test in TestWindowsPrivateParentOpensPhysicalDirectoriesWithoutTouchingLeaf TestWindowsPrivateParentRefusesReparsesAndNonDirectories TestWindowsPrivateParentRefusesUnsafeComponentsAndClosesOnFailure; do
+          for test in \
+            TestWindowsPrivateParentOpensPhysicalDirectoriesWithoutTouchingLeaf \
+            TestWindowsPrivateParentRefusesReparsesAndNonDirectories \
+            TestWindowsPrivateParentRefusesUnsafeComponentsAndClosesOnFailure \
+            TestParseWindowsPrivateDestination \
+            TestParseWindowsPrivateDestinationRefusesAmbiguousPaths; do
             go test ./internal/privatefile -list "^${test}$" | grep -Fx "$test" >/dev/null
           done
           go test -v ./internal/privatefile -count=1 -timeout=300s
