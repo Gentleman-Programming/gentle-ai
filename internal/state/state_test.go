@@ -108,6 +108,96 @@ func TestExternalOperationJournalLegacyStateIsEmpty(t *testing.T) {
 	}
 }
 
+func TestGGAProvenanceRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	want := GGAProvenance{
+		PackageManager:     "brew",
+		ScriptInstallPaths: []string{"/home/example/.local/bin/gga", "/home/example/bin/gga"},
+	}
+	if err := Write(home, InstallState{GGA: want}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.GGA, want) {
+		t.Fatalf("GGA provenance = %#v, want %#v", got.GGA, want)
+	}
+}
+
+func TestGGAProvenanceLegacyStateIsEmpty(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(home), []byte(`{"installed_agents":["opencode"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GGA.PackageManager != "" || got.GGA.ScriptInstallPaths != nil {
+		t.Fatalf("legacy GGA provenance = %#v, want empty", got.GGA)
+	}
+}
+
+func TestMergeGGAProvenance(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		existing GGAProvenance
+		fresh    GGAProvenance
+		want     GGAProvenance
+	}{
+		{
+			name:     "fresh package manager replaces route and paths accumulate in stable order",
+			existing: GGAProvenance{PackageManager: "brew", ScriptInstallPaths: []string{"/a/gga", "/b/gga"}},
+			fresh:    GGAProvenance{PackageManager: "nix", ScriptInstallPaths: []string{"/b/gga", "/c/gga", "/c/gga"}},
+			want:     GGAProvenance{PackageManager: "nix", ScriptInstallPaths: []string{"/a/gga", "/b/gga", "/c/gga"}},
+		},
+		{
+			name:     "empty fresh data never erases ownership",
+			existing: GGAProvenance{PackageManager: "brew", ScriptInstallPaths: []string{"/a/gga"}},
+			fresh:    GGAProvenance{},
+			want:     GGAProvenance{PackageManager: "brew", ScriptInstallPaths: []string{"/a/gga"}},
+		},
+		{
+			name:     "empty script paths are not ownership records",
+			existing: GGAProvenance{ScriptInstallPaths: []string{"", "/a/gga"}},
+			fresh:    GGAProvenance{ScriptInstallPaths: []string{"", "/a/gga", "/b/gga"}},
+			want:     GGAProvenance{ScriptInstallPaths: []string{"/a/gga", "/b/gga"}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MergeGGAProvenance(tt.existing, tt.fresh); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("MergeGGAProvenance() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergeAgentsPreservesGGAProvenanceWithoutAliasingPaths(t *testing.T) {
+	existing := InstallState{
+		InstalledAgents: []string{"opencode"},
+		GGA: GGAProvenance{
+			PackageManager:     "brew",
+			ScriptInstallPaths: []string{"/home/example/.local/bin/gga"},
+		},
+	}
+
+	merged := MergeAgents(existing, []string{"pi"})
+	if !reflect.DeepEqual(merged.GGA, existing.GGA) {
+		t.Fatalf("MergeAgents GGA provenance = %#v, want %#v", merged.GGA, existing.GGA)
+	}
+	merged.GGA.ScriptInstallPaths[0] = "/changed/gga"
+	if existing.GGA.ScriptInstallPaths[0] != "/home/example/.local/bin/gga" {
+		t.Fatalf("MergeAgents aliased GGA paths: existing = %#v", existing.GGA.ScriptInstallPaths)
+	}
+}
+
 func fullyPopulatedInstallState() InstallState {
 	lastUpdateCheck := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
 	rddModeRecordedAt := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
