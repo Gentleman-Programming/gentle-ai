@@ -2,6 +2,7 @@ package gga
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +164,164 @@ func TestCleanupInstallDirUsesPowerShellResolverAndIsIdempotent(t *testing.T) {
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("cleanupInstallDir() left %q behind", target)
+	}
+}
+
+func TestExternalInstallPathsListsOnlyUpstreamScriptDestinations(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		want []string
+	}{
+		{
+			name: "linux",
+			goos: "linux",
+			want: []string{"/usr/local/bin/gga", filepath.Join("HOME", ".local", "bin", "gga")},
+		},
+		{
+			name: "windows",
+			goos: "windows",
+			want: []string{filepath.Join("HOME", "bin", "gga"), filepath.Join("HOME", "bin", "gga.bat")},
+		},
+		{name: "unsupported platform", goos: "darwin"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExternalInstallPaths(tt.goos, "HOME"); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ExternalInstallPaths() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestObserveExternalInstallPathPresenceRecordsEveryPathOrAborts(t *testing.T) {
+	info, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := ExternalInstallPaths("linux", "HOME")
+	got, err := observeExternalInstallPathPresence("linux", "HOME", func(path string) (os.FileInfo, error) {
+		switch path {
+		case paths[0]:
+			return info, nil
+		case paths[1]:
+			return nil, os.ErrNotExist
+		default:
+			t.Fatalf("lstat called for unexpected path %q", path)
+			return nil, nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ExternalInstallPathPresence{{Path: paths[0], Present: true}, {Path: paths[1]}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("presence = %#v, want %#v", got, want)
+	}
+
+	_, err = observeExternalInstallPathPresence("linux", "HOME", func(string) (os.FileInfo, error) {
+		return nil, os.ErrPermission
+	})
+	if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), paths[0]) {
+		t.Fatalf("observation error = %v, want path-specific permission failure", err)
+	}
+}
+
+type commandOutputRunnerFunc func(name string, args ...string) ([]byte, error)
+
+func (f commandOutputRunnerFunc) Output(name string, args ...string) ([]byte, error) {
+	return f(name, args...)
+}
+
+func TestQueryExternalRoutePreservesExactScriptObservations(t *testing.T) {
+	paths := []string{"present", "unknown", "absent"}
+	info, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lstatCalls []string
+	result, err := queryExternalRoute("linux", "script", paths, nil, func(path string) (os.FileInfo, error) {
+		lstatCalls = append(lstatCalls, path)
+		switch path {
+		case "present":
+			return info, nil
+		case "unknown":
+			return nil, os.ErrPermission
+		default:
+			return nil, os.ErrNotExist
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(lstatCalls, paths) {
+		t.Fatalf("lstat calls = %v, want %v", lstatCalls, paths)
+	}
+	if !reflect.DeepEqual(result.PresentPaths, []string{"present"}) {
+		t.Fatalf("present paths = %v", result.PresentPaths)
+	}
+	if len(result.UnknownPaths) != 1 || result.UnknownPaths[0].Path != "unknown" || !errors.Is(result.UnknownPaths[0].Err, os.ErrPermission) {
+		t.Fatalf("unknown paths = %#v", result.UnknownPaths)
+	}
+}
+
+func TestQueryExternalRouteTreatsBrokenSymlinkAsPresent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows symlink creation may require elevated privileges")
+	}
+	link := filepath.Join(t.TempDir(), "gga")
+	if err := os.Symlink("missing-gga", link); err != nil {
+		t.Fatal(err)
+	}
+	result, err := QueryExternalRoute("linux", "script", []string{link}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.PresentPaths, []string{link}) {
+		t.Fatalf("present paths = %v, want broken symlink %q", result.PresentPaths, link)
+	}
+}
+
+func TestQueryExternalRouteQueriesExactBrewFormulaLines(t *testing.T) {
+	var commands [][]string
+	result, err := QueryExternalRoute("darwin", "brew", nil, commandOutputRunnerFunc(func(name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		return []byte("git\nnot-gga\ngga\n"), nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.FormulaPresent {
+		t.Fatal("formula presence = false, want true exact gga line")
+	}
+	if want := [][]string{{"brew", "list", "--formula"}}; !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %v, want %v", commands, want)
+	}
+
+	_, err = QueryExternalRoute("darwin", "brew", nil, commandOutputRunnerFunc(func(string, ...string) ([]byte, error) {
+		return nil, errors.New("brew unavailable")
+	}))
+	if err == nil || !strings.Contains(err.Error(), "brew list --formula") {
+		t.Fatalf("brew error = %v, want runnable retry", err)
+	}
+}
+
+func TestQueryExternalRouteRejectsUnsupportedRecordedRoutes(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		goos  string
+		route string
+	}{
+		{name: "script platform", goos: "darwin", route: "script"},
+		{name: "unknown route", goos: "linux", route: "unknown"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := QueryExternalRoute(tt.goos, tt.route, nil, nil)
+			if err == nil || !strings.Contains(err.Error(), "record") {
+				t.Fatalf("QueryExternalRoute() error = %v, want actionable recorded-route error", err)
+			}
+		})
 	}
 }
 
