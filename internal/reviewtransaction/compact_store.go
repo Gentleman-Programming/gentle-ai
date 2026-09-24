@@ -1717,13 +1717,56 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-review":
-		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateApproved && next.State != StateEscalated {
+		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateApproved && next.State != StateEscalated && next.State != StateDecisionRequired {
 			return fmt.Errorf("%w: invalid compact review completion", ErrInvalidSuccessor)
 		}
 		nextView, viewErr := next.CompactReviewView()
 		cleanApproval := viewErr == nil && next.State == StateApproved && next.EvidenceHash == compactReviewEvidenceHash(nextView)
 		if !equalCompactAdmittedReviewAuthority(previous, next) || !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" && !cleanApproval {
 			return fmt.Errorf("%w: compact review completion changed correction or delivery state", ErrInvalidSuccessor)
+		}
+	case "review/decide":
+		// #1380: the one sanctioned exit from decision_required. A continue
+		// resumes the reviewing authority with the answered question cleared;
+		// a stop escalates with the frozen question and journal retained.
+		if previous.State != StateDecisionRequired || next.State != StateReviewing && next.State != StateEscalated {
+			return fmt.Errorf("%w: invalid compact decision", ErrInvalidSuccessor)
+		}
+		if !equalCompactAdmittedReviewAuthority(previous, next) || !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) ||
+			next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash ||
+			next.OriginalCriteria != nil || next.CorrectionRegression != nil || next.EvidenceHash != "" {
+			return fmt.Errorf("%w: compact decision changed correction or delivery state", ErrInvalidSuccessor)
+		}
+		if next.CapturePhaseRevision != previous.CapturePhaseRevision || next.CapturePhaseEpoch != previous.CapturePhaseEpoch {
+			return fmt.Errorf("%w: compact decision may not advance the capture phase", ErrInvalidSuccessor)
+		}
+		if len(next.DecisionHistory) != len(previous.DecisionHistory)+1 {
+			return fmt.Errorf("%w: compact decision must journal exactly one entry", ErrInvalidSuccessor)
+		}
+		if !reflect.DeepEqual(previous.DecisionHistory, next.DecisionHistory[:len(previous.DecisionHistory)]) {
+			return fmt.Errorf("%w: compact decision history is immutable", ErrInvalidSuccessor)
+		}
+		entry := next.DecisionHistory[len(next.DecisionHistory)-1]
+		if entry.Decision != CompactDecisionContinue && entry.Decision != CompactDecisionStop {
+			return fmt.Errorf("%w: compact decision must be journaled as continue or stop", ErrInvalidSuccessor)
+		}
+		if strings.TrimSpace(entry.Actor) == "" || strings.TrimSpace(entry.Reason) == "" {
+			return fmt.Errorf("%w: compact decision requires the human actor and reason", ErrInvalidSuccessor)
+		}
+		if entry.Revision != previousRevision {
+			return fmt.Errorf("%w: compact decision must journal the revision it was issued against", ErrInvalidSuccessor)
+		}
+		if entry.Decision == CompactDecisionContinue && next.State != StateReviewing || entry.Decision == CompactDecisionStop && next.State != StateEscalated {
+			return fmt.Errorf("%w: compact decision entry does not match its successor state", ErrInvalidSuccessor)
+		}
+		if next.DecisionEpoch != previous.DecisionEpoch+1 {
+			return fmt.Errorf("%w: compact decision must advance the decision epoch", ErrInvalidSuccessor)
+		}
+		if entry.Decision == CompactDecisionContinue && (next.Decision != nil || len(next.FixFindingIDs) != 0) {
+			return fmt.Errorf("%w: compact decision continue must clear the answered question", ErrInvalidSuccessor)
+		}
+		if entry.Decision == CompactDecisionStop && !reflect.DeepEqual(previous.Decision, next.Decision) {
+			return fmt.Errorf("%w: compact decision stop must retain the frozen question", ErrInvalidSuccessor)
 		}
 	case "review/begin-fix":
 		if previous.CorrectionAttemptConsumed() {

@@ -326,7 +326,11 @@ func persistHistoricalFailedValidatorAuthority(t *testing.T, lineage string) (st
 }
 
 // escalatedCompactAuthorityFixture creates reviewing authority first, then
-// records a review-completion escalation through the normal compact transition.
+// records a review-completion escalation through the normal compact
+// transitions. Since #1380 an unresolved completion pauses at
+// decision_required; the fixture resolves the pause through the production
+// `review decide --decision stop` path so every consumer still holds a
+// persisted ESCALATED authority.
 func escalatedCompactAuthorityFixture(t *testing.T, repo, lineage string) (CompactState, CompactStore, CompactRecord) {
 	t.Helper()
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
@@ -344,24 +348,34 @@ func escalatedCompactAuthorityFixture(t *testing.T, repo, lineage string) (Compa
 		Claim: "reviewer evidence remains inconclusive", ProofRefs: []string{"candidate inspection was inconclusive"},
 	}
 	results[0].Findings = []Finding{finding}
-	state, started := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
+	paused, started := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
 		LensResults: results,
 		Classifications: []FindingEvidence{{
 			FindingID: finding.ID, Class: EvidenceInsufficient, Causality: CausalUnknown, Proof: "insufficient evidence",
 		}},
 		RefuterOutcomes: []EvidenceResult{},
 	})
-	if state.State != StateEscalated {
-		t.Fatalf("fixture state = %q, want %q", state.State, StateEscalated)
+	if paused.State != StateDecisionRequired {
+		t.Fatalf("fixture state = %q, want %q before the human decision", paused.State, StateDecisionRequired)
 	}
-	if _, err := store.Replace(started.Revision, "review/complete-review", state); err != nil {
+	if _, err := store.Replace(started.Revision, "review/complete-review", paused); err != nil {
 		t.Fatal(err)
 	}
-	record, err := store.Load()
+	persisted, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return state, store, record
+	stopped, err := DecideCompactStore(t.Context(), repo, CompactDecisionRequest{
+		LineageID: lineage, ExpectedRevision: persisted.Revision,
+		Decision: CompactDecisionStop, Actor: "maintainer@example.com", Reason: "stop the review here",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.State.State != StateEscalated {
+		t.Fatalf("fixture state = %q, want %q after the decide stop", stopped.State.State, StateEscalated)
+	}
+	return stopped.State, store, stopped
 }
 
 // poisonedRecoveryFixture persists an escalated predecessor and a recovery

@@ -107,6 +107,12 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	// those fields are consumed only on the negotiated route this row does not
 	// take, and metadata nothing exercises is metadata nothing keeps honest.
 	{Command: "recover", Operation: "review.recover", Label: "Review RECOVER"},
+	// review.decide owns a verb for the #1380 decision gate the same way
+	// review.recover does: the negotiated status schemas publish the stop as
+	// `review_decision_required`, the native STATUS projection carries the
+	// runnable continue/stop invocations, and this row is the command they
+	// render. No flag metadata: the negotiated route never dispatches it.
+	{Command: "decide", Operation: "review.decide", Label: "Review DECIDE"},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", Negotiated: true, ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
 	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "target-evidence", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
 	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition"}},
