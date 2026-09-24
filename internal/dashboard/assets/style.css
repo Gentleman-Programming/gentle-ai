@@ -1280,5 +1280,251 @@ body {
   color: var(--danger) !important;
 }
 
+/* ==========================================
+   FOLDER PICKER MODAL (Buscador de Carpetas)
+   ========================================== */
+.folder-picker-backdrop {
+  z-index: 1200;
+}
+
+.folder-picker-dialog {
+  max-width: 680px;
+  width: 92%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.folder-picker-body {
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow: hidden;
+}
+
+.folder-picker-shortcuts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.shortcut-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-right: 0.25rem;
+}
+
+.fp-chips-group {
+  display: inline-flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.fp-chip {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+  user-select: none;
+}
+
+.fp-chip:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.fp-chip.active {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.fp-chip-native {
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #c084fc;
+}
+
+.fp-chip-native:hover {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: #a855f7;
+  color: #e9d5ff;
+}
+
+.folder-picker-nav-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fp-path-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem;
+  min-height: 34px;
+  overflow: hidden;
+}
+
+.fp-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
+}
+
+.fp-crumb {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  padding: 0.15rem 0.35rem;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.fp-crumb:hover {
+  background: var(--bg-elevated);
+  color: var(--primary);
+}
+
+.fp-crumb.current {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.fp-crumb-sep {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  user-select: none;
+}
+
+.fp-path-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  outline: none;
+  font-family: inherit;
+}
+
+.fp-btn-icon {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 3px;
+  transition: var(--transition);
+}
+
+.fp-btn-icon:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.folder-picker-list-container {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  max-height: 280px;
+  min-height: 200px;
+  overflow-y: auto;
+}
+
+.folder-picker-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.fp-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.45rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: var(--transition);
+  user-select: none;
+}
+
+.fp-item:last-child {
+  border-bottom: none;
+}
+
+.fp-item:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.fp-item.selected {
+  background: rgba(59, 130, 246, 0.18);
+  border-left: 3px solid var(--primary);
+}
+
+.fp-item-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fp-item-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.fp-item.hidden-dir {
+  opacity: 0.55;
+}
+
+.fp-item-action {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.folder-picker-selection-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+  overflow: hidden;
+}
+
+.fp-selection-label {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.fp-selected-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 

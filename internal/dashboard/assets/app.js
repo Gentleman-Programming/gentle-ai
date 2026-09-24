@@ -7,12 +7,33 @@ document.addEventListener('DOMContentLoaded', () => {
   // Elementos DOM
   const projectSelect = document.getElementById('project-select');
   const btnAddProject = document.getElementById('btn-add-project');
+  const btnBrowseHeaderProject = document.getElementById('btn-browse-header-project');
   const modalAddProject = document.getElementById('modal-add-project');
   const btnCloseAddProject = document.getElementById('btn-close-add-project');
   const btnCancelAddProject = document.getElementById('btn-cancel-add-project');
   const btnSubmitAddProject = document.getElementById('btn-submit-add-project');
   const inputProjectPath = document.getElementById('input-project-path');
+  const btnBrowseProjectPath = document.getElementById('btn-browse-project-path');
   const inputProjectName = document.getElementById('input-project-name');
+
+  // Elementos del Modal Explorador de Carpetas
+  const modalFolderPicker = document.getElementById('modal-folder-picker');
+  const btnCloseFolderPicker = document.getElementById('btn-close-folder-picker');
+  const fpDrivesContainer = document.getElementById('fp-drives-container');
+  const fpBtnHome = document.getElementById('fp-btn-home');
+  const fpBtnWorkspace = document.getElementById('fp-btn-workspace');
+  const fpBtnNativeSo = document.getElementById('fp-btn-native-so');
+  const fpBtnUp = document.getElementById('fp-btn-up');
+  const fpBreadcrumbs = document.getElementById('fp-breadcrumbs');
+  const fpPathInput = document.getElementById('fp-path-input');
+  const fpBtnToggleInput = document.getElementById('fp-btn-toggle-input');
+  const fpBtnRefresh = document.getElementById('fp-btn-refresh');
+  const fpFilterInput = document.getElementById('fp-filter-input');
+  const fpFolderList = document.getElementById('fp-folder-list');
+  const fpSelectedPathDisplay = document.getElementById('fp-selected-path-display');
+  const fpCountInfo = document.getElementById('fp-count-info');
+  const fpBtnCancel = document.getElementById('fp-btn-cancel');
+  const fpBtnConfirm = document.getElementById('fp-btn-confirm');
 
   const zeroConfigHero = document.getElementById('zero-config-hero');
   const zeroConfigMsg = document.getElementById('zero-config-msg');
@@ -354,6 +375,385 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
 
+  // ==========================================
+  // BUSCADOR / SELECTOR DE CARPETAS EN LOCAL
+  // ==========================================
+  let folderPickerState = {
+    currentPath: '',
+    parentPath: '',
+    selectedPath: '',
+    directories: [],
+    drives: [],
+    homeDir: '',
+    workspaceDir: '',
+    separator: '\\',
+    onSelectCallback: null,
+    baseDirContext: ''
+  };
+
+  async function openFolderPicker(options = {}) {
+    const { initialPath, baseDirContext, onSelect } = options;
+    folderPickerState.onSelectCallback = onSelect || null;
+    folderPickerState.baseDirContext = baseDirContext || '';
+    folderPickerState.selectedPath = initialPath || '';
+
+    if (modalFolderPicker) modalFolderPicker.classList.remove('hidden');
+    if (fpSelectedPathDisplay) {
+      fpSelectedPathDisplay.textContent = initialPath || 'Cargando...';
+    }
+    if (fpFilterInput) fpFilterInput.value = '';
+    hidePathInput();
+
+    await navigateToDirectory(initialPath || '');
+  }
+
+  function hidePathInput() {
+    if (fpPathInput) fpPathInput.classList.add('hidden');
+    if (fpBreadcrumbs) fpBreadcrumbs.classList.remove('hidden');
+    if (fpBtnToggleInput) fpBtnToggleInput.textContent = '✏️';
+  }
+
+  function showPathInput() {
+    if (fpPathInput) {
+      fpPathInput.value = folderPickerState.currentPath;
+      fpPathInput.classList.remove('hidden');
+      fpPathInput.focus();
+      fpPathInput.select();
+    }
+    if (fpBreadcrumbs) fpBreadcrumbs.classList.add('hidden');
+    if (fpBtnToggleInput) fpBtnToggleInput.textContent = '🏷️';
+  }
+
+  async function navigateToDirectory(targetPath) {
+    if (!fpFolderList) return;
+    fpFolderList.innerHTML = '<div class="loading-state">Cargando carpetas...</div>';
+
+    try {
+      const url = '/api/fs/directories' + (targetPath ? '?path=' + encodeURIComponent(targetPath) : '');
+      const res = await fetch(url);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Error explorando directorio');
+      }
+      const data = await res.json();
+      folderPickerState.currentPath = data.current_path;
+      folderPickerState.parentPath = data.parent_path;
+      folderPickerState.drives = data.drives || [];
+      folderPickerState.homeDir = data.home_dir || '';
+      folderPickerState.workspaceDir = data.workspace_dir || '';
+      folderPickerState.separator = data.separator || '\\';
+      folderPickerState.directories = data.directories || [];
+
+      if (!folderPickerState.selectedPath) {
+        folderPickerState.selectedPath = data.current_path;
+      }
+      if (fpSelectedPathDisplay) {
+        fpSelectedPathDisplay.textContent = folderPickerState.selectedPath || data.current_path;
+      }
+
+      hidePathInput();
+      renderFolderPickerUI();
+    } catch (err) {
+      fpFolderList.innerHTML = `<div class="error-banner" style="margin: 0.75rem;">Error: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderFolderPickerUI() {
+    // 1. Renderizar drives / unidades
+    if (fpDrivesContainer) {
+      fpDrivesContainer.innerHTML = '';
+      folderPickerState.drives.forEach(drv => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isCurrentDrive = folderPickerState.currentPath.toLowerCase().startsWith(drv.toLowerCase());
+        btn.className = 'fp-chip' + (isCurrentDrive ? ' active' : '');
+        btn.textContent = drv;
+        btn.title = `Ir a unidad ${drv}`;
+        btn.onclick = () => {
+          folderPickerState.selectedPath = drv;
+          if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = drv;
+          navigateToDirectory(drv);
+        };
+        fpDrivesContainer.appendChild(btn);
+      });
+    }
+
+    // 2. Renderizar breadcrumbs
+    renderBreadcrumbs();
+
+    // 3. Renderizar lista de carpetas
+    renderFolderItems();
+  }
+
+  function renderBreadcrumbs() {
+    if (!fpBreadcrumbs) return;
+    fpBreadcrumbs.innerHTML = '';
+
+    const p = folderPickerState.currentPath;
+    const sep = folderPickerState.separator;
+    if (fpPathInput) fpPathInput.value = p;
+
+    let parts = [];
+    let prefix = '';
+
+    if (p.includes(':')) {
+      const driveMatch = p.match(/^([A-Za-z]:[\\/]?)/);
+      if (driveMatch) {
+        prefix = driveMatch[1];
+        const rest = p.slice(prefix.length);
+        parts = rest.split(/[\\/]+/).filter(Boolean);
+      } else {
+        parts = p.split(/[\\/]+/).filter(Boolean);
+      }
+    } else {
+      if (p.startsWith('/')) prefix = '/';
+      parts = p.split(/[\\/]+/).filter(Boolean);
+    }
+
+    if (prefix) {
+      const rootCrumb = document.createElement('span');
+      rootCrumb.className = 'fp-crumb';
+      rootCrumb.textContent = prefix;
+      rootCrumb.title = `Ir a ${prefix}`;
+      rootCrumb.onclick = () => {
+        folderPickerState.selectedPath = prefix;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = prefix;
+        navigateToDirectory(prefix);
+      };
+      fpBreadcrumbs.appendChild(rootCrumb);
+    }
+
+    let acc = prefix;
+    parts.forEach((seg, idx) => {
+      const sepSpan = document.createElement('span');
+      sepSpan.className = 'fp-crumb-sep';
+      sepSpan.textContent = '>';
+      fpBreadcrumbs.appendChild(sepSpan);
+
+      if (!acc.endsWith(sep) && !acc.endsWith('/') && !acc.endsWith('\\')) {
+        acc += sep;
+      }
+      acc += seg;
+      const thisPath = acc;
+
+      const crumb = document.createElement('span');
+      crumb.className = 'fp-crumb' + (idx === parts.length - 1 ? ' current' : '');
+      crumb.textContent = seg;
+      crumb.title = `Ir a ${thisPath}`;
+      crumb.onclick = () => {
+        folderPickerState.selectedPath = thisPath;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = thisPath;
+        navigateToDirectory(thisPath);
+      };
+      fpBreadcrumbs.appendChild(crumb);
+    });
+  }
+
+  function renderFolderItems() {
+    if (!fpFolderList) return;
+    fpFolderList.innerHTML = '';
+
+    const filterText = fpFilterInput ? fpFilterInput.value.trim().toLowerCase() : '';
+    let filtered = folderPickerState.directories.filter(d => {
+      if (!filterText) return true;
+      return d.name.toLowerCase().includes(filterText);
+    });
+
+    if (fpCountInfo) {
+      fpCountInfo.textContent = `${filtered.length} carpetas encontradas`;
+    }
+
+    // Elemento para subir de nivel si existe padre
+    if (folderPickerState.parentPath) {
+      const upItem = document.createElement('div');
+      upItem.className = 'fp-item';
+      upItem.innerHTML = `
+        <div class="fp-item-name">
+          <span class="fp-item-icon">📁</span>
+          <span><strong>..</strong> (Directorio superior)</span>
+        </div>
+        <span class="fp-item-action">Subir ⬆</span>
+      `;
+      upItem.onclick = () => {
+        folderPickerState.selectedPath = folderPickerState.parentPath;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = folderPickerState.parentPath;
+        navigateToDirectory(folderPickerState.parentPath);
+      };
+      fpFolderList.appendChild(upItem);
+    }
+
+    if (filtered.length === 0) {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'empty-state';
+      emptyDiv.style.padding = '1.5rem';
+      emptyDiv.textContent = filterText ? 'No hay carpetas que coincidan con la búsqueda.' : 'No hay subcarpetas en este directorio.';
+      fpFolderList.appendChild(emptyDiv);
+      return;
+    }
+
+    filtered.forEach(dir => {
+      const item = document.createElement('div');
+      const isSelected = dir.path === folderPickerState.selectedPath;
+      item.className = 'fp-item' + (dir.hidden ? ' hidden-dir' : '') + (isSelected ? ' selected' : '');
+      item.innerHTML = `
+        <div class="fp-item-name" title="${escapeHtml(dir.path)}">
+          <span class="fp-item-icon">📁</span>
+          <span>${escapeHtml(dir.name)}</span>
+        </div>
+        <span class="fp-item-action">Abrir ➔</span>
+      `;
+
+      item.addEventListener('click', () => {
+        fpFolderList.querySelectorAll('.fp-item').forEach(el => el.classList.remove('selected'));
+        item.classList.add('selected');
+        folderPickerState.selectedPath = dir.path;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = dir.path;
+      });
+
+      item.addEventListener('dblclick', () => {
+        folderPickerState.selectedPath = dir.path;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = dir.path;
+        navigateToDirectory(dir.path);
+      });
+
+      const actionBtn = item.querySelector('.fp-item-action');
+      if (actionBtn) {
+        actionBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          folderPickerState.selectedPath = dir.path;
+          if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = dir.path;
+          navigateToDirectory(dir.path);
+        });
+      }
+
+      fpFolderList.appendChild(item);
+    });
+  }
+
+  // Event Listeners del Folder Picker
+  if (fpFilterInput) {
+    fpFilterInput.addEventListener('input', () => renderFolderItems());
+  }
+
+  if (fpBtnUp) {
+    fpBtnUp.addEventListener('click', () => {
+      if (folderPickerState.parentPath) {
+        folderPickerState.selectedPath = folderPickerState.parentPath;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = folderPickerState.parentPath;
+        navigateToDirectory(folderPickerState.parentPath);
+      }
+    });
+  }
+
+  if (fpBtnRefresh) {
+    fpBtnRefresh.addEventListener('click', () => {
+      navigateToDirectory(folderPickerState.currentPath);
+    });
+  }
+
+  if (fpBtnToggleInput) {
+    fpBtnToggleInput.addEventListener('click', () => {
+      if (fpPathInput && fpPathInput.classList.contains('hidden')) {
+        showPathInput();
+      } else {
+        hidePathInput();
+      }
+    });
+  }
+
+  if (fpPathInput) {
+    fpPathInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const p = fpPathInput.value.trim();
+        if (p) {
+          folderPickerState.selectedPath = p;
+          if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = p;
+          navigateToDirectory(p);
+        }
+      } else if (e.key === 'Escape') {
+        hidePathInput();
+      }
+    });
+  }
+
+  if (fpBtnHome) {
+    fpBtnHome.addEventListener('click', () => {
+      if (folderPickerState.homeDir) {
+        folderPickerState.selectedPath = folderPickerState.homeDir;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = folderPickerState.homeDir;
+        navigateToDirectory(folderPickerState.homeDir);
+      }
+    });
+  }
+
+  if (fpBtnWorkspace) {
+    fpBtnWorkspace.addEventListener('click', () => {
+      if (folderPickerState.workspaceDir) {
+        folderPickerState.selectedPath = folderPickerState.workspaceDir;
+        if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = folderPickerState.workspaceDir;
+        navigateToDirectory(folderPickerState.workspaceDir);
+      }
+    });
+  }
+
+  if (fpBtnNativeSo) {
+    fpBtnNativeSo.addEventListener('click', async () => {
+      fpBtnNativeSo.disabled = true;
+      const origText = fpBtnNativeSo.textContent;
+      fpBtnNativeSo.textContent = '⏳ Abriendo...';
+      try {
+        const res = await fetch('/api/fs/native-picker', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ initial_path: folderPickerState.selectedPath || folderPickerState.currentPath })
+        });
+        const data = await res.json();
+        if (data && data.path && !data.canceled) {
+          folderPickerState.selectedPath = data.path;
+          if (fpSelectedPathDisplay) fpSelectedPathDisplay.textContent = data.path;
+          await navigateToDirectory(data.path);
+        }
+      } catch (err) {
+        console.warn('Fallo en selector nativo:', err);
+      } finally {
+        fpBtnNativeSo.disabled = false;
+        fpBtnNativeSo.textContent = origText;
+      }
+    });
+  }
+
+  if (fpBtnConfirm) {
+    fpBtnConfirm.addEventListener('click', () => {
+      const chosen = folderPickerState.selectedPath || folderPickerState.currentPath;
+      if (!chosen) {
+        alert('Por favor selecciona una carpeta.');
+        return;
+      }
+      if (folderPickerState.onSelectCallback) {
+        folderPickerState.onSelectCallback(chosen);
+      }
+      if (modalFolderPicker) modalFolderPicker.classList.add('hidden');
+    });
+  }
+
+  if (fpBtnCancel) {
+    fpBtnCancel.addEventListener('click', () => {
+      if (modalFolderPicker) modalFolderPicker.classList.add('hidden');
+    });
+  }
+
+  if (btnCloseFolderPicker) {
+    btnCloseFolderPicker.addEventListener('click', () => {
+      if (modalFolderPicker) modalFolderPicker.classList.add('hidden');
+    });
+  }
+
+  if (modalFolderPicker) {
+    modalFolderPicker.addEventListener('click', (e) => {
+      if (e.target === modalFolderPicker) modalFolderPicker.classList.add('hidden');
+    });
+  }
+
   // Elementos del Constructor de Roles Dinámico
   const rolesBuilderContainer = document.getElementById('roles-builder-container');
   const btnAddRoleRow = document.getElementById('btn-add-role-row');
@@ -378,7 +778,10 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
       <div style="margin-bottom: 0.5rem;">
         <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.2rem;">Rutas / Repositorios (separadas por coma):</label>
-        <input type="text" class="role-repos-input form-select" value="${escapeHtml(repos)}" placeholder="src/Ludeka.Web, ." style="font-size: 0.85rem; padding: 0.25rem 0.5rem; width: 100%; box-sizing: border-box;">
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="text" class="role-repos-input form-select" value="${escapeHtml(repos)}" placeholder="src/Ludeka.Web, ." style="font-size: 0.85rem; padding: 0.25rem 0.5rem; flex: 1; box-sizing: border-box;">
+          <button type="button" class="btn-browse-role-repo btn btn-sm btn-secondary" title="Examinar carpeta en local" style="display: flex; align-items: center; justify-content: center; padding: 0.25rem 0.6rem;">📁</button>
+        </div>
       </div>
       <label style="font-size: 0.8rem; display: flex; align-items: center; gap: 0.4rem; cursor: pointer; color: #cbd5e1; user-select: none;">
         <input type="checkbox" class="role-nonblocking-input" ${nonBlocking ? 'checked' : ''}>
@@ -390,12 +793,84 @@ document.addEventListener('DOMContentLoaded', () => {
       card.remove();
     });
 
+    const btnBrowseRole = card.querySelector('.btn-browse-role-repo');
+    const roleReposInput = card.querySelector('.role-repos-input');
+    if (btnBrowseRole && roleReposInput) {
+      btnBrowseRole.addEventListener('click', () => {
+        const projRoot = inputProjectPath ? inputProjectPath.value.trim() : '';
+        openFolderPicker({
+          initialPath: projRoot || '',
+          baseDirContext: projRoot || '',
+          onSelect: (selectedPath) => {
+            let finalPath = selectedPath;
+            if (projRoot) {
+              const cleanRoot = projRoot.replace(/[\\/]+$/, '');
+              if (selectedPath.toLowerCase().startsWith(cleanRoot.toLowerCase())) {
+                let rel = selectedPath.slice(cleanRoot.length).replace(/^[\\/]+/, '');
+                finalPath = rel || '.';
+              }
+            }
+            const currentVals = roleReposInput.value.trim();
+            if (!currentVals || currentVals === '.') {
+              roleReposInput.value = finalPath;
+            } else {
+              const arr = currentVals.split(',').map(s => s.trim()).filter(Boolean);
+              if (!arr.includes(finalPath)) {
+                arr.push(finalPath);
+              }
+              roleReposInput.value = arr.join(', ');
+            }
+          }
+        });
+      });
+    }
+
     rolesBuilderContainer.appendChild(card);
   }
 
   if (btnAddRoleRow) {
     btnAddRoleRow.addEventListener('click', () => {
       addRoleRow();
+    });
+  }
+
+  // Botón Examinar en Modal Añadir Proyecto
+  if (btnBrowseProjectPath) {
+    btnBrowseProjectPath.addEventListener('click', () => {
+      const current = inputProjectPath ? inputProjectPath.value.trim() : '';
+      openFolderPicker({
+        initialPath: current,
+        onSelect: (selectedPath) => {
+          if (inputProjectPath) {
+            inputProjectPath.value = selectedPath;
+            inputProjectPath.dispatchEvent(new Event('change'));
+          }
+          if (inputProjectName && !inputProjectName.value.trim()) {
+            const parts = selectedPath.replace(/[\\/]+$/, '').split(/[\\/]/);
+            const baseName = parts[parts.length - 1];
+            if (baseName) {
+              inputProjectName.value = baseName;
+            }
+          }
+        }
+      });
+    });
+  }
+
+  // Botón Explorar en Header
+  if (btnBrowseHeaderProject) {
+    btnBrowseHeaderProject.addEventListener('click', () => {
+      openFolderPicker({
+        onSelect: (selectedPath) => {
+          if (inputProjectPath) inputProjectPath.value = selectedPath;
+          if (inputProjectName && !inputProjectName.value.trim()) {
+            const parts = selectedPath.replace(/[\\/]+$/, '').split(/[\\/]/);
+            const baseName = parts[parts.length - 1];
+            if (baseName) inputProjectName.value = baseName;
+          }
+          if (modalAddProject) modalAddProject.classList.remove('hidden');
+        }
+      });
     });
   }
 

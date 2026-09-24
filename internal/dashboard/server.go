@@ -43,6 +43,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/projects/switch", s.handleProjectsSwitch)
 	s.mux.HandleFunc("/api/projects/add", s.handleProjectsAdd)
 	s.mux.HandleFunc("/api/projects/init", s.handleProjectsInit)
+	s.mux.HandleFunc("/api/fs/directories", s.handleFSDirectories)
+	s.mux.HandleFunc("/api/fs/native-picker", s.handleFSNativePicker)
 	s.mux.HandleFunc("/api/workspace", s.handleWorkspace)
 	s.mux.HandleFunc("/api/workspace/specs/sync-status", s.handleSpecsSyncStatus)
 	s.mux.HandleFunc("/api/workspace/specs/pull", s.handleSpecsPull)
@@ -234,6 +236,43 @@ func (s *Server) handleProjectsInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.respondJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleFSDirectories(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	targetPath := r.URL.Query().Get("path")
+	res, err := s.service.BrowseDirectories(targetPath)
+	if err != nil {
+		s.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleFSNativePicker(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+	var req NativePickerRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	selected, err := s.service.PickFolderNative(r.Context(), req.InitialPath)
+	if err != nil {
+		s.respondJSON(w, http.StatusOK, NativePickerResult{
+			Canceled: true,
+			Error:    err.Error(),
+		})
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, NativePickerResult{
+		Path:     selected,
+		Canceled: selected == "",
+	})
 }
 
 func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {

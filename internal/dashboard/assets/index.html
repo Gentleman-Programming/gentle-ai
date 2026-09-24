@@ -22,6 +22,7 @@
         <select id="project-select" class="project-select-dropdown">
           <option value="">Cargando proyectos...</option>
         </select>
+        <button id="btn-browse-header-project" class="btn btn-sm btn-secondary" title="Buscar y abrir carpeta de proyecto en local">📁 Explorar...</button>
         <button id="btn-add-project" class="btn btn-sm btn-outline" title="Vincular otro proyecto al Hub">+ Añadir</button>
       </div>
       <div class="workspace-pill" id="workspace-pill">
@@ -519,7 +520,12 @@
         <div class="modal-body" style="padding: 1.5rem; max-height: 80vh; overflow-y: auto;">
           <div style="margin-bottom: 1rem;">
             <label style="display: block; font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Ruta absoluta del proyecto en disco:</label>
-            <input type="text" id="input-project-path" class="form-select" style="width: 100%; box-sizing: border-box;" placeholder="C:\repos\mi-proyecto o /home/usuario/proyectos/...">
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <input type="text" id="input-project-path" class="form-select" style="flex: 1; box-sizing: border-box;" placeholder="C:\repos\mi-proyecto o /home/usuario/proyectos/...">
+              <button type="button" id="btn-browse-project-path" class="btn btn-secondary" title="Examinar y buscar carpeta en disco local" style="white-space: nowrap; display: flex; align-items: center; gap: 0.35rem;">
+                <span>📁</span> Examinar...
+              </button>
+            </div>
           </div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
             <div>
@@ -552,6 +558,68 @@
           <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
             <button id="btn-cancel-add-project" class="btn btn-secondary">Cancelar</button>
             <button id="btn-submit-add-project" class="btn btn-primary">Vincular e Inicializar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal Explorador / Buscador de Carpetas en Local -->
+    <div id="modal-folder-picker" class="modal-backdrop folder-picker-backdrop hidden">
+      <div class="modal-dialog folder-picker-dialog">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 0.6rem;">
+            <span style="font-size: 1.25rem;">📁</span>
+            <div>
+              <h3 style="margin: 0; font-size: 1.1rem;">Explorador de Carpetas Locales</h3>
+              <span class="subtext" style="font-size: 0.75rem; color: var(--text-muted);">Navega y selecciona una carpeta de tu sistema de archivos</span>
+            </div>
+          </div>
+          <button class="btn-close" id="btn-close-folder-picker">✕</button>
+        </div>
+        <div class="modal-body folder-picker-body">
+          <!-- Accesos Rápidos (Drives, Home, Workspace, Botón SO) -->
+          <div class="folder-picker-shortcuts">
+            <span class="shortcut-label">Accesos rápidos:</span>
+            <div id="fp-drives-container" class="fp-chips-group"></div>
+            <button type="button" id="fp-btn-home" class="fp-chip" title="Directorio de Usuario">🏠 Inicio</button>
+            <button type="button" id="fp-btn-workspace" class="fp-chip" title="Directorio del Workspace">💻 Workspace</button>
+            <button type="button" id="fp-btn-native-so" class="fp-chip fp-chip-native" title="Abrir ventana nativa del explorador de carpetas del sistema operativo">🪟 Explorador del SO</button>
+          </div>
+
+          <!-- Barra de Dirección / Breadcrumbs y Navegación -->
+          <div class="folder-picker-nav-bar">
+            <button type="button" id="fp-btn-up" class="btn btn-secondary btn-sm" title="Subir al directorio superior (..)">⬆ Subir</button>
+            <div class="fp-path-container">
+              <div id="fp-breadcrumbs" class="fp-breadcrumbs"></div>
+              <input type="text" id="fp-path-input" class="fp-path-input hidden" placeholder="Ruta del directorio...">
+              <button type="button" id="fp-btn-toggle-input" class="fp-btn-icon" title="Editar ruta manualmente">✏️</button>
+            </div>
+            <button type="button" id="fp-btn-refresh" class="btn btn-secondary btn-sm" title="Recargar">↻</button>
+          </div>
+
+          <!-- Filtro en tiempo real -->
+          <div class="folder-picker-filter-bar">
+            <input type="text" id="fp-filter-input" class="form-select" placeholder="🔍 Filtrar carpetas en este directorio..." style="width: 100%; box-sizing: border-box; font-size: 0.85rem; padding: 0.4rem 0.75rem;">
+          </div>
+
+          <!-- Contenedor desplazable de carpetas -->
+          <div class="folder-picker-list-container">
+            <div id="fp-folder-list" class="folder-picker-list">
+              <div class="loading-state">Cargando carpetas del sistema...</div>
+            </div>
+          </div>
+
+          <!-- Vista de Selección Activa -->
+          <div class="folder-picker-selection-info">
+            <span class="fp-selection-label">Carpeta seleccionada:</span>
+            <span id="fp-selected-path-display" class="fp-selected-path">—</span>
+          </div>
+        </div>
+        <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--bg-card);">
+          <span id="fp-count-info" style="font-size: 0.78rem; color: var(--text-muted);">0 carpetas encontradas</span>
+          <div style="display: flex; gap: 0.75rem;">
+            <button type="button" id="fp-btn-cancel" class="btn btn-secondary">Cancelar</button>
+            <button type="button" id="fp-btn-confirm" class="btn btn-primary">✓ Seleccionar esta Carpeta</button>
           </div>
         </div>
       </div>
