@@ -416,6 +416,13 @@ func TestRenderInstallManualActionsIncludesPiCodeGraphDrift(t *testing.T) {
 	}
 }
 
+func TestRenderInstallManualActionsIncludesPipelineActions(t *testing.T) {
+	out := RenderInstallManualActions(InstallResult{Execution: pipeline.ExecutionResult{ManualActions: []string{"GGA installation deferred because Homebrew is unavailable."}}})
+	if !strings.Contains(out, "Manual actions required") || !strings.Contains(out, "GGA installation deferred") {
+		t.Fatalf("CLI manual action missing: %q", out)
+	}
+}
+
 func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
 	tests := []struct {
 		name      string

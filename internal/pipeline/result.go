@@ -33,6 +33,9 @@ type ExecutionResult struct {
 	Apply    StageResult
 	Rollback StageResult
 	Err      error
+	// DeferredComponents identifies selected components whose configuration was
+	// applied but whose external binary installation requires manual follow-up.
+	DeferredComponents []string
 	// ManualActions are non-fatal but actionable outcomes propagated by runtime
 	// steps to both CLI and TUI completion renderers.
 	ManualActions []string
