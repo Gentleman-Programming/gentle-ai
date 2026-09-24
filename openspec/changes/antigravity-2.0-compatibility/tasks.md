@@ -15,9 +15,9 @@
 
 ## 3. Engram and SDD behavior
 
-- [x] Write Antigravity MCP config to `~/.gemini/antigravity-cli/mcp_config.json`.
-- [x] Install Antigravity Engram plugin hooks under `~/.gemini/antigravity-cli/plugins/gentle-ai-engram/`.
-- [x] Use default `engram mcp` invocation without Antigravity-specific Pi assumptions.
+- [x] Write Antigravity MCP config to `~/.gemini/config/mcp_config.json`.
+- [x] Install Antigravity Engram plugin hooks under `<variantDir>/plugins/gentle-ai-engram/` (IDE → Desktop → CLI fallback).
+- [x] Use `engram mcp --tools=agent` invocation (standard across all agents).
 - [x] Ensure Antigravity SDD instructions use dynamic subagents.
 
 ## 4. Verification
