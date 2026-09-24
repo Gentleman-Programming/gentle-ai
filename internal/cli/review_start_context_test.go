@@ -105,6 +105,18 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 		conflict.NextAction != "correct_request" || conflict.LineageID != lineage {
 		t.Fatalf("changed-workspace START conflict = %#v", conflict)
 	}
+	for _, forbidden := range []string{
+		"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects", "repository_context", resumed.BaseTree, resumed.CandidateTree,
+	} {
+		if bytes.Contains(conflictOutput.Bytes(), []byte(forbidden)) {
+			t.Fatalf("changed-workspace START leaked frozen authority context %q:\n%s", forbidden, conflictOutput.String())
+		}
+	}
+	for _, subject := range resumed.ArtifactSubjects {
+		if bytes.Contains(conflictOutput.Bytes(), []byte(subject.SubjectHash)) {
+			t.Fatalf("changed-workspace START leaked artifact subject %q:\n%s", subject.SubjectHash, conflictOutput.String())
+		}
+	}
 	after, err := os.ReadFile(store.StatePath())
 	if err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("changed-workspace START conflict changed frozen authority: %v", err)
@@ -131,7 +143,7 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		}
 	})
 
-	t.Run("recovery selection", func(t *testing.T) {
+	t.Run("recovery START conflict stays context-free for a changed candidate", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate before escalation\n", 0o644)
 		lineage := "review-start-context-recovery"
@@ -147,6 +159,27 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 			t.Fatal(err)
 		}
 		writeReviewStartCandidate(t, repo, "tracked.txt", "replacement target after escalation\n", 0o644)
+		var statusOutput bytes.Buffer
+		if err := RunReview([]string{
+			"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage, "--next-transition",
+		}, &statusOutput); err != nil {
+			t.Fatalf("negotiated STATUS for the changed candidate: %v\n%s", err, statusOutput.String())
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+		if status.Action != reviewtransaction.TargetStatusActionRecover || status.Authority == nil || status.Authority.LineageID != lineage ||
+			status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+			status.NextTransition.ReasonCode != "recovery_authorization_required" || status.NextTransition.Collect == nil ||
+			len(status.NextTransition.Collect.Inputs) != 1 {
+			t.Fatalf("STATUS did not return the authoritative recovery route:\n%s", statusOutput.String())
+		}
+		input := status.NextTransition.Collect.Inputs[0]
+		if input.Schema != "gentle-ai.review-recovery-authorization/v1" || input.CaptureOperation != "external.authorize_recovery" {
+			t.Fatalf("recovery collection input = %q via %q, want the recovery authorization schema", input.Schema, input.CaptureOperation)
+		}
+		if status.NextTransition.Execute != nil && status.NextTransition.Execute.Operation == "review.start" {
+			t.Fatalf("STATUS incorrectly routed the changed candidate to review.start:\n%s", statusOutput.String())
+		}
 		var output bytes.Buffer
 		err = RunReview(boundNegotiatedStartArgs(t, []string{
 			"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
@@ -162,6 +195,19 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 			!failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
 			failure.NextAction != "correct_request" || failure.LineageID != lineage {
 			t.Fatalf("recovery START conflict = %#v", failure)
+		}
+		for _, forbidden := range []string{
+			"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects", "repository_context",
+			created.BaseTree, created.CandidateTree,
+		} {
+			if bytes.Contains(output.Bytes(), []byte(forbidden)) {
+				t.Fatalf("recovery START leaked frozen authority context %q:\n%s", forbidden, output.String())
+			}
+		}
+		for _, subject := range created.ArtifactSubjects {
+			if bytes.Contains(output.Bytes(), []byte(subject.SubjectHash)) {
+				t.Fatalf("recovery START leaked artifact subject %q:\n%s", subject.SubjectHash, output.String())
+			}
 		}
 		after, err := os.ReadFile(store.StatePath())
 		if err != nil || !bytes.Equal(after, before) {
