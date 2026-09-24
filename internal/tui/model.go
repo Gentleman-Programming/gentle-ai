@@ -851,7 +851,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.AgentBuilder.Installing = false
 		if msg.Err != nil {
 			m.AgentBuilder.InstallErr = msg.Err
-			m.setScreen(ScreenAgentBuilderPreview)
 		} else {
 			m.AgentBuilder.InstallResults = msg.Results
 			m.AgentBuilder.InstallErr = nil
@@ -2531,8 +2530,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgentBuilderPrompt)
 		}
 	case ScreenAgentBuilderInstalling:
-		if !m.AgentBuilder.Installing {
-			m.setScreen(ScreenAgentBuilderComplete)
+		if m.AgentBuilder.InstallErr != nil {
+			if m.Cursor == 0 {
+				return m.startInstallation()
+			}
+			m.AgentBuilder.InstallErr = nil
+			m.setScreen(ScreenAgentBuilderPreview)
 		}
 	case ScreenAgentBuilderComplete:
 		m.setScreen(ScreenWelcome)
@@ -4830,6 +4833,70 @@ func (m Model) startGeneration() (tea.Model, tea.Cmd) {
 	})
 }
 
+type agentBuilderPostInstallOps struct {
+	mkdirAll           func(string, os.FileMode) error
+	loadRegistry       func(string) (*agentbuilder.Registry, error)
+	saveRegistry       func(string, *agentbuilder.Registry) error
+	systemPromptPath   func(model.AgentID) (string, error)
+	injectSDDReference func(*agentbuilder.GeneratedAgent, string) error
+}
+
+// finishAgentBuilderInstall persists physical install results, then injects SDD references.
+// It never compensates physical writes: retries must converge on the installed skill files.
+func finishAgentBuilderInstall(agent *agentbuilder.GeneratedAgent, adapters []agentbuilder.AdapterInfo, results []agentbuilder.InstallResult, engineID model.AgentID, registryPath string, ops agentBuilderPostInstallOps) error {
+	if err := ops.mkdirAll(filepath.Dir(registryPath), 0755); err != nil {
+		return fmt.Errorf("create custom-agent registry directory: %w", err)
+	}
+
+	reg, err := ops.loadRegistry(registryPath)
+	if err != nil {
+		return fmt.Errorf("load custom-agent registry: %w", err)
+	}
+
+	installedIDs := make([]model.AgentID, 0, len(results))
+	for _, result := range results {
+		if result.Success {
+			installedIDs = append(installedIDs, result.AgentID)
+		}
+	}
+	entry := agentbuilder.RegistryEntry{
+		Name:             agent.Name,
+		Title:            agent.Title,
+		Description:      agent.Description,
+		CreatedAt:        time.Now(),
+		GenerationEngine: engineID,
+		SDDIntegration:   agent.SDDConfig,
+		InstalledAgents:  installedIDs,
+	}
+	if existing := reg.FindByName(agent.Name); existing != nil {
+		existing.Title = entry.Title
+		existing.Description = entry.Description
+		existing.CreatedAt = entry.CreatedAt
+		existing.GenerationEngine = entry.GenerationEngine
+		existing.SDDIntegration = entry.SDDIntegration
+		existing.InstalledAgents = entry.InstalledAgents
+	} else {
+		reg.Add(entry)
+	}
+	if err := ops.saveRegistry(registryPath, reg); err != nil {
+		return fmt.Errorf("save custom-agent registry: %w", err)
+	}
+
+	if agent.SDDConfig == nil || agent.SDDConfig.Mode == agentbuilder.SDDStandalone {
+		return nil
+	}
+	for _, adapter := range adapters {
+		systemPromptPath, err := ops.systemPromptPath(adapter.AgentID)
+		if err != nil {
+			return fmt.Errorf("resolve SDD system prompt for %s: %w", adapter.AgentID, err)
+		}
+		if err := ops.injectSDDReference(agent, systemPromptPath); err != nil {
+			return fmt.Errorf("inject SDD reference for %s: %w", adapter.AgentID, err)
+		}
+	}
+	return nil
+}
+
 // startInstallation launches the agent installation goroutine.
 func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 	m.AgentBuilder.Installing = true
@@ -4868,68 +4935,34 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 			return AgentBuilderInstallDoneMsg{Results: results, Err: err}
 		}
 
-		// Persist entry to registry.
+		ops := agentBuilderPostInstallOps{
+			mkdirAll:           os.MkdirAll,
+			loadRegistry:       agentbuilder.LoadRegistry,
+			saveRegistry:       agentbuilder.SaveRegistry,
+			systemPromptPath:   agentBuilderSystemPromptPath,
+			injectSDDReference: agentbuilder.InjectSDDReference,
+		}
 		registryPath := filepath.Join(homeDir(), ".config", "gentle-ai", "custom-agents.json")
-		_ = os.MkdirAll(filepath.Dir(registryPath), 0755)
-		if reg, loadErr := agentbuilder.LoadRegistry(registryPath); loadErr == nil {
-			// Collect IDs of agents that were successfully installed.
-			var installedIDs []model.AgentID
-			for _, r := range results {
-				if r.Success {
-					installedIDs = append(installedIDs, r.AgentID)
-				}
-			}
-			entry := agentbuilder.RegistryEntry{
-				Name:             installAgent.Name,
-				Title:            installAgent.Title,
-				Description:      installAgent.Description,
-				CreatedAt:        time.Now(),
-				GenerationEngine: engineID,
-				SDDIntegration:   installAgent.SDDConfig,
-				InstalledAgents:  installedIDs,
-			}
-			// Update existing entry if present; otherwise append.
-			if existing := reg.FindByName(installAgent.Name); existing != nil {
-				existing.Title = entry.Title
-				existing.Description = entry.Description
-				existing.CreatedAt = entry.CreatedAt
-				existing.GenerationEngine = entry.GenerationEngine
-				existing.SDDIntegration = entry.SDDIntegration
-				existing.InstalledAgents = entry.InstalledAgents
-			} else {
-				reg.Add(entry)
-			}
-			// Best-effort save — ignore save errors.
-			_ = agentbuilder.SaveRegistry(registryPath, reg)
+		if err := finishAgentBuilderInstall(installAgent, adapters, results, engineID, registryPath, ops); err != nil {
+			return AgentBuilderInstallDoneMsg{Results: results, Err: err}
 		}
-
-		// Wire SDD injection: append custom-agent reference blocks to system prompts.
-		// Best-effort — don't fail the whole install if SDD injection fails.
-		if installAgent.SDDConfig != nil && installAgent.SDDConfig.Mode != agentbuilder.SDDStandalone {
-			for _, adapter := range adapters {
-				if systemPromptPath, ok := agentBuilderSystemPromptPath(adapter.AgentID); ok {
-					_ = agentbuilder.InjectSDDReference(installAgent, systemPromptPath)
-				}
-			}
-		}
-
-		return AgentBuilderInstallDoneMsg{Results: results, Err: nil}
+		return AgentBuilderInstallDoneMsg{Results: results}
 	})
 }
 
 // agentBuilderSystemPromptPath returns the system prompt file path for the given agent.
-func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
+func agentBuilderSystemPromptPath(agentID model.AgentID) (string, error) {
 	home := homeDir()
 	switch agentID {
 	case model.AgentClaudeCode:
-		return filepath.Join(home, ".claude", "CLAUDE.md"), true
+		return filepath.Join(home, ".claude", "CLAUDE.md"), nil
 	case model.AgentOpenCode:
-		return filepath.Join(home, ".config", "opencode", "AGENTS.md"), true
+		return filepath.Join(home, ".config", "opencode", "AGENTS.md"), nil
 	case model.AgentGeminiCLI:
-		return filepath.Join(home, ".gemini", "GEMINI.md"), true
+		return filepath.Join(home, ".gemini", "GEMINI.md"), nil
 	case model.AgentCodex:
-		return filepath.Join(home, ".codex", "AGENTS.md"), true
+		return filepath.Join(home, ".codex", "AGENTS.md"), nil
 	default:
-		return "", false
+		return "", fmt.Errorf("unsupported agent %q", agentID)
 	}
 }
