@@ -182,3 +182,138 @@ roles:
 		t.Errorf("se esperaba error de archivo no encontrado")
 	}
 }
+
+func TestResolveConfigFile_DirectAxiomYaml(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "axiom.yaml")
+	if err := os.WriteFile(configPath, []byte("dummy: 1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Pasando la ruta directa al archivo
+	resolved, err := ResolveConfigFile(configPath)
+	if err != nil || resolved != configPath {
+		t.Fatalf("esperado %s, obtenido %s, err: %v", configPath, resolved, err)
+	}
+
+	// 2. Pasando el directorio contenedor
+	resolvedDir, err := ResolveConfigFile(tempDir)
+	if err != nil || resolvedDir != configPath {
+		t.Fatalf("esperado %s desde directorio, obtenido %s, err: %v", configPath, resolvedDir, err)
+	}
+}
+
+func TestResolveConfigFile_PointerWithConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	specsDir := filepath.Join(tempDir, "repo-specs")
+	if err := os.MkdirAll(specsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	canonicalConfig := filepath.Join(specsDir, "axiom.yaml")
+	validContent := `
+workspace:
+  name: "PlataformaCanonica"
+  topology: "multirepo"
+  specs_repository: "repo-specs"
+roles:
+  backend:
+    name: "Backend"
+    repositories:
+      - path: "backend"
+`
+	if err := os.WriteFile(canonicalConfig, []byte(validContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pointerPath := filepath.Join(tempDir, ".axiom-workspace")
+	pointerContent := "config: repo-specs/axiom.yaml\n"
+	if err := os.WriteFile(pointerPath, []byte(pointerContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Resolver pasando el directorio del workspace
+	resolved, err := ResolveConfigFile(tempDir)
+	if err != nil {
+		t.Fatalf("error resolviendo puntero: %v", err)
+	}
+	if resolved != canonicalConfig {
+		t.Errorf("esperado %s, obtenido %s", canonicalConfig, resolved)
+	}
+
+	// 2. Cargar directamente pasando el directorio del workspace
+	cfg, err := LoadConfig(tempDir)
+	if err != nil {
+		t.Fatalf("error cargando config desde directorio con puntero: %v", err)
+	}
+	if cfg.Workspace.Name != "PlataformaCanonica" {
+		t.Errorf("esperado 'PlataformaCanonica', obtenido '%s'", cfg.Workspace.Name)
+	}
+
+	// 3. Cargar pasando filepath.Join(tempDir, "axiom.yaml") que no existe localmente
+	cfgFromVirtual, err := LoadConfig(filepath.Join(tempDir, "axiom.yaml"))
+	if err != nil {
+		t.Fatalf("error cargando virtual axiom.yaml via fallback puntero: %v", err)
+	}
+	if cfgFromVirtual.Workspace.Name != "PlataformaCanonica" {
+		t.Errorf("esperado 'PlataformaCanonica', obtenido '%s'", cfgFromVirtual.Workspace.Name)
+	}
+}
+
+func TestResolveConfigFile_PointerWithSpecs(t *testing.T) {
+	tempDir := t.TempDir()
+	specsDir := filepath.Join(tempDir, "especificacion")
+	if err := os.MkdirAll(specsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	canonicalConfig := filepath.Join(specsDir, "axiom.yaml")
+	if err := os.WriteFile(canonicalConfig, []byte("dummy: 1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pointerPath := filepath.Join(tempDir, ".axiom-workspace")
+	pointerContent := "specs: especificacion\n"
+	if err := os.WriteFile(pointerPath, []byte(pointerContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := ResolveConfigFile(tempDir)
+	if err != nil {
+		t.Fatalf("error resolviendo puntero con specs: %v", err)
+	}
+	if resolved != canonicalConfig {
+		t.Errorf("esperado %s, obtenido %s", canonicalConfig, resolved)
+	}
+}
+
+func TestResolveConfigFile_FallbackSubdirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	specsDir := filepath.Join(tempDir, "openspec")
+	if err := os.MkdirAll(specsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	canonicalConfig := filepath.Join(specsDir, "axiom.yaml")
+	if err := os.WriteFile(canonicalConfig, []byte("dummy: 1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sin .axiom-workspace ni axiom.yaml en la raíz: debe auto-descubrir openspec/axiom.yaml
+	resolved, err := ResolveConfigFile(tempDir)
+	if err != nil {
+		t.Fatalf("error en auto-descubrimiento de subdirectorio: %v", err)
+	}
+	if resolved != canonicalConfig {
+		t.Errorf("esperado %s, obtenido %s", canonicalConfig, resolved)
+	}
+}
+
+func TestResolveConfigFile_NotFound(t *testing.T) {
+	tempDir := t.TempDir()
+	_, err := ResolveConfigFile(tempDir)
+	if err == nil {
+		t.Fatalf("se esperaba error de archivo no encontrado")
+	}
+}
+

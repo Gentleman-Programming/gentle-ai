@@ -60,6 +60,9 @@ func hasProjectMarker(cwd string) bool {
 	if dirExists(filepath.Join(cwd, ".atl")) {
 		return true
 	}
+	if fileExists(filepath.Join(cwd, "axiom.yaml")) || fileExists(filepath.Join(cwd, ".axiom-workspace")) {
+		return true
+	}
 	for _, dir := range ProjectSkillDirs(cwd) {
 		if dirExists(dir) {
 			return true

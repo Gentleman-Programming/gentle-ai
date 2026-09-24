@@ -800,3 +800,74 @@ func assertRegistrySkills(
 		}
 	}
 }
+
+func TestProjectSkillDirsMultirepo(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+
+	specsDir := filepath.Join(cwd, "repo-specs")
+	backendDir := filepath.Join(cwd, "repo-backend")
+	if err := os.MkdirAll(specsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backendDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	canonicalConfig := filepath.Join(specsDir, "axiom.yaml")
+	configContent := `
+workspace:
+  name: "MultirepoSkills"
+  topology: "multirepo"
+  specs_repository: "repo-specs"
+roles:
+  backend:
+    name: "Backend Role"
+    repositories:
+      - path: "repo-backend"
+`
+	if err := os.WriteFile(canonicalConfig, []byte(configContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	pointerPath := filepath.Join(cwd, ".axiom-workspace")
+	if err := os.WriteFile(pointerPath, []byte("config: repo-specs/axiom.yaml\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Crear una skill en repo-specs y otra en repo-backend
+	writeSkill(t, filepath.Join(specsDir, "skills", "spec-rule", "SKILL.md"), "---\nname: spec-rule\ndescription: Regla de especificacion\n---\n")
+	writeSkill(t, filepath.Join(backendDir, "skills", "db-rule", "SKILL.md"), "---\nname: db-rule\ndescription: Regla de base de datos\n---\n")
+
+	entries := List(cwd, home)
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+
+	// Orden alfabético por nombre: db-rule, spec-rule
+	if entries[0].Name != "db-rule" {
+		t.Errorf("entries[0].Name = %q, want db-rule", entries[0].Name)
+	}
+	if entries[1].Name != "spec-rule" {
+		t.Errorf("entries[1].Name = %q, want spec-rule", entries[1].Name)
+	}
+
+	if got := ScopeForPath(cwd, entries[0].Path); got != "project" {
+		t.Errorf("db-rule scope = %q, want project", got)
+	}
+	if got := ScopeForPath(cwd, entries[1].Path); got != "project" {
+		t.Errorf("spec-rule scope = %q, want project", got)
+	}
+
+	// Verificar renderizado relativo para AGENTS.md
+	rel0 := renderSkillPath(cwd, entries[0].Path, "project", PathRepoRelative)
+	rel1 := renderSkillPath(cwd, entries[1].Path, "project", PathRepoRelative)
+
+	if rel0 != "repo-backend/skills/db-rule/SKILL.md" {
+		t.Errorf("rel0 = %q, want repo-backend/skills/db-rule/SKILL.md", rel0)
+	}
+	if rel1 != "repo-specs/skills/spec-rule/SKILL.md" {
+		t.Errorf("rel1 = %q, want repo-specs/skills/spec-rule/SKILL.md", rel1)
+	}
+}
+

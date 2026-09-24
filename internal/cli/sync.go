@@ -35,6 +35,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
@@ -98,6 +99,10 @@ type SyncResult struct {
 	BackgroundPolicyEnabled bool
 
 	PiBackground PiBackgroundResolution
+
+	SkillsIndexed          int
+	SkillRegistryRefreshed bool
+	SkillRegistryError     string
 }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
@@ -1753,7 +1758,38 @@ func runSyncWithSelectionScoped(homeDir, workspaceDir string, scope InstallScope
 		}
 	}
 
+	// Auto-regeneración del índice de skills en el workspace
+	targetWorkspace := workspaceDir
+	if targetWorkspace == "" {
+		targetWorkspace, _ = os.Getwd()
+	}
+	if PostSyncSkillRegenerator != nil {
+		count, regErr := PostSyncSkillRegenerator(targetWorkspace, homeDir)
+		if regErr != nil {
+			result.SkillRegistryError = regErr.Error()
+		} else {
+			result.SkillRegistryRefreshed = true
+			result.SkillsIndexed = count
+		}
+	}
+
 	return result, nil
+}
+
+// PostSyncSkillRegenerator es el gancho invocado tras un sync exitoso para refrescar el índice de skills.
+var PostSyncSkillRegenerator func(workspaceDir, homeDir string) (int, error) = defaultPostSyncSkillRegenerator
+
+func defaultPostSyncSkillRegenerator(workspaceDir, homeDir string) (int, error) {
+	if reason := skillregistry.RefreshSkip(workspaceDir, homeDir); reason != skillregistry.SkipNone {
+		return 0, nil
+	}
+	res, err := skillregistry.Regenerate(workspaceDir, homeDir, skillregistry.RegenerateOptions{
+		Force: false,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return res.SkillCount, nil
 }
 
 func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent) error {
@@ -2159,6 +2195,12 @@ func RenderSyncReport(result SyncResult) string {
 		for _, path := range result.ChangedFiles {
 			fmt.Fprintf(&b, "  - %s\n", path)
 		}
+	}
+
+	if result.SkillRegistryRefreshed {
+		fmt.Fprintf(&b, "Skills indexed: %d in AGENTS.md\n", result.SkillsIndexed)
+	} else if result.SkillRegistryError != "" {
+		fmt.Fprintf(&b, "WARNING: skill index refresh: %s\n", result.SkillRegistryError)
 	}
 
 	if !result.Verify.Ready {

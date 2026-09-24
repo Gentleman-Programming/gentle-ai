@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
 
 const (
@@ -75,7 +76,7 @@ func UserSkillDirs(home string) []string {
 }
 
 func ProjectSkillDirs(cwd string) []string {
-	return []string{
+	dirs := []string{
 		// Generic project skills first: repo-local intent beats user/global skills.
 		filepath.Join(cwd, "skills"),
 
@@ -97,6 +98,32 @@ func ProjectSkillDirs(cwd string) []string {
 		filepath.Join(cwd, ".atl", "skills"),
 		filepath.Join(cwd, ".hermes", "skills"),
 	}
+
+	// Multirrepo / Monorrepo desacoplado: consultar axiom.yaml o .axiom-workspace
+	if cfg, err := workspace.LoadConfig(cwd); err == nil && cfg != nil {
+		specsRepo := strings.TrimSpace(cfg.Workspace.SpecsRepository)
+		if specsRepo != "" && specsRepo != "." {
+			if filepath.IsAbs(specsRepo) {
+				dirs = append(dirs, filepath.Join(specsRepo, "skills"))
+			} else {
+				dirs = append(dirs, filepath.Join(cwd, specsRepo, "skills"))
+			}
+		}
+		for _, role := range cfg.Roles {
+			for _, repo := range role.Repositories {
+				repoPath := strings.TrimSpace(repo.Path)
+				if repoPath != "" && repoPath != "." {
+					if filepath.IsAbs(repoPath) {
+						dirs = append(dirs, filepath.Join(repoPath, "skills"))
+					} else {
+						dirs = append(dirs, filepath.Join(cwd, repoPath, "skills"))
+					}
+				}
+			}
+		}
+	}
+
+	return dirs
 }
 
 // Regenerate runs the single scan and writes the unified skills index to its

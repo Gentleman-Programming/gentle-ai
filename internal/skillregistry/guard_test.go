@@ -63,6 +63,16 @@ func TestRefreshSkipAcceptsProjectMarkers(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"axiom.yaml file", func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "axiom.yaml"), []byte("workspace:\n  name: Test\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{".axiom-workspace pointer file", func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, ".axiom-workspace"), []byte("config: repo-specs/axiom.yaml\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

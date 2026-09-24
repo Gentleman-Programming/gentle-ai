@@ -8,10 +8,29 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 )
+
+func init() {
+	cli.PostSyncSkillRegenerator = func(workspaceDir, homeDir string) (int, error) {
+		result, skipped, err := runSharedRefresh(skillIndexRefreshArgs{
+			quiet:           true,
+			ensureGitignore: true,
+			cwd:             workspaceDir,
+			home:            homeDir,
+		}, io.Discard)
+		if err != nil {
+			return 0, err
+		}
+		if skipped {
+			return 0, nil
+		}
+		return result.SkillCount, nil
+	}
+}
 
 // skillIndexSurface labels parser and usage errors so one parser serves both
 // `axiom skill index` (REQ-22.10) and the legacy `axiom skill-registry` verb
