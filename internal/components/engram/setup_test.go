@@ -93,6 +93,9 @@ func TestShouldAttemptSetup(t *testing.T) {
 	if ShouldAttemptSetup(SetupModeSupported, model.AgentCursor) {
 		t.Fatal("ShouldAttemptSetup(supported, cursor) = true, want false")
 	}
+	if !ShouldAttemptSetup(SetupModeSupported, model.AgentWindsurf) {
+		t.Fatal("ShouldAttemptSetup(supported, windsurf) = false, want true so mem_save remains available")
+	}
 }
 
 // ---------------------------------------------------------------------------
