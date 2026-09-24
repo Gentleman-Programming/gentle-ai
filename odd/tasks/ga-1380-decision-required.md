@@ -59,7 +59,7 @@ internal/reviewtransaction since 2026-09-21).
    decision-v1 (consent precedent), gofmt/vet/build clean.
 8. [x] Docs: this feature doc evidence; short docs update only if a natural review-commands
    doc home exists (no new docs surface invented).
-9. [ ] Work-unit commit; RDD native review; PR (Closes #1380 WU1; size:exception expected
+9. [x] Work-unit commit 18e282a3; native review BLOCKED by consent TTL loop (gentle-shell#748 repro posted; lineage_created:false both attempts, no residue); PR https://github.com/Gentleman-Programming/gentle-ai/pull/4941 (size:exception 1857 documented, maintainer labels flagged)
    and documented).
 
 ## Evidence
