@@ -219,6 +219,9 @@ jobs:
 
       - name: Run native Windows private report refusal tests
         shell: pwsh
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           $test = 'TestWriteNewReportUnsupportedDoesNotWrite'
           $selected = @(go test ./internal/privatefile -list "^$test$" | Where-Object { $_ -ceq $test })
@@ -228,6 +231,9 @@ jobs:
 
       - name: Run native Windows private parent opener tests
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           set -euo pipefail
           for test in \
@@ -242,6 +248,9 @@ jobs:
 
       - name: Check native Windows managed root test registration (dispatch only)
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
