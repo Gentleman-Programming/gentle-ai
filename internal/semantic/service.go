@@ -57,11 +57,16 @@ func (s *Service) GetStatus(ctx context.Context) (*SemanticStatus, error) {
 	}
 
 	// 2. Diagnosticar agentes y herramientas
-	agents := s.detector.DetectAgents()
+	agents := s.detector.DetectAgents(s.workspaceRoot)
 	status.Agents = agents
 
-	status.SerenaAvailable = s.detector.CheckSerenaAvailability(agents)
+	status.CodeGraphInstalled = s.detector.CheckCodeGraphInPath()
+	status.CodeGraphConfigured = s.detector.CheckCodeGraphConfigured(agents)
 	status.CodeGraphAvailable = s.detector.CheckCodeGraphAvailability(agents)
+
+	status.SerenaInstalled = s.detector.CheckSerenaInPath()
+	status.SerenaConfigured = s.detector.CheckSerenaConfigured(agents)
+	status.SerenaAvailable = s.detector.CheckSerenaAvailability(agents)
 
 	// 3. Resolver conector activo
 	switch status.ConfiguredConnector {

@@ -5,27 +5,13 @@ workspace:
   root: "."
 
 roles:
-  core:
-    name: "Axiom Core Engine"
+  fullstack:
+    name: "Axiom Fullstack Engine"
     repositories:
       - path: "."
     tech:
       - "go"
       - "bubbletea"
-
-  qa:
-    name: "Quality Assurance & Verification"
-    repositories:
-      - path: "."
-    tech:
-      - "go-test"
-
-  e2e:
-    name: "E2E & Automation Testing"
-    repositories:
-      - path: "."
-    tech:
-      - "automation"
 
 governance:
   language: "es"

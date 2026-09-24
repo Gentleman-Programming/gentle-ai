@@ -739,21 +739,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (handoffModalChange) handoffModalChange.innerHTML = '';
 
     items.forEach(inc => {
-      const opt1 = document.createElement('option');
-      opt1.value = inc.name;
-      opt1.textContent = `${inc.name} (${inc.type === 'active' ? 'Activo' : 'Archivado'})`;
-      roleChangeSelect.appendChild(opt1);
+      if (inc.type === 'active') {
+        const opt1 = document.createElement('option');
+        opt1.value = inc.name;
+        opt1.textContent = `${inc.name}`;
+        roleChangeSelect.appendChild(opt1);
 
-      const opt2 = document.createElement('option');
-      opt2.value = inc.name;
-      opt2.textContent = `${inc.name} (${inc.type === 'active' ? 'Activo' : 'Archivado'})`;
-      handoffChangeSelect.appendChild(opt2);
+        const opt2 = document.createElement('option');
+        opt2.value = inc.name;
+        opt2.textContent = `${inc.name} (Fase: ${inc.phase})`;
+        handoffChangeSelect.appendChild(opt2);
 
-      if (handoffModalChange && inc.type === 'active') {
-        const opt3 = document.createElement('option');
-        opt3.value = inc.name;
-        opt3.textContent = `${inc.name} (Fase: ${inc.phase})`;
-        handoffModalChange.appendChild(opt3);
+        if (handoffModalChange) {
+          const opt3 = document.createElement('option');
+          opt3.value = inc.name;
+          opt3.textContent = `${inc.name} (Fase: ${inc.phase})`;
+          handoffModalChange.appendChild(opt3);
+        }
       }
     });
 
@@ -782,9 +784,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderIncrements() {
     incrementsContainer.innerHTML = '';
     const filtered = incrementsData.filter(i => {
-      if (currentFilter === 'all') return true;
+      if (currentFilter === 'all') return i.type === 'active';
       if (currentFilter === 'active') return i.type === 'active';
       if (currentFilter === 'archived') return i.type === 'archived';
+      if (currentFilter === 'type:fix') {
+        const isFix = i.is_bug || i.change_type === 'fix' || i.name.toLowerCase().includes('fix') || i.name.toLowerCase().includes('bug') || i.name.toLowerCase().includes('hotfix');
+        return i.type === 'active' && isFix;
+      }
       if (currentFilter === 'spec_pending') return i.pending_spec;
       if (currentFilter === 'ready_for_design') return i.ready_for_design;
       if (currentFilter === 'ready_for_global_verify') return i.ready_for_global_verify;
@@ -806,6 +812,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const card = document.createElement('div');
       card.className = `inc-card ${inc.type}`;
       const isArchived = inc.type === 'archived';
+      const isFix = inc.is_bug || inc.change_type === 'fix' || inc.name.toLowerCase().includes('fix') || inc.name.toLowerCase().includes('bug') || inc.name.toLowerCase().includes('hotfix');
+      const kindBadge = isFix
+        ? `<span class="badge" style="background:#dc2626;color:#fff;font-weight:600;" title="Corrección de defecto o bug">🐛 BUG / FIX</span>`
+        : `<span class="badge" style="background:#0284c7;color:#fff;font-weight:600;" title="Nueva capacidad o funcionalidad">🚀 FEATURE</span>`;
 
       let operationalBadge = '';
       if (inc.ready_for_design) {
@@ -825,6 +835,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="card-header">
             <div class="card-title">${inc.name}</div>
             <div class="card-badges">
+              ${kindBadge}
               <span class="badge badge-${inc.type}">${isArchived ? 'Archivado' : 'Activo'}</span>
               <span class="badge badge-phase">${inc.phase}</span>
               ${operationalBadge}
@@ -857,6 +868,8 @@ document.addEventListener('DOMContentLoaded', () => {
   async function openIncrementModal(name) {
     currentSelectedIncrement = name;
     modalTitle.textContent = `Incremento: ${name}`;
+    const sddToolbar = document.getElementById('modal-sdd-toolbar');
+    if (sddToolbar) sddToolbar.classList.remove('hidden');
     modalContent.innerHTML = '<div class="loading-state">Cargando artefactos...</div>';
     if (modalConsoleContainer) modalConsoleContainer.classList.add('hidden');
     if (modalConsoleOutput) modalConsoleOutput.textContent = '';
@@ -907,7 +920,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Banner de la Barrera
       barrierBanner.classList.remove('hidden');
-      if (barrier.satisfied) {
+      const roleKeys = Object.keys(barrier.roles || {});
+      const isSingleRole = roleKeys.length <= 1 && (roleKeys.length === 0 || roleKeys[0] === 'fullstack');
+
+      if (isSingleRole) {
+        barrierBanner.className = 'barrier-banner satisfied';
+        barrierIcon.textContent = '🚀';
+        barrierTitle.textContent = 'ROL UNIFICADO (FULLSTACK) — FLUJO CONTINUO';
+        barrierDesc.textContent = 'Axiom opera bajo el rol canónico unificado "fullstack". No requiere barreras fan-in concurrentes ni esperas entre agentes; el ciclo avanza de forma ágil y continua.';
+      } else if (barrier.satisfied) {
         barrierBanner.className = 'barrier-banner satisfied';
         barrierIcon.textContent = '✓';
         barrierTitle.textContent = 'BARRIER SATISFIED (Compuerta Superada)';
@@ -1222,6 +1243,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function showSkillPreview(p) {
     modalTitle.textContent = `Previsualización: ${p.name} (Origen: ${p.origin})`;
+    const sddToolbar = document.getElementById('modal-sdd-toolbar');
+    if (sddToolbar) sddToolbar.classList.add('hidden');
     modalContent.innerHTML = `
       <div style="margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-elevated); border-radius: 4px;">
         <p><strong>Justificación:</strong> ${escapeHtml(p.justification)}</p>
@@ -1268,6 +1291,20 @@ document.addEventListener('DOMContentLoaded', () => {
         connectorLabel = 'CodeGraph Knowledge Graph';
       }
 
+      const cgStatusBadge = data.codegraph_installed
+        ? '<span class="badge-verified" style="background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); font-size: 0.72rem;">✓ CLI en PATH</span>'
+        : '<span class="badge-verified" style="background: rgba(107,114,128,0.15); color: #9ca3af; border-color: rgba(107,114,128,0.3); font-size: 0.72rem;">✗ No en PATH</span>';
+      const cgConfigBadge = data.codegraph_configured
+        ? '<span class="badge-verified" style="background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); font-size: 0.72rem;">✓ En Workspace</span>'
+        : '<span class="badge-verified" style="background: rgba(107,114,128,0.15); color: #9ca3af; border-color: rgba(107,114,128,0.3); font-size: 0.72rem;">No en Workspace</span>';
+
+      const serenaStatusBadge = data.serena_installed
+        ? '<span class="badge-verified" style="background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); font-size: 0.72rem;">✓ CLI en PATH</span>'
+        : '<span class="badge-verified" style="background: rgba(107,114,128,0.15); color: #9ca3af; border-color: rgba(107,114,128,0.3); font-size: 0.72rem;">✗ No en PATH</span>';
+      const serenaConfigBadge = data.serena_configured
+        ? '<span class="badge-verified" style="background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); font-size: 0.72rem;">✓ En Workspace</span>'
+        : '<span class="badge-verified" style="background: rgba(107,114,128,0.15); color: #9ca3af; border-color: rgba(107,114,128,0.3); font-size: 0.72rem;">No en Workspace</span>';
+
       container.innerHTML = `
         <div class="stat-card">
           <div class="stat-label">Conector Semántico Activo</div>
@@ -1286,6 +1323,20 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="stat-card">
           <div class="stat-label">Paquetes Analizados</div>
           <div class="stat-value text-accent">${data.total_packages || 0}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">CodeGraph Diagnostic</div>
+          <div style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.35rem;">
+            ${cgStatusBadge}
+            ${cgConfigBadge}
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Serena MCP Diagnostic</div>
+          <div style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.35rem;">
+            ${serenaStatusBadge}
+            ${serenaConfigBadge}
+          </div>
         </div>
       `;
 
@@ -1306,7 +1357,12 @@ document.addEventListener('DOMContentLoaded', () => {
           agentsContainer.innerHTML = data.agents.map(ag => `
             <div class="agent-item">
               <h4>
-                <span>${escapeHtml(ag.agent_name)}</span>
+                <span style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                  <span>${escapeHtml(ag.agent_name)}</span>
+                  <span class="badge" style="font-size: 0.7rem; font-weight: normal; background: var(--bg-tertiary); color: var(--text-muted); border: 1px solid var(--border-color);">
+                    ${ag.scope === 'workspace' ? '📁 Workspace' : '👤 Global / Usuario'}
+                  </span>
+                </span>
                 <span class="badge-verified" style="background: ${ag.configured ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)'}; color: ${ag.configured ? '#4ade80' : '#9ca3af'}; border-color: ${ag.configured ? 'rgba(34,197,94,0.3)' : 'rgba(107,114,128,0.3)'};">
                   ${ag.configured ? 'CONFIGURADO' : 'NO DETECTADO'}
                 </span>

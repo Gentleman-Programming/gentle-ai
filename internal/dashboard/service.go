@@ -27,6 +27,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/livingdoc"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/multirole"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/semantic"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/workspace"
 )
@@ -361,6 +362,23 @@ func (s *Service) inspectIncrement(path, name, kind string) IncrementSummaryDTO 
 	readyForGlobalVerify := (kind == "active" && hasDesign && hasTasks && len(pendingRoles) == 0 && !hasVerify && !hasArchive)
 	readyForArchive := (kind == "active" && hasVerify && !hasArchive)
 
+	isBug := false
+	changeType := "feature"
+	lowerName := strings.ToLower(name)
+	if strings.Contains(lowerName, "fix") || strings.Contains(lowerName, "bug") || strings.Contains(lowerName, "hotfix") || strings.Contains(lowerName, "defecto") {
+		isBug = true
+		changeType = "fix"
+	}
+	if hasProposal {
+		if pData, err := os.ReadFile(filepath.Join(path, "proposal.md")); err == nil {
+			pLower := strings.ToLower(string(pData))
+			if strings.Contains(pLower, "type: fix") || strings.Contains(pLower, "tipo: fix") || strings.Contains(pLower, "tipo: corrección") || strings.Contains(pLower, "tipo: defecto") {
+				isBug = true
+				changeType = "fix"
+			}
+		}
+	}
+
 	return IncrementSummaryDTO{
 		Name:                 name,
 		Type:                 kind,
@@ -375,6 +393,8 @@ func (s *Service) inspectIncrement(path, name, kind string) IncrementSummaryDTO 
 		PendingRoles:         pendingRoles,
 		ReadyForGlobalVerify: readyForGlobalVerify,
 		ReadyForArchive:      readyForArchive,
+		ChangeType:           changeType,
+		IsBug:                isBug,
 	}
 }
 
@@ -503,28 +523,39 @@ func (s *Service) GetHandoff(changeName string) (*handoff.Handoff, error) {
 	return handoff.Parse(bytes.NewReader(data))
 }
 
-// GetSkills escanea y cataloga las skills locales del proyecto.
+// GetSkills escanea y cataloga las skills locales del proyecto, incluyendo repositorios multirrepo y specs_repository.
 func (s *Service) GetSkills() ([]SkillDTO, error) {
 	var skills []SkillDTO
 	root := s.getRootPath()
+	seen := make(map[string]bool)
 
-	scanDir := func(base string) {
-		fullBase := filepath.Join(root, base)
-		entries, err := os.ReadDir(fullBase)
+	dirs := skillregistry.ProjectSkillDirs(root)
+	dirs = append(dirs, filepath.Join(root, "internal", "assets", "skills"))
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return
+			continue
 		}
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
 			}
-			skillFile := filepath.Join(fullBase, e.Name(), "SKILL.md")
+			skillFile := filepath.Join(dir, e.Name(), "SKILL.md")
 			if fileExists(skillFile) {
+				if seen[e.Name()] {
+					continue
+				}
+				seen[e.Name()] = true
 				desc, trigger := extractSkillMeta(skillFile)
-				relPath, _ := filepath.Rel(root, skillFile)
+				relPath, err := filepath.Rel(root, skillFile)
+				displayPath := filepath.ToSlash(relPath)
+				if err != nil || strings.HasPrefix(displayPath, "../..") {
+					displayPath = filepath.ToSlash(skillFile)
+				}
 				skills = append(skills, SkillDTO{
 					Name:        e.Name(),
-					Path:        filepath.ToSlash(relPath),
+					Path:        displayPath,
 					Description: desc,
 					Trigger:     trigger,
 				})
@@ -532,9 +563,9 @@ func (s *Service) GetSkills() ([]SkillDTO, error) {
 		}
 	}
 
-	scanDir("skills")
-	scanDir(filepath.Join("internal", "assets", "skills"))
-	scanDir(filepath.Join(".agents", "skills"))
+	sort.Slice(skills, func(i, j int) bool {
+		return skills[i].Name < skills[j].Name
+	})
 
 	return skills, nil
 }
@@ -1226,16 +1257,16 @@ func (s *Service) RunSync(scopeOpt ...string) (*EcosystemActionResponse, error) 
 		scope = strings.TrimSpace(scopeOpt[0])
 	}
 
-	origWd, err := os.Getwd()
+	origWd, getErr := os.Getwd()
 	targetPath := s.getRootPath()
-	if err == nil && targetPath != "" && targetPath != origWd {
-		if cherr := os.Chdir(targetPath); cherr == nil {
+	if targetPath != "" {
+		if cherr := os.Chdir(targetPath); cherr == nil && getErr == nil {
 			defer func() { _ = os.Chdir(origWd) }()
 		}
 	}
 
 	var buf bytes.Buffer
-	err = app.RunArgs([]string{"sync", "--scope", scope}, &buf)
+	err := app.RunArgs([]string{"sync", "--scope", scope}, &buf)
 	rawOut := strings.TrimSpace(buf.String())
 	var lines []string
 	if rawOut != "" {

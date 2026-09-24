@@ -37,48 +37,108 @@ func NewDetectorWithCustomHome(homeDir string, lookPath func(file string) (strin
 	}
 }
 
-// DetectAgents inspecciona los agentes de desarrollo soportados en busca de herramientas semánticas.
-func (d *Detector) DetectAgents() []AgentToolStatus {
+// DetectAgents inspecciona tanto los agentes del workspace local como la configuración de usuario global.
+func (d *Detector) DetectAgents(projectRoots ...string) []AgentToolStatus {
 	var results []AgentToolStatus
+	seenPaths := make(map[string]bool)
 
-	if d.homeDir == "" {
-		return results
+	// 1. Detección a nivel de Proyecto (Workspace)
+	var projectRoot string
+	if len(projectRoots) > 0 && strings.TrimSpace(projectRoots[0]) != "" {
+		projectRoot, _ = filepath.Abs(projectRoots[0])
 	}
 
-	agentConfigs := []struct {
-		AgentName string
-		RelPath   string
-	}{
-		{AgentName: "Google Antigravity", RelPath: filepath.Join(".gemini", "antigravity", "mcp_config.json")},
-		{AgentName: "Google Antigravity Global", RelPath: filepath.Join(".gemini", "config", "mcp_config.json")},
-		{AgentName: "Claude Code", RelPath: ".claude.json"},
-		{AgentName: "Kiro IDE", RelPath: filepath.Join(".kiro", "settings", "mcp.json")},
-		{AgentName: "Cursor IDE", RelPath: filepath.Join(".cursor", "mcp.json")},
-	}
-
-	for _, cfg := range agentConfigs {
-		fullPath := filepath.Join(d.homeDir, cfg.RelPath)
-		status := AgentToolStatus{
-			AgentName:  cfg.AgentName,
-			ConfigPath: fullPath,
-			Configured: false,
+	if projectRoot != "" {
+		workspaceConfigs := []struct {
+			AgentName string
+			RelPath   string
+		}{
+			{AgentName: "Google Antigravity (Workspace)", RelPath: filepath.Join(".gemini", "antigravity", "mcp_config.json")},
+			{AgentName: "Google Antigravity (Local)", RelPath: "mcp_config.json"},
+			{AgentName: "Claude Code (Settings)", RelPath: filepath.Join(".claude", "settings.json")},
+			{AgentName: "Claude Code (Workspace)", RelPath: ".claude.json"},
+			{AgentName: "Workspace MCP (.mcp.json)", RelPath: ".mcp.json"},
+			{AgentName: "OpenCode (Workspace)", RelPath: "opencode.json"},
+			{AgentName: "OpenCode (.opencode)", RelPath: filepath.Join(".opencode", "mcp.json")},
+			{AgentName: "VSCode / Cursor (Workspace)", RelPath: filepath.Join(".vscode", "mcp.json")},
+			{AgentName: "Cursor IDE (Workspace)", RelPath: filepath.Join(".cursor", "mcp.json")},
 		}
 
-		content, err := os.ReadFile(fullPath)
-		if err != nil {
-			status.Details = "Archivo de configuración no encontrado"
+		for _, cfg := range workspaceConfigs {
+			fullPath := filepath.Join(projectRoot, cfg.RelPath)
+			if seenPaths[fullPath] {
+				continue
+			}
+			seenPaths[fullPath] = true
+
+			status := AgentToolStatus{
+				AgentName:  cfg.AgentName,
+				ConfigPath: fullPath,
+				Configured: false,
+				Scope:      "workspace",
+			}
+
+			content, err := os.ReadFile(fullPath)
+			if err != nil {
+				// No añadimos archivos de workspace inexistentes para no ensuciar la vista
+				continue
+			}
+
+			configuredTools := d.findSemanticToolsInJSON(content)
+			if len(configuredTools) > 0 {
+				status.Configured = true
+				status.Details = "Herramientas detectadas: " + strings.Join(configuredTools, ", ")
+			} else {
+				status.Details = "Presente en workspace pero sin herramientas semánticas registradas"
+			}
 			results = append(results, status)
-			continue
+		}
+	}
+
+	// 2. Detección a nivel de Usuario (Global)
+	if d.homeDir != "" {
+		agentConfigs := []struct {
+			AgentName string
+			RelPath   string
+		}{
+			{AgentName: "Google Antigravity", RelPath: filepath.Join(".gemini", "antigravity", "mcp_config.json")},
+			{AgentName: "Google Antigravity Global", RelPath: filepath.Join(".gemini", "config", "mcp_config.json")},
+			{AgentName: "Claude Code", RelPath: ".claude.json"},
+			{AgentName: "OpenCode Global", RelPath: filepath.Join(".config", "opencode", "opencode.json")},
+			{AgentName: "Kiro IDE", RelPath: filepath.Join(".kiro", "settings", "mcp.json")},
+			{AgentName: "Cursor IDE", RelPath: filepath.Join(".cursor", "mcp.json")},
 		}
 
-		configuredTools := d.findSemanticToolsInJSON(content)
-		if len(configuredTools) > 0 {
-			status.Configured = true
-			status.Details = "Herramientas detectadas: " + strings.Join(configuredTools, ", ")
-		} else {
-			status.Details = "Presente pero sin herramientas semánticas registradas"
+		for _, cfg := range agentConfigs {
+			fullPath := filepath.Join(d.homeDir, cfg.RelPath)
+			if seenPaths[fullPath] {
+				continue
+			}
+			seenPaths[fullPath] = true
+
+			status := AgentToolStatus{
+				AgentName:  cfg.AgentName,
+				ConfigPath: fullPath,
+				Configured: false,
+				Scope:      "global",
+			}
+
+			content, err := os.ReadFile(fullPath)
+			if err != nil {
+				status.Details = "Archivo de configuración no encontrado"
+				results = append(results, status)
+				continue
+			}
+
+			configuredTools := d.findSemanticToolsInJSON(content)
+			if len(configuredTools) > 0 {
+				status.Configured = true
+				status.Details = "Herramientas detectadas: " + strings.Join(configuredTools, ", ")
+			} else {
+				status.Details = "Presente pero sin herramientas semánticas registradas"
+			}
+			results = append(results, status)
 		}
-		results = append(results, status)
 	}
 
 	return results
@@ -120,13 +180,14 @@ func (d *Detector) findSemanticToolsInJSON(content []byte) []string {
 	return uniqueStrings(found)
 }
 
-// CheckSerenaAvailability comprueba si Serena MCP está disponible en algún agente o CLI.
-func (d *Detector) CheckSerenaAvailability(agents []AgentToolStatus) bool {
-	for _, a := range agents {
-		if a.Configured && strings.Contains(strings.ToLower(a.Details), "serena") {
-			return true
-		}
-	}
+// CheckCodeGraphInPath comprueba si el binario de CodeGraph está en el PATH del sistema.
+func (d *Detector) CheckCodeGraphInPath() bool {
+	_, err := d.lookPathFunc("codegraph")
+	return err == nil
+}
+
+// CheckSerenaInPath comprueba si el binario o ejecutable de Serena MCP está en el PATH del sistema.
+func (d *Detector) CheckSerenaInPath() bool {
 	if _, err := d.lookPathFunc("serena"); err == nil {
 		return true
 	}
@@ -136,17 +197,34 @@ func (d *Detector) CheckSerenaAvailability(agents []AgentToolStatus) bool {
 	return false
 }
 
-// CheckCodeGraphAvailability comprueba si CodeGraph está disponible en CLI o agentes.
-func (d *Detector) CheckCodeGraphAvailability(agents []AgentToolStatus) bool {
-	if _, err := d.lookPathFunc("codegraph"); err == nil {
-		return true
-	}
+// CheckCodeGraphConfigured comprueba si CodeGraph está configurado en algún agente (workspace o global).
+func (d *Detector) CheckCodeGraphConfigured(agents []AgentToolStatus) bool {
 	for _, a := range agents {
 		if a.Configured && strings.Contains(strings.ToLower(a.Details), "codegraph") {
 			return true
 		}
 	}
 	return false
+}
+
+// CheckSerenaConfigured comprueba si Serena está configurada en algún agente (workspace o global).
+func (d *Detector) CheckSerenaConfigured(agents []AgentToolStatus) bool {
+	for _, a := range agents {
+		if a.Configured && strings.Contains(strings.ToLower(a.Details), "serena") {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckSerenaAvailability comprueba si Serena MCP está disponible en algún agente o CLI.
+func (d *Detector) CheckSerenaAvailability(agents []AgentToolStatus) bool {
+	return d.CheckSerenaInPath() || d.CheckSerenaConfigured(agents)
+}
+
+// CheckCodeGraphAvailability comprueba si CodeGraph está disponible en CLI o agentes.
+func (d *Detector) CheckCodeGraphAvailability(agents []AgentToolStatus) bool {
+	return d.CheckCodeGraphInPath() || d.CheckCodeGraphConfigured(agents)
 }
 
 func uniqueStrings(slice []string) []string {

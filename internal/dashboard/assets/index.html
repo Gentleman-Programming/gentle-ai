@@ -56,9 +56,6 @@
       <button class="nav-tab" data-tab="tab-handoffs">
         <span class="tab-icon">🤝</span> Visor de Handoffs
       </button>
-      <button class="nav-tab" data-tab="tab-topology">
-        <span class="tab-icon">🗺️</span> Topología & Salud
-      </button>
       <button class="nav-tab" data-tab="tab-skills">
         <span class="tab-icon">⚡</span> Catálogo de Skills
       </button>
@@ -99,7 +96,8 @@
             <p class="description">Seguimiento en tiempo real de cambios activos y especificaciones vivas archivadas.</p>
           </div>
           <div class="filter-group" id="increments-filter-group">
-            <button class="filter-btn active" data-filter="all">Todos</button>
+            <button class="filter-btn active" data-filter="all">Todos (Activos)</button>
+            <button class="filter-btn" data-filter="type:fix">🐛 Bugs / Fixes</button>
             <button class="filter-btn" data-filter="spec_pending">Pendiente Spec</button>
             <button class="filter-btn" data-filter="ready_for_design">Listo para Design</button>
             <span id="role-filters-container" style="display: inline-flex; gap: 0.25rem;"></span>
@@ -181,54 +179,6 @@
         </div>
       </section>
 
-      <!-- TAB 4: TOPOLOGÍA & SALUD -->
-      <section id="tab-topology" class="tab-panel">
-        <div class="section-header">
-          <div>
-            <h2>Topología y Configuración de Repositorios</h2>
-            <p class="description">Estado de salud del espacio de trabajo según el contrato canónico axiom.yaml.</p>
-          </div>
-        </div>
-
-        <div class="topology-dashboard">
-          <div class="stat-cards-row">
-            <div class="stat-card">
-              <div class="stat-label">Espacio de Trabajo</div>
-              <div class="stat-value" id="top-ws-name">--</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Topología Declarada</div>
-              <div class="stat-value text-accent" id="top-ws-topology">--</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Repositorio Canónico Specs</div>
-              <div class="stat-value" id="top-ws-specs">--</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Diagnóstico de Salud</div>
-              <div class="stat-value text-success" id="top-ws-health">--</div>
-            </div>
-          </div>
-
-          <h3 class="subsection-title">Mapeo de Roles a Repositorios Locales (1 a N)</h3>
-          <div class="table-card">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>ID del Rol</th>
-                  <th>Nombre Descriptivo</th>
-                  <th>Política de Compuerta</th>
-                  <th>Tecnologías</th>
-                  <th>Rutas de Repositorios</th>
-                </tr>
-              </thead>
-              <tbody id="topology-roles-tbody">
-                <tr><td colspan="5" class="loading-state">Cargando roles...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
 
       <!-- TAB 5: SKILLS -->
       <section id="tab-skills" class="tab-panel">
@@ -436,6 +386,52 @@
                 <tr><td colspan="5" class="loading-state">Cargando diagnóstico del sistema...</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- Topología y Salud de Repositorios -->
+        <div class="card" style="margin-top: 1.5rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h3 class="subsection-title" style="margin-bottom: 0;">🗺️ Topología y Configuración de Repositorios</h3>
+            <span class="badge" style="background: var(--bg-tertiary); color: var(--text-color);">axiom.yaml</span>
+          </div>
+          <div class="topology-dashboard">
+            <div class="stat-cards-row">
+              <div class="stat-card">
+                <div class="stat-label">Espacio de Trabajo</div>
+                <div class="stat-value" id="top-ws-name">--</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Topología Declarada</div>
+                <div class="stat-value text-accent" id="top-ws-topology">--</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Repositorio Canónico Specs</div>
+                <div class="stat-value" id="top-ws-specs">--</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Diagnóstico de Salud</div>
+                <div class="stat-value text-success" id="top-ws-health">--</div>
+              </div>
+            </div>
+
+            <h4 class="subsection-title" style="margin-top: 1rem; font-size: 0.95rem;">Mapeo de Roles a Repositorios Locales (1 a N)</h4>
+            <div class="table-card" style="margin-top: 0.5rem;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>ID del Rol</th>
+                    <th>Nombre Descriptivo</th>
+                    <th>Política de Compuerta</th>
+                    <th>Tecnologías</th>
+                    <th>Rutas de Repositorios</th>
+                  </tr>
+                </thead>
+                <tbody id="topology-roles-tbody">
+                  <tr><td colspan="5" class="loading-state">Cargando roles...</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 

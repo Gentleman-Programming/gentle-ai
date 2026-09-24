@@ -272,3 +272,55 @@ func TestServiceReindexCodeGraph(t *testing.T) {
 	}
 }
 
+func TestDetectorProjectWorkspaceConfigsAndDiagnostics(t *testing.T) {
+	tempWorkspace := t.TempDir()
+	tempHome := t.TempDir()
+
+	// Simular .mcp.json a nivel de proyecto con codegraph
+	mcpFile := filepath.Join(tempWorkspace, ".mcp.json")
+	mcpContent := `{
+		"mcpServers": {
+			"codegraph": {
+				"command": "codegraph",
+				"args": ["serve"]
+			}
+		}
+	}`
+	if err := os.WriteFile(mcpFile, []byte(mcpContent), 0644); err != nil {
+		t.Fatalf("error escribiendo .mcp.json: %v", err)
+	}
+
+	detector := NewDetectorWithCustomHome(tempHome, func(file string) (string, error) {
+		if file == "serena" || file == "serena-mcp" {
+			return "/usr/local/bin/serena", nil
+		}
+		return "", os.ErrNotExist
+	})
+
+	agents := detector.DetectAgents(tempWorkspace)
+	var wsAgent *AgentToolStatus
+	for i := range agents {
+		if agents[i].Scope == "workspace" && strings.Contains(agents[i].AgentName, "Workspace MCP") {
+			wsAgent = &agents[i]
+			break
+		}
+	}
+
+	if wsAgent == nil {
+		t.Fatalf("se esperaba detectar agente a nivel de workspace")
+	}
+	if !wsAgent.Configured || !strings.Contains(wsAgent.Details, "codegraph") {
+		t.Errorf("se esperaba que el agente de workspace tuviera codegraph configurado")
+	}
+
+	if !detector.CheckSerenaInPath() {
+		t.Errorf("se esperaba que Serena estuviera instalada en PATH")
+	}
+	if detector.CheckCodeGraphInPath() {
+		t.Errorf("no se esperaba CodeGraph en PATH")
+	}
+	if !detector.CheckCodeGraphConfigured(agents) {
+		t.Errorf("se esperaba CodeGraph configurado en workspace")
+	}
+}
+

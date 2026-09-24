@@ -55,6 +55,7 @@ type AgentToolStatus struct {
 	AgentName  string `json:"agent_name"`
 	ConfigPath string `json:"config_path"`
 	Configured bool   `json:"configured"`
+	Scope      string `json:"scope,omitempty"` // "workspace" o "global"
 	Details    string `json:"details,omitempty"`
 }
 
@@ -64,6 +65,10 @@ type SemanticStatus struct {
 	ActiveConnector     ConnectorType     `json:"active_connector"`
 	SerenaAvailable     bool              `json:"serena_available"`
 	CodeGraphAvailable  bool              `json:"codegraph_available"`
+	SerenaInstalled     bool              `json:"serena_installed"`
+	SerenaConfigured    bool              `json:"serena_configured"`
+	CodeGraphInstalled  bool              `json:"codegraph_installed"`
+	CodeGraphConfigured bool              `json:"codegraph_configured"`
 	NativeASTReady      bool              `json:"native_ast_ready"`
 	Agents              []AgentToolStatus `json:"agents"`
 	TotalPackages       int               `json:"total_packages"`

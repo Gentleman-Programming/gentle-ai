@@ -41,6 +41,8 @@ type IncrementSummaryDTO struct {
 	PendingRoles         []string `json:"pending_roles,omitempty"`
 	ReadyForGlobalVerify bool     `json:"ready_for_global_verify"`
 	ReadyForArchive      bool     `json:"ready_for_archive"`
+	ChangeType           string   `json:"change_type,omitempty"`
+	IsBug                bool     `json:"is_bug"`
 }
 
 // IncrementDetailDTO contiene el detalle estructurado de un cambio y sus artefactos.

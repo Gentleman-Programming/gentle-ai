@@ -1098,6 +1098,7 @@ func runUI(args []string) {
 			}
 		}
 	}
+	_ = os.Chdir(baseDir)
 
 	svc := dashboard.NewServiceWithHub(baseDir, hubMgr)
 	server := dashboard.NewServer(svc)

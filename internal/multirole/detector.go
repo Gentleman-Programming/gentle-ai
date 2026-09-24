@@ -126,6 +126,11 @@ func roleExists(cfg *workspace.WorkspaceConfig, role string) bool {
 			return true
 		}
 	}
+	// Si el workspace está gobernado por el rol unificado 'fullstack' (sin subdivisión),
+	// cualquier rol técnico histórico (core, qa, web, e2e, etc.) es compatible y asumido por fullstack.
+	if _, ok := cfg.Roles["fullstack"]; ok && len(cfg.Roles) == 1 {
+		return true
+	}
 	return false
 }
 

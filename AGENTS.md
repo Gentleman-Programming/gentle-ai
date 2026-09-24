@@ -41,7 +41,6 @@ Naming convention: `gentle-ai-*` skills are repo-specific workflow skills. Unpre
 | --- | --- | --- | --- |
 | `axiom-go-table-tests` | — | project | `skills/axiom-go-table-tests/SKILL.md` |
 | `axiom-idiomatic-error-wrapping` | — | project | `skills/axiom-idiomatic-error-wrapping/SKILL.md` |
-| `branch-pr` | Create Gentle AI pull requests with issue-first checks. Trigger: creating, opening, or preparing PRs for review. | user | `C:\Users\lujam\.config\opencode\skills\branch-pr\SKILL.md` |
 | `chained-pr` | Trigger: PRs over 400 lines, stacked PRs, review slices. Split oversized changes into chained PRs that protect review focus. | project | `.claude/skills/chained-pr/SKILL.md` |
 | `cognitive-doc-design` | Design docs that reduce cognitive load. Trigger: writing guides, READMEs, RFCs, onboarding, architecture, or review-facing docs. | project | `skills/cognitive-doc-design/SKILL.md` |
 | `comment-writer` | Write warm, direct collaboration comments. Trigger: PR feedback, issue replies, reviews, Slack messages, or GitHub comments. | project | `skills/comment-writer/SKILL.md` |
@@ -50,7 +49,6 @@ Naming convention: `gentle-ai-*` skills are repo-specific workflow skills. Unpre
 | `gentle-ai-chained-pr` | Trigger: PRs over 400 lines, stacked PRs, review slices. Split oversized changes into chained PRs that protect review focus. | project | `skills/chained-pr/SKILL.md` |
 | `gentle-ai-collab-perfect` | Trigger: contributing to Gentleman-Programming/gentle-ai as an external collaborator. Honest PR bodies, contributor-vs-maintainer scope, chained-PR strategy, verification protocol, docstring coverage. Load whenever the active repo is Gentleman-Programming/gentle-ai and any part of the contribution flow is in scope: opening an issue, drafting or editing a PR body, splitting a change into chained/stacked PRs, or auditing a PR before requesting review. | project | `skills/gentle-ai-collab-perfect/SKILL.md` |
 | `go-testing` | Trigger: Go tests, go test coverage, Bubbletea teatest, golden files. Apply focused Go testing patterns. | project | `.claude/skills/go-testing/SKILL.md` |
-| `issue-creation` | Trigger: issue creation, bug reports, feature requests, or issue approval. Create and triage GitHub issues from repository evidence. | user | `C:\Users\lujam\.config\opencode\skills\issue-creation\SKILL.md` |
 | `issue-root-resolution` | Trigger: root audit, atacar la raíz, issue roots, backlog roots, mechanism map, deletion-driven fix, resolver issues de raíz, close outdated issues. Audit and resolve issue clusters by verified root cause. | project | `skills/issue-root-resolution/SKILL.md` |
 | `judgment-day` | Trigger: judgment day, dual review, adversarial review, juzgar. Run explicit blind dual review with at most two scoped fix/re-judgment rounds. | project | `.claude/skills/judgment-day/SKILL.md` |
 | `rdd-advisory-transport` | Trigger: reviewer transport, advisory transport, review adapter, lens prompt/schema, OpenCode reviewer plugin, Codex reviewer, ReviewProviderContract. Enforce the shared Go advisory reviewer transport contract. | project | `skills/rdd-advisory-transport/SKILL.md` |
