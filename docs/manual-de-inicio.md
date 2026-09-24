@@ -16,14 +16,20 @@
    - [Opción A: Línea de Comandos (CLI)](#opción-a-línea-de-comandos-cli)
    - [Opción B: Panel Web Interactivo (`axiom ui`)](#opción-b-panel-web-interactivo-axiom-ui)
    - [Aprovisionamiento Aislado de Agentes (`setup`)](#aprovisionamiento-aislado-de-agentes-setup)
+   - [Política Git Diferencial y Gestión de Worktrees](#política-git-diferencial-y-gestión-de-worktrees-odd-5)
+   - [Sincronización Continua de Especificaciones](#sincronización-continua-de-especificaciones)
 6. [El Archivo de Configuración Maestro (`axiom.yaml`)](#6-el-archivo-de-configuración-maestro-axiomyaml)
 7. [Gobernanza de Skills y Autoskills](#7-gobernanza-de-skills-y-autoskills)
    - [Flujo Human-in-the-Loop](#flujo-human-in-the-loop)
    - [Uso por CLI y por Web UI](#uso-por-cli-y-por-web-ui)
 8. [Gestión de Especificaciones Vivas (OpenSpec)](#8-gestión-de-especificaciones-vivas-openspec)
+   - [Podado Progresivo y Superación de Especificaciones](#podado-progresivo-y-superación-de-especificaciones-supersede)
 9. [Flujo Dual de Desarrollo: ODD Cotidiano vs. SDD Formal](#9-flujo-dual-de-desarrollo-odd-cotidiano-vs-sdd-formal)
+   - [Compuertas de Bloque e Integración Pre-Archive](#b-carril-formal-sdd-spec-driven-development)
 10. [Relevos Estructurados entre Roles y Fases (Handoffs)](#10-relevos-estructurados-entre-roles-y-fases-handoffs)
 11. [Mantenimiento, Actualizaciones y Sincronización](#11-mantenimiento-actualizaciones-y-sincronización)
+   - [Mantenimiento Semántico del CodeGraph](#mantenimiento-semántico-del-codegraph-axiom-semantic-reindex)
+   - [Limpieza Post-Merge de Worktrees](#automatización-post-archivado-y-scripts-de-soporte)
 
 ---
 
@@ -169,6 +175,39 @@ axiom setup
 
 ---
 
+### Política Git Diferencial y Gestión de Worktrees (ODD-5)
+
+Axiom establece una separación arquitectónica estricta entre repositorios de especificaciones y repositorios de código para evitar bloqueos y colisiones:
+
+1. **Repositorio de Especificaciones (`specs_repository` — Directo a `main`):**
+   - El repositorio de especificaciones opera **siempre en la rama principal (`main` o `master`)**, sin ramas secundarias ni worktrees.
+   - Las especificaciones y diseños son contratos vivos de verdad compartida. Al emitir un relevo formal (`handoff.md`), es mandatorio que las especificaciones estén commiteadas y sincronizadas con remoto (`git push`).
+2. **Repositorios de Código (Worktrees y Ramas Aisladas):**
+   - Antes de modificar código fuente, cada rol ejecuta el **cuestionario interactivo de pre-vuelo**:
+     1. ¿Crear worktree aislado o trabajar en el árbol actual?
+     2. Nombre de rama (`feat/<funcionalidad>`).
+     3. Rama base (`main`, `develop`, etc.).
+   - Al concluir la verificación en `PASS`, se ofrece registrar el commit y se solicita interactivamente la rama destino del Pull Request (`main`, `develop`, etc.) antes de proponer `gh pr create --base <rama-destino>`.
+3. **Limpieza Automática Post-Merge (`scripts/cleanup-worktree.*`):**
+   - Tras fusionar el PR, Axiom provee scripts canónicos para desmontar el worktree y eliminar la rama local de forma limpia:
+     ```bash
+     # Linux / macOS
+     ./scripts/cleanup-worktree.sh <ruta-worktree> <nombre-rama>
+
+     # Windows (PowerShell)
+     ./scripts/cleanup-worktree.ps1 -WorktreePath <ruta-worktree> -BranchName <nombre-rama>
+     ```
+
+---
+
+### Sincronización Continua de Especificaciones
+
+Para evitar que agentes o desarrolladores trabajen sobre contratos desactualizados:
+* **Detección Pasiva al Inicio de Sesión:** Al arrancar cualquier sesión, Axiom comprueba si existen commits entrantes en el repositorio de especificaciones (`behind > 0`). Si los detecta, avisa de inmediato al usuario y solicita autorización para ejecutar `git pull`.
+* **Superficie Reactiva en Web UI (`axiom ui`):** Si el repositorio de specs está desincronizado con remoto, el dashboard web muestra un banner persistente en la cabecera (**"Specs Remotas Desactualizadas"**) con un botón **"Traer Cambios"** (`POST /api/workspace/specs/pull`) para sincronizar el repositorio con un solo clic.
+
+---
+
 ## 6. El Archivo de Configuración Maestro (`axiom.yaml`)
 
 El archivo `axiom.yaml` es la única fuente de verdad técnica de la estructura del proyecto. Ejemplo canónico:
@@ -284,6 +323,15 @@ Axiom adopta y potencia el estándar **OpenSpec**:
   ```
 * **Visor Web:** En `axiom ui`, la pestaña **Especificaciones** ofrece un árbol de navegación, buscador y visor con renderizado Markdown en tiempo real.
 
+### Podado Progresivo y Superación de Especificaciones (`--supersede`)
+
+A medida que el sistema evoluciona, nuevas capacidades reemplazan contratos previos. Para evitar que el catálogo `openspec/specs/` acumule especificaciones obsoletas o contradictorias:
+* **Comando con banderas de superación:**
+  ```bash
+  axiom sdd archive-compose <nombre-cambio> --supersede <capacidad-obsoleta> --superseded-requirements REQ-1.1,REQ-1.2
+  ```
+* **Trazabilidad en el Catálogo:** El compilador de archivo retira la especificación obsoleta o genera la sección canónica `## Especificaciones Históricas Superadas`, referenciando el cambio que la sustituye y manteniendo la trazabilidad histórica completa sin contaminar los requerimientos activos.
+
 ---
 
 ## 9. Flujo Dual de Desarrollo: ODD Cotidiano vs. SDD Formal
@@ -304,9 +352,19 @@ Para cambios estructurales profundos, refactorizaciones de arquitectura o requer
 ```
 [ sdd-explore ] ➔ [ sdd-propose ] ➔ [ sdd-spec ] ➔ [ sdd-design ] ➔ [ sdd-tasks ] ➔ [ sdd-apply ] ➔ [ sdd-verify ] ➔ [ sdd-archive ]
 ```
-* **Inicio y Sello:** `axiom sdd kickoff seal` fija los roles y la modalidad de avance.
-* **Compuertas de Bloque:** Cada fase requiere aprobación formal antes de avanzar (`axiom sdd gate record`).
-* **Verificación y Archivado:** Exige informe de verificación con tests automáticos (`verify-report.md`) y evidencia de integración antes de congelar el cambio en `openspec/changes/archive/`.
+* **Determinación Temprana y Sello (`kickoff`):** Antes de crear la propuesta, `axiom sdd kickoff seal` fija de forma inmutable la modalidad de avance (continua o con paradas), la política de relevos y el roster de roles.
+* **Compuertas de Bloque Formales:** En modalidad con paradas, cada hito exige aprobación explícita antes de avanzar:
+  ```bash
+  axiom sdd gate record --gate spec|design|tasks|apply --decision approved|rejected --reason "<motivo>"
+  ```
+* **Verificación Formal y Precondición de Integración:**
+  1. `verify` valida el código mediante tests automatizados y genera `verify-report.md`.
+  2. **`archive` no procede inmediatamente tras verificar:** exige registrar previamente evidencia formal de integración o despliegue en la compuerta de integración:
+     ```bash
+     axiom sdd gate record --gate integration --decision approved --evidence-kind pr_merged|deployment|attestation [--commit <sha>]
+     ```
+  3. Cumplida la compuerta, `axiom sdd archive-compose` consolida las especificaciones en `openspec/specs/`, actualiza `openspec/INDEX.md` y congela el cambio en `openspec/changes/archive/`.
+* **Filtro Dinámico de Roles en Web UI:** En `axiom ui` (pestaña Tareas / SDD), un selector dinámico permite filtrar las tareas activas según el rol asignado (`core`, `frontend`, `qa`, `fullstack`).
 
 ---
 
@@ -390,6 +448,17 @@ axiom sync --scope=workspace
 ```
 
 Este comando asegura que los prompts, agentes locales (`opencode.json`) y herramientas del proyecto reflejen las últimas directivas sin tocar tu configuración global de usuario en `~/.config/opencode/`.
+
+### Mantenimiento Semántico del CodeGraph (`axiom semantic reindex`)
+
+Axiom integra análisis semántico del código fuente mediante CodeGraph y Serena. Tras refactorizaciones mayores o tras sincronizar cambios de otros roles:
+* **Por Línea de Comandos:**
+  ```bash
+  axiom semantic reindex
+  ```
+  Actualiza incrementalmente el grafo de dependencias, tipos, funciones y llamadas del workspace sin necesidad de reiniciar la sesión.
+* **Por Panel Web (`axiom ui`):**
+  En la barra de herramientas superior del dashboard, el botón **"Reindexar CodeGraph"** ejecuta el proceso en segundo plano informando visualmente del progreso y completitud en tiempo real.
 
 ### Automatización Post-Archivado y Scripts de Soporte
 
