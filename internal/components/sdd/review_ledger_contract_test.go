@@ -824,8 +824,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// whose exit is releasing the authority, not a smaller candidate, and the
 		// shipped contract has to name it. Both are deliberate, not drift, and the
 		// ceilings carry each row's existing absolute margin over the net change.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_111, maxCharacters: 19_114},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_518, maxCharacters: 37_051},
+		// #1380 adds the review_decision_required continuation row (+249 characters
+		// per case). Preserve the standard three-character ceiling margin.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_360, maxCharacters: 19_363},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_767, maxCharacters: 37_300},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

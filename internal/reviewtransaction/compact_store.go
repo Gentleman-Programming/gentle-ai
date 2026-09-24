@@ -1696,7 +1696,16 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 	return nil
 }
 
+func equalCompactDecisionContinuity(previous, next CompactState) bool {
+	return reflect.DeepEqual(previous.Decision, next.Decision) && previous.DecisionEpoch == next.DecisionEpoch && reflect.DeepEqual(previous.DecisionHistory, next.DecisionHistory)
+}
+
 func validateCompactSuccessor(previousRevision string, previous, next CompactState, operation string) error {
+	if operation == "review/begin-fix" || operation == "review/complete-fix" || operation == "review/complete-correction-verification" {
+		if !equalCompactDecisionContinuity(previous, next) {
+			return fmt.Errorf("%w: correction transition changed decision authority", ErrInvalidSuccessor)
+		}
+	}
 	if !equalCompactAtomicStartBinding(previous.InitialAtomicStart, next.InitialAtomicStart) {
 		return fmt.Errorf("%w: compact initial atomic START binding is immutable", ErrInvalidSuccessor)
 	}
@@ -1717,13 +1726,39 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-review":
-		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateApproved && next.State != StateEscalated && next.State != StateDecisionRequired {
+		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateApproved && next.State != StateDecisionRequired {
 			return fmt.Errorf("%w: invalid compact review completion", ErrInvalidSuccessor)
 		}
 		nextView, viewErr := next.CompactReviewView()
 		cleanApproval := viewErr == nil && next.State == StateApproved && next.EvidenceHash == compactReviewEvidenceHash(nextView)
-		if !equalCompactAdmittedReviewAuthority(previous, next) || !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" && !cleanApproval {
+		if !equalCompactAdmittedReviewAuthority(previous, next) || !snapshotsEqual(previous.CurrentSnapshot, next.CurrentSnapshot) || next.ProposedCorrectionLines != nil || next.ActualCorrectionLines != nil || next.FixDeltaHash != EmptyFixDeltaHash || next.OriginalCriteria != nil || next.EvidenceHash != "" && !cleanApproval ||
+			!reflect.DeepEqual(previous.ResultReopens, next.ResultReopens) || !reflect.DeepEqual(previous.CorrectionAttempts, next.CorrectionAttempts) ||
+			previous.CumulativeCorrectionLines != next.CumulativeCorrectionLines || !reflect.DeepEqual(previous.Recovery, next.Recovery) ||
+			!equalStrings(previous.CorrectionAddedPaths, next.CorrectionAddedPaths) || previous.InvalidationReason != next.InvalidationReason {
 			return fmt.Errorf("%w: compact review completion changed correction or delivery state", ErrInvalidSuccessor)
+		}
+		view, err := previous.CompactReviewView()
+		if err != nil {
+			return fmt.Errorf("%w: cannot derive admitted review route: %v", ErrInvalidSuccessor, err)
+		}
+		expectedState := StateValidating
+		if compactReviewViewHasUnresolvedFindings(view) {
+			expectedState = StateDecisionRequired
+		} else if len(view.FixFindingIDs) > 0 {
+			expectedState = StateCorrectionRequired
+		}
+		if next.State != expectedState && !(expectedState == StateValidating && cleanApproval) {
+			return fmt.Errorf("%w: compact completion route does not match admitted evidence", ErrInvalidSuccessor)
+		}
+		if next.State == StateDecisionRequired {
+			if !reflect.DeepEqual(next.Decision, deriveCompactDecisionEvidence(view)) ||
+				next.DecisionEpoch != previous.DecisionEpoch+1 || len(next.DecisionHistory) != len(previous.DecisionHistory)+1 ||
+				len(previous.DecisionHistory) > 0 && !reflect.DeepEqual(previous.DecisionHistory, next.DecisionHistory[:len(previous.DecisionHistory)]) ||
+				next.DecisionHistory[len(previous.DecisionHistory)] != (CompactDecisionEntry{Decision: CompactDecisionPause, Actor: CompactDecisionSystemActor, Reason: CompactDecisionReasonEvidenceInconclusive}) {
+				return fmt.Errorf("%w: compact pause must derive from admitted evidence and append one engine entry", ErrInvalidSuccessor)
+			}
+		} else if !equalCompactDecisionContinuity(previous, next) {
+			return fmt.Errorf("%w: compact completion changed decision history", ErrInvalidSuccessor)
 		}
 	case "review/decide":
 		// #1380: the one sanctioned exit from decision_required. A continue
@@ -1767,6 +1802,19 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		}
 		if entry.Decision == CompactDecisionStop && !reflect.DeepEqual(previous.Decision, next.Decision) {
 			return fmt.Errorf("%w: compact decision stop must retain the frozen question", ErrInvalidSuccessor)
+		}
+		expected := previous
+		setCompactStateExit(&expected, next.State)
+		expected.DecisionHistory = next.DecisionHistory
+		expected.DecisionEpoch = next.DecisionEpoch
+		if entry.Decision == CompactDecisionContinue {
+			expected.Decision = nil
+			expected.FixFindingIDs = []string{}
+		}
+		// Capture attempts are separately governed by their existing successor checks.
+		expected.TargetedValidatorAttempts = next.TargetedValidatorAttempts
+		if !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: compact decision changed authority outside its owned fields", ErrInvalidSuccessor)
 		}
 	case "review/begin-fix":
 		if previous.CorrectionAttemptConsumed() {
