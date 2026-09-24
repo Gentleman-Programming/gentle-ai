@@ -151,6 +151,9 @@ var reviewStopReasonNarration = map[string]string{
 	"missing_authority_binding": "This run reached a state that should never happen: it lost track of the record it needs to continue. " +
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
+	"review_decision_required": "This review paused because the admitted evidence could not resolve every finding, and only a human can decide what happens next. " +
+		"Run `gentle-ai review decide --cwd <repo> --lineage <lineage> --expected-revision <revision> --decision continue --actor <actor> --reason <reason>` to resume the review, " +
+		"or the same command with `--decision stop` to close it as escalated; STATUS carries the runnable continue and stop invocations already bound to the current `--expected-revision`.",
 	"native_stop_required": "This review is stuck at an escalated state that is not yet eligible to continue. " +
 		"Ask a maintainer to review it before doing anything else, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
