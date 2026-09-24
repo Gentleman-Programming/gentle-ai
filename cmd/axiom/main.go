@@ -54,8 +54,8 @@ func init() {
 
 // version is the build-time version symbol, injectable via
 // -X main.version=<value> (same symbol name as cmd/gentle-ai/main.go).
-// A compilation without injection reports "v0.1.0" (O-1, D-05).
-var version = "v0.1.0"
+// A compilation without injection reports "v3.5.0" (O-1, D-05).
+var version = "v3.5.0"
 
 // Version is the exported alias used by cli.AppVersion, app.Version, and tests.
 var Version = version
