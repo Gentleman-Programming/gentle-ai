@@ -196,6 +196,9 @@ brew install gentleman-programming/tap/gentle-ai
 # macOS / Linux (curl)
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
+# macOS / Linux (mise)
+mise use -g gentle-ai@latest
+
 # Windows (PowerShell) — source install, needs Go 1.25.10+
 go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
 ```
