@@ -219,6 +219,9 @@ jobs:
 
       - name: Run native Windows private report refusal tests
         shell: pwsh
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           $test = 'TestWriteNewReportUnsupportedDoesNotWrite'
           $selected = @(go test ./internal/privatefile -list "^$test$" | Where-Object { $_ -ceq $test })
@@ -228,6 +231,9 @@ jobs:
 
       - name: Run native Windows private parent opener tests
         shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           set -euo pipefail
           for test in \
@@ -239,6 +245,18 @@ jobs:
             go test ./internal/privatefile -list "^${test}$" | grep -Fx "$test" >/dev/null
           done
           go test -v ./internal/privatefile -count=1 -timeout=300s
+
+      - name: Check native Windows managed root test registration (dispatch only)
+        shell: bash
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            go test ./internal/privatefile -list '^TestWindowsManagedRootCandidate$' | grep -Fx TestWindowsManagedRootCandidate >/dev/null
+            go test ./internal/privatefile -run '^TestWindowsManagedRootCandidate$' -count=1 -v
+          fi
 
       - name: Run native Windows junction parent tests
         shell: pwsh
