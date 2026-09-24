@@ -240,6 +240,15 @@ jobs:
           done
           go test -v ./internal/privatefile -count=1 -timeout=300s
 
+      - name: Check native Windows managed root test registration (dispatch only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            go test ./internal/privatefile -list '^TestWindowsManagedRootCandidate$' | grep -Fx TestWindowsManagedRootCandidate >/dev/null
+            go test ./internal/privatefile -run '^TestWindowsManagedRootCandidate$' -count=1 -v
+          fi
+
       - name: Run native Windows junction parent tests
         shell: pwsh
         timeout-minutes: 5
