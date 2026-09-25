@@ -196,40 +196,6 @@ func TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion(t *testi
 	}
 }
 
-// TestGentleAIModulePathVersionAware pins the helper used by goProxyBypassEnv
-// and the beta target composition. The /vN suffix tracks the version (D1-A)
-// and an empty version falls back to the running binary's major (D2-A). The
-// test relies on the v3 test binary so the running-major fallback is 3 — no
-// explicit seam pin is needed from the upgrade package because the helper's
-// runningGoMajor is private to internal/update.
-func TestGentleAIModulePathVersionAware(t *testing.T) {
-	tool := update.ToolInfo{
-		Owner: "Gentleman-Programming",
-		Repo:  "gentle-ai",
-	}
-
-	tests := []struct {
-		name    string
-		version string
-		want    string
-	}{
-		{name: "explicit v4 target composes /v4", version: "v4.0.0", want: "github.com/gentleman-programming/gentle-ai/v4"},
-		{name: "explicit v2 target composes /v2", version: "v2.0.0", want: "github.com/gentleman-programming/gentle-ai/v2"},
-		{name: "v1 target stays unsuffixed", version: "v1.9.0", want: "github.com/gentleman-programming/gentle-ai"},
-		{name: "empty version falls back to running major /v3", version: "", want: "github.com/gentleman-programming/gentle-ai/v3"},
-		{name: "unparseable main@<sha> falls back to running major /v3", version: "main@abc", want: "github.com/gentleman-programming/gentle-ai/v3"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := gentleAIModulePath(tool, tc.version)
-			if got != tc.want {
-				t.Errorf("gentleAIModulePath(_, %q) = %q, want %q", tc.version, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })

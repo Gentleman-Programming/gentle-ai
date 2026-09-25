@@ -679,19 +679,6 @@ func goInstallMainUpgrade(r update.UpdateResult) error {
 	return nil
 }
 
-// gentleAIModulePath returns the module root (github.com/<owner>/<repo>[/vN])
-// for the gentle-ai tool. It does NOT include any /cmd/<tool> subpath — the
-// goProxyBypassEnv needs the module root to scope GONOSUMDB/GOPRIVATE/
-// GONOPROXY. Stable versions derive /vN through ModulePathForVersion;
-// checked beta installs use UpdateResult.BetaModulePath instead.
-func gentleAIModulePath(tool update.ToolInfo, version string) string {
-	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
-	if repository == "github.com//" {
-		repository = "github.com/gentleman-programming/gentle-ai"
-	}
-	return update.ModulePathForVersion(repository, tool.Repo, version)
-}
-
 func goProxyBypassEnv(base []string, module string) []string {
 	if base == nil {
 		base = os.Environ()
