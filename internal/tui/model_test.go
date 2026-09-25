@@ -5183,7 +5183,7 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 
 	origAssignments := readCurrentAssignmentsFn
 	readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
-		return map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment}, nil
+		return map[string]model.ModelAssignment{screens.SDDOrchestratorPhase: defaultAssignment}, nil
 	}
 	t.Cleanup(func() { readCurrentAssignmentsFn = origAssignments })
 
@@ -5229,7 +5229,7 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 			drive: func(m *Model) {
 				openDefaultModelConfig(m)
 			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantAssign:  map[string]model.ModelAssignment{screens.SDDOrchestratorPhase: defaultAssignment},
 			wantMissing: []string{"sdd-apply"},
 		},
 		{
@@ -5238,8 +5238,8 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 				editProfile(m)
 			},
 			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": profileOrchestrator,
-				"sdd-apply":           profilePhase,
+				screens.SDDOrchestratorPhase: profileOrchestrator,
+				"sdd-apply":                   profilePhase,
 			},
 		},
 		{
@@ -5249,7 +5249,7 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 				m.setScreen(ScreenWelcome) // abandon the profile edit
 				openDefaultModelConfig(m)
 			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantAssign:  map[string]model.ModelAssignment{screens.SDDOrchestratorPhase: defaultAssignment},
 			wantMissing: []string{"sdd-apply"},
 		},
 		{
@@ -5259,8 +5259,8 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 				editProfile(m)
 			},
 			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": profileOrchestrator,
-				"sdd-apply":           profilePhase,
+				screens.SDDOrchestratorPhase: profileOrchestrator,
+				"sdd-apply":                   profilePhase,
 			},
 		},
 		{
@@ -5275,7 +5275,7 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 				m.setScreen(ScreenProfiles)
 				m.setScreen(ScreenWelcome)
 			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantAssign:  map[string]model.ModelAssignment{screens.SDDOrchestratorPhase: defaultAssignment},
 			wantMissing: []string{"sdd-apply"},
 		},
 		{
@@ -5288,7 +5288,7 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 				editProfile(m)
 				m.setScreen(ScreenWelcome)
 			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantAssign:  map[string]model.ModelAssignment{screens.SDDOrchestratorPhase: defaultAssignment},
 			wantMissing: []string{"sdd-apply"},
 		},
 		{
@@ -5309,11 +5309,11 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 				m.setScreen(ScreenProfileCreate)
 			},
 			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": profileOrchestrator,
-				"sdd-apply":           profilePhase,
+				screens.SDDOrchestratorPhase: profileOrchestrator,
+				"sdd-apply":                   profilePhase,
 			},
 			checkStash: true,
-			wantStash:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
+			wantStash:  map[string]model.ModelAssignment{screens.SDDOrchestratorPhase: defaultAssignment},
 		},
 		{
 			// Companion case for the same finding: ordinary navigation within
@@ -5327,8 +5327,8 @@ func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
 				m.setScreen(ScreenModelPicker) // and back in
 			},
 			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": defaultAssignment,
-				"sdd-onboard":         {ProviderID: "anthropic", ModelID: "claude-haiku-4-5"},
+				screens.SDDOrchestratorPhase: defaultAssignment,
+				"sdd-onboard":                 {ProviderID: "anthropic", ModelID: "claude-haiku-4-5"},
 			},
 			wantMissing: []string{"sdd-apply"},
 			checkStash:  true,

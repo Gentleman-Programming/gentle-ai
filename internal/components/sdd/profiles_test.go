@@ -1245,3 +1245,186 @@ func assertExactTaskPermissions(t *testing.T, got, want map[string]any) {
 		}
 	}
 }
+
+func TestMigrateLegacyOrchestrator_SettingsMigration(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "default_agent": "gentle-orchestrator",
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "model": "anthropic/claude-sonnet-4"
+    },
+    "sdd-apply": {
+      "mode": "subagent",
+      "model": "openai/gpt-4o"
+    }
+  }
+}
+`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := MigrateLegacyOrchestrator(settingsPath, "")
+	if err != nil {
+		t.Fatalf("MigrateLegacyOrchestrator() error = %v", err)
+	}
+	if !migrated {
+		t.Fatal("MigrateLegacyOrchestrator() = false, want true")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+
+	if defAgent, _ := root["default_agent"].(string); defAgent != "axiom-orchestrator" {
+		t.Errorf("default_agent = %q, want %q", defAgent, "axiom-orchestrator")
+	}
+
+	agents := root["agent"].(map[string]any)
+	if _, exists := agents["gentle-orchestrator"]; exists {
+		t.Error("gentle-orchestrator should have been deleted")
+	}
+	axiomDef, ok := agents["axiom-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("axiom-orchestrator should exist")
+	}
+	if axiomDef["model"] != "anthropic/claude-sonnet-4" {
+		t.Errorf("axiom-orchestrator model = %v, want anthropic/claude-sonnet-4", axiomDef["model"])
+	}
+
+	// Idempotent run:
+	secondRun, err := MigrateLegacyOrchestrator(settingsPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRun {
+		t.Error("second run should report false for unchanged settings")
+	}
+}
+
+func TestMigrateLegacyOrchestrator_PreservesExistingAxiomOrchestrator(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "agent": {
+    "axiom-orchestrator": {
+      "mode": "primary",
+      "model": "openai/gpt-4o"
+    },
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "model": "anthropic/claude-sonnet-4"
+    }
+  }
+}
+`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := MigrateLegacyOrchestrator(settingsPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !migrated {
+		t.Fatal("MigrateLegacyOrchestrator() = false, want true")
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root2 map[string]any
+	if err := json.Unmarshal(data, &root2); err != nil {
+		t.Fatal(err)
+	}
+	agents := root2["agent"].(map[string]any)
+	if _, exists := agents["gentle-orchestrator"]; exists {
+		t.Error("gentle-orchestrator should have been deleted")
+	}
+	axiomDef := agents["axiom-orchestrator"].(map[string]any)
+	if axiomDef["model"] != "openai/gpt-4o" {
+		t.Errorf("pre-existing axiom-orchestrator model = %v, want openai/gpt-4o", axiomDef["model"])
+	}
+}
+
+func TestMigrateLegacyOrchestrator_CommandsMigration(t *testing.T) {
+	dir := t.TempDir()
+	commandsDir := filepath.Join(dir, "commands")
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmdContent := `---
+agent: gentle-orchestrator
+description: Start SDD flow
+---
+You are the gentle-orchestrator coordinator.
+`
+	cmdPath := filepath.Join(commandsDir, "sdd-init.md")
+	if err := os.WriteFile(cmdPath, []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := MigrateLegacyOrchestrator("", commandsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !migrated {
+		t.Fatal("MigrateLegacyOrchestrator() = false, want true")
+	}
+
+	updated, err := os.ReadFile(cmdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(updated), "gentle-orchestrator") {
+		t.Errorf("command still contains gentle-orchestrator:\n%s", string(updated))
+	}
+	if !strings.Contains(string(updated), "agent: axiom-orchestrator") {
+		t.Errorf("command missing agent: axiom-orchestrator:\n%s", string(updated))
+	}
+
+	// Idempotent
+	second, err := MigrateLegacyOrchestrator("", commandsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second {
+		t.Error("second run should report false")
+	}
+}
+
+func TestGenerateProfileOverlay_FallbackAxiomOrchestrator(t *testing.T) {
+	profile := model.Profile{
+		Name: "test-profile",
+	}
+	fallback := map[string]model.ModelAssignment{
+		"axiom-orchestrator": {ProviderID: "openai", ModelID: "gpt-5"},
+	}
+
+	overlay, err := GenerateProfileOverlay(profile, t.TempDir(), "", fallback, "")
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatal(err)
+	}
+	agents := root["agent"].(map[string]any)
+	orch := agents["sdd-orchestrator-test-profile"].(map[string]any)
+	if orch["model"] != "openai/gpt-5" {
+		t.Errorf("orchestrator model = %v, want openai/gpt-5", orch["model"])
+	}
+}

@@ -318,11 +318,13 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 	}
 	orchAssignment := profile.OrchestratorModel
 	if orchAssignment.ProviderID == "" || orchAssignment.ModelID == "" {
-		// Fall back to the global gentle-orchestrator assignment (issue #557)
+		// Fall back to the global axiom-orchestrator or gentle-orchestrator assignment (issue #557)
 		// when the profile did not pin its own orchestrator model. This mirrors
 		// how PhaseAssignments are resolved below so generated profile
 		// orchestrators stay consistent with what the TUI shows elsewhere.
-		if fallback, ok := fallbackPhaseAssignments["gentle-orchestrator"]; ok {
+		if fallback, ok := fallbackPhaseAssignments["axiom-orchestrator"]; ok {
+			orchAssignment = fallback
+		} else if fallback, ok := fallbackPhaseAssignments["gentle-orchestrator"]; ok {
 			orchAssignment = fallback
 		}
 	}
@@ -822,4 +824,79 @@ func RemoveProfileAgents(settingsPath string, profileName string) error {
 
 	_, err = filemerge.WriteFileAtomic(settingsPath, out, 0o644)
 	return err
+}
+
+// MigrateLegacyOrchestrator updates legacy "gentle-orchestrator" references in
+// settingsPath (opencode.json) and in command files under commandsDir in-place,
+// migrating them to "axiom-orchestrator". Returns true if any file was modified.
+func MigrateLegacyOrchestrator(settingsPath, commandsDir string) (bool, error) {
+	var modified bool
+
+	if settingsPath != "" {
+		data, err := os.ReadFile(settingsPath)
+		if err == nil {
+			root, parseErr := filemerge.UnmarshalJSONObject(data)
+			if parseErr == nil {
+				settingsChanged := false
+				for _, section := range []string{"agent", "agents"} {
+					if agentRaw, ok := root[section]; ok {
+						if agentMap, ok := agentRaw.(map[string]any); ok {
+							if gentleDef, ok := agentMap["gentle-orchestrator"]; ok {
+								if _, hasAxiom := agentMap["axiom-orchestrator"]; !hasAxiom {
+									agentMap["axiom-orchestrator"] = gentleDef
+								}
+								delete(agentMap, "gentle-orchestrator")
+								settingsChanged = true
+							}
+						}
+					}
+				}
+				if defAgent, ok := root["default_agent"].(string); ok && defAgent == "gentle-orchestrator" {
+					root["default_agent"] = "axiom-orchestrator"
+					settingsChanged = true
+				}
+				if settingsChanged {
+					out, err := filemerge.MarshalJSONPreservingPermissions(data, root)
+					if err != nil {
+						return false, fmt.Errorf("marshal migrated settings %q: %w", settingsPath, err)
+					}
+					out = append(out, '\n')
+					if _, err := filemerge.WriteFileAtomic(settingsPath, out, 0o644); err != nil {
+						return false, fmt.Errorf("write migrated settings %q: %w", settingsPath, err)
+					}
+					modified = true
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return false, fmt.Errorf("read settings %q: %w", settingsPath, err)
+		}
+	}
+
+	if commandsDir != "" {
+		entries, err := os.ReadDir(commandsDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+					continue
+				}
+				cmdPath := filepath.Join(commandsDir, entry.Name())
+				contentBytes, readErr := os.ReadFile(cmdPath)
+				if readErr != nil {
+					continue
+				}
+				content := string(contentBytes)
+				if strings.Contains(content, "gentle-orchestrator") {
+					updated := strings.ReplaceAll(content, "gentle-orchestrator", "axiom-orchestrator")
+					if _, writeErr := filemerge.WriteFileAtomic(cmdPath, []byte(updated), 0o644); writeErr != nil {
+						return false, fmt.Errorf("write migrated command %q: %w", cmdPath, writeErr)
+					}
+					modified = true
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return false, fmt.Errorf("read commands dir %q: %w", commandsDir, err)
+		}
+	}
+
+	return modified, nil
 }

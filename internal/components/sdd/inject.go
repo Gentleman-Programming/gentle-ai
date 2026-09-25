@@ -597,7 +597,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
-	// 2b. OpenCode /sdd-* commands reference agent: gentle-orchestrator.
+	// 2b. OpenCode /sdd-* commands reference agent: axiom-orchestrator.
 	// Ensure that agent is present even when persona component is not installed.
 	//
 	// mergedSettingsBytes holds the final merged opencode.json bytes produced by
@@ -609,6 +609,9 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	var mergedSettingsBytes []byte
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		if settingsPath != "" {
+			if _, err := MigrateLegacyOrchestrator(settingsPath, adapter.CommandsDir(homeDir)); err != nil {
+				return InjectionResult{}, fmt.Errorf("migrate legacy orchestrator: %w", err)
+			}
 			// Inject model assignments into the overlay before merging.
 			// Models are ONLY written when the user explicitly chose them via
 			// the TUI model picker (multi-mode). The overlay JSON itself must

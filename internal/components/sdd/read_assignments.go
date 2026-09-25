@@ -22,16 +22,18 @@ var reservedAgentSet = map[string]bool{
 	"explore":             true,
 	"gentle-reviewer":     true,
 	"gentle-worker":       true,
+	"axiom-orchestrator":  true,
 	"gentle-orchestrator": true,
 	"sdd-orchestrator":    true,
 }
 
 func buildConfigurableAgentSet() map[string]bool {
 	phases := opencode.ConfigurableAgentPhases()
-	set := make(map[string]bool, len(phases)+1)
+	set := make(map[string]bool, len(phases)+2)
 	for _, p := range phases {
 		set[p] = true
 	}
+	set["axiom-orchestrator"] = true
 	set["gentle-orchestrator"] = true
 	// Backward-compatible read alias for configs that have not been synced yet.
 	set["sdd-orchestrator"] = true

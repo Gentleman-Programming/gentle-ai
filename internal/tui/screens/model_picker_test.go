@@ -59,15 +59,15 @@ func TestRenderModelPickerScrollsToReviewAgents(t *testing.T) {
 	if !strings.Contains(output, "review-refuter") || !strings.Contains(output, "↑ more assignments") {
 		t.Fatalf("review rows are not visible at cursor %d:\n%s", cursor, output)
 	}
-	if strings.Contains(output, "gentle-orchestrator") {
+	if strings.Contains(output, SDDOrchestratorPhase) {
 		t.Fatalf("picker did not window rows around review cursor:\n%s", output)
 	}
 }
 
 func TestModelPickerRows_OrchestratorIsFirst(t *testing.T) {
 	rows := ModelPickerRows()
-	if rows[0] != "gentle-orchestrator" {
-		t.Fatalf("ModelPickerRows()[0] = %q, want %q", rows[0], "gentle-orchestrator")
+	if rows[0] != SDDOrchestratorPhase {
+		t.Fatalf("ModelPickerRows()[0] = %q, want %q", rows[0], SDDOrchestratorPhase)
 	}
 }
 
@@ -221,8 +221,8 @@ func TestHandleModelNav_SubAgentRow_AssignsCorrectPhase(t *testing.T) {
 // ─── SDDOrchestratorPhase constant ────────────────────────────────────────
 
 func TestSDDOrchestratorPhaseConstant(t *testing.T) {
-	if SDDOrchestratorPhase != "gentle-orchestrator" {
-		t.Fatalf("SDDOrchestratorPhase = %q, want %q", SDDOrchestratorPhase, "gentle-orchestrator")
+	if SDDOrchestratorPhase != "axiom-orchestrator" {
+		t.Fatalf("SDDOrchestratorPhase = %q, want %q", SDDOrchestratorPhase, "axiom-orchestrator")
 	}
 }
 
