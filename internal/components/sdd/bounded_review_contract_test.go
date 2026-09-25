@@ -87,7 +87,7 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 	}
 	return append(captureTransportClausesFor(agent), []string{
 		"Native Compact Review Orchestration",
-		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
+		"axiom review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
 		"## Entry rule",
 		"before reporting it complete",
 		"Selectorless STATUS only preflights the current worktree candidate",
@@ -201,7 +201,7 @@ func TestBoundedReviewStopInventoryIsCompleteWithoutRepeatingStatus(t *testing.T
 	}
 
 	for _, want := range []string{
-		"`D` means `gentle-ai review mode disable --scope clone --cwd <B>`",
+		"`D` means `axiom review mode disable --scope clone --cwd <B>`",
 		"`S` means re-query the exact captured target-root STATUS command with lineage and target.",
 		"then `S`; do not reuse the pre-correction target",
 		"then `S`.",
@@ -210,10 +210,10 @@ func TestBoundedReviewStopInventoryIsCompleteWithoutRepeatingStatus(t *testing.T
 			t.Errorf("stop inventory missing continuation alias rule %q", want)
 		}
 	}
-	if strings.Contains(inventory, "gentle-ai review status --cwd") {
+	if strings.Contains(inventory, "axiom review status --cwd") {
 		t.Fatal("stop inventory repeats the canonical STATUS command instead of using S")
 	}
-	canonicalStatus := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + runtimeAgentIDPlaceholder + " --next-transition"
+	canonicalStatus := "axiom review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + runtimeAgentIDPlaceholder + " --next-transition"
 	if got := strings.Count(content, canonicalStatus); got != 1 {
 		t.Fatalf("bounded review contract contains %d canonical STATUS commands, want exactly one", got)
 	}
@@ -298,8 +298,8 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 		t.Run(name, func(t *testing.T) {
 			clauses := append([]string{"lineage, revision, and target"}, required...)
 			if name == "orchestrator" {
-				clauses = append(clauses, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition")
-			} else if strings.Contains(content, "gentle-ai review status --cwd <repo>") {
+				clauses = append(clauses, "axiom review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition")
+			} else if strings.Contains(content, "axiom review status --cwd <repo>") {
 				t.Error("generated OpenCode post-apply controller repeats the canonical STATUS command")
 			}
 			for _, clause := range clauses {
@@ -377,7 +377,7 @@ func TestBoundedReviewContractRendersForAdvertisedRuntimes(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClausesFor(agent.ID))
 			if agent.ID == model.AgentPi {
-				if strings.Contains(content, "gentle-ai review status") {
+				if strings.Contains(content, "axiom review status") || strings.Contains(content, "gentle-ai review status") {
 					t.Fatal("Pi lifecycle exposes raw STATUS")
 				}
 			}

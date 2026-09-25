@@ -855,8 +855,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// directly (see RED below) rather than composed by hand, and the
 		// ceilings move by the same net delta to preserve each row's existing
 		// absolute margin on this fork's own lineage.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_095, maxCharacters: 19_114},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_454, maxCharacters: 37_051},
+		// INC-22: axiom review replaces gentle-ai review (-44 characters across 11 occurrences).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_051, maxCharacters: 19_070},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 35_410, maxCharacters: 37_007},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

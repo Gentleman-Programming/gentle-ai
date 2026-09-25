@@ -69,7 +69,7 @@ func TestNativeReviewExecutionContractsRetainTheirCLIStatusRoute(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReviewExecutionContractFor(%s): %v", agent, err)
 			}
-			status := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition"
+			status := "axiom review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition"
 			if count := strings.Count(contract, status); count != 1 {
 				t.Fatalf("native contract contains %d canonical STATUS routes, want 1", count)
 			}
@@ -93,16 +93,16 @@ func TestReviewExecutionContractForPiUsesFacadeLifecycleRoutes(t *testing.T) {
 		"Pi never reconstructs lineage, target, revision, repository context, lens, order, or commands",
 		"`gentle_review` with operation `answer-consent` and the exact `consentBinding`",
 		"resubmit the same exact binding with `reviewerRunAcknowledged: true`",
-		"exact source-scoped `gentle-ai review mode enable` command rendered by bound facade STATUS",
+		"exact source-scoped `axiom review mode enable` command rendered by bound facade STATUS",
 	} {
 		if !strings.Contains(contract, want) {
 			t.Errorf("Pi review contract missing facade route %q", want)
 		}
 	}
-	if strings.Contains(contract, "gentle-ai review status") {
-		t.Fatal("Pi review contract instructs raw gentle-ai review status instead of gentle_review")
+	if strings.Contains(contract, "axiom review status") || strings.Contains(contract, "gentle-ai review status") {
+		t.Fatal("Pi review contract instructs raw review status instead of gentle_review")
 	}
-	if strings.Contains(contract, "gentle-ai review mode enable --scope global") {
+	if strings.Contains(contract, "axiom review mode enable --scope global") || strings.Contains(contract, "gentle-ai review mode enable --scope global") {
 		t.Fatal("Pi review contract hard-codes global RDD enablement")
 	}
 }
