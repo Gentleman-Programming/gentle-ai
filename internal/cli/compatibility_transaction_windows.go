@@ -17,7 +17,6 @@ import (
 	"unsafe"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
@@ -140,15 +139,6 @@ func (t *windowsCompatibilityRefreshTransaction) Run() (runErr error) {
 		}
 	}
 
-	if slicesContainsComponent(t.components, model.ComponentSDD) {
-		result, err := sdd.InjectSkillDirectoryWithCompatibilityWriter(t.writer.root, "", t.writer.Write, t.writer.Remove)
-		if err != nil {
-			return fmt.Errorf("refresh compatibility SDD skills: %w", err)
-		}
-		if result.Changed {
-			t.changed = append(t.changed, result.Files...)
-		}
-	}
 	notifyWindowsCompatibilityTransaction(compatibilityAfterPublish)
 	return nil
 }

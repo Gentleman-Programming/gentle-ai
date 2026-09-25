@@ -15,7 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
@@ -768,6 +768,40 @@ func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 // TestConfigPathsForBackup_HandlesEmptyDirs verifies that configPathsForBackup
 // returns a non-nil slice (possibly empty) when agent config directories don't exist.
 // It must NOT panic or error out — missing dirs simply contribute no paths.
+func TestConfigPathsForBackup_LegacyCommandSnapshot(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"sdd-init", "sdd-new", "sdd-continue", "sdd-status", "sdd-explore", "sdd-research", "sdd-ff", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
+		for _, prefix := range []string{"", "gentle-"} {
+			path := filepath.Join(home, ".claude", "commands", prefix+name+".md")
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("historical user content"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	paths := configPathsForBackup(home)
+	for _, name := range []string{"sdd-init", "sdd-new", "sdd-continue", "sdd-status", "sdd-explore", "sdd-research", "sdd-ff", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
+		for _, prefix := range []string{"", "gentle-"} {
+			path := filepath.Join(home, ".claude", "commands", prefix+name+".md")
+			found := false
+			for _, got := range paths {
+				if got == path {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("historical path absent from snapshot: %s", path)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Errorf("inventory removed user file %s: %v", path, err)
+			}
+		}
+	}
+}
+
 func TestConfigPathsForBackup_HandlesEmptyDirs(t *testing.T) {
 	homeDir := t.TempDir()
 	// No agent config directories exist in this temp dir.
@@ -1199,6 +1233,7 @@ func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
 // TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile verifies that upgrade
 // backups preserve managed Pi config without capturing session data.
 func TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	homeDir := t.TempDir()
 
 	managedPiSettings := filepath.Join(homeDir, ".pi", "agent", "settings.json")
@@ -1211,6 +1246,12 @@ func TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
 			t.Fatalf("WriteFile %s: %v", path, err)
 		}
+	}
+
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{string(model.AgentPi)},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
 	}
 
 	paths := configPathsForBackup(homeDir)
@@ -1643,7 +1684,7 @@ func TestManagedAgentBackupPathsOpenCodePluginsFollowXDGConfigHome(t *testing.T)
 			t.Fatalf("backup path %q ignores XDG_CONFIG_HOME", p)
 		}
 	}
-	for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(model.AgentOpenCode)...) {
+	for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(model.AgentOpenCode)...) {
 		want := filepath.Join(xdg, "opencode", "plugins", name)
 		if _, ok := pathSet[want]; !ok {
 			t.Fatalf("backup paths miss managed plugin %q; got %v", want, paths)

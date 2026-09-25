@@ -15,7 +15,7 @@ This appendix maps main docs and source files to responsibilities. Use it to mak
 | `docs/engram.md` | Engram command and MCP tool reference. |
 | `docs/agents.md` | Supported agents, delegation model, and per-agent notes. |
 | `docs/components.md` | Components, skills, and presets. |
-| `docs/opencode-profiles.md` | OpenCode SDD profile behavior. |
+| `docs/opencode-profiles.md` | Native OpenCode background-subagent preference and limitations. |
 | `docs/rollback.md` | Backup, restore, and managed uninstall recovery behavior. |
 | `docs/platforms.md` | Platform support and path notes. |
 | `docs/skill-registry.md` | Skill registry refresh/list behavior and generated index expectations. |
@@ -28,7 +28,7 @@ This appendix maps main docs and source files to responsibilities. Use it to mak
 | `cmd/gentle-ai/main.go` | Binary entrypoint and version handoff. |
 | `internal/app/` | Command dispatch, help, app-level version/update routing. |
 | `internal/cli/run.go` | Install flow orchestration. |
-| `internal/cli/sync.go` | Managed config sync flow and SDD profile flags. |
+| `internal/cli/sync.go` | Managed config sync flow and agent selection. |
 | `internal/cli/uninstall.go` | Non-interactive uninstall flow. |
 | `internal/tui/model.go` | Interactive state machine and async messages. |
 | `internal/tui/router.go` | TUI route relationships. |
@@ -38,7 +38,8 @@ This appendix maps main docs and source files to responsibilities. Use it to mak
 | `internal/planner/resolver.go` | Dependency expansion and ordering. |
 | `internal/pipeline/` | Staged execution and rollback. |
 | `internal/components/engram/` | Engram install, setup, MCP injection, and verification wiring. |
-| `internal/components/sdd/` | SDD prompt/profile generation and injection. |
+| `internal/components/agentguidance/` | Shared ODD guidance and runtime-specific policy injection. |
+| `internal/components/reviewassets/` | Managed reviewer contracts and native review agents. |
 | `internal/components/communitytool/` | Community tool installation orchestration plus managed guidance/config/MCP reconciliation, including CodeGraph. |
 | `internal/components/opencodeplugin/` | Optional OpenCode TUI plugin registration, including external package names and the managed Gentle Logo local plugin. |
 | `internal/components/uninstall/` | Managed component cleanup services for uninstall flows. |

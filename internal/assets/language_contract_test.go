@@ -9,23 +9,23 @@ import (
 	"testing"
 )
 
-var sddArtifactLanguageContractRequired = []string{
+var oddArtifactLanguageContractRequired = []string{
 	"Generated technical artifacts default to English",
 	"If technical artifacts are explicitly requested in another language, use a neutral/professional register",
 	"Public/contextual comments follow the target context language",
 	"Explicit user language or tone overrides win; otherwise use a neutral/professional register",
 }
 
-var sddOrchestratorLanguageContractRequired = append([]string{
+var oddOrchestratorLanguageContractRequired = append([]string{
 	"The active persona controls direct user/orchestrator conversation only.",
-}, sddArtifactLanguageContractRequired...)
+}, oddArtifactLanguageContractRequired...)
 
-var sddLanguageSpecificFallbacks = []string{
+var oddLanguageSpecificFallbacks = []string{
 	"If Spanish technical artifacts are explicitly requested",
 	"Spanish comments default to neutral/professional Spanish",
 }
 
-var sddKnownLanguageLeaks = []string{
+var oddKnownLanguageLeaks = []string{
 	"elegí",
 	"Respondé",
 	"¿Querés ajustar algo o continuamos?",
@@ -74,28 +74,26 @@ func TestManagedDirectReplyAssetsEnforceEnglishNoCodeSwitching(t *testing.T) {
 	}
 }
 
-func TestSDDOrchestratorAssetsEnforceLanguageContract(t *testing.T) {
+func TestODDOrchestratorAssetsEnforceLanguageContract(t *testing.T) {
 	assetPaths := allSDDOrchestratorAssetPaths(t)
-	if len(assetPaths) < 11 {
-		t.Fatalf("SDD orchestrator asset count = %d, want at least 11", len(assetPaths))
+	if len(assetPaths) != 12 {
+		t.Fatalf("ODD orchestrator asset count = %d, want 12", len(assetPaths))
 	}
 
 	for _, path := range assetPaths {
 		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
-
-			for _, required := range sddOrchestratorLanguageContractRequired {
+			content := oddLanguageContractContent(t, path)
+			for _, required := range oddOrchestratorLanguageContractRequired {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing language contract wording %q", path, required)
 				}
 			}
-			for _, fallback := range sddLanguageSpecificFallbacks {
+			for _, fallback := range oddLanguageSpecificFallbacks {
 				if strings.Contains(content, fallback) {
 					t.Fatalf("%s contains language-specific fallback wording %q", path, fallback)
 				}
 			}
-
-			for _, leak := range sddKnownLanguageLeaks {
+			for _, leak := range oddKnownLanguageLeaks {
 				if strings.Contains(content, leak) {
 					t.Fatalf("%s contains persona-agnostic language leak %q", path, leak)
 				}
@@ -104,51 +102,60 @@ func TestSDDOrchestratorAssetsEnforceLanguageContract(t *testing.T) {
 	}
 }
 
-func TestSDDPhaseSkillsEnforceLanguageContract(t *testing.T) {
-	for _, path := range allSDDPhaseSkillAssetPaths(t) {
-		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
-			for _, required := range sddArtifactLanguageContractRequired {
-				if !strings.Contains(content, required) {
-					t.Fatalf("%s missing language contract wording %q", path, required)
-				}
-			}
-			for _, fallback := range sddLanguageSpecificFallbacks {
-				if strings.Contains(content, fallback) {
-					t.Fatalf("%s contains language-specific fallback wording %q", path, fallback)
-				}
-			}
-		})
+// The templated prompts use the shared ODD language section; Codex carries
+// the contract inline. Verify the binding before examining effective wording.
+func oddLanguageContractContent(t *testing.T, path string) string {
+	t.Helper()
+	content := MustRead(path)
+	if path == "codex/orchestrator.md" {
+		return content
 	}
+	const placeholder = "{{GENTLE_AI_ODD_SECTION:Language Domain Contract}}"
+	if strings.Count(content, placeholder) != 1 {
+		t.Fatalf("%s must reference the shared ODD language contract exactly once", path)
+	}
+	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
+	const start = "<!-- sdd-orchestrator-section:Language Domain Contract:start -->"
+	const end = "<!-- sdd-orchestrator-section:Language Domain Contract:end -->"
+	from := strings.Index(shared, start)
+	to := strings.Index(shared, end)
+	if from < 0 || to <= from {
+		t.Fatal("shared ODD language section is missing")
+	}
+	section := shared[from+len(start) : to]
+	if !strings.Contains(section, "When delegating, forward this contract to the executor") {
+		t.Fatal("shared ODD language section must forward the contract to delegated reviewers and writers")
+	}
+	return strings.Replace(content, placeholder, section, 1)
 }
 
-func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
+func TestSupportedAgentODDLanguageMatrix(t *testing.T) {
 	tests := []struct {
 		agent string
 		path  string
 	}{
-		{agent: "claude-code", path: "claude/sdd-orchestrator.md"},
-		{agent: "opencode", path: "opencode/sdd-orchestrator.md"},
-		{agent: "kilocode", path: "opencode/sdd-orchestrator.md"},
-		{agent: "gemini-cli", path: "gemini/sdd-orchestrator.md"},
-		{agent: "cursor", path: "cursor/sdd-orchestrator.md"},
-		{agent: "vscode-copilot", path: "generic/sdd-orchestrator.md"},
-		{agent: "codex", path: "codex/sdd-orchestrator.md"},
-		{agent: "antigravity", path: "antigravity/sdd-orchestrator.md"},
-		{agent: "windsurf", path: "windsurf/sdd-orchestrator.md"},
-		{agent: "kimi", path: "kimi/sdd-orchestrator.md"},
-		{agent: "qwen-code", path: "qwen/sdd-orchestrator.md"},
-		{agent: "kiro-ide", path: "kiro/sdd-orchestrator.md"},
-		{agent: "openclaw", path: "generic/sdd-orchestrator.md"},
-		{agent: "pi", path: "generic/sdd-orchestrator.md"},
-		{agent: "trae-ide", path: "generic/sdd-orchestrator.md"},
-		{agent: "hermes", path: "hermes/sdd-orchestrator.md"},
+		{agent: "claude-code", path: "claude/orchestrator.md"},
+		{agent: "opencode", path: "opencode/orchestrator.md"},
+		{agent: "kilocode", path: "opencode/orchestrator.md"},
+		{agent: "gemini-cli", path: "gemini/orchestrator.md"},
+		{agent: "cursor", path: "cursor/orchestrator.md"},
+		{agent: "vscode-copilot", path: "generic/orchestrator.md"},
+		{agent: "codex", path: "codex/orchestrator.md"},
+		{agent: "antigravity", path: "antigravity/orchestrator.md"},
+		{agent: "windsurf", path: "windsurf/orchestrator.md"},
+		{agent: "kimi", path: "kimi/orchestrator.md"},
+		{agent: "qwen-code", path: "qwen/orchestrator.md"},
+		{agent: "kiro-ide", path: "kiro/orchestrator.md"},
+		{agent: "openclaw", path: "generic/orchestrator.md"},
+		{agent: "pi", path: "generic/orchestrator.md"},
+		{agent: "trae-ide", path: "generic/orchestrator.md"},
+		{agent: "hermes", path: "hermes/orchestrator.md"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.agent, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(tc.path))
-			for _, required := range sddOrchestratorLanguageContractRequired {
+			content := oddLanguageContractContent(t, tc.path)
+			for _, required := range oddOrchestratorLanguageContractRequired {
 				if !strings.Contains(content, required) {
 					t.Fatalf("agent %s asset %s missing language contract wording %q", tc.agent, tc.path, required)
 				}
@@ -157,79 +164,16 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 	}
 }
 
-func allSDDPhaseSkillAssetPaths(t *testing.T) []string {
-	t.Helper()
-	paths, err := fs.Glob(FS, "skills/sdd-*/SKILL.md")
-	if err != nil {
-		t.Fatalf("Glob embedded SDD phase skills: %v", err)
-	}
-	if len(paths) != 11 {
-		t.Fatalf("SDD phase skill asset count = %d, want 11", len(paths))
-	}
-	sort.Strings(paths)
-	return paths
-}
-
 func TestShippedReviewAssetsDoNotInstructFixTouchedLineDiscovery(t *testing.T) {
+	// Review and Judgment Day are retained delegated roles. Their prompts do
+	// not repeat the language contract: ODD orchestrators forward it to them.
 	for _, path := range allReviewLifecycleAssetPaths(t) {
-		content := MustRead(path)
-		if strings.Contains(content, "MUST review only fix-touched lines") {
-			t.Fatalf("%s retains stale broad post-fix discovery instructions", path)
-		}
-	}
-}
-
-func TestSDDOrchestratorAssetsUseCanonicalResearchGate(t *testing.T) {
-	assetPaths := allSDDOrchestratorAssetPaths(t)
-	if len(assetPaths) != 12 {
-		t.Fatalf("SDD orchestrator family count = %d, want 12", len(assetPaths))
-	}
-
-	for _, path := range assetPaths {
 		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
-			if path == "claude/sdd-orchestrator.md" {
-				content = MustRead("claude/sdd-orchestrator-workflow.md")
-			}
-			if strings.Count(content, "{{GENTLE_AI_RESEARCH_LIFECYCLE}}") != 1 {
-				t.Fatalf("%s must reference the canonical research lifecycle exactly once", path)
-			}
-			if strings.Contains(content, "proposal question round") {
-				t.Fatalf("%s retains proposer-era interview guidance", path)
+			content := MustRead(path)
+			if strings.Contains(content, "MUST review only fix-touched lines") {
+				t.Fatalf("%s retains stale broad post-fix discovery instructions", path)
 			}
 		})
-	}
-}
-
-func TestSDDProposeAssetsKeepProductDecisionsUserOwned(t *testing.T) {
-	paths := allSDDProposeAssetPaths(t)
-	if len(paths) < 4 {
-		t.Fatalf("SDD propose asset count = %d, want at least 4", len(paths))
-	}
-	for _, path := range paths {
-		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
-			for _, required := range []string{"Return unresolved product decisions to the orchestrator", "do not interview the user", "Pause only dependent work"} {
-				if !strings.Contains(content, required) {
-					t.Fatalf("%s missing product-decision boundary %q", path, required)
-				}
-			}
-			if strings.Contains(content, "proposal question round") {
-				t.Fatalf("%s retains proposal interview guidance", path)
-			}
-		})
-	}
-}
-
-func TestSharedSDDProposeSkillKeepsProductDecisionsUserOwned(t *testing.T) {
-	content := MustRead("skills/sdd-propose/SKILL.md")
-	for _, required := range []string{"Return unresolved product decisions to the orchestrator", "do not interview the user", "Pause only dependent work"} {
-		if !strings.Contains(content, required) {
-			t.Fatalf("skills/sdd-propose/SKILL.md missing product-decision boundary %q", required)
-		}
-	}
-	if strings.Contains(content, "proposal question round") {
-		t.Fatal("skills/sdd-propose/SKILL.md retains proposal interview guidance")
 	}
 }
 
@@ -303,7 +247,7 @@ func TestNeutralPersonaAssetsProvideMentorParityWithoutRegionalVoice(t *testing.
 		"hermes/persona-neutral.md",
 	} {
 		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
+			content := MustRead(path)
 			for _, required := range []string{
 				"Response-length contract",
 				"minimum useful response",
@@ -339,7 +283,7 @@ func TestNeutralOutputStyleAssetsProvideMeaningfulContract(t *testing.T) {
 		"kimi/output-style-neutral.md",
 	} {
 		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
+			content := MustRead(path)
 			if strings.TrimSpace(content) == "" {
 				t.Fatalf("%s is empty", path)
 			}
@@ -375,7 +319,7 @@ func allSDDOrchestratorAssetPaths(t *testing.T) []string {
 		if d.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(path, "/sdd-orchestrator.md") {
+		if strings.HasSuffix(path, "/orchestrator.md") {
 			paths = append(paths, path)
 		}
 		return nil
@@ -389,42 +333,16 @@ func allSDDOrchestratorAssetPaths(t *testing.T) []string {
 func allReviewLifecycleAssetPaths(t *testing.T) []string {
 	t.Helper()
 	var paths []string
-	if err := fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, runtime := range []string{"claude", "cursor", "kimi", "kiro"} {
+		for _, role := range []string{"readability", "refuter", "reliability", "resilience", "risk"} {
+			paths = append(paths, runtime+"/agents/review-"+role+".md")
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".md") {
-			return nil
-		}
-		if strings.Contains(MustRead(path), "MUST review only fix-touched lines") {
-			paths = append(paths, path)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("WalkDir embedded review assets: %v", err)
 	}
-	sort.Strings(paths)
-	return paths
-}
-
-func allSDDProposeAssetPaths(t *testing.T) []string {
-	t.Helper()
-	var paths []string
-	if err := fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, runtime := range []string{"claude", "kiro"} {
+		for _, role := range []string{"fix-agent", "judge-a", "judge-b"} {
+			paths = append(paths, runtime+"/agents/jd-"+role+".md")
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, "/agents/sdd-propose.md") {
-			paths = append(paths, path)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("WalkDir embedded assets: %v", err)
 	}
-	sort.Strings(paths)
 	return paths
 }
 
@@ -457,7 +375,7 @@ func TestPersonaChannelsCarryPreWriteArtifactSelfCheck(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
+			content := MustRead(path)
 			if !strings.Contains(content, preWriteArtifactSelfCheckRequired) {
 				t.Fatalf("%s: missing pre-write artifact self-check sentence", path)
 			}
@@ -474,7 +392,7 @@ func TestNeutralChannelsExtendAntiDriftToToneAndDialect(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
-			content := resolveSharedOrchestratorSections(MustRead(path))
+			content := MustRead(path)
 			if !strings.Contains(content, neutralToneDialectAntiDriftRequired) {
 				t.Fatalf("%s: missing tone/dialect anti-drift sentence", path)
 			}

@@ -1,11 +1,13 @@
-# Shared SDD support files
+# Shared ODD references
 
-This directory contains reference documents shared by the SDD skills. It is a support directory, not an invokable skill, so it intentionally has no `SKILL.md` file or skill frontmatter.
+This directory contains ordinary Markdown references for Organic Driven Development (ODD), Engram memory, skill resolution, optional research, and native review. It is not an invokable skill and has no `SKILL.md` or skill frontmatter.
 
 ## Contents
 
-The files in this directory define shared conventions and contracts used by multiple SDD skills, including persistence, artifact storage, phase execution, status, research, review, and skill-resolution guidance.
+- `odd-orchestrator-sections.md`: shared language and delegated verification sections.
+- `engram-convention.md` and `persistence-contract.md`: ODD task recovery and safe memory writes.
+- `skill-resolver.md`: exact skill-path handoff for delegated work.
+- `research-lifecycle.md`: optional, evidence-backed research.
+- `review-ledger-contract.md` and `review-ledger-contract-pi.md`: runtime-specific native RDD review contracts.
 
-## Maintenance
-
-Keep shared references in this directory as ordinary Markdown files. Install and sync flows deploy every embedded file here to each compatibility skill root. They also remove the obsolete `_shared/SKILL.md` marker while leaving this README and every shared reference in place.
+Install and sync deploy every embedded reference to each compatibility skill root. They remove only the obsolete `_shared/SKILL.md` marker; they do not delete user-authored files.

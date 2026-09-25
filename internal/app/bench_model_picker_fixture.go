@@ -95,7 +95,7 @@ func runBenchModelPickerCommand(args []string, stdout io.Writer) (bool, error) {
 		return true, err
 	}
 	if m.Screen != tui.ScreenSync {
-		return true, fmt.Errorf("benchmark picker continue screen = %v, want sync (cursor=%d rows=%d target=%d custom=%v available=%v profile=%t model-config=%t mode=%v)", m.Screen, m.Cursor, len(rows), target, m.ModelPicker.CustomAgents, m.ModelPicker.AvailableIDs, m.ModelPicker.ForProfile, m.ModelConfigMode, m.ModelPicker.Mode)
+		return true, fmt.Errorf("benchmark picker continue screen = %v, want sync (cursor=%d rows=%d target=%d custom=%v available=%v selected-row=%d model-config=%t mode=%v)", m.Screen, m.Cursor, len(rows), target, m.ModelPicker.CustomAgents, m.ModelPicker.AvailableIDs, m.ModelPicker.SelectedPhaseIdx, m.ModelConfigMode, m.ModelPicker.Mode)
 	}
 	// The sync command is returned by Update, so run the public TUI state
 	// transition's command and feed its completion back through Update.

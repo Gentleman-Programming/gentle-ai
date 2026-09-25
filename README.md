@@ -109,21 +109,19 @@ The cost of a fresh session is not the tokens — it is you, re-explaining the s
 
 ### ODD — Keep small work small
 
-<img width="100%" src="docs/assets/diagrams/odd-cycle.svg" alt="ODD authorizes and understands a request. Read-only work ends separately; authorized work stays lightweight when small or keeps a recoverable record when substantial, then is implemented, checked, and closed. SDD remains an explicit choice." />
+<img width="100%" src="docs/assets/diagrams/odd-cycle.svg" alt="ODD authorizes and understands a request. Read-only work ends separately; authorized work stays lightweight when small or keeps a recoverable record when substantial, then is implemented, checked, and closed." />
 
-Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan. Formal SDD phases remain an explicit choice.
+Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan.
 
 **[Docs →](docs/usage.md#organic-driven-development-odd)**
 
 ---
 
-### SDD — Formal phases when you choose them
+### Strict TDD — Prove behavior when enabled
 
-<img width="100%" src="docs/assets/diagrams/sdd-cycle.svg" alt="The SDD cycle is selected only by explicit request or accepted proposal. Explore can use optional Research; Proposal, Spec, Design and Tasks create formal planning artifacts; Apply uses configured TDD. Optional Verify reports practical diagnostics, including for partial work, but does not gate Archive: a separate path leads from Apply straight to Archive when Verify is skipped. Archive records actual state and history, including unfinished work when explicitly archived. It is not shipping, approval, or RDD." />
+ODD uses the configured TDD mode and exact test runner. When Strict TDD is enabled, capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. When disabled, run applicable functional checks anyway. The presence of tests alone does not enable Strict TDD.
 
-When you explicitly choose Spec-Driven Development, proposal, specification, design, and task artifacts make the plan reviewable before implementation. File-backed storage keeps them on disk; Engram-backed storage keeps them in memory. Apply follows the configured TDD mode. Research and Verify are optional: Verify can diagnose partial work and report practical findings, but it is not an archive gate. Archive records the actual state and history, including unfinished work when you explicitly archive it; it does not ship or approve the change, and SDD does not invoke RDD. TDD is also available in ODD; it does not require an SDD phase.
-
-**[Docs →](docs/intended-usage.md)**
+**[Docs →](docs/usage.md#organic-driven-development-odd)**
 
 ---
 
@@ -141,7 +139,7 @@ Receipt-Driven Development (RDD) is on by default and opt-out: run `gentle-ai re
 
 <img width="100%" src="docs/assets/diagrams/deterministic.svg" alt="A different agent, a different model and a brand-new session all converge on the gentle-ai binary. It reads the change state from files on disk and returns the only valid next transition, so no model votes on what comes next. The answer is always one of four public states: Working, Checking, Ready, or Needs your decision." />
 
-A model that guesses the next step guesses differently tomorrow, and differently again for your teammate. That is the gap between a workflow and a suggestion. The **`gentle-ai` binary** owns native SDD status and RDD review transitions, and because it reads state from files rather than from a context window, two people on two machines get the same answer — and so does the same person a month later.
+A model that guesses the next step guesses differently tomorrow, and differently again for your teammate. That is the gap between a workflow and a suggestion. The **`gentle-ai` binary** owns native RDD review transitions; ODD guidance keeps ordinary work proportional to the request. Review evidence is bound to the candidate rather than a model's recollection.
 
 **[Docs →](docs/trigger-rules.md)**
 
@@ -149,9 +147,9 @@ A model that guesses the next step guesses differently tomorrow, and differently
 
 ### Gentle Shell — A complete workspace for Pi
 
-<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle Shell running an SDD sub-agent, with the todo list and live context and spend information" />
+<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle Shell development workspace with the todo list and live context and spend information" />
 
-**The way Gentle-AI was intended.** Gentle-AI brings our native Pi extensions together in one focused development environment: orchestrate specialized agents, monitor usage for supported provider accounts, and review code changes in a built-in diff.
+Gentle Shell is a separate Pi integration package. Gentle AI configures supported agents; Gentle Shell owns its own Pi runtime, agents, and interface. Installing or updating this binary does not itself establish Pi behavior parity.
 
 **[Docs →](docs/pi.md)**
 
@@ -179,7 +177,7 @@ Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and tw
 | **Doctor** | `gentle-ai doctor` — read-only health report |
 | **Personas** | Optional personas; Gentleman is a caring but rigorous mentor who guides you toward your goal |
 | **Themes** | Gentleman and Gentleman-Cute |
-| **Per-phase model assignment** | Assign a model to each phase in Pi and OpenCode |
+| **Model assignment** | Configure supported agent and review-role models where available |
 
 > **Every component, skill and preset: [Full breakdown →](docs/components.md)**
 
@@ -220,7 +218,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 | **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
 | **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
 | **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 16 |
-| **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct/delegated work and explicitly selected SDD |
+| **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct and delegated work |
 | **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
 | **[Engram](docs/engram.md)** · **[Components](docs/components.md)** | Memory commands, skills, presets and personas |
 | **[Contributing](CONTRIBUTING.md)** · **[Codebase Guide](docs/CODEBASE-GUIDE.md)** | Extend or contribute |

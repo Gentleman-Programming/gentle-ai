@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
 )
 
 // gentleAIMarkerToken matches every envelope marker either half of the
@@ -34,7 +34,7 @@ func TestLensContextBlockCarriesEveryMarkerInstalledClaudeLensAgentsRequire(t *t
 	block := lensContextBlock(t, args, lens)
 
 	installHome := t.TempDir()
-	if _, err := sdd.Inject(installHome, claude.NewAdapter(), ""); err != nil {
+	if _, err := reviewassets.InstallNativeAgents(installHome, claude.NewAdapter(), reviewassets.InstallOptions{}); err != nil {
 		t.Fatalf("install Claude agent definitions: %v", err)
 	}
 	definition, err := os.ReadFile(filepath.Join(installHome, ".claude", "agents", lens+".md"))

@@ -265,8 +265,14 @@ func TestAdapter_PostInstallMessage(t *testing.T) {
 			}
 
 			msg := a.PostInstallMessage(homeDir)
-			if !strings.Contains(msg, "/skill:sdd-explore\n  /skill:sdd-research\n  /skill:sdd-propose") {
-				t.Fatalf("PostInstallMessage() missing research phase order:\n%s", msg)
+			if strings.Contains(strings.ToLower(msg), "sdd") || strings.Contains(msg, "/skill:") {
+				t.Fatalf("PostInstallMessage() advertises retired skill commands:\n%s", msg)
+			}
+			if !strings.Contains(msg, "ODD") || !strings.Contains(msg, "kimi --agent-file") {
+				t.Fatalf("PostInstallMessage() missing ODD launch instructions:\n%s", msg)
+			}
+			if !strings.Contains(msg, `"`+filepath.Join(homeDir, ".config", "agents", "skills")+`"`) {
+				t.Fatalf("PostInstallMessage() missing quoted skills root:\n%s", msg)
 			}
 
 			// Construct expected path to verify against quoted output

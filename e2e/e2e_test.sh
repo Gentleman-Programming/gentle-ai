@@ -195,8 +195,7 @@ test_preset_minimal_components() {
 
     # The component list should contain engram
     assert_output_contains "$output" "engram" "Minimal preset includes engram"
-    # Should NOT contain sdd, skills, persona, etc.
-    assert_output_not_contains "$output" "Components order:.*sdd" "Minimal preset excludes sdd"
+    # Persona is excluded when the user selects custom.
     assert_output_not_contains "$output" "Components order:.*persona" "Minimal + persona=custom excludes persona"
 }
 
@@ -215,18 +214,17 @@ test_preset_minimal_with_default_persona_includes_persona() {
 }
 
 test_preset_ecosystem_components() {
-    log_test "Preset ecosystem-only with persona=custom produces 5 components"
+    log_test "Preset ecosystem-only with persona=custom includes ecosystem components"
 
     # Use persona=custom to test the preset alone, since persona is now
     # driven by Selection.Persona (decoupled from preset).
     output=$($BINARY install --preset ecosystem-only --persona custom --agent claude-code --dry-run 2>&1) || true
 
-    # ecosystem-only (without persona) = engram, sdd, skills, context7, gga
+    # ecosystem-only (without persona) includes engram, skills, context7 and gga.
     local components_line
     components_line=$(echo "$output" | grep "Components order:")
 
     assert_output_contains "$components_line" "engram" "Ecosystem includes engram"
-    assert_output_contains "$components_line" "sdd" "Ecosystem includes sdd"
     assert_output_contains "$components_line" "skills" "Ecosystem includes skills"
     assert_output_contains "$components_line" "context7" "Ecosystem includes context7"
     assert_output_contains "$components_line" "gga" "Ecosystem includes gga"
@@ -258,7 +256,6 @@ test_preset_full_components() {
     components_line=$(echo "$output" | grep "Components order:")
 
     assert_output_contains "$components_line" "engram" "Full includes engram"
-    assert_output_contains "$components_line" "sdd" "Full includes sdd"
     assert_output_contains "$components_line" "skills" "Full includes skills"
     assert_output_contains "$components_line" "context7" "Full includes context7"
     assert_output_contains "$components_line" "persona" "Full includes persona"
@@ -268,8 +265,8 @@ test_preset_full_components() {
     assert_output_contains "$components_line" "opencode-gentle-logo" "Full includes OpenCode Gentle logo"
 }
 
-test_dry_run_full_preset_persona_before_sdd() {
-    log_test "Dry-run: persona appears before engram and sdd in component order"
+test_dry_run_full_preset_persona_before_engram() {
+    log_test "Dry-run: persona appears before engram in component order"
 
     output=$($BINARY install --preset full-gentleman --agent opencode --dry-run 2>&1) || true
 
@@ -279,28 +276,20 @@ test_dry_run_full_preset_persona_before_sdd() {
     # Verify all are present
     assert_output_contains "$components_line" "persona" "Full preset has persona"
     assert_output_contains "$components_line" "engram" "Full preset has engram"
-    assert_output_contains "$components_line" "sdd" "Full preset has sdd"
 
-    # Verify ordering: persona before engram, persona before sdd
+    # Verify ordering: persona before engram
     # Extract the order string and check persona comes first
     local order_str
     order_str=$(echo "$components_line" | sed 's/.*Components order: *//')
 
-    local persona_idx engram_idx sdd_idx
+    local persona_idx engram_idx
     persona_idx=$(echo "$order_str" | tr ',' '\n' | grep -n '^persona$' | cut -d: -f1)
     engram_idx=$(echo "$order_str" | tr ',' '\n' | grep -n '^engram$' | cut -d: -f1)
-    sdd_idx=$(echo "$order_str" | tr ',' '\n' | grep -n '^sdd$' | cut -d: -f1)
 
     if [ -n "$persona_idx" ] && [ -n "$engram_idx" ] && [ "$persona_idx" -lt "$engram_idx" ]; then
         log_pass "Persona ($persona_idx) before engram ($engram_idx)"
     else
         log_fail "Persona must appear before engram in component order: $order_str"
-    fi
-
-    if [ -n "$persona_idx" ] && [ -n "$sdd_idx" ] && [ "$persona_idx" -lt "$sdd_idx" ]; then
-        log_pass "Persona ($persona_idx) before sdd ($sdd_idx)"
-    else
-        log_fail "Persona must appear before sdd in component order: $order_str"
     fi
 }
 
@@ -343,19 +332,17 @@ test_preset_custom_no_components() {
     local components_line
     components_line=$(echo "$output" | grep "Components order:")
     assert_output_not_contains "$components_line" "engram" "Custom preset without components excludes engram"
-    assert_output_not_contains "$components_line" "sdd" "Custom preset without components excludes sdd"
     assert_output_not_contains "$components_line" "skills" "Custom preset without components excludes skills"
 }
 
 test_preset_custom_explicit_components() {
     log_test "Preset custom with explicit --component flags"
 
-    output=$($BINARY install --preset custom --agent claude-code --component engram --component sdd --component skills --dry-run 2>&1) || true
+    output=$($BINARY install --preset custom --persona custom --agent claude-code --component engram --component skills --dry-run 2>&1) || true
 
     local components_line
     components_line=$(echo "$output" | grep "Components order:")
     assert_output_contains "$components_line" "engram" "Custom + explicit components includes engram"
-    assert_output_contains "$components_line" "sdd" "Custom + explicit components includes sdd"
     assert_output_contains "$components_line" "skills" "Custom + explicit components includes skills"
     assert_output_not_contains "$components_line" "persona" "Custom + explicit components excludes persona"
     assert_output_not_contains "$components_line" "context7" "Custom + explicit components excludes context7"
@@ -367,12 +354,6 @@ test_dry_run_component_engram() {
     log_test "Dry-run with --component engram"
     output=$($BINARY install --agent claude-code --component engram --dry-run 2>&1) || true
     assert_output_contains "$output" "engram" "Shows engram component"
-}
-
-test_dry_run_component_sdd() {
-    log_test "Dry-run with --component sdd"
-    output=$($BINARY install --agent claude-code --component sdd --dry-run 2>&1) || true
-    assert_output_contains "$output" "sdd" "Shows sdd component"
 }
 
 test_dry_run_component_skills() {
@@ -409,35 +390,6 @@ test_dry_run_component_theme() {
     log_test "Dry-run with --component theme"
     output=$($BINARY install --agent opencode --component theme --dry-run 2>&1) || true
     assert_output_contains "$output" "theme" "Shows theme component"
-}
-
-# --- Category 1f2: SDD mode flag ---
-
-test_dry_run_sdd_mode_multi() {
-    log_test "Dry-run with --sdd-mode multi"
-
-    output=$($BINARY install --agent opencode --sdd-mode multi --dry-run 2>&1) || true
-
-    assert_output_contains "$output" "opencode" "Shows opencode agent"
-    assert_output_contains "$output" "sdd-mode: multi\|SDDMode: multi\|sdd_mode.*multi\|multi" "Shows multi mode"
-}
-
-test_dry_run_sdd_mode_single() {
-    log_test "Dry-run with --sdd-mode single"
-
-    output=$($BINARY install --agent opencode --sdd-mode single --dry-run 2>&1) || true
-
-    assert_output_contains "$output" "opencode" "Shows opencode agent"
-}
-
-test_dry_run_sdd_mode_invalid_rejected() {
-    log_test "Invalid --sdd-mode is rejected"
-
-    if $BINARY install --agent opencode --sdd-mode turbo --dry-run 2>&1; then
-        log_fail "Invalid sdd-mode should have been rejected"
-    else
-        log_pass "Invalid sdd-mode correctly rejected"
-    fi
 }
 
 # --- Category 1g: Invalid input rejection ---
@@ -508,51 +460,6 @@ test_cc_engram_injection() {
         assert_file_size_min "$HOME/.claude/CLAUDE.md" 500 "CLAUDE.md has substantial content"
     else
         log_fail "engram install command failed"
-    fi
-}
-
-test_cc_sdd_injection() {
-    log_test "Claude Code: SDD injection (CLAUDE.md + native sub-agents)"
-    cleanup_test_env
-
-    if $BINARY install --agent claude-code --component sdd --persona neutral 2>&1; then
-        assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "CLAUDE.md has SDD section marker"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "sub-agent\|dependency\|orchestrator" "CLAUDE.md has real SDD content"
-        assert_file_size_min "$HOME/.claude/CLAUDE.md" 500 "CLAUDE.md SDD section is substantial"
-
-        for phase in sdd-init sdd-explore sdd-research sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive sdd-onboard; do
-            assert_file_exists "$HOME/.claude/agents/${phase}.md" "Claude native sub-agent exists: ${phase}"
-            assert_file_size_min "$HOME/.claude/agents/${phase}.md" 200 "Claude native sub-agent is substantial: ${phase}"
-        done
-
-        assert_file_contains "$HOME/.claude/agents/sdd-design.md" "model: opus" "Claude design sub-agent uses balanced Opus assignment"
-        assert_file_contains "$HOME/.claude/agents/sdd-spec.md" "model: sonnet" "Claude spec sub-agent uses balanced Sonnet assignment"
-        assert_file_contains "$HOME/.claude/agents/sdd-archive.md" "model: haiku" "Claude archive sub-agent uses balanced Haiku assignment"
-
-        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "tools:" "Claude explore sub-agent declares tool scope"
-        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "WebFetch" "Claude explore sub-agent includes WebFetch"
-        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "WebSearch" "Claude explore sub-agent includes WebSearch"
-        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "mcp__plugin_engram_engram__mem_save" "Claude explore sub-agent includes Engram save"
-
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "tools:" "Claude apply sub-agent declares tool scope"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Read" "Claude apply sub-agent includes Read"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Edit" "Claude apply sub-agent includes Edit"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Write" "Claude apply sub-agent includes Write"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "Bash" "Claude apply sub-agent includes Bash"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_search" "Claude apply sub-agent includes Engram search"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_get_observation" "Claude apply sub-agent includes Engram read"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_save" "Claude apply sub-agent includes Engram save"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "mcp__plugin_engram_engram__mem_update" "Claude apply sub-agent includes Engram update"
-
-        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "tools:" "Claude verify sub-agent declares tool scope"
-        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "Read" "Claude verify sub-agent includes Read"
-        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "Bash" "Claude verify sub-agent includes Bash"
-        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "mcp__plugin_engram_engram__mem_search" "Claude verify sub-agent includes Engram search"
-        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "mcp__plugin_engram_engram__mem_get_observation" "Claude verify sub-agent includes Engram read"
-        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "mcp__plugin_engram_engram__mem_save" "Claude verify sub-agent includes Engram save"
-    else
-        log_fail "SDD install command failed"
     fi
 }
 
@@ -634,27 +541,17 @@ test_oc_persona_custom_does_nothing() {
 }
 
 test_cc_skills_minimal() {
-    log_test "Claude Code: skills injection (minimal preset = SDD skills only)"
+    log_test "Claude Code: minimal skills component retains only judgment-day"
     cleanup_test_env
 
-    # #3554: skills no longer hard-depends on sdd, so the SDD orchestrator
-    # skills must be requested explicitly via --component skills,sdd. The SDD
-    # component writes all 12 (11 phases + judgment-day) regardless of preset.
-    if $BINARY install --agent claude-code --component skills,sdd --preset minimal --persona custom 2>&1; then
+    if $BINARY install --agent claude-code --component skills --preset minimal --persona custom 2>&1; then
         local skills_dir="$HOME/.claude/skills"
-        assert_dir_exists "$skills_dir" "Claude skills directory"
-
-        # 12 files: 11 SDD phases + judgment-day. _shared is support-only.
-        assert_file_count "$skills_dir" "SKILL.md" 12 "SDD selected: 12 skill files"
-
-        # Verify specific SDD skills exist
-        assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
-        assert_file_exists "$skills_dir/sdd-apply/SKILL.md" "sdd-apply SKILL.md"
-        assert_file_exists "$skills_dir/sdd-verify/SKILL.md" "sdd-verify SKILL.md"
-        assert_file_exists "$skills_dir/sdd-archive/SKILL.md" "sdd-archive SKILL.md"
-
-        # Each skill should have substantial content
-        assert_file_size_min "$skills_dir/sdd-init/SKILL.md" 100 "sdd-init SKILL.md has real content"
+        if [ -d "$skills_dir" ]; then
+            assert_file_count "$skills_dir" "SKILL.md" 1 "Minimal skills component installs only judgment-day"
+            assert_file_exists "$skills_dir/judgment-day/SKILL.md" "Minimal Claude skills include judgment-day"
+        else
+            log_fail "Minimal skills component did not create judgment-day skills directory"
+        fi
 
         # No framework skills in minimal
         if [ -f "$skills_dir/typescript/SKILL.md" ]; then
@@ -675,12 +572,8 @@ test_cc_skills_full() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # #3554: skills alone no longer pulls sdd. Full preset's skill catalog
-        # is 7 foundation + judgment-day = 8 files; the 11 sdd-* phase
-        # skills come only from the SDD component (not selected here).
         # #4669: the six contributor workflow skills are selectable, never default.
         assert_file_count "$skills_dir" "SKILL.md" 8 "Full preset (skills alone): 8 skill files"
-        assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
@@ -708,12 +601,8 @@ test_cc_skills_ecosystem() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # #3554: skills alone no longer pulls sdd. 7 foundation + judgment-day
-        # = 8 files; the 11 sdd-* phase skills need the SDD component too.
         # #4669: contributor workflow skills are not part of this preset.
         assert_file_count "$skills_dir" "SKILL.md" 8 "Ecosystem preset (skills alone): 8 skill files"
-        # SDD skills NOT present (skills has no hard dependency on sdd)
-        assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         # Foundation skills present
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "Foundation skills present"
         assert_file_exists "$skills_dir/skill-creator/SKILL.md" "skill-creator present"
@@ -742,12 +631,7 @@ test_cc_custom_skills_with_flag() {
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
 
-        # #3554: skills has no hard dependency on sdd anymore. Total = just
-        # the 2 explicitly requested skills.
-        assert_file_count "$skills_dir" "SKILL.md" 2 "Custom + explicit skills: 2 files, no sdd"
-
-        # SDD skills are NOT present (no auto-dependency)
-        assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed (skills has no sdd dependency)"
+        assert_file_count "$skills_dir" "SKILL.md" 2 "Custom + explicit skills: 2 files"
     else
         log_fail "custom + skills flag install command failed"
     fi
@@ -759,42 +643,14 @@ test_cc_custom_no_skills_flag_installs_nothing() {
 
     if $BINARY install --agent claude-code --preset custom --component skills --persona neutral 2>&1; then
         local skills_dir="$HOME/.claude/skills"
-        # #3554: skills has no hard dependency on sdd anymore. SkillsForPreset
-        # (custom) returns nil and no --skills flag was given, so the skills
-        # component is a true no-op: no directory, no files at all.
+        # Custom without --skills installs no skill files.
         if [ -d "$skills_dir" ]; then
             log_fail "Skills directory should NOT be created: skills alone has nothing to install"
         else
-            log_pass "No skills directory created (skills alone, no --skills flag, no sdd dependency)"
+            log_pass "No skills directory created without --skills"
         fi
     else
         log_fail "custom + skills component (no flag) install command failed"
-    fi
-}
-
-test_cc_custom_sdd_plus_skills() {
-    log_test "Claude Code: custom preset + SDD + skills with explicit --skills flag"
-    cleanup_test_env
-
-    if $BINARY install --agent claude-code --preset custom --component engram --component sdd --component skills --skills go-testing,branch-pr --persona neutral 2>&1; then
-        local skills_dir="$HOME/.claude/skills"
-        assert_dir_exists "$skills_dir" "Claude skills directory"
-
-        # #3554 regression guard: skills and sdd are independent components
-        # now (no hard dependency either way). When both are explicitly
-        # selected, SDD writes its own 12 skills exactly once (the skills
-        # injector skips sdd-* IDs to avoid a duplicate write) and the skills
-        # component writes only the explicitly requested ones — no clobbering.
-        assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init SKILL.md (from SDD component)"
-
-        # Skills component installs only the explicitly requested ones
-        assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md (from --skills flag)"
-        assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md (from --skills flag)"
-
-        # Total: 12 SDD/orchestration skills + 2 explicit skills = 14, written once each.
-        assert_file_count "$skills_dir" "SKILL.md" 14 "SDD + explicit skills: 14 skill files total, no duplicates"
-    else
-        log_fail "custom + SDD + skills install command failed"
     fi
 }
 
@@ -873,34 +729,6 @@ test_oc_engram_injection() {
     fi
 }
 
-test_oc_sdd_injection() {
-    log_test "OpenCode: SDD injection (commands + skills)"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
-        local commands_dir="$HOME/.config/opencode/commands"
-        local skill_dir="$HOME/.config/opencode/skills"
-
-        # Command files (11 SDD commands from embedded assets)
-        assert_dir_exists "$commands_dir" "OpenCode commands directory"
-        assert_file_count "$commands_dir" "sdd-*.md" 11 "All 11 SDD command files"
-
-        # Validate command file content
-        assert_file_exists "$commands_dir/sdd-init.md" "sdd-init command file"
-        assert_file_contains "$commands_dir/sdd-init.md" "sdd" "sdd-init command has SDD content"
-
-        # SDD phases and judgment-day (12 files). _shared is support-only.
-        assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 12 "All 12 SDD and orchestration skill files"
-
-        # Validate skill file content
-        assert_file_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
-        assert_file_size_min "$skill_dir/sdd-init/SKILL.md" 100 "sdd-init skill has real content"
-    else
-        log_fail "OpenCode SDD install command failed"
-    fi
-}
-
 test_oc_persona_gentleman() {
     log_test "OpenCode: persona injection (gentleman)"
     cleanup_test_env
@@ -933,14 +761,14 @@ test_oc_skills_minimal() {
     log_test "OpenCode: skills injection (minimal)"
     cleanup_test_env
 
-    # #3554: skills no longer hard-depends on sdd; request sdd explicitly
-    # to still exercise the full 12-file SDD orchestrator skill set.
-    if $BINARY install --agent opencode --component skills,sdd --preset minimal --persona custom 2>&1; then
+    if $BINARY install --agent opencode --component skills --preset minimal --persona custom 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
-        assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 12 "SDD selected: 12 skill files"
-        assert_file_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
-        assert_file_size_min "$skill_dir/sdd-init/SKILL.md" 100 "sdd-init skill has real content"
+        if [ -d "$skill_dir" ]; then
+            assert_file_count "$skill_dir" "SKILL.md" 1 "Minimal OpenCode skills component installs only judgment-day"
+            assert_file_exists "$skill_dir/judgment-day/SKILL.md" "Minimal OpenCode skills include judgment-day"
+        else
+            log_fail "Minimal OpenCode skills component did not create judgment-day skills directory"
+        fi
     else
         log_fail "OpenCode skills (minimal) install command failed"
     fi
@@ -950,13 +778,11 @@ test_oc_skills_full() {
     log_test "OpenCode: skills injection (full-gentleman = 7 foundation skills)"
     cleanup_test_env
 
-    # #3554: skills alone no longer pulls sdd. 7 foundation + judgment-day = 8.
     # #4669: the six contributor workflow skills are selectable, never default.
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
         assert_file_count "$skill_dir" "SKILL.md" 8 "Full preset (skills alone): 8 skill files"
-        assert_file_not_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_not_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr NOT installed by default"
@@ -1070,22 +896,17 @@ test_full_preset_claude_code() {
     log_test "Full-gentleman preset: Claude Code (all components coexist)"
     cleanup_test_env
 
-    # full-gentleman has: engram, sdd, skills, context7, persona, permissions, gga
-    # Engram/GGA need binary install (go install) — may fail but injection components
-    # that don't need binary install should be tested.
-    # We test injection-only components first, then try the full preset.
-    # If full preset fails due to binary install, we fall back to individual injection-only test.
-    if $BINARY install --agent claude-code --component sdd --component persona --component skills --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1; then
+    # Exercise independent injection components without invoking package downloads.
+    if $BINARY install --agent claude-code --component engram --component persona --component skills --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1; then
         local claude_md="$HOME/.claude/CLAUDE.md"
         local settings="$HOME/.claude/settings.json"
 
-        # CLAUDE.md should have all 3 sections coexisting
+        # ODD routing, memory and persona coexist without duplicate sections.
         assert_file_exists "$claude_md" "CLAUDE.md exists"
-        assert_file_contains "$claude_md" "gentle-ai:sdd-orchestrator" "Has SDD section"
+        assert_file_contains "$claude_md" "gentle-ai:agent-routing" "Has ODD routing section"
+        assert_file_contains "$claude_md" "gentle-ai:engram-protocol" "Has memory section"
         assert_file_contains "$claude_md" "gentle-ai:persona" "Has persona section"
-
-        # No duplicate sections
-        assert_no_duplicate_section "$claude_md" "sdd-orchestrator" "No duplicate SDD section"
+        assert_no_duplicate_section "$claude_md" "agent-routing" "No duplicate ODD routing section"
         assert_no_duplicate_section "$claude_md" "persona" "No duplicate persona section"
 
         # settings.json should have permissions + theme
@@ -1104,7 +925,7 @@ test_full_preset_claude_code() {
         assert_valid_json "$registry" "user registry is valid JSON"
 
         # Skills
-        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "At least 11 skill files"
+        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 8 "At least 8 foundation skill files"
 
         log_pass "Full preset: all Claude Code injection-only components coexist"
     else
@@ -1116,7 +937,7 @@ test_full_preset_opencode() {
     log_test "Full-gentleman preset: OpenCode (all components coexist)"
     cleanup_test_env
 
-    if $BINARY install --agent opencode --component engram --component sdd --component persona --component skills --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1; then
+    if $BINARY install --agent opencode --component engram --component persona --component skills --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1; then
         local settings="$HOME/.config/opencode/opencode.json"
         local agents_md="$HOME/.config/opencode/AGENTS.md"
 
@@ -1128,22 +949,13 @@ test_full_preset_opencode() {
         assert_file_contains "$settings" '"context7"' "Has context7 MCP"
         assert_valid_json "$settings" "opencode.json is valid JSON"
 
-        # AGENTS.md for persona + engram (SDD orchestrator is in opencode.json for OpenCode, NOT AGENTS.md)
+        # OpenCode owns ODD routing in the managed orchestrator prompt in opencode.json.
         assert_file_exists "$agents_md" "AGENTS.md exists"
         assert_file_contains "$agents_md" "Senior Architect" "Gentleman persona"
+        assert_file_contains "$settings" "gentle-ai:agent-routing" "OpenCode orchestrator has ODD routing"
         assert_file_contains "$agents_md" "gentle-ai:engram-protocol" "AGENTS.md has engram protocol"
         assert_no_duplicate_section "$agents_md" "engram-protocol" "No duplicate engram section in AGENTS.md"
-        # SDD orchestrator for OpenCode lives in opencode.json as an agent definition (not AGENTS.md)
-        assert_file_contains "$settings" '"gentle-orchestrator"' "opencode.json has gentle-orchestrator agent"
-        assert_file_not_contains "$settings" '"sdd-orchestrator"' "opencode.json does not have legacy base sdd-orchestrator agent"
-        # AGENTS.md must NOT have a sdd-orchestrator HTML section (it's handled by opencode.json)
-        assert_file_not_contains "$agents_md" "<!-- gentle-ai:sdd-orchestrator -->" "AGENTS.md has no SDD section marker (opencode uses json agent)"
-
-        # SDD commands
-        assert_file_count_min "$HOME/.config/opencode/commands" "*.md" 7 "SDD command files"
-
-        # Skills
-        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 11 "At least 11 skill files"
+        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 8 "At least 8 foundation skill files"
 
         log_pass "Full preset: all OpenCode injection-only components coexist"
     else
@@ -1183,8 +995,6 @@ test_minimal_preset_claude_only_engram() {
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:engram-protocol" "Engram protocol section"
 
-        # SDD should NOT be in CLAUDE.md
-        assert_file_not_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "No SDD in minimal"
         # Persona should NOT be in CLAUDE.md
         assert_file_not_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:persona" "No persona in minimal"
         # No permissions settings.json
@@ -1208,16 +1018,16 @@ test_ecosystem_both_agents() {
     log_test "Ecosystem preset: both agents"
     cleanup_test_env
 
-    if $BINARY install --agent claude-code --agent opencode --component sdd --component skills --component context7 --preset ecosystem-only --persona neutral 2>&1; then
+    if $BINARY install --agent claude-code --agent opencode --component engram --component skills --component context7 --preset ecosystem-only --persona neutral 2>&1; then
         # Claude Code
         assert_file_exists "$HOME/.claude/CLAUDE.md" "Claude CLAUDE.md"
-        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "Claude has SDD"
+        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:agent-routing" "Claude has ODD routing"
         assert_file_contains "$HOME/.claude.json" '"context7"' "Claude context7 MCP"
-        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "Claude skills"
+        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 8 "Claude foundation skills"
 
         # OpenCode
-        assert_file_count_min "$HOME/.config/opencode/commands" "*.md" 7 "OpenCode SDD commands"
-        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 11 "OpenCode skills"
+        assert_file_contains "$HOME/.config/opencode/opencode.json" "gentle-ai:agent-routing" "OpenCode orchestrator has ODD routing"
+        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 8 "OpenCode foundation skills"
         assert_file_contains "$HOME/.config/opencode/opencode.json" '"context7"' "OpenCode context7"
         assert_valid_json "$HOME/.config/opencode/opencode.json" "OpenCode opencode.json valid JSON"
 
@@ -1252,13 +1062,14 @@ test_content_claude_md_sections_substantial() {
     log_test "Content validation: CLAUDE.md sections are substantial"
     cleanup_test_env
 
-    # Install SDD + persona + engram (all inject into CLAUDE.md)
-    $BINARY install --agent claude-code --component sdd --component persona --persona gentleman 2>&1 || true
+    # Install persona and engram alongside unconditional ODD routing guidance.
+    $BINARY install --agent claude-code --component persona --persona gentleman 2>&1 || true
     $BINARY install --agent claude-code --component engram --persona gentleman 2>&1 || true
 
     local claude_md="$HOME/.claude/CLAUDE.md"
     if [ -f "$claude_md" ]; then
-        assert_file_size_min "$claude_md" 1000 "CLAUDE.md with 3 sections >= 1000 bytes"
+        assert_file_contains "$claude_md" "gentle-ai:agent-routing" "CLAUDE.md has ODD routing"
+        assert_file_size_min "$claude_md" 1000 "CLAUDE.md with routing, memory and persona >= 1000 bytes"
     else
         log_fail "CLAUDE.md not created"
     fi
@@ -1309,32 +1120,6 @@ test_content_mcp_json_valid() {
     assert_file_not_exists "$HOME/.claude/mcp/engram.json" "legacy Engram MCP file is not written"
 }
 
-test_content_opencode_commands_valid_markdown() {
-    log_test "Content validation: OpenCode commands are valid markdown with frontmatter"
-    cleanup_test_env
-
-    $BINARY install --agent opencode --component sdd --persona neutral 2>&1 || true
-
-    local commands_dir="$HOME/.config/opencode/commands"
-    if [ -d "$commands_dir" ]; then
-        local all_ok=true
-        while IFS= read -r cmd_file; do
-            local size
-            size=$(wc -c < "$cmd_file" | tr -d ' ')
-            if [ "$size" -lt 10 ]; then
-                log_fail "Command file too small ($size bytes): $cmd_file"
-                all_ok=false
-            fi
-        done < <(find "$commands_dir" -name "*.md" -type f)
-
-        if $all_ok; then
-            log_pass "All OpenCode command files have content"
-        fi
-    else
-        log_fail "OpenCode commands directory not created"
-    fi
-}
-
 # --- Category 6: Idempotency ---
 
 test_idempotent_permissions_opencode() {
@@ -1353,21 +1138,6 @@ test_idempotent_permissions_opencode() {
         log_pass "Idempotent: same permissions config after two runs"
     else
         log_fail "Permissions config changed between runs ($first_hash vs $second_hash)"
-    fi
-}
-
-test_idempotent_sdd_claude() {
-    log_test "Idempotency: SDD on Claude Code (no duplicate sections)"
-    cleanup_test_env
-
-    $BINARY install --agent claude-code --component sdd --persona neutral 2>&1 || true
-    $BINARY install --agent claude-code --component sdd --persona neutral 2>&1 || true
-
-    local claude_md="$HOME/.claude/CLAUDE.md"
-    if [ -f "$claude_md" ]; then
-        assert_no_duplicate_section "$claude_md" "sdd-orchestrator" "No duplicate SDD section after 2 runs"
-    else
-        log_fail "CLAUDE.md not found"
     fi
 }
 
@@ -1475,15 +1245,17 @@ test_codex_engram_idempotent() {
 }
 
 test_idempotent_skills_claude() {
-    log_test "Idempotency: skills injection produces same files"
+    log_test "Idempotency: ecosystem skills injection produces same files"
     cleanup_test_env
 
-    $BINARY install --agent claude-code --component skills --preset minimal --persona custom 2>&1 || true
+    # Minimal intentionally selects no default skills; ecosystem installs the
+    # foundation catalog so byte-idempotency checks nonempty SKILL.md files.
+    $BINARY install --agent claude-code --component skills --preset ecosystem-only --persona custom 2>&1 || true
     # Capture file hashes
     local first_hashes
     first_hashes=$(find "$HOME/.claude/skills" -name "SKILL.md" -exec md5sum {} \; 2>/dev/null | sort)
 
-    $BINARY install --agent claude-code --component skills --preset minimal --persona custom 2>&1 || true
+    $BINARY install --agent claude-code --component skills --preset ecosystem-only --persona custom 2>&1 || true
     local second_hashes
     second_hashes=$(find "$HOME/.claude/skills" -name "SKILL.md" -exec md5sum {} \; 2>/dev/null | sort)
 
@@ -1517,7 +1289,7 @@ test_idempotent_full_claude() {
     log_test "Idempotency: full injection-only on Claude Code"
     cleanup_test_env
 
-    $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
+    $BINARY install --agent claude-code --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local first_md_hash
     first_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
     # Snapshot settings.json for semantic comparison (engram setup may reorder
@@ -1525,7 +1297,7 @@ test_idempotent_full_claude() {
     # serialization). Byte-exact hashing would false-fail on harmless reorder.
     cp "$HOME/.claude/settings.json" /tmp/gai_settings_run1.json 2>/dev/null || true
 
-    $BINARY install --agent claude-code --component sdd --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
+    $BINARY install --agent claude-code --component persona --component context7 --component permissions --component theme --preset full-gentleman --persona gentleman 2>&1 || true
     local second_md_hash
     second_md_hash=$(md5sum "$HOME/.claude/CLAUDE.md" 2>/dev/null | cut -d' ' -f1)
 
@@ -1557,7 +1329,7 @@ test_edge_theme_not_in_presets() {
         assert_file_contains "$HOME/.claude/settings.json" '"theme"' "Theme key present"
         # Routing and remote authorization are unconditional agent guidance,
         # not optional components. Require exactly those managed sections;
-        # theme-only must not inject SDD, persona, or other components.
+        # theme-only must not inject persona or other optional components.
         if [ -f "$HOME/.claude/CLAUDE.md" ]; then
             local sections
             sections=$(grep -o '<!-- gentle-ai:[a-z0-9-]* -->' "$HOME/.claude/CLAUDE.md" | sort -u | tr '\n' ' ')
@@ -1615,8 +1387,8 @@ test_edge_persona_switch_preserves_sections_opencode() {
     log_test "Edge case: persona switch preserves managed sections (OpenCode)"
     cleanup_test_env
 
-    # Step 1: Install full stack with gentleman
-    $BINARY install --agent opencode --component persona --component engram --component sdd --persona gentleman 2>&1 || true
+    # Step 1: Install persona and memory with gentleman.
+    $BINARY install --agent opencode --component persona --component engram --persona gentleman 2>&1 || true
 
     local agents_md="$HOME/.config/opencode/AGENTS.md"
     assert_file_exists "$agents_md" "AGENTS.md after full install"
@@ -1716,127 +1488,24 @@ test_gga_reinstall_is_idempotent() {
     fi
 }
 
-# --- Category 10: Cursor agent files ---
+# --- Category 11: Windsurf persona and memory coexistence ---
 
-test_cursor_sdd_subagents() {
-    log_test "Cursor: SDD install writes 11 agent files to ~/.cursor/agents/"
+test_windsurf_persona_and_engram_content() {
+    log_test "Windsurf: persona and Engram coexist in global_rules.md"
     cleanup_test_env
 
-    # Cursor is a desktop app — create the config dir to signal it's "installed"
-    mkdir -p "$HOME/.cursor"
-
-    if $BINARY install --agent cursor --component sdd --persona neutral 2>&1; then
-        local agents_dir="$HOME/.cursor/agents"
-
-        # Directory must exist
-        assert_dir_exists "$agents_dir" "~/.cursor/agents/ directory"
-
-        # All 11 SDD agent files must exist
-        assert_file_exists "$agents_dir/sdd-init.md" "sdd-init.md agent file"
-        assert_file_exists "$agents_dir/sdd-explore.md" "sdd-explore.md agent file"
-        assert_file_exists "$agents_dir/sdd-research.md" "sdd-research.md agent file"
-        assert_file_exists "$agents_dir/sdd-propose.md" "sdd-propose.md agent file"
-        assert_file_exists "$agents_dir/sdd-spec.md" "sdd-spec.md agent file"
-        assert_file_exists "$agents_dir/sdd-design.md" "sdd-design.md agent file"
-        assert_file_exists "$agents_dir/sdd-tasks.md" "sdd-tasks.md agent file"
-        assert_file_exists "$agents_dir/sdd-apply.md" "sdd-apply.md agent file"
-        assert_file_exists "$agents_dir/sdd-verify.md" "sdd-verify.md agent file"
-        assert_file_exists "$agents_dir/sdd-archive.md" "sdd-archive.md agent file"
-        assert_file_exists "$agents_dir/sdd-onboard.md" "sdd-onboard.md agent file"
-
-        # readonly flags: explore and verify are readonly: false (issue #156 — readonly: true
-        # blocks MCP tools and terminal in Cursor, not just file writes)
-        assert_file_contains "$agents_dir/sdd-explore.md" "readonly: false" "sdd-explore is not readonly"
-        assert_file_contains "$agents_dir/sdd-verify.md" "readonly: false" "sdd-verify is not readonly"
-
-        # apply must NOT be readonly (it writes code)
-        assert_file_not_contains "$agents_dir/sdd-apply.md" "readonly: true" "sdd-apply is NOT readonly"
-
-        # All agent files must have substantial content
-        for phase in sdd-init sdd-explore sdd-research sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive sdd-onboard; do
-            assert_file_size_min "$agents_dir/$phase.md" 200 "$phase agent has real content"
-        done
-    else
-        log_fail "Cursor SDD install command failed"
-    fi
-}
-
-# --- Category 11: Windsurf native skills ---
-
-test_windsurf_sdd_skills() {
-    log_test "Windsurf: SDD install writes skill files to ~/.codeium/windsurf/skills/"
-    cleanup_test_env
-
-    # Windsurf is a desktop app — create the config dir to signal it's "installed"
+    # Windsurf is a desktop app — signal its presence without a live agent.
     mkdir -p "$HOME/.codeium/windsurf"
 
-    if $BINARY install --agent windsurf --component sdd --persona neutral 2>&1; then
-        local skill_dir="$HOME/.codeium/windsurf/skills"
-
-        # Skills directory must exist
-        assert_dir_exists "$skill_dir" "~/.codeium/windsurf/skills/ directory"
-
-        # Core SDD skill files must exist
-        assert_file_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init SKILL.md"
-        assert_file_exists "$skill_dir/sdd-explore/SKILL.md" "sdd-explore SKILL.md"
-        assert_file_exists "$skill_dir/sdd-apply/SKILL.md" "sdd-apply SKILL.md"
-        assert_file_exists "$skill_dir/sdd-verify/SKILL.md" "sdd-verify SKILL.md"
-        assert_file_exists "$skill_dir/sdd-archive/SKILL.md" "sdd-archive SKILL.md"
-
-        # Each skill must have substantial content
-        assert_file_size_min "$skill_dir/sdd-init/SKILL.md" 100 "sdd-init skill has real content"
-        assert_file_size_min "$skill_dir/sdd-apply/SKILL.md" 100 "sdd-apply skill has real content"
-    else
-        log_fail "Windsurf SDD install command failed"
-    fi
-}
-
-test_antigravity_sdd_skills_path() {
-    log_test "Antigravity: SDD skills install to ~/.gemini/antigravity-cli/skills/"
-    cleanup_test_env
-
-    # Antigravity is a desktop app — create the config dir to signal it's "installed"
-    mkdir -p "$HOME/.gemini/antigravity"
-
-    if $BINARY install --agent antigravity --component sdd --persona neutral 2>&1; then
-        local skills_dir="$HOME/.gemini/antigravity-cli/skills"
-        assert_dir_exists "$skills_dir" "Antigravity skills directory"
-        assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init skill"
-        assert_file_exists "$skills_dir/sdd-apply/SKILL.md" "sdd-apply skill"
-        assert_file_exists "$skills_dir/_shared/sdd-phase-common.md" "shared convention"
-        assert_file_size_min "$skills_dir/sdd-init/SKILL.md" 100 "skill has real content"
-
-        # Path regression guard: skills must NOT go to legacy Gemini paths.
-        if [ -d "$HOME/.gemini/skills/sdd-init" ]; then
-            log_fail "Skills went to ~/.gemini/skills/ instead of ~/.gemini/antigravity-cli/skills/"
-        elif [ -d "$HOME/.gemini/antigravity/skills/sdd-init" ]; then
-            log_fail "Skills went to legacy ~/.gemini/antigravity/skills/ instead of ~/.gemini/antigravity-cli/skills/"
-        else
-            log_pass "Skills correctly in ~/.gemini/antigravity-cli/skills/"
-        fi
-    else
-        log_fail "Antigravity SDD install command failed"
-    fi
-}
-
-test_windsurf_persona_and_sdd_content() {
-    log_test "Windsurf: persona + SDD inject into global_rules.md"
-    cleanup_test_env
-
-    # Windsurf is a desktop app — create the config dir to signal it's "installed"
-    mkdir -p "$HOME/.codeium/windsurf"
-
-    if $BINARY install --agent windsurf --component persona --component sdd --persona gentleman 2>&1; then
+    if $BINARY install --agent windsurf --component persona --component engram --persona gentleman 2>&1; then
         local rules="$HOME/.codeium/windsurf/memories/global_rules.md"
         assert_file_exists "$rules" "global_rules.md exists"
         assert_file_contains "$rules" "Senior Architect" "Persona injected"
-        assert_file_contains "$rules" "gentle-ai:sdd-orchestrator" "SDD orchestrator marker present"
-        assert_file_contains "$rules" "skill_resolution" "SDD has skill_resolution field"
-        assert_file_contains "$rules" "Engram Topic Key" "SDD has Engram Topic Key section"
         assert_file_contains "$rules" "gentle-ai:engram-protocol" "Engram protocol marker present"
+        assert_file_contains "$rules" "gentle-ai:agent-routing" "ODD routing marker present"
         assert_file_size_min "$rules" 2000 "global_rules.md has substantial content"
     else
-        log_fail "Windsurf persona+SDD install command failed"
+        log_fail "Windsurf persona+Engram install command failed"
     fi
 }
 
@@ -1870,98 +1539,13 @@ test_codex_context7_in_toml() {
 
 # --- Category 7: Injection integrity (guards against issue #4 regression) ---
 
-test_integrity_sdd_skills_nonempty() {
-    log_test "Integrity: every SDD SKILL.md has real content (>100 bytes)"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
-        local skill_dir="$HOME/.config/opencode/skills"
-        local all_ok=true
-        local sdd_skills=(sdd-init sdd-explore sdd-research sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive sdd-onboard)
-
-        for skill in "${sdd_skills[@]}"; do
-            local path="$skill_dir/$skill/SKILL.md"
-            if [ ! -f "$path" ]; then
-                log_fail "SDD skill missing: $path"
-                all_ok=false
-                continue
-            fi
-            local size
-            size=$(wc -c < "$path" | tr -d ' ')
-            if [ "$size" -lt 100 ]; then
-                log_fail "SDD skill empty or too small ($size bytes): $skill"
-                all_ok=false
-            fi
-        done
-
-        if $all_ok; then
-            log_pass "All 11 SDD skills have >= 100 bytes of real content"
-        fi
-    else
-        log_fail "SDD install command failed"
-    fi
-}
-
-test_integrity_sdd_orchestrator_in_opencode_json() {
-    log_test "Integrity: opencode.json contains gentle-orchestrator agent after SDD install"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
-        local settings="$HOME/.config/opencode/opencode.json"
-        assert_file_exists "$settings" "opencode.json exists"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator agent"
-        assert_file_not_contains "$settings" '"sdd-orchestrator"' "Does not have legacy base sdd-orchestrator agent"
-        assert_file_contains "$settings" '"agent"' "Has agent key"
-        assert_valid_json "$settings" "opencode.json is valid JSON"
-    else
-        log_fail "SDD install for orchestrator check failed"
-    fi
-}
-
-test_integrity_all_sdd_commands_have_frontmatter() {
-    log_test "Integrity: all 11 SDD command files have YAML frontmatter"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
-        local commands_dir="$HOME/.config/opencode/commands"
-        local all_ok=true
-        local expected_commands=(sdd-init sdd-apply sdd-archive sdd-continue sdd-explore sdd-ff sdd-new sdd-onboard sdd-research sdd-status sdd-verify)
-
-        for cmd in "${expected_commands[@]}"; do
-            local path="$commands_dir/$cmd.md"
-            if [ ! -f "$path" ]; then
-                log_fail "SDD command missing: $cmd.md"
-                all_ok=false
-                continue
-            fi
-            # Must start with --- (YAML frontmatter)
-            if ! head -1 "$path" | grep -q '^---'; then
-                log_fail "SDD command $cmd.md missing YAML frontmatter"
-                all_ok=false
-            fi
-            # Must contain agent: sdd-orchestrator (except sdd-continue, sdd-ff, sdd-new which use different agent)
-            local size
-            size=$(wc -c < "$path" | tr -d ' ')
-            if [ "$size" -lt 50 ]; then
-                log_fail "SDD command $cmd.md too small ($size bytes)"
-                all_ok=false
-            fi
-        done
-
-        if $all_ok; then
-            log_pass "All 11 SDD commands present with frontmatter and content"
-        fi
-    else
-        log_fail "SDD install for command check failed"
-    fi
-}
-
 test_integrity_full_preset_all_skills_nonempty() {
     log_test "Integrity: full preset — every SKILL.md is non-empty"
     cleanup_test_env
 
-    if $BINARY install --agent opencode --component sdd --component skills --preset full-gentleman --persona gentleman 2>&1; then
+    if $BINARY install --agent opencode --component skills --preset full-gentleman --persona gentleman 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
+        assert_file_count "$skill_dir" "SKILL.md" 8 "Full preset installs 8 foundation skills"
         local all_ok=true
         local empty_count=0
 
@@ -1975,128 +1559,15 @@ test_integrity_full_preset_all_skills_nonempty() {
             fi
         done < <(find "$skill_dir" -name "SKILL.md" -type f)
 
-        if $all_ok; then
-            local total
-            total=$(find "$skill_dir" -name "SKILL.md" -type f | wc -l | tr -d ' ')
-            log_pass "All $total skill files have >= 100 bytes of real content"
+        local total
+        total=$(find "$skill_dir" -name "SKILL.md" -type f | wc -l | tr -d ' ')
+        if $all_ok && [ "$total" -eq 8 ]; then
+            log_pass "All 8 foundation skill files have >= 100 bytes of real content"
         else
-            log_fail "$empty_count skill file(s) are empty or corrupt"
+            log_fail "Expected 8 non-empty foundation skills (found $total; $empty_count empty or corrupt)"
         fi
     else
         log_fail "Full preset install for integrity check failed"
-    fi
-}
-
-test_integrity_sdd_orchestrator_agent_structure() {
-    log_test "Integrity: gentle-orchestrator agent has required fields in opencode.json"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona gentleman 2>&1; then
-        local settings="$HOME/.config/opencode/opencode.json"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator"
-        assert_file_not_contains "$settings" '"sdd-orchestrator"' "Does not have legacy base sdd-orchestrator"
-        assert_file_contains "$settings" '"mode"' "Agent has mode field"
-        assert_file_contains "$settings" '"prompt"' "Agent has prompt field"
-        assert_file_contains "$settings" 'COORDINATOR' "Agent prompt contains orchestrator instructions"
-    else
-        log_fail "SDD + persona install for agent structure check failed"
-    fi
-}
-
-test_integrity_skills_plus_sdd_coexist() {
-    log_test "Integrity: SDD + skills components write non-empty files that coexist"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --component skills --preset full-gentleman --persona neutral 2>&1; then
-        local skill_dir="$HOME/.config/opencode/skills"
-
-        # SDD skills should exist
-        assert_file_size_min "$skill_dir/sdd-init/SKILL.md" 100 "sdd-init skill has content"
-        assert_file_size_min "$skill_dir/sdd-apply/SKILL.md" 100 "sdd-apply skill has content"
-
-        # Foundation skills should also exist
-        assert_file_size_min "$skill_dir/go-testing/SKILL.md" 100 "go-testing skill has content"
-        assert_file_size_min "$skill_dir/skill-creator/SKILL.md" 100 "skill-creator skill has content"
-
-        # Shared SDD conventions should exist
-        assert_file_exists "$skill_dir/_shared/persistence-contract.md" "Shared persistence contract"
-        assert_file_size_min "$skill_dir/_shared/persistence-contract.md" 50 "Persistence contract has content"
-
-        # opencode.json should have gentle-orchestrator as the base coordinator
-        assert_file_contains "$HOME/.config/opencode/opencode.json" '"gentle-orchestrator"' "gentle-orchestrator present"
-        assert_file_not_contains "$HOME/.config/opencode/opencode.json" '"sdd-orchestrator"' "legacy base sdd-orchestrator absent"
-    else
-        log_fail "SDD + skills coexistence install failed"
-    fi
-}
-
-# --- Category 9: SDD multi-mode tests ---
-
-test_oc_sdd_multi_mode_injection() {
-    log_test "OpenCode: SDD multi-mode injection (10 agents in opencode.json)"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona neutral --sdd-mode multi 2>&1; then
-        local settings="$HOME/.config/opencode/opencode.json"
-        local legacy_plugin="$HOME/.config/opencode/plugins/background-agents.ts"
-        local model_variants_plugin="$HOME/.config/opencode/plugins/model-variants.ts"
-        assert_file_exists "$settings" "opencode.json exists"
-        assert_valid_json "$settings" "opencode.json is valid JSON"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator agent"
-        assert_file_not_contains "$settings" '"sdd-orchestrator"' "Does not have legacy base sdd-orchestrator agent"
-        assert_file_contains "$settings" '"sdd-apply"' "Has sdd-apply sub-agent"
-        assert_file_contains "$settings" '"sdd-init"' "Has sdd-init sub-agent"
-        assert_file_contains "$settings" '"sdd-verify"' "Has sdd-verify sub-agent"
-        assert_file_contains "$settings" '"sdd-explore"' "Has sdd-explore sub-agent"
-        assert_file_contains "$settings" '"sdd-propose"' "Has sdd-propose sub-agent"
-        assert_file_contains "$settings" '"sdd-spec"' "Has sdd-spec sub-agent"
-        assert_file_contains "$settings" '"sdd-design"' "Has sdd-design sub-agent"
-        assert_file_contains "$settings" '"sdd-tasks"' "Has sdd-tasks sub-agent"
-        assert_file_contains "$settings" '"sdd-archive"' "Has sdd-archive sub-agent"
-        assert_file_contains "$settings" '"subagent"' "Sub-agents have mode subagent"
-        assert_file_contains "$settings" '"task"' "Has native task tool"
-        assert_file_not_exists "$legacy_plugin" "legacy background-agents plugin not installed by default"
-        assert_file_exists "$model_variants_plugin" "model-variants plugin exists"
-        assert_file_contains "$model_variants_plugin" 'model-variants' "Model variants plugin has expected content marker"
-    else
-        log_fail "OpenCode SDD multi-mode install command failed"
-    fi
-}
-
-test_oc_sdd_single_mode_no_models() {
-    log_test "OpenCode: SDD single mode has all agents but no model overrides"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona neutral --sdd-mode single 2>&1; then
-        local settings="$HOME/.config/opencode/opencode.json"
-        assert_file_exists "$settings" "opencode.json exists"
-        assert_valid_json "$settings" "opencode.json is valid JSON"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator agent"
-        assert_file_not_contains "$settings" '"sdd-orchestrator"' "Single mode: does not have legacy base sdd-orchestrator agent"
-        assert_file_contains "$settings" '"sdd-apply"' "Single mode: has sdd-apply sub-agent"
-        assert_file_not_contains "$settings" '"model"' "Single mode: no model overrides"
-        assert_file_not_exists "$HOME/.config/opencode/plugins/background-agents.ts" "Single mode: legacy background-agents plugin not installed"
-        assert_file_exists "$HOME/.config/opencode/plugins/model-variants.ts" "Single mode: model-variants plugin present"
-    else
-        log_fail "OpenCode SDD single-mode install command failed"
-    fi
-}
-
-test_oc_sdd_default_mode_same_as_single() {
-    log_test "OpenCode: SDD default (no --sdd-mode flag) matches single mode"
-    cleanup_test_env
-
-    if $BINARY install --agent opencode --component sdd --persona neutral 2>&1; then
-        local settings="$HOME/.config/opencode/opencode.json"
-        assert_file_exists "$settings" "opencode.json exists"
-        assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator"
-        assert_file_not_contains "$settings" '"sdd-orchestrator"' "Default mode: does not have legacy base sdd-orchestrator"
-        assert_file_contains "$settings" '"sdd-apply"' "Default mode: has sdd-apply sub-agent"
-        assert_file_not_contains "$settings" '"model"' "Default mode: no model overrides"
-        assert_file_not_exists "$HOME/.config/opencode/plugins/background-agents.ts" "Default mode: legacy background-agents plugin not installed"
-        assert_file_exists "$HOME/.config/opencode/plugins/model-variants.ts" "Default mode: model-variants plugin present"
-    else
-        log_fail "OpenCode SDD default mode install command failed"
     fi
 }
 
@@ -2257,25 +1728,19 @@ test_preset_minimal_with_default_persona_includes_persona
 test_preset_ecosystem_components
 test_preset_full_components
 test_preset_full_with_custom_persona_excludes_persona
-test_dry_run_full_preset_persona_before_sdd
+test_dry_run_full_preset_persona_before_engram
 test_preset_no_legacy_theme_in_any_preset
 test_preset_custom_no_components
 test_preset_custom_explicit_components
 
 # Category 1f: Individual component flags (all 8)
 test_dry_run_component_engram
-test_dry_run_component_sdd
 test_dry_run_component_skills
 test_dry_run_component_context7
 test_dry_run_component_persona
 test_dry_run_component_permissions
 test_dry_run_component_gga
 test_dry_run_component_theme
-
-# Category 1f2: SDD mode flag
-test_dry_run_sdd_mode_multi
-test_dry_run_sdd_mode_single
-test_dry_run_sdd_mode_invalid_rejected
 
 # Category 1g: Invalid inputs
 test_invalid_persona_rejected
@@ -2289,7 +1754,6 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
 
     # Category 2: Claude Code injection
     test_cc_engram_injection
-    test_cc_sdd_injection
     test_cc_persona_gentleman
     test_cc_persona_neutral
     test_cc_persona_custom_does_nothing
@@ -2298,14 +1762,12 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
     test_cc_skills_ecosystem
     test_cc_custom_skills_with_flag
     test_cc_custom_no_skills_flag_installs_nothing
-    test_cc_custom_sdd_plus_skills
     test_cc_context7_injection
     test_cc_permissions_injection
     test_cc_theme_injection
 
     # Category 3: OpenCode injection
     test_oc_engram_injection
-    test_oc_sdd_injection
     test_oc_persona_gentleman
     test_oc_persona_neutral
     test_oc_persona_custom_does_nothing
@@ -2327,11 +1789,9 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
     test_content_claude_md_sections_substantial
     test_content_skills_are_real
     test_content_mcp_json_valid
-    test_content_opencode_commands_valid_markdown
 
     # Category 6: Idempotency
     test_idempotent_permissions_opencode
-    test_idempotent_sdd_claude
     test_idempotent_persona_claude
     test_idempotent_engram_claude
     test_idempotent_skills_claude
@@ -2357,27 +1817,10 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
     test_gga_reinstall_is_idempotent
 
     # Category 7: Injection integrity (issue #4 regression guard)
-    test_integrity_sdd_skills_nonempty
-    test_integrity_sdd_orchestrator_in_opencode_json
-    test_integrity_all_sdd_commands_have_frontmatter
     test_integrity_full_preset_all_skills_nonempty
-    test_integrity_sdd_orchestrator_agent_structure
-    test_integrity_skills_plus_sdd_coexist
 
-    # Category 9: SDD multi-mode
-    test_oc_sdd_multi_mode_injection
-    test_oc_sdd_single_mode_no_models
-    test_oc_sdd_default_mode_same_as_single
-
-    # Category 10: Cursor native agent files
-    test_cursor_sdd_subagents
-
-    # Category 11: Windsurf native skills
-    test_windsurf_sdd_skills
-    test_windsurf_persona_and_sdd_content
-
-    # Antigravity skills path
-    test_antigravity_sdd_skills_path
+    # Category 11: Windsurf persona + memory remain independent of SDD
+    test_windsurf_persona_and_engram_content
 
     # Category 12: Codex context7 by-design skip
     test_codex_context7_in_toml

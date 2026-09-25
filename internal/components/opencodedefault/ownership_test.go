@@ -2,107 +2,97 @@ package opencodedefault
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func check(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-func read(t *testing.T, path string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	check(t, err)
-	return data
-}
-func TestOwnershipLifecycle(t *testing.T) {
-	settings := filepath.Join(t.TempDir(), "opencode.json")
-	write := func(body string) { check(t, os.WriteFile(settings, []byte(body), 0o644)) }
-	install := func() {
-		plan, err := PrepareInstall(settings)
-		check(t, err)
-		_, err = plan.Apply()
-		check(t, err)
-	}
-	uninstall := func() {
-		plan, err := PrepareUninstall(settings)
-		check(t, err)
-		raw, err := os.ReadFile(settings)
-		_, _, applyErr := plan.Apply(raw, err == nil)
-		check(t, applyErr)
-	}
-	wantDefault := func(want string) {
-		got := read(t, settings)
-		if !bytes.Contains(got, []byte(`"default_agent": "`+want+`"`)) {
-			t.Fatalf("default %q not restored: %s", want, got)
-		}
-	}
-	write(`{"default_agent":"build","agent":{"gentle-orchestrator":{}},"profile":true}`)
-	install()
-	install()
-	uninstall()
-	wantDefault("build")
-	write(`{"default_agent":"plan","profile":true}`)
-	install()
-	uninstall()
-	wantDefault("plan")
-	install()
-	check(t, os.Remove(settings))
-	write(`{"default_agent":"gentle-orchestrator","profile":true}`)
-	install()
-	uninstall()
-	wantDefault("gentle-orchestrator")
-	install()
-	check(t, os.Remove(settings))
-	uninstall()
-	if _, err := os.Stat(OwnershipPath(settings)); !os.IsNotExist(err) {
-		t.Fatalf("stale ownership remains: %v", err)
-	}
-	install()
-	uninstall()
-	if _, err := os.Stat(settings); !os.IsNotExist(err) {
-		t.Fatalf("fresh absence was not restored: %v", err)
-	}
-	write(`{"default_agent":"build"}`)
-	before := read(t, settings)
-	check(t, os.WriteFile(OwnershipPath(settings), []byte(`{"schema":"wrong"}`), 0o644))
-	if _, err := PrepareUninstall(settings); err == nil {
-		t.Fatal("malformed ownership was accepted")
-	}
-	if after := read(t, settings); !bytes.Equal(before, after) {
-		t.Fatalf("settings changed: %q", after)
-	}
-}
-
-func TestUninstallWithoutOwnershipHandlesDefaultAgent(t *testing.T) {
+func TestLegacyUninstallOwnership(t *testing.T) {
 	for _, tt := range []struct {
-		name         string
-		defaultAgent string
-		wantPresent  bool
+		name, current, previousState, previousDefault, want string
+		wantDefault, removeRecord                           bool
 	}{
-		{name: "managed default is removed", defaultAgent: ManagedAgent},
-		{name: "user default is preserved", defaultAgent: "build", wantPresent: true},
+		{name: "owned previous default restored", current: ManagedAgent, previousState: "value", previousDefault: "build", want: "build", wantDefault: true, removeRecord: true},
+		{name: "owned absent default removed", current: ManagedAgent, previousState: "absent", removeRecord: true},
+		{name: "user modified default and metadata preserved", current: "user-agent", previousState: "value", previousDefault: "build", want: "user-agent", wantDefault: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			settings := filepath.Join(t.TempDir(), "opencode.json")
-			original := `{"default_agent":"` + tt.defaultAgent + `","agent":{"gentle-orchestrator":{}},"profile":true}`
-			check(t, os.WriteFile(settings, []byte(original), 0o644))
+			original := []byte(`{"default_agent":"` + tt.current + `","unrelated":true}`)
+			if err := os.WriteFile(settings, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			ownerPath := OwnershipPath(settings)
+			metadata := []byte(`{"schema":"gentle-ai.opencode-default-agent","version":1,"state":"managed","previous_state":"` + tt.previousState + `","previous_default":"` + tt.previousDefault + `"}`)
+			if err := os.WriteFile(ownerPath, metadata, 0600); err != nil {
+				t.Fatal(err)
+			}
 			plan, err := PrepareUninstall(settings)
-			check(t, err)
-
-			cleaned := []byte(`{"default_agent":"` + tt.defaultAgent + `","profile":true}`)
-			_, _, err = plan.Apply(cleaned, true)
-			check(t, err)
-
-			got := read(t, settings)
-			present := bytes.Contains(got, []byte(`"default_agent"`))
-			if present != tt.wantPresent || present && !bytes.Contains(got, []byte(`"default_agent": "`+tt.defaultAgent+`"`)) {
-				t.Fatalf("settings = %s", got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := plan.Apply(original, true); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(body, &root); err != nil {
+				t.Fatal(err)
+			}
+			value, present := root["default_agent"]
+			if present != tt.wantDefault || present && value != tt.want || root["unrelated"] != true {
+				t.Fatalf("unexpected settings: %s", body)
+			}
+			info, err := os.Stat(settings)
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatalf("settings permissions changed: %v, %v", info, err)
+			}
+			_, err = os.Stat(ownerPath)
+			if tt.removeRecord && !os.IsNotExist(err) || !tt.removeRecord && err != nil {
+				t.Fatalf("ownership record existence mismatch: %v", err)
 			}
 		})
+	}
+}
+
+func TestUninstallWithoutOwnershipPreservesDefault(t *testing.T) {
+	settings := filepath.Join(t.TempDir(), "opencode.json")
+	original := []byte(`{"default_agent":"gentle-orchestrator","unrelated":true}`)
+	if err := os.WriteFile(settings, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareUninstall(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, removed, err := plan.Apply(original, true)
+	if err != nil || changed || removed {
+		t.Fatalf("unowned default changed: changed=%v removed=%v err=%v", changed, removed, err)
+	}
+	body, err := os.ReadFile(settings)
+	if err != nil || !bytes.Equal(body, original) {
+		t.Fatalf("unowned settings changed: %q, %v", body, err)
+	}
+}
+
+func TestMalformedLegacyOwnershipRefusesUninstall(t *testing.T) {
+	settings := filepath.Join(t.TempDir(), "opencode.json")
+	original := []byte(`{"default_agent":"gentle-orchestrator"}`)
+	if err := os.WriteFile(settings, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(OwnershipPath(settings), []byte(`{"schema":"wrong"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareUninstall(settings); err == nil {
+		t.Fatal("malformed ownership accepted")
+	}
+	body, err := os.ReadFile(settings)
+	if err != nil || !bytes.Equal(body, original) {
+		t.Fatalf("settings changed: %q, %v", body, err)
 	}
 }

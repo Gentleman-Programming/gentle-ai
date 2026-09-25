@@ -53,15 +53,6 @@ func RenderReview(payload planner.ReviewPayload, cursor int, reviewMode string) 
 			}
 		}
 
-		// Issue #149: show Strict TDD status when SDD is in the plan.
-		if payload.HasSDD {
-			strictLabel := "Disabled"
-			if payload.StrictTDD {
-				strictLabel = "Enabled"
-			}
-			b.WriteString("  " + styles.HeadingStyle.Render("Strict TDD") + "  " + styles.UnselectedStyle.Render(strictLabel) + "\n")
-		}
-
 		b.WriteString("\n")
 	}
 

@@ -15,6 +15,44 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
+func TestActiveDefinitionsExcludeRetiredSDDPluginButPreserveLegacyLookup(t *testing.T) {
+	for _, def := range Definitions() {
+		if def.ID == model.OpenCodePluginSDDEngramManage {
+			t.Fatal("retired SDD plugin is still offered for installation")
+		}
+	}
+	legacy, ok := DefinitionFor(model.OpenCodePluginSDDEngramManage)
+	if !ok || legacy.PackageName != "opencode-sdd-engram-manage" {
+		t.Fatalf("legacy uninstall lookup = (%+v, %v), want owned package", legacy, ok)
+	}
+}
+
+func TestRetiredSDDPluginCanStillBeUninstalledWithoutRemovingOtherRegistrations(t *testing.T) {
+	home := t.TempDir()
+	writeTUIConfig(t, home, []string{"opencode-sdd-engram-manage", "user-plugin"})
+
+	result, err := Uninstall(home, model.OpenCodePluginSDDEngramManage)
+	if err != nil {
+		t.Fatalf("Uninstall() error = %v", err)
+	}
+	if !result.ChangedTUI {
+		t.Fatal("legacy registration was not removed")
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Plugin) != 1 || config.Plugin[0] != "user-plugin" {
+		t.Fatalf("remaining registrations = %v, want only user-plugin", config.Plugin)
+	}
+}
+
 func TestInstallAddsCommunityPluginToTUIConfig(t *testing.T) {
 	home := t.TempDir()
 

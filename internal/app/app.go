@@ -119,18 +119,6 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return runUninstall(args[1:], stdout)
 		case "skill-registry":
 			return runSkillRegistry(args[1:], stdout)
-		case "sdd-status":
-			return cli.RunSDDStatus(args[1:], stdout)
-		case "sdd-continue":
-			return cli.RunSDDContinue(args[1:], stdout)
-		case "sdd-attempt":
-			return cli.RunSDDAttempt(args[1:], stdout)
-		case "sdd-archive-compose":
-			return cli.RunSDDArchiveCompose(args[1:], stdout)
-		case "sdd-task-result":
-			return cli.RunSDDTaskResult(args[1:], stdout)
-		case "sdd-preflight-hook":
-			return cli.RunSDDPreflightHook(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "telemetry":
@@ -283,6 +271,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.Backups = ListBackups()
 		m.UpgradeFn = tuiUpgrade(resolveProfile(), homeDir)
 		m.SyncFn = tuiSync(homeDir)
+		m.SyncDetailedFn = tuiSyncDetailed(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
 		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
 		// Slice 3b — wire the 4-layer managed-uninstall runner used by the
@@ -641,6 +630,9 @@ func tuiExecuteWithBackground(
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
 	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
+	// The TUI settles asynchronously: keep its deduplicated rollback snapshot
+	// until state persistence succeeds or the failure has been compensated.
+	defer orchestrator.Finish()
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -728,6 +720,13 @@ func tuiUpgrade(profile system.PlatformProfile, homeDir string) tui.UpgradeFunc 
 // so that the "Configure Models" TUI flow persists its choices to disk.
 func tuiSync(homeDir string) tui.SyncFunc {
 	return func(overrides *model.SyncOverrides) ([]string, error) {
+		files, _, err := tuiSyncDetailed(homeDir)(overrides)
+		return files, err
+	}
+}
+
+func tuiSyncDetailed(homeDir string) tui.SyncDetailedFunc {
+	return func(overrides *model.SyncOverrides) ([]string, []string, error) {
 		agentIDs := syncAgentIDs(homeDir, overrides)
 		syncFlags := cli.SyncFlags{IncludePermissions: syncShouldIncludePermissions(agentIDs)}
 		selection := cli.BuildSyncSelection(syncFlags, agentIDs)
@@ -741,16 +740,16 @@ func tuiSync(homeDir string) tui.SyncFunc {
 
 		result, err := cli.RunSyncWithSelection(homeDir, selection)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Persist model assignments that were actually used (from overrides
 		// or loaded from state) so the next sync preserves them too.
 		if err := persistAssignments(homeDir, selection); err != nil {
-			return nil, fmt.Errorf("persist model assignments: %w", err)
+			return nil, nil, fmt.Errorf("persist model assignments: %w", err)
 		}
 
-		return result.ChangedFiles, nil
+		return result.ChangedFiles, result.ManualActions, nil
 	}
 }
 

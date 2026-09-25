@@ -1,6 +1,8 @@
 package state
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -117,6 +119,7 @@ func TestInstallStatePreservesEveryField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			want := fullyPopulatedInstallState()
 			wantAfter := want
+			wantAfter.StrictTDD = false // retired selection is never persisted or propagated
 			if tt.name == "MergeAgents" {
 				wantAfter.InstalledAgents = []string{"claude-code", "opencode", "codex"}
 			}
@@ -231,6 +234,26 @@ func TestCommunityToolsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLegacySDDDecodesButNeverRestoresActiveSelection(t *testing.T) {
+	var legacy InstallState
+	if err := json.Unmarshal([]byte(`{"selection_configured":true,"components":["sdd","engram"],"sdd_mode":"multi","strict_tdd":true}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(legacy.Components, model.ComponentSDD) || legacy.SDDMode != model.SDDModeMulti {
+		t.Fatalf("legacy state decode lost: %+v", legacy)
+	}
+	selection := model.Selection{}
+	legacy.RestoreSelection(&selection)
+	if selection.HasComponent(model.ComponentSDD) || selection.SDDMode != "" || !selection.HasComponent(model.ComponentEngram) || selection.StrictTDD {
+		t.Fatalf("active selection restored retired mode: %+v", selection)
+	}
+	var next InstallState
+	next.SetSelection(model.Selection{Components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD}, SDDMode: model.SDDModeMulti, StrictTDD: true})
+	if slices.Contains(next.Components, model.ComponentSDD) || next.SDDMode != "" || next.StrictTDD {
+		t.Fatalf("new state persisted retired mode: %+v", next)
+	}
+}
+
 func TestSelectionRoundTripPreservesPresenceAndExplicitEmpty(t *testing.T) {
 	tests := []InstallState{
 		{SelectionConfigured: true, Components: []model.ComponentID{model.ComponentSDD}, Skills: []model.SkillID{model.SkillSDDInit}, Preset: model.PresetCustom, SDDMode: model.SDDModeMulti, StrictTDD: true},
@@ -243,9 +266,33 @@ func TestSelectionRoundTripPreservesPresenceAndExplicitEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := Read(home)
-		if err != nil || got.SelectionConfigured != want.SelectionConfigured || !slices.Equal(got.Components, want.Components) || !slices.Equal(got.Skills, want.Skills) || got.Preset != want.Preset || got.SDDMode != want.SDDMode || got.StrictTDD != want.StrictTDD {
+		if err != nil || got.SelectionConfigured != want.SelectionConfigured || !slices.Equal(got.Components, want.Components) || !slices.Equal(got.Skills, want.Skills) || got.Preset != want.Preset || got.SDDMode != want.SDDMode || got.StrictTDD {
 			t.Errorf("case %d selection = %#v, want %#v", i, got, want)
 		}
+	}
+}
+
+func TestLegacyStrictTDDValuesDecodeButNeverWriteOrRestore(t *testing.T) {
+	for _, value := range []string{"true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			var legacy InstallState
+			if err := json.Unmarshal([]byte(`{"selection_configured":true,"strict_tdd":`+value+`,"persona":"neutral"}`), &legacy); err != nil {
+				t.Fatal(err)
+			}
+			selection := model.Selection{StrictTDD: true}
+			legacy.RestoreSelection(&selection)
+			if selection.StrictTDD || selection.Persona != "" {
+				t.Fatalf("legacy toggle leaked into selection: %+v", selection)
+			}
+			home := t.TempDir()
+			if err := Write(home, legacy); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(Path(home))
+			if err != nil || bytes.Contains(raw, []byte(`"strict_tdd"`)) || !bytes.Contains(raw, []byte(`"persona": "neutral"`)) {
+				t.Fatalf("migration lost unrelated state or wrote retired toggle: %s, %v", raw, err)
+			}
+		})
 	}
 }
 

@@ -35,8 +35,8 @@ Output ONLY the raw SKILL.md content, starting with "# {Title}".
 Do NOT wrap the output in code fences or add any preamble.`
 
 // ComposePrompt builds the full prompt sent to the generation engine.
-// It combines the system instructions with the user's intent and optional SDD context.
-func ComposePrompt(userInput string, sddConfig *SDDIntegration, installedAgents []model.AgentID) string {
+// It combines the system instructions with the user's intent and installed-agent context.
+func ComposePrompt(userInput string, installedAgents []model.AgentID) string {
 	var sb strings.Builder
 
 	sb.WriteString(systemPromptBase)
@@ -50,31 +50,6 @@ func ComposePrompt(userInput string, sddConfig *SDDIntegration, installedAgents 
 			sb.WriteString(fmt.Sprintf("- %s\n", promptEscape(string(a))))
 		}
 		sb.WriteString("</installed_agents>\n\n")
-	}
-
-	// SDD integration context (conditional).
-	if sddConfig != nil && sddConfig.Mode != SDDStandalone {
-		sb.WriteString("<sdd_context>\n")
-		switch sddConfig.Mode {
-		case SDDPhaseSupport:
-			targetPhase := promptEscape(sddConfig.TargetPhase)
-			sb.WriteString(fmt.Sprintf(
-				"This skill provides support for the existing SDD phase: %s\n"+
-					"It must reference and complement the existing phase without replacing it.\n"+
-					"Include a section explaining how it interacts with `sdd-%s` triggers.\n",
-				targetPhase, targetPhase,
-			))
-		case SDDNewPhase:
-			phaseName := promptEscape(sddConfig.PhaseName)
-			sb.WriteString(fmt.Sprintf(
-				"This skill introduces a NEW SDD phase named: %s\n"+
-					"It must integrate with the SDD dependency graph as a first-class phase.\n"+
-					"Include a Trigger that follows the pattern: When the orchestrator launches you for the %s phase.\n"+
-					"The phase name to use in triggers: %s\n",
-				phaseName, phaseName, phaseName,
-			))
-		}
-		sb.WriteString("</sdd_context>\n\n")
 	}
 
 	// User's intent. Keep volatile user-provided data inside an explicit

@@ -11,17 +11,6 @@ import (
 
 // skillLabels maps each SkillID to a human-readable display label.
 var skillLabels = map[model.SkillID]string{
-	model.SkillSDDInit:       "SDD Init",
-	model.SkillSDDExplore:    "SDD Explore",
-	model.SkillSDDResearch:   "SDD Research",
-	model.SkillSDDPropose:    "SDD Propose",
-	model.SkillSDDSpec:       "SDD Spec",
-	model.SkillSDDDesign:     "SDD Design",
-	model.SkillSDDTasks:      "SDD Tasks",
-	model.SkillSDDApply:      "SDD Apply",
-	model.SkillSDDVerify:     "SDD Verify",
-	model.SkillSDDArchive:    "SDD Archive",
-	model.SkillSDDOnboard:    "SDD Onboard",
 	model.SkillJudgmentDay:   "Judgment Day",
 	model.SkillGoTesting:     "Go Testing",
 	model.SkillCreator:       "Skill Creator",
@@ -46,7 +35,7 @@ func SkillPickerOptions() []string {
 	return []string{"Continue", "Back"}
 }
 
-// AllSkillsOrdered returns all skills in display order: SDD group first, then Foundation.
+// AllSkillsOrdered returns all skills in display order: Review group first, then Foundation.
 func AllSkillsOrdered() []model.SkillID {
 	return skills.AllSkillIDs()
 }
@@ -71,13 +60,13 @@ func RenderSkillPicker(selectedSkills []model.SkillID, cursor, height int) strin
 	}
 
 	allSkills, actions := AllSkillsOrdered(), SkillPickerOptions()
-	total, sddCount := len(allSkills)+len(actions), len(skills.SkillsForPreset(model.PresetMinimal))
+	total, reviewCount := len(allSkills)+len(actions), len(skills.SkillsForPreset(model.PresetMinimal))
 	start, end := skillPickerWindow(cursor, height, total)
 	for idx := start; idx < end; idx++ {
 		if idx < len(allSkills) {
-			if idx == start || idx == sddCount {
-				heading := "SDD Skills"
-				if idx >= sddCount {
+			if idx == start || idx == reviewCount {
+				heading := "Review Skills"
+				if idx >= reviewCount {
 					b.WriteString("\n")
 					heading = "Foundation Skills"
 				}

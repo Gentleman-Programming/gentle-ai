@@ -12,7 +12,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
@@ -273,12 +273,20 @@ func TestInstallActivationCapabilityControlsPolicyAndReport(t *testing.T) {
 			addUserPath = func(string) error { return nil }
 			t.Cleanup(func() { runOpenCodeVersion, resolveOpenCodeTarget, addUserPath = oldVersion, oldTarget, oldPath })
 
-			result, err := RunInstall([]string{"--agent", "opencode", "--component", "sdd", "--opencode-background-subagents=on"}, system.DetectionResult{})
+			result, err := RunInstall([]string{"--agent", "opencode", "--component", "persona", "--opencode-background-subagents=on"}, system.DetectionResult{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if string(result.Background.Activation.Capability.Status) != tt.wantStatus || result.BackgroundPolicyEnabled != tt.wantPolicy {
 				t.Fatalf("activation = %#v policy=%t, want status=%q policy=%t", result.Background.Activation, result.BackgroundPolicyEnabled, tt.wantStatus, tt.wantPolicy)
+			}
+			settingsPath := opencodeactivation.EffectiveSettingsPath(home, "")
+			settings, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(settings), "gentle-ai:opencode-background-subagents"); got != tt.wantPolicy {
+				t.Fatalf("managed background policy present = %t, want %t", got, tt.wantPolicy)
 			}
 			if result.Background.Activation.Capability.Ready() != tt.wantReady {
 				t.Fatalf("capability ready = %t, want %t", result.Background.Activation.Capability.Ready(), tt.wantReady)
@@ -290,29 +298,13 @@ func TestInstallActivationCapabilityControlsPolicyAndReport(t *testing.T) {
 	}
 }
 
-func TestBackgroundPolicyForwardingIsOpenCodeOnly(t *testing.T) {
-	original := injectSDD
-	t.Cleanup(func() { injectSDD = original })
-	for _, tt := range []struct {
-		agent model.AgentID
-		want  bool
-	}{{model.AgentOpenCode, true}, {model.AgentKilocode, false}} {
-		var got bool
-		injectSDD = func(_ string, adapter agents.Adapter, _ model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
-			if adapter.Agent() != tt.agent {
-				t.Fatalf("adapter = %q, want %q", adapter.Agent(), tt.agent)
-			}
-			if len(options) > 0 {
-				got = options[0].IncludeOpenCodeBackgroundPolicy
-			}
-			return sdd.InjectionResult{}, nil
-		}
-		if err := (componentApplyStep{component: model.ComponentSDD, homeDir: t.TempDir(), workspaceDir: t.TempDir(), scope: ScopeGlobal, agents: []model.AgentID{tt.agent}, selection: model.Selection{SDDMode: model.SDDModeSingle}, backgroundPolicy: true}).Run(); err != nil {
-			t.Fatal(err)
-		}
-		if got != tt.want {
-			t.Fatalf("policy = %t, want %t", got, tt.want)
-		}
+func TestLegacySDDInstallDoesNotWriteBackgroundPolicy(t *testing.T) {
+	home := t.TempDir()
+	if err := (componentApplyStep{component: model.ComponentSDD, homeDir: home, workspaceDir: home, scope: ScopeGlobal, agents: []model.AgentID{model.AgentOpenCode}, selection: model.Selection{SDDMode: model.SDDModeSingle}, backgroundPolicy: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode")); !os.IsNotExist(err) {
+		t.Fatalf("legacy SDD wrote background assets: %v", err)
 	}
 }
 
@@ -349,24 +341,31 @@ func TestInstallPublishesIntentTransactionally(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := installTestHome(t)
-			oldInject := injectSDD
-			injectSDD = func(path string, adapter agents.Adapter, mode model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
+			oldInject := injectInstallPersona
+			injectInstallPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID) (persona.InjectionResult, error) {
 				if tt.injectErr != nil {
-					return sdd.InjectionResult{}, tt.injectErr
+					return persona.InjectionResult{}, tt.injectErr
 				}
-				if tt.dropAssets {
-					return sdd.InjectionResult{}, nil
+				result, err := oldInject(path, adapter, personaID)
+				if err == nil && tt.dropAssets {
+					err = os.Remove(adapter.SystemPromptFile(path))
 				}
-				return sdd.Inject(path, adapter, mode, options...)
+				return result, err
 			}
-			t.Cleanup(func() { injectSDD = oldInject })
+			t.Cleanup(func() { injectInstallPersona = oldInject })
 
-			result, err := RunInstall([]string{"--agent", "opencode", "--component", "sdd", "--opencode-background-subagents=" + tt.intent}, system.DetectionResult{})
+			result, err := RunInstall([]string{"--agent", "opencode", "--component", "persona", "--opencode-background-subagents=" + tt.intent}, system.DetectionResult{})
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("RunInstall() error = %v, want %q", err, tt.wantErr)
 			}
 			if tt.wantErr == "" && (!result.Verify.Ready || result.BackgroundPolicyEnabled || (tt.intent == "on" && !strings.Contains(result.Verify.FinalNote, "execution stays foreground"))) {
 				t.Fatalf("success report = %#v, want foreground fallback when capability is unknown", result)
+			}
+			if tt.wantErr == "" {
+				settings, readErr := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+				if readErr != nil || !strings.Contains(string(settings), "review-refuter") || !strings.Contains(string(settings), "review-validator") {
+					t.Fatalf("retained review roles missing from OpenCode settings: %s, error = %v", settings, readErr)
+				}
 			}
 			got, readErr := state.Read(home)
 			if tt.wantErr == "" {
@@ -422,14 +421,14 @@ func TestInstallBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			oldHome, oldInject := osUserHomeDir, injectSDD
+			oldHome, oldInject := osUserHomeDir, injectInstallPersona
 			osUserHomeDir = func() (string, error) { return home, nil }
 			injectCalls := 0
-			injectSDD = func(string, agents.Adapter, model.SDDModeID, ...sdd.InjectOptions) (sdd.InjectionResult, error) {
+			injectInstallPersona = func(path string, adapter agents.Adapter, id model.PersonaID) (persona.InjectionResult, error) {
 				injectCalls++
-				return sdd.InjectionResult{}, nil
+				return oldInject(path, adapter, id)
 			}
-			t.Cleanup(func() { osUserHomeDir, injectSDD = oldHome, oldInject })
+			t.Cleanup(func() { osUserHomeDir, injectInstallPersona = oldHome, oldInject })
 			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
 			var before []byte
 			if tt.prior {
@@ -438,7 +437,7 @@ func TestInstallBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 				}
 				before, _ = os.ReadFile(state.Path(home))
 			}
-			args := append([]string{"--agent", "opencode", "--component", "sdd"}, tt.args...)
+			args := append([]string{"--agent", "opencode", "--component", "persona"}, tt.args...)
 			if _, err := RunInstall(args, system.DetectionResult{}); err == nil {
 				t.Fatal("RunInstall() error = nil, want preflight rejection")
 			}
@@ -560,13 +559,13 @@ func TestSyncBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := syncBackgroundTestHome(t)
-			oldInject := injectSDD
+			oldInject := injectSyncPersona
 			injectCalls := 0
-			injectSDD = func(string, agents.Adapter, model.SDDModeID, ...sdd.InjectOptions) (sdd.InjectionResult, error) {
+			injectSyncPersona = func(path string, adapter agents.Adapter, id model.PersonaID) (persona.InjectionResult, error) {
 				injectCalls++
-				return sdd.InjectionResult{}, nil
+				return oldInject(path, adapter, id)
 			}
-			t.Cleanup(func() { injectSDD = oldInject })
+			t.Cleanup(func() { injectSyncPersona = oldInject })
 			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
 			var before []byte
 			if tt.prior != "" {
@@ -575,7 +574,7 @@ func TestSyncBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 				}
 				before, _ = os.ReadFile(state.Path(home))
 			}
-			args := append([]string{"--agents", "opencode", "--sdd-mode", "single"}, tt.args...)
+			args := append([]string{"--agents", "opencode", "--include-persona"}, tt.args...)
 			if _, err := RunSync(args); err == nil {
 				t.Fatal("RunSync() error = nil, want preflight rejection")
 			}
@@ -595,37 +594,13 @@ func TestSyncBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestSyncBackgroundPolicyForwardingIsOpenCodeOnly(t *testing.T) {
-	oldInject := injectSDD
-	t.Cleanup(func() { injectSDD = oldInject })
-	for _, tt := range []struct {
-		agent model.AgentID
-		want  bool
-	}{{model.AgentOpenCode, true}, {model.AgentKilocode, false}} {
-		t.Run(string(tt.agent), func(t *testing.T) {
-			var got bool
-			injectSDD = func(_ string, adapter agents.Adapter, _ model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
-				if adapter.Agent() != tt.agent {
-					t.Fatalf("adapter = %q, want %q", adapter.Agent(), tt.agent)
-				}
-				if len(options) > 0 {
-					got = options[0].IncludeOpenCodeBackgroundPolicy
-				}
-				return sdd.InjectionResult{}, nil
-			}
-			if err := (componentSyncStep{
-				component: model.ComponentSDD,
-				homeDir:   t.TempDir(), workspaceDir: t.TempDir(),
-				agents:           []model.AgentID{tt.agent},
-				selection:        model.Selection{SDDMode: model.SDDModeSingle},
-				backgroundPolicy: true,
-			}).Run(); err != nil {
-				t.Fatal(err)
-			}
-			if got != tt.want {
-				t.Fatalf("policy = %t, want %t", got, tt.want)
-			}
-		})
+func TestLegacySDDSyncDoesNotWriteBackgroundPolicy(t *testing.T) {
+	home := t.TempDir()
+	if err := (componentSyncStep{component: model.ComponentSDD, homeDir: home, workspaceDir: home, agents: []model.AgentID{model.AgentOpenCode}, selection: model.Selection{SDDMode: model.SDDModeSingle}, backgroundPolicy: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode")); !os.IsNotExist(err) {
+		t.Fatalf("legacy SDD wrote background assets: %v", err)
 	}
 }
 
@@ -654,22 +629,22 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			oldInject := injectSDD
-			injectSDD = func(path string, adapter agents.Adapter, mode model.SDDModeID, options ...sdd.InjectOptions) (sdd.InjectionResult, error) {
+			oldInject := injectSyncPersona
+			injectSyncPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID) (persona.InjectionResult, error) {
 				if tt.injectErr != nil {
-					return sdd.InjectionResult{}, tt.injectErr
+					return persona.InjectionResult{}, tt.injectErr
 				}
-				if tt.dropAsset {
-					return sdd.InjectionResult{}, nil
+				result, err := oldInject(path, adapter, personaID)
+				if err == nil && tt.dropAsset {
+					err = os.Remove(adapter.SystemPromptFile(path))
 				}
-				return sdd.Inject(path, adapter, mode, options...)
+				return result, err
 			}
-			t.Cleanup(func() { injectSDD = oldInject })
+			t.Cleanup(func() { injectSyncPersona = oldInject })
 
 			selection := model.Selection{
 				Agents:     []model.AgentID{model.AgentOpenCode},
-				Components: []model.ComponentID{model.ComponentSDD, model.ComponentPersona},
-				SDDMode:    model.SDDModeSingle,
+				Components: []model.ComponentID{model.ComponentPersona},
 				Persona:    model.PersonaNeutral,
 			}
 			background := OpenCodeBackgroundResolution{Intent: tt.intent, Effective: tt.intent, Persist: tt.intent}
@@ -678,6 +653,10 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
 			}
 			if tt.wantErr == "" {
+				settings, readErr := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+				if readErr != nil || !strings.Contains(string(settings), "review-refuter") || !strings.Contains(string(settings), "review-validator") {
+					t.Fatalf("retained review roles missing from sync settings: %s, error = %v", settings, readErr)
+				}
 				if !result.Verify.Ready || result.BackgroundPolicyEnabled || (tt.intent == model.OpenCodeBackgroundOn && !strings.Contains(result.Verify.FinalNote, "execution stays foreground")) {
 					t.Fatalf("success result = %#v, want verified foreground fallback when capability is unknown", result)
 				}
@@ -717,8 +696,7 @@ func TestSyncReportsManagedLauncherChanges(t *testing.T) {
 	}
 	selection := model.Selection{
 		Agents:     []model.AgentID{model.AgentOpenCode},
-		Components: []model.ComponentID{model.ComponentSDD, model.ComponentPersona},
-		SDDMode:    model.SDDModeSingle,
+		Components: []model.ComponentID{model.ComponentPersona},
 		Persona:    model.PersonaNeutral,
 	}
 	result, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{})
@@ -750,8 +728,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 	home := syncBackgroundTestHome(t)
 	selection := model.Selection{
 		Agents:     []model.AgentID{model.AgentOpenCode},
-		Components: []model.ComponentID{model.ComponentSDD, model.ComponentPersona},
-		SDDMode:    model.SDDModeSingle,
+		Components: []model.ComponentID{model.ComponentPersona},
 		Persona:    model.PersonaNeutral,
 	}
 	background := OpenCodeBackgroundResolution{Intent: model.OpenCodeBackgroundOn, Effective: model.OpenCodeBackgroundOn, Persist: model.OpenCodeBackgroundOn}

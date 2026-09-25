@@ -49,15 +49,18 @@ var definitions = []Definition{
 		Repo:        "sub-agent-statusline",
 		Description: "OpenCode sidebar/statusline for sub-agent activity",
 	},
-	{
-		ID:          model.OpenCodePluginSDDEngramManage,
-		Name:        "SDD Engram Manager",
-		PackageName: "opencode-sdd-engram-manage",
-		RepoURL:     "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin",
-		Owner:       "j0k3r-dev-rgl",
-		Repo:        "sdd-engram-plugin",
-		Description: "OpenCode TUI for SDD profiles and Engram memories",
-	},
+}
+
+// Retain only for identifying registrations owned by older installations during
+// uninstall. It is not offered in the installation or update catalogs.
+var legacySDDEngramDefinition = Definition{
+	ID:          model.OpenCodePluginSDDEngramManage,
+	Name:        "SDD Engram Manager",
+	PackageName: "opencode-sdd-engram-manage",
+	RepoURL:     "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin",
+	Owner:       "j0k3r-dev-rgl",
+	Repo:        "sdd-engram-plugin",
+	Description: "OpenCode TUI for SDD profiles and Engram memories",
 }
 
 const gentleLogoPluginFile = "gentle-logo.tsx"
@@ -132,6 +135,9 @@ func Definitions() []Definition {
 }
 
 func DefinitionFor(id model.OpenCodeCommunityPluginID) (Definition, bool) {
+	if id == model.OpenCodePluginSDDEngramManage {
+		return legacySDDEngramDefinition, true
+	}
 	for _, def := range definitions {
 		if def.ID == id {
 			return def, true

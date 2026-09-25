@@ -40,62 +40,52 @@ func writeStale(t *testing.T, path string) {
 	}
 }
 
-func TestCompatibilitySkillsRefreshStepRefreshesExistingOrdinaryAndSDDAssets(t *testing.T) {
+func TestCompatibilitySkillsRefreshRetainsOrdinarySkillsWithoutSDD(t *testing.T) {
 	home := t.TempDir()
 	skillsDir := filepath.Join(home, ".agents", "skills")
-	staleFiles := []string{
-		filepath.Join(skillsDir, "go-testing", "SKILL.md"),
-		filepath.Join(skillsDir, "sdd-apply", "SKILL.md"),
-		filepath.Join(skillsDir, "judgment-day", "SKILL.md"),
-		filepath.Join(skillsDir, "_shared", "persistence-contract.md"),
+	ordinary := filepath.Join(skillsDir, "go-testing", "SKILL.md")
+	legacy := filepath.Join(skillsDir, "sdd-apply", "SKILL.md")
+	writeStale(t, ordinary)
+	writeStale(t, legacy)
+	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills, model.ComponentSDD}, Skills: []model.SkillID{model.SkillGoTesting}}
+	step := compatibilitySkillsRefreshStep{homeDir: home, components: selection.Components, selection: selection}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
 	}
-	for _, path := range staleFiles {
-		writeStale(t, path)
+	if content, err := os.ReadFile(ordinary); err != nil || string(content) == "stale" {
+		t.Fatalf("ordinary skill not refreshed: %v", err)
 	}
+	if content, err := os.ReadFile(legacy); err != nil || string(content) != "stale" {
+		t.Fatalf("legacy skill changed: %q, %v", content, err)
+	}
+	paths, err := compatibilitySkillPaths(skillsDir, selection.Components, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if strings.Contains(path, "sdd-") || strings.Contains(path, "_shared") {
+			t.Errorf("retired compatibility path: %s", path)
+		}
+	}
+	if needsCompatibilitySkillsRefresh([]model.ComponentID{model.ComponentSDD}) {
+		t.Fatal("SDD alone schedules compatibility refresh")
+	}
+}
+
+func TestCompatibilitySkillsRefreshDoesNotRemoveLegacySharedSkillMarker(t *testing.T) {
+	home := t.TempDir()
+	legacy := filepath.Join(home, ".agents", "skills", "_shared", "SKILL.md")
+	writeStale(t, legacy)
 	step := compatibilitySkillsRefreshStep{homeDir: home, components: []model.ComponentID{model.ComponentSkills, model.ComponentSDD}, selection: model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}}
 	if err := step.Run(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range staleFiles {
-		if content, err := os.ReadFile(path); err != nil || string(content) == "stale" {
-			t.Errorf("%q was not refreshed: %v", path, err)
-		}
+	if content, err := os.ReadFile(legacy); err != nil || string(content) != "stale" {
+		t.Fatalf("unrelated legacy marker changed: %q, %v", content, err)
 	}
 }
 
-func TestCompatibilitySkillsRefreshRemovesLegacySharedSkillMarker(t *testing.T) {
-	home := t.TempDir()
-	skillsDir := filepath.Join(home, ".agents", "skills")
-	legacyMarker := filepath.Join(skillsDir, "_shared", "SKILL.md")
-	writeStale(t, legacyMarker)
-	if err := os.Truncate(legacyMarker, 17<<20); err != nil {
-		t.Fatal(err)
-	}
-
-	var changed []string
-	step := compatibilitySkillsRefreshStep{
-		homeDir:      home,
-		components:   []model.ComponentID{model.ComponentSDD},
-		changedFiles: &changed,
-	}
-	if err := step.Run(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(legacyMarker); !os.IsNotExist(err) {
-		t.Fatalf("legacy shared marker %q still exists or could not be checked: %v", legacyMarker, err)
-	}
-	if !slices.Contains(changed, legacyMarker) {
-		t.Fatalf("changed files missing removed legacy marker %q: %v", legacyMarker, changed)
-	}
-	for _, name := range []string{"README.md", "persistence-contract.md", "sdd-phase-common.md", "skill-resolver.md"} {
-		path := filepath.Join(skillsDir, "_shared", name)
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("shared support file %q was not preserved: %v", path, err)
-		}
-	}
-}
-
-func TestWindowsCompatibilityTransactionUsesAnchoredLegacyMarkerRemoval(t *testing.T) {
+func TestWindowsCompatibilityTransactionKeepsAnchoredRollbackWithoutSDDInjection(t *testing.T) {
 	_, testFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")
@@ -106,9 +96,8 @@ func TestWindowsCompatibilityTransactionUsesAnchoredLegacyMarkerRemoval(t *testi
 		t.Fatalf("ReadFile(%q) error = %v", sourcePath, err)
 	}
 
-	const anchoredSDDInjection = "sdd.InjectSkillDirectoryWithCompatibilityWriter(t.writer.root, \"\", t.writer.Write, t.writer.Remove)"
-	if !strings.Contains(string(source), anchoredSDDInjection) {
-		t.Fatalf("Windows compatibility transaction does not route legacy marker cleanup through its anchored writer: missing %q", anchoredSDDInjection)
+	if strings.Contains(string(source), "sdd.InjectSkillDirectoryWithCompatibilityWriter") {
+		t.Fatal("Windows compatibility transaction still injects SDD skills")
 	}
 	const rollbackRemoval = "if _, err := t.writer.Remove(path); err != nil {"
 	if !strings.Contains(string(source), rollbackRemoval) {
@@ -220,7 +209,6 @@ func TestCompatibilitySkillsRefreshRequiresPhysicalDirectory(t *testing.T) {
 		link       string
 	}{
 		{name: "ordinary descendant symlink", components: []model.ComponentID{model.ComponentSkills}, link: "go-testing"},
-		{name: "SDD descendant symlink", components: []model.ComponentID{model.ComponentSDD}, link: "_shared"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if runtime.GOOS == "windows" {
@@ -505,10 +493,8 @@ func TestCompatibilitySkillFilesAreInstallAndSyncBackupTargets(t *testing.T) {
 	files := []string{
 		filepath.Join(skillsDir, "go-testing", "SKILL.md"),
 		filepath.Join(skillsDir, "go-testing", "references", "examples.md"),
-		filepath.Join(skillsDir, "sdd-apply", "SKILL.md"),
-		filepath.Join(skillsDir, "_shared", "persistence-contract.md"),
 	}
-	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills, model.ComponentSDD}, Skills: []model.SkillID{model.SkillGoTesting}}
+	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
 	resolved := planner.ResolvedPlan{OrderedComponents: selection.Components}
 	installTargets, installErr := backupTargets(home, "", ScopeGlobal, selection, resolved)
 	syncTargets, syncErr := syncBackupTargets(home, "", selection, nil)
@@ -542,15 +528,17 @@ func TestAdapterSkillFilesAreBackupTargets(t *testing.T) {
 	}
 	for _, targets := range [][]string{installTargets, syncTargets} {
 		for _, relative := range []string{
+			"go-testing/SKILL.md",
 			"go-testing/references/examples.md",
-			// The obsolete marker is a backup target because sync removes it.
-			"_shared/SKILL.md",
-			"sdd-onboard/SKILL.md",
-			"judgment-day/SKILL.md",
 		} {
 			path := filepath.Join(home, ".claude", "skills", filepath.FromSlash(relative))
 			if !slices.Contains(targets, path) {
 				t.Errorf("adapter backup targets missing %q", path)
+			}
+		}
+		for _, path := range targets {
+			if strings.HasPrefix(path, filepath.Join(home, ".claude", "skills")+string(filepath.Separator)) && (strings.Contains(path, "sdd-") || strings.Contains(path, "_shared")) {
+				t.Errorf("retired skill backup target: %s", path)
 			}
 		}
 	}

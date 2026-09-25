@@ -32,7 +32,7 @@ func TestRoutingPathsMatchesEveryPathInjectRoutingWrites(t *testing.T) {
 				t.Fatalf("RoutingPaths(%q) error = %v", agent.ID, err)
 			}
 
-			result, err := InjectRouting(targetDir, agent.ID)
+			result, err := InjectRoutingWithOptions(targetDir, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent.ID, err)
 			}

@@ -142,14 +142,130 @@ func TestAssessSnapshotRiskDetectsProcessBoundaryInTrackedEdits(t *testing.T) {
 		writeSnapshotFile(t, repo, "tools/runner.go", "package tools\n\nimport \"os/exec\"\n\nfunc Run() error {\n\treturn exec.Command(\"git\", \"status\").Run()\n}\n")
 		assertProcessBoundaryHigh(t, repo, "tools/runner.go")
 	})
-	t.Run("deletion of a spawning module stays a process boundary", func(t *testing.T) {
+	t.Run("deletion of a spawning module does not add a boundary", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tools/runner.py", "import subprocess\n\ndef run(argv):\n    return subprocess.run(argv)\n")
 		gitSnapshot(t, repo, "add", "--", "tools/runner.py")
 		gitSnapshot(t, repo, "commit", "-m", "spawning runner")
 		gitSnapshot(t, repo, "rm", "--", "tools/runner.py")
-		assertProcessBoundaryHigh(t, repo, "tools/runner.py")
+		assertProcessBoundaryMedium(t, repo)
 	})
+}
+
+func TestProcessBoundaryChangedLines(t *testing.T) {
+	cases := []struct {
+		name, path, before, after string
+		high                      bool
+	}{
+		{"unchanged spawn", "tools/runner.go", "package tools\nfunc run() { exec.Command(\"git\") }\nvar x = 1\n", "package tools\nfunc run() { exec.Command(\"git\") }\nvar x = 2\n", false},
+		{"added shell spawn", "tools/runner.ts", "const x = 1;\n", "const x = 1;\nexecSync(cmd, { shell: true });\n", true},
+		{"edited spawn", "tools/runner.go", "package tools\nfunc run() { exec.Command(\"git\") }\n", "package tools\nfunc run() { exec.Command(\"sh\") }\n", true},
+		{"removed spawn", "tools/runner.go", "package tools\nfunc run() { exec.Command(\"git\") }\n", "package tools\n", false},
+		{"Go test", "tools/foo_test.go", "package tools\n", "package tools\nfunc run() { exec.Command(\"git\") }\n", false},
+		{"TS test", "tools/runner.test.ts", "const x = 1;\n", "const x = 1;\nexecSync(cmd, { shell: true });\n", false},
+		{"shebang retained", "tools/runner.py", "#!/usr/bin/env python3\nx = 1\n", "#!/usr/bin/env python3\nx = 2\n", true},
+		// Regression for the "+++" misparse: the diff line for this added
+		// content is "+++counter++; exec.Command(...)" (a '+' diff marker
+		// followed by text that itself starts with "++"). A parser that treats
+		// any line beginning with the three bytes "+++" as a file header,
+		// instead of tracking the first "@@" hunk marker per section, would
+		// silently skip this added spawn construct.
+		{"added line whose text starts with ++", "tools/runner.go", "package tools\n", "package tools\n++counter++; exec.Command(\"sh\")\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, tc.path, tc.before)
+			gitSnapshot(t, repo, "add", "--", tc.path)
+			gitSnapshot(t, repo, "commit", "-m", "base")
+			writeSnapshotFile(t, repo, tc.path, tc.after)
+			if tc.high {
+				assertProcessBoundaryHigh(t, repo, tc.path)
+			} else {
+				assertProcessBoundaryMedium(t, repo)
+			}
+		})
+	}
+}
+
+// TestProcessBoundaryDiffScanIgnoresUserDiffPresentation keeps the added-line
+// scan independent of repository diff presentation config: custom prefixes
+// must not turn every change into a scan-limit high, and a textconv driver
+// must not hide the frozen bytes that are actually committed, and neither
+// may a binary or -diff attribute collapse the patch to "Binary files differ".
+func TestProcessBoundaryDiffScanIgnoresUserDiffPresentation(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		attributes string
+		config     [][2]string
+	}{
+		{"noprefix", "*.go diff=hide\n", [][2]string{{"diff.noprefix", "true"}}},
+		{"mnemonic prefix", "*.go diff=hide\n", [][2]string{{"diff.mnemonicPrefix", "true"}}},
+		{"custom prefixes", "*.go diff=hide\n", [][2]string{{"diff.srcPrefix", "old/"}, {"diff.dstPrefix", "new/"}}},
+		{"textconv hides content", "*.go diff=hide\n", [][2]string{{"diff.hide.textconv", "true"}}},
+		{"binary attribute", "*.go binary\n", nil},
+		{"no-diff attribute", "*.go -diff\n", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, ".gitattributes", tc.attributes)
+			writeSnapshotFile(t, repo, "tools/runner.go", "package tools\n")
+			gitSnapshot(t, repo, "add", "--", ".gitattributes", "tools/runner.go")
+			gitSnapshot(t, repo, "commit", "-m", "base")
+			for _, entry := range tc.config {
+				gitSnapshot(t, repo, "config", entry[0], entry[1])
+			}
+			writeSnapshotFile(t, repo, "tools/runner.go", "package tools\nfunc run() { exec.Command(\"sh\") }\n")
+			assertProcessBoundaryHigh(t, repo, "tools/runner.go")
+		})
+	}
+}
+
+// TestProcessBoundaryDiffScanFailsClosedOnOutputLimit exercises a case the
+// blob-size scan alone cannot catch: the base and candidate blobs are tiny
+// (well under the limit), but the diff *output* -- headers plus per-line
+// +/- markers -- exceeds it. The diff scan must fail closed into the same
+// process_scan_limit reason the blob scan uses, not return a bare error.
+func TestProcessBoundaryDiffScanFailsClosedOnOutputLimit(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tools/f.go", "x=1\n")
+	gitSnapshot(t, repo, "add", "--", "tools/f.go")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	writeSnapshotFile(t, repo, "tools/f.go", "x=2\n")
+	original := processBoundaryScanByteLimit
+	processBoundaryScanByteLimit = 20
+	t.Cleanup(func() { processBoundaryScanByteLimit = original })
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment, err := (SnapshotBuilder{Repo: repo}).AssessSnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("AssessSnapshotRisk() error = %v, want fail-closed process_scan_limit instead of an error", err)
+	}
+	if assessment.Level != RiskHigh || len(assessment.Reasons) != 1 || assessment.Reasons[0].Code != RiskReasonProcessScanLimit {
+		t.Fatalf("assessment = %#v, want high with a single process_scan_limit reason", assessment)
+	}
+}
+
+func assertProcessBoundaryMedium(t *testing.T, repo string) {
+	t.Helper()
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment, err := (SnapshotBuilder{Repo: repo}).AssessSnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.Level != RiskMedium {
+		t.Fatalf("assessment = %#v, want medium", assessment)
+	}
+	for _, reason := range assessment.Reasons {
+		if reason.Code == RiskReasonProcessBoundary {
+			t.Fatalf("unexpected process boundary: %#v", assessment)
+		}
+	}
 }
 
 func assertProcessBoundaryHigh(t *testing.T, repo, path string) {

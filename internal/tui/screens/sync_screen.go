@@ -16,7 +16,7 @@ import (
 //  1. operationRunning → "Syncing configurations..." with spinner
 //  2. hasSyncRun && (filesChanged > 0 || syncErr != nil) → show result
 //  3. Otherwise → show confirmation screen
-func RenderSync(files []string, syncErr error, operationRunning bool, hasSyncRun bool, spinnerFrame int) string {
+func RenderSync(files []string, syncErr error, operationRunning bool, hasSyncRun bool, spinnerFrame int, manualActions ...[]string) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Sync Configurations"))
@@ -33,6 +33,13 @@ func RenderSync(files []string, syncErr error, operationRunning bool, hasSyncRun
 	// State 2: sync has run — show result
 	if hasSyncRun {
 		b.WriteString(renderSyncResult(files, syncErr))
+		if syncErr == nil && len(manualActions) > 0 && len(manualActions[0]) > 0 {
+			b.WriteString("\n\n")
+			b.WriteString(styles.WarningStyle.Render("Manual actions required:"))
+			for _, action := range manualActions[0] {
+				b.WriteString("\n- " + action)
+			}
+		}
 		return b.String()
 	}
 
