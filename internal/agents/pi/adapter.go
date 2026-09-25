@@ -3,6 +3,7 @@ package pi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -90,13 +91,20 @@ type CodeGraphPathSet struct {
 }
 
 // CodeGraphPaths resolves PI_CODING_AGENT_DIR when set, matching Pi's runtime
-// override instead of assuming the default agent directory.
+// override instead of assuming the default agent directory. When an agent
+// directory override is active, an isolated manifest path is derived to prevent
+// cross-contamination with the default global Pi manifest.
 func CodeGraphPaths(homeDir string) CodeGraphPathSet {
 	agentDir := AgentConfigPath(homeDir)
+	manifest := filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json")
+	if defaultDir := filepath.Join(ConfigPath(homeDir), "agent"); filepath.Clean(agentDir) != filepath.Clean(defaultDir) {
+		sum := sha256.Sum256([]byte(filepath.Clean(agentDir)))
+		manifest = filepath.Join(homeDir, ".gentle-ai", fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
+	}
 	return CodeGraphPathSet{
 		AgentDir:  agentDir,
 		MCPConfig: filepath.Join(agentDir, piEngramMCPConfigFile),
-		Manifest:  filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json"),
+		Manifest:  manifest,
 	}
 }
 

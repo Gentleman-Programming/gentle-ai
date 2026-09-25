@@ -66,5 +66,7 @@ type UpdateResult struct {
 	Status           UpdateStatus
 	ReleaseURL       string
 	UpdateHint       string
+	BetaCommit       string // full immutable commit verified by the beta check
+	BetaModulePath   string // validated go.mod module at BetaCommit
 	Err              error
 }

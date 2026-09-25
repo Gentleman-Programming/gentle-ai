@@ -18,7 +18,7 @@ func TestIssueCreationSkillPublicationContract(t *testing.T) {
 		{"single format authority", []string{"YAML Issue Forms are the single format authority", "omit `markdown` guidance"}},
 		{"current duplicate search", []string{"open-and-closed duplicate search", "Reuse that result while it remains current", "--state all"}},
 		{"evidence-based duplicate handling", []string{"read from the target host", "Compare each candidate's body controls and required answers with the selected YAML form", "Unavailable body, target mismatch, incomplete data, or ambiguous classification is `unknown`", "Comment there instead", "repair it in place", "never auto-rewrite or approve"}},
-		{"semantic form translation", []string{"declared order", "`input` / `textarea`", "`dropdown`", "`checkboxes`", "`validations.required`", "first-person", "textarea.attributes.render", "`attributes.multiple` selection mode", "`dropdown.attributes.multiple: true`", "otherwise treat it as single-select", "every dropdown selection to exactly match a declared option", "A required dropdown must have at least one valid selection", "preserve every valid reviewed selection in declared options order"}},
+		{"semantic form translation", []string{"declared order", "`input` / `textarea`", "`dropdown`", "`checkboxes`", "`validations.required`", "agent's own evidence-backed operational actions", "personal facts, consent, legal", "explicit user affirmation", "textarea.attributes.render", "`attributes.multiple` selection mode", "`dropdown.attributes.multiple: true`", "otherwise treat it as single-select", "every dropdown selection to exactly match a declared option", "A required dropdown must have at least one valid selection", "preserve every valid reviewed selection in declared options order"}},
 		{"private discovery, body, and read-back lifecycle", []string{"private temporary files outside repositories", "Do not print the contents of any protected file", "owner-only temporary directory", "`DISCOVERY_FILE`, `BODY_FILE`, `READBACK_FILE`, `PRE_READ_FILE`, plus `POST_READ_FILE`", "`0700`/`0600`, or strict Windows ACL equivalents", "Clean up all five files on every"}},
 		{"file-backed CLI publication", []string{"gh issue create", "--body-file \"$BODY_FILE\"", "gh issue comment"}},
 		{"private body-bearing read-back", []string{"read it back from that host into `READBACK_FILE`", "Redirect stdout from both body-bearing read-back commands", "Validate and compare only from `READBACK_FILE`"}},
@@ -136,10 +136,11 @@ func TestIssueCreationSkillDelegatedWorkflowMutationContract(t *testing.T) {
 		"`status:approved` is a strict special case",
 		"Protected policy labels are `status:approved`, `size:exception`, and any repository-defined gate-override or authorization label.",
 		"Before any generic `$LABEL` add/remove command, explicitly reject every protected label from the generic path.",
-		"Ordinary label actions fail closed when classification is unknown.", "Adding or removing a protected label requires current direct instruction verified on the target host as binding exact target/action to a repository maintainer or repository-authorized approver, plus authenticated actor `viewerPermission` `MAINTAIN` or `ADMIN`.",
-		"`size:exception` additionally requires documented over-budget rationale; rationale never replaces policy authority.", "A repository-defined gate-override or authorization label has no generic fallback; require repository-defined protected handling or stop.",
+		"Ordinary label actions fail closed when classification is unknown.", "Adding or removing a protected label requires a current direct human instruction binding exact target and add/remove action plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`.",
+		"Do not require separate target-host proof of the instructing human's identity.",
+		"`size:exception` additionally requires documented over-budget rationale and the human choice to accept the exception; neither replaces the direct instruction or actor permission.", "A repository-defined gate-override or authorization label has no generic fallback; require repository-defined protected handling or stop.",
 		"one bounded mutation attempt with no blind retry",
-		"`TRIAGE` is explicitly insufficient for `status:approved`; an unverifiable instructing principal means no mutation.",
+		"`TRIAGE` is explicitly insufficient for `status:approved`; a missing direct instruction or insufficient actor permission means no mutation.",
 	} {
 		if !strings.Contains(reference, term) {
 			t.Errorf("delegated workflow reference is missing contract marker %q", term)
@@ -179,8 +180,15 @@ func TestIssueCreationSkillDelegatedWorkflowMutationContract(t *testing.T) {
 	if genericGuard == -1 || firstGenericCommand == -1 || genericGuard > firstGenericCommand || protectedAuthorityGate == -1 || ordinaryGenericBlock == -1 || strings.Index(reference, wantCommands[3]) <= protectedAuthorityGate || strings.Index(reference, wantCommands[10]) >= ordinaryGenericBlock {
 		t.Error("protected commands must follow their authority gate and remain independent of the guarded generic block")
 	}
-	if strings.Contains(reference, "Never add `status:approved`") {
-		t.Error("delegated workflow reference retains the blanket status:approved prohibition")
+	for _, obsolete := range []string{
+		"Never add `status:approved`",
+		"target-host evidence binding the direct instructing principal",
+		"instruction verified on the target host",
+		"unverifiable instructing principal",
+	} {
+		if strings.Contains(reference, obsolete) {
+			t.Errorf("delegated workflow reference retains obsolete authority gate %q", obsolete)
+		}
 	}
 }
 
@@ -191,17 +199,18 @@ func TestIssueCreationSkillDelegationAuthorityBoundaries(t *testing.T) {
 		terms []string
 	}{
 		{
-			name: "approval instruction is target-host verified",
+			name: "approval instruction binds target and action without instructor host proof",
 			terms: []string{
-				"For `status:approved`, require target-host evidence binding the direct instructing principal to approval authority as a repository maintainer or repository-authorized approver.",
+				"Do not require separate target-host proof of the instructing human's identity.",
+				"current direct human instruction binding exact `HOST`, `REPO=OWNER/REPO`, issue/PR number, and add/remove action",
 			},
 		},
 		{
 			name: "protected labels require policy authority",
 			terms: []string{
 				"Protected policy labels are `status:approved`, `size:exception`, and any repository-defined gate-override/authorization label.",
-				"Adding or removing a protected label requires current direct target-host-verified maintainer/authorized-approver instruction for exact add/remove plus authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN`; `TRIAGE` never suffices.",
-				"`size:exception` also needs a documented rationale; unknown gate labels stop.",
+				"Adding or removing a protected label requires authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN` immediately before mutation; `TRIAGE` never suffices.",
+				"`size:exception` also needs a documented over-budget rationale and human choice to accept the exception; unknown gate labels stop.",
 				"Reject inferred/model-authored authority; atomic `status:approved`, exactly one attempt/readback; fail closed.",
 			},
 		},
@@ -222,6 +231,19 @@ func TestIssueCreationSkillDelegationAuthorityBoundaries(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestIssueCreationSkillAffirmationBoundary(t *testing.T) {
+	content := MustRead("skills/issue-creation/SKILL.md")
+	for _, obsolete := range []string{
+		"require explicit user affirmation for first-person checkbox text",
+		"target-host evidence binding the direct instructing principal",
+		"target-host-verified maintainer/authorized-approver instruction",
+	} {
+		if strings.Contains(content, obsolete) {
+			t.Errorf("issue-creation skill retains obsolete assertion or authority gate %q", obsolete)
+		}
 	}
 }
 

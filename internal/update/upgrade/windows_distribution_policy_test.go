@@ -49,7 +49,7 @@ func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 			}
 			for _, required := range []string{
 				"Windows binary distribution and Scoop are temporarily unavailable",
-				"go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai" + tc.wantTarget,
+				"go install " + update.ModulePathForVersion("github.com/gentleman-programming/gentle-ai/cmd/gentle-ai", "gentle-ai", tc.latestVersion) + tc.wantTarget,
 			} {
 				if !strings.Contains(hint, required) {
 					t.Errorf("manual hint is missing %q: %s", required, hint)
@@ -70,9 +70,24 @@ func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 	}
 }
 
+func TestWindowsBetaSourceRecoveryIsPinned(t *testing.T) {
+	tool := update.ToolInfo{Name: "gentle-ai", Owner: "Gentleman-Programming", Repo: "gentle-ai"}
+	sha := "972997650b51abcdef0123456789abcdef012345"
+	result := update.UpdateResult{Tool: tool, LatestVersion: "main@" + sha[:12], BetaCommit: sha, BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4"}
+	hint := gentleAIWindowsSourceInstallHint(result)
+	want := "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@" + sha
+	if !strings.Contains(hint, want) || strings.Contains(hint, "@main") {
+		t.Fatalf("Windows recovery command not pinned: %s", hint)
+	}
+	result.BetaModulePath = ""
+	if hint := gentleAIWindowsSourceInstallHint(result); strings.Contains(hint, "go install") {
+		t.Fatalf("unverified Windows recovery command: %s", hint)
+	}
+}
+
 func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 	const (
-		mainSHA = "abc1234"
+		mainSHA = "972997650b51abcdef0123456789abcdef012345"
 		module  = "github.com/gentleman-programming/gentle-ai/v3"
 	)
 
@@ -108,13 +123,13 @@ func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 		return gotCmd
 	}
 
-	r := update.UpdateResult{Tool: tool, LatestVersion: "main@" + mainSHA, Status: update.UpdateAvailable}
+	r := update.UpdateResult{Tool: tool, LatestVersion: "main@" + mainSHA[:12], BetaCommit: mainSHA, BetaModulePath: module, Status: update.UpdateAvailable}
 	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true, Supported: true}
 	if _, err := runStrategy(context.Background(), r, profile); err != nil {
 		t.Fatalf("runStrategy beta Windows self-upgrade: %v", err)
 	}
 
-	wantTarget := tool.GoImportPath + "@main"
+	wantTarget := module + "/cmd/gentle-ai@" + mainSHA
 	if gotName != "go" || len(gotArgs) != 2 || gotArgs[0] != "install" || gotArgs[1] != wantTarget {
 		t.Fatalf("go command = %q %v, want go install %s", gotName, gotArgs, wantTarget)
 	}

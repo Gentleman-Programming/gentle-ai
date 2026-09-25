@@ -15,7 +15,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 - [Testing](#testing)
 - [Running the Cross-Lane Battery](#running-the-cross-lane-battery)
 - [Commit Convention](#commit-convention)
-- [Delivery Strategy for SDD Changes](#delivery-strategy-for-sdd-changes)
+- [Delivery Strategy for ODD Changes](#delivery-strategy-for-odd-changes)
 - [Pull Request Rules](#pull-request-rules)
 - [Code of Conduct](#code-of-conduct)
 
@@ -305,16 +305,16 @@ Branch names **must** match this pattern:
 
 ## Pull Request Rules
 
-### Delivery Strategy for SDD Changes
+### Delivery Strategy for ODD Changes
 
-Before `sdd-apply` starts, the SDD conductor checks the **Review Workload Forecast** from `sdd-tasks`. This protects reviewers from one giant, exhausting PR when the work should be split.
+For substantial ODD work, forecast authored changed lines from the feature task list and track the running count from work-unit commits. Before the next commit when the forecast or running count exceeds about 400 lines, choose a reviewable delivery boundary. This task-size heuristic does not replace the PR size budget below.
 
-| Strategy | Use when | What happens before apply |
+| Strategy | Use when | What happens at the delivery boundary |
 |---|---|---|
-| `ask-on-risk` | Default. You want the conductor to pause only when the forecast is risky. | If the forecast is high or above 400 changed lines, it asks whether to split or proceed with `size:exception`. |
-| `auto-chain` | You already know the change should be reviewed in slices. | The apply phase implements the next chained/stacked PR slice using work-unit commits. |
-| `single-pr` | The change is small or must land atomically. | If the forecast exceeds 400 changed lines, apply stops until a maintainer approves `size:exception`. |
-| `exception-ok` | A maintainer already accepted a large PR. | Apply continues and records that the PR has maintainer-approved `size:exception`. |
+| `ask-on-risk` | Default; choose a split only if the forecast or running count exceeds the budget. | Ask once for a chain strategy (`stacked-to-main` or `feature-branch-chain`). |
+| `auto-chain` | The change should be reviewed in slices. | Ask for a missing chain strategy, then record each slice's work-unit commits. |
+| `single-pr` | The change must land atomically. | A PR above the budget still requires maintainer approval for `size:exception`. |
+| `exception-ok` | A maintainer has already approved an oversized PR. | Record the approved exception; do not treat it as permission to open a PR. |
 
 **Decision checklist:**
 

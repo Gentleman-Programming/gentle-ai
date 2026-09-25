@@ -473,8 +473,13 @@ func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, s
 	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no CodeGraph MCP or instruction marker was found"
 }
 
-func piCodeGraphStatusPath(homeDir string) string {
+// PiCodeGraphManifestPath returns the effective CodeGraph manifest path for Pi.
+func PiCodeGraphManifestPath(homeDir string) string {
 	return piagent.CodeGraphPaths(homeDir).Manifest
+}
+
+func piCodeGraphStatusPath(homeDir string) string {
+	return PiCodeGraphManifestPath(homeDir)
 }
 
 func hasDetectedCodeGraphToolWiring(homeDir string) bool {

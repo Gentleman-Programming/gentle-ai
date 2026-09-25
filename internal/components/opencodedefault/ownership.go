@@ -29,11 +29,6 @@ type fieldValue struct {
 	present bool
 	value   string
 }
-type InstallPlan struct {
-	settingsPath string
-	owned        *ownership
-	recapture    bool
-}
 type UninstallPlan struct {
 	settingsPath  string
 	settingsExist bool
@@ -43,39 +38,6 @@ type UninstallPlan struct {
 
 func OwnershipPath(settingsPath string) string {
 	return filepath.Join(filepath.Dir(settingsPath), ".gentle-ai-default-agent.json")
-}
-func PrepareInstall(settingsPath string) (*InstallPlan, error) {
-	root, _, exists, _, err := readSettings(settingsPath)
-	if err != nil {
-		return nil, err
-	}
-	owned, err := readOwnership(OwnershipPath(settingsPath))
-	if err != nil {
-		return nil, err
-	}
-	agents, _ := root["agent"].(map[string]any)
-	_, managedAgentPresent := agents[ManagedAgent]
-	return &InstallPlan{settingsPath: settingsPath, owned: owned, recapture: !exists || !managedAgentPresent}, nil
-}
-func (p *InstallPlan) Apply() (bool, error) {
-	root, raw, _, current, err := readSettings(p.settingsPath)
-	if err != nil {
-		return false, err
-	}
-	owned := p.owned
-	if owned == nil || p.recapture || !current.present || current.value != ManagedAgent {
-		owned = newOwnership(current)
-	}
-	root["default_agent"] = ManagedAgent
-	settings := encode(root)
-	metadata := encode(owned)
-	ownerPath := OwnershipPath(p.settingsPath)
-	ownerRaw, _ := os.ReadFile(ownerPath)
-	changed := !bytes.Equal(raw, settings) || !bytes.Equal(ownerRaw, metadata)
-	if err := writePair(p.settingsPath, settings, true, ownerPath, metadata, true); err != nil {
-		return false, err
-	}
-	return changed, nil
 }
 func PrepareUninstall(settingsPath string) (*UninstallPlan, error) {
 	_, _, exists, current, err := readSettings(settingsPath)
@@ -89,18 +51,21 @@ func PrepareUninstall(settingsPath string) (*UninstallPlan, error) {
 	return &UninstallPlan{settingsPath: settingsPath, settingsExist: exists, current: current, owned: owned}, nil
 }
 func (p *UninstallPlan) Apply(cleaned []byte, settingsExist bool) (changed, removed bool, err error) {
+	// Only a legacy ownership record proves that gentle-ai may roll back this
+	// field. A user-modified default is not ours to change or release.
+	if p.owned == nil || !p.settingsExist || !p.current.present || p.current.value != ManagedAgent {
+		return false, false, nil
+	}
 	root := map[string]any{}
 	if settingsExist {
 		if root, err = filemerge.UnmarshalJSONObject(cleaned); err != nil {
 			return false, false, fmt.Errorf("parse cleaned OpenCode settings: %w", err)
 		}
 	}
-	if p.settingsExist && p.current.present && p.current.value == ManagedAgent {
-		if p.owned == nil || p.owned.PreviousState == "absent" {
-			delete(root, "default_agent")
-		} else {
-			root["default_agent"] = p.owned.PreviousDefault
-		}
+	if p.owned.PreviousState == "absent" {
+		delete(root, "default_agent")
+	} else {
+		root["default_agent"] = p.owned.PreviousDefault
 	}
 	settingsExist = settingsExist && len(root) > 0
 	var settings []byte
@@ -180,14 +145,6 @@ func defaultField(root map[string]any) (fieldValue, error) {
 	}
 	return fieldValue{present: true, value: text}, nil
 }
-func newOwnership(previous fieldValue) *ownership {
-	owned := &ownership{Schema: schema, Version: version, State: "managed", PreviousState: "absent"}
-	if previous.present {
-		owned.PreviousState = "value"
-		owned.PreviousDefault = previous.value
-	}
-	return owned
-}
 func encode(value any) []byte {
 	raw, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
@@ -205,7 +162,13 @@ func writePair(settingsPath string, settings []byte, keepSettings bool, ownerPat
 	}
 	mutate := func(path string, data []byte, keep bool) error {
 		if keep {
-			_, err := journal.WriteWithMode(path, data, 0o644)
+			mode := os.FileMode(0o644)
+			if info, err := os.Lstat(path); err == nil {
+				mode = info.Mode().Perm()
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			_, err := journal.WriteWithMode(path, data, mode)
 			return err
 		}
 		_, err := journal.Remove(path)

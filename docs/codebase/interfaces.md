@@ -25,7 +25,7 @@ argv
   -> verify.Report
 ```
 
-Use CLI packages for non-interactive behavior such as `install`, `sync`, `uninstall`, `restore`, `update`, and `upgrade`. `internal/app/` also routes utility commands such as `doctor`, `version`, `help`, `skill-registry refresh|list`, `sdd-status`, and `sdd-continue`. Keep CLI docs focused on user workflows; do not replicate every internal struct.
+Use CLI packages for non-interactive behavior such as `install`, `sync`, `uninstall`, `restore`, `update`, and `upgrade`. `internal/app/` also routes utility commands such as `doctor`, `version`, `help`, `skill-registry refresh|list`. Keep CLI docs focused on user workflows; do not replicate every internal struct.
 
 ## MCP flow
 

@@ -25,7 +25,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
@@ -228,7 +229,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	if adapter.SupportsSlashCommands() {
-		add(sdd.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
+		add(legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
 	}
 
 	if adapter.SupportsSubAgents() {
@@ -250,15 +251,15 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		// The SDD plugin writer resolves the config directory through the
 		// adapter and owns the plugin list; the snapshot must match it (#3219).
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(adapter.Agent())...) {
+		for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
 			add(filepath.Join(pluginsDir, name))
 		}
 		add(
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 		)
-		for _, phase := range sdd.SharedPromptPhases() {
-			add(filepath.Join(sdd.SharedPromptDir(homeDir), phase+".md"))
+		for _, phase := range legacyassets.SharedPromptPhases() {
+			add(filepath.Join(legacyassets.SharedPromptDir(homeDir), phase+".md"))
 		}
 	}
 

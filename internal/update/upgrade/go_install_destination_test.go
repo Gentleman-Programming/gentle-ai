@@ -313,8 +313,10 @@ func TestBetaGoInstallMainUpgradeWarnsWhenDestinationDiffers(t *testing.T) {
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
 		},
-		LatestVersion: "main@abc1234",
-		Status:        update.UpdateAvailable,
+		LatestVersion:  "main@abc1234abcde",
+		BetaCommit:     "abc1234abcde0123456789abcdef0123456789ab",
+		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4",
+		Status:         update.UpdateAvailable,
 	}
 
 	var upgradeErr error

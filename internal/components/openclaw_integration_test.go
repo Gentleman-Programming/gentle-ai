@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
@@ -25,8 +25,11 @@ func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
 	if _, err := engram.InjectWithPromptDir(home, workspace, adapter); err != nil {
 		t.Fatalf("engram.Inject(openclaw) error = %v", err)
 	}
-	if _, err := sdd.Inject(workspace, adapter, model.SDDModeSingle, sdd.InjectOptions{StrictTDD: true, WorkspaceDir: workspace}); err != nil {
-		t.Fatalf("sdd.Inject(openclaw) error = %v", err)
+	if _, err := agentguidance.InjectRoutingWithOptions(workspace, adapter.Agent(), agentguidance.RoutingOptions{}); err != nil {
+		t.Fatalf("agentguidance.InjectRouting(openclaw) error = %v", err)
+	}
+	if _, err := agentguidance.InjectStrictTDDWithOptions(workspace, adapter.Agent(), true, agentguidance.RoutingOptions{}); err != nil {
+		t.Fatalf("agentguidance.InjectStrictTDDWithOptions(openclaw) error = %v", err)
 	}
 	if _, err := persona.Inject(workspace, adapter, model.PersonaGentleman); err != nil {
 		t.Fatalf("persona.Inject(openclaw) error = %v", err)
@@ -48,10 +51,13 @@ func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
 	}
 
 	agentsText := readText(t, filepath.Join(workspace, "AGENTS.md"))
-	for _, want := range []string{"gentle-ai:engram-protocol", "gentle-ai:sdd-orchestrator", "gentle-ai:strict-tdd-mode"} {
+	for _, want := range []string{"gentle-ai:engram-protocol", "gentle-ai:agent-routing", "Organic Driven Development", "review", "gentle-ai:strict-tdd-mode"} {
 		if !strings.Contains(agentsText, want) {
 			t.Fatalf("OpenClaw AGENTS.md missing %q; got:\n%s", want, agentsText)
 		}
+	}
+	if strings.Contains(agentsText, "gentle-ai:sdd-orchestrator") {
+		t.Fatalf("OpenClaw AGENTS.md must not receive retired SDD guidance; got:\n%s", agentsText)
 	}
 	if strings.Contains(agentsText, "Senior Architect") {
 		t.Fatalf("OpenClaw AGENTS.md must not receive persona content; got:\n%s", agentsText)
@@ -103,8 +109,11 @@ func runOpenClawInjectorChain(t *testing.T, home, workspace string, adapter agen
 	if _, err := engram.InjectWithPromptDir(home, workspace, adapter); err != nil {
 		t.Fatalf("engram.Inject(openclaw) error = %v", err)
 	}
-	if _, err := sdd.Inject(workspace, adapter, model.SDDModeSingle, sdd.InjectOptions{StrictTDD: true, WorkspaceDir: workspace}); err != nil {
-		t.Fatalf("sdd.Inject(openclaw) error = %v", err)
+	if _, err := agentguidance.InjectRoutingWithOptions(workspace, adapter.Agent(), agentguidance.RoutingOptions{}); err != nil {
+		t.Fatalf("agentguidance.InjectRouting(openclaw) error = %v", err)
+	}
+	if _, err := agentguidance.InjectStrictTDDWithOptions(workspace, adapter.Agent(), true, agentguidance.RoutingOptions{}); err != nil {
+		t.Fatalf("agentguidance.InjectStrictTDDWithOptions(openclaw) error = %v", err)
 	}
 	if _, err := persona.Inject(workspace, adapter, model.PersonaGentleman); err != nil {
 		t.Fatalf("persona.Inject(openclaw) error = %v", err)

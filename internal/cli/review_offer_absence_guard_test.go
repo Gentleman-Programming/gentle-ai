@@ -4,33 +4,27 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"testing"
 )
 
-// This file is the Wave 4 S3 primary absence proof (design.md decision 4)
-// for internal/cli's half of the guard: a static AST guard asserting ZERO
-// call edges into offer/ReviewCore symbols from internal/cli's SDD
-// apply/verify/archive/status/continue surface, except through the
-// Scope (deliberately narrow, per design.md decision 4's own rationale):
-// only the SDD apply/verify/archive/status/continue files — sdd_attempt.go,
-// sdd_status.go — are scanned. The ~30 other
-// internal/cli files that import reviewtransaction (review_*.go) are
-// explicit, user-invoked `review` subcommands, not automatic SDD
-// apply/verify/archive paths, and
-// are intentionally out of this guard's scope — scanning them would be a
-// false positive against code this guard is not meant to constrain.
+// This guard rejects direct review-offer calls in the native review CLI's
+// entrypoints, including read-only assessment and mode management. Review
+// remains an explicit user choice, not a hidden side effect of another CLI
+// surface. The inventory is deliberately scoped: it does not claim to scan
+// every review implementation file.
 
-// reviewOfferAbsenceScopedCLIFiles are the exact internal/cli files this
-// guard scans. Any new SDD apply/verify/archive/status/continue file must
-// be added here deliberately — the guard proves nothing about a file it
-// does not scan.
+// reviewOfferAbsenceScopedCLIFiles lists existing native review CLI entrypoints.
+// Keep this inventory current when entrypoints move or are retired.
 var reviewOfferAbsenceScopedCLIFiles = []string{
-	"sdd_attempt.go",
-	"sdd_status.go",
+	"review.go",
+	"review_assess.go",
+	"review_facade.go",
+	"review_mode.go",
 }
 
-// reviewOfferAbsenceCLIForbiddenSelectors mirrors
-// internal/sddstatus/review_offer_absence_guard_test.go's forbidden set.
+// reviewOfferAbsenceCLIForbiddenSelectors names the offer/core calls that
+// must never be introduced into the scoped CLI entrypoints.
 var reviewOfferAbsenceCLIForbiddenSelectors = map[string]bool{
 	"OfferReviewAfterVerify": true,
 	"ReviewCore":             true,
@@ -77,13 +71,17 @@ func example(ctx context.Context) {
 	}
 }
 
-// TestReviewOfferAbsenceGuardHoldsForScopedCLIFiles runs the scanner
-// against exactly the SDD apply/verify/archive/status/continue files this
-// guard names, failing with exact violation evidence if any of them
-// reference an offer/ReviewCore symbol directly.
+// TestReviewOfferAbsenceGuardHoldsForScopedCLIFiles requires each inventoried
+// entrypoint to exist and rejects direct offer/ReviewCore references in it.
 func TestReviewOfferAbsenceGuardHoldsForScopedCLIFiles(t *testing.T) {
+	if len(reviewOfferAbsenceScopedCLIFiles) == 0 {
+		t.Fatal("native review CLI entrypoint inventory must not be empty")
+	}
 	for _, file := range reviewOfferAbsenceScopedCLIFiles {
 		t.Run(file, func(t *testing.T) {
+			if _, err := os.Stat(file); err != nil {
+				t.Fatalf("inventoried native review CLI entrypoint %q must exist: %v", file, err)
+			}
 			violations, err := scanReviewOfferAbsenceCLIFile(file)
 			if err != nil {
 				t.Fatalf("scanReviewOfferAbsenceCLIFile(%s): %v", file, err)

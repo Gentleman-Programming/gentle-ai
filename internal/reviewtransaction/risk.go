@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,14 +42,15 @@ const (
 type RiskSignal string
 
 const (
-	SignalAuth         RiskSignal = "auth"
-	SignalUpdate       RiskSignal = "update"
-	SignalSecurity     RiskSignal = "security"
-	SignalPayments     RiskSignal = "payments"
-	SignalDataExposure RiskSignal = "data_exposure"
-	SignalDataLoss     RiskSignal = "data_loss"
-	SignalPermissions  RiskSignal = "permissions"
-	SignalShellProcess RiskSignal = "shell_process"
+	SignalAuth          RiskSignal = "auth"
+	SignalUpdate        RiskSignal = "update"
+	SignalSecurity      RiskSignal = "security"
+	SignalPayments      RiskSignal = "payments"
+	SignalDataExposure  RiskSignal = "data_exposure"
+	SignalDataLoss      RiskSignal = "data_loss"
+	SignalPermissions   RiskSignal = "permissions"
+	SignalShellProcess  RiskSignal = "shell_process"
+	SignalDangerousSink RiskSignal = "dangerous_sink"
 )
 
 type DiffStat struct {
@@ -69,6 +71,7 @@ const (
 	RiskReasonServiceToken     RiskReasonCode = "service_token"
 	RiskReasonShellSource      RiskReasonCode = "shell_source"
 	RiskReasonProcessBoundary  RiskReasonCode = "process_boundary"
+	RiskReasonDangerousSink    RiskReasonCode = "dangerous_sink"
 	RiskReasonProcessScanLimit RiskReasonCode = "process_scan_limit"
 	RiskReasonExecutableMode   RiskReasonCode = "executable_mode"
 	// RiskReasonLargeChange is never derived anymore; size stopped selecting a
@@ -582,9 +585,10 @@ func treeBlobSizes(ctx context.Context, repo, tree string, paths []string) ([]tr
 // `stmt.Exec(`, and `/re/.exec(` are database statements and regular
 // expressions, not process boundaries (#2542). Spawn calls that only exist in
 // member form are named explicitly instead.
-const processBoundaryPattern = `(^#!)` +
-	`|((^|[^[:alnum:]_.])(subprocess|child_process|execute_process|exec)([^[:alnum:]_]|$))` +
-	`|(getRuntime\(\)\.exec\(|ProcessBuilder|os\.system\(|os\.exec[lv]p?e?\(|posix_spawn|proc_open\(|shell_exec\(|passthru\(|popen\(|Process\.Start\()`
+const processBoundaryPattern = `((^|[^[:alnum:]_.])(subprocess|child_process|execute_process|exec)([^[:alnum:]_]|$))` +
+	`|(execSync\(|getRuntime\(\)\.exec\(|ProcessBuilder|os\.system\(|os\.exec[lv]p?e?\(|posix_spawn|proc_open\(|shell_exec\(|passthru\(|popen\(|Process\.Start\()`
+
+var processSpawnLine = regexp.MustCompile(`(?i)` + processBoundaryPattern)
 
 func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, snapshot Snapshot, stats []DiffStat) ([]RiskReason, error) {
 	repo, err := builder.repositoryRoot(ctx)
@@ -593,7 +597,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 	}
 	paths := make([]string, 0, len(stats))
 	for _, stat := range stats {
-		if isContentScanEligible(stat) {
+		if isContentScanEligible(stat) && !isTestRiskPath(stat.Path) {
 			paths = append(paths, stat.Path)
 		}
 	}
@@ -617,12 +621,11 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 		if len(treePaths) == 0 {
 			continue
 		}
-		// An interpreter directive and a spawn construct are both process
-		// boundaries the file's extension can neither promise nor deny, so the
-		// same bounded pass looks for either inside the frozen bytes.
+		// Interpreter directives remain whole-file evidence, including on the
+		// base side, so removal of a script does not hide its process boundary.
 		fixedArgs := []string{
 			"grep", "-I", "-l", "-z", "-i", "-E",
-			processBoundaryPattern, tree, "--",
+			`^#!`, tree, "--",
 		}
 		prefixLength := gitArgvPrefixLength(repo, fixedArgs...)
 		for _, batch := range batchLiteralPathspecs(treePaths, prefixLength) {
@@ -643,7 +646,77 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 			}
 		}
 	}
+	// Diff output is bounded separately from the blob inventory; an oversized
+	// patch fails closed into the same scan-limit reason the blob scan uses,
+	// instead of erroring the whole assessment. Presentation is pinned so user
+	// prefix config cannot break path attribution, a textconv driver cannot
+	// replace the frozen bytes being scanned, and a binary or -diff attribute
+	// cannot collapse the patch into "Binary files differ".
+	diffFixedArgs := []string{
+		"-c", "core.quotePath=false", "diff", "--text", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--unified=0",
+		snapshot.BaseTree, snapshot.CandidateTree, "--",
+	}
+	diffPrefixLength := gitArgvPrefixLength(repo, diffFixedArgs...)
+	for _, batch := range batchLiteralPathspecs(paths, diffPrefixLength) {
+		args := append(append([]string{}, diffFixedArgs...), batch...)
+		output, err := runGitCaptured(ctx, repo, nil, nil, int(processBoundaryScanByteLimit), false, true, args...)
+		var limitErr *GitOutputLimitError
+		if errors.As(err, &limitErr) {
+			return []RiskReason{{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: strings.TrimPrefix(batch[0], ":(literal)")}}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect process boundary diff: %w", err)
+		}
+		batchPaths := make(map[string]struct{}, len(batch))
+		for _, pathspec := range batch {
+			batchPaths[strings.TrimPrefix(pathspec, ":(literal)")] = struct{}{}
+		}
+		// ambiguousReason names the fail-closed scan-limit path when a section's
+		// attribution cannot be trusted: the first path handed to this batch, so
+		// the reason still points somewhere inspectable inside it.
+		ambiguousReason := RiskReason{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: strings.TrimPrefix(batch[0], ":(literal)")}
+		currentPath, inHunk, processSeen, sinkSeen := "", false, false, false
+		for _, line := range bytes.Split(output, []byte{'\n'}) {
+			switch {
+			case bytes.HasPrefix(line, []byte("diff --git ")):
+				separator := bytes.LastIndex(line, []byte(" b/"))
+				if separator < 0 {
+					return []RiskReason{ambiguousReason}, nil
+				}
+				currentPath, inHunk, processSeen, sinkSeen = string(line[separator+len(" b/"):]), false, false, false
+				if _, known := batchPaths[currentPath]; !known {
+					return []RiskReason{ambiguousReason}, nil
+				}
+			case bytes.HasPrefix(line, []byte("@@")):
+				inHunk = true
+			case inHunk && len(line) > 0 && line[0] == '+':
+				added := line[1:]
+				if !processSeen && processSpawnLine.Match(added) {
+					reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: currentPath})
+					processSeen = true
+				}
+				if !sinkSeen && dangerousSinkLine(currentPath, string(added)) {
+					reasons = append(reasons, RiskReason{Code: RiskReasonDangerousSink, Signal: SignalDangerousSink, Path: currentPath})
+					sinkSeen = true
+				}
+			}
+		}
+	}
 	return canonicalRiskReasons(reasons), nil
+}
+
+func isTestRiskPath(logicalPath string) bool {
+	for _, segment := range strings.Split(asciiLower(logicalPath), "/") {
+		switch segment {
+		case "test", "tests", "__tests__", "testdata", "spec":
+			return true
+		}
+	}
+	name := asciiLower(path.Base(logicalPath))
+	return strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") ||
+		strings.Contains(name, ".spec.") || strings.HasPrefix(name, "test_") && strings.HasSuffix(name, ".py") ||
+		strings.HasSuffix(name, "_test.py")
 }
 
 func removeFallbackRiskReasons(reasons []RiskReason) []RiskReason {
@@ -1342,7 +1415,7 @@ func hasHighSignal(signals []RiskSignal) bool {
 func validRiskSignal(signal RiskSignal) bool {
 	switch signal {
 	case SignalAuth, SignalUpdate, SignalSecurity, SignalPayments,
-		SignalDataExposure, SignalDataLoss, SignalPermissions, SignalShellProcess:
+		SignalDataExposure, SignalDataLoss, SignalPermissions, SignalShellProcess, SignalDangerousSink:
 		return true
 	default:
 		return false

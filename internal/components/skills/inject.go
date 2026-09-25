@@ -13,9 +13,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
-// IsSDDSkill reports whether a skill ID belongs to the SDD orchestrator suite.
-// SDD skills are installed by the SDD component; the skills component skips
-// them to prevent duplicate writes when both components are selected.
+// IsSDDSkill identifies retired SDD skill IDs retained for compatibility.
+// They are never installed, regardless of the requested capability.
 func IsSDDSkill(id model.SkillID) bool {
 	return strings.HasPrefix(string(id), "sdd-")
 }
@@ -26,8 +25,7 @@ type InjectionResult struct {
 	Skipped []model.SkillID
 }
 
-// InjectWithCapability writes skill files like Inject, but for SDD skills
-// it extracts only the section matching the given capability.
+// InjectWithCapability writes retained skill files for the given capability.
 func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
 	if !adapter.SupportsSkills() {
 		return InjectionResult{Skipped: skillIDs}, nil
@@ -62,7 +60,7 @@ func directoryAssets(skillDir string, skillIDs []model.SkillID, capability strin
 	var result []directoryAsset
 	var skipped []model.SkillID
 	for _, id := range skillIDs {
-		if IsSDDSkill(id) && capability == "" {
+		if IsSDDSkill(id) {
 			continue
 		}
 		embedDir := "skills/" + string(id)
@@ -143,9 +141,7 @@ func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.S
 // The skills directory is determined by adapter.SkillsDir(), removing
 // the need for any agent-specific switch statements.
 //
-// SDD skills (those whose IDs begin with "sdd-") are intentionally skipped
-// here because the SDD component installs them as part of its own injection.
-// This prevents a write conflict when both components are selected together.
+// Retired SDD skill IDs are skipped; they cannot be restored by explicit selection.
 //
 // Individual skill failures (e.g., missing embedded asset) are logged
 // and skipped rather than aborting the entire operation.

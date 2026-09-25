@@ -20,11 +20,11 @@ const (
 )
 
 var kiroPresetDescriptions = map[KiroModelPreset]string{
-	KiroPresetBalanced:    "Kiro Auto for most phases, Opus for design, Haiku for lightweight archive/onboard work",
-	KiroPresetPerformance: "Frontier Claude-family models for architecture, verification, and review-heavy phases",
+	KiroPresetBalanced:    "Kiro Auto for ODD delegation and review roles",
+	KiroPresetPerformance: "Frontier Claude-family models for delegation and review roles",
 	KiroPresetEconomy:     "Low-credit Kiro options: Qwen, DeepSeek, and MiniMax for budget-conscious runs",
 	KiroPresetOpenWeight:  "Kiro open-weight families: MiniMax, GLM, DeepSeek, and Qwen",
-	KiroPresetCustom:      "Pick the Kiro model option for each SDD phase, JD agent, and general delegation entry individually",
+	KiroPresetCustom:      "Pick the Kiro model for ODD, JD, RDD, and general delegation roles individually",
 }
 
 var kiroPresetOrder = []KiroModelPreset{
@@ -134,7 +134,13 @@ func handleKiroPresetNav(
 	}
 
 	assignments := kiroPresetConstructors[selected]()
-	state.CustomAssignments = assignments
+	// Keep previously installed keys intact without offering retired roles.
+	for key, alias := range state.CustomAssignments {
+		if _, active := assignments[key]; !active {
+			assignments[key] = alias
+		}
+	}
+	state.CustomAssignments = maps.Clone(assignments)
 	return true, assignments
 }
 
@@ -154,7 +160,7 @@ func handleKiroCustomPhaseNav(
 			return true, nil
 		}
 		if cursor == len(claudePhases) {
-			return true, state.CustomAssignments
+			return true, maps.Clone(state.CustomAssignments)
 		}
 		state.InCustomMode = false
 		return true, nil
@@ -173,7 +179,7 @@ func nextKiroAlias(current model.KiroModelAlias) model.KiroModelAlias {
 
 func KiroModelPickerOptionCount(state KiroModelPickerState) int {
 	if state.InCustomMode {
-		return len(claudePhases) + 2 // phase rows + Confirm + Back
+		return len(claudePhases) + 2 // role rows + Confirm + Back
 	}
 	return len(kiroPresetOrder) + 1 // presets + Back
 }
@@ -190,7 +196,7 @@ func renderKiroPresetList(state KiroModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Kiro Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how Kiro models are assigned to each SDD execution phase (explore → apply → archive):"))
+	b.WriteString(styles.SubtextStyle.Render("Choose how Kiro models are assigned to ODD and review roles:"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range kiroPresetOrder {
@@ -213,7 +219,7 @@ func renderKiroCustomPhaseList(state KiroModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Custom Kiro Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Press enter on a phase to cycle: auto → opus → sonnet → haiku → minimax → glm → deepseek → qwen"))
+	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: auto → opus → sonnet → haiku → minimax → glm → deepseek → qwen"))
 	b.WriteString("\n\n")
 
 	for idx, phase := range claudePhases {

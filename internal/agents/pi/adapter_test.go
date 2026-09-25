@@ -2,6 +2,7 @@ package pi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -228,8 +229,24 @@ func TestCodeGraphPathsResolveConfiguredAgentDirectory(t *testing.T) {
 	if paths.MCPConfig != filepath.Join(configured, "mcp.json") {
 		t.Fatalf("MCPConfig = %q", paths.MCPConfig)
 	}
-	if paths.Manifest != filepath.Join(home, ".gentle-ai", "pi-codegraph.json") {
-		t.Fatalf("Manifest = %q", paths.Manifest)
+	sum := sha256.Sum256([]byte(filepath.Clean(configured)))
+	wantManifest := filepath.Join(home, ".gentle-ai", fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
+	if paths.Manifest != wantManifest {
+		t.Fatalf("Manifest = %q, want %q", paths.Manifest, wantManifest)
+	}
+}
+
+func TestCodeGraphPathsDefaultAgentDirectory(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	home := t.TempDir()
+	paths := CodeGraphPaths(home)
+	wantAgentDir := filepath.Join(home, ".pi", "agent")
+	if paths.AgentDir != wantAgentDir {
+		t.Fatalf("AgentDir = %q, want %q", paths.AgentDir, wantAgentDir)
+	}
+	wantManifest := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
+	if paths.Manifest != wantManifest {
+		t.Fatalf("Manifest = %q, want %q", paths.Manifest, wantManifest)
 	}
 }
 

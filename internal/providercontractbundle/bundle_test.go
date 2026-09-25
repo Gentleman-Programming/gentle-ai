@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
@@ -577,7 +577,7 @@ func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
 // a sorted orchestration entry naming pi and its file reference, and Verify
 // must accept the archive built from exactly those bytes.
 func TestPiFacadeLifecycleValidation(t *testing.T) {
-	valid, err := sdd.ReviewExecutionContractFor(model.AgentPi)
+	valid, err := reviewassets.ReviewExecutionContractFor(model.AgentPi)
 	if err != nil {
 		t.Fatal(err)
 	}

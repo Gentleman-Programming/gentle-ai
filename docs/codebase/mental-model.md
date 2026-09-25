@@ -10,7 +10,7 @@ Gentle-AI is an ecosystem configurator for AI coding agents. It owns the install
 |---|---|
 | Go CLI and Bubbletea TUI | `cmd/gentle-ai/main.go`, `internal/app/`, `internal/tui/` |
 | Agent configuration orchestrator | `internal/agents/`, `internal/components/`, `internal/planner/`, `internal/pipeline/` |
-| Asset distributor | `internal/assets/`, `internal/components/sdd/`, `internal/components/skills/` |
+| Asset distributor | `internal/assets/`, `internal/components/agentguidance/`, `internal/components/skills/` |
 | External tool integrator | `internal/components/engram/`, `internal/components/gga/`, `internal/components/mcp/` |
 
 ## What this project is not
@@ -45,7 +45,7 @@ install/sync path
 
 - **Backups before mutation**: managed installs, syncs, and uninstalls must preserve a rollback path.
 - **Adapters own paths**: per-agent config roots and strategy decisions stay in `internal/agents/<agent>/`.
-- **Components own behavior**: Engram, SDD, skills, MCP, persona, permissions, GGA, and plugins stay in `internal/components/<component>/`.
+- **Components own behavior**: Engram, ODD guidance, review assets, skills, MCP, persona, permissions, GGA, and plugins stay in `internal/components/<component>/`.
 - **Planner owns ordering**: do not hand-sort component dependencies in CLI or TUI flows.
 - **Sync stays idempotent**: running sync twice should not rewrite already-current managed assets.
 - **External internals stay external**: do not document or change Engram cloud/dashboard/store internals as if they live here.

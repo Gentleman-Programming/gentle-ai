@@ -25,6 +25,26 @@ func TestModelEffortLevels(t *testing.T) {
 	}
 }
 
+func TestLegacySDDIdentitiesRemainReservedWithoutInventedODDAgents(t *testing.T) {
+	configurable := ConfigurableAgentPhases()
+	for _, legacy := range SDDPhases() {
+		found := false
+		for _, role := range configurable {
+			if role == legacy {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("legacy agent %q no longer reserved", legacy)
+		}
+	}
+	for _, role := range configurable {
+		if role == "odd-explorer" || role == "odd-worker" || role == "odd-verify" {
+			t.Errorf("prompt-only OpenCode worker class %q exposed as installed agent", role)
+		}
+	}
+}
+
 func TestReviewPhasesCompleteRuntimeSet(t *testing.T) {
 	want := []string{
 		"review-risk",

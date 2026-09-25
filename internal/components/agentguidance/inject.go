@@ -58,12 +58,17 @@ type templateBootstrapper interface {
 // guidance is delivered through a managed orchestrator definition. The adapter
 // retains its normal targetDir-derived path when SettingsPath is empty.
 type RoutingOptions struct {
-	SettingsPath string
+	SettingsPath                string
+	CodexPhaseModelAssignments  map[string]string
+	CodexModelAssignments       map[string]model.CodexEffort
+	CodexCarrilModelAssignments map[string]string
 }
 
-// InjectRouting installs the organic routing guidance for one supported agent
-// under targetDir, which is the installation root the adapter resolves its
-// configuration paths from.
+// InjectRoutingWithOptions installs the organic routing guidance for one
+// supported agent under targetDir, which is the installation root the adapter
+// resolves its configuration paths from, using a caller-resolved settings path
+// when the adapter's effective configuration authority differs from its
+// ordinary targetDir-derived path.
 //
 // Delivery is strategy-aware: writing one markdown file for every adapter would
 // land the guidance in a scope the agent never loads, or inside a template its
@@ -71,19 +76,16 @@ type RoutingOptions struct {
 //
 // Only the marked section is owned by Gentle AI: everything a user wrote around
 // it is preserved verbatim, and a second identical injection is a no-op.
-func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
-	return InjectRoutingWithOptions(targetDir, agent, RoutingOptions{})
-}
-
-// InjectRoutingWithOptions installs routing guidance using a caller-resolved
-// settings path when the adapter's effective configuration authority differs
-// from its ordinary targetDir-derived path.
 func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) (Result, error) {
 	// Render before resolving the delivery so an unsupported agent is rejected
 	// without having touched the filesystem.
 	rendered, err := RenderRouting(agent)
 	if err != nil {
 		return Result{}, err
+	}
+	if agent == model.AgentCodex {
+		rendered += "\n\n### Codex ODD worker assignments\n\nUse the exact model and reasoning_effort for the selected worker class when calling `spawn_agent`; set `fork_turns: \"none\"` for overrides. These assignments apply to ODD delegation, not native RDD review.\n\n" +
+			model.RenderCodexODDAssignments(options.CodexPhaseModelAssignments, options.CodexModelAssignments, options.CodexCarrilModelAssignments)
 	}
 
 	delivery, err := resolveRoutingDelivery(targetDir, agent, options)

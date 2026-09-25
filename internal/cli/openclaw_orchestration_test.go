@@ -34,12 +34,6 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 			fileName:  "SOUL.md",
 			marker:    "<!-- gentle-ai:persona -->",
 		},
-		{
-			name:      "sdd writes protocol to workspace AGENTS",
-			component: model.ComponentSDD,
-			fileName:  "AGENTS.md",
-			marker:    "<!-- gentle-ai:sdd-orchestrator -->",
-		},
 	}
 
 	for _, tt := range tests {
@@ -87,6 +81,33 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("ordinary install writes applicable test-first ODD routing to workspace AGENTS", func(t *testing.T) {
+		home, workspace := t.TempDir(), t.TempDir()
+		selection := model.Selection{Agents: []model.AgentID{model.AgentOpenClaw}, StrictTDD: true}
+		runtime, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection,
+			planner.ResolvedPlan{Agents: selection.Agents}, system.PlatformProfile{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.workspaceDir = workspace
+		runInstallInjectionSteps(t, runtime)
+		body := readOpenClawTestFile(t, filepath.Join(workspace, "AGENTS.md"))
+		for _, want := range []string{"gentle-ai:agent-routing", "Organic Driven Development (ODD)", "relevant runnable deterministic test"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("workspace AGENTS.md missing %q", want)
+			}
+		}
+		if strings.Contains(body, "gentle-ai:strict-tdd-mode") {
+			t.Error("workspace AGENTS.md retained retired strict TDD marker")
+		}
+		if strings.Contains(body, "gentle-ai:sdd-orchestrator") {
+			t.Error("workspace AGENTS.md retained retired SDD guidance")
+		}
+		if _, err := os.Stat(filepath.Join(home, "AGENTS.md")); !os.IsNotExist(err) {
+			t.Fatalf("ordinary workspace install wrote home AGENTS.md: %v", err)
+		}
+	})
 }
 
 func TestComponentSyncStepOpenClawGlobalInjections(t *testing.T) {
@@ -107,12 +128,6 @@ func TestComponentSyncStepOpenClawGlobalInjections(t *testing.T) {
 			component: model.ComponentPersona,
 			fileName:  "SOUL.md",
 			marker:    "<!-- gentle-ai:persona -->",
-		},
-		{
-			name:      "sdd sync writes protocol to home AGENTS",
-			component: model.ComponentSDD,
-			fileName:  "AGENTS.md",
-			marker:    "<!-- gentle-ai:sdd-orchestrator -->",
 		},
 	}
 
@@ -187,7 +202,7 @@ func testGlobalArtifactRoots(t *testing.T, sync bool) {
 			}
 			selection := model.Selection{
 				Agents:     []model.AgentID{model.AgentOpenClaw, model.AgentWindsurf, model.AgentPi},
-				Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD, model.ComponentSkills},
+				Components: []model.ComponentID{model.ComponentPersona, model.ComponentSkills},
 				Skills:     []model.SkillID{model.SkillGoTesting},
 				Persona:    model.PersonaGentleman, StrictTDD: true,
 			}
@@ -233,6 +248,7 @@ func testGlobalArtifactRoots(t *testing.T, sync bool) {
 					t.Errorf("ambient content changed: %q", got)
 				}
 			}
+			assertOpenClawRoutingAndReview(t, home)
 			for _, path := range []string{"AGENTS.md", "SOUL.md", ".openclaw/skills/go-testing/SKILL.md", ".codeium/windsurf/memories/global_rules.md", ".codeium/windsurf/skills/go-testing/SKILL.md", ".pi/gentle-ai/persona.json"} {
 				if _, err := os.Stat(filepath.Join(home, path)); err != nil {
 					t.Errorf("missing global artifact %s: %v", path, err)
@@ -250,7 +266,7 @@ func TestExplicitWorkspaceInstallOverridesOpenClawConfig(t *testing.T) {
 	writeOpenClawConfigWithWorkspace(t, home, configured)
 	selection := model.Selection{
 		Agents:     []model.AgentID{model.AgentOpenClaw, model.AgentWindsurf, model.AgentPi},
-		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD, model.ComponentSkills},
+		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSkills},
 		Skills:     []model.SkillID{model.SkillGoTesting}, Persona: model.PersonaGentleman,
 	}
 	rt, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}, system.PlatformProfile{})
@@ -258,7 +274,8 @@ func TestExplicitWorkspaceInstallOverridesOpenClawConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	runInstallInjectionSteps(t, rt)
-	for _, path := range []string{"AGENTS.md", "SOUL.md", ".openclaw/skills/go-testing/SKILL.md", ".windsurf/workflows/sdd-new.md", ".pi/gentle-ai/persona.json"} {
+	assertOpenClawRoutingAndReview(t, workspace)
+	for _, path := range []string{"AGENTS.md", "SOUL.md", ".openclaw/skills/go-testing/SKILL.md", ".codeium/windsurf/memories/global_rules.md", ".pi/gentle-ai/persona.json"} {
 		if _, err := os.Stat(filepath.Join(workspace, path)); err != nil {
 			t.Errorf("missing workspace artifact %s: %v", path, err)
 		}
@@ -369,16 +386,28 @@ func quoteJSON(value string) string {
 
 func assertOpenClawInstructionsInWorkspace(t *testing.T, workspace string) {
 	t.Helper()
+	assertOpenClawRoutingAndReview(t, workspace)
 	agentsText := readOpenClawTestFile(t, filepath.Join(workspace, "AGENTS.md"))
-	for _, want := range []string{"gentle-ai:engram-protocol", "gentle-ai:sdd-orchestrator", "gentle-ai:strict-tdd-mode"} {
-		if !strings.Contains(agentsText, want) {
-			t.Fatalf("active workspace AGENTS.md missing %q; got:\n%s", want, agentsText)
-		}
+	if !strings.Contains(agentsText, "gentle-ai:engram-protocol") {
+		t.Fatalf("active workspace AGENTS.md missing Engram protocol")
 	}
 
 	soulText := readOpenClawTestFile(t, filepath.Join(workspace, "SOUL.md"))
 	if !strings.Contains(soulText, "gentle-ai:persona") || !strings.Contains(soulText, "Senior Architect") {
 		t.Fatalf("active workspace SOUL.md missing Gentle AI persona; got:\n%s", soulText)
+	}
+}
+
+func assertOpenClawRoutingAndReview(t *testing.T, root string) {
+	t.Helper()
+	agentsText := readOpenClawTestFile(t, filepath.Join(root, "AGENTS.md"))
+	for _, want := range []string{"gentle-ai:agent-routing", "Organic Driven Development (ODD)", "Receipt-driven development is user-owned"} {
+		if !strings.Contains(agentsText, want) {
+			t.Fatalf("AGENTS.md at %s missing %q", root, want)
+		}
+	}
+	if strings.Contains(agentsText, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatalf("AGENTS.md at %s retained legacy SDD orchestrator section", root)
 	}
 }
 

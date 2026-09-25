@@ -106,6 +106,96 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	}
 }
 
+// TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion is the
+// acceptance scenario for issue #4687: a stable-channel upgrade target whose
+// major differs from the running binary's major must compose a /vN suffix
+// matching the TARGET version, not the running binary. This is what makes a
+// cross-major upgrade resolvable: a v3 binary targeting v4.0.0 composes
+// .../v4/... and a v3 binary targeting v2.0.0 composes .../v2/....
+//
+// The composition happens inside goInstallUpgrade, which is reached from
+// runStrategy only on a Windows profile with Go on PATH and a declared
+// GoImportPath — gentleAISelfUpgradeMethod routes gentle-ai on Linux and
+// macOS to InstallBinary (the minisign-verified release download) and the
+// beta channel bypasses this path through goInstallMainUpgrade. The previous
+// rewrite used a Linux profile and never reached the composition: the
+// routing went straight to binaryUpgrade and the test failed on
+// ErrReleaseTrustUnavailable. The preflight gate inside goInstallUpgrade is
+// satisfied the same way as
+// TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget: a fake binary
+// is written into a temp GOBIN, lookPathFn resolves "gentle-ai" to that
+// path, and execCommand hands a synthetic GOBIN back to goInstallDestinationDir.
+func TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion(t *testing.T) {
+	var tool update.ToolInfo
+	for _, candidate := range update.Tools {
+		if candidate.Name == "gentle-ai" {
+			tool = candidate
+			break
+		}
+	}
+	if tool.GoImportPath == "" {
+		t.Fatal("shipped gentle-ai registry entry must declare GoImportPath")
+	}
+
+	tests := []struct {
+		name       string
+		latestVer  string
+		wantTarget string
+	}{
+		{
+			name:       "v3 binary targeting v4.0.0 composes /v4",
+			latestVer:  "4.0.0",
+			wantTarget: "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0",
+		},
+		{
+			name:       "v3 binary targeting v2.0.0 composes /v2",
+			latestVer:  "2.0.0",
+			wantTarget: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.0.0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gobin := t.TempDir()
+			destination := writeFakeBinary(t, gobin, "gentle-ai.exe")
+
+			origLookPath := lookPathFn
+			t.Cleanup(func() { lookPathFn = origLookPath })
+			lookPathFn = func(string) (string, error) { return destination, nil }
+
+			origExec := execCommand
+			t.Cleanup(func() { execCommand = origExec })
+
+			var gotName string
+			var gotArgs []string
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				if name == "go" && len(args) == 2 && args[0] == "env" {
+					return mockCmd("echo", gobin)
+				}
+				gotName = name
+				gotArgs = args
+				return mockCmd("true")
+			}
+
+			r := update.UpdateResult{
+				Tool:          tool,
+				LatestVersion: tc.latestVer,
+				Status:        update.UpdateAvailable,
+			}
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true, Supported: true}
+
+			if _, err := runStrategy(context.Background(), r, profile); err != nil {
+				t.Fatalf("runStrategy: %v", err)
+			}
+
+			wantArgs := []string{"install", tc.wantTarget}
+			if gotName != "go" || len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
+				t.Fatalf("exec command = %q %v, want %v", gotName, gotArgs, wantArgs)
+			}
+		})
+	}
+}
+
 func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
@@ -127,8 +217,10 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
 		},
-		LatestVersion: "main@972997650b51",
-		Status:        update.UpdateAvailable,
+		LatestVersion:  "main@972997650b51",
+		BetaCommit:     "972997650b51abcdef0123456789abcdef012345",
+		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4",
+		Status:         update.UpdateAvailable,
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}
 
@@ -140,18 +232,40 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	if gotName != "go" {
 		t.Fatalf("exec name = %q, want %q", gotName, "go")
 	}
-	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main"}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@972997650b51abcdef0123456789abcdef012345"}
 	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
 	for _, want := range []string{
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v3",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v3",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v3",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v4",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v4",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v4",
 	} {
 		if !envContains(gotCmd.Env, want) {
 			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
 		}
+	}
+}
+
+func TestBetaInstallRejectsUnverifiedTargetBeforeMutation(t *testing.T) {
+	origExec := execCommand
+	t.Cleanup(func() { execCommand = origExec })
+	called := false
+	execCommand = func(name string, args ...string) *exec.Cmd { called = true; return mockCmd("true") }
+	tool := update.ToolInfo{Name: "gentle-ai", Owner: "Gentleman-Programming", Repo: "gentle-ai", InstallMethod: update.InstallBinary}
+	cases := []struct{ name, sha, module, version string }{
+		{name: "no metadata", version: "main@972997650b51"},
+		{name: "wrong module", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/other/gentle-ai/v4", version: "main@972997650b51"},
+		{name: "mismatched short revision", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/gentleman-programming/gentle-ai/v4", version: "main@6eff4a1ba110"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := update.UpdateResult{Tool: tool, LatestVersion: tc.version, BetaCommit: tc.sha, BetaModulePath: tc.module, Status: update.UpdateAvailable}
+			_, err := runStrategy(context.Background(), r, system.PlatformProfile{OS: "linux", PackageManager: "apt"})
+			if err == nil || called {
+				t.Fatalf("unverified target should not execute: err=%v, called=%v", err, called)
+			}
+		})
 	}
 }
 

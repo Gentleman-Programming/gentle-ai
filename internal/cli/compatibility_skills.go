@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
@@ -53,7 +52,7 @@ func (s compatibilitySkillsRefreshStep) ID() string {
 }
 
 func needsCompatibilitySkillsRefresh(components []model.ComponentID) bool {
-	return slices.Contains(components, model.ComponentSkills) || slices.Contains(components, model.ComponentSDD)
+	return slices.Contains(components, model.ComponentSkills)
 }
 
 func compatibilitySkillsDir(homeDir string) (string, bool, error) {
@@ -81,8 +80,7 @@ func compatibilitySkillsRefreshable(homeDir string, selection model.Selection) (
 	if err != nil || !ok {
 		return false, err
 	}
-	return slices.Contains(selection.Components, model.ComponentSDD) ||
-		slices.Contains(selection.Components, model.ComponentSkills) && len(selectedSkillIDs(selection)) > 0, nil
+	return slices.Contains(selection.Components, model.ComponentSkills) && len(selectedSkillIDs(selection)) > 0, nil
 }
 
 func compatibilitySkillFiles(skillDir string, components []model.ComponentID, selection model.Selection) ([]string, error) {
@@ -104,15 +102,6 @@ func compatibilitySkillPaths(skillDir string, components []model.ComponentID, se
 		prospective, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
 		if err != nil {
 			return nil, fmt.Errorf("enumerate compatibility skills: %w", err)
-		}
-		for _, path := range prospective {
-			paths[path] = struct{}{}
-		}
-	}
-	if slices.Contains(components, model.ComponentSDD) {
-		prospective, err := sdd.SkillDirectoryPaths(skillDir, "")
-		if err != nil {
-			return nil, fmt.Errorf("enumerate compatibility SDD skills: %w", err)
 		}
 		for _, path := range prospective {
 			paths[path] = struct{}{}
@@ -201,16 +190,6 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 			if result.Changed {
 				changed = append(changed, result.Files...)
 			}
-		}
-	}
-
-	if slices.Contains(s.components, model.ComponentSDD) {
-		result, injectErr := sdd.InjectSkillDirectoryWithCompatibilityWriter(skillDir, "", writer.Write, writer.Remove)
-		if injectErr != nil {
-			return fmt.Errorf("refresh compatibility SDD skills: %w", injectErr)
-		}
-		if result.Changed {
-			changed = append(changed, result.Files...)
 		}
 	}
 

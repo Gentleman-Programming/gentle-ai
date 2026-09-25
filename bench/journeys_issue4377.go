@@ -12,7 +12,8 @@ import (
 // issue4377Journeys drives the customizable installer through its RDD choice
 // and final confirmation under a real PTY. The sandbox HOME is isolated, and
 // the exchange quits before installation, proving a cancelled choice cannot
-// change the user's global configuration.
+// change the user's global configuration. #4377 tests the deferred RDD choice;
+// ODD's default applicable test-first policy is not an installer choice.
 func issue4377Journeys() []Journey {
 	return []Journey{{
 		ID:     "j127-customizable-install-rdd-choice",
@@ -65,6 +66,8 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 						if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", 2)+"\r"); err != nil {
 							return err
 						}
+						// #4377 keeps the deferred RDD decision after community tools;
+						// there is no separate Strict TDD installer choice to confirm.
 						return waitForIssue4377TTY(reader, []string{"Community Tools/Plugins", "Continue"}, func() error {
 							if communityToolCursorRows == 0 {
 								return fmt.Errorf("community tools rendered no tool rows")

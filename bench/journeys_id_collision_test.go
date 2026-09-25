@@ -24,10 +24,7 @@ func journeySources() []journeySource {
 	sources := []journeySource{
 		{"journeys.go", coreJourneys()},
 		{"journeys_edge.go", edgeJourneys()},
-		{"journeys_sdd.go", sddJourneys()},
-		{"journeys_issue_2891.go", issue2891Journeys()},
-		{"journeys_issue2696.go", issue2696Journeys()},
-		{"journeys_issue4210.go", issue4210Journeys()},
+		{"journeys_review_recovery.go", reviewRecoveryJourneys()},
 		{"journeys_issue_3065.go", issue3065Journeys()},
 		{"journeys_stop_hook.go", stopHookJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
@@ -51,7 +48,6 @@ func journeySources() []journeySource {
 		{"journeys_managed_assets.go", managedAssetJourneys()},
 		{"journeys_issue2906.go", issue2906Journeys()},
 		{"journeys_issue_2138.go", issue2138Journeys()},
-		{"journeys_issue_3336.go", issue3336Journeys()},
 		{"journeys_issue_3500.go", issue3500Journeys()},
 		{"journeys_issue_3043.go", issue3043Journeys()},
 		{"journeys_issue_3557.go", issue3557Journeys()},
@@ -59,7 +55,6 @@ func journeySources() []journeySource {
 		{"journeys_repository_context.go", repositoryContextJourneys()},
 		{"journeys_provider_capture.go", providerCaptureRetryJourneys()},
 		{"journeys_captured_provider_validator.go", capturedProviderValidatorJourneys()},
-		{"journeys_sdd_shared_scaffolding.go", sddSharedScaffoldingJourneys()},
 		{"journeys_issue3321.go", issue3321Journeys()},
 		{"journeys_issue3587.go", issue3587Journeys()},
 		{"journeys_issue3748.go", issue3748Journeys()},
@@ -149,6 +144,47 @@ func journeyIDCollisions(sources []journeySource) []string {
 	}
 
 	return collisions
+}
+
+// TestRetiredSDDJourneysAreAbsent keeps deleted native workflow IDs out of the core corpus.
+func TestRetiredSDDJourneysAreAbsent(t *testing.T) {
+	retired := map[string]bool{
+		"j41-kill-switch-versus-sdd-pre-verify":                              true,
+		"j42-kill-switch-versus-sdd-archive":                                 true,
+		"j44-sdd-historical-requirement-stale-pass":                          true,
+		"j52-sdd-stale-authority-does-not-shadow-approved-candidate":         true,
+		"j53-sdd-ambiguous-authorities-fail-closed":                          true,
+		"j54-sdd-missing-authority-receipt-fails-closed":                     true,
+		"j55-sdd-mismatched-authority-receipt-fails-closed":                  true,
+		"j56-sdd-non-allow-post-apply-gate-fails-closed":                     true,
+		"j58-sdd-foreign-openspec-path-fails-closed":                         true,
+		"j63-disabled-failed-verification-unmanaged-remediation":             true,
+		"j47-disabled-mode-archives-discovered-scope-changed-authority":      true,
+		"j49-status-without-cwd-honors-kill-switch":                          true,
+		"j96-sdd-same-parent-repository-edit-authority":                      true,
+		"j98-sdd-flat-root-spec-is-discovered":                               true,
+		"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding": true,
+		"j128-historical-verification-does-not-block-apply":                  true,
+		"j3336-opencode-sdd-fresh-default-preflight":                         true,
+		"j2138-opencode-native-fallback-boundary":                            true,
+	}
+	for _, journey := range Journeys() {
+		if retired[journey.ID] {
+			t.Errorf("retired SDD journey %q remains in the core corpus", journey.ID)
+		}
+	}
+}
+
+// TestCoreJourneysAvoidRetiredWorkflowCommands guards executable step declarations,
+// including composite capabilities, against deleted native SDD commands.
+func TestCoreJourneysAvoidRetiredWorkflowCommands(t *testing.T) {
+	for _, journey := range Journeys() {
+		for _, step := range journey.Steps {
+			if step.Requires != nil && len(step.Requires.Verb) > 0 && strings.HasPrefix(step.Requires.Verb[0], "sdd-") {
+				t.Errorf("journey %q requires retired command %q", journey.ID, step.Requires.Verb[0])
+			}
+		}
+	}
 }
 
 // TestJourneyIDsAreUniqueAcrossSourceFiles is the focused full-ID and numeric-prefix collision check.

@@ -98,9 +98,8 @@ func collectDocumentedInvocations(t *testing.T) []documentedInvocation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// docs/: the human-facing instruction surface. docs/audits are dated
-	// snapshots of past investigations, not living instructions, so they are
-	// deliberately outside the runnable corpus.
+	// docs/: the human-facing instruction surface. Historical audit snapshots
+	// are not runnable guidance.
 	err = filepath.WalkDir(filepath.Join("..", "..", "docs"), func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -215,8 +214,8 @@ func classifyWords(words []string, safeVerbs map[string]bool, repo string) ([]st
 			continue
 		case strings.Contains(word, documentedRuntimeAgentIDPlaceholder):
 			// The placeholder appears only in the shared review contract. Its
-			// OpenCode rendering is pinned by TestGoldenSDD_OpenCode_Multi, so
-			// execute the documented command with that rendered runtime identity.
+			// OpenCode renders this runtime identity; execute the documented
+			// command with that concrete value.
 			word = strings.ReplaceAll(word, documentedRuntimeAgentIDPlaceholder, documentedRuntimeAgentID)
 		}
 		if wordNeedsShell(placeholderRegexp.ReplaceAllString(word, "")) {
@@ -380,6 +379,57 @@ func registrySurfaceViolation(words []string) string {
 var documentedInvocationKnownFailures = map[string]string{}
 
 func TestDocumentedInvocationsRunAsDocumented(t *testing.T) {
+	// Retired workflow documents must not remain in the current documentation tree.
+	for _, name := range []string{"openspec-config.md", "antigravity-sdd-workaround.md", "prd-opencode-profiles.md"} {
+		path := filepath.Join("..", "..", "docs", name)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("retired workflow document remains: %s", path)
+		} else if !os.IsNotExist(err) {
+			t.Errorf("cannot inspect retired document %s: %v", path, err)
+		}
+	}
+	// Secondary live guides must not promise the removed SDD workflow.
+	for name, retiredClaims := range map[string][]string{
+		"CONTRIBUTING.md":                      {"Delivery Strategy for SDD Changes", "Before `sdd-apply` starts"},
+		"docs/codebase/sync-and-cloud.md":      {"Default sync scope includes SDD", "OpenCode SDD profile flags"},
+		"docs/codebase/integrations.md":        {"| SDD assets |"},
+		"docs/codebase/maintainer-playbook.md": {"| SDD workflow |"},
+	} {
+		content, err := os.ReadFile(filepath.Join("..", "..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, claim := range retiredClaims {
+			if strings.Contains(string(content), claim) {
+				t.Errorf("%s still promises retired workflow: %q", name, claim)
+			}
+		}
+	}
+	// Primary entry points must not advertise retired SDD commands or artifacts.
+	for _, name := range []string{"README.md", "docs/intended-usage.md", "docs/agents.md", "docs/pi.md"} {
+		content, err := os.ReadFile(filepath.Join("..", "..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, retired := range []string{"/sdd-", "/gentle-sdd-", "gentle-ai sdd-", "SDD phases", "SDD agents", "OpenSpec"} {
+			if strings.Contains(string(content), retired) {
+				t.Errorf("%s still advertises retired %q", name, retired)
+			}
+		}
+		// Check local Markdown links in the same primary guidance, without
+		// treating remote URLs, mailto links or in-page anchors as files.
+		links := regexp.MustCompile(`\]\(([^)]+)\)`)
+		for _, match := range links.FindAllStringSubmatch(string(content), -1) {
+			target := strings.SplitN(match[1], "#", 2)[0]
+			if target == "" || strings.Contains(target, ":") {
+				continue
+			}
+			resolved := filepath.Join("..", "..", filepath.Dir(name), target)
+			if _, err := os.Stat(resolved); err != nil {
+				t.Errorf("%s has broken local link %q: %v", name, match[1], err)
+			}
+		}
+	}
 	corpus := collectDocumentedInvocations(t)
 	safeVerbs := platformIndependentVerbs(t)
 

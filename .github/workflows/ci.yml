@@ -260,7 +260,7 @@ jobs:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
           GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
         run: |
-          $packages = @('./internal/cli', './internal/reviewtransaction', './internal/sddstatus', './internal/components/engram')
+          $packages = @('./internal/cli', './internal/reviewtransaction', './internal/components/engram')
           $expected = @(
             'TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals',
             'TestRARPrivateOwnerRemainsTokenUserOnly',

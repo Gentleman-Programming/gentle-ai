@@ -53,7 +53,7 @@
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/antigravity/sdd-orchestrator.md"
+      "path": "internal/assets/antigravity/orchestrator.md"
     },
     {
       "context": "ACI",
@@ -63,52 +63,52 @@
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/claude/sdd-orchestrator.md"
+      "path": "internal/assets/claude/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/codex/sdd-orchestrator.md"
+      "path": "internal/assets/codex/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/cursor/sdd-orchestrator.md"
+      "path": "internal/assets/cursor/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/gemini/sdd-orchestrator.md"
+      "path": "internal/assets/gemini/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/generic/sdd-orchestrator.md"
+      "path": "internal/assets/generic/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/hermes/sdd-orchestrator.md"
+      "path": "internal/assets/hermes/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/kimi/sdd-orchestrator.md"
+      "path": "internal/assets/kimi/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/kiro/sdd-orchestrator.md"
+      "path": "internal/assets/kiro/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/opencode/sdd-orchestrator.md"
+      "path": "internal/assets/opencode/orchestrator.md"
     },
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/qwen/sdd-orchestrator.md"
+      "path": "internal/assets/qwen/orchestrator.md"
     },
     {
       "context": "ACI",
@@ -118,7 +118,7 @@
     {
       "context": "ACI",
       "disposition": "REGENERATE",
-      "path": "internal/assets/windsurf/sdd-orchestrator.md"
+      "path": "internal/assets/windsurf/orchestrator.md"
     },
     {
       "context": "ACI",
@@ -202,7 +202,7 @@
     },
     {
       "context": "SDD",
-      "disposition": "KEEP",
+      "disposition": "DELETE",
       "path": "internal/cli/sdd_attempt.go"
     },
     {
@@ -336,23 +336,23 @@
       "path": "internal/components/golden_test.go"
     },
     {
-      "context": "SDD",
-      "disposition": "KEEP",
+      "context": "RAR",
+      "disposition": "DELETE",
       "path": "internal/components/sdd/bounded_review_contract_test.go"
     },
     {
-      "context": "SDD",
-      "disposition": "KEEP",
+      "context": "RAR",
+      "disposition": "DELETE",
       "path": "internal/components/sdd/boundedreview.go"
     },
     {
-      "context": "SDD",
-      "disposition": "KEEP",
+      "context": "RAR",
+      "disposition": "DELETE",
       "path": "internal/components/sdd/inject.go"
     },
     {
-      "context": "SDD",
-      "disposition": "KEEP",
+      "context": "RAR",
+      "disposition": "DELETE",
       "path": "internal/components/sdd/inject_test.go"
     },
     {
@@ -462,12 +462,12 @@
     },
     {
       "context": "SDD",
-      "disposition": "KEEP",
+      "disposition": "DELETE",
       "path": "internal/sddstatus/runtime_ledger.go"
     },
     {
       "context": "SDD",
-      "disposition": "KEEP",
+      "disposition": "DELETE",
       "path": "internal/sddstatus/runtime_ledger_test.go"
     },
     {

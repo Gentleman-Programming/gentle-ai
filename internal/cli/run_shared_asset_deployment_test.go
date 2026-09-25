@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
@@ -35,20 +36,30 @@ func embeddedSharedFileNames(t *testing.T) []string {
 	return names
 }
 
-// TestComponentPathsSDDCoversEveryEmbeddedSharedFile pins the sync property:
-// every embedded shared file is a tracked SDD component path, so a sync backs
-// it up and verifies it instead of leaving it unmanaged.
+// Shared files remain embedded as source material; ordinary skills own their
+// installed paths, rather than an implicit SDD-wide shared directory.
 func TestComponentPathsSDDCoversEveryEmbeddedSharedFile(t *testing.T) {
-	home := t.TempDir()
-	adapters := resolveAdapters([]model.AgentID{model.AgentGeminiCLI})
-
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
-	skillDir := adapters[0].SkillsDir(home)
-
-	for _, name := range embeddedSharedFileNames(t) {
-		want := filepath.Join(skillDir, "_shared", name)
-		if !containsPath(paths, want) {
-			t.Errorf("componentPaths(sdd) missing embedded shared file %q (%s)", name, want)
+	names := embeddedSharedFileNames(t)
+	for _, retained := range []string{"engram-convention.md", "odd-orchestrator-sections.md", "skill-resolver.md"} {
+		found := false
+		for _, name := range names {
+			if name == retained {
+				found = true
+			}
 		}
+		if !found {
+			t.Errorf("retained shared source missing: %s", retained)
+		}
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, "sdd-") || name == "openspec-convention.md" {
+			t.Errorf("retired shared source still embedded: %s", name)
+		}
+	}
+	home := t.TempDir()
+	selection := model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}
+	paths := componentPaths(home, selection, resolveAdapters([]model.AgentID{model.AgentGeminiCLI}), model.ComponentSkills)
+	if want := filepath.Join(home, ".gemini", "skills", "go-testing", "SKILL.md"); !containsPath(paths, want) {
+		t.Fatalf("retained skill not tracked: %s", want)
 	}
 }

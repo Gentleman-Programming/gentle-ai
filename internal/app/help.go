@@ -18,13 +18,6 @@ COMMANDS
   sync         Sync agent configs and skills to current version
   skill-registry refresh
                Refresh .atl/skill-registry.md with cache-hit fast path
-  sdd-status [change]
-               Print native SDD phase status for orchestrators
-  sdd-continue [change]
-               Print native SDD dispatcher routing output
-  sdd-attempt grant --cwd <repo> --change <change>
-               Record explicitly authorized edit roots for one change instance
-               Validate exact verification-report bytes without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; the final capture closes and burns its review

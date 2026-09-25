@@ -194,6 +194,22 @@ func writeScratch(sandbox *Sandbox, name string, content []byte) (string, error)
 	return path, nil
 }
 
+// These explicit-lineage helpers remain for the runner's negative selection
+// tests; neither constructs an SDD workspace or invokes a retired CLI verb.
+func sddCaptureSelectedAuthorityLenses(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("no selected authority lineage")
+	}
+	return captureAllLensesFor(r, "--lineage", r.sandbox.Lineage)
+}
+
+func sddCaptureSelectedAuthorityEvidence(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("no selected authority lineage")
+	}
+	return captureFinalEvidenceFor(r, "--lineage", r.sandbox.Lineage)
+}
+
 // captureAllLenses drives the collect loop the product itself dictates: read
 // the next transition, synthesize the reviewer result it asks for, capture it,
 // repeat. Each capture counts as one model run.
@@ -849,15 +865,12 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 //
 // coreJourneys below are the flows drawn from the community testing guide and
 // the failure paths it collected; edgeJourneys in journeys_edge.go are the edge
-// cases those flows never reached; sddJourneys in journeys_sdd.go is the SDD
-// remediation successor cycle and fail-closed authority controls; and
+// cases those flows never reached; reviewRecoveryJourneys preserves j43's
+// recovery guard-rail sequence; and
 // waveOneJourneys pins integrated community fixes at their real CLI boundary.
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
-	journeys = append(journeys, sddJourneys()...)
-	journeys = append(journeys, issue2891Journeys()...)
-	journeys = append(journeys, issue2696Journeys()...)
-	journeys = append(journeys, issue4210Journeys()...)
+	journeys = append(journeys, reviewRecoveryJourneys()...)
 	journeys = append(journeys, issue3065Journeys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)
@@ -880,7 +893,6 @@ func Journeys() []Journey {
 	journeys = append(journeys, managedAssetJourneys()...)
 	journeys = append(journeys, issue2906Journeys()...)
 	journeys = append(journeys, issue2138Journeys()...)
-	journeys = append(journeys, issue3336Journeys()...)
 	journeys = append(journeys, issue3500Journeys()...)
 	journeys = append(journeys, issue3043Journeys()...)
 	journeys = append(journeys, issue3557Journeys()...)
@@ -888,7 +900,6 @@ func Journeys() []Journey {
 	journeys = append(journeys, repositoryContextJourneys()...)
 	journeys = append(journeys, providerCaptureRetryJourneys()...)
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)
-	journeys = append(journeys, sddSharedScaffoldingJourneys()...)
 	journeys = append(journeys, issue3321Journeys()...)
 	journeys = append(journeys, issue3587Journeys()...)
 	journeys = append(journeys, issue3748Journeys()...)

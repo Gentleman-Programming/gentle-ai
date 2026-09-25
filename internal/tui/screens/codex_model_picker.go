@@ -38,16 +38,18 @@ var codexPresetDescriptions = map[CodexModelPreset]string{
 }
 
 var codexPresetConstructors = map[CodexModelPreset]func() map[string]model.CodexEffort{
-	CodexPresetLowCost:     model.CodexModelPresetLowCost,
-	CodexPresetRecommended: model.CodexModelPresetRecommended,
-	CodexPresetPowerful:    model.CodexModelPresetPowerful,
+	CodexPresetLowCost: func() map[string]model.CodexEffort { return model.CodexODDEffortsForPreset(string(CodexPresetLowCost)) },
+	CodexPresetRecommended: func() map[string]model.CodexEffort {
+		return model.CodexODDEffortsForPreset(string(CodexPresetRecommended))
+	},
+	CodexPresetPowerful: func() map[string]model.CodexEffort {
+		return model.CodexODDEffortsForPreset(string(CodexPresetPowerful))
+	},
 }
 
-// codexCustomPhases is the ordered list of SDD, ODD and RDD roles for the Custom
+// codexCustomPhases is the ordered list of ODD and RDD roles for the Custom
 // per-phase model picker. Order matches codexTierGroups phase groupings.
 var codexCustomPhases = []string{
-	"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
-	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
 	"odd-explorer", "odd-worker", "odd-verify",
 	"rdd-risk", "rdd-readability", "rdd-reliability", "rdd-resilience", "rdd-refuter", "rdd-validator",
@@ -111,7 +113,7 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 	}
 	for _, preset := range codexPresetOrder {
 		constructor := codexPresetConstructors[preset]
-		if codexAssignmentsEqual(constructor(), assignments) || codexPresetMatchesCustomEfforts(preset, assignments) {
+		if codexAssignmentsEqual(constructor(), assignments) || codexPresetMatchesCustomEfforts(preset, assignments) || codexAssignmentsEqual(legacyCodexPreset(preset), assignments) {
 			return CodexModelPickerState{
 				Preset:            preset,
 				AvailableModels:   model.CodexAvailableModels(),
@@ -124,6 +126,17 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 		Preset:            CodexPresetRecommended,
 		AvailableModels:   model.CodexAvailableModels(),
 		CustomAssignments: make(map[string]CodexCustomAssignment),
+	}
+}
+
+func legacyCodexPreset(preset CodexModelPreset) map[string]model.CodexEffort {
+	switch preset {
+	case CodexPresetLowCost:
+		return model.CodexModelPresetLowCost()
+	case CodexPresetPowerful:
+		return model.CodexModelPresetPowerful()
+	default:
+		return model.CodexModelPresetRecommended()
 	}
 }
 
@@ -163,7 +176,7 @@ func filteredCodexModels(state CodexModelPickerState) []string {
 // CodexModelPickerOptionCount returns the total number of selectable rows based
 // on the active sub-mode:
 //   - Main picker: 3 presets + Custom + Back = 5
-//   - Phase list: SDD phases + ODD worker classes + RDD roles + Confirm
+//   - Phase list: ODD worker classes + RDD roles + Confirm
 //   - Model select / Effort select: navigated by HandleCodexModelPickerNav
 //     directly (cursor is managed by the sub-flow, not the outer optionCount).
 func CodexModelPickerOptionCount(state CodexModelPickerState) int {
@@ -292,10 +305,6 @@ func handleCustomPhaseListNav(key string, state *CodexModelPickerState, cursor i
 				constructor = model.CodexModelPresetRecommended
 			}
 			base := constructor()
-			presetCarrils := model.CodexPresetCarrilDefaults(string(state.Preset))
-			for _, role := range model.CodexODDRoleCarrils() {
-				base[role.Role] = presetCarrils[role.Carril].Effort
-			}
 			for phase, a := range state.CustomAssignments {
 				if a.Effort != "" {
 					base[phase] = a.Effort
@@ -441,7 +450,7 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Codex Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose the reasoning_effort tier for Codex SDD phases (tied to your ChatGPT plan):"))
+	b.WriteString(styles.SubtextStyle.Render("Choose the reasoning_effort tier for Codex ODD workers (tied to your ChatGPT plan):"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range codexPresetOrder {
@@ -460,7 +469,7 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 	} else {
 		b.WriteString(styles.UnselectedStyle.Render("  "+customLabel) + "\n")
 	}
-	b.WriteString(styles.SubtextStyle.Render("    Assign a specific model and effort to SDD, ODD and RDD roles") + "\n")
+	b.WriteString(styles.SubtextStyle.Render("    Assign a specific model and effort to ODD and RDD roles") + "\n")
 
 	b.WriteString("\n")
 	b.WriteString(renderOptions([]string{"← Back"}, cursor-len(codexPresetOrder)-1))
@@ -596,7 +605,7 @@ func codexModelSearchDisplay(query string) string {
 
 // CodexPresetLabel returns the human-readable plan label for a preset.
 // Labels are self-describing: they include the model id and effort tier per
-// carril so the user can see what will be written to profile files.
+// carril so the user can see the workload policy.
 //
 // Every preset runs the main orchestrator at medium effort, but not on the
 // same model: low-cost runs it on gpt-5.6-terra. The label reads the real

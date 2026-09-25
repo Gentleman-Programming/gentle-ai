@@ -1200,35 +1200,53 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 
 // ─── Codex profile injection tests ───────────────────────────────────────────
 
-// TestInjectCodexWritesProfiles asserts that Inject for the Codex adapter
-// writes the three gentle-ai SDD profile files into ~/.codex/.
-func TestInjectCodexWritesProfiles(t *testing.T) {
+func TestInjectCodexPreservesLegacyProfilesWithInstalledCLI(t *testing.T) {
 	validCodexRuntime(t)
 	home := t.TempDir()
-
-	_, err := Inject(home, codexAdapter())
-	if err != nil {
-		t.Fatalf("Inject(codex) error = %v", err)
+	profileDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-
-	profiles := []struct {
-		name            string
-		reasoningEffort string
-	}{
-		{"sdd-strong.config.toml", "medium"},
-		{"sdd-mid.config.toml", "high"},
-		{"sdd-cheap.config.toml", "high"},
-	}
-
-	for _, p := range profiles {
-		path := filepath.Join(home, ".codex", p.name)
-		content, readErr := os.ReadFile(path)
-		if readErr != nil {
-			t.Fatalf("profile %q not written by Inject: %v", p.name, readErr)
+	for _, name := range []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"} {
+		path := filepath.Join(profileDir, name)
+		if err := os.WriteFile(path, []byte("user-owned profile\n"), 0o644); err != nil {
+			t.Fatal(err)
 		}
-		want := `"` + p.reasoningEffort + `"`
-		if !strings.Contains(string(content), want) {
-			t.Fatalf("profile %q: want model_reasoning_effort = %s; got:\n%s", p.name, want, string(content))
+	}
+	result, err := InjectWithOptions(home, codexAdapter(), InjectOptions{CodexCarrilModelAssignments: map[string]string{"sdd-strong": "gpt-6-astra"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"} {
+		path := filepath.Join(profileDir, name)
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != "user-owned profile\n" {
+			t.Errorf("%s altered: %q, %v", name, got, err)
+		}
+		for _, reported := range result.Files {
+			if reported == path {
+				t.Errorf("retired profile reported as written: %s", path)
+			}
+		}
+	}
+}
+
+func TestInjectCodexDoesNotCreateLegacyProfilesWithInstalledCLI(t *testing.T) {
+	validCodexRuntime(t)
+	home := t.TempDir()
+	result, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"} {
+		path := filepath.Join(home, ".codex", name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("retired profile created: %s (%v)", path, err)
+		}
+		for _, reported := range result.Files {
+			if reported == path {
+				t.Errorf("retired profile reported: %s", path)
+			}
 		}
 	}
 }
@@ -1433,89 +1451,6 @@ func TestInjectCodexInvalidRuntimeDoesNotMutateFiles(t *testing.T) {
 				t.Fatalf("profile changed after validation failure: got=%q error=%v", got, err)
 			}
 		})
-	}
-}
-
-// TestInjectCodexProfilesIdempotent asserts that running Inject twice leaves
-// the profile files unchanged on the second run and does not duplicate keys.
-func TestInjectCodexProfilesIdempotent(t *testing.T) {
-	validCodexRuntime(t)
-	home := t.TempDir()
-
-	if _, err := Inject(home, codexAdapter()); err != nil {
-		t.Fatalf("first Inject(codex) error = %v", err)
-	}
-	second, err := Inject(home, codexAdapter())
-	if err != nil {
-		t.Fatalf("second Inject(codex) error = %v", err)
-	}
-	if second.Changed {
-		t.Fatal("second Inject(codex) changed = true, want false (profiles are idempotent)")
-	}
-
-	for _, name := range []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"} {
-		content, readErr := os.ReadFile(filepath.Join(home, ".codex", name))
-		if readErr != nil {
-			t.Fatalf("profile %q missing after second Inject: %v", name, readErr)
-		}
-		count := strings.Count(string(content), "model_reasoning_effort")
-		if count != 1 {
-			t.Fatalf("profile %q: expected 1 model_reasoning_effort key after second Inject, got %d; content:\n%s", name, count, string(content))
-		}
-	}
-}
-
-// TestProfileFallbackAgreesWithRenderFallback asserts that resolveProfileAssignments
-// with nil inputs produces the same per-carril effort as RenderCodexPhaseEfforts with
-// nil inputs (both must use the Recommended preset as the canonical nil fallback).
-func TestProfileFallbackAgreesWithRenderFallback(t *testing.T) {
-	// Profile fallback: nil carrilModels + nil phaseEfforts
-	assignments := resolveProfileAssignments(nil, nil)
-
-	// Build a quick carril→effort map from the profile assignments.
-	profileEffort := make(map[string]string, len(assignments))
-	for _, a := range assignments {
-		profileEffort[a.Profile] = a.ReasoningEffort
-	}
-
-	// Render fallback: nil inputs → CodexModelPresetRecommended
-	renderOut := model.RenderCodexPhaseEfforts(nil, nil)
-
-	// For each carril, the render table and the profile files must agree.
-	// The render check is per-row: we find the carril's row and assert the effort
-	// cell appears within that specific row (not just anywhere in the table).
-	cases := []struct {
-		carril     string
-		wantEffort string
-	}{
-		{"sdd-strong", "medium"},
-		{"sdd-mid", "high"},
-		{"sdd-cheap", "high"},
-	}
-	for _, tc := range cases {
-		got := profileEffort[tc.carril]
-		if got != tc.wantEffort {
-			t.Errorf("profile fallback for %q = %q, want %q", tc.carril, got, tc.wantEffort)
-		}
-		// Render-side: find the carril's row and check the effort cell is in THAT row.
-		needle := "| `" + tc.carril + "`"
-		rowStart := strings.Index(renderOut, needle)
-		if rowStart == -1 {
-			t.Errorf("render fallback table missing row for carril %q; table:\n%s", tc.carril, renderOut)
-			continue
-		}
-		rowEnd := len(renderOut)
-		for i := rowStart + 1; i < len(renderOut); i++ {
-			if renderOut[i] == '\n' {
-				rowEnd = i
-				break
-			}
-		}
-		row := renderOut[rowStart:rowEnd]
-		effortCell := "| `" + tc.wantEffort + "` |"
-		if !strings.Contains(row, effortCell) {
-			t.Errorf("render fallback carril %q row = %q: want effort cell %q", tc.carril, row, effortCell)
-		}
 	}
 }
 
