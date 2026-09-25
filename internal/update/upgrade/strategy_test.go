@@ -251,8 +251,10 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
 		},
-		LatestVersion: "main@972997650b51",
-		Status:        update.UpdateAvailable,
+		LatestVersion:  "main@972997650b51",
+		BetaCommit:     "972997650b51abcdef0123456789abcdef012345",
+		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4",
+		Status:         update.UpdateAvailable,
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}
 
@@ -264,18 +266,40 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	if gotName != "go" {
 		t.Fatalf("exec name = %q, want %q", gotName, "go")
 	}
-	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main"}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@972997650b51abcdef0123456789abcdef012345"}
 	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
 	for _, want := range []string{
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v3",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v3",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v3",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v4",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v4",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v4",
 	} {
 		if !envContains(gotCmd.Env, want) {
 			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
 		}
+	}
+}
+
+func TestBetaInstallRejectsUnverifiedTargetBeforeMutation(t *testing.T) {
+	origExec := execCommand
+	t.Cleanup(func() { execCommand = origExec })
+	called := false
+	execCommand = func(name string, args ...string) *exec.Cmd { called = true; return mockCmd("true") }
+	tool := update.ToolInfo{Name: "gentle-ai", Owner: "Gentleman-Programming", Repo: "gentle-ai", InstallMethod: update.InstallBinary}
+	cases := []struct{ name, sha, module, version string }{
+		{name: "no metadata", version: "main@972997650b51"},
+		{name: "wrong module", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/other/gentle-ai/v4", version: "main@972997650b51"},
+		{name: "mismatched short revision", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/gentleman-programming/gentle-ai/v4", version: "main@6eff4a1ba110"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := update.UpdateResult{Tool: tool, LatestVersion: tc.version, BetaCommit: tc.sha, BetaModulePath: tc.module, Status: update.UpdateAvailable}
+			_, err := runStrategy(context.Background(), r, system.PlatformProfile{OS: "linux", PackageManager: "apt"})
+			if err == nil || called {
+				t.Fatalf("unverified target should not execute: err=%v, called=%v", err, called)
+			}
+		})
 	}
 }
 

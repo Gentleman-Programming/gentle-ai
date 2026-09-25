@@ -81,7 +81,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		}
 	}
 	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
-		return false, goInstallMainUpgrade(r.Tool)
+		return false, goInstallMainUpgrade(r)
 	}
 
 	method := effectiveMethod(r.Tool, profile)
@@ -565,17 +565,16 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	target := fmt.Sprintf("%s@v%s", update.ModulePathForVersion(tool.GoImportPath, tool.Repo, latestVersion), latestVersion)
 	betaGentleAI := isBetaGentleAIUpgrade(r)
 	if betaGentleAI {
-		// Beta: the version advertised is main@<sha>, which is unparseable as
-		// a major number, so the helper falls back to the running binary's
-		// major (D2-A). A cross-major beta upgrade is not client-side
-		// derivable without probing main's go.mod; the running-major fallback
-		// is the honest behavior we can deliver here.
-		target = update.ModulePathForVersion(tool.GoImportPath, tool.Repo, r.LatestVersion) + "@main"
+		pinned, err := update.ValidatedBetaSourceInstallCommand(r)
+		if err != nil {
+			return err
+		}
+		target = strings.TrimPrefix(pinned, "go install ")
 	}
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
 	if betaGentleAI {
-		cmd.Env = goProxyBypassEnv(cmd.Env, gentleAIModulePath(tool, latestVersion))
+		cmd.Env = goProxyBypassEnv(cmd.Env, r.BetaModulePath)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
@@ -638,7 +637,15 @@ func gentleAIWindowsGoInstallProvenanceHint(r update.UpdateResult, destination, 
 	} else {
 		hint += "Confirm the active installation, then intentionally migrate with:\n  "
 	}
-	hint += update.GentleAISourceInstallCommand(r.LatestVersion)
+	if isBetaGentleAIUpgrade(r) {
+		command, err := update.ValidatedBetaSourceInstallCommand(r)
+		if err != nil {
+			return hint + "Beta target metadata is unavailable; rerun the update check."
+		}
+		hint += command
+	} else {
+		hint += update.GentleAISourceInstallCommand(r.LatestVersion)
+	}
 	if destination != "" {
 		hint += fmt.Sprintf("\nAfter a successful migration, ensure only %s resolves for gentle-ai on PATH.", destination)
 	}
@@ -652,19 +659,15 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 		strings.HasPrefix(strings.TrimSpace(r.LatestVersion), "main@")
 }
 
-// goInstallMainUpgrade installs gentle-ai from HEAD on the beta channel. It runs
-// the same `go install` mechanism as goInstallUpgrade and therefore carries the
-// same risk of writing somewhere the shell does not resolve, so it performs the
-// same non-fatal destination verification.
-func goInstallMainUpgrade(tool update.ToolInfo) error {
-	// The HEAD beta target is unparseable as a version, so the helper falls
-	// back to the running binary's major (D2-A). See goInstallUpgrade for the
-	// cross-major caveat.
-	module := gentleAIModulePath(tool, "")
-
+// goInstallMainUpgrade installs the checked beta revision, not mutable HEAD.
+func goInstallMainUpgrade(r update.UpdateResult) error {
+	command, err := update.ValidatedBetaSourceInstallCommand(r)
+	if err != nil {
+		return err
+	}
+	module := r.BetaModulePath
 	destDir, destErr := goInstallDestinationDir()
-
-	target := module + "/cmd/gentle-ai@main"
+	target := strings.TrimPrefix(command, "go install ")
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
 	cmd.Env = goProxyBypassEnv(cmd.Env, module)
@@ -672,16 +675,15 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, strings.TrimSpace(string(out)))
 	}
 
-	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
+	warnGoInstallDestination(r.Tool.Name, detectOS(), destDir, destErr)
 	return nil
 }
 
 // gentleAIModulePath returns the module root (github.com/<owner>/<repo>[/vN])
 // for the gentle-ai tool. It does NOT include any /cmd/<tool> subpath — the
-// caller appends "/cmd/gentle-ai@main" when composing the beta install target,
-// and goProxyBypassEnv needs the module root to scope GONOSUMDB/GOPRIVATE/
-// GONOPROXY. The /vN suffix is derived from version via ModulePathForVersion
-// (issue #4687); passing "" forces the running-major fallback.
+// goProxyBypassEnv needs the module root to scope GONOSUMDB/GOPRIVATE/
+// GONOPROXY. Stable versions derive /vN through ModulePathForVersion;
+// checked beta installs use UpdateResult.BetaModulePath instead.
 func gentleAIModulePath(tool update.ToolInfo, version string) string {
 	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
 	if repository == "github.com//" {
@@ -775,7 +777,18 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 func gentleAIWindowsSourceInstallHint(r update.UpdateResult) string {
 	return update.WindowsDistributionHoldMessage + " " +
 		"No binary or remote script was downloaded or executed. Install/update from source with Go 1.25.10+:\n  " +
-		update.GentleAISourceInstallCommand(r.LatestVersion)
+		gentleAISourceCommandForResult(r)
+}
+
+func gentleAISourceCommandForResult(r update.UpdateResult) string {
+	if isBetaGentleAIUpgrade(r) {
+		command, err := update.ValidatedBetaSourceInstallCommand(r)
+		if err != nil {
+			return "Beta target metadata is unavailable; rerun the update check."
+		}
+		return command
+	}
+	return update.GentleAISourceInstallCommand(r.LatestVersion)
 }
 
 // engramBinaryUpgrade downloads or installs the latest engram binary.

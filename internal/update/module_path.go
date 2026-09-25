@@ -13,10 +13,9 @@ import (
 // a resolvable target. The suffix is inserted immediately after the /<repo>
 // segment of base (e.g. github.com/o/r + v4 + subpath → github.com/o/r/v4/subpath);
 // when base has no /<repo> segment, the suffix is appended. When version is
-// empty or cannot be parsed, the running
-// binary's major is used (debug.ReadBuildInfo), which keeps @main/@latest
-// targets working for same-major upgrades; cross-major beta is documented
-// as not client-side derivable.
+// empty or cannot be parsed, the running binary's major is used
+// (debug.ReadBuildInfo). Beta installs must instead use the validated module
+// directive at the checked commit, never this fallback.
 func ModulePathForVersion(base, repo, version string) string {
 	major := parseMajorVersion(version)
 	if major < 0 {
@@ -83,12 +82,9 @@ func repoSegmentInsertPoint(base, repo string) int {
 // unsuffixed) returns 0 so callers using ModulePathForVersion produce an
 // unsuffixed path; major >= 2 returns the parsed integer.
 //
-// Package-level var so tests can pin the running-major seam (e.g. to 3 in the
-// repo's v3 unit tests) without rebuilding. A cross-major beta upgrade is
-// not client-side derivable without probing main's go.mod; the @main target
-// falls back to the running binary's major and the user accepts that a v2
-// running binary asking for @main would compose a /v3 path. Document this
-// here so the failure mode is honest rather than silent.
+// Package-level var so tests can pin the running-major seam (e.g. to 3 in
+// the repo's v3 unit tests) without rebuilding. Beta upgrade paths do not
+// use this seam; they require a checked commit's validated go.mod directive.
 var runningGoMajor = func() int {
 	info, ok := debug.ReadBuildInfo()
 	if !ok || info == nil || info.Main.Path == "" {

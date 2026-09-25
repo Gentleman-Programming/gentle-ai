@@ -1233,6 +1233,7 @@ func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
 // TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile verifies that upgrade
 // backups preserve managed Pi config without capturing session data.
 func TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	homeDir := t.TempDir()
 
 	managedPiSettings := filepath.Join(homeDir, ".pi", "agent", "settings.json")
@@ -1245,6 +1246,12 @@ func TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
 			t.Fatalf("WriteFile %s: %v", path, err)
 		}
+	}
+
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{string(model.AgentPi)},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
 	}
 
 	paths := configPathsForBackup(homeDir)

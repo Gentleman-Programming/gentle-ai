@@ -3,10 +3,9 @@ package update
 import "testing"
 
 // TestGentleAISourceInstallCommandSameMajorStaysV3 pins the existing
-// same-major behavior: when the running binary is v3 (the default seam),
-// "latest", "main@<sha>", and a v3.*.* version all compose a /v3 path.
-// This is the regression guard for any change that would silently move
-// @latest or @main off the running major for same-major targets.
+// same-major stable behavior: when the running binary is v3 (the default
+// seam), "latest" and v3.*.* compose a /v3 path. An unresolved beta commit
+// cannot produce a safe source command without its validated module path.
 func TestGentleAISourceInstallCommandSameMajorStaysV3(t *testing.T) {
 	origRunning := runningGoMajor
 	t.Cleanup(func() { runningGoMajor = origRunning })
@@ -18,7 +17,7 @@ func TestGentleAISourceInstallCommandSameMajorStaysV3(t *testing.T) {
 		want    string
 	}{
 		{name: "empty version uses @latest with running major /v3", version: "", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest"},
-		{name: "main@<sha> uses @main with running major /v3", version: "main@972997650b51", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main"},
+		{name: "unresolved beta commit has no safe source command", version: "main@972997650b51", want: ""},
 		{name: "v3.4.0 uses @v3.4.0 with /v3", version: "v3.4.0", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.4.0"},
 		{name: "3.4.0 (no v prefix) uses @v3.4.0 with /v3", version: "3.4.0", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.4.0"},
 	}

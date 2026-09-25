@@ -114,10 +114,28 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	if fetchErr != nil {
 		result.Err = fetchErr
 		result.Status = CheckFailed
+		if betaMainHead {
+			result.UpdateHint = "Beta target metadata is unavailable; rerun the update check."
+		}
 		return result
 	}
 
 	if betaMainHead {
+		if !validBetaCommit(mainCommit.SHA) {
+			result.Status = CheckFailed
+			result.UpdateHint = "Beta target metadata is unavailable; rerun the update check."
+			result.Err = fmt.Errorf("invalid beta main commit SHA")
+			return result
+		}
+		module, err := fetchBetaModulePath(ctx, tool.Owner, tool.Repo, mainCommit.SHA)
+		if err != nil {
+			result.Status = CheckFailed
+			result.UpdateHint = "Beta target metadata is unavailable; rerun the update check."
+			result.Err = err
+			return result
+		}
+		result.BetaCommit = strings.ToLower(mainCommit.SHA)
+		result.BetaModulePath = module
 		return applyBetaMainHeadStatus(result, localVersion, mainCommit)
 	}
 
@@ -194,11 +212,9 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 
 	result.LatestVersion = "main@" + shortRemote
 	result.ReleaseURL = strings.TrimSpace(commit.HTMLURL)
-	// Derive the instruction from the advertised target: the only installer
-	// that delivers main@<sha> is `go install ...@main`. The per-OS stable
-	// hint would silently replace this beta build with the latest stable
-	// release (issue #2323).
-	result.UpdateHint = GentleAISourceInstallCommand(result.LatestVersion)
+	// Compose the fallback from the verified module and full checked commit.
+	// A stable-channel hint or mutable @main would not deliver this target.
+	result.UpdateHint = BetaSourceInstallCommand(result.BetaModulePath, result.BetaCommit)
 
 	if strings.TrimSpace(localVersion) == "" {
 		result.Status = VersionUnknown

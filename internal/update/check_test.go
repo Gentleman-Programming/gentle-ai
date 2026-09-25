@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,7 +22,15 @@ func TestMain(m *testing.M) {
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
 	}
-
+	// Every HTTP call in this package is local to a test transport. Never
+	// inspect an ambient gh login or forward ambient credentials to fixtures.
+	ghLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	if err := os.Setenv("GITHUB_TOKEN", "local-test-token"); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("GH_TOKEN", ""); err != nil {
+		panic(err)
+	}
 	os.Exit(m.Run())
 }
 
@@ -330,6 +339,80 @@ func TestCheckSingleToolOpenCodePluginRegisteredNotMaterialized(t *testing.T) {
 	}
 }
 
+func TestBetaTargetBindsModuleAndFullCommit(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "beta")
+	const sha = "972997650b51abcdef0123456789abcdef012345"
+	var mainRequests atomic.Int32
+	orig := httpClient
+	t.Cleanup(func() { httpClient = orig })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			next := sha
+			if mainRequests.Add(1) > 1 {
+				next = "6eff4a1ba110abcdef0123456789abcdef012345"
+			}
+			json.NewEncoder(w).Encode(githubCommit{SHA: next})
+		case "/Gentleman-Programming/gentle-ai/" + sha + "/go.mod":
+			fmt.Fprint(w, "module github.com/gentleman-programming/gentle-ai/v4\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server, forwardRaw: true}
+	result := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+	want := "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@" + sha
+	if result.Status != UpdateAvailable || result.UpdateHint != want || result.BetaCommit != sha || result.BetaModulePath != "github.com/gentleman-programming/gentle-ai/v4" {
+		t.Fatalf("beta result = %+v; want %s", result, want)
+	}
+	moved, err := fetchMainCommit(context.Background(), "Gentleman-Programming", "gentle-ai")
+	if err != nil || moved.SHA == sha {
+		t.Fatalf("main did not move: %+v, %v", moved, err)
+	}
+	pinned, err := ValidatedBetaSourceInstallCommand(result)
+	if err != nil || pinned != want {
+		t.Fatalf("main moved but checked target changed: %q, %v", pinned, err)
+	}
+}
+
+func TestBetaCheckRejectsUntrustedMetadata(t *testing.T) {
+	const sha = "972997650b51abcdef0123456789abcdef012345"
+	cases := []struct {
+		name, sha, module string
+		status            int
+	}{
+		{name: "missing go.mod", sha: sha, status: http.StatusNotFound},
+		{name: "wrong repository", sha: sha, module: "github.com/other/gentle-ai/v4"},
+		{name: "invalid semantic major", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v1"},
+		{name: "malformed major", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v04"},
+		{name: "malformed module directive", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v4 extra"},
+		{name: "truncated commit", sha: "972997650b51", module: "github.com/gentleman-programming/gentle-ai/v4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GENTLE_AI_CHANNEL", "beta")
+			original := httpClient
+			t.Cleanup(func() { httpClient = original })
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/repos/Gentleman-Programming/gentle-ai/commits/main" {
+					json.NewEncoder(w).Encode(githubCommit{SHA: tc.sha})
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+			httpClient = server.Client()
+			httpClient.Transport = &testTransport{server: server, module: tc.module, rawStatus: tc.status}
+			got := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+			if got.Status != CheckFailed || got.Err == nil || strings.HasPrefix(got.LatestVersion, "main@") || got.BetaCommit != "" || got.BetaModulePath != "" || strings.Contains(got.UpdateHint, "go install") {
+				t.Fatalf("unchecked beta metadata advertised: %+v", got)
+			}
+		})
+	}
+}
+
 func TestCheckSingleToolGentleAIBetaComparesMainHead(t *testing.T) {
 	t.Setenv("GENTLE_AI_CHANNEL", "beta")
 
@@ -473,6 +556,7 @@ func TestCheckSingleToolGentleAIStableVersionWithoutChannelComparesLatestRelease
 	origClient := httpClient
 	t.Cleanup(func() { httpClient = origClient })
 
+	var moduleRequested atomic.Bool
 	var mainHeadRequested atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -492,14 +576,14 @@ func TestCheckSingleToolGentleAIStableVersionWithoutChannelComparesLatestRelease
 	}))
 	defer server.Close()
 	httpClient = server.Client()
-	httpClient.Transport = &testTransport{server: server}
+	httpClient.Transport = &testTransport{server: server, moduleRequested: &moduleRequested}
 
 	simulateStrayForeignRequest(t, server)
 
 	result := checkSingleTool(context.Background(), Tools[0], "1.40.3", system.PlatformProfile{})
 
-	if mainHeadRequested.Load() {
-		t.Fatal("stable channel must not request main HEAD")
+	if mainHeadRequested.Load() || moduleRequested.Load() {
+		t.Fatal("stable channel must not request main HEAD or beta go.mod")
 	}
 	if result.Status != UpdateAvailable {
 		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
@@ -635,12 +719,15 @@ func TestCheckSingleToolGentleAIBetaHintNamesAdvertisedTarget(t *testing.T) {
 	if result.LatestVersion != "main@972997650b51" {
 		t.Fatalf("LatestVersion = %q, want main@972997650b51", result.LatestVersion)
 	}
-	derived := GentleAISourceInstallCommand(result.LatestVersion)
+	derived, err := ValidatedBetaSourceInstallCommand(result)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if result.UpdateHint != derived {
 		t.Fatalf("UpdateHint = %q, want the instruction derived from the advertised target: %q", result.UpdateHint, derived)
 	}
-	if result.UpdateHint != "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main" {
-		t.Fatalf("UpdateHint = %q, want the go install @main command", result.UpdateHint)
+	if result.UpdateHint != "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@972997650b51abcdef0123456789abcdef012345" {
+		t.Fatalf("UpdateHint = %q, want the pinned go install command", result.UpdateHint)
 	}
 }
 
@@ -2070,10 +2157,29 @@ func simulateStrayForeignRequest(t *testing.T, server *httptest.Server) {
 
 // testTransport redirects all requests to the test server.
 type testTransport struct {
-	server *httptest.Server
+	server          *httptest.Server
+	module          string
+	rawStatus       int
+	forwardRaw      bool
+	moduleRequested *atomic.Bool
 }
 
 func (tt *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Existing beta fixtures have a v3 go.mod at each checked commit.
+	// Explicit target-metadata tests use their own handler to override it.
+	if !tt.forwardRaw && strings.HasPrefix(req.URL.Path, "/Gentleman-Programming/gentle-ai/") && strings.HasSuffix(req.URL.Path, "/go.mod") {
+		if tt.moduleRequested != nil {
+			tt.moduleRequested.Store(true)
+		}
+		if tt.rawStatus != 0 {
+			return &http.Response{StatusCode: tt.rawStatus, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header), Request: req}, nil
+		}
+		module := tt.module
+		if module == "" {
+			module = "github.com/gentleman-programming/gentle-ai/v3"
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("module " + module + "\n")), Header: make(http.Header), Request: req}, nil
+	}
 	// Rewrite the request URL to point at the test server, preserving the path.
 	req.URL.Scheme = "http"
 	req.URL.Host = tt.server.Listener.Addr().String()

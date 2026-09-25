@@ -1,6 +1,7 @@
 package update
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,19 +11,36 @@ import (
 const WindowsDistributionHoldMessage = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
 
 // GentleAISourceInstallCommand returns the safe source-install fallback for an
-// exact release, beta main build, or the latest release when version is empty.
-// The /vN suffix is derived from version via ModulePathForVersion (issue
-// #4687); see its doc comment for the unparseable-version fallback.
+// exact release or the latest release when version is empty. Beta builds
+// require validated commit metadata; use ValidatedBetaSourceInstallCommand.
+// The /vN suffix for releases is derived via ModulePathForVersion.
 func GentleAISourceInstallCommand(version string) string {
 	target := "latest"
 	version = strings.TrimSpace(version)
 	if strings.HasPrefix(version, "main@") {
-		target = "main"
-	} else if version != "" {
+		return ""
+	}
+	if version != "" {
 		target = "v" + strings.TrimPrefix(version, "v")
 	}
 	module := ModulePathForVersion("github.com/gentleman-programming/gentle-ai/cmd/gentle-ai", "gentle-ai", version)
 	return "go install " + module + "@" + target
+}
+
+// BetaSourceInstallCommand composes a source install from metadata already
+// validated against the exact checked commit. It never follows mutable main.
+func BetaSourceInstallCommand(module, commit string) string {
+	return "go install " + module + "/cmd/gentle-ai@" + commit
+}
+
+// ValidatedBetaSourceInstallCommand rejects unchecked or inconsistent beta metadata.
+func ValidatedBetaSourceInstallCommand(r UpdateResult) (string, error) {
+	if !isGentleAIRepo(r.Tool) || !validBetaCommit(r.BetaCommit) ||
+		!validBetaModulePath(r.BetaModulePath, r.Tool.Owner, r.Tool.Repo) ||
+		r.LatestVersion != "main@"+shortCommit(r.BetaCommit) {
+		return "", errors.New("beta target metadata is missing or inconsistent; rerun the update check")
+	}
+	return BetaSourceInstallCommand(r.BetaModulePath, r.BetaCommit), nil
 }
 
 // updateHint returns a platform-specific instruction string for updating the given tool.
