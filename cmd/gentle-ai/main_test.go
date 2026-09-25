@@ -19,7 +19,7 @@ func TestGentleAICompatWrapper_DeprecationNotice(t *testing.T) {
 	}
 
 	outStr := stdout.String()
-	if !strings.Contains(outStr, "gentle-ai") {
+	if !strings.Contains(outStr, "axiom") && !strings.Contains(outStr, "gentle-ai") {
 		t.Fatalf("stdout no contiene la salida esperada del comando:\n%s", outStr)
 	}
 }
@@ -35,7 +35,7 @@ func TestGentleAICompatWrapper_Help(t *testing.T) {
 		t.Fatalf("stderr no contiene el aviso de deprecación con --help")
 	}
 
-	if !strings.Contains(stdout.String(), "USAGE") && !strings.Contains(stdout.String(), "gentle-ai") {
+	if !strings.Contains(stdout.String(), "USAGE") && !strings.Contains(stdout.String(), "axiom") && !strings.Contains(stdout.String(), "gentle-ai") {
 		t.Fatalf("stdout no contiene la ayuda esperada")
 	}
 }

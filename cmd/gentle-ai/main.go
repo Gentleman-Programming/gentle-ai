@@ -11,7 +11,7 @@ import (
 // version is set by GoReleaser via ldflags at build time.
 var version = "dev"
 
-const deprecationNotice = "Aviso: 'gentle-ai' está deprecado y ha sido unificado en 'axiom'. Se recomienda utilizar 'axiom' en su lugar."
+const deprecationNotice = "gentle-ai CLI está deprecado; usa 'axiom'"
 
 func run(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintln(stderr, deprecationNotice)
