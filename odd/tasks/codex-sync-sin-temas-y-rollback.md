@@ -20,7 +20,7 @@ El registro aportado indica 291 comprobaciones correctas y tres fallidas, todas 
 ## Tareas
 
 - [x] **T1 · Coherencia de perfiles Codex** — Corregir el contrato entre la generación condicional y la verificación de `axiom sync`, con pruebas para CLI disponible y no disponible. Ruta: delegada (lógica y pruebas en varios ficheros). Pruebas dirigidas correctas; suite amplia de `internal/cli` fallida por permisos y aserciones ajenas visibles, sin línea base demostrada. Commit: `8bc70073`.
-- [x] **T2 · Retirada segura de temas** — Eliminar la instalación de temas visuales de presets, catálogo, install y sync; migrar temas Axiom anteriores solo con bytes exactos y ruta sin symlink, conservar preferencias/temas ajenos. Commit: pendiente. `go test ./internal/components/theme ./internal/components/uninstall -count=1` y pruebas CLI focalizadas pasan con APPDATA/GOCACHE temporales; `gofmt -l` y `git diff --check` limpios. Las pruebas de symlink se omiten por falta de privilegio Windows; junctions no verificados.
+- [x] **T2 · Retirada segura de temas** — Eliminar la instalación de temas visuales de presets, catálogo, install y sync; migrar temas Axiom anteriores solo con bytes exactos y ruta sin symlink, conservar preferencias/temas ajenos. Commit principal: `122769b7`; corrección de los dos goldens del selector: pendiente de commit. `go test ./internal/components/theme ./internal/components/uninstall -count=1`, CLI focalizada y `TestPresetSelectionNextScreenFlowMatrix` pasan con entorno temporal; `gofmt -l` y `git diff --check` limpios. Las pruebas de symlink se omiten por falta de privilegio Windows; junctions no verificados.
 - [ ] **T3 · Rollback de Axiom por defecto** — Separar la procedencia de los respaldos en la selección inicial sin impedir la restauración explícita de respaldos Gentle AI; cubrir ordenación y selección con pruebas. Ruta: delegada (backup, aplicación o TUI y pruebas). Verificación: pruebas focalizadas de backup y TUI.
 - [ ] **T4 · Documentación operativa de Axiom** — Corregir README y guías vigentes de instalación, componentes, agentes y rollback; conservar información histórica veraz y comprobar enlaces/comandos. Ruta: delegada (varios documentos). Verificación: búsqueda de referencias operativas heredadas y lectura estructural de los documentos modificados.
 
@@ -42,4 +42,4 @@ El registro aportado indica 291 comprobaciones correctas y tres fallidas, todas 
 
 ## Siguiente paso
 
-Registrar el commit de T2 y continuar con T3.
+Registrar la corrección de los goldens de T2 y continuar con T3.
