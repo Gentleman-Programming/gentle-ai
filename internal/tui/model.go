@@ -4318,6 +4318,10 @@ func (m *Model) setScreen(next Screen) {
 	if next == ScreenBackups {
 		m.BackupScroll = 0
 		m.PinErr = nil
+		m.Cursor = defaultBackupSelectionCursor(m.Backups)
+		if m.Cursor >= screens.BackupMaxVisible {
+			m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+		}
 	}
 	if next == ScreenProfiles {
 		// Refresh on entry without replacing valid data with an empty error state.
@@ -4341,6 +4345,29 @@ func (m *Model) setScreen(next Screen) {
 		m.UninstallProfileSelection = false
 		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	}
+}
+
+// defaultBackupSelectionCursor selects the newest Axiom-owned snapshot while
+// leaving Gentle AI history available but never implicitly selected. When no
+// Axiom snapshot exists, focus the "Volver" row so the user must deliberately
+// choose a historical backup.
+func defaultBackupSelectionCursor(backups []backup.Manifest) int {
+	newestAxiom := -1
+	for i, manifest := range backups {
+		if manifest.Origin != backup.BackupOriginAxiom {
+			continue
+		}
+		if newestAxiom == -1 || manifest.CreatedAt.After(backups[newestAxiom].CreatedAt) {
+			newestAxiom = i
+		}
+	}
+	if newestAxiom >= 0 {
+		return newestAxiom
+	}
+	if len(backups) > 0 {
+		return len(backups)
+	}
+	return 0
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.

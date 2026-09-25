@@ -28,6 +28,39 @@ func TestRenderBackupsShowsDisplayLabel(t *testing.T) {
 	}
 }
 
+func TestRenderBackupsMakesHistoricalFallbackExplicit(t *testing.T) {
+	historical := backup.Manifest{
+		ID:        "gentle-ai-history",
+		CreatedAt: time.Date(2026, 3, 22, 15, 4, 5, 0, time.UTC),
+		Source:    backup.BackupSourceSync,
+		Origin:    backup.BackupOriginGentleAI,
+	}
+
+	t.Run("Axiom backup is labeled without historical-only warning", func(t *testing.T) {
+		axiom := backup.Manifest{ID: "axiom-current", Origin: backup.BackupOriginAxiom}
+		output := RenderBackups([]backup.Manifest{axiom, historical}, 0, 0, nil)
+		if !strings.Contains(output, "Axiom") {
+			t.Errorf("backup list should identify Axiom origin; got:\n%s", output)
+		}
+		if strings.Contains(output, "No hay respaldos de Axiom") {
+			t.Errorf("backup list must not show historical-only warning when an Axiom backup exists; got:\n%s", output)
+		}
+		if !strings.Contains(output, "Gentle AI histórico") {
+			t.Errorf("backup list should keep the historical backup visibly selectable; got:\n%s", output)
+		}
+	})
+
+	t.Run("legacy-only list warns and labels the explicit fallback", func(t *testing.T) {
+		output := RenderBackups([]backup.Manifest{historical}, 1, 0, nil)
+		if !strings.Contains(output, "No hay respaldos de Axiom") {
+			t.Errorf("backup list should explain the fallback when no Axiom backup exists; got:\n%s", output)
+		}
+		if !strings.Contains(output, "Gentle AI histórico") {
+			t.Errorf("backup list should label legacy backup provenance; got:\n%s", output)
+		}
+	})
+}
+
 // TestRenderBackupsShowsFallbackLabelForOldManifest verifies that an old
 // manifest without Source metadata renders with "unknown source" fallback.
 func TestRenderBackupsShowsFallbackLabelForOldManifest(t *testing.T) {

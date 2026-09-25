@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,91 @@ func TestBackupSelectionNavigatesToRestoreConfirm(t *testing.T) {
 	// The selected backup must be stored for the confirm screen to display.
 	if state.SelectedBackup.ID != "backup-001" {
 		t.Errorf("SelectedBackup.ID = %q, want backup-001", state.SelectedBackup.ID)
+	}
+}
+
+func TestBackupScreenPreselectsNewestAxiomBackup(t *testing.T) {
+	created := func(day int) time.Time { return time.Date(2026, 3, day, 10, 0, 0, 0, time.UTC) }
+
+	tests := []struct {
+		name    string
+		backups []backup.Manifest
+		want    int
+	}{
+		{
+			name: "latest Axiom backup wins over newer Gentle AI history",
+			backups: []backup.Manifest{
+				{ID: "newer-legacy", CreatedAt: created(23), Origin: backup.BackupOriginGentleAI},
+				{ID: "newest-axiom", CreatedAt: created(22), Origin: backup.BackupOriginAxiom},
+				{ID: "older-axiom", CreatedAt: created(21), Origin: backup.BackupOriginAxiom},
+			},
+			want: 1,
+		},
+		{
+			name: "no Axiom backups leaves historical backups unselected",
+			backups: []backup.Manifest{
+				{ID: "newest-legacy", CreatedAt: created(23), Origin: backup.BackupOriginGentleAI},
+				{ID: "older-legacy", CreatedAt: created(22), Origin: backup.BackupOriginGentleAI},
+			},
+			want: 2, // Focus "Volver"; the user must deliberately choose a historical backup.
+		},
+		{
+			name:    "empty list keeps the only return option selected",
+			backups: nil,
+			want:    0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Backups = tt.backups
+			m.setScreen(ScreenBackups)
+			if m.Cursor != tt.want {
+				t.Errorf("cursor = %d, want %d", m.Cursor, tt.want)
+			}
+			if tt.name == "no Axiom backups leaves historical backups unselected" {
+				updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				if got := updated.(Model); got.Screen != ScreenWelcome || got.SelectedBackup.ID != "" {
+					t.Errorf("Enter on the fallback return row must not select/restore history: screen=%v selected=%q", got.Screen, got.SelectedBackup.ID)
+				}
+
+				updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+				if got := updated.(Model); got.Cursor != len(tt.backups)-1 {
+					t.Errorf("Up from the fallback return row should expose the newest historical row: cursor=%d", got.Cursor)
+				}
+			}
+		})
+	}
+}
+
+func TestBackupScreenScrollsToDefaultSelectionOutsideFirstPage(t *testing.T) {
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	backups := make([]backup.Manifest, 0, 14)
+	for i := 0; i < 12; i++ {
+		backups = append(backups, backup.Manifest{
+			ID:        fmt.Sprintf("newer-history-%02d", i),
+			CreatedAt: base.Add(time.Duration(100+i) * time.Hour),
+			Origin:    backup.BackupOriginGentleAI,
+		})
+	}
+	backups = append(backups,
+		backup.Manifest{ID: "latest-axiom", CreatedAt: base.Add(50 * time.Hour), Origin: backup.BackupOriginAxiom},
+		backup.Manifest{ID: "older-axiom", CreatedAt: base.Add(40 * time.Hour), Origin: backup.BackupOriginAxiom},
+	)
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Backups = backups
+	m.setScreen(ScreenBackups)
+
+	if m.Cursor != 12 {
+		t.Fatalf("cursor = %d, want 12 for the newest Axiom backup", m.Cursor)
+	}
+	if m.BackupScroll != 3 {
+		t.Fatalf("BackupScroll = %d, want 3 to show the selected row within the 10-row viewport", m.BackupScroll)
+	}
+	if !strings.Contains(m.View(), "latest-axiom") {
+		t.Fatalf("the selected Axiom backup is outside the visible window:\n%s", m.View())
 	}
 }
 

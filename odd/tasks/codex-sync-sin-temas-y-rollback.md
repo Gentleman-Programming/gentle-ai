@@ -20,8 +20,8 @@ El registro aportado indica 291 comprobaciones correctas y tres fallidas, todas 
 ## Tareas
 
 - [x] **T1 · Coherencia de perfiles Codex** — Corregir el contrato entre la generación condicional y la verificación de `axiom sync`, con pruebas para CLI disponible y no disponible. Ruta: delegada (lógica y pruebas en varios ficheros). Pruebas dirigidas correctas; suite amplia de `internal/cli` fallida por permisos y aserciones ajenas visibles, sin línea base demostrada. Commit: `8bc70073`.
-- [x] **T2 · Retirada segura de temas** — Eliminar la instalación de temas visuales de presets, catálogo, install y sync; migrar temas Axiom anteriores solo con bytes exactos y ruta sin symlink, conservar preferencias/temas ajenos. Commit principal: `122769b7`; corrección de los dos goldens del selector: pendiente de commit. `go test ./internal/components/theme ./internal/components/uninstall -count=1`, CLI focalizada y `TestPresetSelectionNextScreenFlowMatrix` pasan con entorno temporal; `gofmt -l` y `git diff --check` limpios. Las pruebas de symlink se omiten por falta de privilegio Windows; junctions no verificados.
-- [ ] **T3 · Rollback de Axiom por defecto** — Separar la procedencia de los respaldos en la selección inicial sin impedir la restauración explícita de respaldos Gentle AI; cubrir ordenación y selección con pruebas. Ruta: delegada (backup, aplicación o TUI y pruebas). Verificación: pruebas focalizadas de backup y TUI.
+- [x] **T2 · Retirada segura de temas** — Eliminar la instalación de temas visuales de presets, catálogo, install y sync; migrar temas Axiom anteriores solo con bytes exactos y ruta sin symlink, conservar preferencias/temas ajenos. Commits: `122769b7` y `a78b99b1` (ajuste de dos goldens del selector). `go test ./internal/components/theme ./internal/components/uninstall -count=1`, CLI focalizada y `TestPresetSelectionNextScreenFlowMatrix` pasan con entorno temporal; `gofmt -l` y `git diff --check` limpios. Las pruebas de symlink se omiten por falta de privilegio Windows; junctions no verificados.
+- [x] **T3 · Rollback de Axiom por defecto** — La TUI distingue procedencia por raíz, preselecciona el respaldo Axiom más reciente y mantiene Gentle AI histórico disponible mediante selección expresa. IDs duplicados entre raíces siguen siendo restaurables; el scroll hace visible la selección. Commit: pendiente. `go test ./internal/backup ./internal/tui` y `go test ./internal/app -run TestListBackupsKeepsDuplicateIDsRestorableBySelectedRoot -count=1` pasan con HOME/USERPROFILE/GOCACHE temporales. La CLI independiente `axiom restore latest` mantiene su resolución anterior; alcance de T3 limitado a rollback TUI.
 - [ ] **T4 · Documentación operativa de Axiom** — Corregir README y guías vigentes de instalación, componentes, agentes y rollback; conservar información histórica veraz y comprobar enlaces/comandos. Ruta: delegada (varios documentos). Verificación: búsqueda de referencias operativas heredadas y lectura estructural de los documentos modificados.
 
 ## Modo de trabajo y entrega
@@ -42,4 +42,4 @@ El registro aportado indica 291 comprobaciones correctas y tres fallidas, todas 
 
 ## Siguiente paso
 
-Registrar la corrección de los goldens de T2 y continuar con T3.
+Registrar el commit de T3 y continuar con T4.
