@@ -33,28 +33,31 @@ Desacoplar el almacenamiento de configuración local y el lanzador de agentes de
 
 ## Tareas
 
-- [ ] **T1 · Infraestructura de rutas canónicas `~/.axiom/` y bootstrap de migración**
+- [x] **T1 · Infraestructura de rutas canónicas `~/.axiom/` y bootstrap de migración**
   - Actualizar helpers de rutas de usuario para resolver `~/.axiom/state.json`, `~/.axiom/cache/` y `~/.axiom/bin/`.
   - Implementar rutina de bootstrap: al cargar el estado, si `~/.axiom/state.json` no existe pero `~/.gentle-ai/state.json` sí, copiar el fichero a la nueva ruta y continuar operando sobre `~/.axiom`.
   - Pruebas unitarias que verifiquen el arranque limpio, arranque con migración y precedencia de `~/.axiom`.
 
-- [ ] **T2 · Unificación de variables de entorno con prefijo `AXIOM_*`**
+- [x] **T2 · Unificación de variables de entorno con prefijo `AXIOM_*`**
   - Extender el helper `system.Getenv` para resolver `AXIOM_CHANNEL` (fallback `GENTLE_AI_CHANNEL`), `AXIOM_OPENCODE_BACKGROUND_SUBAGENTS` (fallback `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`), y `AXIOM_STATE_DIR` (fallback `GENTLE_AI_STATE_DIR`).
   - Actualizar referencias internas y pruebas unitarias.
 
-- [ ] **T3 · Lanzadores administrados de OpenCode en `~/.axiom/bin/`**
+- [x] **T3 · Lanzadores administrados de OpenCode en `~/.axiom/bin/`**
   - Migrar la generación de scripts envoltorios (`opencode`, `opencode.cmd`, `opencode.ps1`) para que residan bajo `~/.axiom/bin/`.
   - Asegurar que la limpieza/desinstalación retire tanto lanzadores antiguos en `~/.gentle-ai/bin/` como los nuevos en `~/.axiom/bin/`.
   - Tests unitarios de activación y desactivación de lanzadores.
 
-- [ ] **T4 · Migración de conductor OpenCode a `axiom-orchestrator`**
+- [x] **T4 · Migración de conductor OpenCode a `axiom-orchestrator`**
   - Establecer `axiom-orchestrator` como clave canónica del agente base en `internal/catalog/` y generación de perfiles SDD.
   - Implementar migración in-place en `internal/components/sdd/profiles.go`: si `opencode.json` contiene `gentle-orchestrator`, sustituirlo por `axiom-orchestrator` y reescribir comandos `/sdd-*` asociados.
   - Tests unitarios de preservación y migración de perfiles OpenCode.
 
-- [ ] **T5 · Thin wrapper deprecado en `cmd/gentle-ai`**
+- [x] **T5 · Thin wrapper deprecado en `cmd/gentle-ai`**
   - Adaptar `cmd/gentle-ai/main.go` para que imprima advertencia de obsolescencia en `stderr` ("gentle-ai CLI está deprecado; usa 'axiom'") y delegue la ejecución a la lógica central de Axiom.
 
-- [ ] **T6 · Verificación funcional completa**
+- [x] **T6 · Verificación funcional completa**
   - Ejecutar suites de tests de `internal/cli`, `internal/system` y `internal/components/sdd`.
   - Validar sincronización en workspace real con `go run ./cmd/axiom sync`.
+  - Verificación completada con éxito:
+    - Suites unitarias pasando: `internal/system` (PASS), `internal/state` (PASS), `internal/opencode` (PASS), `internal/components/uninstall` (PASS), `internal/components/sdd` (PASS), `internal/tui/screens` (PASS), `internal/tui` (PASS), `cmd/gentle-ai` (PASS), `cmd/axiom` (PASS).
+    - Ejecución en vivo de `axiom sync --dry-run` validando proyección y parámetros sin errores.
