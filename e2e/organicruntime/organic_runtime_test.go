@@ -1864,6 +1864,8 @@ var organicRoutingGuidanceRequiredFragments = []string{
 	"run proportionate functional or structural checks",
 	"gentle-ai review mode enable|disable|status",
 	"disabled/unmanaged",
+	"Remote execution boundary",
+	"SSH ControlMaster",
 }
 
 // TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor proves the
