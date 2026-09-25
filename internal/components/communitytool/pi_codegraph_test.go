@@ -1042,3 +1042,49 @@ func installFakeCodeGraphScript(t *testing.T, body string) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
+
+func TestCodeGraphIsolatedManifestWithConfiguredAgentDir(t *testing.T) {
+	home := t.TempDir()
+
+	// 1. Initial run under standard Pi config creates a manifest with an owned child.
+	defaultPaths := piagent.CodeGraphPaths(home)
+	defaultChild := filepath.Join(defaultPaths.AgentDir, "agents", "sdd-proposal.md")
+	writePiFile(t, defaultChild, "---\ntools: bash\n---\nproposal\n")
+	defaultManifest := piCodeGraphManifest{
+		Children: map[string]piCodeGraphOwnedFile{
+			defaultChild: {After: "---\ntools: bash\n---\nproposal\n", AfterHash: hashPiBytes([]byte("---\ntools: bash\n---\nproposal\n"))},
+		},
+	}
+	data, err := json.Marshal(defaultManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(defaultPaths.Manifest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultPaths.Manifest, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Gentle shell runs with PI_CODING_AGENT_DIR set to an isolated directory.
+	shellAgentDir := filepath.Join(home, ".gentle-shell", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", shellAgentDir)
+
+	// 3. UninstallPiCodeGraph (invoked when CodeGraph is not selected) must succeed
+	// without failing on "escapes allowed roots" from the default Pi manifest.
+	result, err := UninstallPiCodeGraph(home)
+	if err != nil {
+		t.Fatalf("UninstallPiCodeGraph() with configured PI_CODING_AGENT_DIR error = %v, want nil", err)
+	}
+	if len(result.Files) != 0 {
+		t.Fatalf("result.Files = %v, want empty", result.Files)
+	}
+
+	// Default Pi files and manifest must remain untouched.
+	if _, err := os.Stat(defaultChild); err != nil {
+		t.Fatalf("default child was removed: %v", err)
+	}
+	if _, err := os.Stat(defaultPaths.Manifest); err != nil {
+		t.Fatalf("default manifest was removed: %v", err)
+	}
+}

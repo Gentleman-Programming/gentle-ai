@@ -1917,7 +1917,7 @@ func restorePersistedCommunityTools(homeDir string, selection *model.Selection, 
 }
 
 func hasManagedPiCodeGraphManifest(homeDir string) bool {
-	path := filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json")
+	path := communitytool.PiCodeGraphManifestPath(homeDir)
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return false
