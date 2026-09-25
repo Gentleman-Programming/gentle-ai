@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestOpenCodeReviewTransportPluginDeduplicatesDuplicateInstances(t *testing.T) {
@@ -202,7 +201,7 @@ func TestOpenCodeReviewTransportPluginUsesActiveHostWithoutVersionOrEnvironmentG
 	if !strings.Contains(source, `spawn(TRANSPORT.Command, ["review", "opencode-transport"]`) {
 		t.Fatal("OpenCode transport plugin must spawn only the shared Go transport")
 	}
-	if !strings.Contains(source, "spawn(resolved, [\"--version\"]") {
+	if !strings.Contains(source, "spawn(\"gentle-ai\", [\"--version\"]") {
 		t.Fatal("OpenCode transport plugin must use the gentle-ai --version handshake from issue #3049")
 	}
 }
@@ -308,7 +307,6 @@ console.log(JSON.stringify({ prompt: before.args.prompt, refused }))
 		"opencode_review_transport_binary_skew",
 		"1.9.0",
 		"2.0.0",
-		oldBin,
 		"which -a gentle-ai",
 	} {
 		if !strings.Contains(result.Refused, want) {
@@ -361,137 +359,6 @@ console.log(JSON.stringify({ prompt: before.args.prompt, refused }))
 	if log != "" {
 		t.Fatalf("refused unavailable must not spawn the relay child, got relay frames %q", log)
 	}
-}
-
-func TestOpenCodeReviewTransportPluginBinaryHandshakeCachesProbeAndReProbesOnMtimeChange(t *testing.T) {
-	source, err := Read("opencode/plugins/opencode-review-transport.ts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The TS harness writes GENTLE_AI_BARRIER after the first relay, waits
-	// for the +".go" signal before firing session.deleted and the second
-	// relay. Together these verify two spec scenarios: cache reuse for
-	// relays within one session, and re-probe after mtime drift + session
-	// deletion. Reading the probe log between the two phases confirms
-	// exactly one --version call landed during the cache-reuse phase and
-	// two after the mtime change.
-	const harness = `import plugin from "./plugin.mts"
-import { writeFile, readFile } from "node:fs/promises"
-const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
-const barrier = process.env.GENTLE_AI_BARRIER
-const goSignal = barrier + ".go"
-const before1 = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
-await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call-1" }, before1)
-const after1 = { output: "untrusted reviewer output", metadata: {} }
-await hooks["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call-1", args: { subagent_type: "review-risk" } }, after1)
-await writeFile(barrier, "ready")
-while (true) {
-  try {
-    if ((await readFile(goSignal, "utf-8")).trim() === "touched") break
-  } catch {}
-  await new Promise((resolve) => setTimeout(resolve, 50))
-}
-await hooks.event({ event: { type: "session.deleted", properties: { info: { id: "session" } } } })
-const before2 = { args: { subagent_type: "review-resilience", prompt: "Go must receive this original host prompt" } }
-await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call-2" }, before2)
-const after2 = { output: "untrusted reviewer output", metadata: {} }
-await hooks["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call-2", args: { subagent_type: "review-resilience" } }, after2)
-console.log(JSON.stringify({ output1: after1.output, output2: after2.output }))
-`
-	_, _, probeLog := runOpenCodeTransportPluginHarnessWithMtimeBarrier(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
-	probes := 0
-	if trimmed := strings.TrimSpace(probeLog); trimmed != "" {
-		probes = strings.Count(trimmed, "\n") + 1
-	}
-	if probes != 2 {
-		t.Fatalf("cache reuse on the first two relays plus mtime drift + session.deleted before the second relay must yield two probe invocations; got %d; log=%q", probes, probeLog)
-	}
-}
-
-// runOpenCodeTransportPluginHarnessWithMtimeBarrier rewrites the bundled
-// relay binary's mtime between the two relays; the TS harness waits on
-// GENTLE_AI_BARRIER before proceeding.
-func runOpenCodeTransportPluginHarnessWithMtimeBarrier(t *testing.T, modules map[string]string, harness, relay string) (string, string, string) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the relay fixture uses a POSIX shell")
-	}
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is unavailable")
-	}
-	root := t.TempDir()
-	bin := filepath.Join(root, "bin")
-	if err := os.MkdirAll(bin, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, source := range modules {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(root, "harness.mts"), []byte(harness), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	relayPath := filepath.Join(bin, "gentle-ai")
-	if err := os.WriteFile(relayPath, []byte(relay), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	logPath := filepath.Join(root, "relay.log")
-	probePath := filepath.Join(root, "probe.log")
-	barrierPath := filepath.Join(root, "barrier")
-	command := exec.Command(node, "harness.mts")
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GENTLE_AI_RELAY_LOG="+logPath,
-		"GENTLE_AI_PROBE_LOG="+probePath,
-		"GENTLE_AI_BARRIER="+barrierPath,
-	)
-	stdoutBuf := &strings.Builder{}
-	command.Stdout = stdoutBuf
-	command.Stderr = stdoutBuf
-	if err := command.Start(); err != nil {
-		t.Fatalf("start barrier harness: %v", err)
-	}
-	for time.Now().Before(time.Now().Add(15 * time.Second)) {
-		if _, err := os.Stat(barrierPath); err == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if _, err := os.Stat(barrierPath); err != nil {
-		command.Process.Kill()
-		t.Fatalf("barrier harness never reached first-relay barrier: %s", stdoutBuf.String())
-	}
-	if err := os.Chtimes(relayPath, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
-		command.Process.Kill()
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(barrierPath+".go", []byte("touched"), 0o644); err != nil {
-		command.Process.Kill()
-		t.Fatal(err)
-	}
-	if err := command.Wait(); err != nil {
-		t.Fatalf("barrier harness failed: %v\n%s", err, stdoutBuf.String())
-	}
-	log, err := os.ReadFile(logPath)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	probe, err := os.ReadFile(probePath)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	relayLog := ""
-	if log != nil {
-		relayLog = string(log)
-	}
-	probeLog := ""
-	if probe != nil {
-		probeLog = string(probe)
-	}
-	return stdoutBuf.String(), relayLog, probeLog
 }
 
 func TestOpenCodeReviewTransportPluginRefusesCompletionWithoutMatchingBeforeHook(t *testing.T) {

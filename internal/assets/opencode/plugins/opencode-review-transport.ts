@@ -1,7 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { spawn } from "node:child_process"
-import { statSync } from "node:fs"
-import { delimiter, join } from "node:path"
 
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability", "review-refuter", "review-validator"])
 // OpenCode emits session.created before prompting the review agent. Replace
@@ -86,9 +84,8 @@ const RELAY_REFUSED_CODE = "opencode_review_transport_relay_refused"
 
 // Binary handshake (issue #3049): a stale PATH `gentle-ai` can answer the
 // relay for a newer binary's authority without knowing the provider-transport/v1
-// capability. Probe `--version` before the relay spawn and refuse on skew or
-// ENOENT; cache by resolved path + mtime so an upgrade or fresh session
-// re-probes automatically.
+// capability. Probe `--version` via PATH before the relay spawn and refuse on
+// skew or ENOENT; the OS resolves the binary so no manual PATH walk is needed.
 const BINARY_SKEW_CODE = "opencode_review_transport_binary_skew"
 const BINARY_UNAVAILABLE_CODE = "opencode_review_transport_binary_unavailable"
 
@@ -112,42 +109,6 @@ function relayRefusedPrompt(reason: string): string {
 
 function relayRefusedOutput(reason: string): string {
   return `${RELAY_REFUSED_CODE}: ${reason}`
-}
-
-// Resolve the PATH entry that `spawn("gentle-ai", ...)` would pick. Walking
-// PATH ourselves gives a stable cache key for the mtime-based invalidation;
-// `statSync` follows symlinks so a swap of the symlink target surfaces as
-// an mtime drift on the same path.
-function resolveGentleAiPath(): { path: string; mtime: number } | null {
-  const isWindows = process.platform === "win32"
-  const extensions = isWindows ? [".exe", ".cmd", ".bat", ""] : [""]
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (dir === "") continue
-    for (const ext of extensions) {
-      const candidate = join(dir, `gentle-ai${ext}`)
-      try {
-        const stat = statSync(candidate)
-        if (stat.isFile()) return { path: candidate, mtime: stat.mtimeMs }
-      } catch {
-        continue
-      }
-    }
-  }
-  return null
-}
-
-const RELAY_PROBE_CACHE_KEY = "__gentleAiOpenCodeReviewTransportProbeCache" as const
-type ProbeCacheEntry = { mtime: number; version: string }
-type ProbeResult = { path: string; mtime: number; version: string }
-
-function relayProbeCache(): Map<string, ProbeCacheEntry> {
-  const runtime = globalThis as typeof globalThis & { [RELAY_PROBE_CACHE_KEY]?: Map<string, ProbeCacheEntry> }
-  if (runtime[RELAY_PROBE_CACHE_KEY] === undefined) runtime[RELAY_PROBE_CACHE_KEY] = new Map<string, ProbeCacheEntry>()
-  return runtime[RELAY_PROBE_CACHE_KEY]
-}
-
-function clearRelayProbeCache(): void {
-  relayProbeCache().clear()
 }
 
 // Parse `gentle-ai <semver>\n` from `--version` stdout. Anything else is
@@ -180,9 +141,9 @@ function compareSemver(pathVersion: string, minVersion: string): number {
   return 0
 }
 
-function runGentleAiVersion(resolved: string): Promise<{ code: number | null; stdout: string } | null> {
+function runGentleAiVersion(): Promise<{ code: number | null; stdout: string } | null> {
   return new Promise((settle) => {
-    const child = spawn(resolved, ["--version"], { stdio: ["ignore", "pipe", "pipe"] })
+    const child = spawn("gentle-ai", ["--version"], { stdio: ["ignore", "pipe", "pipe"] })
     let stdout = ""
     let done = false
     const finish = (value: { code: number | null; stdout: string } | null) => {
@@ -196,34 +157,17 @@ function runGentleAiVersion(resolved: string): Promise<{ code: number | null; st
   })
 }
 
-async function probeGentleAiBinary(): Promise<ProbeResult | null> {
-  const resolved = resolveGentleAiPath()
-  if (resolved === null) return null
-  const cache = relayProbeCache()
-  const cached = cache.get(resolved.path)
-  if (cached !== undefined && cached.mtime === resolved.mtime) {
-    return { path: resolved.path, mtime: cached.mtime, version: cached.version }
-  }
-  const probe = await runGentleAiVersion(resolved.path)
+async function probeGentleAiBinary(): Promise<{ version: string } | null> {
+  const probe = await runGentleAiVersion()
   if (probe === null || probe.code !== 0) return null
   const version = parseGentleAiVersion(probe.stdout)
   if (version === undefined) return null
-  // Re-stat the resolved path: between resolveGentleAiPath and the spawn
-  // closing, an upgrade could have swapped the file under us, and the
-  // cached mtime must match the binary we actually probed.
-  let mtime = resolved.mtime
-  try {
-    mtime = statSync(resolved.path).mtimeMs
-  } catch {
-    return null
-  }
-  cache.set(resolved.path, { mtime, version })
-  return { path: resolved.path, mtime, version }
+  return { version }
 }
 
-function binarySkewReason(resolvedPath: string, pathVersion: string): string {
+function binarySkewReason(pathVersion: string): string {
   return (
-    `${BINARY_SKEW_CODE}: PATH resolves gentle-ai to ${resolvedPath} version ${pathVersion}, ` +
+    `${BINARY_SKEW_CODE}: PATH gentle-ai reports version ${pathVersion}, ` +
     `which is older than the minimum ${MIN_GENTLE_AI_VERSION} this plugin requires. ` +
     `Inspect the path with: which -a gentle-ai`
   )
@@ -240,7 +184,7 @@ async function runBinaryHandshake(): Promise<void> {
   const result = await probeGentleAiBinary()
   if (result === null) throw new Error(binaryUnavailableReason())
   if (compareSemver(result.version, MIN_GENTLE_AI_VERSION) < 0) {
-    throw new Error(binarySkewReason(result.path, result.version))
+    throw new Error(binarySkewReason(result.version))
   }
 }
 
@@ -375,9 +319,6 @@ const OpenCodeReviewTransportPlugin: Plugin = async ({ directory, worktree }) =>
       reviewSessions.delete(event.properties.info.id)
       const prefix = `${event.properties.info.id}:`
       clearSession(prefix)
-      // Clear the probe cache so the next relay in a new session re-probes.
-      // Within a session, relays still reuse the cached mtime probe.
-      clearRelayProbeCache()
     },
     "experimental.chat.system.transform": async (input, output) => {
       if (typeof input.sessionID !== "string" || !reviewSessions.has(input.sessionID)) return
