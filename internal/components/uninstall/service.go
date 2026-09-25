@@ -523,7 +523,8 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			backupTargets[op.path] = struct{}{}
 			operationsByKey[operationKey(op)] = op
 		}
-		for _, path := range opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS) {
+		allLauncherPaths := append(opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS), opencodeactivation.LegacyManagedLauncherPaths(s.homeDir, runtime.GOOS)...)
+		for _, path := range allLauncherPaths {
 			backupTargets[path] = struct{}{}
 			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
 		}

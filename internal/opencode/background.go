@@ -475,6 +475,7 @@ type ActivationPlan struct {
 	action       activationAction
 	capability   CapabilityResolution
 	paths        []string
+	legacyPaths  []string
 	desired      map[string][]byte
 	before       map[string]launcherSnapshot
 	changed      []string
@@ -526,6 +527,16 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 		content := launcherContent(options.OS, target)
 		plan.desired[path] = []byte(content[filepath.Base(path)])
 	}
+	for _, lp := range LegacyManagedLauncherPaths(homeDir, options.OS) {
+		snapshot, err := readLauncherSnapshot(lp)
+		if err != nil {
+			return nil, err
+		}
+		if snapshot.exists && snapshot.owned {
+			plan.legacyPaths = append(plan.legacyPaths, lp)
+			plan.before[lp] = snapshot
+		}
+	}
 	return plan, nil
 }
 
@@ -534,12 +545,7 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 // safe even when the real runtime is no longer installed.
 func PrepareDeactivation(homeDir string, options ActivationOptions) (*ActivationPlan, error) {
 	options = options.normalized()
-	paths := ManagedLauncherPaths(homeDir, options.OS)
-	for _, lp := range LegacyManagedLauncherPaths(homeDir, options.OS) {
-		if _, err := os.Stat(lp); err == nil {
-			paths = append(paths, lp)
-		}
-	}
+	paths := append(ManagedLauncherPaths(homeDir, options.OS), LegacyManagedLauncherPaths(homeDir, options.OS)...)
 	plan := &ActivationPlan{
 		homeDir: homeDir,
 		goos:    options.OS,
@@ -654,6 +660,12 @@ func (p *ActivationPlan) Apply() error {
 			p.changed = append(p.changed, path)
 			if err := p.options.WriteFile(path, desired, 0o755); err != nil {
 				return p.failAndRollback(fmt.Errorf("write managed OpenCode launcher %q: %w", path, err))
+			}
+		}
+		for _, lp := range p.legacyPaths {
+			p.changed = append(p.changed, lp)
+			if err := p.options.RemoveFile(lp); err != nil && !os.IsNotExist(err) {
+				return p.failAndRollback(fmt.Errorf("remove legacy OpenCode launcher %q: %w", lp, err))
 			}
 		}
 		if p.goos == "windows" {

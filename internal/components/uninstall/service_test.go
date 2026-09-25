@@ -116,13 +116,15 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 	}
 	paths := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)
 	ownedPath := paths[0]
+	legacyPaths := opencodeactivation.LegacyManagedLauncherPaths(homeDir, runtime.GOOS)
+	legacyOwnedPath := legacyPaths[0]
 	userPath := filepath.Join(opencodeactivation.BinDir(homeDir), "user-opencode-launcher")
-	for index, path := range []string{ownedPath, userPath} {
+	for index, path := range []string{ownedPath, legacyOwnedPath, userPath} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		content := []byte("user launcher")
-		if index == 0 {
+		if index < 2 {
 			content = []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\n")
 		}
 		if err := os.WriteFile(path, content, 0o755); err != nil {
@@ -141,11 +143,17 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 	if _, err := os.Stat(ownedPath); !os.IsNotExist(err) {
 		t.Fatalf("owned launcher stat error = %v, want absent", err)
 	}
+	if _, err := os.Stat(legacyOwnedPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy owned launcher stat error = %v, want absent", err)
+	}
 	if data, err := os.ReadFile(userPath); err != nil || string(data) != "user launcher" {
 		t.Fatalf("user launcher = %q, error = %v; want preserved", data, err)
 	}
 	if !slices.Contains(result.RemovedFiles, ownedPath) {
 		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, ownedPath)
+	}
+	if !slices.Contains(result.RemovedFiles, legacyOwnedPath) {
+		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, legacyOwnedPath)
 	}
 }
 

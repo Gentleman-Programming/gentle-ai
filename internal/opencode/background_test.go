@@ -314,6 +314,66 @@ func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 	}
 }
 
+func TestActivationCleansLegacyManagedLaunchersAndDeactivationRemovesBoth(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyLaunchers := LegacyManagedLauncherPaths(home, "linux")
+	for _, lp := range legacyLaunchers {
+		if err := os.MkdirAll(filepath.Dir(lp), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(lp, []byte("#!/bin/sh\n# "+OwnershipMarker+"\nlegacy"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	options := ActivationOptions{
+		OS:            "linux",
+		Path:          filepath.Dir(target),
+		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
+		AddToUserPath: func(string) error { return nil },
+		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	}
+
+	if _, err := Activate(home, options); err != nil {
+		t.Fatal(err)
+	}
+
+	canonicalPath := POSIXLauncherPath(home)
+	if _, err := os.Stat(canonicalPath); err != nil {
+		t.Fatalf("canonical launcher missing after activate: %v", err)
+	}
+
+	for _, lp := range legacyLaunchers {
+		if _, err := os.Stat(lp); !os.IsNotExist(err) {
+			t.Fatalf("legacy launcher stat error = %v, want absent after activation", err)
+		}
+	}
+
+	for _, lp := range legacyLaunchers {
+		if err := os.WriteFile(lp, []byte("#!/bin/sh\n# "+OwnershipMarker+"\nlegacy"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Deactivate(home, options); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(canonicalPath); !os.IsNotExist(err) {
+		t.Fatalf("canonical launcher stat error = %v, want absent after deactivate", err)
+	}
+	for _, lp := range legacyLaunchers {
+		if _, err := os.Stat(lp); !os.IsNotExist(err) {
+			t.Fatalf("legacy launcher stat error = %v, want absent after deactivate", err)
+		}
+	}
+}
+
 func TestActivationRefusesUserOwnedCollision(t *testing.T) {
 	home := t.TempDir()
 	path := POSIXLauncherPath(home)
