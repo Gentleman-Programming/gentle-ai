@@ -37,43 +37,30 @@ func TestManifestRoundTrip(t *testing.T) {
 	}
 }
 
-// TestBundleDigestExcludesObserved: observed updates must not change bundle identity.
+// TestBundleDigestExcludesObserved: observed updates must not change bundle
+// identity, while a desired change must. Both properties guard the same
+// canonicalisation (producer + owned_extent + desired, observed excluded).
 func TestBundleDigestExcludesObserved(t *testing.T) {
 	base := Manifest{
 		Schema: ManifestSchema, Producer: Producer{BinaryVersion: "2.2.0"},
 		Resources: []ManifestResource{{
 			ID: "x", Adapter: "full-file", Target: "/tmp",
 			OwnedExtent: OwnedExtent{Kind: ExtentFull, Ownership: OwnershipManaged},
-			Desired:     "sha256:desired", Observed: "sha256:observed-first",
+			Desired:     "sha256:desired-A", Observed: "sha256:observed-first",
 		}},
 	}
 	first := base.WithBundleDigest()
+
 	base.Resources[0].Observed = "sha256:observed-second"
-	second := base.WithBundleDigest()
-
-	if first.Bundle.Digest != second.Bundle.Digest {
-		t.Errorf("bundle digest changed when only observed changed: %q vs %q", first.Bundle.Digest, second.Bundle.Digest)
+	if first.Bundle.Digest != base.WithBundleDigest().Bundle.Digest {
+		t.Errorf("bundle digest changed when only observed changed")
 	}
-	if first.Bundle.Algo != "sha256" || first.Bundle.Digest == "" {
-		t.Errorf("bundle metadata wrong: %+v", first.Bundle)
-	}
-}
-
-// TestBundleDigestChangesWhenDesiredChanges: digest MUST change when desired changes.
-func TestBundleDigestChangesWhenDesiredChanges(t *testing.T) {
-	base := Manifest{
-		Schema: ManifestSchema, Producer: Producer{BinaryVersion: "2.2.0"},
-		Resources: []ManifestResource{{
-			ID: "x", Adapter: "full-file", Target: "/tmp",
-			OwnedExtent: OwnedExtent{Kind: ExtentFull, Ownership: OwnershipManaged},
-			Desired:     "sha256:desired-A",
-		}},
-	}
-	first := base.WithBundleDigest()
-
 	base.Resources[0].Desired = "sha256:desired-B"
 	if first.Bundle.Digest == base.WithBundleDigest().Bundle.Digest {
 		t.Error("bundle digest unchanged after desired changed")
+	}
+	if first.Bundle.Algo != "sha256" || first.Bundle.Digest == "" {
+		t.Errorf("bundle metadata wrong: %+v", first.Bundle)
 	}
 }
 
