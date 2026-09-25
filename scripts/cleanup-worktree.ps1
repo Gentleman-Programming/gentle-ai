@@ -1,4 +1,5 @@
 # scripts/cleanup-worktree.ps1 — Desmantelamiento limpio y seguro de git worktrees y ramas locales post-merge (ODD-5.7).
+# Nota: para el flujo canónico por slug, prefiere usar: scripts/axiom-worktree.ps1 done <slug>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true, Position=0, HelpMessage="Ruta al directorio del worktree a eliminar")]
