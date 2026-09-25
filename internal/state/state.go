@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
 
 const stateDir = ".axiom"
@@ -187,34 +188,44 @@ func (s *InstallState) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Path returns the absolute path to the state file for the given home directory.
+// Path returns the absolute path to the canonical Axiom state file for the given home directory.
 func Path(homeDir string) string {
-	return filepath.Join(homeDir, stateDir, stateFile)
+	return system.StatePath(homeDir)
 }
 
 // LegacyPath returns the absolute path to the legacy Gentle AI state file for the given home directory.
 func LegacyPath(homeDir string) string {
-	return filepath.Join(homeDir, legacyStateDir, stateFile)
+	return system.LegacyStatePath(homeDir)
+}
+
+// Bootstrap checks if canonical state (~/.axiom/state.json or $AXIOM_STATE_DIR/state.json) exists.
+// If it does not exist but legacy state exists (~/.gentle-ai/state.json), it defensively copies
+// the legacy state to the canonical path while preserving the legacy file intact as backup.
+func Bootstrap(homeDir string) error {
+	canonicalPath := Path(homeDir)
+	if _, err := os.Stat(canonicalPath); err == nil {
+		return nil
+	}
+	legacyPath := LegacyPath(homeDir)
+	legacyData, err := os.ReadFile(legacyPath)
+	if err != nil {
+		return nil // No legacy state to migrate from
+	}
+	if mkErr := os.MkdirAll(filepath.Dir(canonicalPath), 0o755); mkErr != nil {
+		return mkErr
+	}
+	_, err = filemerge.WriteFileAtomic(canonicalPath, legacyData, 0o644)
+	return err
 }
 
 // Read reads and unmarshals the state file from the given home directory.
-// If ~/.axiom/state.json does not exist but ~/.gentle-ai/state.json does,
-// it defensively migrates the state to ~/.axiom/state.json while preserving
-// the legacy file as backup.
+// It invokes Bootstrap to ensure non-destructive automatic migration from ~/.gentle-ai/state.json
+// when ~/.axiom/state.json is missing.
 // Returns an error if the file does not exist or cannot be decoded.
 func Read(homeDir string) (InstallState, error) {
+	_ = Bootstrap(homeDir)
 	canonicalPath := Path(homeDir)
 	data, err := os.ReadFile(canonicalPath)
-	if err != nil && os.IsNotExist(err) {
-		legacyPath := LegacyPath(homeDir)
-		if legacyData, legacyErr := os.ReadFile(legacyPath); legacyErr == nil {
-			if mkErr := os.MkdirAll(filepath.Dir(canonicalPath), 0o755); mkErr == nil {
-				_, _ = filemerge.WriteFileAtomic(canonicalPath, legacyData, 0o644)
-			}
-			data = legacyData
-			err = nil
-		}
-	}
 	if err != nil {
 		return InstallState{}, err
 	}
@@ -301,9 +312,10 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 }
 
 // Write persists the full install state to disk under the given home directory.
-// It creates the .axiom directory if it does not already exist.
+// It creates the canonical state directory if it does not already exist.
 func Write(homeDir string, s InstallState) error {
-	dir := filepath.Join(homeDir, stateDir)
+	targetPath := Path(homeDir)
+	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -311,7 +323,7 @@ func Write(homeDir string, s InstallState) error {
 	if err != nil {
 		return err
 	}
-	_, err = filemerge.WriteFileAtomic(Path(homeDir), data, 0o644)
+	_, err = filemerge.WriteFileAtomic(targetPath, data, 0o644)
 	return err
 }
 

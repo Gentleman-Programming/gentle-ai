@@ -433,6 +433,80 @@ func TestLegacyStateMigration(t *testing.T) {
 	}
 }
 
+// TestBootstrap verifies the explicit Bootstrap function under clean, legacy, and precedence conditions.
+func TestBootstrap(t *testing.T) {
+	t.Run("clean start does not create state", func(t *testing.T) {
+		home := t.TempDir()
+		if err := Bootstrap(home); err != nil {
+			t.Fatalf("Bootstrap() on clean directory returned unexpected error: %v", err)
+		}
+		if _, err := os.Stat(Path(home)); !os.IsNotExist(err) {
+			t.Errorf("Bootstrap() created state file when none existed: %v", err)
+		}
+	})
+
+	t.Run("migrates legacy state and preserves original", func(t *testing.T) {
+		home := t.TempDir()
+		legacyDir := filepath.Join(home, ".gentle-ai")
+		if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		legacyContent := `{"installed_agents":["opencode"]}`
+		if err := os.WriteFile(filepath.Join(legacyDir, "state.json"), []byte(legacyContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := Bootstrap(home); err != nil {
+			t.Fatalf("Bootstrap() error = %v", err)
+		}
+
+		// Canonical file must exist with legacy content
+		canonicalData, err := os.ReadFile(Path(home))
+		if err != nil {
+			t.Fatalf("ReadFile(canonicalPath) error = %v", err)
+		}
+		if string(canonicalData) != legacyContent {
+			t.Errorf("canonical content = %s, want %s", string(canonicalData), legacyContent)
+		}
+
+		// Legacy file must remain untouched
+		if _, err := os.Stat(filepath.Join(legacyDir, "state.json")); err != nil {
+			t.Errorf("legacy file missing after Bootstrap: %v", err)
+		}
+	})
+
+	t.Run("canonical state takes precedence over legacy", func(t *testing.T) {
+		home := t.TempDir()
+		legacyDir := filepath.Join(home, ".gentle-ai")
+		axiomDir := filepath.Join(home, ".axiom")
+		if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(axiomDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(legacyDir, "state.json"), []byte(`{"installed_agents":["legacy"]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		canonicalContent := `{"installed_agents":["canonical"]}`
+		if err := os.WriteFile(filepath.Join(axiomDir, "state.json"), []byte(canonicalContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := Bootstrap(home); err != nil {
+			t.Fatalf("Bootstrap() error = %v", err)
+		}
+
+		canonicalData, err := os.ReadFile(Path(home))
+		if err != nil {
+			t.Fatalf("ReadFile(canonicalPath) error = %v", err)
+		}
+		if string(canonicalData) != canonicalContent {
+			t.Errorf("canonical content = %s, want %s", string(canonicalData), canonicalContent)
+		}
+	})
+}
+
 // TestReadMissing verifies that reading a non-existent file returns an error (not a panic).
 func TestReadMissing(t *testing.T) {
 	home := t.TempDir()
