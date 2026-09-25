@@ -120,6 +120,93 @@ func TestListBackupsWithSourceMetadata(t *testing.T) {
 	}
 }
 
+func TestListBackupsKeepsDuplicateIDsRestorableBySelectedRoot(t *testing.T) {
+	home := t.TempDir()
+	canonicalRoot := backup.BackupRootFor(home)
+	legacyRoot := backup.LegacyBackupRootFor(home)
+	sourcePath := filepath.Join(home, "config.json")
+
+	createSnapshot := func(root, contents string) backup.Manifest {
+		t.Helper()
+		if err := os.WriteFile(sourcePath, []byte(contents), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", sourcePath, err)
+		}
+		manifest, err := backup.NewSnapshotter().Create(filepath.Join(root, "shared-id"), []string{sourcePath})
+		if err != nil {
+			t.Fatalf("Snapshotter.Create(%q): %v", root, err)
+		}
+		return manifest
+	}
+
+	axiomSnapshot := createSnapshot(canonicalRoot, "Axiom snapshot\n")
+	legacySnapshot := createSnapshot(legacyRoot, "Gentle AI snapshot\n")
+	if axiomSnapshot.ID != legacySnapshot.ID {
+		t.Fatalf("test setup IDs differ: Axiom=%q legacy=%q", axiomSnapshot.ID, legacySnapshot.ID)
+	}
+	if err := os.WriteFile(sourcePath, []byte("current configuration\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current): %v", err)
+	}
+
+	setupMockHome(t, home)
+	manifests := ListBackups()
+	if len(manifests) != 2 {
+		t.Fatalf("ListBackups() returned %d manifests, want both same-ID roots", len(manifests))
+	}
+	byOrigin := make(map[backup.BackupOrigin]backup.Manifest, len(manifests))
+	for _, manifest := range manifests {
+		if manifest.ID != axiomSnapshot.ID {
+			t.Errorf("listed ID = %q, want shared ID %q", manifest.ID, axiomSnapshot.ID)
+		}
+		byOrigin[manifest.Origin] = manifest
+	}
+	axiom, hasAxiom := byOrigin[backup.BackupOriginAxiom]
+	legacy, hasLegacy := byOrigin[backup.BackupOriginGentleAI]
+	if !hasAxiom || !hasLegacy {
+		t.Fatalf("ListBackups() origins = %v, want both Axiom and Gentle AI", byOrigin)
+	}
+	if axiom.RootDir == legacy.RootDir {
+		t.Fatalf("same-ID backups share restore path %q; expected root-specific identity", axiom.RootDir)
+	}
+
+	restoreThroughTUI := func(selected backup.Manifest, want string) {
+		t.Helper()
+		m := tui.NewModel(system.DetectionResult{}, "dev")
+		m.Backups = manifests
+		m.RestoreFn = tuiRestore
+		m.Screen = tui.ScreenBackups
+		for i, manifest := range m.Backups {
+			if manifest.Origin == selected.Origin {
+				m.Cursor = i // Explicitly choose this product-origin row.
+				break
+			}
+		}
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		confirm := updated.(tui.Model)
+		if confirm.SelectedBackup.RootDir != selected.RootDir || confirm.SelectedBackup.Origin != selected.Origin {
+			t.Fatalf("TUI selected root=%q origin=%q, want root=%q origin=%q", confirm.SelectedBackup.RootDir, confirm.SelectedBackup.Origin, selected.RootDir, selected.Origin)
+		}
+		updated, cmd := confirm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatal("confirming the selected backup returned no restore command")
+		}
+		updated, _ = updated.(tui.Model).Update(cmd())
+		if got := updated.(tui.Model).RestoreErr; got != nil {
+			t.Fatalf("restoring %s backup failed: %v", selected.Origin, got)
+		}
+		contents, err := os.ReadFile(sourcePath)
+		if err != nil {
+			t.Fatalf("ReadFile(restored config): %v", err)
+		}
+		if string(contents) != want {
+			t.Fatalf("restored %s snapshot = %q, want %q", selected.Origin, contents, want)
+		}
+	}
+
+	restoreThroughTUI(axiom, "Axiom snapshot\n")
+	restoreThroughTUI(legacy, "Gentle AI snapshot\n")
+}
+
 // TestRunArgsRestoreListIsDispatched verifies that `gentle-ai restore --list`
 // is correctly dispatched through RunArgs and produces a meaningful response
 // (either a backup list or a "no backups" message — never "unknown command").

@@ -27,6 +27,10 @@ func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int, pinE
 		b.WriteString(renderOptions([]string{"Volver"}, 0))
 		return b.String()
 	}
+	if !hasAxiomBackup(backups) {
+		b.WriteString(styles.WarningStyle.Render("No hay respaldos de Axiom. Los respaldos históricos de Gentle AI no se seleccionan automáticamente; elige uno expresamente si quieres restaurarlo."))
+		b.WriteString("\n\n")
+	}
 
 	end := scrollOffset + BackupMaxVisible
 	if end > len(backups) {
@@ -42,7 +46,7 @@ func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int, pinE
 		snapshot := backups[i]
 		// Use DisplayLabel for richer labels: "install — 2026-03-22 15:04 (5 files)"
 		// Falls back to "unknown source — 2026-03-22 15:04" for old manifests.
-		displayLabel := snapshot.DisplayLabel()
+		displayLabel := fmt.Sprintf("%s  [%s]", snapshot.DisplayLabel(), snapshot.Origin.Label())
 		if snapshot.CreatedByVersion != "" {
 			displayLabel = fmt.Sprintf("%s  [v%s]", displayLabel, snapshot.CreatedByVersion)
 		}
@@ -89,7 +93,7 @@ func RenderRestoreConfirm(manifest backup.Manifest, cursor int) string {
 	b.WriteString(styles.HeadingStyle.Render("Respaldo: "))
 	b.WriteString(styles.SelectedStyle.Render(manifest.ID))
 	b.WriteString("\n")
-	b.WriteString(styles.SubtextStyle.Render(manifest.DisplayLabel()))
+	b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("%s  [%s]", manifest.DisplayLabel(), manifest.Origin.Label())))
 	b.WriteString("\n\n")
 
 	b.WriteString(styles.WarningStyle.Render("Esto sobrescribirá tu configuración actual."))
@@ -100,6 +104,15 @@ func RenderRestoreConfirm(manifest backup.Manifest, cursor int) string {
 	b.WriteString(styles.HelpStyle.Render("j/k: navegar • enter: seleccionar • esc: volver"))
 
 	return b.String()
+}
+
+func hasAxiomBackup(backups []backup.Manifest) bool {
+	for _, manifest := range backups {
+		if manifest.Origin == backup.BackupOriginAxiom {
+			return true
+		}
+	}
+	return false
 }
 
 // RenderRestoreResult renders the restore result screen.

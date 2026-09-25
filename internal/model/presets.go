@@ -7,16 +7,8 @@ func VisualPolishComponents() []ComponentID {
 	return []ComponentID{ComponentTheme, ComponentClaudeTheme, ComponentOpenCodeGentleLogo}
 }
 
-// installSafePresetVisualComponents returns only the agent-specific visual
-// components that presets can install without overwriting a generic theme.
-// ComponentOpenCodeGentleLogo is excluded to keep OpenCode home slots unpolluted.
-func installSafePresetVisualComponents() []ComponentID {
-	return []ComponentID{ComponentClaudeTheme}
-}
-
 // ComponentsForPreset returns the managed components implied by a preset/persona
-// pair. PersonaCustom opts out of managed persona only; preset choice still
-// controls visual polish.
+// pair. Visual themes are retained as legacy cleanup IDs, never installed.
 func ComponentsForPreset(preset PresetID, persona PersonaID) []ComponentID {
 	var components []ComponentID
 	switch preset {
@@ -35,7 +27,6 @@ func ComponentsForPreset(preset PresetID, persona PersonaID) []ComponentID {
 			ComponentPermission,
 			ComponentGGA,
 		}
-		components = append(components, installSafePresetVisualComponents()...)
 	}
 	if persona != PersonaCustom {
 		components = append(components, ComponentPersona)

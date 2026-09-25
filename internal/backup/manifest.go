@@ -13,6 +13,29 @@ import (
 // New values may be added in future — consumers must handle unknown values gracefully.
 type BackupSource string
 
+// BackupOrigin identifies the product-owned root from which a backup was
+// discovered. It is runtime metadata, not part of the persisted snapshot
+// contract: legacy manifests do not contain a product-origin field.
+type BackupOrigin string
+
+const (
+	BackupOriginUnknown  BackupOrigin = ""
+	BackupOriginAxiom    BackupOrigin = "axiom"
+	BackupOriginGentleAI BackupOrigin = "gentle-ai"
+)
+
+// Label returns the human-readable product origin for a discovered backup.
+func (o BackupOrigin) Label() string {
+	switch o {
+	case BackupOriginAxiom:
+		return "Axiom"
+	case BackupOriginGentleAI:
+		return "Gentle AI histórico"
+	default:
+		return "origen no identificado"
+	}
+}
+
 const (
 	// BackupSourceInstall indicates the backup was created before an install run.
 	BackupSourceInstall BackupSource = "install"
@@ -75,6 +98,11 @@ type Manifest struct {
 	// Checksum is the SHA-256 composite hash of the snapshotted files, used for deduplication.
 	// Optional: omitted when empty for backward-compatibility with old manifests.
 	Checksum string `json:"checksum,omitempty"`
+
+	// Origin is assigned by the backup-listing boundary from the root where
+	// this manifest was discovered. It is intentionally transient so listing
+	// backups never migrates or rewrites a user's existing manifest.
+	Origin BackupOrigin `json:"-"`
 }
 
 // DisplayLabel returns a human-readable label for the backup suitable for display
@@ -198,11 +226,25 @@ func LegacyBackupRootFor(home string) string {
 
 // BackupRoots returns every backup root that a reader must scan for the
 // given home directory, canonical root first: [BackupRootFor(home),
-// LegacyBackupRootFor(home)]. Order is part of the contract — it lets a
-// caller such as ListBackups prefer a canonical-root backup over a legacy
-// one when both exist for the same identifier.
+// LegacyBackupRootFor(home)]. Order is part of the contract — callers can
+// identify canonical and historical backups consistently, but must not treat
+// manifest IDs as globally unique across these roots.
 func BackupRoots(home string) []string {
 	return []string{BackupRootFor(home), LegacyBackupRootFor(home)}
+}
+
+// BackupOriginForRoot identifies one of the supported backup roots. Unknown
+// roots remain unknown rather than being guessed from manifest metadata.
+func BackupOriginForRoot(home, root string) BackupOrigin {
+	cleanRoot := filepath.Clean(root)
+	switch cleanRoot {
+	case filepath.Clean(BackupRootFor(home)):
+		return BackupOriginAxiom
+	case filepath.Clean(LegacyBackupRootFor(home)):
+		return BackupOriginGentleAI
+	default:
+		return BackupOriginUnknown
+	}
 }
 
 // legacyBackupRoot returns the legacy parent directory for Gentle AI backups (~/.gentle-ai/backups).

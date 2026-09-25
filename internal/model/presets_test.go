@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestComponentsForPresetFullGentlemanUsesInstallSafeVisualInventory(t *testing.T) {
+func TestComponentsForPresetFullGentlemanNeverInstallsVisualThemes(t *testing.T) {
 	tests := []struct {
 		name    string
 		persona PersonaID
@@ -18,14 +18,10 @@ func TestComponentsForPresetFullGentlemanUsesInstallSafeVisualInventory(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			got := ComponentsForPreset(PresetFullGentleman, tt.persona)
 
-			if slices.Contains(got, ComponentTheme) {
-				t.Fatalf("ComponentsForPreset() includes generic ComponentTheme: %v", got)
-			}
-			if slices.Contains(got, ComponentOpenCodeGentleLogo) {
-				t.Fatalf("ComponentsForPreset() must not include ComponentOpenCodeGentleLogo: %v", got)
-			}
-			if !slices.Contains(got, ComponentClaudeTheme) {
-				t.Fatalf("ComponentsForPreset() missing ComponentClaudeTheme: %v", got)
+			for _, visual := range VisualPolishComponents() {
+				if slices.Contains(got, visual) {
+					t.Fatalf("ComponentsForPreset() includes legacy visual component %q: %v", visual, got)
+				}
 			}
 		})
 	}

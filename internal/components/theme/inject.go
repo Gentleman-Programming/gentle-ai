@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
@@ -85,50 +84,129 @@ var axiomDarkOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := adapter.SettingsPath(homeDir)
-	if settingsPath == "" {
-		return InjectionResult{}, nil
-	}
-
-	// Per REQ-09.2: Axiom is non-intrusive and preserves the developer's theme preferences.
-	// It does NOT inject "theme" into settings.json during sync or install.
-	return InjectionResult{Changed: false, Files: []string{settingsPath}}, nil
+	return InjectionResult{}, nil
 }
 
-// InjectVisualThemes writes the managed visual theme assets without selecting one
-// in an agent's active settings.
+// InjectVisualThemes is retained for legacy callers, but Axiom no longer
+// installs visual themes. Existing files are handled by guarded cleanup.
 func InjectVisualThemes(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	paths := VisualThemePaths(homeDir, adapter)
-	if len(paths) == 0 {
-		return InjectionResult{}, nil
-	}
+	return InjectionResult{}, nil
+}
 
+// IsManagedVisualTheme proves that a file still contains the exact bytes an
+// earlier Axiom release generated. Names alone are insufficient provenance.
+func IsManagedVisualTheme(path string, adapter agents.Adapter, content []byte) bool {
 	var values []any
 	switch adapter.Agent() {
 	case model.AgentClaudeCode:
 		values = []any{axiomClaudeTheme, axiomDarkClaudeTheme}
 	case model.AgentOpenCode:
 		values = []any{axiomOpenCodeTheme, axiomDarkOpenCodeTheme}
+	default:
+		return false
 	}
+	var index int
+	switch filepath.Base(path) {
+	case "axiom.json":
+		index = 0
+	case "axiom-dark.json":
+		index = 1
+	default:
+		return false
+	}
+	expected, err := json.MarshalIndent(values[index], "", "  ")
+	return err == nil && string(content) == string(append(expected, '\n'))
+}
 
-	result := InjectionResult{Files: make([]string, 0, len(paths))}
-	for i, path := range paths {
-		content, err := json.MarshalIndent(values[i], "", "  ")
+// ManagedVisualThemePaths returns only regular files still identical to old
+// Axiom assets. Sync snapshots these paths before attempting their removal.
+func ManagedVisualThemePaths(homeDir string, adapter agents.Adapter) ([]string, error) {
+	var owned []string
+	for _, path := range VisualThemePaths(homeDir, adapter) {
+		managed, err := IsManagedVisualThemeFile(path, adapter)
 		if err != nil {
-			return InjectionResult{}, fmt.Errorf("marshal visual theme %q: %w", filepath.Base(path), err)
+			return nil, err
 		}
-		content = append(content, '\n')
-		writeResult, err := filemerge.WriteFileAtomic(path, content, 0o644)
+		if managed {
+			owned = append(owned, path)
+		}
+	}
+	return owned, nil
+}
+
+// IsManagedVisualThemeFile requires both exact content and a link-free path.
+// This is shared by sync and uninstall so neither can follow a linked theme dir.
+func IsManagedVisualThemeFile(path string, adapter agents.Adapter) (bool, error) {
+	linked, err := linkedThemeAncestor(path)
+	if err != nil {
+		return false, fmt.Errorf("inspect theme ancestors for %q: %w", path, err)
+	}
+	if linked {
+		return false, nil
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect legacy theme %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read legacy theme %q: %w", path, err)
+	}
+	return IsManagedVisualTheme(path, adapter, content), nil
+}
+
+// linkedThemeAncestor rejects symlinks and Windows junctions before a managed
+// asset is read or removed. Go reports junctions as non-directories to Lstat.
+func linkedThemeAncestor(path string) (bool, error) {
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		info, err := os.Lstat(dir)
+		if os.IsNotExist(err) {
+			return false, nil // The theme path cannot exist below a missing ancestor.
+		}
+		if err != nil {
+			return false, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return true, nil
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return false, nil
+		}
+	}
+}
+
+// RetireManagedVisualThemes rechecks ownership immediately before deletion.
+// Modified assets and user-selected settings are left untouched.
+func RetireManagedVisualThemes(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	paths, err := ManagedVisualThemePaths(homeDir, adapter)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	result := InjectionResult{}
+	for _, path := range paths {
+		managed, err := IsManagedVisualThemeFile(path, adapter)
 		if err != nil {
 			return InjectionResult{}, err
 		}
-		result.Changed = result.Changed || writeResult.Changed
+		if !managed {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return InjectionResult{}, fmt.Errorf("remove managed visual theme %q: %w", path, err)
+		}
 		result.Files = append(result.Files, path)
 	}
+	result.Changed = len(result.Files) > 0
 	return result, nil
 }
 
-// VisualThemePaths returns the installer-owned visual theme assets for an adapter.
+// VisualThemePaths returns paths used by earlier releases, for guarded cleanup.
 func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 	var root string
 	switch adapter.Agent() {
@@ -140,30 +218,4 @@ func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 		return nil
 	}
 	return []string{filepath.Join(root, "axiom.json"), filepath.Join(root, "axiom-dark.json")}
-}
-
-func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
-	baseJSON, err := osReadFile(path)
-	if err != nil {
-		return filemerge.WriteResult{}, err
-	}
-
-	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
-	if err != nil {
-		return filemerge.WriteResult{}, err
-	}
-
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
-}
-
-var osReadFile = func(path string) ([]byte, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read json file %q: %w", path, err)
-	}
-
-	return content, nil
 }

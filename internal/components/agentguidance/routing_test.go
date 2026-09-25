@@ -295,7 +295,7 @@ func TestRenderRoutingMakesTheReviewKillSwitchDiscoverable(t *testing.T) {
 			}
 
 			for _, want := range []string{
-				"gentle-ai review mode enable|disable|status",
+				"axiom review mode enable|disable|status",
 				"`status` is read-only",
 				"deciding source and the effective mode",
 			} {

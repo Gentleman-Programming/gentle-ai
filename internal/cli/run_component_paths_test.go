@@ -3,11 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
@@ -546,6 +548,39 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	want := filepath.Join(home, ".codex", "config.toml")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPaths(engram,codex) missing %q\npaths=%v", want, paths)
+	}
+}
+
+func TestVerificationComponentPathsCodexRuntimeGate(t *testing.T) {
+	tests := []struct {
+		name         string
+		version      string
+		commandErr   error
+		wantProfiles bool
+	}{
+		{name: "CLI disponible", version: "codex-cli 0.144.0", wantProfiles: true},
+		{name: "CLI ausente", commandErr: exec.ErrNotFound},
+		{name: "CLI incompatible no se oculta", version: "codex-cli 0.143.9", wantProfiles: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(codex.SetRuntimeVersionCommandForTest(tt.version, tt.commandErr))
+			home := t.TempDir()
+			adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
+			paths := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+			verified := verificationComponentPaths(paths, home, "", ScopeGlobal, adapters, model.ComponentEngram)
+			if !containsPath(verified, filepath.Join(home, ".codex", "config.toml")) {
+				t.Fatalf("la configuración compartida debe verificarse siempre: %v", verified)
+			}
+			for _, profile := range codex.SddProfilePaths(filepath.Join(home, ".codex")) {
+				if !containsPath(paths, profile) {
+					t.Fatalf("la copia de seguridad debe inventariar %q: %v", profile, paths)
+				}
+				if got := containsPath(verified, profile); got != tt.wantProfiles {
+					t.Errorf("verificación de %q = %v, esperado %v", profile, got, tt.wantProfiles)
+				}
+			}
+		})
 	}
 }
 
@@ -1231,23 +1266,12 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 	}
 }
 
-func TestComponentPathsVisualThemesMatchSelectedAdapter(t *testing.T) {
+func TestComponentPathsVisualThemesAreNoLongerRequired(t *testing.T) {
 	home := t.TempDir()
-	for _, tt := range []struct {
-		agent model.AgentID
-		want  []string
-	}{
-		{model.AgentClaudeCode, []string{filepath.Join(home, ".claude", "themes", "axiom.json"), filepath.Join(home, ".claude", "themes", "axiom-dark.json")}},
-		{model.AgentOpenCode, []string{filepath.Join(home, ".config", "opencode", "themes", "axiom.json"), filepath.Join(home, ".config", "opencode", "themes", "axiom-dark.json")}},
-	} {
-		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentClaudeTheme)
-		if len(paths) != len(tt.want) {
-			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
-		}
-		for i := range tt.want {
-			if paths[i] != tt.want[i] {
-				t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
-			}
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode} {
+		paths := componentPaths(home, model.Selection{}, resolveAdapters([]model.AgentID{agent}), model.ComponentClaudeTheme)
+		if len(paths) != 0 {
+			t.Fatalf("%q required visual paths = %v, want none", agent, paths)
 		}
 	}
 }
@@ -1303,5 +1327,39 @@ func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
 			t.Fatalf("%s returned duplicate path %q\npaths = %v", label, path, paths)
 		}
 		seen[path] = struct{}{}
+	}
+}
+
+func TestComponentInjectionDirScopedWorkspaceSafeguard(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("registry error: %v", err)
+	}
+
+	// Desktop agents without workspace support must fall back to homeDir
+	for _, id := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf, model.AgentAntigravity} {
+		adapter, ok := reg.Get(id)
+		if !ok {
+			continue
+		}
+		got := componentInjectionDirScoped(home, workspace, ScopeWorkspace, adapter)
+		if got != home {
+			t.Errorf("adapter %s in ScopeWorkspace: got %q, want homeDir %q", id, got, home)
+		}
+	}
+
+	// CLI agents with workspace support must use workspaceDir
+	for _, id := range []model.AgentID{model.AgentClaudeCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentCursor} {
+		adapter, ok := reg.Get(id)
+		if !ok {
+			continue
+		}
+		got := componentInjectionDirScoped(home, workspace, ScopeWorkspace, adapter)
+		if got != workspace {
+			t.Errorf("adapter %s in ScopeWorkspace: got %q, want workspaceDir %q", id, got, workspace)
+		}
 	}
 }

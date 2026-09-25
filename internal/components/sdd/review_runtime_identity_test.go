@@ -135,7 +135,7 @@ func TestAdvertisedRenderedReviewProtocolsBindRuntimeOnce(t *testing.T) {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			if agent.ID == model.AgentPi {
-				if strings.Contains(content, "gentle-ai review status") {
+				if strings.Contains(content, "axiom review status") || strings.Contains(content, "gentle-ai review status") {
 					t.Fatal("Pi rendered raw STATUS")
 				}
 				return
@@ -148,7 +148,7 @@ func TestAdvertisedRenderedReviewProtocolsBindRuntimeOnce(t *testing.T) {
 				t.Fatalf("rendered review protocol binds %q, want %q", bindings[0], "--agent "+string(agent.ID))
 			}
 
-			status := "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent.ID) + " --next-transition"
+			status := "axiom review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent.ID) + " --next-transition"
 			if got := strings.Count(content, status); got != 1 {
 				t.Fatalf("rendered review protocol contains %d canonical STATUS commands, want exactly one", got)
 			}

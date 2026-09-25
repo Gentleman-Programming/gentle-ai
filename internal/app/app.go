@@ -986,7 +986,6 @@ func ListBackups() []backup.Manifest {
 	roots := backup.BackupRoots(homeDir)
 
 	manifests := make([]backup.Manifest, 0)
-	seenIDs := make(map[string]struct{})
 
 	for _, backupRoot := range roots {
 		entries, err := os.ReadDir(backupRoot)
@@ -1004,10 +1003,8 @@ func ListBackups() []backup.Manifest {
 			if err != nil {
 				continue
 			}
-			if _, exists := seenIDs[manifest.ID]; !exists {
-				seenIDs[manifest.ID] = struct{}{}
-				manifests = append(manifests, manifest)
-			}
+			manifest.Origin = backup.BackupOriginForRoot(homeDir, backupRoot)
+			manifests = append(manifests, manifest)
 		}
 	}
 

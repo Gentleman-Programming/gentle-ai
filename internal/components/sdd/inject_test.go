@@ -3652,6 +3652,7 @@ func TestInjectOpenCodeReviewValidatorHasBoundedInspectionPermissions(t *testing
 		"edit":  "deny",
 		"task":  "deny",
 		"bash": map[string]any{
+			"axiom review inspect-candidate --purpose targeted-validation *":     "allow",
 			"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
 			"*": "deny",
 		},
@@ -7847,7 +7848,7 @@ func TestEnsureClaudeSkillRegistryHookAppendsIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
+	if strings.Count(text, "axiom skill-registry refresh") != 1 {
 		t.Fatalf("hook command count mismatch:\n%s", text)
 	}
 	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo existing") {
@@ -7965,7 +7966,7 @@ func TestEnsureClaudeReviewStopHookAppendsIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if strings.Count(text, "gentle-ai review stop-hook --agent claude-code") != 2 {
+	if strings.Count(text, "axiom review stop-hook --agent claude-code") != 2 {
 		t.Fatalf("hook command count mismatch, want one Stop entry and one SessionStart entry:\n%s", text)
 	}
 	if !strings.Contains(text, `"matcher": "startup|resume|clear|compact"`) {
@@ -7998,7 +7999,7 @@ func TestEnsureClaudeTelemetryHooksAppendsIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if strings.Count(text, "gentle-ai telemetry runtime claude --json") != 2 || strings.Count(text, `"async": true`) != 2 || !strings.Contains(text, "echo keep") {
+	if strings.Count(text, "axiom telemetry runtime claude --json") != 2 || strings.Count(text, `"async": true`) != 2 || !strings.Contains(text, "echo keep") {
 		t.Fatalf("hooks not merged idempotently:\n%s", text)
 	}
 }
@@ -8046,16 +8047,16 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "gentle-ai skill-registry refresh") {
+	if !strings.Contains(text, "axiom skill-registry refresh") {
 		t.Fatalf("Claude settings.json missing skill-registry hook:\n%s", text)
 	}
-	if strings.Count(text, "gentle-ai review stop-hook --agent claude-code") != 2 {
+	if strings.Count(text, "axiom review stop-hook --agent claude-code") != 2 {
 		t.Fatalf("Claude settings.json missing review stop-hook Stop+SessionStart entries:\n%s", text)
 	}
 	if !strings.Contains(text, `"matcher": "startup|resume|clear|compact"`) {
 		t.Fatalf("Claude settings.json missing SessionStart baseline matcher:\n%s", text)
 	}
-	if strings.Count(text, "gentle-ai sdd-preflight-hook --agent claude-code") != 1 {
+	if strings.Count(text, "axiom sdd-preflight-hook --agent claude-code") != 1 {
 		t.Fatalf("Claude settings.json missing fail-closed SDD PreToolUse entry:\n%s", text)
 	}
 	for _, matcher := range []string{`"matcher": "Agent"`} {
@@ -8107,10 +8108,10 @@ func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testi
 		t.Fatal(err)
 	}
 	text := string(data)
-	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
+	if strings.Count(text, "axiom skill-registry refresh") != 1 {
 		t.Fatalf("hook command count mismatch:\n%s", text)
 	}
-	if strings.Count(text, "gentle-ai telemetry runtime codex --json") != 2 {
+	if strings.Count(text, "axiom telemetry runtime codex --json") != 2 {
 		t.Fatalf("Codex telemetry hook must cover SubagentStop and Stop exactly once:\n%s", text)
 	}
 	if strings.Count(text, `"async": true`) != 2 {
@@ -8127,6 +8128,155 @@ func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testi
 	}
 	if !strings.Contains(text, "echo keep") {
 		t.Fatalf("existing hooks not preserved:\n%s", text)
+	}
+}
+
+func TestEnsureCodexSkillRegistryHookMigratesLegacyCommands(t *testing.T) {
+	home := t.TempDir()
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyJSON := `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai skill-registry refresh --quiet --no-gitignore --cwd \"$PWD\" || true"}
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime codex --json", "async": true, "timeout": 5}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime codex --json", "async": true, "timeout": 5}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(hooksPath, []byte(legacyJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureCodexSkillRegistryHook(hooksPath)
+	if err != nil {
+		t.Fatalf("ensureCodexSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected migration to report changed = true")
+	}
+
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "gentle-ai") {
+		t.Fatalf("legacy gentle-ai command still present after migration:\n%s", text)
+	}
+	if strings.Count(text, "axiom skill-registry refresh") != 1 {
+		t.Fatalf("expected 1 axiom skill-registry refresh, got:\n%s", text)
+	}
+	if strings.Count(text, "axiom telemetry runtime codex --json") != 2 {
+		t.Fatalf("expected 2 axiom telemetry runtime codex hooks, got:\n%s", text)
+	}
+}
+
+func TestEnsureClaudeHooksMigrateLegacyCommands(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyJSON := `{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai skill-registry refresh --quiet --no-gitignore --cwd \"${CLAUDE_PROJECT_DIR:-$PWD}\" || true"}
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai sdd-preflight-hook --agent claude-code", "timeout": 30}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 60}
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime claude --json", "async": true, "timeout": 5}
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 30}
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime claude --json", "async": true, "timeout": 5}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(legacyJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := installSkillRegistryAutomation(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("installSkillRegistryAutomation(claude) error = %v", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "gentle-ai") {
+		t.Fatalf("legacy gentle-ai command still present after migration:\n%s", text)
+	}
+	if strings.Count(text, "axiom skill-registry refresh") != 1 {
+		t.Fatalf("expected 1 axiom skill-registry refresh, got:\n%s", text)
+	}
+	if strings.Count(text, "axiom sdd-preflight-hook --agent claude-code") != 1 {
+		t.Fatalf("expected 1 axiom sdd-preflight-hook, got:\n%s", text)
+	}
+	if strings.Count(text, "axiom review stop-hook --agent claude-code") != 2 {
+		t.Fatalf("expected 2 axiom review stop-hook entries, got:\n%s", text)
+	}
+	if strings.Count(text, "axiom telemetry runtime claude --json") != 2 {
+		t.Fatalf("expected 2 axiom telemetry runtime entries, got:\n%s", text)
 	}
 }
 
@@ -8289,10 +8439,10 @@ func TestInject_CodexInstallsSkillRegistryHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "gentle-ai skill-registry refresh") {
+	if !strings.Contains(string(data), "axiom skill-registry refresh") {
 		t.Fatalf("Codex hooks.json missing skill-registry refresh:\n%s", data)
 	}
-	if strings.Count(string(data), "gentle-ai telemetry runtime codex --json") != 2 {
+	if strings.Count(string(data), "axiom telemetry runtime codex --json") != 2 {
 		t.Fatalf("Codex hooks.json missing telemetry Stop hooks:\n%s", data)
 	}
 }

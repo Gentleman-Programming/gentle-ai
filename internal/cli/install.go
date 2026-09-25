@@ -65,7 +65,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.StringVar(&opts.Persona, "persona", "", "persona to apply")
 	fs.StringVar(&opts.Preset, "preset", "", "preset to apply")
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
-	fs.StringVar(&opts.Scope, "scope", "", "install scope: global (default) or workspace — env: AXIOM_INSTALL_SCOPE (fallback: GENTLE_AI_INSTALL_SCOPE)")
+	fs.StringVar(&opts.Scope, "scope", "", "install scope: workspace (default) or global — env: AXIOM_INSTALL_SCOPE (fallback: GENTLE_AI_INSTALL_SCOPE)")
 	fs.StringVar(&opts.Channel, "channel", "", installChannelHelp)
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: AXIOM_OPENCODE_BACKGROUND_SUBAGENTS (fallback: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS); eligible versions use a managed launcher")
 	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: AXIOM_PI_BACKGROUND_SUBAGENTS (fallback: GENTLE_AI_PI_BACKGROUND_SUBAGENTS); the resolved policy is projected for gentle-pi")

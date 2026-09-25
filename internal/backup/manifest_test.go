@@ -35,6 +35,40 @@ func TestManifestSourceLabel(t *testing.T) {
 	}
 }
 
+func TestBackupOriginForRoot(t *testing.T) {
+	home := t.TempDir()
+
+	tests := []struct {
+		name string
+		root string
+		want BackupOrigin
+	}{
+		{name: "canonical Axiom root", root: BackupRootFor(home), want: BackupOriginAxiom},
+		{name: "legacy Gentle AI root", root: LegacyBackupRootFor(home), want: BackupOriginGentleAI},
+		{name: "unrecognized root", root: filepath.Join(home, "backups"), want: BackupOriginUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BackupOriginForRoot(home, tt.root); got != tt.want {
+				t.Errorf("BackupOriginForRoot(%q) = %q, want %q", tt.root, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestManifestOriginIsNotPersisted(t *testing.T) {
+	manifest := Manifest{ID: "runtime-only", Origin: BackupOriginAxiom}
+
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(data), `"origin"`) || strings.Contains(string(data), "axiom") {
+		t.Fatalf("runtime origin must not alter the snapshot schema: %s", data)
+	}
+}
+
 // TestManifestDisplayLabel verifies that DisplayLabel returns a human-readable
 // label combining the source and timestamp, and falls back gracefully for
 // manifests without source metadata (backward-compatible old manifests).

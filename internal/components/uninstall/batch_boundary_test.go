@@ -62,8 +62,8 @@ func TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails(t *testing.
 	}
 
 	settings := string(mustReadServiceFile(t, claudeSettings))
-	if strings.Contains(settings, "theme") || strings.Contains(settings, "outputStyle") {
-		t.Fatalf("claude settings = %s, want managed keys removed: the batch must not abandon later agents", settings)
+	if !strings.Contains(settings, `"theme": "gentleman"`) || strings.Contains(settings, "outputStyle") {
+		t.Fatalf("claude settings = %s, want user theme preserved and managed outputStyle removed", settings)
 	}
 	if !strings.Contains(settings, "MY_VAR") {
 		t.Fatalf("claude settings = %s, want the user-owned key preserved", settings)

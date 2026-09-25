@@ -35,7 +35,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
@@ -483,7 +482,7 @@ func withFailedVerificationNote(report verify.Report, resolved planner.ResolvedP
 	for i, agent := range resolved.Agents {
 		names[i] = string(agent)
 	}
-	report.FinalNote = verify.VerificationIssuesMessageForCommand("gentle-ai install --agent " + strings.Join(names, ","))
+	report.FinalNote = verify.VerificationIssuesMessageForCommand("axiom install --agent " + strings.Join(names, ","))
 	return report
 }
 
@@ -1780,9 +1779,6 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentGGA:
-		if s.scope == ScopeWorkspace {
-			return nil
-		}
 		if !ggaAvailable(s.profile) {
 			// GGA not found on any known PATH — install it.
 			if s.profile.OS == "windows" {
@@ -1833,18 +1829,10 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentTheme:
-		for _, adapter := range adapters {
-			if _, err := theme.Inject(s.homeDir, adapter); err != nil {
-				return fmt.Errorf("inject theme for %q: %w", adapter.Agent(), err)
-			}
-		}
+		// Retained for legacy selections; no visual configuration is installed.
 		return nil
 	case model.ComponentClaudeTheme:
-		for _, adapter := range adapters {
-			if _, err := theme.InjectVisualThemes(s.homeDir, adapter); err != nil {
-				return fmt.Errorf("inject visual themes for %q: %w", adapter.Agent(), err)
-			}
-		}
+		// Retained for legacy selections; no visual assets are installed.
 		return nil
 	case model.ComponentOpenCodeGentleLogo:
 		if !containsAgent(s.agents, model.AgentOpenCode) {
@@ -2549,15 +2537,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			// No managed path. Per REQ-09.2 this component is non-intrusive:
-			// theme.Inject writes nothing and preserves whatever theme the
-			// developer already chose. Declaring the agent's settings file
-			// here made post-apply verification require a file the component
-			// never creates, so `install --component theme` exited non-zero on
-			// any machine without a pre-existing settings file. A component
-			// that writes nothing must not claim a required file.
+			// No managed path: legacy theme component is inert.
 		case model.ComponentClaudeTheme:
-			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
+			// No required paths: visual assets are no longer installed.
 		case model.ComponentOpenCodeGentleLogo:
 			if adapter.Agent() == model.AgentOpenCode {
 				paths = append(paths,
@@ -2579,6 +2561,44 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 	}
 
 	return paths
+}
+
+// verificationComponentPaths excludes Codex profiles only when the CLI is
+// absent. Engram injection still writes shared Codex configuration in that
+// case, but deliberately leaves CLI-only profiles untouched. Keep the full
+// component path inventory for backup and uninstall, including existing
+// profiles that might need restoring.
+func verificationComponentPaths(paths []string, homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter, component model.ComponentID) []string {
+	if component != model.ComponentEngram {
+		return paths
+	}
+	var codexAdapter agents.Adapter
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentCodex {
+			codexAdapter = adapter
+			break
+		}
+	}
+	if codexAdapter == nil || !codexagent.IsGPT56RuntimeUnavailable(codexagent.ValidateGPT56Runtime()) {
+		// An incompatible or failing installed CLI is not an optional case:
+		// injection reports that error and verification must not hide it.
+		return paths
+	}
+	configPath := codexAdapter.MCPConfigPath(componentPathDirScoped(homeDir, workspaceDir, scope, codexAdapter, component), "engram")
+	if configPath == "" {
+		return paths
+	}
+	profiles := make(map[string]struct{})
+	for _, path := range codexagent.SddProfilePaths(filepath.Dir(configPath)) {
+		profiles[path] = struct{}{}
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, optional := profiles[path]; !optional {
+			filtered = append(filtered, path)
+		}
+	}
+	return filtered
 }
 
 // effectiveOpenCodeSettingsPath selects the one OpenCode settings authority for
@@ -2619,9 +2639,26 @@ func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapte
 
 // componentInjectionDirScoped returns the directory to inject component files for the given adapter,
 // taking the install scope into account. When scope is ScopeWorkspace, agent-scoped
-// components write to workspaceDir instead of the selected agent's global config root.
+// components write to workspaceDir instead of the selected agent's global config root,
+// except for desktop agents that do not support workspace installation (VSCode, Trae, Windsurf),
+// which are always installed in homeDir.
 func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
+	if scope == ScopeWorkspace && !adapterSupportsWorkspace(adapter) {
+		return homeDir
+	}
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+}
+
+func adapterSupportsWorkspace(adapter agents.Adapter) bool {
+	if adapter == nil {
+		return false
+	}
+	switch adapter.Agent() {
+	case model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf, model.AgentAntigravity:
+		return false
+	default:
+		return true
+	}
 }
 
 // piPersonaConfigRoots returns the roots whose Pi persona state is managed by
@@ -2737,7 +2774,8 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 			// install command, so its files are not required here.
 			continue
 		}
-		for _, path := range componentPathsWithWorkspaceScoped(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
+		paths := componentPathsWithWorkspaceScoped(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component)
+		for _, path := range verificationComponentPaths(paths, input.HomeDir, input.WorkspaceDir, input.Scope, adapters, component) {
 			if path == "" {
 				continue
 			}

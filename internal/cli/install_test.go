@@ -2,6 +2,7 @@ package cli
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,7 +80,6 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 			model.ComponentContext7,
 			model.ComponentPermission,
 			model.ComponentGGA,
-			model.ComponentClaudeTheme,
 			model.ComponentPersona,
 		},
 	}
@@ -117,7 +117,7 @@ func TestNormalizeInstallFlagsChannelBeta(t *testing.T) {
 	}
 }
 
-func TestNormalizeInstallFlagsFullPresetCustomPersonaKeepsPresetPolish(t *testing.T) {
+func TestNormalizeInstallFlagsFullPresetCustomPersonaExcludesVisualComponents(t *testing.T) {
 	input, err := NormalizeInstallFlags(InstallFlags{
 		Preset:  string(model.PresetFullGentleman),
 		Persona: string(model.PersonaCustom),
@@ -130,42 +130,19 @@ func TestNormalizeInstallFlagsFullPresetCustomPersonaKeepsPresetPolish(t *testin
 		if got == model.ComponentPersona {
 			t.Fatalf("components should not include persona for custom persona; got %#v", input.Selection.Components)
 		}
-		if got == model.ComponentTheme {
-			t.Fatalf("components should not include generic theme; got %#v", input.Selection.Components)
-		}
-	}
-
-	for _, want := range []model.ComponentID{model.ComponentClaudeTheme} {
-		found := false
-		for _, got := range input.Selection.Components {
-			if got == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("components should include preset polish %q; got %#v", want, input.Selection.Components)
-		}
-	}
-	for _, got := range input.Selection.Components {
-		if got == model.ComponentOpenCodeGentleLogo {
-			t.Fatalf("components should not include %q; got %#v", model.ComponentOpenCodeGentleLogo, input.Selection.Components)
+		if slices.Contains(model.VisualPolishComponents(), got) {
+			t.Fatalf("components should not include visual component %q; got %#v", got, input.Selection.Components)
 		}
 	}
 }
 
-func TestNormalizeInstallFlagsCustomAcceptsOptionalGentlemanInstallables(t *testing.T) {
-	input, err := NormalizeInstallFlags(InstallFlags{
+func TestNormalizeInstallFlagsRejectsRetiredVisualThemeComponent(t *testing.T) {
+	_, err := NormalizeInstallFlags(InstallFlags{
 		Preset:     string(model.PresetCustom),
-		Components: []string{string(model.ComponentClaudeTheme), string(model.ComponentOpenCodeGentleLogo)},
+		Components: []string{string(model.ComponentClaudeTheme)},
 	}, system.DetectionResult{})
-	if err != nil {
-		t.Fatalf("NormalizeInstallFlags() error = %v", err)
-	}
-
-	want := []model.ComponentID{model.ComponentClaudeTheme, model.ComponentOpenCodeGentleLogo}
-	if !reflect.DeepEqual(input.Selection.Components, want) {
-		t.Fatalf("components = %#v, want %#v", input.Selection.Components, want)
+	if err == nil || !strings.Contains(err.Error(), `unsupported component "claude-theme"`) {
+		t.Fatalf("NormalizeInstallFlags() error = %v, want unsupported visual component", err)
 	}
 }
 
