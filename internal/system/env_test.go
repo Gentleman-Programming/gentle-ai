@@ -74,4 +74,81 @@ func TestGetenv(t *testing.T) {
 			t.Errorf("Getenv() = %q, want %q", got, "")
 		}
 	})
+
+	t.Run("automatic fallback for single AXIOM_ key", func(t *testing.T) {
+		const unsetAxiom = "AXIOM_AUTO_FALLBACK_UNSET"
+		const setGentle = "GENTLE_AI_AUTO_FALLBACK_UNSET"
+		t.Setenv(setGentle, "fallback_value")
+
+		if got := Getenv(unsetAxiom); got != "fallback_value" {
+			t.Errorf("Getenv(%s) = %q, want %q", unsetAxiom, got, "fallback_value")
+		}
+
+		got, ok := LookupEnv(unsetAxiom)
+		if !ok || got != "fallback_value" {
+			t.Errorf("LookupEnv(%s) = (%q, %v), want (%q, true)", unsetAxiom, got, ok, "fallback_value")
+		}
+	})
+
+	t.Run("canonical variables resolution", func(t *testing.T) {
+		testCases := []struct {
+			name        string
+			axiomKey    string
+			gentleKey   string
+			axiomVal    string
+			gentleVal   string
+			wantBoth    string
+			wantGentle  string
+		}{
+			{
+				name:       "channel",
+				axiomKey:   EnvChannelAxiom,
+				gentleKey:  EnvChannelGentle,
+				axiomVal:   "beta",
+				gentleVal:  "stable",
+				wantBoth:   "beta",
+				wantGentle: "stable",
+			},
+			{
+				name:       "opencode background subagents",
+				axiomKey:   EnvOpenCodeBackgroundSubagentsAxiom,
+				gentleKey:  EnvOpenCodeBackgroundSubagentsGentle,
+				axiomVal:   "on",
+				gentleVal:  "off",
+				wantBoth:   "on",
+				wantGentle: "off",
+			},
+			{
+				name:       "state dir",
+				axiomKey:   EnvStateDirAxiom,
+				gentleKey:  EnvStateDirGentle,
+				axiomVal:   "/opt/axiom",
+				gentleVal:  "/opt/gentle-ai",
+				wantBoth:   "/opt/axiom",
+				wantGentle: "/opt/gentle-ai",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Setenv(tc.axiomKey, tc.axiomVal)
+				t.Setenv(tc.gentleKey, tc.gentleVal)
+				if got := Getenv(tc.axiomKey); got != tc.wantBoth {
+					t.Errorf("Getenv(%s) = %q, want %q", tc.axiomKey, got, tc.wantBoth)
+				}
+				if got := Getenv(tc.axiomKey, tc.gentleKey); got != tc.wantBoth {
+					t.Errorf("Getenv(%s, %s) = %q, want %q", tc.axiomKey, tc.gentleKey, got, tc.wantBoth)
+				}
+
+				t.Setenv(tc.axiomKey, "")
+				if got := Getenv(tc.axiomKey); got != tc.wantGentle {
+					t.Errorf("Getenv(%s) fallback = %q, want %q", tc.axiomKey, got, tc.wantGentle)
+				}
+				if got := Getenv(tc.axiomKey, tc.gentleKey); got != tc.wantGentle {
+					t.Errorf("Getenv(%s, %s) fallback = %q, want %q", tc.axiomKey, tc.gentleKey, got, tc.wantGentle)
+				}
+			})
+		}
+	})
 }
+
