@@ -153,7 +153,7 @@ For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI 
 
 ## Start working with ODD
 
-Open your agent in the project and describe an outcome, for example: "Add CSV export using the existing report filters." [Organic Driven Development (ODD)](usage.md#organic-driven-development-odd) is the everyday flow: explore, implement authorized work, and check it. Substantial work keeps one recoverable feature document; small/read-only work avoids durable artifacts. No SDD command is required. Choose SDD explicitly only when you want its separate phase artifacts.
+Open your agent in the project and describe an outcome, for example: "Add CSV export using the existing report filters." [Organic Driven Development (ODD)](usage.md#organic-driven-development-odd) is the development workflow: explore, implement authorized work, and check it. Substantial work keeps one recoverable feature document; small/read-only work avoids durable artifacts.
 
 ## Hardening recommendations for users
 

@@ -189,18 +189,30 @@ func Read(homeDir string) (InstallState, error) {
 
 func (s *InstallState) SetSelection(selection model.Selection) {
 	s.SelectionConfigured = true
-	s.Components = append([]model.ComponentID(nil), selection.Components...)
+	s.Components = activeComponents(selection.Components)
 	s.Skills = append([]model.SkillID(nil), selection.Skills...)
-	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, selection.SDDMode, selection.StrictTDD
+	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, "", selection.StrictTDD
 }
 
 func (s InstallState) RestoreSelection(selection *model.Selection) {
 	if !s.SelectionConfigured {
 		return
 	}
-	selection.Components = append([]model.ComponentID(nil), s.Components...)
+	selection.Components = activeComponents(s.Components)
 	selection.Skills = append([]model.SkillID(nil), s.Skills...)
-	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, s.SDDMode, s.StrictTDD
+	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, "", s.StrictTDD
+}
+
+// activeComponents preserves the persisted legacy value for decoding and
+// historical restore while keeping it out of current install/sync selections.
+func activeComponents(components []model.ComponentID) []model.ComponentID {
+	var active []model.ComponentID
+	for _, component := range components {
+		if component != model.ComponentSDD {
+			active = append(active, component)
+		}
+	}
+	return active
 }
 
 // MergeAgents returns a new InstallState that combines existing with the

@@ -1088,87 +1088,6 @@ func requireFreshNegotiatedStart(_ *Sandbox, observation Observation) error {
 	return nil
 }
 
-// requireDisabledUnmanagedArchiveStatus asserts the kill-switch-off shape at
-// sdd-status: the optional offer is structurally absent and archive remains
-// governed only by tasks and independent verification.
-func requireDisabledUnmanagedArchiveStatus(name string) func(*Sandbox, Observation) error {
-	return sddStatusAssertion(name, func(status sddStatusV2) error {
-		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
-			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
-				status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-		}
-		if status.ReviewOffer != nil {
-			return fmt.Errorf("disabled status reviewOffer=%+v, want structural absence", status.ReviewOffer)
-		}
-		return nil
-	})
-}
-
-// snapshotJ47StatusInput records the repository state that the public status
-// read must preserve. The completed SDD fixture commits its own artifacts, so a
-// changed head or worktree here would be a side effect of status itself.
-func snapshotJ47StatusInput(sandbox *Sandbox) error {
-	head, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
-	if err != nil {
-		return fmt.Errorf("read status input head: %w", err)
-	}
-	worktree, err := gitOut(sandbox, sandbox.Repo, "status", "--porcelain=v1")
-	if err != nil {
-		return fmt.Errorf("read status input worktree: %w", err)
-	}
-	sandbox.Scratch["j47-status-head"] = head
-	sandbox.Scratch["j47-status-worktree"] = worktree
-	return nil
-}
-
-// requireJ47DisabledV2ArchiveStatus pins #3564's public V2 projection: completed
-// SDD work proceeds to archive under the clone-local disabled mode without any
-// retired review data, and status does not alter its input repository.
-func requireJ47DisabledV2ArchiveStatus(sandbox *Sandbox, observation Observation) error {
-	if observation.ExitCode != 0 {
-		return fmt.Errorf("disabled V2 sdd-status exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
-	}
-
-	var document map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &document); err != nil {
-		return fmt.Errorf("parse disabled V2 sdd-status: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	var schemaVersion int
-	if raw, ok := document["schemaVersion"]; !ok || json.Unmarshal(raw, &schemaVersion) != nil || schemaVersion != 2 {
-		return fmt.Errorf("schemaVersion = %s, want 2", document["schemaVersion"])
-	}
-	for _, retired := range []string{"reviewOffer", "reviewGate", "reviewTransaction", "runtimeStatus", "reVerify", "receipt", "lineage"} {
-		if _, present := document[retired]; present {
-			return fmt.Errorf("disabled V2 sdd-status exposed retired key %q", retired)
-		}
-	}
-
-	var status sddStatusV2
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
-		return fmt.Errorf("decode disabled V2 status: %w", err)
-	}
-	if !status.TaskProgress.AllComplete || status.TaskProgress.Total == 0 || status.Dependencies.Verify != "ready" ||
-		status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
-		return fmt.Errorf("disabled V2 status = tasks %d/%d complete=%v verify=%q archive=%q next=%q blocked=%v, want completed/all_done/ready/archive/no blockers",
-			status.TaskProgress.Completed, status.TaskProgress.Total, status.TaskProgress.AllComplete,
-			status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
-	}
-
-	head, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
-	if err != nil {
-		return fmt.Errorf("read status output head: %w", err)
-	}
-	worktree, err := gitOut(sandbox, sandbox.Repo, "status", "--porcelain=v1")
-	if err != nil {
-		return fmt.Errorf("read status output worktree: %w", err)
-	}
-	if head != sandbox.Scratch["j47-status-head"] || worktree != sandbox.Scratch["j47-status-worktree"] {
-		return fmt.Errorf("disabled V2 sdd-status mutated its repository input: head %q/%q worktree %q/%q",
-			sandbox.Scratch["j47-status-head"], head, sandbox.Scratch["j47-status-worktree"], worktree)
-	}
-	return nil
-}
-
 func prepareDeclinedCandidate(sandbox *Sandbox) error {
 	if err := sandbox.write(filepath.Join(sandbox.Repo, declineCandidatePath), declineCandidateContents); err != nil {
 		return err
@@ -1362,20 +1281,6 @@ func waveOneJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j47-disabled-mode-archives-discovered-scope-changed-authority",
-			Review: reviewUntouched,
-			Title:  "Disabled clone mode: explicit-CWD SDD status v2 reports archive readiness",
-			Source: "issue #3564 V2: completed SDD tasks and verification route directly to archive",
-			Steps: []Step{
-				{Name: "fixture: completed SDD change with passing verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
-				{Name: "disable review mode for the clone", Requires: modeCapability,
-					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
-				{Name: "fixture: capture status input state", Fixture: snapshotJ47StatusInput},
-				{Name: "explicit-CWD disabled V2 status is archive-ready and read-only", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--contract", "gentle-ai.sdd-status/v2", "--json"), After: requireJ47DisabledV2ArchiveStatus},
-			},
-		},
-		{
 			ID:     "j48-recovered-workspace-preserves-full-candidate-scope",
 			Review: reviewOptedIn,
 			Title:  "Recovered workspace correction: terminal authorities preserve the complete candidate scope",
@@ -1407,23 +1312,6 @@ func waveOneJourneys() []Journey {
 				}},
 				{Name: "fixture: add path outside recovered scope", Fixture: addFullScopePathDrift},
 				{Name: "path drift still fails closed", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", fullScopeSuccessor, "--gate", "pre-commit"), After: requireFullScopeDrift},
-			},
-		},
-		{
-			ID:     "j49-status-without-cwd-honors-kill-switch",
-			Review: reviewOptedIn,
-			Title:  "SDD status without CWD: repository resolution and the kill switch share one workspace",
-			Source: "issue #2129",
-			Steps: []Step{
-				{Name: "fixture: archive-ready SDD change", Fixture: sddPlanningArtifacts(sddVerifyReport)},
-				{Name: "disable review mode for the clone", Requires: modeCapability,
-					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
-				{Name: "explicit CWD honors disabled mode", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDisabledUnmanagedArchiveStatus("explicit CWD control")},
-				{Name: "omitted CWD honors the same disabled mode", Requires: sddStatusCapability,
-					Args: func(*Sandbox) ([]string, error) {
-						return []string{"sdd-status", sddChange, "--json"}, nil
-					}, After: requireDisabledUnmanagedArchiveStatus("omitted CWD")},
 			},
 		},
 		{

@@ -13,7 +13,6 @@ func TestRenderOpenCodePluginsShowsInstallAndRepoOptions(t *testing.T) {
 	for _, want := range []string{
 		"Optional OpenCode Community Plugins",
 		"Sub-agent Statusline",
-		"SDD Engram Manager",
 		"View repo",
 		"Continue",
 	} {
@@ -21,7 +20,10 @@ func TestRenderOpenCodePluginsShowsInstallAndRepoOptions(t *testing.T) {
 			t.Fatalf("RenderOpenCodePlugins missing %q; output:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(out, "[x]") || !strings.Contains(out, "[ ]") {
-		t.Fatalf("RenderOpenCodePlugins should show selected and unselected checkboxes; output:\n%s", out)
+	if strings.Contains(out, "SDD Engram Manager") || strings.Contains(out, "sdd-engram-plugin") {
+		t.Fatalf("RenderOpenCodePlugins offers retired plugin; output:\n%s", out)
+	}
+	if !strings.Contains(out, "[x]") {
+		t.Fatalf("RenderOpenCodePlugins should show selected checkbox; output:\n%s", out)
 	}
 }

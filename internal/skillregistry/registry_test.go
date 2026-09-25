@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/trae"
 )
 
 func TestRegenerateWritesRegistryAndCacheThenHitsCache(t *testing.T) {
@@ -401,6 +402,30 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 	}
 }
 
+func TestTraeInstalledSkillDiscoveryPreservesExistingPrecedenceAndExclusions(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	traeDir := trae.NewAdapter().SkillsDir(home)
+	writeSkill(t, filepath.Join(traeDir, "trae-only", "SKILL.md"), "---\nname: trae-only\ndescription: Trae installed\n---\n")
+	writeSkill(t, filepath.Join(traeDir, "dup", "SKILL.md"), "---\nname: dup\ndescription: Trae copy\n---\n")
+	writeSkill(t, filepath.Join(home, ".claude", "skills", "dup", "SKILL.md"), "---\nname: dup\ndescription: Claude copy\n---\n")
+	writeSkill(t, filepath.Join(traeDir, "sdd-apply", "SKILL.md"), "---\nname: sdd-apply\ndescription: retired\n---\n")
+
+	entries := List(cwd, home)
+	want := []SkillEntry{
+		{Name: "dup", Path: filepath.Join(home, ".claude", "skills", "dup", "SKILL.md"), Description: "Claude copy"},
+		{Name: "trae-only", Path: filepath.Join(traeDir, "trae-only", "SKILL.md"), Description: "Trae installed"},
+	}
+	assertSkillEntries(t, entries, want)
+	result, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("Regenerate() error = %v", err)
+	}
+	if result.SkillCount != len(want) {
+		t.Fatalf("Regenerate() skill count = %d, want %d", result.SkillCount, len(want))
+	}
+}
+
 func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 	home := t.TempDir()
 	dirs := UserSkillDirs(home)
@@ -425,6 +450,7 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 		filepath.Join(home, ".pi", "agent", "skills"),
 		filepath.Join(home, ".agents", "skills"),
 		filepath.Join(home, ".hermes", "skills"),
+		trae.NewAdapter().SkillsDir(home),
 	} {
 		if !containsPath(dirs, want) {
 			t.Fatalf("UserSkillDirs() missing %q in %#v", want, dirs)

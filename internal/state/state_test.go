@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -228,6 +229,26 @@ func TestCommunityToolsRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.CommunityTools, want.CommunityTools) || !got.CommunityToolsConfigured {
 		t.Fatalf("community tool state = (%v, %t), want (%v, true)", got.CommunityTools, got.CommunityToolsConfigured, want.CommunityTools)
+	}
+}
+
+func TestLegacySDDDecodesButNeverRestoresActiveSelection(t *testing.T) {
+	var legacy InstallState
+	if err := json.Unmarshal([]byte(`{"selection_configured":true,"components":["sdd","engram"],"sdd_mode":"multi","strict_tdd":true}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(legacy.Components, model.ComponentSDD) || legacy.SDDMode != model.SDDModeMulti {
+		t.Fatalf("legacy state decode lost: %+v", legacy)
+	}
+	selection := model.Selection{}
+	legacy.RestoreSelection(&selection)
+	if selection.HasComponent(model.ComponentSDD) || selection.SDDMode != "" || !selection.HasComponent(model.ComponentEngram) || !selection.StrictTDD {
+		t.Fatalf("active selection restored retired mode: %+v", selection)
+	}
+	var next InstallState
+	next.SetSelection(model.Selection{Components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD}, SDDMode: model.SDDModeMulti, StrictTDD: true})
+	if slices.Contains(next.Components, model.ComponentSDD) || next.SDDMode != "" || !next.StrictTDD {
+		t.Fatalf("new state persisted retired mode: %+v", next)
 	}
 }
 

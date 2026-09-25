@@ -32,10 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/versions"
 )
@@ -1852,20 +1849,16 @@ func runOrganicProviderCaptureFake(agent string) int {
 	return 0
 }
 
-// TestOrganicConfiguredAgentReceivesRoutingGuidance is the optional-SDD
-// "proposed" leg. Every configured agent is told the same thing through its own
-// delivery strategy: three routes exist, SDD is only ever proposed, and it is
-// selected only by an explicit request or an accepted proposal.
-// organicRoutingGuidanceRequiredFragments is the routing-guidance content
+// organicRoutingGuidanceRequiredFragments pins the ODD routes and independent
+// review/TDD guidance delivered to each configured agent.
 // every configured agent must receive, shared between this file's Cursor
 // case and organic_runtime_real_agent_detection_test.go's Claude Code /
 // OpenCode cases (see that file for why they're split).
 var organicRoutingGuidanceRequiredFragments = []string{
+	"Organic Driven Development",
 	"Direct inline",
 	"Delegated direct",
-	"Optional SDD",
-	"never selects SDD",
-	"never create SDD artifacts",
+	"configured TDD mode",
 	"gentle-ai review mode enable|disable|status",
 	"disabled/unmanaged",
 }
@@ -1916,6 +1909,9 @@ func TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor(t *testing.T) {
 		if !bytes.Contains(rendered, []byte(fragment)) {
 			t.Fatalf("routing guidance for cursor omits %q:\n%s", fragment, rendered)
 		}
+	}
+	if bytes.Contains(rendered, []byte("SDD")) {
+		t.Fatalf("routing guidance for cursor still names retired SDD:\n%s", rendered)
 	}
 }
 
@@ -2070,53 +2066,23 @@ func TestOrganicImplementationRoutesReachDelivery(t *testing.T) {
 	}
 }
 
-// TestOrganicOptionalSDDDeclineAndAccept covers both answers to the one optional
-// route question. Declining leaves the repository free of SDD state; accepting
-// may use its OpenSpec state, but archive routing cannot require a burned review
-// authority, receipt, binding, or delivery-gate allow.
-func TestOrganicOptionalSDDDeclineAndAccept(t *testing.T) {
+// TestOrganicDirectRouteCreatesNoSDDArtifacts preserves the ODD negative control:
+// direct work and its native review do not create retired workflow artifacts.
+func TestOrganicDirectRouteCreatesNoSDDArtifacts(t *testing.T) {
 	t.Parallel()
+	harness := newOrganicHarness(t)
+	harness.runActor(organicActorRoleDirect, "docs/direct.md", organicLines("direct line", 8), "docs: implement directly", organicDirectActorMarker)
 
-	t.Run("declined", func(t *testing.T) {
-		t.Parallel()
-		harness := newOrganicHarness(t)
-		harness.runActor(organicActorRoleDirect, "docs/declined.md", organicLines("declined line", 8), "docs: implement directly", organicDirectActorMarker)
-
-		started, _ := harness.startReview("organic-sdd-declined", "--base-ref", "origin/main")
-		if approved := harness.approveReview("organic-sdd-declined", started); approved.State != organicStateApproved {
-			t.Fatalf("declined route did not approve: %#v", approved)
-		}
-		// This is the proposal's core claim, so it stays verbatim: direct and
-		// delegated work never create SDD artifacts, prompts, phase attempts, or
-		// synthetic SDD runs.
-		harness.assertNoSDDArtifacts()
-		if _, err := os.Stat(filepath.Join(harness.repo.worktree, "openspec")); !os.IsNotExist(err) {
-			t.Fatalf("declined route created OpenSpec artifacts: %v", err)
-		}
-	})
-
-	t.Run("accepted", func(t *testing.T) {
-		t.Parallel()
-		harness := newOrganicHarness(t)
-		const change = "organic-accepted-change"
-		harness.seedOrganicSDDChange(change)
-		harness.writeFiles(map[string]string{
-			"docs/accepted.md": organicLines("accepted line", 8),
-		})
-
-		started, _ := harness.startReview("organic-sdd-accepted")
-		if approved := harness.approveReview("organic-sdd-accepted", started); approved.State != organicStateApproved {
-			t.Fatalf("accepted route did not approve: %#v", approved)
-		}
-
-		status := harness.sddStatus(change)
-		if status.Dependencies.Archive == "blocked" {
-			t.Fatalf("accepted SDD archive stayed blocked after terminal burn: reasons=%v", status.BlockedReasons)
-		}
-		if status.ReviewGate != nil {
-			t.Fatalf("accepted SDD archive retained a review gate after terminal burn: %#v", status.ReviewGate)
-		}
-	})
+	started, _ := harness.startReview("organic-direct-no-sdd-artifacts", "--base-ref", "origin/main")
+	if approved := harness.approveReview("organic-direct-no-sdd-artifacts", started); approved.State != organicStateApproved {
+		t.Fatalf("direct route did not approve: %#v", approved)
+	}
+	// Direct and delegated work never create SDD artifacts, prompts, phase
+	// attempts, or synthetic SDD runs.
+	harness.assertNoSDDArtifacts()
+	if _, err := os.Stat(filepath.Join(harness.repo.worktree, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("declined route created OpenSpec artifacts: %v", err)
+	}
 }
 
 // TestOrganicBoundedCorrectionAllowsExactlyOne proves the ordinary review budget:
@@ -2866,14 +2832,10 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testin
 
 // TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview drives issue #1877's
 // sequence through the terminal-burn model. Review mode changes only the
-// informational delivery disposition: an SDD archive cannot become blocked by a
-// missing receipt or review authority after FINALIZE has burned it.
+// informational delivery disposition; it does not restore burned authority.
 func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 	t.Parallel()
 	harness := newOrganicHarness(t)
-	const change = "reenable-change"
-	harness.seedOrganicSDDChange(change)
-
 	harness.writeFiles(map[string]string{"docs/baseline.md": organicLines("baseline line", 6)})
 	harness.git("add", "--", "docs/baseline.md")
 	baselineStarted, _ := harness.startReview("organic-reenable-baseline")
@@ -2896,17 +2858,8 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 		harness.git("commit", "-q", "-m", "docs: unmanaged delivery "+unit)
 	}
 
-	disabled := harness.sddStatus(change)
-	if disabled.Dependencies.Archive == "blocked" || disabled.ReviewGate != nil {
-		t.Fatalf("disabled archive retained review authority requirements: %#v", disabled)
-	}
-
 	if mode := harness.enableReview(); mode.Status.Effective != organicModeOn {
 		t.Fatalf("re-enable produced no typed outcome: %#v", mode)
-	}
-	enabled := harness.sddStatus(change)
-	if enabled.Dependencies.Archive == "blocked" || enabled.ReviewGate != nil {
-		t.Fatalf("re-enabled archive required burned authority or gate allow: %#v", enabled)
 	}
 
 	// New work after re-enable remains ordinary delivery until an independently
@@ -3392,31 +3345,6 @@ func (harness *organicHarness) enableReview() organicModeResult {
 	return mode
 }
 
-// organicSDDStatus is the slice of `sdd-status --json` the archive journeys
-// consume: the archive dependency, the review gate record, and the routing.
-type organicSDDStatus struct {
-	Dependencies struct {
-		Archive string `json:"archive"`
-	} `json:"dependencies"`
-	ReviewGate *struct {
-		Result   string `json:"result"`
-		Reason   string `json:"reason"`
-		Delivery string `json:"delivery"`
-	} `json:"reviewGate"`
-	NextRecommended string   `json:"nextRecommended"`
-	BlockedReasons  []string `json:"blockedReasons"`
-}
-
-func (harness *organicHarness) sddStatus(change string) organicSDDStatus {
-	harness.t.Helper()
-	payload := harness.gentle("sdd-status", change, "--cwd", harness.repo.worktree, "--json")
-	var status organicSDDStatus
-	if err := json.Unmarshal(payload, &status); err != nil {
-		harness.t.Fatalf("decode sdd-status: %v\n%s", err, payload)
-	}
-	return status
-}
-
 // organicNamedContinuation returns the argument tokens of the first
 // `gentle-ai ...` command a product message names, read exactly as an operator
 // would: to the end of the line, stopping at the first `<placeholder>` whose
@@ -3461,43 +3389,6 @@ func (harness *organicHarness) runNamedReviewStart(tokens []string, extra ...str
 		harness.t.Fatalf("decode named review start: %v\n%s", err, payload)
 	}
 	return started
-}
-
-// organicSDDVerifyReport is the fenced envelope a completed independent
-// verification writes. Its exact shape matters: a report the product cannot
-// parse routes as "verification is missing", which is a different journey.
-const organicSDDVerifyReport = "```yaml\n" +
-	"schema: gentle-ai.verify-result/v1\n" +
-	"evidence_revision: sha256:1111111111111111111111111111111111111111111111111111111111111111\n" +
-	"verdict: pass\n" +
-	"blockers: 0\n" +
-	"critical_findings: 0\n" +
-	"requirements: 1/1\n" +
-	"scenarios: 1/1\n" +
-	"test_command: go test ./internal/example\n" +
-	"test_exit_code: 0\n" +
-	"test_output_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222\n" +
-	"build_command: go test ./cmd/gentle-ai\n" +
-	"build_exit_code: 0\n" +
-	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
-	"```\n"
-
-// seedOrganicSDDChange commits a complete OpenSpec change at its archive
-// decision: planning done, every task checked, and a parseable passing
-// verification report — so `sdd-status` routes on the review gate alone.
-func (harness *organicHarness) seedOrganicSDDChange(change string) {
-	harness.t.Helper()
-	root := "openspec/changes/" + change + "/"
-	harness.writeFiles(map[string]string{
-		root + "proposal.md": "# " + change + "\n\n## Why\n\nthe journey drives a delivery cycle.\n",
-		root + "design.md":   "# design\n\n## Approach\n\nplain prose, no executable content.\n",
-		root + "tasks.md":    "# tasks\n\n- [x] 1.1 write the prose\n",
-		root + "specs/prose/spec.md": "### Requirement: prose exists\n" +
-			"#### Scenario: prose is present\n\n- **WHEN** the reader opens the docs\n- **THEN** the prose is there\n",
-		root + "verify-report.md": organicSDDVerifyReport,
-	})
-	harness.git("add", "--", "openspec")
-	harness.git("commit", "-q", "-m", "test: seed the SDD change")
 }
 
 // reviewModeGenerations lists the clone-local kill-switch compare-and-swap
@@ -4257,166 +4148,22 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 	}
 }
 
-func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned real-agent journeys")
-	}
-	requireOrganicExecutableVersion(t, "opencode", pinnedOpenCodeVersion)
-
-	configRoot := prepareOpenCodeConfig(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", configRoot)
-
-	const (
-		executorPrompt               = "Execute the assigned SDD apply phase without delegation."
-		executorCompletionPrefix     = "SDD_APPLY_EXECUTOR_COMPLETED:"
-		orchestratorCompletionMarker = "SDD_APPLY_ORCHESTRATOR_COMPLETED"
-	)
-	executorNonce := fmt.Sprintf("sdd-apply-executor-nonce-%d", time.Now().UnixNano())
-	fixture := newOpenCodeFixtureServer(t, []openCodeTurn{
-		{tool: "task", arguments: map[string]any{
-			"description":   "Run the installed SDD apply executor",
-			"prompt":        executorPrompt,
-			"subagent_type": "sdd-apply",
-		}},
-	}, executorPrompt)
-	defer fixture.Close()
-	fixture.requireInstalledSDDApplyExecutor = true
-	fixture.executorNonce = executorNonce
-	fixture.executorCompletionPrefix = executorCompletionPrefix
-	fixture.completion = orchestratorCompletionMarker
-	fixture.actorCommand = "echo " + executorNonce
-
-	settingsPath := filepath.Join(configRoot, "opencode", "opencode.json")
-	if err := os.WriteFile(settingsPath, []byte(organicOpenCodeConfig(t, fixture.URL)), 0o600); err != nil {
-		t.Fatalf("write OpenCode fixture config: %v", err)
-	}
-	if _, err := sdd.Inject(home, opencode.NewAdapter(), model.SDDModeMulti); err != nil {
-		t.Fatalf("install SDD OpenCode assets: %v", err)
-	}
-
-	workdir := t.TempDir()
-	environment := append(os.Environ(),
-		"OPENCODE_CONFIG_DIR="+filepath.Join(configRoot, "opencode"),
-		"OPENCODE_TEST_HOME="+filepath.Join(home, "opencode"),
-		"OPENCODE_AUTH_CONTENT={}",
-		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
-		"OPENCODE_DISABLE_AUTOUPDATE=1",
-		"OPENCODE_DISABLE_AUTOCOMPACT=1",
-		"OPENCODE_DISABLE_CLAUDE_CODE=1",
-		"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
-		"OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
-		"OPENCODE_DISABLE_LSP_DOWNLOAD=1",
-		"OPENCODE_DISABLE_MODELS_FETCH=1",
-		"OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=1",
-		"OPENCODE_FAST_BOOT=1",
-		"OPENCODE_PURE=1",
-	)
-	ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
-	defer cancel()
-	command := organicCommandContext(ctx, "opencode", "run", "--pure",
-		"--format", "json", "--agent", "gentle-orchestrator", "--model", "fixture/fixture",
-		"--dir", workdir, "Delegate the assigned phase to the installed sdd-apply executor.",
-	)
-	command.Dir = workdir
-	command.Env = environment
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("run installed sdd-apply executor: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
-	}
-	fixture.assertComplete(t, true)
-	fixture.assertInstalledSDDApplyExecutorProof(t)
-	if !strings.Contains(stdout.String(), orchestratorCompletionMarker) {
-		t.Fatalf("orchestrator did not complete after the executor result round trip:\n%s", stdout.String())
-	}
-}
-
-func TestInstalledSDDApplyExecutorProofRejectsOrchestratorSpoof(t *testing.T) {
-	const (
-		nonce            = "sdd-apply-executor-nonce-spoof-control"
-		executorComplete = "SDD_APPLY_EXECUTOR_COMPLETED:" + nonce
-	)
-	fixture := &openCodeFixtureServer{
-		requireInstalledSDDApplyExecutor: true,
-		executorNonce:                    nonce,
-		executorCompletionPrefix:         "SDD_APPLY_EXECUTOR_COMPLETED:",
-		executorSubagentResult:           executorComplete,
-	}
-	recorder := httptest.NewRecorder()
-	input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorComplete}}}
-
-	if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
-		t.Fatal("an orchestrator-spoofed executor completion was accepted without an executor bash result")
-	}
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("spoof response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
-	}
-	if !strings.Contains(fixture.failure, "without executor bash result") {
-		t.Fatalf("spoof refusal = %q, want missing executor bash result", fixture.failure)
-	}
-}
-
-func TestInstalledSDDApplyExecutorRoundTripRejectsMissingCredentials(t *testing.T) {
-	tests := []struct {
-		name   string
-		nonce  string
-		prefix string
+func TestOpenCodeFixtureRecognizesDelegatedDirectActor(t *testing.T) {
+	fixture := &openCodeFixtureServer{actorPrompt: "Act as the delegated-direct implementation worker."}
+	for _, test := range []struct {
+		name  string
+		input openAIRequest
+		want  bool
 	}{
-		{name: "empty nonce", prefix: "SDD_APPLY_EXECUTOR_COMPLETED:"},
-		{name: "empty completion prefix", nonce: "sdd-apply-executor-nonce-missing-prefix"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			const executorResult = "SDD_APPLY_EXECUTOR_COMPLETED:fixture-result"
-			fixture := &openCodeFixtureServer{
-				executorNonce:            tt.nonce,
-				executorCompletionPrefix: tt.prefix,
-				executorBashResult:       tt.nonce,
-				executorSubagentResult:   executorResult,
-			}
-			recorder := httptest.NewRecorder()
-			input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorResult}}}
-
-			if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
-				t.Fatal("round trip accepted missing executor proof credentials")
-			}
-			if recorder.Code != http.StatusInternalServerError {
-				t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
-			}
-			if !strings.Contains(fixture.failure, "missing nonce or completion marker") {
-				t.Fatalf("refusal = %q, want missing credentials", fixture.failure)
+		{name: "delegated user prompt", input: openAIRequest{Messages: []openAIMessage{{Role: "user", Content: fixture.actorPrompt}}}, want: true},
+		{name: "orchestrator mention", input: openAIRequest{Messages: []openAIMessage{{Role: "assistant", Content: fixture.actorPrompt}}}},
+		{name: "unrelated user prompt", input: openAIRequest{Messages: []openAIMessage{{Role: "user", Content: "Implement directly."}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := fixture.isSubagent(test.input); got != test.want {
+				t.Fatalf("delegated actor recognized = %t, want %t", got, test.want)
 			}
 		})
-	}
-}
-
-func TestInstalledSDDApplyExecutorRoundTripRejectsUnrelatedBashOutput(t *testing.T) {
-	const (
-		nonce            = "sdd-apply-executor-nonce-unrelated-output"
-		executorComplete = "SDD_APPLY_EXECUTOR_COMPLETED:" + nonce
-	)
-	fixture := &openCodeFixtureServer{
-		executorNonce:            nonce,
-		executorCompletionPrefix: "SDD_APPLY_EXECUTOR_COMPLETED:",
-		executorBashResult:       "completed a different command successfully",
-		executorSubagentResult:   executorComplete,
-	}
-	recorder := httptest.NewRecorder()
-	input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorComplete}}}
-
-	if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
-		t.Fatal("round trip accepted non-empty bash output without the executor nonce")
-	}
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
-	}
-	if !strings.Contains(fixture.failure, "without executor bash result") {
-		t.Fatalf("refusal = %q, want nonce-bound executor bash result", fixture.failure)
 	}
 }
 
@@ -4479,22 +4226,15 @@ type openCodeTurn struct {
 
 type openCodeFixtureServer struct {
 	*httptest.Server
-	mu                               sync.Mutex
-	script                           []openCodeTurn
-	actorPrompt                      string
-	actorCommand                     string
-	completion                       string
-	subagentCompletion               string
-	requireInstalledSDDApplyExecutor bool
-	sawInstalledSDDApplyExecutor     bool
-	executorNonce                    string
-	executorCompletionPrefix         string
-	executorBashResult               string
-	executorSubagentResult           string
-	executorRoundTripResult          string
-	mainCalls                        int
-	subagentStarts                   int
-	failure                          string
+	mu                 sync.Mutex
+	script             []openCodeTurn
+	actorPrompt        string
+	actorCommand       string
+	completion         string
+	subagentCompletion string
+	mainCalls          int
+	subagentStarts     int
+	failure            string
 }
 
 func newOpenCodeFixtureServer(t *testing.T, script []openCodeTurn, actorPrompt string) *openCodeFixtureServer {
@@ -4535,23 +4275,12 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 		return
 	}
 	if fixture.isSubagent(input) {
-		if fixture.requireInstalledSDDApplyExecutor && !fixture.acceptInstalledSDDApplyExecutor(writer, input) {
-			return
-		}
 		fixture.mu.Lock()
 		fixture.subagentStarts++
 		fixture.mu.Unlock()
 		last := input.Messages[len(input.Messages)-1]
 		if last.Role == "tool" {
-			if fixture.requireInstalledSDDApplyExecutor && !fixture.captureInstalledSDDApplyExecutorBashResult(writer, messageText(last.Content)) {
-				return
-			}
 			completion := fixture.subagentCompletion
-			if fixture.requireInstalledSDDApplyExecutor {
-				fixture.mu.Lock()
-				completion = fixture.executorSubagentResult
-				fixture.mu.Unlock()
-			}
 			if completion == "" {
 				completion = organicDelegatedActorMarker
 			}
@@ -4567,9 +4296,6 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 	call := fixture.mainCalls
 	fixture.mu.Unlock()
 	if call > len(fixture.script) {
-		if fixture.requireInstalledSDDApplyExecutor && !fixture.acceptInstalledSDDApplyExecutorRoundTrip(writer, input) {
-			return
-		}
 		completion := fixture.completion
 		if completion == "" {
 			completion = "Organic journey complete."
@@ -4579,142 +4305,6 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 	}
 	turn := fixture.script[call-1]
 	fixture.writeTool(writer, fmt.Sprintf("turn-%d", call), turn.tool, turn.arguments)
-}
-
-func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutor(writer http.ResponseWriter, input openAIRequest) bool {
-	var transcript strings.Builder
-	for _, message := range input.Messages {
-		transcript.WriteString(messageText(message.Content))
-	}
-	content := transcript.String()
-	// The proof asserts the role contract the executor actually received, not
-	// one wording of it. Ordering between two blocks is no longer the property
-	// under test: a single block whose every imperative follows its own
-	// condition is, and the executor branch must come first because these
-	// skills are delegate_only and the sub-agent is the intended reader.
-	role := strings.Index(content, "## Execution Role")
-	if role < 0 {
-		fixture.fail(writer, "installed sdd-apply executor did not load its Execution Role block")
-		return false
-	}
-	executor := strings.Index(content, "If you are the `sdd-apply` sub-agent")
-	orchestrator := strings.Index(content, "If you loaded this skill through the `skill()` tool")
-	if executor < 0 || orchestrator < 0 || executor > orchestrator {
-		fixture.fail(writer, "installed sdd-apply executor role block does not state the executor branch before the orchestrator branch")
-		return false
-	}
-	if !strings.Contains(content, "continue with the phase work below. Do not delegate. Do not call the Skill tool.") {
-		fixture.fail(writer, "installed sdd-apply executor is missing its non-delegating continuation instruction")
-		return false
-	}
-	for _, retraction := range []string{"does NOT apply to you", "the gate above", "the gate below"} {
-		if strings.Contains(content, retraction) {
-			fixture.fail(writer, "installed sdd-apply executor received a retraction phrase %q that undoes an earlier imperative", retraction)
-			return false
-		}
-	}
-	for _, rawTool := range input.Tools {
-		var tool struct {
-			Function struct {
-				Name string `json:"name"`
-			} `json:"function"`
-		}
-		if err := json.Unmarshal(rawTool, &tool); err != nil {
-			fixture.fail(writer, "decode installed sdd-apply tool definition: %v", err)
-			return false
-		}
-		if tool.Function.Name == "task" {
-			fixture.fail(writer, "installed sdd-apply executor was offered the task delegation tool")
-			return false
-		}
-	}
-	fixture.mu.Lock()
-	fixture.sawInstalledSDDApplyExecutor = true
-	fixture.mu.Unlock()
-	return true
-}
-
-func (fixture *openCodeFixtureServer) captureInstalledSDDApplyExecutorBashResult(writer http.ResponseWriter, result string) bool {
-	fixture.mu.Lock()
-	nonce := fixture.executorNonce
-	prefix := fixture.executorCompletionPrefix
-	fixture.mu.Unlock()
-	if nonce == "" || prefix == "" {
-		fixture.fail(writer, "installed sdd-apply executor proof is missing its nonce or completion marker")
-		return false
-	}
-	if !strings.Contains(result, nonce) {
-		fixture.fail(writer, "installed sdd-apply executor bash result does not contain its nonce")
-		return false
-	}
-	fixture.mu.Lock()
-	fixture.executorBashResult = result
-	fixture.executorSubagentResult = prefix + nonce
-	fixture.mu.Unlock()
-	return true
-}
-
-func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutorRoundTrip(writer http.ResponseWriter, input openAIRequest) bool {
-	fixture.mu.Lock()
-	nonce := fixture.executorNonce
-	prefix := fixture.executorCompletionPrefix
-	bashResult := fixture.executorBashResult
-	executorResult := fixture.executorSubagentResult
-	fixture.mu.Unlock()
-	if nonce == "" || prefix == "" {
-		fixture.fail(writer, "installed sdd-apply executor proof is missing nonce or completion marker")
-		return false
-	}
-	if !strings.Contains(bashResult, nonce) {
-		fixture.fail(writer, "orchestrator cannot complete the executor proof without executor bash result")
-		return false
-	}
-	if executorResult == "" {
-		fixture.fail(writer, "installed sdd-apply executor did not return a nonce-bound subagent result")
-		return false
-	}
-	for index := len(input.Messages) - 1; index >= 0; index-- {
-		message := input.Messages[index]
-		if message.Role != "tool" {
-			continue
-		}
-		result := messageText(message.Content)
-		if strings.Contains(result, executorResult) && strings.Contains(result, nonce) {
-			fixture.mu.Lock()
-			fixture.executorRoundTripResult = result
-			fixture.mu.Unlock()
-			return true
-		}
-	}
-	fixture.fail(writer, "orchestrator did not receive the nonce-bound executor subagent result")
-	return false
-}
-
-func (fixture *openCodeFixtureServer) assertInstalledSDDApplyExecutorProof(t *testing.T) {
-	t.Helper()
-	fixture.mu.Lock()
-	defer fixture.mu.Unlock()
-	nonce := fixture.executorNonce
-	prefix := fixture.executorCompletionPrefix
-	if nonce == "" || prefix == "" {
-		t.Fatal("installed sdd-apply executor proof is missing nonce or completion marker")
-	}
-	executorResult := prefix + nonce
-	if fixture.completion == executorResult {
-		t.Fatal("orchestrator and executor completion markers must be distinct")
-	}
-	if !strings.Contains(fixture.actorCommand, nonce) {
-		t.Fatal("the installed sdd-apply executor did not receive its nonce-bearing bash command")
-	}
-	if !strings.Contains(fixture.executorBashResult, nonce) {
-		t.Fatal("the installed sdd-apply executor did not return its bash-produced nonce")
-	}
-	if fixture.executorSubagentResult != executorResult {
-		t.Fatalf("executor subagent result = %q, want %q", fixture.executorSubagentResult, executorResult)
-	}
-	if !strings.Contains(fixture.executorRoundTripResult, executorResult) {
-		t.Fatal("orchestrator did not receive the executor result through its task round trip")
-	}
 }
 
 // isSubagent recognises the delegated worker session. OpenCode gives the
@@ -4807,9 +4397,6 @@ func (fixture *openCodeFixtureServer) assertComplete(t *testing.T, wantSubagent 
 	}
 	if hadSubagent := fixture.subagentStarts > 0; hadSubagent != wantSubagent {
 		t.Fatalf("real sub-agent used = %t, want %t", hadSubagent, wantSubagent)
-	}
-	if fixture.requireInstalledSDDApplyExecutor && !fixture.sawInstalledSDDApplyExecutor {
-		t.Fatal("the installed sdd-apply executor never loaded its runtime prompt")
 	}
 }
 

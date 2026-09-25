@@ -97,11 +97,11 @@ func TestRunInstallPersistsConfiguredSelection(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.cursor): %v", err)
 	}
-	if _, err := RunInstall([]string{"--agent", "cursor", "--preset", "custom", "--sdd-mode", "multi"}, system.DetectionResult{}); err != nil {
+	if _, err := RunInstall([]string{"--agent", "cursor", "--preset", "custom"}, system.DetectionResult{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := state.Read(home)
-	if err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || len(got.Components) != 0 {
+	if err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != "" || len(got.Components) != 0 || len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != "cursor" {
 		t.Fatalf("persisted selection = %#v, err = %v", got, err)
 	}
 	wantDigest, err := managedAssetDigest()

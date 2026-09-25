@@ -6,22 +6,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
-// SDDIntegrationMode defines how a generated agent integrates with SDD phases.
-type SDDIntegrationMode string
-
-const (
-	SDDStandalone   SDDIntegrationMode = "standalone"
-	SDDNewPhase     SDDIntegrationMode = "new-phase"
-	SDDPhaseSupport SDDIntegrationMode = "phase-support"
-)
-
-// SDDIntegration describes how the agent connects to the SDD workflow.
-type SDDIntegration struct {
-	Mode        SDDIntegrationMode `json:"mode"`
-	TargetPhase string             `json:"target_phase"`
-	PhaseName   string             `json:"phase_name,omitempty"`
-}
-
 // GeneratedAgent holds the result of a generation run before installation.
 type GeneratedAgent struct {
 	Name        string
@@ -29,7 +13,6 @@ type GeneratedAgent struct {
 	Description string
 	Trigger     string
 	Content     string
-	SDDConfig   *SDDIntegration
 }
 
 // RegistryEntry is a single record persisted in the custom-agent registry.
@@ -39,7 +22,6 @@ type RegistryEntry struct {
 	Description      string          `json:"description"`
 	CreatedAt        time.Time       `json:"created_at"`
 	GenerationEngine model.AgentID   `json:"generation_engine"`
-	SDDIntegration   *SDDIntegration `json:"sdd_integration,omitempty"`
 	InstalledAgents  []model.AgentID `json:"installed_agents"`
 }
 

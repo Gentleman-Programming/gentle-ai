@@ -67,4 +67,3 @@ After synthesizing worker results, return:
 ## References
 
 - [references/tuning-knobs.md](references/tuning-knobs.md) — Full table of `delegate_task` configuration parameters and the explicit toolset/MCP/skill checklist for worker missions.
-- [../../hermes/sdd-orchestrator.md](../../hermes/sdd-orchestrator.md) — SDD orchestrator protocol that uses this delegation standard for SDD phase work.

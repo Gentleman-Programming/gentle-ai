@@ -1094,6 +1094,29 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 			} else {
 				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
+				if requestedLineage == "" {
+					// Only the lineage derived for this exact frozen START can block
+					// it. Avoid selectorless authority scans (and HEAD ancestry reads)
+					// for unrelated fresh targets, including unborn repositories.
+					startLineage, lineageErr := reviewAtomicStartLineage(ctx, root, liveSnapshot.Identity)
+					if lineageErr != nil {
+						return fmt.Errorf("derive negotiated START lineage: %w", lineageErr)
+					}
+					occupied, occupancyErr := reviewtransaction.ExactReviewLineageOccupied(ctx, root, startLineage)
+					if occupancyErr != nil {
+						return fmt.Errorf("inspect negotiated START lineage occupancy: %w", occupancyErr)
+					}
+					if occupied {
+						assessed, _, assessErr := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{Target: target, LineageID: startLineage, PrePR: prePR})
+						if assessErr != nil {
+							return fmt.Errorf("assess terminal review target: %w", assessErr)
+						}
+						if assessed.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
+							assessed.State == reviewtransaction.StateEscalated && assessed.Action == reviewtransaction.TargetStatusActionStop {
+							native = assessed
+						}
+					}
+				}
 				consumed, consumptionErr := reviewtransaction.CompactTargetConsumed(ctx, root, liveSnapshot.Identity)
 				if consumptionErr != nil {
 					return fmt.Errorf("read terminal consumption evidence: %w", consumptionErr)

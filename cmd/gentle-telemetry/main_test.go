@@ -67,6 +67,20 @@ func TestNextMaintenanceDelay(t *testing.T) {
 	}
 }
 
+func TestRuntimeMetricsTTL(t *testing.T) {
+	if defaultRuntimeMetricsTTL != 24*time.Hour {
+		t.Fatalf("default runtime metrics TTL = %v, want 24h", defaultRuntimeMetricsTTL)
+	}
+	for _, ttl := range []time.Duration{0, time.Hour, defaultRuntimeMetricsTTL} {
+		if err := validateRuntimeMetricsTTL(ttl); err != nil {
+			t.Errorf("validateRuntimeMetricsTTL(%v): %v", ttl, err)
+		}
+	}
+	if err := validateRuntimeMetricsTTL(-time.Second); err == nil {
+		t.Error("negative runtime metrics TTL accepted")
+	}
+}
+
 func TestValidateRuntimeStoreMode(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

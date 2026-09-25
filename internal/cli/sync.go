@@ -20,15 +20,18 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
@@ -57,19 +60,13 @@ type SyncFlags struct {
 
 	PiBackgroundSubagents    string
 	PiBackgroundSubagentsSet bool
-	// Profiles holds named SDD profiles parsed from --profile flags.
-	// Each entry is populated by parseProfileFlag and augmented by
-	// parseProfilePhaseFlag.
-	Profiles []model.Profile
-	// rawProfiles and rawProfilePhases hold the raw string values from
-	// --profile and --profile-phase flags before parsing into model.Profile.
-	rawProfiles      []string
-	rawProfilePhases []string
-	skillsSet        bool
-	sddModeSet       bool
-	strictTDDSet     bool
-	permissionsSet   bool
-	themeSet         bool
+	// Profiles remains available to internal callers with persisted selections.
+	Profiles       []model.Profile
+	skillsSet      bool
+	sddModeSet     bool
+	strictTDDSet   bool
+	permissionsSet bool
+	themeSet       bool
 }
 
 // SyncResult holds the outcome of a sync execution.
@@ -91,7 +88,8 @@ type SyncResult struct {
 	// ChangedFiles lists deduplicated absolute paths of managed files
 	// processed during this sync. Paths appear once even when multiple
 	// components touch the same file. It is nil when no files changed.
-	ChangedFiles []string
+	ChangedFiles  []string
+	ManualActions []string
 
 	Background              OpenCodeBackgroundResolution
 	BackgroundPolicyEnabled bool
@@ -116,16 +114,12 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "skill", &opts.Skills)
 	registerListFlag(fs, "skills", &opts.Skills)
-	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
-	fs.StringVar(&opts.SDDProfileStrategy, "sdd-profile-strategy", "", "OpenCode SDD profile sync strategy: generated-multi or external-single-active (default: auto-detect)")
-	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for SDD agents (RED → GREEN → REFACTOR)")
+	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for ODD (RED → GREEN → REFACTOR)")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
 	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
-	registerListFlag(fs, "profile", &opts.rawProfiles)
-	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
 
 	if err := fs.Parse(args); err != nil {
 		// The flag package's own failf/usage() may have already printed the
@@ -145,8 +139,6 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 		switch f.Name {
 		case "skill", "skills":
 			opts.skillsSet = true
-		case "sdd-mode":
-			opts.sddModeSet = true
 		case "strict-tdd":
 			opts.strictTDDSet = true
 		case "include-permissions":
@@ -164,21 +156,6 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q — pass agents with the --agent %s flag, not a positional argument", fs.Arg(0), fs.Arg(0))
 	}
 
-	strategy, err := parseProfileSyncStrategy(opts.SDDProfileStrategy)
-	if err != nil {
-		return SyncFlags{}, err
-	}
-	opts.SDDProfileStrategy = string(strategy)
-
-	// Parse --profile flags into model.Profile values.
-	if len(opts.rawProfiles) > 0 || len(opts.rawProfilePhases) > 0 {
-		profiles, err := parseProfileFlags(opts.rawProfiles, opts.rawProfilePhases)
-		if err != nil {
-			return SyncFlags{}, err
-		}
-		opts.Profiles = profiles
-	}
-
 	return opts, nil
 }
 
@@ -189,13 +166,9 @@ func PrintSyncHelp(w io.Writer) {
 FLAGS
   --agent, --agents <list>           Agents to sync
   --skill, --skills <list>           Skills to sync
-  --sdd-mode single|multi            SDD orchestrator mode
-  --sdd-profile-strategy <strategy>  OpenCode SDD profile sync strategy
-  --strict-tdd                       Enable strict TDD mode for SDD agents
+  --strict-tdd                       Enable strict TDD mode for ODD
   --include-permissions              Include permissions component
   --include-theme                    Include theme component
-  --profile <name:provider/model>    Sync a named SDD profile
-  --profile-phase <name:phase:model> Sync a named SDD profile phase
   --opencode-background-subagents=auto|on|off
                                      Resolve OpenCode capability and manage a launcher when eligible; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
                                      auto inherits managed on/off, unsupported/unknown stays foreground, off removes only owned launchers
@@ -207,151 +180,9 @@ FLAGS
 `)
 }
 
-func parseProfileSyncStrategy(raw string) (model.SDDProfileStrategyID, error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return "", nil
-	}
-
-	switch model.SDDProfileStrategyID(value) {
-	case model.SDDProfileStrategyGeneratedMulti, model.SDDProfileStrategyExternalSingleActive:
-		return model.SDDProfileStrategyID(value), nil
-	default:
-		return "", fmt.Errorf("unsupported sdd-profile-strategy %q (valid: generated-multi, external-single-active)", raw)
-	}
-}
-
-// parseProfileFlags converts the raw --profile and --profile-phase string values
-// into a slice of model.Profile. Returns an error if any value is malformed.
-//
-// --profile format:  name:provider/model
-// --profile-phase format: name:phase:provider/model
-func parseProfileFlags(rawProfiles, rawProfilePhases []string) ([]model.Profile, error) {
-	// Build a map of profile name → profile so we can merge phase assignments.
-	profileMap := make(map[string]*model.Profile)
-	profileOrder := make([]string, 0, len(rawProfiles))
-
-	for _, raw := range rawProfiles {
-		p, err := parseProfileFlag(raw)
-		if err != nil {
-			return nil, err
-		}
-		profileMap[p.Name] = &p
-		profileOrder = append(profileOrder, p.Name)
-	}
-
-	for _, raw := range rawProfilePhases {
-		name, phase, assignment, err := parseProfilePhaseFlag(raw)
-		if err != nil {
-			return nil, err
-		}
-		entry, exists := profileMap[name]
-		if !exists {
-			// Profile referenced in --profile-phase but not declared in --profile.
-			// Create a minimal entry so phase assignments are not lost.
-			newProfile := model.Profile{Name: name, PhaseAssignments: make(map[string]model.ModelAssignment)}
-			profileMap[name] = &newProfile
-			profileOrder = append(profileOrder, name)
-			entry = profileMap[name]
-		}
-		if entry.PhaseAssignments == nil {
-			entry.PhaseAssignments = make(map[string]model.ModelAssignment)
-		}
-		entry.PhaseAssignments[phase] = assignment
-	}
-
-	profiles := make([]model.Profile, 0, len(profileOrder))
-	seen := make(map[string]bool)
-	for _, name := range profileOrder {
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		profiles = append(profiles, *profileMap[name])
-	}
-	return profiles, nil
-}
-
-// parseProfileFlag parses a single --profile value of the form "name:provider/model".
-// Returns an error for empty name, reserved names, or missing separator.
-func parseProfileFlag(raw string) (model.Profile, error) {
-	colonIdx := strings.Index(raw, ":")
-	if colonIdx <= 0 {
-		return model.Profile{}, fmt.Errorf("--profile %q: invalid format, expected name:provider/model", raw)
-	}
-	name := raw[:colonIdx]
-	modelSpec := raw[colonIdx+1:]
-
-	if err := sdd.ValidateProfileName(name); err != nil {
-		return model.Profile{}, fmt.Errorf("--profile %q: %w", raw, err)
-	}
-
-	assignment, err := parseModelSpec(modelSpec)
-	if err != nil {
-		return model.Profile{}, fmt.Errorf("--profile %q: %w", raw, err)
-	}
-
-	return model.Profile{
-		Name:              name,
-		OrchestratorModel: assignment,
-		PhaseAssignments:  make(map[string]model.ModelAssignment),
-	}, nil
-}
-
-// parseProfilePhaseFlag parses a single --profile-phase value of the form
-// "name:phase:provider/model".
-func parseProfilePhaseFlag(raw string) (name, phase string, assignment model.ModelAssignment, err error) {
-	parts := strings.SplitN(raw, ":", 3)
-	if len(parts) != 3 {
-		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: invalid format, expected name:phase:provider/model", raw)
-	}
-	name = parts[0]
-	phase = parts[1]
-	modelSpec := parts[2]
-
-	if name == "" {
-		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: profile name must not be empty", raw)
-	}
-	if err = sdd.ValidateProfileName(name); err != nil {
-		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: %w", raw, err)
-	}
-	if phase == "" {
-		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: phase must not be empty", raw)
-	}
-	// Validate that the phase is a known profile-configurable agent name.
-	// SDD profiles can configure both SDD phase agents and Judgment Day agents.
-	knownPhases := sdd.ProfileAssignmentPhaseOrder()
-	validPhase := false
-	for _, p := range knownPhases {
-		if p == phase {
-			validPhase = true
-			break
-		}
-	}
-	if !validPhase {
-		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: unknown phase %q; valid phases are: %v", raw, phase, knownPhases)
-	}
-
-	assignment, err = parseModelSpec(modelSpec)
-	if err != nil {
-		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: %w", raw, err)
-	}
-	return name, phase, assignment, nil
-}
-
-// parseModelSpec parses a "provider/model" or "provider:model" string into a
-// ModelAssignment. Returns an error if the spec is empty or has no separator.
-func parseModelSpec(spec string) (model.ModelAssignment, error) {
-	providerID, modelID, ok := model.SplitModelSpec(spec)
-	if !ok {
-		return model.ModelAssignment{}, fmt.Errorf("invalid model spec %q: expected provider/model or provider:model", spec)
-	}
-	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID}, nil
-}
-
 // BuildSyncSelection builds a model.Selection for the sync command.
 //
-// Default sync scope: SDD, Engram, Context7, GGA, Skills, Persona.
+// Default sync scope: Engram, Context7, GGA, Skills, Persona.
 // Excluded by default: Permissions, Theme (no markers; managed via JSON
 // overlays where user customization cannot be safely diff-merged).
 // Permissions and Theme can be opted-in via flags.
@@ -364,14 +195,13 @@ func parseModelSpec(spec string) (model.ModelAssignment, error) {
 // This is the reusable managed-asset sync contract. A future `upgrade --sync`
 // flow can call this function to get the same managed-only selection semantics.
 func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selection {
-	// Order matters: Persona must run BEFORE SDD/Engram/MCP because those
+	// Order matters: Persona must run BEFORE Engram/MCP because those
 	// components inject content with substrings (e.g. "## Personality",
 	// "Senior Architect") that overlap with persona's legacy-block fingerprints.
 	// Running persona last would cause its StripLegacyPersonaBlock pass to
 	// detect the just-written managed sections as legacy and strip them.
 	components := []model.ComponentID{
 		model.ComponentPersona,
-		model.ComponentSDD,
 		model.ComponentEngram,
 		model.ComponentContext7,
 		model.ComponentGGA,
@@ -419,21 +249,11 @@ func RestorePersistedSelection(selection *model.Selection, persisted state.Insta
 		selection.Skills = explicit.Skills
 		setSelectionComponent(selection, model.ComponentSkills, true, true)
 	}
-	if flags.sddModeSet {
-		selection.SDDMode = explicit.SDDMode
-	}
 	if flags.strictTDDSet {
 		selection.StrictTDD = explicit.StrictTDD
 	}
 	setSelectionComponent(selection, model.ComponentPermission, flags.permissionsSet, flags.IncludePermissions)
 	setSelectionComponent(selection, model.ComponentTheme, flags.themeSet, flags.IncludeTheme)
-	// The persisted component list above may predate the caller ever choosing
-	// the SDD component (e.g. an install that ran before profiles existed).
-	// When the caller explicitly asked for profile or model assignment work,
-	// that request must not be silently dropped — see issue #3430.
-	if model.CarriesSDDWork(explicit.Profiles, explicit.ModelAssignments) {
-		selection.EnsureComponent(model.ComponentSDD)
-	}
 }
 
 func setSelectionComponent(selection *model.Selection, component model.ComponentID, configured, included bool) {
@@ -585,20 +405,46 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
+	for _, agent := range r.agentIDs {
+		if nativeReviewAgentSupported(agent) {
+			apply = append(apply, nativeReviewAgentStep{id: "sync:agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: ScopeGlobal, selection: r.selection, changedFiles: &r.changedFiles, state: r.state})
+		}
+	}
+
 	// Routing guidance is refreshed per agent and outside the component loop, for
 	// the same reason install schedules it there: a persisted selection without
-	// the optional SDD component must still leave every agent able to choose an
-	// implementation route (issue #1794). It runs after the components so the
-	// refreshed SDD assets are already on disk when guidance is merged.
+	// any optional component must still leave every agent able to choose an
+	// implementation route (issue #1794). It runs after the components so their
+	// managed assets are in place before guidance is merged.
 	for _, agent := range r.agentIDs {
 		apply = append(apply, agentRoutingGuidanceStep{
-			id:           "sync:agent-guidance:" + string(agent),
-			agent:        agent,
-			homeDir:      r.homeDir,
-			workspaceDir: r.workspaceDir,
-			scope:        ScopeGlobal,
-			changedFiles: &r.changedFiles,
+			codexPhaseModels: r.selection.CodexPhaseModelAssignments,
+			codexEfforts:     r.selection.CodexModelAssignments,
+			codexCarrils:     r.selection.CodexCarrilModelAssignments,
+			strictTDD:        r.selection.StrictTDD,
+			backgroundPolicy: r.backgroundPolicy,
+			legacySDD:        false,
+			id:               "sync:agent-guidance:" + string(agent),
+			agent:            agent,
+			homeDir:          r.homeDir,
+			workspaceDir:     r.workspaceDir,
+			scope:            ScopeGlobal,
+			changedFiles:     &r.changedFiles,
 		})
+	}
+
+	// Model assignments belong to the retained OpenCode sync route, not the
+	// retired SDD component. Run after guidance so both updates to opencode.json
+	// are included in the same sync transaction.
+	if len(r.selection.ModelAssignments) > 0 {
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentOpenCode {
+				apply = append(apply, openCodeModelAssignmentSyncStep{
+					path:        effectiveOpenCodeSettingsPath(r.homeDir, r.workspaceDir, ScopeGlobal, adapter),
+					assignments: r.selection.ModelAssignments, changedFiles: &r.changedFiles,
+				})
+			}
+		}
 	}
 
 	// Managed OpenCode-compatible plugins are versioned runtime artifacts tied
@@ -608,7 +454,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	// (issue #1440). Refresh installed copies explicitly; the step never
 	// installs plugins that were never present. When SDD is selected, its
 	// inject step already rewrites the plugins.
-	if anyAgentReceivesManagedOpenCodePlugins(r.agentIDs) && !r.selection.HasComponent(model.ComponentSDD) {
+	if anyAgentReceivesManagedOpenCodePlugins(r.agentIDs) {
 		apply = append(apply, openCodePluginRefreshSyncStep{
 			id:           "sync:opencode:managed-plugins",
 			homeDir:      r.homeDir,
@@ -640,6 +486,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
+		if component == model.ComponentSDD {
+			continue
+		}
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
@@ -678,16 +527,38 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			}
 		}
 	}
+	if len(selection.ModelAssignments) > 0 {
+		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentOpenCode {
+				paths[effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)] = struct{}{}
+			}
+		}
+	}
 	// Routing guidance is refreshed per agent outside the component loop, at
 	// ScopeGlobal like the step itself. A persisted selection whose components
 	// do not cover the same file would otherwise be rewritten without a
 	// snapshot and could never be rolled back (issue #1794).
+	for _, adapter := range adapters {
+		if path := agentguidance.StrictTDDPath(routingGuidanceDir(homeDir, workspaceDir, ScopeGlobal, adapter), adapter.Agent()); path != "" {
+			paths[path] = struct{}{}
+		}
+	}
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
 		paths[path] = struct{}{}
 	}
 	for _, adapter := range adapters {
+		if names := reviewassets.NativeAgentManifest[adapter.Agent()]; len(names) > 0 {
+			dir := adapter.SubAgentsDir(componentInjectionDirScoped(homeDir, workspaceDir, ScopeGlobal, adapter))
+			paths[filepath.Join(dir, reviewassets.OwnershipLedgerFilename)] = struct{}{}
+			for _, name := range names {
+				paths[filepath.Join(dir, name)] = struct{}{}
+			}
+		}
 		if adapter.Agent() == model.AgentPi {
 			paths[adapter.SystemPromptFile(homeDir)] = struct{}{}
+		}
+		if adapter.Agent() == model.AgentCodex {
+			paths[filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")] = struct{}{}
 		}
 	}
 	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, ScopeGlobal, selection.Agents); configDir != "" {
@@ -700,11 +571,11 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	// Kilocode) is synced, independent of the SDD component: the
 	// openCodePluginRefreshSyncStep may rewrite installed copies (issue #1440).
 	for _, adapter := range adapters {
-		if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 			continue
 		}
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
+		for _, name := range opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent()) {
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
@@ -768,17 +639,6 @@ func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model
 				return nil, fmt.Errorf("enumerate %s skill backup targets: %w", adapter.Agent(), err)
 			}
 			paths = append(paths, ordinary...)
-		}
-		if slices.Contains(selection.Components, model.ComponentSDD) {
-			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
-			if skillDir == "" {
-				continue
-			}
-			sddPaths, err := sdd.SkillDirectoryPaths(skillDir, "")
-			if err != nil {
-				return nil, fmt.Errorf("enumerate %s SDD backup targets: %w", adapter.Agent(), err)
-			}
-			paths = append(paths, sddPaths...)
 		}
 	}
 	return paths, nil
@@ -854,6 +714,94 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 // changedFiles is a shared slice pointer. Each step appends candidate paths
 // from its aggregate InjectionResult when any file changed. RunSync compares
 // candidates with pre-sync snapshots before exposing persisted changes.
+// openCodeModelAssignmentSyncStep persists picker choices independently of the
+// retired SDD component. Only current picker identities are eligible; legacy
+// saved SDD keys must not be resurrected by an ordinary sync.
+type openCodeModelAssignmentSyncStep struct {
+	path         string
+	assignments  map[string]model.ModelAssignment
+	changedFiles *[]string
+}
+
+func (s openCodeModelAssignmentSyncStep) ID() string { return "sync:opencode:model-assignments" }
+
+func (s openCodeModelAssignmentSyncStep) Run() error {
+	// Refuse leaf links before discovery/read: following one can read and then
+	// overwrite a target not covered by the sync snapshot. The atomic writer
+	// independently refuses leaf links at publication time.
+	info, err := os.Lstat(s.path)
+	if err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("refuse non-regular OpenCode settings %q: move the symlink or directory aside, place a regular file at this path, then rerun `gentle-ai sync`", s.path)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat OpenCode settings: %w", err)
+	}
+	custom, err := opencodedefault.DiscoverCustomAgents(s.path)
+	if err != nil {
+		return fmt.Errorf("discover OpenCode custom agents: %w", err)
+	}
+	allowed := map[string]bool{"gentle-orchestrator": true, "general": true, "explore": true}
+	for _, name := range opencodeactivation.JDPhases() {
+		allowed[name] = true
+	}
+	for _, name := range opencodeactivation.ReviewPhases() {
+		allowed[name] = true
+	}
+	for _, name := range custom {
+		allowed[name] = true
+	}
+	agents := make(map[string]any)
+	for name, assignment := range s.assignments {
+		if !allowed[name] || assignment.ProviderID == "" || assignment.ModelID == "" {
+			continue
+		}
+		entry := map[string]any{"model": assignment.FullID()}
+		// Omitting variant on an effortless custom assignment preserves the
+		// user's own value; an explicit picker effort may replace it (#3262).
+		if assignment.Effort != "" {
+			entry["variant"] = assignment.Effort
+		}
+		agents[name] = entry
+	}
+	if len(agents) == 0 {
+		return nil
+	}
+	original, err := os.ReadFile(s.path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read OpenCode settings: %w", err)
+	}
+	if len(original) > 0 {
+		if _, err := filemerge.UnmarshalJSONObject(original); err != nil {
+			return fmt.Errorf("refuse to change malformed OpenCode settings: %w", err)
+		}
+	}
+	overlay, err := json.Marshal(map[string]any{"agent": agents})
+	if err != nil {
+		return fmt.Errorf("marshal OpenCode model assignments: %w", err)
+	}
+	updated, err := filemerge.MergeJSONObjectsForPath(s.path, original, overlay)
+	if err != nil {
+		return fmt.Errorf("merge OpenCode model assignments: %w", err)
+	}
+	if bytes.Equal(original, updated) {
+		return nil
+	}
+	mode := os.FileMode(0644)
+	if info != nil {
+		mode = info.Mode().Perm()
+	}
+	result, err := filemerge.WriteFileAtomic(s.path, updated, mode)
+	// Publication can land before a subsequent durability check fails. Report
+	// the landed path so transaction rollback has the correct evidence.
+	if result.Changed {
+		*s.changedFiles = append(*s.changedFiles, s.path)
+	}
+	if err != nil {
+		return fmt.Errorf("write OpenCode model assignments: %w", err)
+	}
+	return nil
+}
+
 type componentSyncStep struct {
 	id           string
 	component    model.ComponentID
@@ -894,10 +842,24 @@ func (s openCodePluginRefreshSyncStep) ID() string { return s.id }
 
 func (s openCodePluginRefreshSyncStep) Run() error {
 	for _, adapter := range resolveAdapters(s.agents) {
-		if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 			continue
 		}
-		res, err := sdd.RefreshInstalledOpenCodePlugins(s.homeDir, adapter)
+		// The legacy background plugin identifies an older managed installation:
+		// migrate it to the retained plugin set rather than treating it as an
+		// empty installation. Otherwise refresh only already-installed plugins.
+		legacy := filepath.Join(adapter.GlobalConfigDir(s.homeDir), "plugins", "background-agents.ts")
+		_, legacyErr := os.Lstat(legacy)
+		var res opencoderuntimeplugins.Result
+		var err error
+		if adapter.Agent() == model.AgentOpenCode && legacyErr == nil {
+			res, err = opencoderuntimeplugins.Install(s.homeDir, adapter)
+		} else {
+			if legacyErr != nil && !os.IsNotExist(legacyErr) {
+				return legacyErr
+			}
+			res, err = opencoderuntimeplugins.Refresh(s.homeDir, adapter)
+		}
 		if err != nil {
 			return fmt.Errorf("sync managed OpenCode plugins: %w", err)
 		}
@@ -912,7 +874,7 @@ func (s openCodePluginRefreshSyncStep) Run() error {
 // receives the managed OpenCode-compatible plugins from the SDD injector.
 func anyAgentReceivesManagedOpenCodePlugins(agentIDs []model.AgentID) bool {
 	for _, id := range agentIDs {
-		if sdd.AgentReceivesManagedOpenCodePlugins(id) {
+		if opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(id) {
 			return true
 		}
 	}
@@ -1078,67 +1040,7 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentSDD:
-		profileStrategy := sdd.ResolveProfileStrategy(s.homeDir, s.selection.SDDProfileStrategy)
-
-		// Resolve profiles for injection:
-		// - When profiles are explicitly provided (TUI/CLI), use them directly.
-		// - On a regular sync (no explicit profiles), detect existing named profiles
-		//   from disk so their orchestrator prompts are refreshed from updated embedded
-		//   assets while model assignments are preserved.
-		profiles := s.selection.Profiles
-		if len(profiles) == 0 && profileStrategy != model.SDDProfileStrategyExternalSingleActive {
-			settingsPath := ""
-			for _, adapter := range adapters {
-				if adapter.Agent() == model.AgentOpenCode {
-					settingsPath = effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter)
-					break
-				}
-			}
-			if settingsPath != "" {
-				detected, detectErr := sdd.DetectProfiles(settingsPath)
-				if detectErr == nil {
-					profiles = detected
-				}
-				// If detect fails (e.g. file missing), silently skip — no profiles to refresh.
-			}
-		}
-
-		// If profiles exist (explicit or detected), SDDModeMulti is required:
-		// shared prompt files must be written and {file:...} refs must resolve.
-		sddMode := s.selection.SDDMode
-		if profileStrategy == model.SDDProfileStrategyExternalSingleActive {
-			sddMode = model.SDDModeMulti
-		} else if len(profiles) > 0 && sddMode == "" {
-			sddMode = model.SDDModeMulti
-		}
-
-		for _, adapter := range adapters {
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-			opts := sdd.InjectOptions{
-				OpenCodeModelAssignments:           s.selection.ModelAssignments,
-				OpenCodeSettingsPath:               effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter),
-				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
-				ClaudePhaseAssignments:             s.selection.ClaudePhaseAssignments,
-				KiroModelAssignments:               s.selection.KiroModelAssignments,
-				CodexModelAssignments:              s.selection.CodexModelAssignments,
-				CodexCarrilModelAssignments:        s.selection.CodexCarrilModelAssignments,
-				CodexPhaseModelAssignments:         s.selection.CodexPhaseModelAssignments,
-				StrictTDD:                          s.selection.StrictTDD,
-				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
-				Profiles:                           profiles,
-				CodeGraphGuidanceMarkdown:          codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
-			}
-			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
-			inject := sdd.Inject
-			if s.backgroundPolicy {
-				inject = injectSDD
-			}
-			res, err := inject(targetDir, adapter, sddMode, opts)
-			if err != nil {
-				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
-			}
-			s.countChanged(boolToInt(res.Changed), res.Files...)
-		}
+		// Preserve legacy state parsing without resurrecting retired SDD assets.
 		return nil
 
 	case model.ComponentSkills:
@@ -1210,7 +1112,7 @@ func (s componentSyncStep) Run() error {
 				continue
 			}
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-			res, err := persona.InjectForSync(targetDir, adapter, s.selection.Persona)
+			res, err := injectSyncPersona(targetDir, adapter, s.selection.Persona)
 			if err != nil {
 				return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 			}
@@ -1582,6 +1484,9 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	return runSyncWithSelection(homeDir, selection, background, piBackground)
 }
 
+var syncStagePlan = func(runtime *syncRuntime) pipeline.StagePlan { return runtime.stagePlan() }
+var compareChangedSyncFiles = changedSyncFiles
+
 func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
 	agentIDs := selection.Agents
 	// The read error is captured, not discarded: the persona alias migration
@@ -1633,6 +1538,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		return result, err
 	}
 	defer rt.state.cleanupCompatibilityTransaction()
+	defer rt.state.cleanupRollbackSnapshot()
 	rt.backgroundActivation = background.activationPlan
 	if rt.backgroundActivation != nil {
 		rt.runtimeReady = rt.backgroundActivation.Capability().Ready()
@@ -1644,7 +1550,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	}
 	rt.piBackgroundProjection = piBackground.projectionPlan
 
-	stagePlan := rt.stagePlan()
+	stagePlan := syncStagePlan(rt)
 	result.Plan = stagePlan
 	before, err := snapshotSyncFiles(rt.managedPaths)
 	if err != nil {
@@ -1654,17 +1560,17 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
 	compatibilityChanged := rt.state.compatibilityChangedFiles()
-	rt.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
 	}
+	result.ManualActions = append(result.ManualActions, rt.state.nativeReviewActions...)
 
 	// Capture how many managed assets were actually changed.
 	// Deduplicate paths — multiple components may touch the same file
 	// (e.g. Engram and Context7 both merge into settings.json).
-	result.ChangedFiles, err = changedSyncFiles(rt.changedFiles, before)
+	result.ChangedFiles, err = compareChangedSyncFiles(rt.changedFiles, before)
 	if err != nil {
-		return result, err
+		return result, rollbackPostApplyError(orchestrator, result.Execution, err)
 	}
 	result.ChangedFiles = dedupPaths(append(result.ChangedFiles, compatibilityChanged...))
 	if background.activationPlan != nil {
@@ -1701,9 +1607,9 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		}
 		return result, verificationErr
 	}
-	writer, err := managedAssetDigest()
+	writer, err := deriveManagedAssetWriter()
 	if err != nil {
-		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
+		return result, rollbackPostApplyError(orchestrator, result.Execution, fmt.Errorf("derive managed asset writer identity: %w", err))
 	}
 	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist); err != nil {
 		persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
@@ -2073,9 +1979,14 @@ func RenderSyncReport(result SyncResult) string {
 			fmt.Fprintln(&b, "No agents were discovered or specified. Nothing to sync.")
 		} else {
 			fmt.Fprintf(&b, "Agents: %s\n", joinAgentIDs(result.Agents))
-			fmt.Fprintln(&b, "All managed assets are already up to date. No files changed.")
+			if len(result.ManualActions) == 0 {
+				fmt.Fprintln(&b, "All managed assets are already up to date. No files changed.")
+			} else {
+				fmt.Fprintln(&b, "No managed files changed; preserved native agents were not updated.")
+			}
 		}
 		backgroundReport()
+		renderSyncManualActions(&b, result.ManualActions)
 		return strings.TrimRight(b.String(), "\n")
 	}
 
@@ -2124,8 +2035,19 @@ func RenderSyncReport(result SyncResult) string {
 		fmt.Fprint(&b, verify.RenderReport(result.Verify))
 	}
 	backgroundReport()
+	renderSyncManualActions(&b, result.ManualActions)
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderSyncManualActions(b *strings.Builder, actions []string) {
+	if len(actions) == 0 {
+		return
+	}
+	fmt.Fprintln(b, "Manual actions required:")
+	for _, action := range actions {
+		fmt.Fprintf(b, "- %s\n", action)
+	}
 }
 
 // withFailedSyncVerificationNote replaces the generic
@@ -2151,7 +2073,15 @@ func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selec
 	adapters := resolveAdapters(selection.Agents)
 
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
+		if component == model.ComponentSDD {
+			// Legacy state remains readable, but retired assets are not installed.
+			continue
+		}
+		paths := syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component)
+		if component == model.ComponentEngram {
+			paths = verificationComponentPaths(homeDir, workspaceDir, ScopeGlobal, selection, adapters, component)
+		}
+		for _, path := range paths {
 			currentPath := path
 			if isRetiredManagedPath(currentPath) {
 				checks = append(checks, verify.Check{
@@ -2182,11 +2112,11 @@ func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selec
 		}
 	}
 	for _, adapter := range adapters {
-		if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 			continue
 		}
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		legacyPath := filepath.Join(pluginsDir, sdd.LegacyOpenCodeReviewPluginName)
+		legacyPath := filepath.Join(pluginsDir, opencoderuntimeplugins.LegacyOpenCodeReviewPluginName)
 		checks = append(checks, verify.Check{
 			ID:          "verify:sync:file:" + legacyPath,
 			Description: "legacy OpenCode review plugin removed",

@@ -210,11 +210,65 @@ var codexPresetOrchestrator = map[CodexPresetKey]CodexOrchestratorAssignment{
 	CodexPresetPowerful:    {Model: "gpt-6-astra", Effort: CodexEffortMedium},
 }
 
-// CodexODDRoles maps worker classes (not installed named agents) to preset lanes.
+// CodexODDRoles maps ODD worker classes to legacy saved carril keys.
+// Carril keys remain readable for existing custom model assignments, but
+// do not determine ODD's default models or effort.
 var codexODDRoles = []struct{ Role, Carril string }{
 	{"odd-explorer", "sdd-cheap"},
 	{"odd-worker", "sdd-mid"},
 	{"odd-verify", "sdd-strong"},
+}
+
+var codexODDDefaults = map[CodexPresetKey]map[string]CodexCarrilDefault{
+	CodexPresetLowCost: {
+		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6-luna", Effort: CodexEffortMedium},
+		"odd-verify":   {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+	},
+	CodexPresetRecommended: {
+		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+	},
+	CodexPresetPowerful: {
+		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6-sol", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6-astra", Effort: CodexEffortXHigh},
+	},
+}
+
+// CodexODDEffortsForPreset provides ODD-only effort assignments without SDD
+// phase keys. A caller retiring the old picker rows can use these directly.
+func CodexODDEffortsForPreset(preset string) map[string]CodexEffort {
+	defaults, ok := codexODDDefaults[CodexPresetKey(preset)]
+	if !ok {
+		defaults = codexODDDefaults[CodexPresetRecommended]
+	}
+	out := make(map[string]CodexEffort, len(defaults))
+	for role, value := range defaults {
+		out[role] = value.Effort
+	}
+	return out
+}
+
+func codexLegacyPresetForEfforts(efforts map[string]CodexEffort) CodexPresetKey {
+	for _, preset := range []CodexPresetKey{CodexPresetLowCost, CodexPresetPowerful} {
+		defaults := codexPresetEfforts(string(preset))
+		if len(efforts) != len(defaults) {
+			continue
+		}
+		match := true
+		for phase, effort := range defaults {
+			if efforts[phase] != effort {
+				match = false
+				break
+			}
+		}
+		if match {
+			return preset
+		}
+	}
+	return CodexPresetRecommended
 }
 
 // CodexODDRoleCarrils returns the worker-class to preset-lane mapping.
@@ -225,41 +279,23 @@ func CodexODDRoleCarrils() []struct{ Role, Carril string } {
 // RenderCodexODDAssignments provides spawn_agent arguments for ODD work.
 // RDD assignments remain persisted for the native adapter, not prompt delegation.
 func RenderCodexODDAssignments(phaseModels map[string]string, efforts map[string]CodexEffort, carrilModels map[string]string) string {
-	if len(carrilModels) == 0 {
-		carrilModels = DefaultCarrilModels()
-	}
-	preset := CodexPresetRecommended
-	for _, candidate := range []CodexPresetKey{CodexPresetLowCost, CodexPresetPowerful} {
-		defaults := codexPresetEfforts(string(candidate))
-		if len(efforts) != len(defaults) {
-			continue
-		}
-		match := true
-		for phase, expected := range defaults {
-			if efforts[phase] != expected {
-				match = false
-				break
-			}
-		}
-		if match {
-			preset = candidate
-			break
-		}
-	}
+	// Compatibility with persisted 14-phase preset maps; new ODD-only maps
+	// use explicit odd-* effort values and never require SDD phase keys.
+	preset := codexLegacyPresetForEfforts(efforts)
 	var b strings.Builder
 	b.WriteString("| ODD worker class | Model | reasoning_effort |\n|---|---|---|\n")
-	for _, role := range codexODDRoles {
-		defaults := CodexPresetCarrilDefaults(string(CodexPresetRecommended))[role.Carril]
+	for _, role := range CodexODDRoleCarrils() {
+		defaults := codexODDDefaults[preset][role.Role]
 		modelID := carrilModels[role.Carril]
 		if modelID == "" {
-			modelID = defaults.Model
+			modelID = codexODDDefaults[CodexPresetRecommended][role.Role].Model
 		}
 		if phaseModels[role.Role] != "" {
 			modelID = phaseModels[role.Role]
 		}
 		effort := efforts[role.Role]
 		if !effort.Valid() {
-			effort = CodexPresetCarrilDefaults(string(preset))[role.Carril].Effort
+			effort = defaults.Effort
 		}
 		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` |\n", role.Role, modelID, effort)
 	}
@@ -517,75 +553,6 @@ func RenderCodexPhaseEfforts(assignments map[string]CodexEffort, carrilModels ma
 			effort,
 			phases,
 		))
-	}
-
-	return sb.String()
-}
-
-// codexPhaseOrder is the canonical phase ordering for the per-phase table,
-// matching codexTierGroups phase groupings.
-var codexPhaseOrder = []string{
-	"sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
-	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
-	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
-}
-
-// phaseToCarrilModel returns the default model id for a phase by looking up its
-// carril via codexTierGroups.
-func phaseToCarrilModel(phase string, carrilModels map[string]string) string {
-	for _, tier := range codexTierGroups {
-		for _, p := range tier.Phases {
-			if p == phase {
-				if m := carrilModels[tier.Profile]; m != "" {
-					return m
-				}
-				return tier.Model
-			}
-		}
-	}
-	return codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model // ultimate fallback
-}
-
-// RenderCodexPhaseEffortsByPhase renders a per-phase Markdown table for the
-// Codex sdd-orchestrator.md asset when Custom per-phase model assignments are
-// active. Each row shows: phase | model | reasoning_effort.
-//
-// phaseModels maps phase names to custom model IDs. Phases not present in
-// phaseModels fall back to carrilModels, preserving the selected or explicitly
-// saved carril assignments. efforts maps phase names to CodexEffort values
-// (typically from a preset + user overrides). When efforts is nil,
-// CodexModelPresetRecommended is used. When carrilModels is nil, the canonical
-// Recommended carril models are used.
-//
-// The output is deterministic: phases are always rendered in codexPhaseOrder.
-func RenderCodexPhaseEffortsByPhase(phaseModels map[string]string, efforts map[string]CodexEffort, carrilModels map[string]string) string {
-	if len(efforts) == 0 {
-		efforts = CodexModelPresetRecommended()
-	}
-	if len(carrilModels) == 0 {
-		carrilModels = DefaultCarrilModels()
-	}
-
-	var sb strings.Builder
-	sb.WriteString("| Phase | Model | `reasoning_effort` |\n")
-	sb.WriteString("|-------|-------|--------------------|\n")
-
-	for _, phase := range codexPhaseOrder {
-		// Resolve model: custom per-phase override takes priority over carril default.
-		modelID := ""
-		if phaseModels != nil {
-			modelID = phaseModels[phase]
-		}
-		if modelID == "" {
-			modelID = phaseToCarrilModel(phase, carrilModels)
-		}
-
-		effort := efforts[phase]
-		if effort == "" {
-			effort = CodexEffortMedium // safe fallback
-		}
-
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` |\n", phase, modelID, effort))
 	}
 
 	return sb.String()

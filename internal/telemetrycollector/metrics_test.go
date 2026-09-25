@@ -2,8 +2,10 @@ package telemetrycollector
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
@@ -51,7 +53,6 @@ func TestRuntimeMetricsObserve_DeliveryAndRowCounters(t *testing.T) {
 		`gentle_runtime_rows_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high"} 1`,
 		`gentle_runtime_responses_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal"} 6`,
 		`gentle_runtime_responses_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high"} 4`,
-		`gentle_runtime_launches_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal"} 0`,
 		`gentle_runtime_launches_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high"} 3`,
 		`gentle_runtime_tokens_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",kind="input"} 999999999999`,
 		`gentle_runtime_tokens_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",kind="output"} 500`,
@@ -61,7 +62,6 @@ func TestRuntimeMetricsObserve_DeliveryAndRowCounters(t *testing.T) {
 		`gentle_runtime_errors_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",category="rate_limit"} 1`,
 		`gentle_runtime_duration_ms_sum{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",duration_kind="message"} 1.25`,
 		`gentle_runtime_duration_measured_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",duration_kind="message"} 2`,
-		`gentle_runtime_duration_measured_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",duration_kind="unavailable"} 0`,
 		`gentle_runtime_rows_by_evidence_total{host="pi",model_evidence="response",effective_effort="medium"} 1`,
 		`gentle_runtime_rows_by_evidence_total{host="pi",model_evidence="selected",effective_effort="high"} 1`,
 	} {
@@ -70,9 +70,164 @@ func TestRuntimeMetricsObserve_DeliveryAndRowCounters(t *testing.T) {
 		}
 	}
 
+	// Zero-valued observations must not create series.
+	for _, absent := range []string{
+		`gentle_runtime_launches_total{host="pi",agent_kind="built_in",agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal"}`,
+		`gentle_runtime_duration_measured_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",duration_kind="unavailable"}`,
+	} {
+		if strings.Contains(out, absent) {
+			t.Errorf("zero-valued series rendered %q:\n%s", absent, out)
+		}
+	}
+
 	// error_category "none" must never create a series (rowA).
 	if strings.Contains(out, `agent_class="sdd-apply",provider="openai",model="gpt-5.4",selected_effort="minimal",category=`) {
 		t.Errorf("row with error_category=none produced an errors series:\n%s", out)
+	}
+}
+
+func TestRuntimeMetricsAdd_ZeroDeltaDoesNotCreateOrRemoveSeries(t *testing.T) {
+	m := NewRuntimeMetrics()
+	label := runtimeLabel{"host", "pi"}
+	m.add("gentle_runtime_responses_total", 0, label)
+
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo after absent zero: %v", err)
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("absent zero-delta series rendered: %q", got)
+	}
+
+	m.add("gentle_runtime_responses_total", 3, label)
+	buf.Reset()
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo after increment: %v", err)
+	}
+	before := buf.String()
+	if !strings.Contains(before, `gentle_runtime_responses_total{host="pi"} 3`) {
+		t.Fatalf("non-zero delta was not rendered: %q", before)
+	}
+
+	m.add("gentle_runtime_responses_total", 0, label)
+	buf.Reset()
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo after existing zero: %v", err)
+	}
+	if got := buf.String(); got != before {
+		t.Errorf("existing series changed after zero delta:\nbefore: %q\nafter: %q", before, got)
+	}
+}
+
+func TestRuntimeMetricsWriteTo_IdleTTL(t *testing.T) {
+	const metric = "gentle_runtime_responses_total"
+	start := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	clock := start
+	m := NewRuntimeMetricsWithTTL(time.Hour)
+	m.now = func() time.Time { return clock }
+	stale := runtimeLabel{"host", "stale"}
+	active := runtimeLabel{"host", "active"}
+	m.add(metric, 3, stale)
+	m.add(metric, 5, active)
+
+	clock = clock.Add(30 * time.Minute)
+	m.add(metric, 2, active)
+	m.add(metric, 0, stale) // zero is not an update
+	clock = start.Add(time.Hour)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="stale"} 3`)
+
+	clock = start.Add(time.Hour + time.Nanosecond)
+	out := metricsOutput(t, m)
+	if !strings.Contains(out, `gentle_runtime_responses_total{host="stale"} 3`) {
+		t.Errorf("idle series not rendered on eviction scrape: %q", out)
+	}
+	if next := metricsOutput(t, m); strings.Contains(next, `host="stale"`) {
+		t.Errorf("idle series rendered after eviction: %q", next)
+	}
+	if !strings.Contains(out, `gentle_runtime_responses_total{host="active"} 7`) {
+		t.Errorf("recently updated series missing: %q", out)
+	}
+	if _, exists := m.data[metric][runtimeSeriesKey([]runtimeLabel{stale})]; exists {
+		t.Error("evicted series retained in registry")
+	}
+
+	clock = start.Add(2 * time.Hour)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="active"} 7`)
+	if out := metricsOutput(t, m); out != "" {
+		t.Errorf("empty family still rendered: %q", out)
+	}
+	if _, exists := m.data[metric]; exists {
+		t.Error("empty family retained in registry")
+	}
+	m.add(metric, 4, stale)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="stale"} 4`)
+}
+
+type failingMetricsWriter struct{}
+
+func (failingMetricsWriter) Write([]byte) (int, error) { return 0, errors.New("scrape write failed") }
+
+func TestRuntimeMetricsWriteTo_WriteErrorPreservesExpiredSeries(t *testing.T) {
+	const metric = "gentle_runtime_responses_total"
+	clock := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	m := NewRuntimeMetricsWithTTL(time.Hour)
+	m.now = func() time.Time { return clock }
+	m.add(metric, 3, runtimeLabel{"host", "pi"})
+	clock = clock.Add(2 * time.Hour)
+	if _, err := m.WriteTo(failingMetricsWriter{}); err == nil {
+		t.Fatal("expected write error")
+	}
+	if _, exists := m.data[metric]; !exists {
+		t.Fatal("failed scrape evicted series")
+	}
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="pi"} 3`)
+	if out := metricsOutput(t, m); out != "" {
+		t.Errorf("series survived successful eviction scrape: %q", out)
+	}
+}
+
+func TestRuntimeMetricsWriteTo_ZeroTTLNeverEvicts(t *testing.T) {
+	m := NewRuntimeMetricsWithTTL(0)
+	clock := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return clock }
+	m.add("gentle_runtime_responses_total", 3, runtimeLabel{"host", "pi"})
+	clock = clock.Add(365 * 24 * time.Hour)
+	assertMetricsContain(t, m, `gentle_runtime_responses_total{host="pi"} 3`)
+}
+
+func metricsOutput(t *testing.T, m *RuntimeMetrics) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	return buf.String()
+}
+
+func assertMetricsContain(t *testing.T, m *RuntimeMetrics, want string) {
+	t.Helper()
+	if got := metricsOutput(t, m); !strings.Contains(got, want) {
+		t.Errorf("output missing %q: %q", want, got)
+	}
+}
+
+func TestRuntimeMetricsObserve_ReportedOnlySkipsZeroCoverageStates(t *testing.T) {
+	m := NewRuntimeMetrics()
+	m.Observe(twoRowRuntimeFixture(t))
+
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	out := buf.String()
+	prefix := `gentle_runtime_token_fields_total{host="pi",agent_kind="orchestrator",agent_class="orchestrator",provider="anthropic",model="claude-hi",selected_effort="high",kind="input",state="`
+	if !strings.Contains(out, prefix+`reported"} 2`) {
+		t.Fatalf("reported token coverage missing:\n%s", out)
+	}
+	for _, state := range []string{"unavailable", "unsupported"} {
+		if strings.Contains(out, prefix+state+`"}`) {
+			t.Errorf("zero %s token coverage rendered:\n%s", state, out)
+		}
 	}
 }
 

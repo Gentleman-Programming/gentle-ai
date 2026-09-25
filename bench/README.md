@@ -64,18 +64,6 @@ subset. `run --axis damaged-store` adds an opt-in axis; `--axis all` adds every
 registered one. An unknown axis name is a hard error, never a quiet fall back to
 the core.
 
-Run the portable SDD authority controls against a selected public binary:
-
-```sh
-gentle-ai-bench run --binary /path/to/gentle-ai --only \
-  j52-sdd-stale-authority-does-not-shadow-approved-candidate,\
-  j53-sdd-ambiguous-authorities-fail-closed,\
-  j54-sdd-missing-authority-receipt-fails-closed,\
-  j55-sdd-mismatched-authority-receipt-fails-closed,\
-  j56-sdd-non-allow-post-apply-gate-fails-closed,\
-  j58-sdd-foreign-openspec-path-fails-closed
-```
-
 **`run` fails closed on failed journeys.** A journey that reports `failed`
 produced no numbers — the harness could not build or prove its fixture, or an
 assertion fired — and community issue #1883 found that such a run still exited
@@ -319,9 +307,9 @@ invents a metric is worse than one that admits a gap.
 
 7. **The corpus is honest, not exhaustive.** Mandatory portable black-box
    journeys run end to end, weighted toward failure paths because that is where
-   friction lives. Testing-guide flows 1 (install) and 8 (no phantom SDD
-   artifacts) are inspection steps rather than review-lifecycle friction and are
-   not modelled.
+   friction lives. Most installation inspection and artifact cleanup are not
+   review-lifecycle friction; the OpenCode install/sync journeys pin only
+   specific user-visible boundaries.
 
 8. **Some edge cases are unreachable from a temp directory and are guide flows
    instead.** A network mount where advisory locks fail in ways that are
@@ -477,9 +465,19 @@ Lifecycle journeys still explicitly enable it rather than depending on that defa
 - `reviewUntouched` — the runner runs no mode command at all. This is for a
   journey whose subject IS the switch (`j03-kill-switch` drives it itself,
   `j31-nonsense-mode-value` authors the record under test) and for one that has
-  nothing to do with reviews (`j2138`, `j3043`, `j97` install agents).
+  nothing to do with reviews (`j2138`, `j3043`, `j3500` install or sync OpenCode).
   Untouched means ON/default on a fresh install; journeys requiring OFF must
   explicitly disable it.
+
+OpenCode-specific core journeys: `j3336` is retired because its SDD session
+preflight no longer exists. `j3500` uses `sync --agent opencode` twice and
+checks contiguous external prompt bytes, unchanged unrelated configuration,
+and second-sync convergence. `j3043` uses persona-only install and checks the
+owned background launcher, restart signal, and explicit environment off.
+`j2138` checks the currently installed hidden review-refuter and
+review-validator permissions, replacing the obsolete SDD general/explore
+fallback claim. `go test ./...` validates these declarations, not driven
+execution against a product binary.
 
 The declaration is mandatory because the alternative already cost us once: the
 corpus measured the review lifecycle only because the product's default happened
@@ -509,8 +507,9 @@ under ordinary repository policy.
 Journeys 1 to 14 came from the community testing guide and the failure paths it
 collected. Journeys 15 to 36 are the edge cases those flows never reached. Each
 one is tied to one of the five shapes a night of real defects clustered into,
-and the shape is named in the journey's `Source`. Journeys 37 to 43 in
-`journeys_sdd.go` reuse the same vocabulary:
+and the shape is named in the journey's `Source`. Retired SDD/OpenSpec
+journeys no longer run in the portable core; independent review authority
+coverage remains in j59, j60, and j111.
 
 | shape | what it is |
 |---|---|
@@ -548,31 +547,10 @@ number look covered.
 | `j35-correction-budget-exactly-zero` | forecasting a correction against a budget of 0 | 3 + 4 |
 | `j36-contract-right-name-wrong-version` | `--contract` with the right name and a version this build lacks | 2 + 4 |
 
-### SDD lifecycle journeys (`journeys_sdd.go`)
+### Review recovery guard rails (`journeys_review_recovery.go`)
 
-The active SDD-focused corpus is non-exhaustive; it includes these lifecycle
-and compatibility journeys:
-
-| ID | Flow | Source |
-|---|---|---|
-| `j41-kill-switch-versus-sdd-pre-verify` | pre-verify: RDD supervises nothing, on or off, before verify runs | shape 5 (the kill switch and the pre-verify router) + Wave 4's removal of pre-verify review supervision |
-| `j42-kill-switch-versus-sdd-archive` | SDD archive never offers review, whether RDD is on or off | #4612: SDD has no review offer or review authority dependency |
-| `j63-disabled-failed-verification-unmanaged-remediation` | failed verification requires remediation without runtime attempts; re-enabling RDD adds no review offer | #4612: retain verification truth without attempt governance or review offers |
-| `j44-sdd-historical-requirement-stale-pass` | historical change-local requirement heading: stale PASS restarts verification instead of failed remediation | issue #2137 (historical OpenSpec requirement compatibility and stale verification routing) |
-
-Two of them measure something no test could: `j41` and `j42` each take one item
-off the documented known-open list and let the number say whether it is still
-open. Both came back **closed**, and both are therefore journeys with **no
-blocks at all** — the pin is an assertion on the envelope rather than a block
-count, so a regression fails the journey loudly instead of passing quietly.
-
-`j41` is the clearest example of the corpus working as intended: it was written
-to measure a believed-open dead end where the SDD pre-verify router demanded a
-review the kill switch forbade, and it FAILED its own assertions on the run that
-found the behavior fixed. The failure was the finding. It now pins the absence
-of pre-verify review supervision: with the switch on, off, and re-enabled,
-routing remains `verify` with a ready verification dependency and no blocked
-reasons, because either half alone would pass while the other regressed.
+The independent j43 operator sequence remains defined here; the atomic-review
+migration currently filters it from the runnable corpus in favor of j60.
 
 **Every fixture proves its own edge case before the journey trusts the result.**
 A fixture that sets its edge case up wrongly and then passes is the failure mode
@@ -627,22 +605,6 @@ worktree and requires the identical selector-free gate to allow the identical
 span. Comparing the span, not just the verdict, is what makes it a regression:
 a graph that admitted the no-op self-loop denied composition for every
 unrelated lineage in the repository.
-
-### SDD authority discovery controls (`journeys_sdd.go`)
-
-Portable journeys 52 to 56 and 58 prove SDD chooses the sole exact approved
-authority over stale history and fails closed for every public authority shape.
-Each uses the public binary through the normal benchmark sandbox, not a
-source-level proxy.
-
-| ID | Flow | Source |
-|---|---|---|
-| `j52-sdd-stale-authority-does-not-shadow-approved-candidate` | newer approved same-path authority wins over stale history | issue #1893 |
-| `j53-sdd-ambiguous-authorities-fail-closed` | multiple eligible authorities block selection | compact authority discovery contract |
-| `j54-sdd-missing-authority-receipt-fails-closed` | a missing published receipt is not approval | compact authority discovery contract |
-| `j55-sdd-mismatched-authority-receipt-fails-closed` | receipt bytes must match approved authority state | compact authority discovery contract |
-| `j56-sdd-non-allow-post-apply-gate-fails-closed` | changed bytes cannot inherit an otherwise valid authority | compact authority discovery contract |
-| `j58-sdd-foreign-openspec-path-fails-closed` | mixed OpenSpec paths cannot govern the selected change | compact authority discovery contract |
 
 ## Opt-in axes
 
@@ -843,9 +805,7 @@ metrics.go     Dimension, BlockCounts, accumulator, aggregate
 runner.go      Sandbox, capability probe, journey engine
 journeys.go    the corpus, as data — guide flows and their failure paths
 journeys_edge.go  the edge-case part of the corpus, with self-proving fixtures
-journeys_sdd.go   SDD status and edit-authority flows, the kill switch against SDD, and
-                  the recovery guard rails
-journeys_wave1.go  integrated community fixes exercised at their CLI boundary
+journeys_wave1.go  integrated review community fixes exercised at their CLI boundary
 axis.go        the opt-in axis seam: registry, --axis selection, provenance
 axis_damaged_store.go  ONE axis, deletable: journeys starting from a store
                   damaged on disk. Not black-box; declares so itself.

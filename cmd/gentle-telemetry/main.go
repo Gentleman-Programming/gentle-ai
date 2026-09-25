@@ -31,6 +31,7 @@ const (
 	// moments of the original (clients never retry), so two days of
 	// identities is generous; ninety would be a hundred million rows.
 	defaultRuntimeDedupDays       = 2
+	defaultRuntimeMetricsTTL      = 24 * time.Hour
 	defaultRateLimitPerMin        = 60
 	defaultRuntimeRateLimitPerMin = 600
 	// maintenanceUTCOffset anchors the daily rollup to shortly after UTC
@@ -74,6 +75,13 @@ func validateRuntimeStoreMode(value string) (string, error) {
 	}
 }
 
+func validateRuntimeMetricsTTL(ttl time.Duration) error {
+	if ttl < 0 {
+		return fmt.Errorf("must be non-negative, got %s", ttl)
+	}
+	return nil
+}
+
 func parseCIDRs(values []string) ([]*net.IPNet, error) {
 	nets := make([]*net.IPNet, 0, len(values))
 	for _, v := range values {
@@ -99,6 +107,7 @@ func run() error {
 	summaryTokenFile := flag.String("summary-token-file", "", "path to a file containing the bearer token required for GET /v1/summary")
 	retentionDays := flag.Int("retention-days", defaultRetentionDays, "days of raw events to retain before purge")
 	runtimeDedupDays := flag.Int("runtime-dedup-days", defaultRuntimeDedupDays, "days to remember runtime delivery ids for replay rejection under --runtime-store=metrics (never longer than --retention-days)")
+	runtimeMetricsTTL := flag.Duration("runtime-metrics-ttl", defaultRuntimeMetricsTTL, "idle lifetime of runtime counter series before eviction on GET /metrics (0 disables; keep far above the scrape interval)")
 	rateLimitPerMinute := flag.Int("rate-limit-per-minute", defaultRateLimitPerMin, "per-IP request budget for POST /v1/events, per minute")
 	runtimeRateLimitPerMinute := flag.Int("runtime-rate-limit-per-minute", defaultRuntimeRateLimitPerMin, "per-address request budget for POST /v1/runtime-events, per minute")
 	var trustedProxyCIDRs repeatableFlag
@@ -117,6 +126,9 @@ func run() error {
 	}
 	if *runtimeDedupDays < 1 { // RunMaintenance refuses it too; fail at startup instead
 		return fmt.Errorf("parse --runtime-dedup-days: must be at least 1, got %d", *runtimeDedupDays)
+	}
+	if err := validateRuntimeMetricsTTL(*runtimeMetricsTTL); err != nil {
+		return fmt.Errorf("parse --runtime-metrics-ttl: %w", err)
 	}
 
 	if len(trustedProxyCIDRs) == 0 {
@@ -179,7 +191,7 @@ func run() error {
 	// stays exactly as before, with no registry allocated at all.
 	var runtimeMetrics *telemetrycollector.RuntimeMetrics
 	if runtimeStoreMode != telemetrycollector.RuntimeStoreSQLite {
-		runtimeMetrics = telemetrycollector.NewRuntimeMetrics()
+		runtimeMetrics = telemetrycollector.NewRuntimeMetricsWithTTL(*runtimeMetricsTTL)
 	}
 
 	server := &telemetrycollector.Server{

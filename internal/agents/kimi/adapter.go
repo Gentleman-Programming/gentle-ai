@@ -205,7 +205,6 @@ func (a *Adapter) SupportsMCP() bool {
 // --- Sub-agent support (optional interface) ---
 //
 // Kimi uses YAML-based agent specs with separate .md system prompts.
-// The SDD component copies all files from the embedded agents directory.
 
 func (a *Adapter) SupportsSubAgents() bool {
 	return a.CapabilityManifest().Features.FileSubAgents
@@ -228,18 +227,7 @@ func (a *Adapter) PostInstallMessage(homeDir string) string {
 Usage:
   kimi --agent-file "%s"
 
-Native SDD entrypoints:
-  /skill:sdd-init
-  /skill:sdd-explore
-  /skill:sdd-research
-  /skill:sdd-propose
-  /skill:sdd-spec
-  /skill:sdd-design
-  /skill:sdd-tasks
-  /skill:sdd-apply
-  /skill:sdd-verify
-  /skill:sdd-archive
-  /skill:sdd-onboard
+Launch the gentleman agent for ODD guidance. Kimi also supports YAML agents in ~/.kimi/agents.
 
 Skills root:
   "%s"`, gentlemanYaml, skillsRoot)
@@ -273,8 +261,8 @@ func binaryName() string {
 }
 
 // BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
-// It is used by the installation pipeline to guarantee that modular components
-// (SDD, Engram) can be included even if the Persona component is not installed.
+// It is used by the installation pipeline to provide the managed Kimi prompt
+// even when optional components are not installed.
 func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	kimiDir := a.GlobalConfigDir(homeDir)
 	if err := os.MkdirAll(kimiDir, 0o755); err != nil {

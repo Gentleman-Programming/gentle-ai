@@ -7,10 +7,58 @@ import (
 	"testing"
 )
 
+func TestAdjacentOpenCodeJourneysUseRetainedCLI(t *testing.T) {
+	for _, journey := range Journeys() {
+		if !strings.HasPrefix(journey.ID, "j2138-") && !strings.HasPrefix(journey.ID, "j3043-") && !strings.HasPrefix(journey.ID, "j3500-") && !strings.HasPrefix(journey.ID, "j3336-") {
+			continue
+		}
+		for _, step := range journey.Steps {
+			if step.Requires != nil {
+				for _, flag := range step.Requires.Flags {
+					if flag == "--agents" || strings.HasPrefix(flag, "--sdd-") {
+						t.Errorf("%s requires retired flag %s", journey.ID, flag)
+					}
+				}
+			}
+			if step.Args != nil {
+				args, err := step.Args(nil)
+				if err != nil {
+					t.Fatalf("%s args: %v", journey.ID, err)
+				}
+				for _, arg := range args {
+					if arg == "sdd" || arg == "--agents" || strings.HasPrefix(arg, "--sdd-") {
+						t.Errorf("%s invokes retired component or flag %s", journey.ID, arg)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestCorpusJourneysDeclareReviewMode(t *testing.T) {
 	for _, journey := range allDeclaredJourneys() {
 		if journey.Review != reviewOptedIn && journey.Review != reviewUntouched {
 			t.Errorf("journey %q declares review mode %q; every runnable journey must explicitly opt in or remain untouched", journey.ID, journey.Review)
+		}
+	}
+}
+
+func TestRetiredSDDReplacementsRemainActive(t *testing.T) {
+	active := make(map[string]bool)
+	for _, journey := range allDeclaredJourneys() {
+		active[journey.ID] = true
+	}
+	for _, id := range []string{
+		"j47-disabled-mode-archives-discovered-scope-changed-authority",
+		"j49-status-without-cwd-honors-kill-switch",
+		"j96-sdd-same-parent-repository-edit-authority",
+		"j98-sdd-flat-root-spec-is-discovered",
+		"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding",
+		"j128-historical-verification-does-not-block-apply",
+	} {
+		replacement, ok := retiredAtomicJourneyReplacements[id]
+		if !ok || !active[replacement] || active[id] {
+			t.Errorf("retired %q: replacement %q, mapped=%t active=%t retired active=%t", id, replacement, ok, active[replacement], active[id])
 		}
 	}
 }
@@ -37,9 +85,9 @@ func TestCorpusDoesNotReintroduceRetiredReceiptAndGatePins(t *testing.T) {
 		"staged delivery candidate can validate",
 	}
 	for _, journey := range allDeclaredJourneys() {
-		if journey.ID == "j44-sdd-historical-requirement-stale-pass" || journey.ID == "j85-review-parse-refusals-are-preflight" {
+		if journey.ID == "j85-review-parse-refusals-are-preflight" {
 			// TestHistoricalCompatibilityJourneysAreNarrowlyNamed constrains the
-			// only retained historical parser/refusal compatibility fixtures.
+			// retained historical parser/refusal compatibility fixture.
 			continue
 		}
 		declaration := strings.ToLower(journey.Title)
@@ -96,7 +144,7 @@ func TestRetiredLifecycleImplementationsArePhysicallyRemoved(t *testing.T) {
 
 func TestHistoricalCompatibilityJourneysAreNarrowlyNamed(t *testing.T) {
 	for _, journey := range allDeclaredJourneys() {
-		if journey.ID != "j44-sdd-historical-requirement-stale-pass" && journey.ID != "j85-review-parse-refusals-are-preflight" {
+		if journey.ID != "j85-review-parse-refusals-are-preflight" {
 			continue
 		}
 		declaration := strings.ToLower(journey.ID + " " + journey.Title + " " + journey.Source)

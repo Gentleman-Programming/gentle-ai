@@ -396,7 +396,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			continue
 		}
 		state := candidate.compact.State
-		if request.LineageID == "" && (compactRejectedTargetedValidatorTerminalForChangedTarget(state, live) ||
+		if request.LineageID == "" && (compactRejectedTargetedValidatorTerminalForChangedTarget(state, live) && !compactEscalatedOriginalTargetMatches(state, live) ||
 			compactHistoricalFailedValidator(state) && compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)) {
 			continue
 		}
@@ -443,6 +443,14 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			}
 		}
 		if state.State == StateEscalated {
+			// The frozen original target still owns its terminal lineage even
+			// after a correction changed CurrentSnapshot. A failed validation
+			// must not become a fresh START (or a changed-target recovery) just
+			// because the operator restored those original bytes.
+			if compactEscalatedOriginalTargetMatches(state, live) && !compactAccountingOnlyEscalation(state) {
+				candidates = append(candidates, candidate)
+				continue
+			}
 			if compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live) {
 				candidate.correctionRecovery = true
 				candidate.recoveryDisposition = RecoveryEscalated
@@ -585,6 +593,19 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return base, nil
 	}
+}
+
+// compactEscalatedOriginalTargetMatches binds the original delivery scope,
+// including intended-untracked proof, rather than comparing identity domains
+// that may differ between current-changes and base-diff selectors.
+func compactEscalatedOriginalTargetMatches(state CompactState, live Snapshot) bool {
+	if state.State != StateEscalated {
+		return false
+	}
+	requested := state
+	requested.InitialSnapshot = live
+	return compactStartDeliveryScopeMatches(state, requested) &&
+		state.InitialSnapshot.CandidateTree == live.CandidateTree
 }
 
 // compactRejectedTargetedValidatorTerminalForChangedTarget recognizes only a

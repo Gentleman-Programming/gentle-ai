@@ -23,9 +23,7 @@ type WelcomeAdvisory struct {
 }
 
 // WelcomeOptions returns the welcome menu options.
-// When showProfiles is true, an "OpenCode SDD Profiles" option is inserted
-// between "Configure models" and "Manage backups".
-// profileCount is used to show a badge with the current profile count.
+// Legacy profile discovery does not add a menu action; existing files are preserved.
 // When hasEngines is false, "Create your own Agent" is shown as disabled
 // (labelled "(no agents)") to signal that no supported AI engine is installed.
 func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
@@ -55,14 +53,6 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	// OpenCode community plugins. Sits next to the install shortcut above
 	// so the menu pairs install + uninstall as mirror operations.
 	opts = append(opts, "Uninstall OpenCode Plugin")
-
-	if showProfiles {
-		profilesLabel := "OpenCode SDD Profiles"
-		if profileCount > 0 {
-			profilesLabel = fmt.Sprintf("OpenCode SDD Profiles (%d)", profileCount)
-		}
-		opts = append(opts, profilesLabel)
-	}
 
 	opts = append(opts, "Manage backups")
 	opts = append(opts, "Reset review store")

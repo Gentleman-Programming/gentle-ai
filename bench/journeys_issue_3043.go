@@ -27,7 +27,7 @@ func issue3043OpenCodeRuntime(sandbox *Sandbox) error {
 }
 
 func issue3043InstallArgs(sandbox *Sandbox) ([]string, error) {
-	return []string{"install", "--agent", "opencode", "--component", "sdd", "--opencode-background-subagents=on"}, nil
+	return []string{"install", "--agent", "opencode", "--component", "persona", "--opencode-background-subagents=on"}, nil
 }
 
 func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {

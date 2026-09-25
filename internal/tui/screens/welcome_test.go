@@ -24,48 +24,17 @@ func TestWelcomeOptions_WithoutProfiles(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_WithProfiles_ZeroCount shows "OpenCode SDD Profiles" without a badge.
-func TestWelcomeOptions_WithProfiles_ZeroCount(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, true, 0, true)
-	found := false
-	for _, opt := range opts {
-		if opt == "OpenCode SDD Profiles" {
-			found = true
+func TestWelcomeOptions_LegacyProfilesDoNotAddMenuEntry(t *testing.T) {
+	for _, count := range []int{0, 1, 2} {
+		opts := screens.WelcomeOptions(nil, true, true, count, true)
+		if len(opts) != 14 || !containsOption(opts, "Configure models") {
+			t.Fatalf("legacy count %d: unexpected menu: %v", count, opts)
 		}
-		if strings.HasPrefix(opt, "OpenCode SDD Profiles (") {
-			t.Errorf("expected no badge for 0 profiles, got: %q", opt)
+		for _, opt := range opts {
+			if strings.Contains(opt, "SDD Profiles") {
+				t.Fatalf("legacy count %d: profile entry remains: %v", count, opts)
+			}
 		}
-	}
-	if !found {
-		t.Errorf("expected 'OpenCode SDD Profiles' option when showProfiles=true, profileCount=0; got: %v", opts)
-	}
-}
-
-// TestWelcomeOptions_WithProfiles_CountTwo shows "OpenCode SDD Profiles (2)".
-func TestWelcomeOptions_WithProfiles_CountTwo(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, true, 2, true)
-	found := false
-	for _, opt := range opts {
-		if opt == "OpenCode SDD Profiles (2)" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected 'OpenCode SDD Profiles (2)' in options; got: %v", opts)
-	}
-}
-
-// TestWelcomeOptions_WithProfiles_CountOne shows "OpenCode SDD Profiles (1)".
-func TestWelcomeOptions_WithProfiles_CountOne(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, true, 1, true)
-	found := false
-	for _, opt := range opts {
-		if opt == "OpenCode SDD Profiles (1)" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected 'OpenCode SDD Profiles (1)' in options; got: %v", opts)
 	}
 }
 
@@ -80,12 +49,11 @@ func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithProfiles verifies 15 options when showProfiles=true
-// and hasEngines=true.
+// Legacy profiles must not alter the welcome option count.
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 2, true)
 	// Includes the Receipt-Driven Development entry.
-	want := 15
+	want := 14
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=true, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
@@ -106,17 +74,13 @@ func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_ProfilesInsertedBeforeManageBackups verifies the ordering:
-// profiles option sits between "OpenCode Community Plugins" / "Uninstall OpenCode
-// Plugin" and "Manage backups". Slice 3b inserts the uninstall shortcut between
-// the plugins entry and the profiles entry.
+// TestWelcomeOptions_ProfilesInsertedBeforeManageBackups verifies the retained shortcuts stay adjacent.
 func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 1, true)
 
 	agentIdx := -1
 	pluginsIdx := -1
 	uninstallIdx := -1
-	profilesIdx := -1
 	manageBackupsIdx := -1
 	for i, opt := range opts {
 		if strings.HasPrefix(opt, "Create your own Agent") {
@@ -127,9 +91,6 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 		}
 		if opt == "Uninstall OpenCode Plugin" {
 			uninstallIdx = i
-		}
-		if strings.HasPrefix(opt, "OpenCode SDD Profiles") {
-			profilesIdx = i
 		}
 		if opt == "Manage backups" {
 			manageBackupsIdx = i
@@ -145,9 +106,6 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	if uninstallIdx < 0 {
 		t.Fatal("option 'Uninstall OpenCode Plugin' not found")
 	}
-	if profilesIdx < 0 {
-		t.Fatal("option 'OpenCode SDD Profiles' not found")
-	}
 	if manageBackupsIdx < 0 {
 		t.Fatal("option 'Manage backups' not found")
 	}
@@ -160,13 +118,9 @@ func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 		t.Errorf("'Uninstall OpenCode Plugin' at index %d, expected %d (right after plugins at %d)",
 			uninstallIdx, pluginsIdx+1, pluginsIdx)
 	}
-	if profilesIdx != uninstallIdx+1 {
-		t.Errorf("profiles option at index %d, expected %d (right after uninstall at %d)",
-			profilesIdx, uninstallIdx+1, uninstallIdx)
-	}
-	if manageBackupsIdx != profilesIdx+1 {
-		t.Errorf("'Manage backups' at index %d, expected %d (right after profiles at %d)",
-			manageBackupsIdx, profilesIdx+1, profilesIdx)
+	if manageBackupsIdx != uninstallIdx+1 {
+		t.Errorf("'Manage backups' at index %d, expected %d (right after uninstall at %d)",
+			manageBackupsIdx, uninstallIdx+1, uninstallIdx)
 	}
 }
 
@@ -209,29 +163,29 @@ func TestRenderWelcome_WithoutProfiles(t *testing.T) {
 	}
 }
 
-// TestRenderWelcome_WithProfiles_ZeroCount contains "OpenCode SDD Profiles" but no badge.
+// Legacy profile discovery must not show a profile menu entry.
 func TestRenderWelcome_WithProfiles_ZeroCount(t *testing.T) {
 	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 0, true)
-	if !strings.Contains(output, "OpenCode SDD Profiles") {
-		t.Errorf("RenderWelcome(showProfiles=true, count=0) missing 'OpenCode SDD Profiles'")
+	if strings.Contains(output, "OpenCode SDD Profiles") || !strings.Contains(output, "Configure models") {
+		t.Errorf("unexpected legacy profile menu or missing model configuration")
 	}
 	if strings.Contains(output, "OpenCode SDD Profiles (") {
 		t.Errorf("RenderWelcome(showProfiles=true, count=0) should NOT have badge")
 	}
 }
 
-// TestRenderWelcome_WithProfiles_CountTwo contains "OpenCode SDD Profiles (2)".
+// Discovered legacy profiles do not produce a count badge.
 func TestRenderWelcome_WithProfiles_CountTwo(t *testing.T) {
 	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 2, true)
-	if !strings.Contains(output, "OpenCode SDD Profiles (2)") {
-		t.Errorf("RenderWelcome(showProfiles=true, count=2) missing 'OpenCode SDD Profiles (2)'")
+	if strings.Contains(output, "OpenCode SDD Profiles") {
+		t.Errorf("legacy profile menu remains")
 	}
 }
 
-// TestRenderWelcome_WithProfiles_CountOne contains "OpenCode SDD Profiles (1)".
+// A single legacy profile does not produce a badge.
 func TestRenderWelcome_WithProfiles_CountOne(t *testing.T) {
 	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 1, true)
-	if !strings.Contains(output, "OpenCode SDD Profiles (1)") {
-		t.Errorf("RenderWelcome(showProfiles=true, count=1) missing 'OpenCode SDD Profiles (1)'")
+	if strings.Contains(output, "OpenCode SDD Profiles") {
+		t.Errorf("legacy profile menu remains")
 	}
 }

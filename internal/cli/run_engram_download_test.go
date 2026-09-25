@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -688,96 +687,57 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 // Make sure the engram package's DownloadLatestBinary is accessible.
 var _ = engram.DownloadLatestBinary
 
-// TestRunInstallSDDCompletesWhenAutoAddedEngramCannotBeInstalled pins #3725:
-// engram is auto-added by sdd, and when its release cannot be fetched the
-// whole pipeline exited 1 with nothing installed. The requested component must
-// land and the missing dependency must be reported as a warning naming its own
-// install command.
-func TestRunInstallSDDCompletesWhenAutoAddedEngramCannotBeInstalled(t *testing.T) {
+// Engram is user-owned: installing ordinary guidance does not attempt an implicit download.
+// The old SDD auto-added-dependency warning was retired with SDD selection.
+func TestRunInstallClaudeGuidanceDoesNotAutoInstallEngram(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PATH", t.TempDir())
-	restoreHome := osUserHomeDir
-	restoreCommand := runCommand
-	restoreLookPath := cmdLookPath
-	restoreDownload := engramDownloadFn
+	restoreHome, restoreCommand, restoreLookPath, restoreDownload := osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn
 	t.Cleanup(func() {
-		osUserHomeDir = restoreHome
-		runCommand = restoreCommand
-		cmdLookPath = restoreLookPath
-		engramDownloadFn = restoreDownload
+		osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn = restoreHome, restoreCommand, restoreLookPath, restoreDownload
 	})
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = missingBinaryLookPath
 	engramDownloadFn = func(system.PlatformProfile) (string, error) {
-		return "", errors.New("GitHub API returned HTTP 403")
+		t.Fatal("ordinary guidance must not download Engram")
+		return "", nil
 	}
-
-	result, err := RunInstall([]string{"--agent", "claude-code", "--components", "sdd"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
-	if err != nil {
-		t.Fatalf("RunInstall() error = %v; an auto-added dependency must not abort the requested components", err)
+	result, err := RunInstall([]string{"--agent", "claude-code", "--components", "persona"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
+	if err != nil || !result.Verify.Ready {
+		t.Fatalf("install: %v, report: %#v", err, result.Verify)
 	}
-	if !result.Verify.Ready {
-		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	path := filepath.Join(home, ".claude", "CLAUDE.md")
+	if !verifyReportRequiresFile(result.Verify, path) {
+		t.Fatalf("guidance not verified at %q: %#v", path, result.Verify)
 	}
-	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
-	if _, err := os.Stat(claudeMD); err != nil {
-		t.Fatalf("requested sdd component did not land: %v", err)
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("implicit Engram MCP config: %v", err)
 	}
-	if !verifyReportRequiresFile(result.Verify, claudeMD) {
-		t.Fatalf("SDD writes %s, so verification must still require it; report = %#v", claudeMD, result.Verify)
-	}
-	if raw, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil && strings.Contains(string(raw), "\"engram\"") {
-		t.Fatalf("engram MCP configuration was written for a binary that does not exist:\n%s", raw)
-	}
-	const wantCommand = "gentle-ai install --agent claude-code --components engram"
-	for _, check := range result.Verify.Checks {
-		if check.Status == verify.CheckStatusWarning && strings.Contains(check.Error, wantCommand) {
-			return
-		}
-	}
-	t.Fatalf("no warning names %q; report = %#v", wantCommand, result.Verify)
 }
 
-// TestRunInstallOpenCodeMultiSDDCompletesWhenAutoAddedEngramCannotBeInstalled
-// pins issue #3975: in multi mode the SDD injector writes nothing into the
-// OpenCode AGENTS.md (the phases live in opencode.json and prompts/sdd/*), so
-// SDD must not demand that file. Before the fix the file existed only because
-// the auto-added engram step created it, and a skipped engram failed the
-// install on `verify:file:.../.config/opencode/AGENTS.md`.
-func TestRunInstallOpenCodeMultiSDDCompletesWhenAutoAddedEngramCannotBeInstalled(t *testing.T) {
+func TestRunInstallOpenCodeGuidanceDoesNotAutoInstallEngram(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PATH", t.TempDir())
-	restoreHome := osUserHomeDir
-	restoreCommand := runCommand
-	restoreLookPath := cmdLookPath
-	restoreDownload := engramDownloadFn
+	restoreHome, restoreCommand, restoreLookPath, restoreDownload := osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn
 	t.Cleanup(func() {
-		osUserHomeDir = restoreHome
-		runCommand = restoreCommand
-		cmdLookPath = restoreLookPath
-		engramDownloadFn = restoreDownload
+		osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn = restoreHome, restoreCommand, restoreLookPath, restoreDownload
 	})
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = missingBinaryLookPath
 	engramDownloadFn = func(system.PlatformProfile) (string, error) {
-		return "", errors.New("GitHub API returned HTTP 403")
+		t.Fatal("OpenCode guidance must not download Engram")
+		return "", nil
 	}
-
-	result, err := RunInstall([]string{"--agent", "opencode", "--components", "sdd", "--sdd-mode", "multi"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
-	if err != nil {
-		t.Fatalf("RunInstall() error = %v; an auto-added dependency must not abort the requested components", err)
+	result, err := RunInstall([]string{"--agent", "opencode", "--components", "persona"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
+	if err != nil || !result.Verify.Ready {
+		t.Fatalf("install: %v, report: %#v", err, result.Verify)
 	}
-	if !result.Verify.Ready {
-		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("OpenCode guidance missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); err != nil {
-		t.Fatalf("requested sdd component did not land: %v", err)
-	}
-	agentsMD := filepath.Join(home, ".config", "opencode", "AGENTS.md")
-	if verifyReportRequiresFile(result.Verify, agentsMD) {
-		t.Fatalf("SDD never writes %s for OpenCode, so verification must not require it; report = %#v", agentsMD, result.Verify)
+	if !verifyReportRequiresFile(result.Verify, path) {
+		t.Fatalf("guidance not verified at %q: %#v", path, result.Verify)
 	}
 }
 

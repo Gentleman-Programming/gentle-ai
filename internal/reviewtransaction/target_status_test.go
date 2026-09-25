@@ -240,6 +240,15 @@ func TestFailedCriteriaEscalationStatusStillStopsWithUnchangedTarget(t *testing.
 	if err != nil || status.Action != TargetStatusActionStop || status.ActionDisposition != "" || status.Revision != record.Revision {
 		t.Fatalf("failed-criteria escalation status with an unchanged target = %#v, err=%v, want a terminal stop", status, err)
 	}
+	// Restoring the frozen original after failed correction validation must not
+	// turn the occupied lineage into either a fresh START or a recovery.
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
+	original, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil || original.Applicability != TargetApplicabilityCurrent || original.LineageID != state.LineageID ||
+		original.Action != TargetStatusActionStop || original.Decision.SemanticTransition != TargetStatusActionStop ||
+		original.TargetIdentity != state.InitialSnapshot.Identity {
+		t.Fatalf("restored original escalation status = %#v, err=%v, want bound terminal stop", original, err)
+	}
 }
 
 // TestAccountingOnlyEscalationRecoveryStillRequiresMaintainerAuthorization

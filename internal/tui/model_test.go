@@ -34,6 +34,21 @@ import (
 	"github.com/muesli/termenv"
 )
 
+func TestSyncDetailedPreservedActionsReachCompletion(t *testing.T) {
+	path := "/home/example/.cursor/agents/review-risk.md"
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSync
+	m.SyncDetailedFn = func(*model.SyncOverrides) ([]string, []string, error) {
+		return nil, []string{"Native review agent " + path + " was preserved, not updated; compare and merge manually."}, nil
+	}
+	msg := m.startSync(nil)().(SyncDoneMsg)
+	updated, _ := m.Update(msg)
+	got := updated.(Model)
+	if len(got.SyncFiles) != 0 || len(got.SyncManualActions) != 1 || !strings.Contains(got.View(), path) {
+		t.Fatalf("sync completion files=%v actions=%v view=%s", got.SyncFiles, got.SyncManualActions, got.View())
+	}
+}
+
 func TestNavigationWelcomeToDetection(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 
@@ -410,178 +425,6 @@ func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *test
 	}
 }
 
-func TestProfileCreateContinueSanitizesStaleEffort(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenProfileCreate
-	m.ProfileCreateStep = 1
-	m.ProfileDraft = model.Profile{Name: "work"}
-	m.Cursor = len(screens.ModelPickerRowsForProfile())
-	m.ModelPicker = screens.ModelPickerState{
-		AvailableIDs: []string{"anthropic"},
-		SDDModels: map[string][]opencode.Model{
-			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
-		},
-	}
-	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
-		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "" {
-		t.Fatalf("orchestrator Effort = %q, want empty for stale known effort", got)
-	}
-	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "" {
-		t.Fatalf("sdd-apply Effort = %q, want empty for stale known effort", got)
-	}
-}
-
-func TestProfileEditContinueSanitizesStaleEffort(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenProfileCreate
-	m.ProfileCreateStep = 1
-	m.ProfileEditMode = true
-	m.ProfileDraft = model.Profile{Name: "work"}
-	m.Cursor = len(screens.ModelPickerRowsForProfile())
-	m.ModelPicker = screens.ModelPickerState{
-		AvailableIDs: []string{"anthropic"},
-		SDDModels: map[string][]opencode.Model{
-			"anthropic": {{ID: "claude-sonnet-4", Variants: []string{"low", "medium"}}},
-		},
-	}
-	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
-		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "" {
-		t.Fatalf("orchestrator Effort = %q, want empty for stale known effort", got)
-	}
-	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "" {
-		t.Fatalf("sdd-apply Effort = %q, want empty for stale known effort", got)
-	}
-}
-
-func TestProfileCreateContinuePreservesEffortWhenVariantDataUnknown(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenProfileCreate
-	m.ProfileCreateStep = 1
-	m.ProfileDraft = model.Profile{Name: "work"}
-	m.Cursor = len(screens.ModelPickerRowsForProfile())
-	m.ModelPicker = screens.ModelPickerState{AvailableIDs: []string{"anthropic"}, SDDModels: map[string][]opencode.Model{}}
-	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		screens.SDDOrchestratorPhase: {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
-		"sdd-apply":                  {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"},
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if got := state.ProfileDraft.OrchestratorModel.Effort; got != "high" {
-		t.Fatalf("orchestrator Effort = %q, want high when variant data is unknown", got)
-	}
-	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"].Effort; got != "high" {
-		t.Fatalf("sdd-apply Effort = %q, want high when variant data is unknown", got)
-	}
-}
-
-func profileModelStep(available bool) Model {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenProfileCreate
-	m.ProfileCreateStep = 1
-	m.ModelPicker = screens.ModelPickerState{Mode: screens.ModePhaseList, ForProfile: true}
-	if available {
-		m.ModelPicker.AvailableIDs = []string{"openai"}
-	}
-	return m
-}
-
-func TestProfileCreateEmptyProviderEnterContinuesAndBacksOut(t *testing.T) {
-	keep := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "high"}
-	orch := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}
-
-	m := profileModelStep(false)
-	m.ProfileDraft = model.Profile{
-		Name:              "work",
-		OrchestratorModel: orch,
-		PhaseAssignments:  map[string]model.ModelAssignment{"sdd-apply": keep},
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.ProfileCreateStep != 2 || state.Cursor != 0 {
-		t.Fatalf("step/cursor = %d/%d, want 2/0", state.ProfileCreateStep, state.Cursor)
-	}
-	if state.ProfileDraft.OrchestratorModel != orch {
-		t.Fatalf("orchestrator = %+v, want unchanged %+v", state.ProfileDraft.OrchestratorModel, orch)
-	}
-	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"]; got != keep {
-		t.Fatalf("sdd-apply assignment = %+v, want unchanged %+v", got, keep)
-	}
-
-	back := profileModelStep(false)
-	back.Cursor = 1
-	updated, _ = back.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state = updated.(Model)
-
-	if state.Screen != ScreenProfileCreate || state.ProfileCreateStep != 0 || state.Cursor != 0 {
-		t.Fatalf("screen/step/cursor = %v/%d/%d, want ScreenProfileCreate/0/0", state.Screen, state.ProfileCreateStep, state.Cursor)
-	}
-}
-
-func TestProfileCreateSeparatorIsIgnoredAndSkipped(t *testing.T) {
-	sepIdx := screens.SeparatorRowIdx()
-	if sepIdx < 0 {
-		t.Skip("no separator row defined")
-	}
-
-	m := profileModelStep(true)
-	m.Cursor = sepIdx
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.ModelPicker.Mode != screens.ModePhaseList {
-		t.Fatalf("ModelPicker.Mode = %v, want ModePhaseList", state.ModelPicker.Mode)
-	}
-	if state.ModelPicker.SelectedPhaseIdx == sepIdx {
-		t.Fatalf("separator row should not become selected phase index %d", sepIdx)
-	}
-
-	state.Cursor = sepIdx - 1
-	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	state = updated.(Model)
-
-	if state.Cursor != sepIdx+1 {
-		t.Fatalf("cursor after j from row before separator = %d, want %d", state.Cursor, sepIdx+1)
-	}
-}
-
-func TestProfileCreateCustomAgentsDoNotChangeNavigation(t *testing.T) {
-	m := profileModelStep(true)
-	m.ModelPicker.CustomAgents = []string{"custom-profile-agent"}
-	rows := screens.ModelPickerRowsForProfile()
-	m.Cursor = len(rows) - 1
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	state := updated.(Model)
-	if state.Cursor != len(rows) {
-		t.Fatalf("cursor after last profile row = %d, want Continue at %d", state.Cursor, len(rows))
-	}
-
-	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state = updated.(Model)
-	if state.ProfileCreateStep != 2 || state.Cursor != 0 {
-		t.Fatalf("step/cursor after profile Continue = %d/%d, want 2/0", state.ProfileCreateStep, state.Cursor)
-	}
-}
-
 func TestModelPickerNavigationSkipsReviewSeparator(t *testing.T) {
 	rows := screens.ModelPickerRows()
 	separator := -1
@@ -603,51 +446,6 @@ func TestModelPickerNavigationSkipsReviewSeparator(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	if got := updated.(Model).Cursor; got != separator+1 {
 		t.Fatalf("cursor after review separator = %d, want %d", got, separator+1)
-	}
-}
-
-func TestProfileCreateBackspaceClearsSelectedJDAssignment(t *testing.T) {
-	jdPhases := opencode.JDPhases()
-	if len(jdPhases) == 0 {
-		t.Skip("no JD phases defined")
-	}
-	target := jdPhases[0]
-	keep := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4"}
-
-	m := profileModelStep(true)
-	m.ProfileEditMode = true
-	m.ProfileDraft = model.Profile{
-		Name: "work",
-		PhaseAssignments: map[string]model.ModelAssignment{
-			target:      {ProviderID: "openai", ModelID: "gpt-5"},
-			"sdd-apply": keep,
-		},
-	}
-	m.Cursor = screens.SeparatorRowIdx() + 1
-	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
-		target:      {ProviderID: "openai", ModelID: "gpt-5"},
-		"sdd-apply": keep,
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
-	state := updated.(Model)
-
-	if _, exists := state.Selection.ModelAssignments[target]; exists {
-		t.Fatalf("%s should be cleared through the profile key handler; assignments = %v", target, state.Selection.ModelAssignments)
-	}
-	if got := state.Selection.ModelAssignments["sdd-apply"]; got != keep {
-		t.Fatalf("sdd-apply assignment = %+v, want unchanged %+v", got, keep)
-	}
-
-	state.Cursor = len(screens.ModelPickerRowsForProfile())
-	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state = updated.(Model)
-
-	if _, exists := state.ProfileDraft.PhaseAssignments[target]; exists || state.ProfileCreateStep != 2 {
-		t.Fatalf("%s should stay cleared after continuing to confirm; draft = %+v", target, state.ProfileDraft.PhaseAssignments)
-	}
-	if got := state.ProfileDraft.PhaseAssignments["sdd-apply"]; got != keep {
-		t.Fatalf("draft sdd-apply assignment = %+v, want unchanged %+v", got, keep)
 	}
 }
 
@@ -773,11 +571,17 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 		t.Fatalf("after persona screen = %v, want %v", state.Screen, ScreenPreset)
 	}
 
-	state.Cursor = 2 // Minimal preset: Engram only, no SDD/model detours.
+	state.Cursor = 2 // Minimal preset: Engram only, no model detours.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("after preset screen = %v, want %v", state.Screen, ScreenStrictTDD)
+	}
+	state.Cursor = screens.StrictTDDOptionDisable
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
 	if state.Screen != ScreenCommunityTools {
-		t.Fatalf("after preset screen = %v, want %v", state.Screen, ScreenCommunityTools)
+		t.Fatalf("after strict TDD screen = %v, want %v", state.Screen, ScreenCommunityTools)
 	}
 
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeySpace})
@@ -843,14 +647,20 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 		}
 	}
 
-	// Pi is selected and its background preference is unresolved, so the review
-	// confirmation routes through the Pi background prompt first.
+	// Both OpenCode and Pi remain selected, so resolve each background prompt
+	// before executing the combined installation.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Screen != ScreenOpenCodeBackground {
+		t.Fatalf("after review screen = %v, want %v", state.Screen, ScreenOpenCodeBackground)
+	}
+	state.Cursor = 1 // Keep OpenCode foreground.
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
 	if state.Screen != ScreenPiBackground {
-		t.Fatalf("after review screen = %v, want %v", state.Screen, ScreenPiBackground)
+		t.Fatalf("after OpenCode background screen = %v, want %v", state.Screen, ScreenPiBackground)
 	}
-	state.Cursor = 1 // Keep foreground.
+	state.Cursor = 1 // Keep Pi foreground.
 	updated, cmd := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
 	if state.Screen != ScreenInstalling {
@@ -1452,7 +1262,7 @@ func TestBackupRestoreMsgHandledGracefully(t *testing.T) {
 	}
 }
 
-func TestShouldShowSDDModeScreen(t *testing.T) {
+func TestShouldShowStrictTDDScreenForSelectedComponents(t *testing.T) {
 	tests := []struct {
 		name       string
 		agents     []model.AgentID
@@ -1466,16 +1276,16 @@ func TestShouldShowSDDModeScreen(t *testing.T) {
 			want:       true,
 		},
 		{
-			name:       "Claude only + SDD = false",
+			name:       "Claude only + component = true",
 			agents:     []model.AgentID{model.AgentClaudeCode},
 			components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
-			want:       false,
+			want:       true,
 		},
 		{
-			name:       "OpenCode + no SDD = false",
+			name:       "OpenCode + Engram = true",
 			agents:     []model.AgentID{model.AgentOpenCode},
 			components: []model.ComponentID{model.ComponentEngram},
-			want:       false,
+			want:       true,
 		},
 		{
 			name:       "multiple agents including OpenCode + SDD = true",
@@ -1484,16 +1294,16 @@ func TestShouldShowSDDModeScreen(t *testing.T) {
 			want:       true,
 		},
 		{
-			name:       "no agents + SDD = false",
+			name:       "no agents + component = false",
 			agents:     []model.AgentID{},
-			components: []model.ComponentID{model.ComponentSDD},
+			components: []model.ComponentID{model.ComponentEngram},
 			want:       false,
 		},
 		{
-			name:       "OpenCode + empty components = false",
+			name:       "OpenCode + empty components = true",
 			agents:     []model.AgentID{model.AgentOpenCode},
 			components: []model.ComponentID{},
-			want:       false,
+			want:       true,
 		},
 	}
 
@@ -1503,11 +1313,29 @@ func TestShouldShowSDDModeScreen(t *testing.T) {
 			m.Selection.Agents = tt.agents
 			m.Selection.Components = tt.components
 
-			got := m.shouldShowSDDModeScreen()
+			got := m.shouldShowStrictTDDScreen()
 			if got != tt.want {
-				t.Fatalf("shouldShowSDDModeScreen() = %v, want %v", got, tt.want)
+				t.Fatalf("shouldShowStrictTDDScreen() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestModelConfigPickerPredicatesDoNotDependOnInstallerSDD(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCodex}
+	m.ModelConfigMode = true
+	for _, check := range []struct {
+		name string
+		show func() bool
+	}{
+		{"Claude", m.shouldShowClaudeModelPickerScreen},
+		{"Kiro", m.shouldShowKiroModelPickerScreen},
+		{"Codex", m.shouldShowCodexModelPickerScreen},
+	} {
+		if !check.show() {
+			t.Errorf("Configure models must retain %s picker without installer SDD", check.name)
+		}
 	}
 }
 
@@ -1519,10 +1347,10 @@ func TestShouldShowClaudeModelPickerScreen(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "Claude + SDD = true",
+			name:       "Claude + SDD installer = false",
 			agents:     []model.AgentID{model.AgentClaudeCode},
 			components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
-			want:       true,
+			want:       false,
 		},
 		{
 			name:       "OpenCode + SDD = false",
@@ -1561,11 +1389,11 @@ func TestPresetFlowShowsClaudeModelPickerBeforeDependencyTree(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenClaudeModelPicker)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenStrictTDD)
 	}
-	if state.ClaudeModelPicker.Preset != screens.ClaudePresetBalanced {
-		t.Fatalf("preset = %v, want %v", state.ClaudeModelPicker.Preset, screens.ClaudePresetBalanced)
+	if state.ModelConfigMode {
+		t.Fatal("installer must not enter Configure models mode")
 	}
 }
 
@@ -1579,9 +1407,9 @@ func TestClaudeModelPickerBalancedSelectionStoresAssignments(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	// With SDD selected, ClaudeCode flow now goes to ScreenStrictTDD before DependencyTree.
-	if state.Screen != ScreenStrictTDD {
-		t.Fatalf("screen = %v, want %v (ClaudeCode + SDD goes to StrictTDD first)", state.Screen, ScreenStrictTDD)
+	// An explicitly opened installer-era picker is no longer part of the installer chain.
+	if state.Screen != ScreenClaudeModelPicker {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenClaudeModelPicker)
 	}
 	// Orchestrator is present in the balanced preset (injected as part of the model
 	// assignment table). The Claude picker shows sub-agents and default; orchestrator
@@ -1592,24 +1420,15 @@ func TestClaudeModelPickerBalancedSelectionStoresAssignments(t *testing.T) {
 	if got := state.Selection.ClaudeModelAssignments["default"]; got != model.ClaudeModelSonnet {
 		t.Fatalf("default = %q, want %q", got, model.ClaudeModelSonnet)
 	}
-	if got := state.Selection.ClaudeModelAssignments["sdd-archive"]; got != model.ClaudeModelHaiku {
-		t.Fatalf("sdd-archive = %q, want %q", got, model.ClaudeModelHaiku)
+	if got := state.Selection.ClaudeModelAssignments["odd-worker"]; got != model.ClaudeModelSonnet {
+		t.Fatalf("odd-worker = %q, want %q", got, model.ClaudeModelSonnet)
+	}
+	if _, exists := state.Selection.ClaudeModelAssignments["sdd-archive"]; exists {
+		t.Fatal("fresh preset introduced retired SDD role")
 	}
 }
 
-// ─── SDDMode → ModelPicker / DependencyTree transition (issue #106 Bug 2) ──
-
-// sddMultiCursor returns the cursor index for SDDModeMulti in SDDModeOptions.
-func sddMultiCursor(t *testing.T) int {
-	t.Helper()
-	for i, opt := range screens.SDDModeOptions() {
-		if opt == model.SDDModeMulti {
-			return i
-		}
-	}
-	t.Fatal("SDDModeMulti not found in SDDModeOptions()")
-	return -1
-}
+// Runtime model configuration remains available outside the preset flow.
 
 func withModelPickerSettingsPath(t *testing.T, settingsPath string) {
 	t.Helper()
@@ -1638,17 +1457,15 @@ func withModelPickerCatalogDiscoverer(t *testing.T, discover screens.RuntimeCata
 	})
 }
 
-// TestSDDModeMultiShowsRuntimeModelPicker verifies that selecting SDDModeMulti
-// opens the runtime model picker before catalog discovery completes.
-func TestSDDModeMultiShowsRuntimeModelPicker(t *testing.T) {
+// TestConfigureModelsShowsRuntimeModelPicker verifies that Configure models
+// opens the runtime picker before catalog discovery completes.
+func TestConfigureModelsShowsRuntimeModelPicker(t *testing.T) {
 	dir := t.TempDir()
 	withModelPickerSettingsPath(t, filepath.Join(dir, "missing-settings.json"))
 
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenSDDMode
-	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
-	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-	m.Cursor = sddMultiCursor(t)
+	m.Screen = ScreenModelConfig
+	m.Cursor = 1 // OpenCode follows Claude in the Configure models menu.
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -1661,15 +1478,16 @@ func TestSDDModeMultiShowsRuntimeModelPicker(t *testing.T) {
 	}
 }
 
-func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
+func TestConfigureModelsEmptyPickerCanContinueWithDefaults(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("OPENCODE_CONFIG_DIR", dir)
 	withModelPickerSettingsPath(t, filepath.Join(dir, "missing-settings.json"))
 
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenSDDMode
-	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
-	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-	m.Cursor = sddMultiCursor(t)
+	m.Screen = ScreenModelConfig
+	m.Cursor = 1 // OpenCode runtime picker, not the Claude picker.
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -1681,8 +1499,8 @@ func TestSDDModeMultiEmptyModelPickerCanContinueWithDefaults(t *testing.T) {
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
 
-	if state.Screen != ScreenStrictTDD {
-		t.Fatalf("screen = %v, want ScreenStrictTDD after continuing with defaults", state.Screen)
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("screen = %v, want ScreenModelConfig after continuing with defaults", state.Screen)
 	}
 	if state.Selection.ModelAssignments != nil {
 		t.Fatalf("ModelAssignments = %v, want nil defaults", state.Selection.ModelAssignments)
@@ -2214,18 +2032,17 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 12
+	m.Cursor = 11
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=12 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=11 (Managed uninstall with OpenCode): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies the welcome menu has 14 items without OpenCode
-// and 15 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
+// TestWelcomeMenu_OptionCount verifies legacy discovery does not change the menu.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	// Without OpenCode detected: 14 options, including the review-mode entry.
@@ -2233,10 +2050,9 @@ func TestWelcomeMenu_OptionCount(t *testing.T) {
 	if len(opts) != 14 {
 		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 14; got %v", len(opts), opts)
 	}
-	// With OpenCode detected: 15 options (adds "OpenCode SDD Profiles").
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
-	if len(optsWithProfiles) != 15 {
-		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 15; got %v", len(optsWithProfiles), optsWithProfiles)
+	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true)
+	if len(optsWithProfiles) != 14 || !reflect.DeepEqual(opts, optsWithProfiles) {
+		t.Fatalf("legacy profile discovery changed welcome menu: %v", optsWithProfiles)
 	}
 }
 
@@ -2604,13 +2420,7 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallModeScreen_FullWithProfilesNavigatesToProfileSelection(t *testing.T) {
-	orig := readProfilesFn
-	readProfilesFn = func(_ string) ([]model.Profile, error) {
-		return []model.Profile{{Name: "cheap"}, {Name: "fast"}}, nil
-	}
-	t.Cleanup(func() { readProfilesFn = orig })
-
+func TestUninstallModeScreen_FullWithProfilesSkipsProfileSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 1 // Full Uninstall option
@@ -2618,11 +2428,11 @@ func TestUninstallModeScreen_FullWithProfilesNavigatesToProfileSelection(t *test
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallProfiles {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	if state.Screen != ScreenUninstallConfirm {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
 	}
-	if !reflect.DeepEqual(state.UninstallProfilesToRemove, []string{"cheap", "fast"}) {
-		t.Fatalf("UninstallProfilesToRemove = %v, want [cheap fast]", state.UninstallProfilesToRemove)
+	if len(state.UninstallProfilesToRemove) != 0 {
+		t.Fatalf("legacy profiles selected for deletion: %v", state.UninstallProfilesToRemove)
 	}
 }
 
@@ -2656,13 +2466,7 @@ func TestUninstallComponents_ContinueNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallComponents_ContinueWithProfilesNavigatesToProfileSelection(t *testing.T) {
-	orig := readProfilesFn
-	readProfilesFn = func(_ string) ([]model.Profile, error) {
-		return []model.Profile{{Name: "cheap"}}, nil
-	}
-	t.Cleanup(func() { readProfilesFn = orig })
-
+func TestUninstallComponents_ContinueWithProfilesSkipsProfileSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallComponents
 	m.UninstallMode = model.UninstallModePartial
@@ -2673,11 +2477,8 @@ func TestUninstallComponents_ContinueWithProfilesNavigatesToProfileSelection(t *
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallProfiles {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
-	}
-	if !reflect.DeepEqual(state.UninstallProfilesToRemove, []string{"cheap"}) {
-		t.Fatalf("UninstallProfilesToRemove = %v, want [cheap]", state.UninstallProfilesToRemove)
+	if state.Screen != ScreenUninstallConfirm || len(state.UninstallProfilesToRemove) != 0 {
+		t.Fatalf("partial component uninstall selected legacy profiles: screen=%v profiles=%v", state.Screen, state.UninstallProfilesToRemove)
 	}
 }
 
@@ -3140,102 +2941,56 @@ func TestModelConfig_KiroPickerBackReturnsToModelConfig(t *testing.T) {
 	}
 }
 
-// TestCodexPickerBackRowEnterNavigates verifies that pressing Enter on the
-// Codex picker "← Back" row actually navigates (regression: the back row used
-// to be swallowed because HandleCodexModelPickerNav returned (true, nil) and
-// model.go only navigates when assignments are non-nil). With Claude in the
-// flow, Back must return to the Claude picker.
+// TestCodexPickerBackRowEnterNavigates protects the retained Configure models
+// back row, independently of installer preset selection.
 func TestCodexPickerBackRowEnterNavigates(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenCodexModelPicker
-	m.ModelConfigMode = false
-	m.Selection.Preset = model.PresetFullGentleman // non-custom
+	m.ModelConfigMode = true
 	m.Selection.Agents = []model.AgentID{model.AgentCodex, model.AgentClaudeCode}
-	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
 	m.CodexModelPicker = screens.NewCodexModelPickerState()
-	// Cursor on the "← Back" row.
 	m.Cursor = screens.CodexModelPickerOptionCount(m.CodexModelPicker) - 1
-
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Fatalf("CodexModelPicker enter on Back (Claude in flow): screen = %v, want %v",
-			state.Screen, ScreenClaudeModelPicker)
+	if state := updated.(Model); state.Screen != ScreenModelConfig {
+		t.Fatalf("Configure models Codex Back: screen = %v, want ModelConfig", state.Screen)
 	}
 }
 
-// TestSDDModeBackReturnsToCodexPicker verifies that going back from the OpenCode
-// SDDMode screen returns to the Codex picker when Codex is in the flow
-// (regression: SDDMode back skipped Codex and jumped straight to Claude).
-// Forward order is Claude → Kiro → Codex → SDDMode, so back must hit Codex first.
-func TestSDDModeBackReturnsToCodexPicker(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenSDDMode
-	m.ModelConfigMode = false
-	m.Selection.Preset = model.PresetFullGentleman // non-custom
-	// OpenCode triggers SDDMode; Codex + Claude in flow, no Kiro.
-	m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentCodex, model.AgentClaudeCode}
-	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
-	// Cursor on the SDDMode "← Back" row (after the mode options).
-	m.Cursor = len(screens.SDDModeOptions())
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenCodexModelPicker {
-		t.Fatalf("SDDMode back (Codex in flow): screen = %v, want %v",
-			state.Screen, ScreenCodexModelPicker)
+// TestStrictTDDBackReturnsToPreset preserves the ODD installer back route.
+func TestStrictTDDBackReturnsToPreset(t *testing.T) {
+	for _, key := range []tea.KeyType{tea.KeyEnter, tea.KeyEsc} {
+		t.Run(key.String(), func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenStrictTDD
+			m.Selection.Preset = model.PresetFullGentleman
+			m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentCodex, model.AgentClaudeCode}
+			m.Selection.Components = []model.ComponentID{model.ComponentSDD}
+			m.Cursor = len(screens.StrictTDDOptions())
+			updated, _ := m.Update(tea.KeyMsg{Type: key})
+			if got := updated.(Model).Screen; got != ScreenPreset {
+				t.Fatalf("screen = %v, want Preset", got)
+			}
+		})
 	}
 }
 
-// TestSDDModeEscReturnsToCodexPicker verifies the Esc path (goBack) is consistent
-// with the Enter-on-Back path: it must also return to Codex when in the flow.
-func TestSDDModeEscReturnsToCodexPicker(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenSDDMode
-	m.ModelConfigMode = false
-	m.Selection.Preset = model.PresetFullGentleman
-	m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentCodex, model.AgentClaudeCode}
-	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	state := updated.(Model)
-
-	if state.Screen != ScreenCodexModelPicker {
-		t.Fatalf("SDDMode esc (Codex in flow): screen = %v, want %v",
-			state.Screen, ScreenCodexModelPicker)
-	}
-}
-
-// TestPresetConfirmEntersFirstPickerInFlow verifies that confirming a preset on
-// ScreenPreset enters the FIRST picker of the conditional chain and initializes
-// its state — covering the Kiro-first and Codex-first entry paths (no Claude),
-// which the previous round-trip cases only exercised with Claude first. This is
-// the safety net for collapsing the ScreenPreset confirm ladder onto
-// pickerNextScreen + applyPickerEntry.
-func TestPresetConfirmEntersFirstPickerInFlow(t *testing.T) {
+// TestPresetConfirmEntersStrictTDDForPickerAgents ensures the ODD installer
+// bypasses retired phase-model pickers for Codex and Kiro.
+func TestPresetConfirmEntersStrictTDDForPickerAgents(t *testing.T) {
 	tests := []struct {
 		name       string
 		agents     []model.AgentID
 		wantScreen Screen
-		checkInit  func(t *testing.T, state Model)
 	}{
 		{
-			name:       "Codex first (no Claude/Kiro) enters Codex picker initialized",
+			name:       "Codex enters Strict TDD",
 			agents:     []model.AgentID{model.AgentCodex},
-			wantScreen: ScreenCodexModelPicker,
-			checkInit: func(t *testing.T, state Model) {
-				if state.CodexModelPicker.Preset != screens.CodexPresetRecommended {
-					t.Fatalf("Codex picker state not initialized: preset = %q, want %q",
-						state.CodexModelPicker.Preset, screens.CodexPresetRecommended)
-				}
-			},
+			wantScreen: ScreenStrictTDD,
 		},
 		{
-			name:       "Kiro first (no Claude) enters Kiro picker",
+			name:       "Kiro enters Strict TDD",
 			agents:     []model.AgentID{model.AgentKiroIDE},
-			wantScreen: ScreenKiroModelPicker,
+			wantScreen: ScreenStrictTDD,
 		},
 	}
 
@@ -3251,9 +3006,6 @@ func TestPresetConfirmEntersFirstPickerInFlow(t *testing.T) {
 
 			if state.Screen != tt.wantScreen {
 				t.Fatalf("Preset confirm: screen = %v, want %v", state.Screen, tt.wantScreen)
-			}
-			if tt.checkInit != nil {
-				tt.checkInit(t, state)
 			}
 		})
 	}
@@ -3282,25 +3034,18 @@ func TestPresetConfirmCustomEntersDependencyTreeComponentPicker(t *testing.T) {
 	}
 }
 
-// TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker verifies that Esc from
-// ScreenKiroModelPicker in a non-custom preset returns to ScreenClaudeModelPicker
-// when Claude is in the flow — keeping Esc consistent with Enter on "← Back".
+// TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker protects the generic
+// Configure models escape route even when multiple agents are selected.
 func TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenKiroModelPicker
-	m.ModelConfigMode = false
-	m.Selection.Preset = model.PresetFullGentleman // non-custom
-	// Simulate both Kiro and Claude being selected.
+	m.ModelConfigMode = true
+	m.Selection.Preset = model.PresetFullGentleman
 	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentClaudeCode}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	m.KiroModelPicker = screens.NewKiroModelPickerState()
-
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	state := updated.(Model)
-
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Fatalf("KiroModelPicker esc (non-custom, Claude in flow): screen = %v, want %v",
-			state.Screen, ScreenClaudeModelPicker)
+	if state := updated.(Model); state.Screen != ScreenModelConfig {
+		t.Fatalf("Configure models Kiro Esc: screen = %v, want ModelConfig", state.Screen)
 	}
 }
 
@@ -3722,38 +3467,17 @@ func TestModelConfig_KiroPickerTriggersSyncScreen(t *testing.T) {
 	if got := state.PendingSyncOverrides.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("step2: default = %q, want %q", got, model.KiroModelAuto)
 	}
-	if got := state.PendingSyncOverrides.KiroModelAssignments["sdd-design"]; got != model.KiroModelOpus {
-		t.Errorf("step2: sdd-design = %q, want %q", got, model.KiroModelOpus)
+	if got := state.PendingSyncOverrides.KiroModelAssignments["odd-explorer"]; got != model.KiroModelAuto {
+		t.Errorf("step2: odd-explorer = %q, want %q", got, model.KiroModelAuto)
+	}
+	if _, ok := state.PendingSyncOverrides.KiroModelAssignments["sdd-design"]; ok {
+		t.Error("step2: new preset must not introduce SDD assignments")
 	}
 }
 
 // TestModelConfig_OpenCodePickerContinueTriggersSyncScreen verifies that pressing
 // "Continue" from ScreenModelPicker while in ModelConfigMode navigates to ScreenSync
 // and populates PendingSyncOverrides with ModelAssignments and SDDMode=multi.
-func TestModelConfig_ProfileSaveTargetsOpenCode(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenProfileCreate
-	m.ProfileCreateStep = 2
-	m.Cursor = 0
-	m.ProfileDraft = model.Profile{Name: "free"}
-
-	updated, _ := m.confirmProfileCreate()
-	state := updated.(Model)
-
-	if state.Screen != ScreenSync {
-		t.Fatalf("screen = %v, want ScreenSync", state.Screen)
-	}
-	if state.PendingSyncOverrides == nil {
-		t.Fatalf("PendingSyncOverrides should be non-nil after profile Save & Sync")
-	}
-	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentOpenCode {
-		t.Fatalf("TargetAgents = %v, want [%s]", got, model.AgentOpenCode)
-	}
-	if got := state.PendingSyncOverrides.Profiles; len(got) != 1 || got[0].Name != "free" {
-		t.Fatalf("Profiles = %v, want profile named free", got)
-	}
-}
-
 func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker
@@ -3978,52 +3702,8 @@ func TestSyncDoneMsg_ClearsPendingOverrides(t *testing.T) {
 	}
 }
 
-// TestSyncDoneMsg_CursorClampedAfterProfileListRefresh verifies that when
-// SyncDoneMsg causes the ProfileList to shrink, the cursor is clamped so it
-// never points past the end of the new list.
-func TestSyncDoneMsg_CursorClampedAfterProfileListRefresh(t *testing.T) {
-	// Override readProfilesFn to return a shorter list.
-	orig := readProfilesFn
-	readProfilesFn = func(_ string) ([]model.Profile, error) {
-		return []model.Profile{
-			{Name: "cheap"},
-			{Name: "premium"},
-		}, nil
-	}
-	t.Cleanup(func() { readProfilesFn = orig })
-
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenProfiles
-	m.OperationRunning = true
-	// Cursor was at 5 (pointing at a profile that no longer exists after sync).
-	m.Cursor = 5
-
-	updated, _ := m.Update(SyncDoneMsg{Files: []string{"a"}, Err: nil})
-	state := updated.(Model)
-
-	// After refresh, ProfileList has 2 items; cursor must be clamped to 1 (len-1).
-	if state.Cursor >= len(state.ProfileList) {
-		t.Fatalf("Cursor = %d is out of bounds (ProfileList len = %d); expected cursor to be clamped",
-			state.Cursor, len(state.ProfileList))
-	}
-	if state.Cursor != len(state.ProfileList)-1 {
-		t.Errorf("Cursor = %d, want %d (clamped to last profile index)",
-			state.Cursor, len(state.ProfileList)-1)
-	}
-}
-
-// TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub is an extended
-// version of TestSyncDoneMsg_ClearsPendingOverrides that also injects a
-// readProfilesFn stub so the test does not depend on the filesystem.
-func TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub(t *testing.T) {
-	stubProfiles := []model.Profile{{Name: "cheap"}, {Name: "premium"}}
-
-	orig := readProfilesFn
-	readProfilesFn = func(_ string) ([]model.Profile, error) {
-		return stubProfiles, nil
-	}
-	t.Cleanup(func() { readProfilesFn = orig })
-
+// Sync completion clears transient model overrides even when synchronization fails.
+func TestSyncDoneMsg_ClearsPendingOverridesWithoutProfileRefresh(t *testing.T) {
 	tests := []struct {
 		name     string
 		syncDone SyncDoneMsg
@@ -4058,10 +3738,6 @@ func TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub(t *testing.T) {
 			}
 			if state.OperationRunning {
 				t.Errorf("OperationRunning should be false after SyncDoneMsg")
-			}
-			// Verify profiles were refreshed from stub.
-			if len(state.ProfileList) != len(stubProfiles) {
-				t.Errorf("ProfileList len = %d, want %d (from stub)", len(state.ProfileList), len(stubProfiles))
 			}
 		})
 	}
@@ -4276,36 +3952,6 @@ func TestNewModel_StateAgentsArePreselected(t *testing.T) {
 
 // ─── Task 4: StrictTDD screen navigation ────────────────────────────────────
 
-// helper: returns cursor index for SDDModeSingle in SDDModeOptions.
-func sddSingleCursor(t *testing.T) int {
-	t.Helper()
-	for i, opt := range screens.SDDModeOptions() {
-		if opt == model.SDDModeSingle {
-			return i
-		}
-	}
-	t.Fatal("SDDModeSingle not found in SDDModeOptions()")
-	return -1
-}
-
-// TestStrictTDDScreenAppearsAfterSDDMode verifies that from ScreenSDDMode,
-// selecting single mode navigates to ScreenStrictTDD (not ScreenDependencyTree)
-// when the SDD component and OpenCode agent are selected.
-func TestStrictTDDScreenAppearsAfterSDDMode(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenSDDMode
-	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
-	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-	m.Cursor = sddSingleCursor(t)
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenStrictTDD {
-		t.Fatalf("screen = %v, want ScreenStrictTDD (after SDDMode single selection)", state.Screen)
-	}
-}
-
 // TestStrictTDDScreenEnableSetsSelection verifies that selecting "Enable" on
 // ScreenStrictTDD sets m.Selection.StrictTDD = true.
 func TestStrictTDDScreenEnableSetsSelection(t *testing.T) {
@@ -4341,43 +3987,15 @@ func TestStrictTDDScreenDisableSetsSelection(t *testing.T) {
 	}
 }
 
-// TestStrictTDDScreenSkippedWhenNoSDD verifies that when the SDD component is
-// NOT selected, the ScreenStrictTDD is not used in the navigation path.
-// From ScreenSDDMode with single selection → should go directly to
-// ScreenDependencyTree when SDD is not in components.
-//
-// NOTE: shouldShowSDDModeScreen() requires ComponentSDD, so in practice the
-// SDDMode screen itself would not show when there is no SDD. This test
-// validates that ScreenStrictTDD is never reached without SDD.
-func TestStrictTDDScreenSkippedWhenNoSDD(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenSDDMode
-	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
-	// No ComponentSDD in components.
-	m.Selection.Components = []model.ComponentID{model.ComponentEngram}
-	m.Cursor = sddSingleCursor(t)
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen == ScreenStrictTDD {
-		t.Fatalf("screen = ScreenStrictTDD, but SDD is not selected — should skip StrictTDD screen")
-	}
-}
-
-// TestStrictTDDBackNavigatesToSDDMode verifies that pressing Escape on
-// ScreenStrictTDD returns to ScreenSDDMode.
-func TestStrictTDDBackNavigatesToSDDMode(t *testing.T) {
+// TestStrictTDDBackNavigatesToPreset verifies the direct OpenCode route.
+func TestStrictTDDBackNavigatesToPreset(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenStrictTDD
 	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
 	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	state := updated.(Model)
-
-	if state.Screen != ScreenSDDMode {
-		t.Fatalf("screen = %v, want ScreenSDDMode after pressing Esc on ScreenStrictTDD", state.Screen)
+	if got := updated.(Model).Screen; got != ScreenPreset {
+		t.Fatalf("screen = %v, want Preset", got)
 	}
 }
 
@@ -4407,12 +4025,8 @@ func TestDependencyTreeEnterBackNavigatesToOpenCodePlugins(t *testing.T) {
 	}
 }
 
-// TestModelPickerEnterBackNavigatesToSDDMode verifies that pressing Enter on
-// the "Back" option of ScreenModelPicker navigates to ScreenSDDMode (NOT
-// StrictTDD). ModelPicker sits between SDDMode and StrictTDD in the forward
-// flow: SDDMode → ModelPicker → StrictTDD. Back must go to SDDMode to avoid
-// a loop between ModelPicker ↔ StrictTDD.
-func TestModelPickerEnterBackNavigatesToSDDMode(t *testing.T) {
+// TestModelPickerEnterBackNavigatesToConfig verifies generic picker back navigation.
+func TestModelPickerEnterBackNavigatesToConfig(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker
 	m.Selection.Preset = model.PresetFullGentleman // non-custom
@@ -4428,15 +4042,13 @@ func TestModelPickerEnterBackNavigatesToSDDMode(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenSDDMode {
-		t.Fatalf("screen = %v, want ScreenSDDMode after Enter on ModelPicker Back (avoid StrictTDD loop)", state.Screen)
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("screen = %v, want ModelConfig after ModelPicker Back", state.Screen)
 	}
 }
 
-// TestModelPickerContinueMultiGoesToStrictTDD verifies that pressing Continue
-// on ModelPicker (non-custom preset, multi mode) navigates to ScreenStrictTDD
-// before going to DependencyTree. Previously it went directly to DependencyTree.
-func TestModelPickerContinueMultiGoesToStrictTDD(t *testing.T) {
+// TestModelPickerContinueReturnsToConfig verifies generic picker completion.
+func TestModelPickerContinueReturnsToConfig(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker
 	m.Selection.Preset = model.PresetFullGentleman // non-custom
@@ -4452,12 +4064,12 @@ func TestModelPickerContinueMultiGoesToStrictTDD(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenStrictTDD {
-		t.Fatalf("screen = %v, want ScreenStrictTDD after ModelPicker Continue (multi, non-custom)", state.Screen)
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("screen = %v, want ModelConfig after ModelPicker Continue", state.Screen)
 	}
 }
 
-func TestStrictTDDBackNavigatesToModelPickerWhenMulti(t *testing.T) {
+func TestStrictTDDBackSkipsLegacyModelPicker(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenStrictTDD
 	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
@@ -4467,8 +4079,8 @@ func TestStrictTDDBackNavigatesToModelPickerWhenMulti(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenModelPicker {
-		t.Fatalf("screen = %v, want ScreenModelPicker after Esc on ScreenStrictTDD with SDDModeMulti", state.Screen)
+	if state.Screen != ScreenPreset {
+		t.Fatalf("screen = %v, want Preset after Esc on StrictTDD", state.Screen)
 	}
 }
 
@@ -4519,12 +4131,11 @@ func TestStrictTDDScreenAppearsForClaudeCodeAgent(t *testing.T) {
 	// Set cursor on first preset option.
 	m2.Cursor = 0 // FullGentleman
 
-	// Press Enter → sets preset, components include SDD → should showClaudeModelPicker
-	// (ClaudeCode + SDD = true) → goes to ScreenClaudeModelPicker, NOT StrictTDD yet.
+	// Preset confirmation must open Strict TDD directly for Claude.
 	updated, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Skipf("prerequisite: expected ScreenClaudeModelPicker, got %v — adjust test setup", state.Screen)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("preset with Claude: screen = %v, want StrictTDD without installer phase picker", state.Screen)
 	}
 
 	// Now simulate the ClaudeModelPicker "confirmed" path by calling goBack-equivalent
@@ -4571,10 +4182,8 @@ func TestStrictTDDScreenAppearsForCursorAgent(t *testing.T) {
 	}
 }
 
-// TestStrictTDDBackNavFromClaudeFlow verifies that pressing ESC on ScreenStrictTDD
-// when ClaudeCode agent (no OpenCode) is selected goes back to ScreenClaudeModelPicker,
-// not ScreenSDDMode (which is OpenCode-only).
-// RED: currently fails because goBack() for ScreenStrictTDD always goes to SDDMode.
+// TestStrictTDDBackNavFromClaudeFlow verifies Esc returns to Preset without
+// entering a retired installer phase picker.
 func TestStrictTDDBackNavFromClaudeFlow(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenStrictTDD
@@ -4585,8 +4194,8 @@ func TestStrictTDDBackNavFromClaudeFlow(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Fatalf("screen = %v, want ScreenClaudeModelPicker after Esc on ScreenStrictTDD (ClaudeCode agent, no OpenCode)", state.Screen)
+	if state.Screen != ScreenPreset {
+		t.Fatalf("screen = %v, want ScreenPreset after Esc on ScreenStrictTDD (ClaudeCode agent)", state.Screen)
 	}
 }
 
@@ -4677,10 +4286,9 @@ func TestCustomPresetStrictTDDWithClaudeFlow(t *testing.T) {
 	updated, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	// DependencyTree Continue with ClaudeCode + SDD → shouldShowClaudeModelPickerScreen = true
-	// → should navigate to ScreenClaudeModelPicker first.
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Skipf("prerequisite: expected ScreenClaudeModelPicker, got %v — adjust test", state.Screen)
+	// Custom component confirmation must open Strict TDD directly for Claude.
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("custom Claude components: screen = %v, want StrictTDD without installer phase picker", state.Screen)
 	}
 
 	// After ClaudeModelPicker assigns (simulate by checking the shouldShowStrictTDDScreen flag),
@@ -4778,8 +4386,8 @@ func TestCustomPresetStrictTDDBackGoesToSDDMode(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenSDDMode {
-		t.Fatalf("screen = %v, want ScreenSDDMode after Esc on ScreenStrictTDD (custom preset, OpenCode + SDD)", state.Screen)
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("screen = %v, want DependencyTree after Esc on StrictTDD custom preset", state.Screen)
 	}
 }
 
@@ -5159,218 +4767,60 @@ func TestModelConfigOpenCodeNoPrePopulationWhenFileEmpty(t *testing.T) {
 // ─── Issue #950: isolate default OpenCode model config from custom SDD
 // profiles ───────────────────────────────────────────────────────────────
 
-// TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig is a table test
-// for issue #950. A custom SDD profile edit loads its own OrchestratorModel
-// and PhaseAssignments into m.Selection.ModelAssignments — keyed by the same
-// "gentle-orchestrator" constant the default OpenCode model config screen
-// uses for its own base row — because both screens share one ModelPicker.
-// Without resetting that map on entry/exit of the profile flow:
-//   - a profile's assignments bleed into the default gentle-orchestrator
-//     config (a custom profile overwrites the default), and
-//   - the default config's nil guard (`if ModelAssignments == nil`) never
-//     fires, so opening it after visiting a profile shows/persists stale
-//     profile-specific phase keys (e.g. "sdd-apply") instead of just the
-//     real default.
-//
-// Each case drives the model through a sequence of screens and asserts the
-// final m.Selection.ModelAssignments contents.
-func TestModelAssignmentsIsolatedBetweenProfilesAndDefaultConfig(t *testing.T) {
-	defaultAssignment := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}
-	profileOrchestrator := model.ModelAssignment{ProviderID: "openai", ModelID: "o3"}
-	profilePhase := model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o"}
-
-	profile := model.Profile{
-		Name:              "high-performance",
-		OrchestratorModel: profileOrchestrator,
-		PhaseAssignments:  map[string]model.ModelAssignment{"sdd-apply": profilePhase},
-	}
-
-	origAssignments := readCurrentAssignmentsFn
-	readCurrentAssignmentsFn = func(_ string) (map[string]model.ModelAssignment, error) {
-		return map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment}, nil
-	}
-	t.Cleanup(func() { readCurrentAssignmentsFn = origAssignments })
-
-	origProfiles := readProfilesFn
-	readProfilesFn = func(_ string) ([]model.Profile, error) {
-		return []model.Profile{profile}, nil
-	}
-	t.Cleanup(func() { readProfilesFn = origProfiles })
-
-	openDefaultModelConfig := func(m *Model) {
-		m.setScreen(ScreenModelConfig)
-		m.Cursor = 1 // "Configure OpenCode models"
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-		*m = updated.(Model)
-		if m.Screen != ScreenModelPicker {
-			t.Fatalf("expected ScreenModelPicker, got %v", m.Screen)
+func TestModelConfigReadsCurrentAssignmentsWithoutChangingSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	settings := []byte(`{
+		// Existing settings may include JSONC comments and legacy agent names.
+		"agent": {
+			"sdd-orchestrator": {"model": "openai/legacy"},
+			"gentle-orchestrator": {"model": "anthropic/current", "variant": "high"},
+			"custom-agent": {"model": "openai/custom"},
+			"broken": {"model": 123}
 		}
+	}`)
+	if err := os.WriteFile(path, settings, 0o600); err != nil {
+		t.Fatal(err)
 	}
-
-	editProfile := func(m *Model) {
-		m.setScreen(ScreenProfiles)
-		m.Cursor = 0 // the only entry: "high-performance"
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-		*m = updated.(Model)
-		if m.Screen != ScreenProfileCreate {
-			t.Fatalf("expected ScreenProfileCreate, got %v", m.Screen)
-		}
+	assignments, err := readCurrentAssignmentsFn(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	tests := []struct {
-		name        string
-		drive       func(m *Model)
-		wantAssign  map[string]model.ModelAssignment
-		wantMissing []string // keys that must be absent from the final map
-
-		// checkStash, when true, additionally asserts m.DefaultModelAssignmentsStash
-		// equals wantStash exactly (nil-safe via reflect.DeepEqual semantics).
-		checkStash bool
-		wantStash  map[string]model.ModelAssignment
-	}{
-		{
-			name: "fresh default OpenCode model config loads only the real default",
-			drive: func(m *Model) {
-				openDefaultModelConfig(m)
-			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
-			wantMissing: []string{"sdd-apply"},
-		},
-		{
-			name: "editing a profile loads only that profile's own assignments",
-			drive: func(m *Model) {
-				editProfile(m)
-			},
-			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": profileOrchestrator,
-				"sdd-apply":           profilePhase,
-			},
-		},
-		{
-			name: "leaving a profile edit then opening default config loads real defaults, not the profile's",
-			drive: func(m *Model) {
-				editProfile(m)
-				m.setScreen(ScreenWelcome) // abandon the profile edit
-				openDefaultModelConfig(m)
-			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
-			wantMissing: []string{"sdd-apply"},
-		},
-		{
-			name: "opening default config then editing a profile does not carry default fields into the profile",
-			drive: func(m *Model) {
-				openDefaultModelConfig(m)
-				editProfile(m)
-			},
-			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": profileOrchestrator,
-				"sdd-apply":           profilePhase,
-			},
-		},
-		{
-			// Regression for a review finding: an earlier version of this fix
-			// nil'd m.Selection.ModelAssignments unconditionally on entering
-			// ScreenProfiles, which wiped in-session default edits the user had
-			// not synced yet just by visiting the Profiles screen. The default
-			// must be stashed and restored intact instead of discarded.
-			name: "configuring defaults then visiting Profiles and leaving without editing leaves defaults intact",
-			drive: func(m *Model) {
-				openDefaultModelConfig(m)
-				m.setScreen(ScreenProfiles)
-				m.setScreen(ScreenWelcome)
-			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
-			wantMissing: []string{"sdd-apply"},
-		},
-		{
-			// Regression for the same finding: editing a profile and leaving
-			// must restore the stashed default, not the profile's edited data
-			// nor an empty map.
-			name: "configuring defaults then editing a profile and leaving restores the defaults, not the profile edit",
-			drive: func(m *Model) {
-				openDefaultModelConfig(m)
-				editProfile(m)
-				m.setScreen(ScreenWelcome)
-			},
-			wantAssign:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
-			wantMissing: []string{"sdd-apply"},
-		},
-		{
-			// Regression for a second review finding (R4-profile-picker-wipe):
-			// the exit-side restore fired on every transition out of
-			// {ScreenProfiles, ScreenProfileCreate}, including a detour into the
-			// shared ScreenModelPicker that a profile edit may open to display/
-			// edit its own assignments — swapping the profile's live data for
-			// the stashed default mid-edit and clearing the stash early. The
-			// profile flow must be tracked by origin (ProfileFlowActive) so a
-			// picker detour stays "inside" the flow: the profile's assignments
-			// must survive the round trip, and the stash must be untouched.
-			name: "detouring through the model picker mid-profile-edit keeps the profile's own assignments and leaves the stash untouched",
-			drive: func(m *Model) {
-				openDefaultModelConfig(m)      // configure a real default first
-				editProfile(m)                 // stash := copy(default); ModelAssignments := profile's own data
-				m.setScreen(ScreenModelPicker) // detour reachable from a profile edit — must NOT restore/clear
-				m.setScreen(ScreenProfileCreate)
-			},
-			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": profileOrchestrator,
-				"sdd-apply":           profilePhase,
-			},
-			checkStash: true,
-			wantStash:  map[string]model.ModelAssignment{"gentle-orchestrator": defaultAssignment},
-		},
-		{
-			// Companion case for the same finding: ordinary navigation within
-			// the default config flow (never having entered the profile flow)
-			// must never touch the stash at all.
-			name: "opening the default config, editing it, then bouncing through the picker leaves defaults intact with no stash involvement",
-			drive: func(m *Model) {
-				openDefaultModelConfig(m) // ProfileFlowActive stays false throughout
-				m.Selection.ModelAssignments["sdd-onboard"] = model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-4-5"}
-				m.setScreen(ScreenModelConfig) // back out of the picker
-				m.setScreen(ScreenModelPicker) // and back in
-			},
-			wantAssign: map[string]model.ModelAssignment{
-				"gentle-orchestrator": defaultAssignment,
-				"sdd-onboard":         {ProviderID: "anthropic", ModelID: "claude-haiku-4-5"},
-			},
-			wantMissing: []string{"sdd-apply"},
-			checkStash:  true,
-			wantStash:   nil,
-		},
+	if got := assignments["gentle-orchestrator"]; got != (model.ModelAssignment{ProviderID: "anthropic", ModelID: "current", Effort: "high"}) {
+		t.Fatalf("current orchestrator assignment = %+v", got)
 	}
+	if got := assignments["custom-agent"]; got.ModelID != "custom" {
+		t.Fatalf("custom assignment = %+v", got)
+	}
+	if _, ok := assignments["broken"]; ok {
+		t.Fatal("malformed assignment was retained")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(settings) {
+		t.Fatalf("Configure models modified settings: %v", err)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(system.DetectionResult{}, "dev")
-			tt.drive(&m)
+// Configure models keeps in-session OpenCode edits across ordinary navigation.
+func TestModelConfigAssignmentsSurviveNavigation(t *testing.T) {
+	want := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}
+	original := readCurrentAssignmentsFn
+	readCurrentAssignmentsFn = func(string) (map[string]model.ModelAssignment, error) {
+		return map[string]model.ModelAssignment{"gentle-orchestrator": want}, nil
+	}
+	t.Cleanup(func() { readCurrentAssignmentsFn = original })
 
-			for key, want := range tt.wantAssign {
-				got, ok := m.Selection.ModelAssignments[key]
-				if !ok {
-					t.Errorf("ModelAssignments[%q] missing, want %+v", key, want)
-					continue
-				}
-				if got != want {
-					t.Errorf("ModelAssignments[%q] = %+v, want %+v", key, got, want)
-				}
-			}
-			for _, key := range tt.wantMissing {
-				if got, ok := m.Selection.ModelAssignments[key]; ok {
-					t.Errorf("ModelAssignments[%q] = %+v, want absent (isolation leak)", key, got)
-				}
-			}
-			// Exact-size check: catches a stray extra key (from either side)
-			// that the per-key checks above would otherwise miss — important
-			// for the "defaults are intact and unchanged" regression cases.
-			if tt.wantAssign != nil && len(m.Selection.ModelAssignments) != len(tt.wantAssign) {
-				t.Errorf("ModelAssignments = %+v (%d entries), want exactly %+v (%d entries)",
-					m.Selection.ModelAssignments, len(m.Selection.ModelAssignments), tt.wantAssign, len(tt.wantAssign))
-			}
-			if tt.checkStash && !reflect.DeepEqual(m.DefaultModelAssignmentsStash, tt.wantStash) {
-				t.Errorf("DefaultModelAssignmentsStash = %+v, want %+v", m.DefaultModelAssignmentsStash, tt.wantStash)
-			}
-		})
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.setScreen(ScreenModelConfig)
+	m.Cursor = 1
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenModelPicker || m.Selection.ModelAssignments["gentle-orchestrator"] != want {
+		t.Fatalf("Configure models did not load current assignments: screen=%v assignments=%v", m.Screen, m.Selection.ModelAssignments)
+	}
+	m.Selection.ModelAssignments["custom-agent"] = model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5"}
+	m.setScreen(ScreenModelConfig)
+	m.setScreen(ScreenModelPicker)
+	if got := m.Selection.ModelAssignments["custom-agent"]; got.ModelID != "gpt-5" {
+		t.Fatalf("in-session assignment lost during navigation: %+v", got)
 	}
 }
 
@@ -5803,12 +5253,12 @@ func TestCustomPersonaCustomPresetCanSelectEngramWithoutPersonaOrPolish(t *testi
 	}
 }
 
-func TestShouldShowCodexModelPickerScreen_TrueWhenCodexAndSDD(t *testing.T) {
+func TestShouldShowCodexModelPickerScreen_FalseForInstaller(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Selection.Agents = []model.AgentID{model.AgentCodex}
 	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-	if !m.shouldShowCodexModelPickerScreen() {
-		t.Fatal("shouldShowCodexModelPickerScreen() = false, want true when Codex+SDD selected")
+	if m.shouldShowCodexModelPickerScreen() {
+		t.Fatal("installer must not show Codex phase picker")
 	}
 }
 
@@ -5830,13 +5280,10 @@ func TestShouldShowCodexModelPickerScreen_FalseWhenNoSDD(t *testing.T) {
 	}
 }
 
-// ─── Codex picker install-flow routing tests ─────────────────────────────────
-// These tests cover scenarios in which the Codex model picker MUST be reached
-// during the install flow (non-ModelConfigMode, non-custom preset, SDD selected).
+// ─── ODD installer routing and retained Configure models tests ───────────────
 
-// TestCodexOnly_InstallFlowReachesCodexPicker verifies that selecting a preset
-// when Codex is the only agent (no Claude, no Kiro) navigates to
-// ScreenCodexModelPicker.
+// TestCodexOnly_InstallFlowReachesCodexPicker verifies that Codex-only
+// installation enters Strict TDD instead of the retired phase picker.
 func TestCodexOnly_InstallFlowReachesCodexPicker(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenPreset
@@ -5846,103 +5293,66 @@ func TestCodexOnly_InstallFlowReachesCodexPicker(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenCodexModelPicker {
-		t.Fatalf("Codex-only install flow: screen = %v, want ScreenCodexModelPicker", state.Screen)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("Codex-only preset: screen = %v, want StrictTDD", state.Screen)
 	}
 }
 
 // TestClaudeAndCodex_InstallFlowReachesCodexPickerAfterClaude verifies that
-// after the Claude model picker is completed, the flow advances to
-// ScreenCodexModelPicker when Codex is also selected (no Kiro).
-// RED: currently goes to ScreenSDDMode instead of ScreenCodexModelPicker.
+// a Claude/Codex preset enters Strict TDD directly.
 func TestClaudeAndCodex_InstallFlowReachesCodexPickerAfterClaude(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenClaudeModelPicker
-	m.ModelConfigMode = false
-	m.Selection.Preset = model.PresetFullGentleman
+	m.Screen = ScreenPreset
 	m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentCodex}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
-	m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
 
-	// Press Enter to confirm the default preset option (cursor 0).
+	// Confirm the full preset.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenCodexModelPicker {
-		t.Fatalf("Claude+Codex install flow (after Claude picker): screen = %v, want ScreenCodexModelPicker", state.Screen)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("Claude+Codex preset: screen = %v, want StrictTDD", state.Screen)
 	}
 }
 
 // TestKiroAndCodex_InstallFlowReachesCodexPickerAfterKiro verifies that
-// after the Kiro model picker is completed, the flow advances to
-// ScreenCodexModelPicker when Codex is also selected (no Claude).
-// RED: currently goes to ScreenSDDMode instead of ScreenCodexModelPicker.
+// a Kiro/Codex preset enters Strict TDD directly.
 func TestKiroAndCodex_InstallFlowReachesCodexPickerAfterKiro(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenKiroModelPicker
-	m.ModelConfigMode = false
-	m.Selection.Preset = model.PresetFullGentleman
+	m.Screen = ScreenPreset
 	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentCodex}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
-	m.KiroModelPicker = screens.NewKiroModelPickerState()
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenCodexModelPicker {
-		t.Fatalf("Kiro+Codex install flow (after Kiro picker): screen = %v, want ScreenCodexModelPicker", state.Screen)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("Kiro+Codex preset: screen = %v, want StrictTDD", state.Screen)
 	}
 }
 
-// TestClaudeKiroCodex_InstallFlowSequence verifies that the full Claude→Kiro→Codex
-// picker chain is traversed in order during an install flow where all three agents
-// are selected.
-// RED: currently Claude→Kiro→SDDMode (Codex is skipped).
+// TestClaudeKiroCodex_InstallFlowSequence verifies the positive ODD route
+// with every former phase-picker agent selected.
 func TestClaudeKiroCodex_InstallFlowSequence(t *testing.T) {
-	preset := model.PresetFullGentleman
-	components := componentsForPreset(preset, model.PersonaGentleman)
-	agents := []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCodex}
-
-	// Step 1: ScreenPreset → ScreenClaudeModelPicker.
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenPreset
-	m.Selection.Agents = agents
-	m.Cursor = 0
-
+	m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCodex}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Fatalf("step1: screen = %v, want ScreenClaudeModelPicker", state.Screen)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("preset: screen = %v, want StrictTDD", state.Screen)
 	}
-
-	// Step 2: ScreenClaudeModelPicker confirm → ScreenKiroModelPicker.
-	state.Screen = ScreenClaudeModelPicker
-	state.Selection.Components = components
-	state.ClaudeModelPicker = screens.NewClaudeModelPickerState()
-	state.Cursor = 0
-
+	state.Cursor = 0 // Enable Strict TDD.
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
-	if state.Screen != ScreenKiroModelPicker {
-		t.Fatalf("step2: screen = %v, want ScreenKiroModelPicker", state.Screen)
-	}
-
-	// Step 3: ScreenKiroModelPicker confirm → ScreenCodexModelPicker.
-	state.Screen = ScreenKiroModelPicker
-	state.Selection.Components = components
-	state.KiroModelPicker = screens.NewKiroModelPickerState()
-	state.Cursor = 0
-
-	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state = updated.(Model)
-	if state.Screen != ScreenCodexModelPicker {
-		t.Fatalf("step3 (Kiro→Codex): screen = %v, want ScreenCodexModelPicker", state.Screen)
+	if !state.Selection.StrictTDD || state.Screen != ScreenDependencyTree {
+		t.Fatalf("StrictTDD continuation: screen/enabled = %v/%v, want DependencyTree/true", state.Screen, state.Selection.StrictTDD)
 	}
 }
 
-// TestCodexPicker_EscBackNavToKiroWhenKiroSelected verifies that pressing Esc
-// from ScreenCodexModelPicker goes back to ScreenKiroModelPicker when Kiro is
-// also selected in the flow.
+// TestCodexPicker_EscBackNavToKiroWhenKiroSelected verifies that a stale
+// installer picker cannot return to another retired picker.
 func TestCodexPicker_EscBackNavToKiroWhenKiroSelected(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenCodexModelPicker
@@ -5955,14 +5365,13 @@ func TestCodexPicker_EscBackNavToKiroWhenKiroSelected(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenKiroModelPicker {
-		t.Fatalf("CodexPicker esc (Kiro in flow): screen = %v, want ScreenKiroModelPicker", state.Screen)
+	if state.Screen != ScreenPreset {
+		t.Fatalf("retired Codex picker Esc: screen = %v, want Preset", state.Screen)
 	}
 }
 
 // TestCodexPicker_EscBackNavToClaudeWhenClaudeSelectedNoKiro verifies that
-// pressing Esc from ScreenCodexModelPicker goes back to ScreenClaudeModelPicker
-// when Claude is selected but Kiro is not.
+// stale installer picker escape remains safe without Kiro.
 func TestCodexPicker_EscBackNavToClaudeWhenClaudeSelectedNoKiro(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenCodexModelPicker
@@ -5975,8 +5384,8 @@ func TestCodexPicker_EscBackNavToClaudeWhenClaudeSelectedNoKiro(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenClaudeModelPicker {
-		t.Fatalf("CodexPicker esc (Claude in flow, no Kiro): screen = %v, want ScreenClaudeModelPicker", state.Screen)
+	if state.Screen != ScreenPreset {
+		t.Fatalf("retired Codex picker Esc: screen = %v, want Preset", state.Screen)
 	}
 }
 
@@ -6079,8 +5488,7 @@ func TestCodexPresetSelection_PopulatesPendingSyncOverrides(t *testing.T) {
 // ─── FIX W-2: CustomConfirmed reset on preset selection ──────────────────────
 
 // TestCodexModelPickerPresetClearsCustomState verifies that selecting a preset
-// after a prior Custom confirm resets CustomConfirmed to false and clears
-// CodexPhaseModelAssignments so the inject layer uses the carril table.
+// clears active custom role models but retains legacy SDD config for migration.
 func TestCodexModelPickerPresetClearsCustomState(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenCodexModelPicker
@@ -6090,7 +5498,9 @@ func TestCodexModelPickerPresetClearsCustomState(t *testing.T) {
 	m.CodexModelPicker.CustomConfirmed = true
 	m.Selection.CodexPhaseModelAssignments = map[string]string{
 		"sdd-propose": "gpt-5.4",
+		"odd-worker":  "gpt-6-astra",
 	}
+	m.Selection.CodexModelAssignments = map[string]model.CodexEffort{"sdd-propose": model.CodexEffortXHigh}
 
 	// Select the Recommended preset (cursor index 1).
 	m.Cursor = 1
@@ -6101,10 +5511,14 @@ func TestCodexModelPickerPresetClearsCustomState(t *testing.T) {
 	if state.CodexModelPicker.CustomConfirmed {
 		t.Error("CodexModelPicker.CustomConfirmed = true after preset selection, want false")
 	}
-	// CodexPhaseModelAssignments must be nil — inject layer should use carril table.
-	if state.Selection.CodexPhaseModelAssignments != nil {
-		t.Errorf("Selection.CodexPhaseModelAssignments = %v after preset selection, want nil",
-			state.Selection.CodexPhaseModelAssignments)
+	if got := state.Selection.CodexPhaseModelAssignments; !reflect.DeepEqual(got, map[string]string{"sdd-propose": "gpt-5.4"}) {
+		t.Errorf("phase models = %v, want only preserved legacy assignment", got)
+	}
+	if got := state.Selection.CodexModelAssignments["sdd-propose"]; got != model.CodexEffortXHigh {
+		t.Errorf("legacy effort = %s, want xhigh", got)
+	}
+	if got := state.Selection.CodexModelAssignments["odd-worker"]; got != model.CodexODDEffortsForPreset(string(screens.CodexPresetRecommended))["odd-worker"] {
+		t.Errorf("odd-worker effort = %s, want preset policy", got)
 	}
 }
 
@@ -7586,7 +7000,6 @@ func TestPickerFlowSlice(t *testing.T) {
 		model.AgentCodex,
 		model.AgentOpenCode,
 	}
-	sddComponents := []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
 
 	tests := []struct {
 		name      string
@@ -7594,106 +7007,67 @@ func TestPickerFlowSlice(t *testing.T) {
 		wantSlice []Screen
 	}{
 		{
-			name: "non-custom all agents SDDMode Multi includes ModelPicker",
+			name: "non-custom all agents skip installer phase pickers",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Selection.Preset = model.PresetFullGentleman
 				m.Selection.Agents = allPickerAgents
-				m.Selection.Components = sddComponents
-				m.Selection.SDDMode = model.SDDModeMulti
-				return m
-			},
-			wantSlice: []Screen{
-				ScreenPreset,
-				ScreenClaudeModelPicker,
-				ScreenKiroModelPicker,
-				ScreenCodexModelPicker,
-				ScreenSDDMode,
-				ScreenModelPicker,
-				ScreenStrictTDD,
-				ScreenDependencyTree,
-			},
-		},
-		{
-			name: "non-custom all agents SDDMode Single excludes ModelPicker",
-			setup: func(t *testing.T) Model {
-				m := NewModel(system.DetectionResult{}, "dev")
-				m.Selection.Preset = model.PresetFullGentleman
-				m.Selection.Agents = allPickerAgents
-				m.Selection.Components = sddComponents
-				m.Selection.SDDMode = model.SDDModeSingle
-				return m
-			},
-			wantSlice: []Screen{
-				ScreenPreset,
-				ScreenClaudeModelPicker,
-				ScreenKiroModelPicker,
-				ScreenCodexModelPicker,
-				ScreenSDDMode,
-				ScreenStrictTDD,
-				ScreenDependencyTree,
-			},
-		},
-		{
-			name: "non-custom Claude only includes Claude and StrictTDD anchors",
-			setup: func(t *testing.T) Model {
-				m := NewModel(system.DetectionResult{}, "dev")
-				m.Selection.Preset = model.PresetFullGentleman
-				m.Selection.Agents = []model.AgentID{model.AgentClaudeCode}
-				m.Selection.Components = sddComponents
-				return m
-			},
-			wantSlice: []Screen{
-				ScreenPreset,
-				ScreenClaudeModelPicker,
-				ScreenStrictTDD,
-				ScreenDependencyTree,
-			},
-		},
-		{
-			name: "non-custom no picker agents yields only anchors",
-			setup: func(t *testing.T) Model {
-				m := NewModel(system.DetectionResult{}, "dev")
-				m.Selection.Preset = model.PresetMinimal
-				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
-				// No SDD component: all shouldShow* return false.
 				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
 				return m
 			},
-			wantSlice: []Screen{ScreenPreset, ScreenDependencyTree},
+			wantSlice: []Screen{ScreenPreset, ScreenStrictTDD, ScreenDependencyTree},
 		},
 		{
-			name: "custom Claude+Kiro+OpenCode SDDMode Multi DependencyTree at index 1",
+			name: "legacy multi mode cannot restore installer model picker",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetFullGentleman
+				m.Selection.Agents = allPickerAgents
+				m.Selection.SDDMode = model.SDDModeMulti
+				return m
+			},
+			wantSlice: []Screen{ScreenPreset, ScreenStrictTDD, ScreenDependencyTree},
+		},
+		{
+			name: "custom places dependency tree before StrictTDD",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentOpenCode}
-				m.Selection.Components = sddComponents
-				m.Selection.SDDMode = model.SDDModeMulti
 				return m
 			},
-			// Custom: DependencyTree appears at index 1 (before pickers).
-			// SDDMode + ModelPicker appear because OpenCode is selected and SDDMode is multi.
-			wantSlice: []Screen{
-				ScreenPreset,
-				ScreenDependencyTree,
-				ScreenClaudeModelPicker,
-				ScreenKiroModelPicker,
-				ScreenSDDMode,
-				ScreenModelPicker,
-				ScreenStrictTDD,
-			},
+			wantSlice: []Screen{ScreenPreset, ScreenDependencyTree, ScreenStrictTDD},
 		},
 		{
-			name: "custom no picker agents DependencyTree at index 1 no tail anchor",
+			name: "custom Cursor retains StrictTDD tail",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentCursor}
-				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
+				return m
+			},
+			wantSlice: []Screen{ScreenPreset, ScreenDependencyTree, ScreenStrictTDD},
+		},
+		{
+			name: "no selected agent has no StrictTDD",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetMinimal
+				m.Selection.Agents = nil
 				return m
 			},
 			wantSlice: []Screen{ScreenPreset, ScreenDependencyTree},
+		},
+		{
+			name: "Configure models mode does not add generic picker to installer slice",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetFullGentleman
+				m.Selection.Agents = allPickerAgents
+				m.ModelConfigMode = true
+				return m
+			},
+			wantSlice: []Screen{ScreenPreset, ScreenClaudeModelPicker, ScreenKiroModelPicker, ScreenCodexModelPicker, ScreenStrictTDD, ScreenDependencyTree},
 		},
 	}
 
@@ -7714,19 +7088,12 @@ func TestPickerFlowSlice(t *testing.T) {
 }
 
 func TestPickerNextScreen(t *testing.T) {
-	// Full non-custom chain with all agents + SDD single (no ModelPicker).
+	// Installer chain with selected agents; phase pickers are excluded.
 	newFullChainModel := func(t *testing.T) Model {
 		t.Helper()
 		m := NewModel(system.DetectionResult{}, "dev")
 		m.Selection.Preset = model.PresetFullGentleman
-		m.Selection.Agents = []model.AgentID{
-			model.AgentClaudeCode,
-			model.AgentKiroIDE,
-			model.AgentCodex,
-			model.AgentOpenCode,
-		}
-		m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-		m.Selection.SDDMode = model.SDDModeSingle
+		m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCodex, model.AgentOpenCode}
 		return m
 	}
 
@@ -7738,39 +7105,28 @@ func TestPickerNextScreen(t *testing.T) {
 		wantOK     bool
 	}{
 		{
-			name:       "Preset to ClaudeModelPicker",
+			name:       "Preset to StrictTDD without phase pickers",
 			setup:      newFullChainModel,
 			screen:     ScreenPreset,
-			wantScreen: ScreenClaudeModelPicker,
-			wantOK:     true,
-		},
-		{
-			name:       "ClaudeModelPicker to KiroModelPicker",
-			setup:      newFullChainModel,
-			screen:     ScreenClaudeModelPicker,
-			wantScreen: ScreenKiroModelPicker,
-			wantOK:     true,
-		},
-		{
-			name:       "KiroModelPicker to CodexModelPicker",
-			setup:      newFullChainModel,
-			screen:     ScreenKiroModelPicker,
-			wantScreen: ScreenCodexModelPicker,
-			wantOK:     true,
-		},
-		{
-			name:       "CodexModelPicker to SDDMode",
-			setup:      newFullChainModel,
-			screen:     ScreenCodexModelPicker,
-			wantScreen: ScreenSDDMode,
-			wantOK:     true,
-		},
-		{
-			name:       "SDDMode to StrictTDD",
-			setup:      newFullChainModel,
-			screen:     ScreenSDDMode,
 			wantScreen: ScreenStrictTDD,
 			wantOK:     true,
+		},
+		{
+			name: "custom Preset to DependencyTree",
+			setup: func(t *testing.T) Model {
+				m := newFullChainModel(t)
+				m.Selection.Preset = model.PresetCustom
+				return m
+			},
+			screen: ScreenPreset, wantScreen: ScreenDependencyTree, wantOK: true,
+		},
+		{
+			name:  "legacy phase picker is not an installer member",
+			setup: newFullChainModel, screen: ScreenCodexModelPicker, wantOK: false,
+		},
+		{
+			name:  "generic ModelPicker is not an installer member",
+			setup: newFullChainModel, screen: ScreenModelPicker, wantOK: false,
 		},
 		{
 			name:       "StrictTDD to DependencyTree",
@@ -7835,6 +7191,17 @@ func TestPickerNextScreen(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("Configure models still opens generic runtime picker", func(t *testing.T) {
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Screen = ScreenModelConfig
+		m.Cursor = 1 // OpenCode in the Configure models menu.
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		state := updated.(Model)
+		if state.Screen != ScreenModelPicker || !state.ModelConfigMode {
+			t.Fatalf("Configure models screen/mode = %v/%v, want ModelPicker/true", state.Screen, state.ModelConfigMode)
+		}
+	})
 }
 
 func TestPickerPreviousScreen(t *testing.T) {
@@ -7848,8 +7215,7 @@ func TestPickerPreviousScreen(t *testing.T) {
 			model.AgentCodex,
 			model.AgentOpenCode,
 		}
-		m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-		m.Selection.SDDMode = model.SDDModeSingle
+		m.Selection.Components = []model.ComponentID{model.ComponentEngram}
 		return m
 	}
 
@@ -7868,39 +7234,41 @@ func TestPickerPreviousScreen(t *testing.T) {
 			wantOK:     true,
 		},
 		{
-			name:       "StrictTDD to SDDMode",
+			name:       "StrictTDD to Preset without installer phase pickers",
 			setup:      newFullChainModel,
 			screen:     ScreenStrictTDD,
-			wantScreen: ScreenSDDMode,
-			wantOK:     true,
-		},
-		{
-			name:       "SDDMode to CodexModelPicker",
-			setup:      newFullChainModel,
-			screen:     ScreenSDDMode,
-			wantScreen: ScreenCodexModelPicker,
-			wantOK:     true,
-		},
-		{
-			name:       "CodexModelPicker to KiroModelPicker",
-			setup:      newFullChainModel,
-			screen:     ScreenCodexModelPicker,
-			wantScreen: ScreenKiroModelPicker,
-			wantOK:     true,
-		},
-		{
-			name:       "KiroModelPicker to ClaudeModelPicker",
-			setup:      newFullChainModel,
-			screen:     ScreenKiroModelPicker,
-			wantScreen: ScreenClaudeModelPicker,
-			wantOK:     true,
-		},
-		{
-			name:       "ClaudeModelPicker to Preset",
-			setup:      newFullChainModel,
-			screen:     ScreenClaudeModelPicker,
 			wantScreen: ScreenPreset,
 			wantOK:     true,
+		},
+		{
+			name: "custom StrictTDD to DependencyTree",
+			setup: func(t *testing.T) Model {
+				m := newFullChainModel(t)
+				m.Selection.Preset = model.PresetCustom
+				return m
+			},
+			screen: ScreenStrictTDD, wantScreen: ScreenDependencyTree, wantOK: true,
+		},
+		{
+			name: "no agent DependencyTree to Preset",
+			setup: func(t *testing.T) Model {
+				m := newFullChainModel(t)
+				m.Selection.Agents = nil
+				return m
+			},
+			screen: ScreenDependencyTree, wantScreen: ScreenPreset, wantOK: true,
+		},
+		{
+			name:  "retired Codex installer picker is not a member",
+			setup: newFullChainModel, screen: ScreenCodexModelPicker, wantOK: false,
+		},
+		{
+			name:  "retired Kiro installer picker is not a member",
+			setup: newFullChainModel, screen: ScreenKiroModelPicker, wantOK: false,
+		},
+		{
+			name:  "retired Claude installer picker is not a member",
+			setup: newFullChainModel, screen: ScreenClaudeModelPicker, wantOK: false,
 		},
 		{
 			name:       "Preset is first anchor returns ok=false",
@@ -7929,19 +7297,6 @@ func TestPickerPreviousScreen(t *testing.T) {
 			screen:     ScreenReview,
 			wantScreen: 0,
 			wantOK:     false,
-		},
-		{
-			name: "custom slice ClaudeModelPicker prev returns DependencyTree",
-			setup: func(t *testing.T) Model {
-				m := NewModel(system.DetectionResult{}, "dev")
-				m.Selection.Preset = model.PresetCustom
-				m.Selection.Agents = []model.AgentID{model.AgentClaudeCode}
-				m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-				return m
-			},
-			screen:     ScreenClaudeModelPicker,
-			wantScreen: ScreenDependencyTree,
-			wantOK:     true,
 		},
 	}
 
@@ -8053,19 +7408,6 @@ func TestApplyPickerEntry(t *testing.T) {
 			},
 		},
 		{
-			name: "SDDMode sets screen only",
-			setup: func(t *testing.T) Model {
-				return NewModel(system.DetectionResult{}, "dev")
-			},
-			target: ScreenSDDMode,
-			assertFn: func(t *testing.T, got Model) {
-				t.Helper()
-				if got.Screen != ScreenSDDMode {
-					t.Fatalf("Screen = %v, want ScreenSDDMode", got.Screen)
-				}
-			},
-		},
-		{
 			name: "StrictTDD sets screen only",
 			setup: func(t *testing.T) Model {
 				return NewModel(system.DetectionResult{}, "dev")
@@ -8169,42 +7511,6 @@ func TestModelUpdateAppliesRuntimeCatalogDiscovery(t *testing.T) {
 	}
 }
 
-func TestModelUpdateAppliesRuntimeCatalogDiscoveryDuringProfileModelStep(t *testing.T) {
-	newProfilePicker := func() Model {
-		m := NewModel(system.DetectionResult{}, "dev")
-		m.Screen = ScreenProfileCreate
-		m.ProfileCreateStep = 1
-		m.runtimeCatalogDiscoveryRequest = 1
-		m.ModelPicker = screens.NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing-opencode.json"), nil)
-		m.ModelPicker.ForProfile = true
-		m.ModelPicker.StartRuntimeCatalogDiscovery(1, "profile-project")
-		return m
-	}
-	message := screens.RuntimeCatalogDiscoveryMsg{RequestID: 1, ProjectDir: "profile-project", Providers: map[string]opencode.Provider{
-		"profile-provider": {ID: "profile-provider", Models: map[string]opencode.Model{"tool-model": {ID: "tool-model", ToolCall: true}}},
-	}}
-
-	t.Run("profile model step accepts matching tool-capable catalog", func(t *testing.T) {
-		updated, _ := newProfilePicker().Update(message)
-		state := updated.(Model)
-		if !state.ModelPicker.ForProfile || state.ModelPicker.CatalogStatus != screens.RuntimeCatalogReady || len(state.ModelPicker.AvailableIDs) != 1 || state.ModelPicker.AvailableIDs[0] != "profile-provider" {
-			t.Fatalf("profile runtime catalog state = %+v", state.ModelPicker)
-		}
-	})
-
-	for _, step := range []int{0, 2} {
-		t.Run(fmt.Sprintf("profile step %d rejects catalog", step), func(t *testing.T) {
-			m := newProfilePicker()
-			m.ProfileCreateStep = step
-			updated, _ := m.Update(message)
-			state := updated.(Model)
-			if state.ModelPicker.CatalogStatus != screens.RuntimeCatalogLoading || len(state.ModelPicker.AvailableIDs) != 0 {
-				t.Fatalf("profile step %d accepted runtime catalog: %+v", step, state.ModelPicker)
-			}
-		})
-	}
-}
-
 func TestInitializeModelPickerWorkingDirectoryFailureShowsDiscoveryFallback(t *testing.T) {
 	originalDir := modelPickerWorkingDir
 	originalSettingsPath := modelPickerSettingsPath
@@ -8283,16 +7589,10 @@ func TestRuntimeCatalogDiscoveryIgnoresStaleProjectResults(t *testing.T) {
 	}
 }
 
-// ─── Unit 4: TestPickerBackRowRegression ─────────────────────────────────────
-//
-// These tests are the RED gate for Unit 5 (forward call-site rewrites) and
-// Unit 6 (back call-site rewrites). They cover the 4 pre-existing
-// inconsistencies between goBack (Esc) and confirmSelection (Enter on Back row).
-// Cases 3, 4, 5, 6 MUST FAIL before Units 5/6 are implemented.
-// Cases 1, 2 may already pass; they are included as regression guards.
+// ─── ODD installer and Configure models back-row regression ─────────────────
 
 func TestPickerBackRowRegression(t *testing.T) {
-	sddComponents := []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	components := []model.ComponentID{model.ComponentEngram}
 
 	// codexBackRow returns the cursor index for the "← Back" row in ScreenCodexModelPicker.
 	codexBackRow := screens.CodexModelPickerOptionCount(screens.NewCodexModelPickerState()) - 1
@@ -8307,94 +7607,83 @@ func TestPickerBackRowRegression(t *testing.T) {
 		wantScreen Screen
 	}{
 		{
-			// Case 1: Codex Back non-custom Codex-only → Preset (should already pass)
-			name: "codex back non-custom codex-only returns to Preset",
+			name: "Configure models Codex Back returns to ModelConfig",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenCodexModelPicker
+				m.ModelConfigMode = true
 				m.Selection.Agents = []model.AgentID{model.AgentCodex}
-				m.Selection.Components = sddComponents
+				m.Selection.Components = components
 				m.Selection.Preset = model.PresetFullGentleman
 				m.CodexModelPicker = screens.NewCodexModelPickerState()
 				m.Cursor = codexBackRow
 				return m
 			},
-			wantScreen: ScreenPreset,
+			wantScreen: ScreenModelConfig,
 		},
 		{
-			// Case 2: Codex Back non-custom Kiro+Codex → KiroModelPicker (should already pass)
-			name: "codex back non-custom kiro+codex returns to KiroModelPicker",
+			name: "Configure models Codex Back with Kiro returns to ModelConfig",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenCodexModelPicker
+				m.ModelConfigMode = true
 				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentCodex}
-				m.Selection.Components = sddComponents
+				m.Selection.Components = components
 				m.Selection.Preset = model.PresetFullGentleman
 				m.CodexModelPicker = screens.NewCodexModelPickerState()
 				m.Cursor = codexBackRow
 				return m
 			},
-			wantScreen: ScreenKiroModelPicker,
+			wantScreen: ScreenModelConfig,
 		},
 		{
-			// Case 3: Codex Back custom Codex-only → DependencyTree
-			// BUG: currently goes to ScreenPreset (same as non-custom path) — RED must fail.
-			name: "codex back custom codex-only returns to DependencyTree (bug fix)",
+			name: "Configure models Codex Back ignores custom preset",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenCodexModelPicker
+				m.ModelConfigMode = true
 				m.Selection.Agents = []model.AgentID{model.AgentCodex}
-				m.Selection.Components = sddComponents
+				m.Selection.Components = components
 				m.Selection.Preset = model.PresetCustom
 				m.CodexModelPicker = screens.NewCodexModelPickerState()
 				m.Cursor = codexBackRow
 				return m
 			},
-			wantScreen: ScreenDependencyTree,
+			wantScreen: ScreenModelConfig,
 		},
 		{
-			// Case 4: StrictTDD Back Codex+no Claude+no Kiro (no OpenCode) → CodexModelPicker
-			// BUG: confirmSelection only checked Claude/SDDMode — skipped Codex when no OpenCode — RED must fail.
-			name: "strictTDD back codex+no opencode+no claude/kiro returns to CodexModelPicker (bug fix)",
+			name: "StrictTDD Back Codex-only returns to Preset",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenStrictTDD
 				m.Selection.Agents = []model.AgentID{model.AgentCodex}
-				m.Selection.Components = sddComponents
+				m.Selection.Components = components
 				m.Selection.Preset = model.PresetFullGentleman
-				m.CodexModelPicker = screens.NewCodexModelPickerState()
 				m.Cursor = strictTDDBackRow
 				return m
 			},
-			wantScreen: ScreenCodexModelPicker,
+			wantScreen: ScreenPreset,
 		},
 		{
-			// Case 5: StrictTDD Back Kiro+no Claude+no Codex (no OpenCode) → KiroModelPicker
-			// BUG: same latent bug as case 4 — RED must fail.
-			name: "strictTDD back kiro+no opencode+no claude/codex returns to KiroModelPicker (bug fix)",
+			name: "StrictTDD Back Kiro-only returns to Preset",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenStrictTDD
 				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
-				m.Selection.Components = sddComponents
+				m.Selection.Components = components
 				m.Selection.Preset = model.PresetFullGentleman
-				m.KiroModelPicker = screens.NewKiroModelPickerState()
 				m.Cursor = strictTDDBackRow
 				return m
 			},
-			wantScreen: ScreenKiroModelPicker,
+			wantScreen: ScreenPreset,
 		},
 		{
-			// Case 6: DependencyTree Back non-custom OpenCode no StrictTDD/SDDMode → OpenCodePlugins
-			// BUG: confirmSelection lacks shouldShowOpenCodePluginsScreen check — RED must fail.
-			name: "depTree back non-custom opencode+no sdd returns to OpenCodePlugins (bug fix)",
+			name: "DependencyTree Back OpenCode returns to OpenCodePlugins",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
 				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
-				// Minimal preset: no SDD component, so shouldShowStrictTDDScreen=false,
-				// shouldShowSDDModeScreen=false. OpenCode is present → OpenCodePlugins guard fires.
-				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
+				m.Selection.Components = components
 				m.Selection.Preset = model.PresetMinimal
 				m.Cursor = depTreeBackRow
 				return m
@@ -8402,38 +7691,39 @@ func TestPickerBackRowRegression(t *testing.T) {
 			wantScreen: ScreenOpenCodePlugins,
 		},
 		{
-			// Case 7: applyPickerEntry custom Kiro-only DependencyTree Continue → KiroModelPicker with state
-			name: "custom kiro-only depTree continue lands on KiroModelPicker with initialized state",
+			name: "custom Kiro-only DependencyTree Continue enters StrictTDD",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
-				m.Selection.Components = sddComponents
+				m.Selection.Components = components
 				m.Cursor = len(screens.AllComponents()) // "Continue" row
 				return m
 			},
-			wantScreen: ScreenKiroModelPicker,
+			wantScreen: ScreenStrictTDD,
 		},
 		{
-			// Case 8: applyPickerEntry custom Codex-only DependencyTree Continue → CodexModelPicker with state
-			name: "custom codex-only depTree continue lands on CodexModelPicker with initialized state",
+			name: "custom Codex-only DependencyTree Continue enters StrictTDD",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentCodex}
-				m.Selection.Components = sddComponents
+				m.Selection.Components = components
 				m.Cursor = len(screens.AllComponents()) // "Continue" row
 				return m
 			},
-			wantScreen: ScreenCodexModelPicker,
+			wantScreen: ScreenStrictTDD,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := tt.setup(t)
+			if tt.wantScreen == ScreenModelConfig && !m.ModelConfigMode {
+				t.Fatal("Configure models picker must start in ModelConfigMode")
+			}
 			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			got := updated.(Model)
 			if got.Screen != tt.wantScreen {
@@ -8443,13 +7733,13 @@ func TestPickerBackRowRegression(t *testing.T) {
 	}
 }
 
-func TestGoBackCustomModelPickerStartsDiscovery(t *testing.T) {
+func TestGoBackCustomSkipsRetiredModelPicker(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen, m.Selection.Preset, m.Selection.SDDMode = ScreenStrictTDD, model.PresetCustom, model.SDDModeMulti
 	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
 	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if got := updated.(Model); got.Screen != ScreenModelPicker || cmd == nil {
+	if got := updated.(Model); got.Screen != ScreenDependencyTree || cmd != nil {
 		t.Fatalf("screen/cmd = %v/%v", got.Screen, cmd)
 	}
 }

@@ -45,6 +45,26 @@ var retiredRemoteControlPlaneVocabulary = []string{
 	"daemon",
 }
 
+// Every adapter must receive only the ODD workflow, not a selectable legacy route.
+func TestRenderRoutingOffersOnlyODD(t *testing.T) {
+	t.Parallel()
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(rendered, "Organic Driven Development (ODD) is the predefined workflow") {
+				t.Fatal("ODD workflow is missing")
+			}
+			if strings.Contains(strings.ToLower(rendered), "sdd") {
+				t.Fatalf("agent %q still offers SDD routing", agent.ID)
+			}
+		})
+	}
+}
+
 func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
@@ -70,7 +90,6 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 			for _, want := range []string{
 				"Direct inline",
 				"Delegated direct",
-				"Optional SDD",
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing route %q:\n%s", agent.ID, want, rendered)
@@ -107,12 +126,11 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"without a task or storage permission prompt",
 			"Small, understood work creates no durable task artifacts",
 		}},
-		{"optional research without implicit SDD", []string{
+		{"optional research within ODD", []string{
 			"Recommend optional research only for a named uncertainty",
 			"If declined, continue within authorized scope only where safe without the missing evidence",
 			"disclose unresolved uncertainty and pause affected unsafe decisions",
 			"Neither research nor a proposal is mandatory",
-			"Do not recommend SDD merely to resolve ambiguity",
 		}},
 		{"adaptive research and product questions", []string{
 			"Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code",
@@ -121,7 +139,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"ask one focused user question only for a real unresolved product decision, then stop and wait",
 			"Workers return gaps to the parent rather than assuming choices",
 			"forward these research instructions to a fresh general exploration/research worker through existing delegation",
-			"do not create a specialized agent or invoke sdd-research",
+			"do not create a specialized research agent",
 		}},
 		{"external evidence and useful research handoff", []string{
 			"use available authorized documentation/web tools and prefer primary sources",
@@ -161,7 +179,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"When disabled, run ordinary functional checks, not no checks",
 			"If mode is unknown/conflicting or the runner is missing",
 			"resolve only the ambiguity affecting the next action",
-			"never invent precedence or a command, and never invoke sdd-init to determine ODD TDD",
+			"never invent precedence or a command to determine ODD TDD",
 		}},
 		{"updates require proof", []string{
 			"automatically update affected intent and TODOs",
@@ -251,9 +269,6 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 					}
 				})
 			}
-			if strings.Contains(rendered, "propose SDD only when durable proposal") {
-				t.Error("organic uncertainty still proactively recommends SDD")
-			}
 		})
 	}
 }
@@ -341,28 +356,6 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 	}
 }
 
-func TestRenderRoutingKeepsSDDSelectionExplicit(t *testing.T) {
-	t.Parallel()
-
-	rendered, err := RenderRouting(model.AgentClaudeCode)
-	if err != nil {
-		t.Fatalf("RenderRouting error = %v", err)
-	}
-
-	lowered := strings.ToLower(rendered)
-	for _, want := range []string{
-		"explicit request",
-		"accepted proposal",
-	} {
-		if !strings.Contains(lowered, want) {
-			t.Fatalf("rendered routing does not require %q:\n%s", want, rendered)
-		}
-	}
-	if !strings.Contains(lowered, "never select") {
-		t.Fatalf("rendered routing does not state that size or risk alone never selects SDD:\n%s", rendered)
-	}
-}
-
 func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 	t.Parallel()
 
@@ -387,8 +380,7 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 				"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts",
 				"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.",
 				"After explicit change intent is established",
-				"SDD is selected only by an explicit request or an accepted proposal.",
-				"Automatic SDD pace is not mutation authorization",
+				"Every authorized change takes exactly one implementation route: direct inline or delegated direct.",
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing outcome-authorization clause %q:\n%s", agent.ID, want, rendered)
@@ -583,7 +575,6 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 				"before the first source write",
 				"Tell the user in one line which feature document was created and how many tasks it holds",
 				"Never describe this workflow only when asked about it: run it.",
-				"SDD is a branch inside ODD",
 				"Resume an interrupted feature with `mem_context`",
 			} {
 				if !strings.Contains(rendered, want) {
@@ -635,7 +626,7 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"**Route declaration:**",
 				"record the chosen route per task",
 				"so skipped delegation is observable instead of silent",
-				"These triggers never select SDD and never create SDD artifacts",
+				"These triggers only choose between direct inline and delegated direct inside the organic flow",
 				"honoring its mandatory delegation triggers",
 			} {
 				if !strings.Contains(rendered, want) {

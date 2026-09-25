@@ -313,8 +313,12 @@ func TestPiCodeGraphRefreshRestoresMissingOwnedChild(t *testing.T) {
 }
 
 func TestPiCodeGraphPathsExcludesUnsafeManifestPaths(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	home := t.TempDir()
 	paths := piagent.CodeGraphPaths(home)
+	if want := filepath.Join(home, ".pi", "agent"); paths.AgentDir != want {
+		t.Fatalf("agent directory = %q, want isolated path %q", paths.AgentDir, want)
+	}
 	outside := filepath.Join(t.TempDir(), "outside.json")
 	escapedDir := filepath.Join(paths.AgentDir, "escaped")
 	escaped := filepath.Join(escapedDir, "child.md")

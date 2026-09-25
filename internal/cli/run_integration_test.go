@@ -137,6 +137,28 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestCodexODDAssignmentInstallRoutingStep(t *testing.T) {
+	home := t.TempDir()
+	step := agentRoutingGuidanceStep{
+		agent: model.AgentCodex, homeDir: home, scope: ScopeGlobal,
+		codexPhaseModels: map[string]string{"odd-worker": "gpt-explicit"},
+		codexEfforts:     map[string]model.CodexEffort{"odd-worker": model.CodexEffortXHigh},
+		codexCarrils:     map[string]string{"sdd-cheap": "gpt-cheap", "sdd-strong": "gpt-strong"},
+	}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"| `odd-worker` | `gpt-explicit` | `xhigh` |", "| `odd-explorer` | `gpt-cheap` | `high` |", "| `odd-verify` | `gpt-strong` | `medium` |"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("installed Codex guidance missing %q", want)
+		}
+	}
+}
+
 func TestRunInstallCodexKeepsOldRuntimeFailure(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -1921,8 +1943,8 @@ func TestRunInstallDryRunMatchesActualInstall(t *testing.T) {
 	}
 }
 
-func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
-	installArgs := []string{"--agent", "opencode", "--component", "sdd", "--sdd-mode", "multi"}
+func TestRunInstallDryRunMatchesActualInstallOpenCodeReview(t *testing.T) {
+	installArgs := []string{"--agent", "opencode", "--component", "persona"}
 	dryRunArgs := append([]string{"--dry-run"}, installArgs...)
 	dryResult, err := RunInstall(dryRunArgs, system.DetectionResult{})
 	if err != nil {
@@ -1938,15 +1960,8 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 	for _, component := range dryResult.Resolved.OrderedComponents {
 		expectedPaths = append(expectedPaths, componentPaths(home, dryResult.Selection, adapters, component)...)
 	}
-	pluginPaths := []string{
-		filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"),
-		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
-		filepath.Join(home, ".config", "opencode", "plugins", "skill-registry.ts"),
-	}
-	for _, pluginPath := range pluginPaths {
-		if !containsPath(expectedPaths, pluginPath) {
-			t.Fatalf("dry-run expected paths missing multi-mode plugin %q\npaths=%v", pluginPath, expectedPaths)
-		}
+	if len(expectedPaths) == 0 {
+		t.Fatal("dry-run omitted the requested persona files")
 	}
 
 	restoreHome := osUserHomeDir
@@ -1971,25 +1986,8 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 	}
 
 	for _, path := range expectedPaths {
-		if isLegacyOpenCodeBackgroundAgentsPlugin(path) {
-			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-				t.Fatalf("expected legacy OpenCode SDD plugin %q to be removed after install; stat err = %v", path, statErr)
-			}
-			continue
-		}
 		if _, statErr := os.Stat(path); statErr != nil {
-			t.Fatalf("expected dry-run path %q to exist after install: %v", path, statErr)
-		}
-	}
-	for _, pluginPath := range pluginPaths {
-		if isLegacyOpenCodeBackgroundAgentsPlugin(pluginPath) {
-			if _, statErr := os.Stat(pluginPath); !os.IsNotExist(statErr) {
-				t.Fatalf("expected legacy OpenCode SDD plugin %q to be removed after install; stat err = %v", pluginPath, statErr)
-			}
-			continue
-		}
-		if _, statErr := os.Stat(pluginPath); statErr != nil {
-			t.Fatalf("expected OpenCode SDD plugin %q to exist after install: %v", pluginPath, statErr)
+			t.Fatalf("dry-run path %q missing after install: %v", path, statErr)
 		}
 	}
 }
@@ -2076,7 +2074,8 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 
 	args := []string{
 		"--agent", "claude-code",
-		"--component", "sdd",
+		"--component", "skills",
+		"--skills", "go-testing",
 		"--component", "engram",
 		"--component", "persona",
 	}
@@ -2144,7 +2143,7 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 
 	// 3. No duplicate gentle-ai marker blocks — each section's open marker
 	// must appear exactly once.
-	for _, sectionID := range []string{"sdd-orchestrator", "engram-protocol"} {
+	for _, sectionID := range []string{"engram-protocol"} {
 		openMarker := "<!-- gentle-ai:" + sectionID + " -->"
 		count := strings.Count(content, openMarker)
 		if count != 1 {
@@ -2326,45 +2325,33 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 	}
 }
 
-// TestRunInstallSkillsAndSDDBothSelectedNoDuplicateSkillFiles guards #3554
-// review finding: skills+sdd together must write every sdd-* skill exactly
-// once plus the requested standalone skill — no duplicates, no clobbering.
-func TestRunInstallSkillsAndSDDBothSelectedNoDuplicateSkillFiles(t *testing.T) {
+// Ordinary standalone skills must not duplicate files when the selection is repeated.
+func TestRunInstallRepeatedOrdinarySkillsNoDuplicateSkillFiles(t *testing.T) {
 	home := t.TempDir()
 	restoreHome, restoreCommand, restoreLookPath := osUserHomeDir, runCommand, cmdLookPath
-	t.Cleanup(func() {
-		osUserHomeDir, runCommand, cmdLookPath = restoreHome, restoreCommand, restoreLookPath
-	})
+	t.Cleanup(func() { osUserHomeDir, runCommand, cmdLookPath = restoreHome, restoreCommand, restoreLookPath })
 	osUserHomeDir = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
-
-	result, err := RunInstall([]string{
-		"--agent", "claude-code", "--preset", "custom",
-		"--component", "skills,sdd", "--skills", "go-testing",
-	}, system.DetectionResult{})
-	if err != nil || !result.Verify.Ready {
-		t.Fatalf("RunInstall() error = %v, verify = %#v", err, result.Verify)
+	args := []string{"--agent", "claude-code", "--preset", "custom", "--component", "skills", "--skills", "go-testing,branch-pr"}
+	for i := 0; i < 2; i++ {
+		result, err := RunInstall(args, system.DetectionResult{})
+		if err != nil || !result.Verify.Ready {
+			t.Fatalf("install %d: %v, verify = %#v", i, err, result.Verify)
+		}
 	}
-
-	skillsDir := filepath.Join(home, ".claude", "skills")
-	entries, err := os.ReadDir(skillsDir)
+	entries, err := os.ReadDir(filepath.Join(home, ".claude", "skills"))
 	if err != nil {
-		t.Fatalf("ReadDir(%q) error = %v", skillsDir, err)
+		t.Fatal(err)
 	}
-	var skillCount int
+	var count int
 	for _, entry := range entries {
-		if _, statErr := os.Stat(filepath.Join(skillsDir, entry.Name(), "SKILL.md")); statErr == nil {
-			skillCount++
+		if _, err := os.Stat(filepath.Join(home, ".claude", "skills", entry.Name(), "SKILL.md")); err == nil {
+			count++
 		}
 	}
-	if skillCount != 13 {
-		t.Fatalf("expected 13 skill files (12 SDD + go-testing, no duplicates), got %d", skillCount)
-	}
-	for _, id := range []string{"sdd-init", "go-testing"} {
-		if _, err := os.Stat(filepath.Join(skillsDir, id, "SKILL.md")); err != nil {
-			t.Fatalf("expected %s skill file: %v", id, err)
-		}
+	if count != 2 {
+		t.Fatalf("expected exactly two standalone skills after repeat install, got %d", count)
 	}
 }
 
@@ -2402,7 +2389,7 @@ func TestRunInstallCustomPresetExplicitComponentsResolveCorrectly(t *testing.T) 
 			"--agent", "claude-code",
 			"--preset", "custom",
 			"--component", "engram",
-			"--component", "sdd",
+			"--component", "skills",
 			"--component", "permissions",
 			"--dry-run",
 		},
@@ -2412,7 +2399,7 @@ func TestRunInstallCustomPresetExplicitComponentsResolveCorrectly(t *testing.T) 
 		t.Fatalf("RunInstall() error = %v", err)
 	}
 
-	// Should have exactly the 3 explicit components (sdd depends on engram which is already selected).
+	// Custom selection contains exactly the three explicitly requested independent components.
 	if len(result.Resolved.OrderedComponents) != 3 {
 		t.Fatalf("expected 3 ordered components, got %d: %v",
 			len(result.Resolved.OrderedComponents), result.Resolved.OrderedComponents)
@@ -2421,20 +2408,16 @@ func TestRunInstallCustomPresetExplicitComponentsResolveCorrectly(t *testing.T) 
 	// Verify persona, skills, context7, gga are NOT in the plan.
 	for _, c := range result.Resolved.OrderedComponents {
 		switch c {
-		case model.ComponentPersona, model.ComponentSkills, model.ComponentContext7, model.ComponentGGA:
+		case model.ComponentPersona, model.ComponentContext7, model.ComponentGGA:
 			t.Fatalf("unexpected component %q in custom preset plan", c)
 		}
 	}
 }
 
-// TestOpenCodePersonaBeforeSDDPreservesAllSections is the regression test for
-// issue #121: on StrategyFileReplace agents, if Persona ran after SDD it would
-// overwrite the entire AGENTS.md, destroying the SDD orchestrator section.
-//
-// This test exercises the full install pipeline for OpenCode with Persona +
-// Engram + SDD selected together and verifies that the final AGENTS.md
-// contains all three sections with no duplicates.
-func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
+// TestOpenCodePersonaBeforeODDRoutingPreservesAllSections protects issue #121:
+// persona replacement must not erase the independently installed Engram section.
+// Ordinary ODD routing belongs in opencode.json, not AGENTS.md.
+func TestOpenCodePersonaBeforeODDRoutingPreservesAllSections(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -2454,7 +2437,6 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 			"--agent", "opencode",
 			"--component", "persona",
 			"--component", "engram",
-			"--component", "sdd",
 			"--persona", "gentleman",
 		},
 		system.DetectionResult{},
@@ -2475,11 +2457,8 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 		t.Error("AGENTS.md missing Gentleman persona content (persona not written)")
 	}
 
-	// For OpenCode, the SDD orchestrator goes into opencode.json (agent overlay),
-	// NOT AGENTS.md. AGENTS.md only contains persona and engram sections.
-	// The issue #121 regression was that Persona would overwrite AGENTS.md
-	// AFTER engram had already injected the engram-protocol marker, destroying
-	// the engram section. We verify persona + engram coexist.
+	// OpenCode routing goes into opencode.json, not AGENTS.md. Persona and
+	// Engram must coexist even when persona replaces the AGENTS.md file.
 
 	// Engram protocol section must be present
 	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->") {
@@ -2495,25 +2474,23 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 		t.Errorf("AGENTS.md contains %d occurrences of %q, want exactly 1 (no duplicates)", count, marker)
 	}
 
-	// AGENTS.md must NOT have sdd-orchestrator markers — OpenCode uses opencode.json overlay
-	if strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
-		t.Error("AGENTS.md should NOT have sdd-orchestrator marker — OpenCode uses opencode.json agent overlay")
+	// ODD routing lives in the managed OpenCode agent prompt, not AGENTS.md.
+	if strings.Contains(text, "<!-- gentle-ai:agent-routing -->") {
+		t.Error("AGENTS.md should not contain OpenCode routing guidance")
 	}
 
-	// SDD orchestrator for OpenCode lives in opencode.json agent overlay under
-	// the canonical gentle-orchestrator key. Legacy sdd-orchestrator should be
-	// migrated away during injection.
+	// Routing is installed independently of a retired SDD selection.
 	opencodeJSON := filepath.Join(home, ".config", "opencode", "opencode.json")
 	jsonContent, err := os.ReadFile(opencodeJSON)
 	if err != nil {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
 	}
 	jsonText := string(jsonContent)
-	if !strings.Contains(jsonText, "gentle-orchestrator") {
-		t.Error("opencode.json missing gentle-orchestrator agent entry (SDD not injected)")
+	if !strings.Contains(jsonText, `"gentle-orchestrator"`) || !strings.Contains(jsonText, "gentle-ai:agent-routing") {
+		t.Error("opencode.json missing managed ordinary ODD routing prompt")
 	}
 	if strings.Contains(jsonText, `"sdd-orchestrator"`) {
-		t.Error("opencode.json should not contain legacy sdd-orchestrator agent entry")
+		t.Error("opencode.json should not contain retired sdd-orchestrator alias")
 	}
 }
 func TestRunInstallKimiBootstrapsHub(t *testing.T) {

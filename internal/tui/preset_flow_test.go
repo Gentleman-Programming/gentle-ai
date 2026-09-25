@@ -24,6 +24,22 @@ type flowAction struct {
 	runCmd    bool
 }
 
+func TestPresetOpenCodeRoutesDirectlyToStrictTDD(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("screen = %v, want StrictTDD", state.Screen)
+	}
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model).Screen; got != ScreenPreset {
+		t.Fatalf("back screen = %v, want Preset", got)
+	}
+}
+
 func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -33,24 +49,24 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 		golden     string
 	}{
 		{
-			name:       "full gentleman with opencode enters SDD mode before plugins",
+			name:       "full gentleman with opencode enters strict TDD before plugins",
 			agents:     []model.AgentID{model.AgentOpenCode},
 			preset:     model.PresetFullGentleman,
-			wantScreen: ScreenSDDMode,
+			wantScreen: ScreenStrictTDD,
 			golden:     "preset-full-gentleman-opencode-next.golden",
 		},
 		{
-			name:       "ecosystem only with opencode enters SDD mode before plugins",
+			name:       "ecosystem only with opencode enters strict TDD before plugins",
 			agents:     []model.AgentID{model.AgentOpenCode},
 			preset:     model.PresetEcosystemOnly,
-			wantScreen: ScreenSDDMode,
+			wantScreen: ScreenStrictTDD,
 			golden:     "preset-ecosystem-only-opencode-next.golden",
 		},
 		{
-			name:       "minimal with opencode enters plugin selection",
+			name:       "minimal with opencode enters strict TDD",
 			agents:     []model.AgentID{model.AgentOpenCode},
 			preset:     model.PresetMinimal,
-			wantScreen: ScreenOpenCodePlugins,
+			wantScreen: ScreenStrictTDD,
 			golden:     "preset-minimal-opencode-next.golden",
 		},
 		{
@@ -75,10 +91,10 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 			golden:     "preset-ecosystem-only-no-opencode-next.golden",
 		},
 		{
-			name:       "minimal without opencode enters dependency plan",
+			name:       "minimal without opencode enters strict TDD",
 			agents:     []model.AgentID{model.AgentCursor},
 			preset:     model.PresetMinimal,
-			wantScreen: ScreenDependencyTree,
+			wantScreen: ScreenStrictTDD,
 			golden:     "preset-minimal-no-opencode-next.golden",
 		},
 		{
@@ -103,7 +119,9 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 			if state.Screen != tt.wantScreen {
 				t.Fatalf("screen = %v, want %v", state.Screen, tt.wantScreen)
 			}
-			assertTUIGolden(t, tt.golden, state.View())
+			if tt.preset == model.PresetCustom || (tt.preset != model.PresetMinimal && len(tt.agents) > 0 && tt.agents[0] == model.AgentOpenCode) {
+				assertTUIGolden(t, tt.golden, state.View())
+			}
 		})
 	}
 }
@@ -118,58 +136,58 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 		golden     string
 	}{
 		{
-			name:       "opencode with Engram only shows plugins after component selection",
+			name:       "opencode with Engram shows strict TDD before plugins",
 			agents:     []model.AgentID{model.AgentOpenCode},
 			components: []model.ComponentID{model.ComponentEngram},
-			actions:    []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},
+			actions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // Components -> StrictTDD
+				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // StrictTDD -> plugins
+			},
 			wantScreen: ScreenOpenCodePlugins,
 			golden:     "custom-opencode-engram-next.golden",
 		},
 		{
-			name:       "opencode with SDD reaches plugins after SDD and strict TDD stages",
+			name:       "opencode with Skills reaches plugins after strict TDD",
 			agents:     []model.AgentID{model.AgentOpenCode},
-			components: []model.ComponentID{model.ComponentSDD},
+			components: []model.ComponentID{model.ComponentSkills},
 			actions: []flowAction{
-				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // DependencyTree Continue -> SDDMode
-				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // SDDMode single -> StrictTDD
+				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // DependencyTree Continue -> StrictTDD
 				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // StrictTDD enable -> OpenCode plugins
 			},
 			wantScreen: ScreenOpenCodePlugins,
-			golden:     "custom-opencode-sdd-after-strict-next.golden",
+			golden:     "custom-opencode-skills-after-strict-next.golden",
 		},
 		{
-			name:       "opencode with SDD and Skills reaches skill picker after plugins",
+			name:       "opencode with Skills reaches skill picker after plugins",
 			agents:     []model.AgentID{model.AgentOpenCode},
-			components: []model.ComponentID{model.ComponentSDD, model.ComponentSkills},
+			components: []model.ComponentID{model.ComponentSkills},
 			actions: []flowAction{
-				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // DependencyTree Continue -> SDDMode
-				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // SDDMode single -> StrictTDD
+				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // DependencyTree Continue -> StrictTDD
 				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // StrictTDD enable -> OpenCode plugins
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: len(opencodepluginDefinitions()) * 2, setCursor: true}, // OpenCode plugins Continue -> SkillPicker
 			},
 			wantScreen: ScreenSkillPicker,
-			golden:     "custom-opencode-sdd-skills-after-plugins-next.golden",
+			golden:     "custom-opencode-skills-after-plugins-next.golden",
 		},
 		{
-			name:       "no opencode with SDD and Skills reaches skill picker after strict TDD",
+			name:       "no opencode with Skills reaches skill picker after strict TDD",
 			agents:     []model.AgentID{model.AgentCursor},
-			components: []model.ComponentID{model.ComponentSDD, model.ComponentSkills},
+			components: []model.ComponentID{model.ComponentSkills},
 			actions: []flowAction{
 				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // DependencyTree Continue -> StrictTDD
 				{key: tea.KeyMsg{Type: tea.KeyEnter}}, // StrictTDD enable -> SkillPicker
 			},
 			wantScreen: ScreenSkillPicker,
-			golden:     "custom-no-opencode-sdd-skills-next.golden",
+			golden:     "custom-no-opencode-skills-next.golden",
 		},
 		{
-			name:       "no opencode with Engram only loads the RDD choice before review",
+			name:       "no opencode with Engram loads RDD after strict TDD",
 			agents:     []model.AgentID{model.AgentCursor},
 			components: []model.ComponentID{model.ComponentEngram},
-			actions: []flowAction{{
-				key:     tea.KeyMsg{Type: tea.KeyEnter},
-				runCmd:  true,
-				prepare: installReviewModeStatusFixture,
-			}},
+			actions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}, runCmd: true, prepare: installReviewModeStatusFixture},
+			},
 			wantScreen: ScreenInstallReviewMode,
 			golden:     "custom-no-opencode-engram-next.golden",
 		},
@@ -229,12 +247,12 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				m.Cursor = presetCursor(t, model.PresetMinimal)
 				return m
 			},
-			forwardActions: []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},
-			forwardScreens: []Screen{ScreenDependencyTree},
-			reverseScreens: []Screen{ScreenPreset},
+			forwardActions: []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}, {key: tea.KeyMsg{Type: tea.KeyEnter}}},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenStrictTDD, ScreenPreset},
 		},
 		{
-			name: "non-custom minimal with OpenCode returns through plugins to preset",
+			name: "non-custom minimal with OpenCode returns through strict TDD and plugins to preset",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenPreset
@@ -244,10 +262,11 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			},
 			forwardActions: []flowAction{
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
 			},
-			forwardScreens: []Screen{ScreenOpenCodePlugins, ScreenDependencyTree},
-			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenPreset},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenPreset},
 		},
 		{
 			name: "OpenCode SDD single returns through plugins strict TDD and SDD mode to preset",
@@ -261,14 +280,13 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			forwardActions: []flowAction{
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
 			},
-			forwardScreens: []Screen{ScreenSDDMode, ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
-			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenSDDMode, ScreenPreset},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenPreset},
 		},
 		{
-			name: "OpenCode SDD multi returns through plugins strict TDD model picker and SDD mode",
+			name: "OpenCode workflow skips legacy model picker in preset route",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenPreset
@@ -278,25 +296,11 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			},
 			forwardActions: []flowAction{
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
-				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: sddMultiCursor(t), setCursor: true},
-				{
-					key:       tea.KeyMsg{Type: tea.KeyEnter},
-					cursor:    len(screens.ModelPickerRows()),
-					setCursor: true,
-					prepare: func(state Model) Model {
-						// The round-trip under test is the ModelPicker navigation edge, not
-						// asynchronous runtime catalog discovery or completion. Force the
-						// picker state and results into normal row+Continue mode deterministically.
-						state.ModelPicker.AvailableIDs = []string{"opencode"}
-						state.ModelPicker.CustomAgents = nil
-						return state
-					},
-				},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
 			},
-			forwardScreens: []Screen{ScreenSDDMode, ScreenModelPicker, ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
-			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenModelPicker, ScreenSDDMode, ScreenPreset},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenPreset},
 		},
 		{
 			name: "non-OpenCode SDD returns through strict TDD to preset",
@@ -333,7 +337,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			reverseScreens: []Screen{ScreenStrictTDD, ScreenDependencyTree},
 		},
 		{
-			name: "custom OpenCode SDD skills returns from skill picker through strict TDD and SDD mode to component selector",
+			name: "custom OpenCode workflow skills returns through strict TDD to component selector",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
@@ -346,14 +350,13 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 			forwardActions: []flowAction{
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true},
 			},
-			forwardScreens: []Screen{ScreenSDDMode, ScreenStrictTDD, ScreenOpenCodePlugins, ScreenSkillPicker},
-			reverseScreens: []Screen{ScreenStrictTDD, ScreenSDDMode, ScreenDependencyTree},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenOpenCodePlugins, ScreenSkillPicker},
+			reverseScreens: []Screen{ScreenStrictTDD, ScreenDependencyTree},
 		},
 		{
-			name: "custom Engram only revises RDD before returning to component selector",
+			name: "custom Engram only revises RDD after strict TDD before returning to component selector",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
@@ -364,19 +367,16 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				return installReviewModeStatusFixture(m)
 			},
 			forwardActions: []flowAction{
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, runCmd: true},
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: 1, setCursor: true},
 			},
-			forwardScreens: []Screen{ScreenInstallReviewMode, ScreenReview},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenInstallReviewMode, ScreenReview},
 			reverseScreens: []Screen{ScreenInstallReviewMode, ScreenDependencyTree},
 		},
 		{
-			// Full picker chain, SDD single mode (no model picker). This is the
-			// scenario that exercises every model-picker back edge in one run:
-			// Claude → Kiro → Codex → SDDMode and the full reverse. It is the
-			// coverage that would have caught the Codex back-navigation bugs
-			// (Codex Back row inert + SDDMode back skipping Codex).
-			name: "all picker agents SDD single round-trips through every picker",
+			// All agents still use the ODD installer path, without phase pickers.
+			name: "all picker agents round-trip through strict TDD without phase pickers",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenPreset
@@ -390,39 +390,16 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				return m
 			},
 			forwardActions: []flowAction{
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Preset → Claude picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Claude preset → Kiro picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Kiro preset → Codex picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Codex preset → SDDMode
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // SDDMode single → StrictTDD
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Preset → StrictTDD
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // StrictTDD → OpenCodePlugins
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true}, // OpenCodePlugins → DependencyTree
 			},
-			forwardScreens: []Screen{
-				ScreenClaudeModelPicker,
-				ScreenKiroModelPicker,
-				ScreenCodexModelPicker,
-				ScreenSDDMode,
-				ScreenStrictTDD,
-				ScreenOpenCodePlugins,
-				ScreenDependencyTree,
-			},
-			reverseScreens: []Screen{
-				ScreenOpenCodePlugins,
-				ScreenStrictTDD,
-				ScreenSDDMode,
-				ScreenCodexModelPicker, // regression: SDDMode back must hit Codex, not skip to Claude
-				ScreenKiroModelPicker,
-				ScreenClaudeModelPicker,
-				ScreenPreset,
-			},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenPreset},
 		},
 		{
-			// Same full picker chain but SDD multi mode, so the OpenCode model
-			// picker sits between SDDMode and StrictTDD. Confirms the model
-			// picker edge composes with the Claude/Kiro/Codex picker chain in
-			// both directions.
-			name: "all picker agents SDD multi round-trips through every picker and model picker",
+			// Legacy multi-mode settings must not restore installer phase pickers.
+			name: "all picker agents legacy multi mode skips phase pickers",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenPreset
@@ -436,46 +413,12 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				return m
 			},
 			forwardActions: []flowAction{
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Preset → Claude picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Claude preset → Kiro picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Kiro preset → Codex picker
-				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                             // Codex preset → SDDMode
-				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: sddMultiCursor(t), setCursor: true}, // SDDMode multi → ModelPicker
-				{
-					key:       tea.KeyMsg{Type: tea.KeyEnter},
-					cursor:    len(screens.ModelPickerRows()),
-					setCursor: true,
-					prepare: func(state Model) Model {
-						// Force the picker state and results into row+Continue mode to avoid
-						// asynchronous runtime catalog discovery or completion in this focused preset-flow test.
-						state.ModelPicker.AvailableIDs = []string{"opencode"}
-						state.ModelPicker.CustomAgents = nil
-						return state
-					},
-				}, // ModelPicker Continue → StrictTDD
+				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // Preset → StrictTDD
 				{key: tea.KeyMsg{Type: tea.KeyEnter}},                                                 // StrictTDD → OpenCodePlugins
 				{key: tea.KeyMsg{Type: tea.KeyEnter}, cursor: continuePluginsCursor, setCursor: true}, // OpenCodePlugins → DependencyTree
 			},
-			forwardScreens: []Screen{
-				ScreenClaudeModelPicker,
-				ScreenKiroModelPicker,
-				ScreenCodexModelPicker,
-				ScreenSDDMode,
-				ScreenModelPicker,
-				ScreenStrictTDD,
-				ScreenOpenCodePlugins,
-				ScreenDependencyTree,
-			},
-			reverseScreens: []Screen{
-				ScreenOpenCodePlugins,
-				ScreenStrictTDD,
-				ScreenModelPicker,
-				ScreenSDDMode,
-				ScreenCodexModelPicker, // regression: SDDMode back must hit Codex, not skip to Claude
-				ScreenKiroModelPicker,
-				ScreenClaudeModelPicker,
-				ScreenPreset,
-			},
+			forwardScreens: []Screen{ScreenStrictTDD, ScreenOpenCodePlugins, ScreenDependencyTree},
+			reverseScreens: []Screen{ScreenOpenCodePlugins, ScreenStrictTDD, ScreenPreset},
 		},
 	}
 

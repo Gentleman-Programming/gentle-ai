@@ -70,18 +70,9 @@
 ./internal/reviewtransaction TestPublishNoReplaceDarwinENOTSUPFallbackNeverReplaces  # the fallback keeps the immutability contract
 ./internal/reviewtransaction TestPublishNoReplaceDarwinOtherErrnoPropagatesUnchanged # fallback is ENOTSUP-only; other errnos stay typed
 
-# --- #1850: first-use RuntimeStore contention leaked raw ENOENT ---------------
-# Reporter's Darwin oracle: 181/200 failures pre-fix, 200/200 post-0bcff694.
-# count=20 is the reporter's own reproduction bar (docs/testing guide, Flow 22);
-# the original failure had no data-race report (filesystem race), so the plain
-# high-count run is the reproduction and the race run is the memory-safety net.
-# #4612 retires attempt/reset operations, not the shared grant store's safety.
-# Exercise the same fresh-store contention through the surviving grant API.
-./internal/sddstatus TestEditGrantCASAndLockPermitOnlyOneConcurrentWriter count=20
-./internal/sddstatus TestEditGrantCASAndLockPermitOnlyOneConcurrentWriter count=3 race
-./internal/sddstatus TestEditGrantRejectsStaleCASWithoutPublishing race
-./internal/sddstatus TestEditGrantLockContentionPreservesTheNonMutationProof race
-./internal/sddstatus TestEditGrantMutationContentionIsNotDoubleWrapped race
+# #1850 first-use SDD RuntimeStore contention is historical: its package and
+# grant tests were retired. Flow 22 in the testing guide records the original
+# Darwin evidence, not a runnable oracle for this ODD-only branch.
 
 # --- #1872: RAR plan-authority lock convoy (fixed by 6457a4a8) ----------------
 # Reproduced ONLY on Darwin: the critical section costs hundreds of ms there

@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
 )
@@ -149,9 +148,8 @@ type manifest struct {
 // contract inside Gentle AI's own installer (no system prompt, skill, or
 // file-subagent surface to splice generic SDD composition into), so this
 // bundle becomes that runtime's sole channel. Pi is first: its capability
-// manifest advertises MCP only, so sdd.Inject is a no-op for it and the
-// contract text renderBoundedReviewAssetBody produces for every other
-// runtime never reaches gentle-pi any other way (issue #4056).
+// manifest advertises MCP only, so its contract does not reach gentle-pi
+// through an installed system prompt (issue #4056).
 var orchestrationRuntimeIdentities = []string{"pi"}
 
 // orchestrationEntry is one closed runtime's bound review execution contract,
@@ -163,8 +161,8 @@ type orchestrationEntry struct {
 
 // canonicalOrchestrationEntries renders the bound review execution contract
 // for every closed orchestration runtime, in sorted runtime order. It is the
-// single source both Generate and Verify read, so the shipped bytes can never
-// drift from what sdd.ReviewExecutionContractFor actually produces.
+// single source both Generate and Verify read, so the shipped bytes cannot
+// drift between generation and verification.
 func canonicalOrchestrationEntries() ([]orchestrationEntry, error) {
 	runtimes := slices.Clone(orchestrationRuntimeIdentities)
 	sort.Strings(runtimes)
@@ -177,7 +175,7 @@ func canonicalOrchestrationEntries() ([]orchestrationEntry, error) {
 		if !reviewerprovider.RegisteredRuntime(agent) {
 			return nil, fmt.Errorf("%w: orchestration runtime %q is not a registered review runtime", errInvalidBundle, runtime)
 		}
-		content, err := sdd.ReviewExecutionContractFor(agent)
+		content, err := reviewExecutionContractFor(agent)
 		if err != nil {
 			return nil, fmt.Errorf("%w: orchestration runtime %q: %v", errInvalidBundle, runtime, err)
 		}

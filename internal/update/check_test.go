@@ -25,6 +25,14 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestActiveToolsExcludeRetiredSDDPlugin(t *testing.T) {
+	for _, tool := range Tools {
+		if tool.Name == "opencode-sdd-engram-manage" || tool.NpmPackage == "opencode-sdd-engram-manage" {
+			t.Fatalf("retired SDD plugin is still offered for update: %+v", tool)
+		}
+	}
+}
+
 // --- TestDetectInstalledVersion ---
 
 func TestDetectInstalledVersion(t *testing.T) {
@@ -1030,8 +1038,8 @@ func TestCheckAll(t *testing.T) {
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "1.5.0", profile)
 
-	if len(results) != 5 {
-		t.Fatalf("len(results) = %d, want 5", len(results))
+	if len(results) != 4 {
+		t.Fatalf("len(results) = %d, want 4", len(results))
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
@@ -1043,7 +1051,6 @@ func TestCheckAll(t *testing.T) {
 	// gga: not installed
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
 	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
-	assertResult(t, results[4], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
 }
 
 func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
@@ -1446,8 +1453,8 @@ func TestParseVersionFromOutput(t *testing.T) {
 
 // TestRegistryContents verifies the registry has all expected tools.
 func TestRegistryContents(t *testing.T) {
-	if len(Tools) != 5 {
-		t.Fatalf("len(Tools) = %d, want 5", len(Tools))
+	if len(Tools) != 4 {
+		t.Fatalf("len(Tools) = %d, want 4", len(Tools))
 	}
 
 	expected := map[string]struct {
@@ -1458,7 +1465,6 @@ func TestRegistryContents(t *testing.T) {
 		"engram":                       {owner: "Gentleman-Programming", repo: "engram"},
 		"gga":                          {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
 		"opencode-subagent-statusline": {owner: "Joaquinvesapa", repo: "sub-agent-statusline"},
-		"opencode-sdd-engram-manage":   {owner: "j0k3r-dev-rgl", repo: "sdd-engram-plugin"},
 	}
 
 	for _, tool := range Tools {
@@ -1489,7 +1495,7 @@ func TestRegistryContents(t *testing.T) {
 	if Tools[2].DetectCmd == nil {
 		t.Fatalf("gga DetectCmd should not be nil")
 	}
-	if Tools[3].NpmPackage == "" || Tools[4].NpmPackage == "" {
+	if Tools[3].NpmPackage == "" {
 		t.Fatalf("OpenCode plugin tools should declare NpmPackage")
 	}
 }

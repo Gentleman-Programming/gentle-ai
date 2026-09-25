@@ -8,26 +8,19 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
 )
 
 // Provenance rule (#2524, root 4 of #2440): a runtime's rendered surface must
 // never tell it to identify as another runtime. Before #2484, codex's rendered
-// AGENTS.md carried `--agent claude-code` and nothing went red. This rule
-// closes that class.
-//
-// Both sides are DERIVED, never enumerated (#2471, root 10):
-//
-//   - the surfaces are every *.golden under testdata/golden, the pinned
-//     renders of each runtime's installed instruction surface;
-//   - the owning runtime comes from matching the golden's filename tokens
-//     against the slug each model.AgentID projects (its first hyphen
-//     segment: "claude-code" -> "claude", "gemini-cli" -> "gemini"), with
-//     the slug set built from catalog.AllAgents() at run time.
-//
-// Occurrences are read from the same extracted-invocation corpus PR #2522
-// introduced, and a raw-bytes count cross-checks the extraction so an
-// `--agent` binding outside any extractable invocation cannot hide.
+// AGENTS.md carried `--agent claude-code` and nothing went red. Check both
+// the retained golden surfaces and the currently rendered review contract:
+// the goldens no longer contain the review command, but reviewassets still
+// binds runtime identity in the installed contract. Derive golden owners from
+// catalog.AllAgents() and inspect the actual per-runtime render, not an
+// invented golden or a removed SDD overlay.
 
 var rawAgentBindingRegexp = regexp.MustCompile(`--agent[= ]+[A-Za-z0-9._{}-]+`)
 
@@ -124,7 +117,45 @@ func TestRenderedSurfaceNamesOnlyItsOwnRuntime(t *testing.T) {
 		}
 	}
 
+	// The review contract is now rendered separately from the historical
+	// combined goldens. Require a real bound command for every non-Pi review
+	// runtime, and reject cross-binding or unextractable bindings there too.
+	for _, agent := range catalog.AllAgents() {
+		id := agent.ID
+		if !reviewerprovider.RegisteredRuntime(id) && id != model.AgentPi {
+			continue
+		}
+		t.Run(string(id), func(t *testing.T) {
+			content, err := reviewassets.ReviewExecutionContractFor(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(content, "{{GENTLE_AI_RUNTIME_AGENT_ID}}") {
+				t.Fatal("rendered review contract has an unbound runtime identity")
+			}
+			found := 0
+			for _, invocation := range extractInvocations("review-contract:"+string(id), content) {
+				for _, value := range agentFlagValues(invocation.command) {
+					found++
+					if value != string(id) {
+						t.Errorf("%s binds --agent %q instead of %q: %s", invocation.source, value, id, invocation.command)
+					}
+				}
+			}
+			if raw := len(rawAgentBindingRegexp.FindAllString(content, -1)); raw != found {
+				t.Errorf("review contract carries %d --agent bindings but only %d are extractable invocations", raw, found)
+			}
+			if id == model.AgentPi {
+				if found != 0 {
+					t.Errorf("Pi uses facade operations, not --agent CLI bindings; found %d", found)
+				}
+			} else if found == 0 {
+				t.Fatal("rendered review contract contains no bound --agent invocation")
+			}
+			verified += found
+		})
+	}
 	if verified == 0 {
-		t.Fatal("verified no --agent binding in any rendered golden; either the surfaces stopped binding identity or the scanner went stale")
+		t.Fatal("verified no runtime identity binding in current review contracts or rendered goldens")
 	}
 }

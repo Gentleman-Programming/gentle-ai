@@ -416,7 +416,7 @@ func TestRenderInstallManualActionsIncludesPiCodeGraphDrift(t *testing.T) {
 	}
 }
 
-func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
+func TestNativeReviewCodeGraphGuidanceMarkdownOnlyWhenSelected(t *testing.T) {
 	tests := []struct {
 		name      string
 		setupHome func(t *testing.T, home string)
@@ -486,7 +486,7 @@ func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
 				tc.setupHome(t, home)
 			}
 
-			got := codeGraphGuidanceMarkdownForSDD(home, tc.selected)
+			got := nativeReviewCodeGraphGuidanceMarkdown(home, tc.selected)
 			if !tc.want {
 				if got != "" {
 					t.Fatalf("guidance = %q, want empty", got)
@@ -500,82 +500,54 @@ func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
 	}
 }
 
-func TestComponentApplyStepInjectsCodeGraphGuidanceWhenCodeGraphSelected(t *testing.T) {
-	home := t.TempDir()
-	withCodeGraphLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
+func TestCommunityToolGuidanceOnRetainedOpenCodePrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		selected []model.CommunityToolID
+		lookPath func(string) (string, error)
+		want     bool
+	}{
+		{name: "selected despite unavailable CLI", selected: []model.CommunityToolID{model.CommunityToolCodeGraph}, lookPath: func(string) (string, error) { return "", errors.New("not found") }, want: true},
+		{name: "configured elsewhere but not selected", lookPath: func(string) (string, error) { return "/bin/codegraph", nil }},
+		{name: "CLI available but not selected", lookPath: func(string) (string, error) { return "/bin/codegraph", nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			withCodeGraphLookPath(t, tc.lookPath)
+			promptPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+			mustWriteFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), []byte(`{}`))
+			mustWriteFile(t, promptPath, []byte("user-owned OpenCode instructions\n"))
+			if tc.name == "configured elsewhere but not selected" {
+				mustWriteFile(t, filepath.Join(home, ".codex", "config.toml"), []byte("[mcp_servers.codegraph]\ncommand = \"codegraph\"\n"))
+			}
 
-	step := componentApplyStep{
-		id:           "apply:sdd",
-		component:    model.ComponentSDD,
-		homeDir:      home,
-		workspaceDir: "/work/project",
-		scope:        ScopeGlobal,
-		agents:       []model.AgentID{model.AgentOpenCode},
-		selection: model.Selection{
-			CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-			SDDMode:        model.SDDModeMulti,
-		},
-	}
-	if err := step.Run(); err != nil {
-		t.Fatalf("componentApplyStep.Run() error = %v", err)
-	}
-
-	assertOpenCodeSharedPromptCodeGraphGuidance(t, home, true)
-}
-
-func TestComponentApplyStepOmitsCodeGraphGuidanceWithoutSelection(t *testing.T) {
-	home := t.TempDir()
-	withCodeGraphLookPath(t, func(string) (string, error) { return "/bin/codegraph", nil })
-	mustWriteFile(t, filepath.Join(home, ".codex", "config.toml"), []byte(strings.Join([]string{
-		`[mcp_servers.codegraph]`,
-		`command = "codegraph"`,
-	}, "\n")))
-	mustWriteFile(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte(strings.Join([]string{
-		"existing Codex guidance",
-		"<!-- gentle-ai:codegraph-guidance -->",
-		"CodeGraph guidance with `gentle-ai codegraph init --cwd <project-root>`",
-		"<!-- /gentle-ai:codegraph-guidance -->",
-	}, "\n")))
-
-	step := componentApplyStep{
-		id:           "apply:sdd",
-		component:    model.ComponentSDD,
-		homeDir:      home,
-		workspaceDir: "/work/project",
-		scope:        ScopeGlobal,
-		agents:       []model.AgentID{model.AgentOpenCode},
-		selection:    model.Selection{SDDMode: model.SDDModeMulti},
-	}
-	if err := step.Run(); err != nil {
-		t.Fatalf("componentApplyStep.Run() error = %v", err)
+			result, err := communitytool.InjectCodeGraphGuidanceIfSelected(home, tc.selected)
+			if err != nil {
+				t.Fatalf("InjectCodeGraphGuidanceIfSelected() error = %v", err)
+			}
+			if result.Changed != tc.want {
+				t.Fatalf("guidance changed = %v, want %v", result.Changed, tc.want)
+			}
+			assertOpenCodeSharedPromptCodeGraphGuidance(t, home, tc.want)
+		})
 	}
 
-	assertOpenCodeSharedPromptCodeGraphGuidance(t, home, false)
-}
-
-func TestComponentApplyStepOmitsCodeGraphGuidanceWhenOnlyCLIAvailable(t *testing.T) {
-	home := t.TempDir()
-	withCodeGraphLookPath(t, func(string) (string, error) { return "/bin/codegraph", nil })
-
-	step := componentApplyStep{
-		id:           "apply:sdd",
-		component:    model.ComponentSDD,
-		homeDir:      home,
-		workspaceDir: "/work/project",
-		scope:        ScopeGlobal,
-		agents:       []model.AgentID{model.AgentOpenCode},
-		selection:    model.Selection{SDDMode: model.SDDModeMulti},
-	}
-	if err := step.Run(); err != nil {
-		t.Fatalf("componentApplyStep.Run() error = %v", err)
-	}
-
-	assertOpenCodeSharedPromptCodeGraphGuidance(t, home, false)
+	t.Run("selected tool does not create an undetected OpenCode installation", func(t *testing.T) {
+		home := t.TempDir()
+		result, err := communitytool.InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph})
+		if err != nil || result.Changed {
+			t.Fatalf("undetected OpenCode guidance = %#v, %v; want no changes", result, err)
+		}
+		promptPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+		if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
+			t.Fatalf("undetected OpenCode prompt was created: %v", err)
+		}
+	})
 }
 
 func TestComponentSyncStepOmitsCodeGraphGuidanceFromLegacyMarkerWithoutSelection(t *testing.T) {
 	home := t.TempDir()
-	withCodeGraphLookPath(t, func(string) (string, error) { return "/bin/codegraph", nil })
+	withCodeGraphLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
 	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), []byte(`{}`))
 	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "AGENTS.md"), []byte(strings.Join([]string{
 		"custom notes",
@@ -585,20 +557,25 @@ func TestComponentSyncStepOmitsCodeGraphGuidanceFromLegacyMarkerWithoutSelection
 	}, "\n")))
 
 	var changed []string
-	step := componentSyncStep{
-		id:           "sync:sdd",
-		component:    model.ComponentSDD,
-		homeDir:      home,
-		workspaceDir: "/work/project",
-		agents:       []model.AgentID{model.AgentOpenCode},
-		selection:    model.Selection{SDDMode: model.SDDModeMulti},
-		changedFiles: &changed,
-	}
+	step := codeGraphGuidanceSyncStep{homeDir: home, changedFiles: &changed}
 	if err := step.Run(); err != nil {
-		t.Fatalf("componentSyncStep.Run() error = %v", err)
+		t.Fatalf("codeGraphGuidanceSyncStep.Run() error = %v", err)
 	}
 
-	assertOpenCodeSharedPromptCodeGraphGuidance(t, home, false)
+	promptPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	data, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "CODEGRAPH_START") || strings.Contains(string(data), "old CodeGraph instructions") {
+		t.Fatalf("legacy guidance remains without selection: %s", data)
+	}
+	if !strings.Contains(string(data), "custom notes") {
+		t.Fatalf("cleanup removed user-owned guidance: %s", data)
+	}
+	if !slices.Contains(changed, promptPath) {
+		t.Fatalf("changed paths = %v, want cleaned guidance", changed)
+	}
 }
 
 func TestCommunityToolInstallStepUsesInjectableInstaller(t *testing.T) {
@@ -774,12 +751,15 @@ func withCodeGraphLookPath(t *testing.T, lookPath func(string) (string, error)) 
 
 func assertOpenCodeSharedPromptCodeGraphGuidance(t *testing.T, home string, want bool) {
 	t.Helper()
-	promptPath := filepath.Join(home, ".config", "opencode", "prompts", "sdd", "sdd-apply.md")
+	promptPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
 	content, err := os.ReadFile(promptPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", promptPath, err)
 	}
 	text := string(content)
+	if !strings.Contains(text, "user-owned OpenCode instructions") {
+		t.Fatalf("user-owned OpenCode guidance was overwritten: %s", text)
+	}
 	hasGuidance := strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") && strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>")
 	if hasGuidance != want {
 		t.Fatalf("CodeGraph guidance present = %v, want %v in %s", hasGuidance, want, promptPath)

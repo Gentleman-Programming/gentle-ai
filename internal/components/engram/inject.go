@@ -180,14 +180,11 @@ type InjectOptions struct {
 	// nil preserves the user's existing main-session configuration.
 	CodexOrchestratorAssignment *model.CodexOrchestratorAssignment
 
-	// CodexCarrilModelAssignments holds the resolved carril→model-id map used
-	// when writing SDD profile .config.toml files. nil/empty = use canonical
-	// defaults (sdd-strong=gpt-5.6-sol, sdd-mid=gpt-5.6-terra, sdd-cheap=gpt-5.6-luna).
+	// CodexCarrilModelAssignments retains saved model choices for ODD workers.
+	// Existing legacy carril keys remain readable, but no SDD profiles are written.
 	CodexCarrilModelAssignments map[string]string
 
-	// CodexModelAssignments holds the resolved phase→effort map used to derive
-	// the per-carril reasoning_effort written to SDD profile files.
-	// nil/empty = use canonical defaults.
+	// CodexModelAssignments retains saved effort choices for ODD/RDD routing.
 	CodexModelAssignments map[string]model.CodexEffort
 
 	// Version carries the raw installed engram binary version string (e.g.
@@ -470,9 +467,8 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			return InjectionResult{}, err
 		}
 
-		// Step 1 — multi-agent SDD enablement keys ([features] and [agents]).
-		// features.multi_agent is enabled by default: Codex SDD delegates phases via
-		// spawn_agent so the per-phase reasoning_effort table actually applies. The
+		// Step 1 — multi-agent ODD delegation keys ([features] and [agents]).
+		// features.multi_agent is enabled by default for bounded ODD workers. The
 		// orchestrator asset gracefully falls back to solo execution if the multi-agent
 		// tools are unavailable in the session. agents.max_threads/max_depth carry
 		// conservative defaults.
@@ -499,19 +495,8 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		changed = changed || tomlWrite.Changed
 		files = append(files, configPath)
 
-		// Write gentle-ai SDD model-selection profile files only when Codex is
-		// installed and supports GPT-5.6. Without the executable, shared config
-		// still works, but existing CLI-only profiles must remain untouched.
-		if runtimeErr == nil {
-			codexHomeDir := filepath.Dir(configPath)
-			profileAssignments := resolveProfileAssignments(opts.CodexCarrilModelAssignments, opts.CodexModelAssignments)
-			profilesChanged, profileFiles, profileErr := codex.WriteCodexProfiles(codexHomeDir, profileAssignments)
-			if profileErr != nil {
-				return InjectionResult{}, profileErr
-			}
-			changed = changed || profilesChanged
-			files = append(files, profileFiles...)
-		}
+		// Retired SDD-only profile files, including user-customized copies, are
+		// deliberately neither created nor modified by Engram injection.
 	}
 
 	// 2. Inject Engram memory protocol into system prompt (if supported).
@@ -1028,62 +1013,6 @@ func isVersionedHomebrewCellarPath(path string) bool {
 func isStableHomebrewEngramPath(path string) bool {
 	clean := filepath.ToSlash(filepath.Clean(path))
 	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram") && isEngramCommand(clean)
-}
-
-// resolveProfileAssignments builds the []codex.ProfileAssignment slice used
-// to write the three SDD profile .config.toml files. The carril→model map and
-// the phase→effort map are resolved independently (they live on different axes)
-// so either can be nil and the other still takes effect.
-//
-//   - nil carrilModels → model for each carril falls back to model.DefaultCarrilModels.
-//   - nil phaseEfforts → effort for each carril falls back to the carril's canonical
-//     DefaultEffort from model.CodexTierGroups (Recommended preset values).
-//
-// Single source of truth: tier definitions (phases, default effort, default model)
-// are read from model.CodexTierGroups instead of a duplicate local table.
-func resolveProfileAssignments(carrilModels map[string]string, phaseEfforts map[string]model.CodexEffort) []codex.ProfileAssignment {
-	tiers := model.CodexTierGroups()
-
-	effortRank := map[model.CodexEffort]int{
-		model.CodexEffortLow:    0,
-		model.CodexEffortMedium: 1,
-		model.CodexEffortHigh:   2,
-		model.CodexEffortXHigh:  3,
-	}
-
-	out := make([]codex.ProfileAssignment, 0, len(tiers))
-	for _, t := range tiers {
-		// Resolve model: carrilModels override, fall back to canonical default.
-		mdl := t.Model
-		if v, ok := carrilModels[t.Profile]; ok && v != "" {
-			mdl = v
-		}
-
-		// Resolve effort: max over assigned phases, fall back to carril's DefaultEffort.
-		eff := t.DefaultEffort
-		if len(phaseEfforts) > 0 {
-			best := model.CodexEffort("")
-			bestRank := -1
-			for _, phase := range t.Phases {
-				if e, ok := phaseEfforts[phase]; ok {
-					if r, ok2 := effortRank[e]; ok2 && r > bestRank {
-						bestRank = r
-						best = e
-					}
-				}
-			}
-			if best != "" {
-				eff = best
-			}
-		}
-
-		out = append(out, codex.ProfileAssignment{
-			Profile:         t.Profile,
-			Model:           mdl,
-			ReasoningEffort: string(eff),
-		})
-	}
-	return out
 }
 
 // nativeOpenCodeEngramOverlay updates only the managed server in its existing

@@ -28,9 +28,32 @@ func TestClaudeShortTerminalShowsFocusedRDDRowsAndConfirm(t *testing.T) {
 	}
 }
 
-func TestClaudeModelPickerPlacesResearchAfterExplore(t *testing.T) {
-	if len(claudePhases) < 3 || claudePhases[0] != "sdd-explore" || claudePhases[1] != "sdd-research" || claudePhases[2] != "sdd-propose" {
-		t.Fatalf("claude phase order = %v", claudePhases)
+func TestClaudePickerPreservesLegacyAssignmentsWithoutShowingRows(t *testing.T) {
+	legacy := model.ClaudePhaseAssignment{Model: model.ClaudeModelFable, Effort: model.ClaudeEffortHigh}
+	picker := NewClaudeModelPickerStateFromPhaseAssignments(map[string]model.ClaudePhaseAssignment{"sdd-propose": legacy})
+	picker.InCustomMode = true
+	if strings.Contains(RenderClaudeModelPicker(picker, 0), "Propose") {
+		t.Fatal("legacy SDD role is visible")
+	}
+	_, saved := HandleClaudeModelPickerNav("enter", &picker, ClaudeModelPickerOptionCount(picker)-2)
+	if saved["sdd-propose"] != legacy {
+		t.Fatalf("legacy assignment changed: %+v", saved["sdd-propose"])
+	}
+}
+
+func TestClaudePickerOffersOnlyActiveRoles(t *testing.T) {
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	rows := RenderClaudeModelPicker(picker, 0)
+	for _, role := range []string{"ODD Explorer", "ODD Worker", "ODD Verify", "RDD Risk", "RDD Validator", "General delegation"} {
+		if !strings.Contains(rows, role) {
+			t.Errorf("missing active role %q: %s", role, rows)
+		}
+	}
+	for _, role := range []string{"sdd-", "SDD phase", "Explore   ", "Apply   "} {
+		if strings.Contains(rows, role) {
+			t.Errorf("retired SDD role %q visible: %s", role, rows)
+		}
 	}
 }
 
@@ -231,7 +254,7 @@ func TestHandleCustomEffortSelect_OnlyOffersSupportedEfforts(t *testing.T) {
 // explicit model/effort selection flow.
 func TestRenderClaudeModelPicker_CustomModeRendersFable(t *testing.T) {
 	state := NewClaudeModelPickerStateFromAssignments(map[string]model.ClaudeModelAlias{
-		"sdd-propose": model.ClaudeModelFable,
+		"odd-explorer": model.ClaudeModelFable,
 	})
 	state.InCustomMode = true
 

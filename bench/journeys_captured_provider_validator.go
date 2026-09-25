@@ -44,6 +44,29 @@ func capturedProviderValidatorJourneys() []Journey {
 			},
 		},
 		{
+			ID:     "j4433-restored-escalated-derived-target-stops",
+			Review: reviewOptedIn,
+			Title:  "#4433: restoring an escalated derived-lineage candidate stops selectorless STATUS instead of restarting",
+			Source: "#4433: terminal escalated authority occupies the derived lineage of the original frozen target; only a changed candidate may receive a fresh START (j123)",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: stage high-risk correction candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
+				{Name: "selectorless STATUS starts the original derived-lineage review", Requires: atomicReviewStatusCapability, Composite: startDerivedEscalationReview},
+				{Name: "capture severe finding and all four selected lenses", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureAtomicReviewerSlots(r, r.sandbox.Lineage, true)
+				}},
+				{Name: "capture the bounded correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectionPlanFor(r, r.sandbox.Lineage, 2)
+				}},
+				{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
+				{Name: "reject the provider-bound targeted validator and close escalated", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+					return captureRejectedProviderValidatorSlotFor(r, r.sandbox.Lineage)
+				}},
+				{Name: "fixture: restore the exact original frozen candidate", Fixture: restoreDerivedEscalationCandidate},
+				{Name: "selectorless STATUS binds escalated authority and requires native stop, never START", Requires: atomicReviewStatusCapability, Composite: requireDerivedEscalationStop},
+			},
+		},
+		{
 			ID:     "j123-rejected-provider-validator-starts-fresh-high-risk-review",
 			Review: reviewOptedIn,
 			Title:  "#3799: a rejected validator leaves a changed normal candidate for a fresh high-risk review",
@@ -67,6 +90,49 @@ func capturedProviderValidatorJourneys() []Journey {
 			},
 		},
 	}
+}
+
+func startDerivedEscalationReview(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, "")
+	if err != nil {
+		return err
+	}
+	lineage, err := startAtomicTransactionFromSelectorlessStatus(r)
+	if err != nil {
+		return err
+	}
+	if status.TargetIdentity == "" || status.executeArgument("lineage") != lineage {
+		return fmt.Errorf("original selectorless binding = target %q, lineage %q, started %q", status.TargetIdentity, status.executeArgument("lineage"), lineage)
+	}
+	r.sandbox.Lineage = lineage
+	r.sandbox.Scratch["j4433-original-target"] = status.TargetIdentity
+	r.sandbox.Scratch["j4433-original-tree"] = status.Projection.CurrentCandidateTree
+	return requireExplicitAtomicFourLensStatusFor(r, lineage)
+}
+
+func restoreDerivedEscalationCandidate(sandbox *Sandbox) error {
+	const original = "package candidate\n\nfunc value() int { return 3 }\n"
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), original); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "diff", "--quiet", "--", "candidate.go")
+}
+
+func requireDerivedEscalationStop(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, "")
+	if err != nil {
+		return err
+	}
+	if status.Authority.LineageID == "" || status.TargetIdentity != r.sandbox.Scratch["j4433-original-target"] ||
+		status.Projection.CurrentCandidateTree == "" || status.Projection.CurrentCandidateTree != r.sandbox.Scratch["j4433-original-tree"] ||
+		status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "escalated" || status.Authority.Revision == "" ||
+		status.NextTransition.Kind != "stop" || status.NextTransition.ReasonCode != "native_stop_required" ||
+		status.NextTransition.Execute.Operation != "" || status.NextTransition.Execute.Command != "" ||
+		len(status.NextTransition.Execute.Arguments) != 0 || len(status.NextTransition.Collect.Inputs) != 0 ||
+		status.NextTransition.Continuation != nil {
+		return fmt.Errorf("restored derived target selectorless STATUS = target %q authority=%+v transition=%+v; want terminal escalated native stop for %q", status.TargetIdentity, status.Authority, status.NextTransition, r.sandbox.Scratch["j4433-original-target"])
+	}
+	return nil
 }
 
 func captureProviderValidatorSlot(r *journeyRun) error {

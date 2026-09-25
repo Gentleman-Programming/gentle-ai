@@ -124,8 +124,9 @@ on `duplicate`, and never at all under `sqlite`.
 has no auth: the collector's listener is loopback-only and VictoriaMetrics
 scrapes it from the same host, the same trust boundary every other
 unauthenticated route on this listener already relies on. Every metric is a
-monotonically increasing counter (reset only by process restart, handled
-downstream by `increase()`/`rate()`), all carrying `host`:
+monotonically increasing counter while its series lives, all carrying `host`.
+A process restart or idle-series eviction resets that series downstream;
+`increase()`/`rate()` handle those resets:
 
 | Metric | Labels | Meaning |
 |---|---|---|
@@ -140,6 +141,17 @@ downstream by `increase()`/`rate()`), all carrying `host`:
 | `gentle_runtime_duration_measured_total` | same as rows, `+duration_kind` | sum of `duration.measured_count` |
 | `gentle_runtime_rows_by_evidence_total` | `host,model_evidence,effective_effort` | one per row, kept low-cardinality by leaving out agent/provider/model |
 
+A series appears only after a non-zero increment, so an absent series means
+zero; downstream `sum`/`increase` treat it the same. A zero increment does
+not refresh its idle lifetime. `--runtime-metrics-ttl` defaults to `24h`: a
+series idle for longer than that is rendered one last time by the successful
+`GET /metrics` scrape that evicts it, then disappears from memory and the next
+exposition. A failed scrape write does not evict it. If observed again, it
+restarts at the new delta (a downstream counter reset). Set the flag to `0`
+to disable eviction. Keep the TTL far above the scrape interval (15s on the
+reference deployment) for regular scrapes; even after a longer scrape outage,
+the first successful scrape renders the last increment before eviction.
+
 A label value is sanitized for the exposition format (`\`, `"`, and newline
 escaped) and an empty value renders as `unknown`; in practice every label
 already comes from the wire contract (see
@@ -147,11 +159,11 @@ already comes from the wire contract (see
 `RuntimeMetrics.Observe` is ever called from something other than a parsed,
 validated `telemetry.RuntimeEvent`.
 
-**Exposition size**: the registry is in memory and never evicts a series,
-so `/metrics` grows with every distinct `host`/`agent_kind`/`agent_class`/
-`provider`/`model`/`selected_effort` combination observed since the last
-collector restart. `provider` is any short lowercase label and `model` is
-any id matching the public family pattern (`NormalizeRuntimeModel`), so
+**Exposition size**: the in-memory registry retains each distinct
+`host`/`agent_kind`/`agent_class`/`provider`/`model`/`selected_effort`
+combination only while it remains active within the configured TTL.
+`provider` is any short lowercase label and `model` is any id matching the
+public family pattern (`NormalizeRuntimeModel`), so
 this vocabulary is bounded by convention, not by an enum: on 2026-09-18
 production reached 155 providers, 255 model ids and roughly 90,000
 exposition lines (17.5 MB), which is above VictoriaMetrics' default
@@ -373,6 +385,7 @@ address"`, with the header's value itself never logged.
 --summary-token-file <path>                               # bearer token for /v1/summary (local runs; systemd uses LoadCredential, see Token rotation)
 --retention-days 90                                        # raw event retention
 --runtime-dedup-days 2                                     # runtime delivery id retention (replay rejection), never longer than --retention-days
+--runtime-metrics-ttl 24h                                  # idle series eviction on /metrics; 0 disables (keep far above the scrape interval)
 --rate-limit-per-minute 60                                 # per-address budget on /v1/events
 --runtime-rate-limit-per-minute 600                         # per-address budget on /v1/runtime-events
 --runtime-store sqlite                                      # sqlite (default) | metrics | both — see Runtime metrics for VictoriaMetrics
