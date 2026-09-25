@@ -389,9 +389,7 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 	if flags.IncludePermissions {
 		components = append(components, model.ComponentPermission)
 	}
-	if flags.IncludeTheme {
-		components = append(components, model.ComponentTheme)
-	}
+	// --include-theme remains parseable for compatibility but cannot install a theme.
 
 	sddMode := model.SDDModeID(flags.SDDMode)
 
@@ -434,7 +432,11 @@ func RestorePersistedSelection(selection *model.Selection, persisted state.Insta
 		selection.StrictTDD = explicit.StrictTDD
 	}
 	setSelectionComponent(selection, model.ComponentPermission, flags.permissionsSet, flags.IncludePermissions)
-	setSelectionComponent(selection, model.ComponentTheme, flags.themeSet, flags.IncludeTheme)
+	// Retire visual components persisted by older releases; sync must not
+	// reinstall theme assets after a user upgrades to a theme-free Axiom.
+	selection.Components = slices.DeleteFunc(selection.Components, func(component model.ComponentID) bool {
+		return component == model.ComponentTheme || component == model.ComponentClaudeTheme
+	})
 	// The persisted component list above may predate the caller ever choosing
 	// the SDD component (e.g. an install that ran before profiles existed).
 	// When the caller explicitly asked for profile or model assignment work,
@@ -567,6 +569,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	apply := []pipeline.Step{
 		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir},
 	}
+	if r.scope != ScopeWorkspace {
+		apply = append(apply, managedVisualThemeCleanupStep{id: "sync:retire-managed-visual-themes", homeDir: r.homeDir, adapters: adapters, changedFiles: &r.changedFiles})
+	}
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "sync:opencode:telemetry-runtime", configDir: telemetryDir, changedFiles: &r.changedFiles, state: r.state})
 	}
@@ -660,6 +665,17 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 
 func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
+	if scope != ScopeWorkspace {
+		for _, adapter := range adapters {
+			owned, err := theme.ManagedVisualThemePaths(homeDir, adapter)
+			if err != nil {
+				return nil, err
+			}
+			for _, path := range owned {
+				paths[path] = struct{}{}
+			}
+		}
+	}
 	for _, component := range selection.Components {
 		for _, path := range syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
@@ -908,6 +924,28 @@ type componentSyncStep struct {
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
 
 	backgroundPolicy bool
+}
+
+type managedVisualThemeCleanupStep struct {
+	id           string
+	homeDir      string
+	adapters     []agents.Adapter
+	changedFiles *[]string
+}
+
+func (s managedVisualThemeCleanupStep) ID() string { return s.id }
+
+func (s managedVisualThemeCleanupStep) Run() error {
+	for _, adapter := range s.adapters {
+		result, err := theme.RetireManagedVisualThemes(s.homeDir, adapter)
+		if err != nil {
+			return fmt.Errorf("retire visual themes for %q: %w", adapter.Agent(), err)
+		}
+		if result.Changed && s.changedFiles != nil {
+			*s.changedFiles = append(*s.changedFiles, result.Files...)
+		}
+	}
+	return nil
 }
 
 type codeGraphGuidanceSyncStep struct {
@@ -1275,24 +1313,11 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentTheme:
-		// Opt-in only — reached when --include-theme is set.
-		for _, adapter := range adapters {
-			res, err := theme.Inject(s.homeDir, adapter)
-			if err != nil {
-				return fmt.Errorf("sync theme for %q: %w", adapter.Agent(), err)
-			}
-			s.countChanged(boolToInt(res.Changed), res.Files...)
-		}
+		// Legacy component: never change user theme preferences.
 		return nil
 
 	case model.ComponentClaudeTheme:
-		for _, adapter := range adapters {
-			res, err := theme.InjectVisualThemes(s.homeDir, adapter)
-			if err != nil {
-				return fmt.Errorf("sync visual themes for %q: %w", adapter.Agent(), err)
-			}
-			s.countChanged(boolToInt(res.Changed), res.Files...)
-		}
+		// Legacy component: never reinstall visual theme assets.
 		return nil
 
 	case model.ComponentOpenCodeGentleLogo:

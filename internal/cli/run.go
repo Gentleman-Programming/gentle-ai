@@ -35,7 +35,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
@@ -1833,18 +1832,10 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentTheme:
-		for _, adapter := range adapters {
-			if _, err := theme.Inject(s.homeDir, adapter); err != nil {
-				return fmt.Errorf("inject theme for %q: %w", adapter.Agent(), err)
-			}
-		}
+		// Retained for legacy selections; no visual configuration is installed.
 		return nil
 	case model.ComponentClaudeTheme:
-		for _, adapter := range adapters {
-			if _, err := theme.InjectVisualThemes(s.homeDir, adapter); err != nil {
-				return fmt.Errorf("inject visual themes for %q: %w", adapter.Agent(), err)
-			}
-		}
+		// Retained for legacy selections; no visual assets are installed.
 		return nil
 	case model.ComponentOpenCodeGentleLogo:
 		if !containsAgent(s.agents, model.AgentOpenCode) {
@@ -2549,15 +2540,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			// No managed path. Per REQ-09.2 this component is non-intrusive:
-			// theme.Inject writes nothing and preserves whatever theme the
-			// developer already chose. Declaring the agent's settings file
-			// here made post-apply verification require a file the component
-			// never creates, so `install --component theme` exited non-zero on
-			// any machine without a pre-existing settings file. A component
-			// that writes nothing must not claim a required file.
+			// No managed path: legacy theme component is inert.
 		case model.ComponentClaudeTheme:
-			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
+			// No required paths: visual assets are no longer installed.
 		case model.ComponentOpenCodeGentleLogo:
 			if adapter.Agent() == model.AgentOpenCode {
 				paths = append(paths,

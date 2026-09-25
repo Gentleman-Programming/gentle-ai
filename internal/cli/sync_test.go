@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -404,21 +405,34 @@ func TestBuildSyncSelectionIncludePermissionsWhenFlagSet(t *testing.T) {
 	}
 }
 
-func TestBuildSyncSelectionIncludeThemeWhenFlagSet(t *testing.T) {
+func TestBuildSyncSelectionIncludeThemeFlagIsInert(t *testing.T) {
 	agents := []model.AgentID{model.AgentClaudeCode}
 	flags := SyncFlags{IncludeTheme: true}
 
 	sel := BuildSyncSelection(flags, agents)
 
-	found := false
 	for _, comp := range sel.Components {
 		if comp == model.ComponentTheme {
-			found = true
-			break
+			t.Fatalf("BuildSyncSelection() must not include ComponentTheme even with --include-theme")
 		}
 	}
-	if !found {
-		t.Errorf("BuildSyncSelection() expected ComponentTheme when --include-theme is set")
+}
+
+func TestRestorePersistedSelectionRetiresVisualThemes(t *testing.T) {
+	selection := BuildSyncSelection(SyncFlags{}, []model.AgentID{model.AgentClaudeCode})
+	RestorePersistedSelection(&selection, state.InstallState{
+		SelectionConfigured: true,
+		Components: []model.ComponentID{
+			model.ComponentPersona, model.ComponentTheme, model.ComponentClaudeTheme,
+		},
+	}, SyncFlags{})
+	if !slices.Contains(selection.Components, model.ComponentPersona) {
+		t.Fatal("non-visual persisted component was lost")
+	}
+	for _, visual := range []model.ComponentID{model.ComponentTheme, model.ComponentClaudeTheme} {
+		if slices.Contains(selection.Components, visual) {
+			t.Fatalf("retired visual component %q survived state restore", visual)
+		}
 	}
 }
 
@@ -1516,7 +1530,7 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 	}
 }
 
-func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
+func TestRunSyncDoesNotRefreshPersistedVisualThemes(t *testing.T) {
 	workspace, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatalf("EvalSymlinks(workspace) error = %v", err)
@@ -1547,17 +1561,12 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 		backup.UserHomeDirFn = restoreBackupHome
 	})
 
-	// Runtime telemetry files are reconciled before persisted visual components.
+	// Runtime telemetry files are reconciled; persisted visual themes are ignored.
 	// The last two entries are the routing guidance targets. Guidance is written
-	// for every configured agent regardless of which components are persisted, so
-	// a first sync of a purely visual selection still delivers it (issue #1794).
+	// for every configured agent regardless of which components are persisted.
 	wantFiles := []string{
 		filepath.Join(home, ".config", "opencode", "plugins", "telemetry-runtime.ts"),
 		filepath.Join(home, ".config", "opencode", ".gentle-ai-telemetry-runtime.json"),
-		filepath.Join(home, ".claude", "themes", "axiom.json"),
-		filepath.Join(home, ".claude", "themes", "axiom-dark.json"),
-		filepath.Join(home, ".config", "opencode", "themes", "axiom.json"),
-		filepath.Join(home, ".config", "opencode", "themes", "axiom-dark.json"),
 		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 		filepath.Join(home, ".config", "opencode", "tui.json"),
 		filepath.Join(home, ".claude", "CLAUDE.md"),
@@ -1573,7 +1582,12 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	}
 	for _, path := range wantFiles {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("managed visual component file %q was not refreshed: %v", path, err)
+			t.Fatalf("expected managed non-theme file %q was not refreshed: %v", path, err)
+		}
+	}
+	for _, root := range []string{filepath.Join(home, ".claude", "themes"), filepath.Join(home, ".config", "opencode", "themes")} {
+		if _, err := os.Stat(root); !os.IsNotExist(err) {
+			t.Fatalf("sync installed a theme directory %q: %v", root, err)
 		}
 	}
 
@@ -1583,6 +1597,72 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	}
 	if !second.NoOp || second.FilesChanged != 0 || len(second.ChangedFiles) != 0 {
 		t.Fatalf("second sync = NoOp %v, FilesChanged %d, ChangedFiles %#v; want idempotent no-op", second.NoOp, second.FilesChanged, second.ChangedFiles)
+	}
+}
+
+func TestRunSyncRetiresOnlyExactManagedVisualTheme(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"}, SelectionConfigured: true,
+		Components: []model.ComponentID{model.ComponentClaudeTheme}, Persona: "custom",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"theme":"personal"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	themes := filepath.Join(home, ".claude", "themes")
+	if err := os.MkdirAll(themes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := struct {
+		Name      string            `json:"name"`
+		Base      string            `json:"base"`
+		Overrides map[string]string `json:"overrides"`
+	}{"axiom", "dark", map[string]string{
+		"diffAdded": "#3F4A2D", "diffRemoved": "#5C3838", "diffAddedWord": "#76946A", "diffRemovedWord": "#C34043",
+		"chromeYellow": "#DCA561", "briefLabelYou": "#DCA561", "rainbow_yellow": "#DCA561", "yellow_FOR_SUBAGENTS_ONLY": "#DCA561",
+	}}
+	exact, err := json.MarshalIndent(asset, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact = append(exact, '\n')
+	exactPath := filepath.Join(themes, "axiom.json")
+	modifiedPath := filepath.Join(themes, "axiom-dark.json")
+	if err := os.WriteFile(exactPath, exact, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	modified := []byte(`{"name":"user-modified"}`)
+	if err := os.WriteFile(modifiedPath, modified, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = restoreHome; backup.UserHomeDirFn = restoreBackupHome })
+	result, err := RunSync([]string{"--agents", "claude-code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(exactPath); !os.IsNotExist(err) {
+		t.Fatalf("exact theme remains: %v", err)
+	}
+	if got, err := os.ReadFile(modifiedPath); err != nil || string(got) != string(modified) {
+		t.Fatalf("modified theme changed: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(settings); err != nil || string(got) != `{"theme":"personal"}` {
+		t.Fatalf("theme preference changed: %q, %v", got, err)
+	}
+	if !slices.Contains(result.ChangedFiles, exactPath) {
+		t.Fatalf("removed theme missing from ChangedFiles: %v", result.ChangedFiles)
 	}
 }
 

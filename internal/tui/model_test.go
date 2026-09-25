@@ -5577,21 +5577,21 @@ func TestComponentsForPreset_PersonaMatrix(t *testing.T) {
 		wantNil          bool
 	}{
 		{
-			name:             "full-gentleman + gentleman includes persona and safe agent visuals",
+			name:             "full-gentleman + gentleman includes persona without visuals",
 			preset:           model.PresetFullGentleman,
 			persona:          model.PersonaGentleman,
 			wantPersona:      true,
 			wantTheme:        false,
-			wantClaudeTheme:  true,
+			wantClaudeTheme:  false,
 			wantOpenCodeLogo: false,
 		},
 		{
-			name:             "full-gentleman + custom excludes persona but keeps safe agent visuals",
+			name:             "full-gentleman + custom excludes persona and visuals",
 			preset:           model.PresetFullGentleman,
 			persona:          model.PersonaCustom,
 			wantPersona:      false,
 			wantTheme:        false,
-			wantClaudeTheme:  true,
+			wantClaudeTheme:  false,
 			wantOpenCodeLogo: false,
 		},
 		{
@@ -5693,7 +5693,7 @@ func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
 	m.Selection.Persona = model.PersonaGentleman
 	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 
-	// Confirm that managed persona and visual polish are initially included.
+	// Confirm that managed persona is included, but visual polish is not.
 	hasPersonaBefore := false
 	hasPolishBefore := false
 	for _, c := range m.Selection.Components {
@@ -5707,8 +5707,8 @@ func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
 	if !hasPersonaBefore {
 		t.Fatal("setup: expected ComponentPersona in initial components")
 	}
-	if !hasPolishBefore {
-		t.Fatal("setup: expected managed visual polish in initial components")
+	if hasPolishBefore {
+		t.Fatal("setup: visual polish must not be installed")
 	}
 
 	// Move cursor to PersonaCustom and confirm.
@@ -5720,8 +5720,7 @@ func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
 		t.Fatalf("Persona = %v, want %v", state.Selection.Persona, model.PersonaCustom)
 	}
 
-	// ComponentPersona and the generic theme must be removed after recompute, while
-	// preset-owned agent-specific visual components remain.
+	// ComponentPersona and all visual components remain absent after recompute.
 	for _, c := range state.Selection.Components {
 		if c == model.ComponentPersona {
 			t.Fatalf("ComponentPersona must not be in components after switching to PersonaCustom; got: %v", state.Selection.Components)
@@ -5730,9 +5729,9 @@ func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
 			t.Fatalf("ComponentTheme must not be in full preset components; got: %v", state.Selection.Components)
 		}
 	}
-	for _, want := range []model.ComponentID{model.ComponentClaudeTheme} {
-		if !slices.Contains(state.Selection.Components, want) {
-			t.Fatalf("agent-specific visual should remain preset-owned after switching to PersonaCustom; missing %v in %v", want, state.Selection.Components)
+	for _, visual := range model.VisualPolishComponents() {
+		if slices.Contains(state.Selection.Components, visual) {
+			t.Fatalf("visual component %q appeared after switching to PersonaCustom", visual)
 		}
 	}
 	if slices.Contains(state.Selection.Components, model.ComponentOpenCodeGentleLogo) {

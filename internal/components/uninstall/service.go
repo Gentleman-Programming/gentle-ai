@@ -891,31 +891,18 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 		}
 	case model.ComponentTheme:
-		for _, path := range settingsTargets(homeDir, adapter) {
-			targets = append(targets, path)
-			ops = append(ops, rewriteJSONFile(path, jsonPath{"theme"}))
-		}
+		// Legacy component: Axiom does not own the user's theme setting.
 	case model.ComponentClaudeTheme:
-		for _, path := range theme.VisualThemePaths(homeDir, adapter) {
+		managedPaths, err := theme.ManagedVisualThemePaths(homeDir, adapter)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, path := range managedPaths {
 			targets = append(targets, path)
-			ops = append(ops, removeFile(path))
+			ops = append(ops, removeManagedVisualTheme(path, adapter))
 		}
-		for _, legacyName := range []string{"gentleman.json", "gentleman-cute.json"} {
-			var legacyPath string
-			switch adapter.Agent() {
-			case model.AgentClaudeCode:
-				legacyPath = filepath.Join(adapter.GlobalConfigDir(homeDir), "themes", legacyName)
-			case model.AgentOpenCode:
-				legacyPath = filepath.Join(filepath.Dir(adapter.SettingsPath(homeDir)), "themes", legacyName)
-			}
-			if legacyPath != "" {
-				targets = append(targets, legacyPath)
-				ops = append(ops, removeFile(legacyPath))
-			}
-		}
-		if paths := theme.VisualThemePaths(homeDir, adapter); len(paths) > 0 {
-			ops = append(ops, removeDirIfEmpty(filepath.Dir(paths[0])))
-		}
+		// Legacy Gentleman-named assets have no verifiable byte identity here.
+		// Preserve them rather than deleting a possibly user-authored file.
 	case model.ComponentOpenCodeGentleLogo:
 		if adapter.Agent() != model.AgentOpenCode {
 			break
@@ -1631,6 +1618,26 @@ func removeFile(path string) operation {
 					return false, false, nil
 				}
 				return false, false, statErr
+			}
+			if err := removeFileIfExists(path); err != nil {
+				return false, false, err
+			}
+			return true, true, nil
+		},
+	}
+}
+
+func removeManagedVisualTheme(path string, adapter agents.Adapter) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			managed, err := theme.IsManagedVisualThemeFile(path, adapter)
+			if err != nil {
+				return false, false, err
+			}
+			if !managed {
+				return false, false, nil
 			}
 			if err := removeFileIfExists(path); err != nil {
 				return false, false, err

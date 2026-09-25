@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
@@ -736,7 +737,7 @@ func TestExpandVisualPolishUninstallComponents(t *testing.T) {
 	}
 }
 
-func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
+func TestPartialUninstallClaudeThemePreservesUnverifiedThemeAssets(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 
@@ -767,13 +768,13 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	managed := []string{
+	unverified := []string{
 		filepath.Join(homeDir, ".claude", "themes", "gentleman.json"),
 		filepath.Join(homeDir, ".claude", "themes", "gentleman-cute.json"),
 		filepath.Join(homeDir, ".config", "opencode", "themes", "gentleman.json"),
 		filepath.Join(homeDir, ".config", "opencode", "themes", "gentleman-cute.json"),
 	}
-	for _, path := range managed {
+	for _, path := range unverified {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -805,9 +806,9 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 		t.Fatalf("PartialUninstall() error = %v", err)
 	}
 
-	for _, path := range managed {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("managed theme %q should be removed: %v", path, err)
+	for _, path := range unverified {
+		if got, err := os.ReadFile(path); err != nil || string(got) != `{"name":"managed"}` {
+			t.Fatalf("unverified legacy theme %q must be preserved: %q, %v", path, got, err)
 		}
 	}
 	for path, want := range preserved {
@@ -820,6 +821,52 @@ func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 	}
 	if got, err := os.ReadFile(logoPath); err != nil || string(got) != "// managed logo" {
 		t.Fatalf("OpenCode logo = %q, %v", got, err)
+	}
+}
+
+func TestPartialUninstallClaudeThemeRemovesExactAxiomAssetAndPreservesUserTheme(t *testing.T) {
+	home := t.TempDir()
+	svc, err := NewService(home, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	adapter, _ := svc.registry.Get(model.AgentClaudeCode)
+	path := theme.VisualThemePaths(home, adapter)[0]
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := struct {
+		Name      string            `json:"name"`
+		Base      string            `json:"base"`
+		Overrides map[string]string `json:"overrides"`
+	}{"axiom", "dark", map[string]string{
+		"diffAdded": "#3F4A2D", "diffRemoved": "#5C3838", "diffAddedWord": "#76946A", "diffRemovedWord": "#C34043",
+		"chromeYellow": "#DCA561", "briefLabelYou": "#DCA561", "rainbow_yellow": "#DCA561", "yellow_FOR_SUBAGENTS_ONLY": "#DCA561",
+	}}
+	content, err := json.MarshalIndent(asset, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = append(content, '\n')
+	if !theme.IsManagedVisualTheme(path, adapter, content) {
+		t.Fatal("fixture is not exact legacy Axiom asset")
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	settings := adapter.SettingsPath(home)
+	if err := os.WriteFile(settings, []byte(`{"theme":"my-theme"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentClaudeTheme}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("exact managed asset still exists: %v", err)
+	}
+	if got, err := os.ReadFile(settings); err != nil || string(got) != `{"theme":"my-theme"}` {
+		t.Fatalf("user theme changed: %q, %v", got, err)
 	}
 }
 

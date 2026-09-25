@@ -13,7 +13,7 @@ func TestRenderPersonaClarifiesCustomKeepsExistingPersona(t *testing.T) {
 	if !strings.Contains(out, "custom") {
 		t.Fatalf("RenderPersona missing custom option; output:\n%s", out)
 	}
-	if !strings.Contains(out, "Do not install a managed persona; choose themes/logo on the next screens") {
+	if !strings.Contains(out, "No instalar una persona gestionada; elige los demás componentes después") {
 		t.Fatalf("RenderPersona missing custom persona clarification; output:\n%s", out)
 	}
 	if strings.Contains(out, "Bring your own persona instructions") {
@@ -24,8 +24,11 @@ func TestRenderPersonaClarifiesCustomKeepsExistingPersona(t *testing.T) {
 func TestRenderPresetClarifiesCustomManualSelection(t *testing.T) {
 	out := RenderPreset(model.PresetCustom, 3)
 
-	if !strings.Contains(out, "Choose each component manually") {
+	if !strings.Contains(out, "Elige cada componente") {
 		t.Fatalf("RenderPreset missing custom preset clarification; output:\n%s", out)
+	}
+	if strings.Contains(out, "themes") {
+		t.Fatalf("RenderPreset still advertises theme installation; output:\n%s", out)
 	}
 	if strings.Contains(out, "Pick individual components yourself") {
 		t.Fatalf("RenderPreset still shows old custom preset wording; output:\n%s", out)
