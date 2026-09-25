@@ -10,7 +10,7 @@
 <p><strong>Plataforma Determinista de Ingeniería de Software, Orquestación Multi-Agente y Spec-Driven Development (SDD).</strong></p>
 
 <p>
-<img src="https://img.shields.io/badge/go-1.25+-38BDF8?style=for-the-badge&labelColor=0F172A" alt="Go 1.25+">
+<img src="https://img.shields.io/badge/go-1.25.10+-38BDF8?style=for-the-badge&labelColor=0F172A" alt="Go 1.25.10+">
 <img src="https://img.shields.io/badge/agents-16-818CF8?style=for-the-badge&labelColor=0F172A" alt="16 agents">
 <img src="https://img.shields.io/badge/lifecycle-SDD%20%2B%20RDD-38BDF8?style=for-the-badge&labelColor=0F172A" alt="SDD + RDD">
 <img src="https://img.shields.io/badge/multi--project-Hub-C084FC?style=for-the-badge&labelColor=0F172A" alt="Multi-Project Hub">
@@ -95,19 +95,17 @@ Receipt-Driven Development (RDD) is opt-in and stays off until you enable it. It
 
 ### Deterministic by design — Know the next valid step
 
-<img width="100%" src="docs/assets/diagrams/deterministic.svg" alt="A different agent, a different model and a brand-new session all converge on the gentle-ai binary. It reads the change state from files on disk and returns the only valid next transition, so no model votes on what comes next. The answer is always one of four public states: Working, Checking, Ready, or Needs your decision." />
+<img width="100%" src="docs/assets/diagrams/deterministic.svg" alt="Agentes, modelos y sesiones distintas convergen en la CLI de Axiom. Lee el estado del cambio desde ficheros y devuelve la siguiente transición válida sin delegar la decisión en el modelo. Sus estados públicos son Working, Checking, Ready y Needs your decision." />
 
-A model that guesses the next step guesses differently tomorrow, and differently again for your teammate. That is the gap between a workflow and a suggestion. The **`gentle-ai` binary** owns native SDD status and RDD review transitions, and because it reads state from files rather than from a context window, two people on two machines get the same answer — and so does the same person a month later.
+Si el modelo tiene que adivinar el siguiente paso, mañana puede proponer uno distinto, y otro diferente a tu compañero. Esa es la diferencia entre un flujo determinista y una sugerencia. El ejecutable **`axiom`** resuelve las transiciones nativas de SDD y RDD leyendo el estado persistido, no el contexto efímero de una conversación; así, el siguiente paso válido no depende de quién pregunte ni de cuándo.
 
 **[Docs →](docs/trigger-rules.md)**
 
 ---
 
-### Gentle Shell — A complete workspace for Pi
+### Interfaz de Axiom — Operación local del proyecto
 
-<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle Shell running an SDD sub-agent, with the todo list and live context and spend information" />
-
-**The way Gentle-AI was intended.** Gentle-AI brings our native Pi extensions together in one focused development environment: orchestrate specialized agents, monitor usage for supported provider accounts, and review code changes in a built-in diff.
+**Axiom incluye interfaces locales para trabajar con el proyecto.** `axiom tui` abre la interfaz de terminal; `axiom ui` inicia el panel web local. Ambas forman parte del producto Axiom y no requieren instalar un tema visual.
 
 **[Docs →](docs/pi.md)**
 
@@ -117,7 +115,7 @@ A model that guesses the next step guesses differently tomorrow, and differently
 
 <img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
-Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and twelve more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
+Axiom lleva sus flujos a Pi, OpenCode, Claude Code, Codex y otras integraciones. Cada adaptador usa las capacidades nativas del agente, por lo que funciones como la delegación y la revisión RDD pueden variar.
 
 **[Docs →](docs/agents.md)**
 
@@ -125,17 +123,17 @@ Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and tw
 
 ### Also in the box
 
-| Component | What it does |
+| Componente | Función |
 | :--- | :--- |
-| **Skills library** | Loaded automatically when the task matches |
-| **Context7 MCP** | Optional, selectable live framework and library documentation |
-| **CodeGraph** | Read-only symbol graph of your codebase |
-| **Security deny-list** | Blocks `~/.ssh`, `.env` and credential files |
-| **Config backups** | Snapshotted before every single write |
-| **Doctor** | `gentle-ai doctor` — read-only health report |
-| **Personas** | Optional personas; Gentleman is a caring but rigorous mentor who guides you toward your goal |
-| **Themes** | Gentleman and Gentleman-Cute |
-| **Per-phase model assignment** | Assign a model to each phase in Pi and OpenCode |
+| **Biblioteca de skills** | Carga las skills cuando coinciden con la tarea |
+| **Context7 MCP** | Documentación actualizada y opcional de frameworks y bibliotecas |
+| **CodeGraph** | Grafo de símbolos de solo lectura del código |
+| **Lista de denegación de seguridad** | Bloquea el acceso a `~/.ssh`, `.env` y ficheros de credenciales |
+| **Copias de configuración** | Crea respaldos antes de escribir |
+| **Diagnóstico** | `axiom doctor` — comprobación de solo lectura |
+| **Personas** | Persona opcional de mentor o neutral, si se selecciona |
+| **Temas visuales** | Axiom no instala ni sincroniza temas visuales |
+| **Asignación de modelos por fase** | Permite asignar modelos por fase en Pi y OpenCode |
 
 > **Every component, skill and preset: [Full breakdown →](docs/components.md)**
 
@@ -146,22 +144,17 @@ Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and tw
 ## Get started
 
 ```bash
-# macOS (Homebrew)
-brew install gentleman-programming/tap/gentle-ai
-
-# macOS / Linux (curl)
-curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
-
-# Windows (PowerShell) — source install, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
+git clone https://github.com/IGutierrezZ/axiom.git
+cd axiom
+go install ./cmd/axiom
 ```
 
 ```bash
-gentle-ai          # pick your agents, components and persona
-gentle-ai doctor   # verify — read-only, changes nothing
+axiom              # abre la TUI en una terminal interactiva
+axiom doctor       # diagnóstico de solo lectura
 ```
 
-Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
+Después, usa el agente con normalidad. Axiom crea respaldos antes de modificar ficheros de configuración; algunas integraciones también pueden aprovisionar runtimes si se selecciona esa acción. Axiom ya no instala ni sincroniza temas visuales.
 
 > **Beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
 
@@ -174,7 +167,8 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 | Where to go | What you'll find |
 | :--- | :--- |
 | **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
-| **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
+| **[Inicio rápido](docs/quickstart.md)** | Instalación desde el repositorio, configuración inicial, sincronización y diagnóstico. |
+| **[Uso y comandos](docs/usage.md)** | Guía de comandos y flujos operativos del CLI de Axiom; las opciones heredadas se identifican como tales. |
 | **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 16 |
 | **[Routing](docs/trigger-rules.md)** | How the agent picks direct, delegated or SDD |
 | **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
@@ -188,7 +182,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 
 ## Community
 
-Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped and unclaimed — pick one and it's yours.
+Las incidencias de Axiom etiquetadas como [`up-for-grabs`](https://github.com/IGutierrezZ/axiom/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) están disponibles para colaborar.
 
 <div align="center">
 
@@ -199,7 +193,7 @@ Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/ge
 <br/><br/>
 
 <a href="CONTRIBUTORS.md">
-  <img width="100%" src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai&columns=16" alt="Gentle-AI contributors" />
+  <img width="100%" src="https://contrib.rocks/image?repo=IGutierrezZ/axiom&columns=16" alt="Contribuidores de Axiom" />
 </a>
 
 <p><sub>This project exists because of these people.</sub></p>
@@ -212,7 +206,7 @@ Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/ge
 
 ## Origen y Evolución
 
-**Axiom** es una plataforma independiente de ingeniería aumentada nacida como evolución y bifurcación de *Gentle-AI*. Conserva la robustez del arnés determinista y la metodología de Spec-Driven Development (SDD), incorporando gobernanza multi-rol, catálogo de autoskills, motor de código semántico y un Hub centralizado multi-proyecto.
+**Axiom** es una plataforma independiente de ingeniería aumentada que evolucionó a partir de una bifurcación de *Gentle AI*. Conserva atribución e identificadores heredados cuando son necesarios para la compatibilidad, y desarrolla por separado su producto, su CLI y su gobernanza multi-rol y multi-repositorio.
 
 <div align="center">
 

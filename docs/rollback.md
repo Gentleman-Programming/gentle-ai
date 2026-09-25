@@ -1,72 +1,68 @@
-# Backup & Rollback Guide
+# Copias de seguridad y restauración
 
-The backup system automatically snapshots your configuration files before every install, sync, and upgrade. Backups are compressed, deduplicated, and automatically pruned to keep disk usage under control.
+Axiom crea una copia de los ficheros de configuración que va a modificar antes de instalar, sincronizar o actualizar componentes. La pantalla **Respaldos** de la TUI distingue las copias de Axiom de las copias históricas de Gentle AI: selecciona por defecto la copia más reciente de Axiom y mantiene las de Gentle AI disponibles para una restauración deliberada.
 
-## How it works
+## Qué se guarda
 
-Every time you run `gentle-ai install`, `sync`, or `upgrade`, the system:
+Cada operación de escritura:
 
-1. **Computes a checksum** of all files that will be backed up
-2. **Skips the backup** if it would be identical to the most recent one (dedup)
-3. **Creates a compressed snapshot** (`snapshot.tar.gz`) with all your config files
-4. **Prunes old backups** — keeps the 5 most recent, deletes the rest
+1. Calcula la huella de los ficheros incluidos en la copia.
+2. Omite el respaldo si su contenido coincide con el último.
+3. Crea una instantánea comprimida (`snapshot.tar.gz`).
+4. Aplica la política de retención a las copias no fijadas.
 
-## Snapshot contents
+El manifiesto registra el origen, la fecha, el número de ficheros, la huella y si una ruta existía antes de la operación. Las copias antiguas, anteriores al formato comprimido, conservan un directorio `files/`; Axiom también las admite al restaurar.
 
-- `manifest.json` — metadata (source, timestamp, file count, checksum, pin status)
-- `snapshot.tar.gz` — compressed archive of all backed-up files
-- For paths that did not exist before the operation, the manifest tracks `existed=false`
+El alcance de un respaldo de sincronización depende de los agentes registrados como instalados por Axiom. No presupongas que incluye los directorios de agentes configurados manualmente fuera de Axiom. Las copias de Axiom (`~/.axiom/backups/`) y las históricas de Gentle AI (`~/.gentle-ai/backups/`) mantienen su procedencia, aunque tengan identificadores repetidos.
 
-> **Backup scope**: pre-upgrade and pre-sync snapshots cover only the agents listed in `state.InstalledAgents` (`~/.gentle-ai/state.json`). Config directories for agents you installed outside of gentle-ai are not included in the snapshot.
+## Retención
 
-Legacy (pre-v1.16) backups use a `files/` directory with plain copies instead of a tar.gz archive. Both formats are fully supported for restore.
+| Ajuste | Valor predeterminado | Comportamiento |
+|--------|---------------------|----------------|
+| Cantidad | 5 | Se conservan las cinco copias no fijadas más recientes en cada carpeta de respaldos |
+| Copias fijadas | Sin límite | No se eliminan durante la poda automática |
+| Duplicados | Omitidos | No se crea otra copia si la configuración no ha cambiado |
+| Compresión | Activada | Las nuevas copias usan `tar.gz` |
 
-## Retention policy
+## Restaurar desde la TUI
 
-| Setting | Default | Behavior |
-|---------|---------|----------|
-| Keep count | 5 | The 5 most recent unpinned backups are kept |
-| Pinned backups | Never deleted | Survive pruning regardless of count |
-| Duplicates | Skipped | If config hasn't changed, no new backup is created |
-| Compression | Always | New backups use tar.gz (~75% smaller) |
+Abre la pantalla de respaldos:
 
-## Pinning backups
+```sh
+axiom tui
+```
 
-You can mark any backup as "pinned" in the TUI to protect it from automatic pruning:
+En la pantalla **Respaldos**, utiliza `j`/`k` para elegir una copia y `Enter` para restaurarla. La selección inicial apunta a la copia de Axiom más reciente; elige expresamente una copia identificada como Gentle AI solo si quieres recuperar ese estado histórico.
 
-1. Run `gentle-ai` and navigate to the **Backups** screen
-2. Use `j`/`k` to select a backup
-3. Press **`p`** to toggle pin/unpin
-4. Pinned backups show a `[pinned]` indicator
+| Tecla | Acción |
+|-------|--------|
+| `j` / `k` | Mover la selección |
+| `Enter` | Restaurar la copia seleccionada |
+| `p` | Fijar o quitar la fijación |
+| `r` | Añadir o cambiar la descripción |
+| `d` | Eliminar la copia seleccionada |
+| `Esc` | Volver |
 
-Pinned backups are never automatically deleted, even when the retention limit is exceeded.
+La interfaz conserva la raíz/origen seleccionado al restaurar; no deduzcas el origen solo por el ID, porque puede repetirse entre Axiom y Gentle AI.
 
-## Managing backups (TUI)
+## Semántica de restauración
 
-| Key | Action |
-|-----|--------|
-| `j` / `k` | Navigate up/down |
-| `Enter` | Restore selected backup |
-| `p` | Pin/unpin (protect from pruning) |
-| `r` | Rename (add a description) |
-| `d` | Delete |
-| `Esc` | Back |
+- Si `existed=true`, restaura el fichero en su ruta original.
+- Si `existed=false`, elimina el fichero creado por la operación respaldada.
+- Las escrituras de cada fichero son atómicas; la restauración completa puede abarcar varios ficheros.
+- Se admiten tanto instantáneas `tar.gz` como el formato histórico `files/`.
+- La restauración revierte ficheros de configuración; no desinstala paquetes del sistema.
 
-## Restore behavior
+## Si falla una verificación
 
-- If `existed=true`: restores the file from the snapshot to its original path
-- If `existed=false`: removes the file (reverting files created during install)
-- Restore is atomic per file write — no partial restores
-- Works with both compressed (tar.gz) and legacy (plain file) backups
+1. Lee qué comprobaciones han fallado y qué ficheros se han modificado.
+2. Abre la TUI y restaura la copia de Axiom apropiada desde **Respaldos**.
+3. Corrige la causa externa y valida el plan antes de repetir la operación con `axiom install --dry-run` o `axiom sync --dry-run`.
+4. Aplica de nuevo la operación solo cuando el plan sea el esperado.
 
-## If verification fails
+Para escoger un respaldo de un origen concreto, usa la pantalla **Respaldos**: el atajo de CLI `axiom restore latest` tiene una resolución independiente y no ofrece la misma preselección de origen de la TUI.
 
-1. Review failed checks in verification report
-2. Restore from latest snapshot via the TUI or `gentle-ai restore latest`
-3. Re-run install with `--dry-run` to validate plan
-4. Re-run install after fixing external dependencies
+## Límites
 
-## What rollback does NOT cover
-
-- Packages installed via `brew install`, `apt-get install`, or `pacman -S` are not uninstalled during rollback. The snapshot system handles configuration files only.
-- If you need to undo a package install, use your platform's package manager directly (e.g., `brew uninstall`, `sudo apt-get remove`, `sudo pacman -R`).
+- Las instalaciones realizadas mediante `brew`, `apt-get`, `pacman` o `dnf` no se desinstalan al restaurar una copia de configuración. Usa el gestor de paquetes correspondiente si también quieres retirarlas.
+- No selecciones una copia histórica de Gentle AI por ser la más reciente en conjunto: comprueba el origen que muestra la TUI antes de confirmar.
