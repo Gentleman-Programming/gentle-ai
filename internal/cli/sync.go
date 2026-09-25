@@ -2240,7 +2240,8 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 	adapters := resolveAdapters(selection.Agents)
 
 	for _, component := range selection.Components {
-		for _, path := range syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
+		paths := syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
+		for _, path := range verificationComponentPaths(paths, homeDir, workspaceDir, scope, adapters, component) {
 			currentPath := path
 			if isRetiredManagedPath(currentPath) {
 				checks = append(checks, verify.Check{

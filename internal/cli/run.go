@@ -2581,6 +2581,44 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 	return paths
 }
 
+// verificationComponentPaths excludes Codex profiles only when the CLI is
+// absent. Engram injection still writes shared Codex configuration in that
+// case, but deliberately leaves CLI-only profiles untouched. Keep the full
+// component path inventory for backup and uninstall, including existing
+// profiles that might need restoring.
+func verificationComponentPaths(paths []string, homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter, component model.ComponentID) []string {
+	if component != model.ComponentEngram {
+		return paths
+	}
+	var codexAdapter agents.Adapter
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentCodex {
+			codexAdapter = adapter
+			break
+		}
+	}
+	if codexAdapter == nil || !codexagent.IsGPT56RuntimeUnavailable(codexagent.ValidateGPT56Runtime()) {
+		// An incompatible or failing installed CLI is not an optional case:
+		// injection reports that error and verification must not hide it.
+		return paths
+	}
+	configPath := codexAdapter.MCPConfigPath(componentPathDirScoped(homeDir, workspaceDir, scope, codexAdapter, component), "engram")
+	if configPath == "" {
+		return paths
+	}
+	profiles := make(map[string]struct{})
+	for _, path := range codexagent.SddProfilePaths(filepath.Dir(configPath)) {
+		profiles[path] = struct{}{}
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, optional := profiles[path]; !optional {
+			filtered = append(filtered, path)
+		}
+	}
+	return filtered
+}
+
 // effectiveOpenCodeSettingsPath selects the one OpenCode settings authority for
 // a component operation. Global sync/install uses the project-over-global
 // resolver; an explicit workspace scope remains workspace-managed.
@@ -2737,7 +2775,8 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 			// install command, so its files are not required here.
 			continue
 		}
-		for _, path := range componentPathsWithWorkspaceScoped(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
+		paths := componentPathsWithWorkspaceScoped(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component)
+		for _, path := range verificationComponentPaths(paths, input.HomeDir, input.WorkspaceDir, input.Scope, adapters, component) {
 			if path == "" {
 				continue
 			}

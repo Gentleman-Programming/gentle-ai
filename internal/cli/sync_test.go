@@ -6026,6 +6026,73 @@ func setupCodexSyncHomeWithPhaseModels(t *testing.T, carrilModels map[string]str
 	return home
 }
 
+func TestRunSyncCodexVerificationMatchesRuntimeProfileOutput(t *testing.T) {
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	tests := []struct {
+		name         string
+		version      string
+		commandErr   error
+		wantProfiles bool
+	}{
+		{name: "CLI ausente solo exige configuración compartida", commandErr: exec.ErrNotFound},
+		{name: "CLI disponible exige perfiles", version: "codex-cli 0.144.0", wantProfiles: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := setupCodexSyncHome(t, nil, nil)
+			t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			osUserHomeDir = func() (string, error) { return home, nil }
+			t.Cleanup(codex.SetRuntimeVersionCommandForTest(tt.version, tt.commandErr))
+
+			result, err := RunSync([]string{"--agents", "codex"})
+			if err != nil {
+				t.Fatalf("RunSync() error = %v", err)
+			}
+			if !result.Verify.Ready {
+				t.Fatalf("post-sync no está listo: %s", verify.RenderReport(result.Verify))
+			}
+			if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); err != nil {
+				t.Fatalf("configuración compartida ausente: %v", err)
+			}
+			for _, profile := range codex.SddProfilePaths(filepath.Join(home, ".codex")) {
+				_, err := os.Stat(profile)
+				if tt.wantProfiles && err != nil {
+					t.Errorf("perfil exigido ausente %q: %v", profile, err)
+				}
+				if !tt.wantProfiles && !os.IsNotExist(err) {
+					t.Errorf("sin CLI el perfil %q no debe crearse: %v", profile, err)
+				}
+				for _, check := range result.Verify.Checks {
+					if check.ID == "verify:sync:file:"+profile && !tt.wantProfiles {
+						t.Errorf("sin CLI el perfil %q no debe exigirse", profile)
+					}
+				}
+			}
+			if tt.wantProfiles {
+				missing := codex.SddProfilePaths(filepath.Join(home, ".codex"))[0]
+				if err := os.Remove(missing); err != nil {
+					t.Fatal(err)
+				}
+				report := runPostSyncVerification(home, "", result.Selection)
+				if report.Ready {
+					t.Fatalf("la verificación debe fallar si falta el perfil %q", missing)
+				}
+			}
+		})
+	}
+}
+
 func TestRunSync_RestoresCodexCarrilAssignments(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -6608,4 +6675,3 @@ func TestRunSyncWithSelectionScopedWorkspaceDoesNotTouchHomeState(t *testing.T) 
 		t.Errorf("legacy global state file %q was created during workspace-scoped sync", legacyStatePath)
 	}
 }
-

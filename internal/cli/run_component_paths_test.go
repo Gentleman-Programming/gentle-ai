@@ -3,11 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
@@ -546,6 +548,39 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	want := filepath.Join(home, ".codex", "config.toml")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPaths(engram,codex) missing %q\npaths=%v", want, paths)
+	}
+}
+
+func TestVerificationComponentPathsCodexRuntimeGate(t *testing.T) {
+	tests := []struct {
+		name         string
+		version      string
+		commandErr   error
+		wantProfiles bool
+	}{
+		{name: "CLI disponible", version: "codex-cli 0.144.0", wantProfiles: true},
+		{name: "CLI ausente", commandErr: exec.ErrNotFound},
+		{name: "CLI incompatible no se oculta", version: "codex-cli 0.143.9", wantProfiles: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(codex.SetRuntimeVersionCommandForTest(tt.version, tt.commandErr))
+			home := t.TempDir()
+			adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
+			paths := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+			verified := verificationComponentPaths(paths, home, "", ScopeGlobal, adapters, model.ComponentEngram)
+			if !containsPath(verified, filepath.Join(home, ".codex", "config.toml")) {
+				t.Fatalf("la configuración compartida debe verificarse siempre: %v", verified)
+			}
+			for _, profile := range codex.SddProfilePaths(filepath.Join(home, ".codex")) {
+				if !containsPath(paths, profile) {
+					t.Fatalf("la copia de seguridad debe inventariar %q: %v", profile, paths)
+				}
+				if got := containsPath(verified, profile); got != tt.wantProfiles {
+					t.Errorf("verificación de %q = %v, esperado %v", profile, got, tt.wantProfiles)
+				}
+			}
+		})
 	}
 }
 
