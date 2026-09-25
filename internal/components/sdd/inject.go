@@ -1383,6 +1383,7 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, usePermissions 
 				"edit":  "deny",
 				"task":  "deny",
 				"bash": map[string]any{
+					"axiom review inspect-candidate --purpose targeted-validation *":    "allow",
 					"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow",
 					"*": "deny",
 				},
@@ -1865,7 +1866,8 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 		return false, err
 	}
 
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
+	const command = `axiom skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
+	const legacyCommand = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
 	if hasHooks && hooksMap == nil {
@@ -1876,7 +1878,9 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 	}
 
 	changed := false
-	if !hookCommandExists(hooksMap, "SessionStart", command) {
+	if replaceHookCommand(hooksMap, "SessionStart", legacyCommand, command) {
+		changed = true
+	} else if !hookCommandExists(hooksMap, "SessionStart", command) {
 		sessionRaw, hasSessionStart := hooksMap["SessionStart"]
 		sessionStart, _ := sessionRaw.([]any)
 		if hasSessionStart && sessionStart == nil {
@@ -1897,8 +1901,13 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 		changed = true
 	}
 
-	const telemetryCommand = `gentle-ai telemetry runtime codex --json`
+	const telemetryCommand = `axiom telemetry runtime codex --json`
+	const legacyTelemetryCommand = `gentle-ai telemetry runtime codex --json`
 	for _, event := range []string{"SubagentStop", "Stop"} {
+		if replaceHookCommand(hooksMap, event, legacyTelemetryCommand, telemetryCommand) {
+			changed = true
+			continue
+		}
 		if hookCommandExists(hooksMap, event, telemetryCommand) {
 			continue
 		}
@@ -1940,6 +1949,23 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 	return wr.Changed, nil
 }
 
+func replaceHookCommand(hooksMap map[string]any, event, oldCmd, newCmd string) bool {
+	entries, _ := hooksMap[event].([]any)
+	replaced := false
+	for _, entry := range entries {
+		entryMap, _ := entry.(map[string]any)
+		hooks, _ := entryMap["hooks"].([]any)
+		for _, hook := range hooks {
+			hookMap, _ := hook.(map[string]any)
+			if hookMap["command"] == oldCmd {
+				hookMap["command"] = newCmd
+				replaced = true
+			}
+		}
+	}
+	return replaced
+}
+
 func hookCommandExists(hooksMap map[string]any, event, command string) bool {
 	entries, _ := hooksMap[event].([]any)
 	for _, entry := range entries {
@@ -1965,10 +1991,8 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
-	if claudeHookExists(root, command) {
-		return false, nil
-	}
+	const command = `axiom skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	const legacyCommand = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
@@ -1978,21 +2002,33 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
 	}
-	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
-	userPromptSubmit, _ := promptRaw.([]any)
-	if hasUserPromptSubmit && userPromptSubmit == nil {
-		return false, fmt.Errorf("Claude settings %q has unsupported hooks.UserPromptSubmit shape: want array", settingsPath)
-	}
-	userPromptSubmit = append(userPromptSubmit, map[string]any{
-		"matcher": "",
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": command,
+
+	changed := false
+	if replaceHookCommand(hooksMap, "UserPromptSubmit", legacyCommand, command) {
+		changed = true
+	} else if !claudeHookExists(root, command) {
+		promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
+		userPromptSubmit, _ := promptRaw.([]any)
+		if hasUserPromptSubmit && userPromptSubmit == nil {
+			return false, fmt.Errorf("Claude settings %q has unsupported hooks.UserPromptSubmit shape: want array", settingsPath)
+		}
+		userPromptSubmit = append(userPromptSubmit, map[string]any{
+			"matcher": "",
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": command,
+				},
 			},
-		},
-	})
-	hooksMap["UserPromptSubmit"] = userPromptSubmit
+		})
+		hooksMap["UserPromptSubmit"] = userPromptSubmit
+		changed = true
+	}
+
+	if !changed {
+		return false, nil
+	}
+
 	root["hooks"] = hooksMap
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -2028,7 +2064,8 @@ func ensureClaudeSDDPreflightHook(settingsPath string, agentID model.AgentID) (b
 		hooksMap = map[string]any{}
 	}
 
-	command := fmt.Sprintf("gentle-ai sdd-preflight-hook --agent %s", agentID)
+	command := fmt.Sprintf("axiom sdd-preflight-hook --agent %s", agentID)
+	legacyCommand := fmt.Sprintf("gentle-ai sdd-preflight-hook --agent %s", agentID)
 	changed := false
 	// The guard derives parent-confirmed SDD preflight authority at dispatch
 	// time directly from the session transcript the hook runner supplies on
@@ -2040,6 +2077,10 @@ func ensureClaudeSDDPreflightHook(settingsPath string, agentID model.AgentID) (b
 	for _, hook := range []struct{ key, matcher string }{
 		{key: "PreToolUse", matcher: "Agent"},
 	} {
+		if replaceHookCommand(hooksMap, hook.key, legacyCommand, command) {
+			changed = true
+			continue
+		}
 		added, err := appendClaudeReviewStopHookEntry(hooksMap, hook.key, settingsPath, command, map[string]any{
 			"matcher": hook.matcher,
 			"hooks":   []any{map[string]any{"type": "command", "command": command, "timeout": 30}},
@@ -2069,7 +2110,7 @@ func ensureClaudeSDDPreflightHook(settingsPath string, agentID model.AgentID) (b
 // ensureClaudeReviewStopHook appends the managed review preflight commands to
 // hooks.Stop and hooks.SessionStart in the Claude Code settings file. The
 // pair makes the review preflight deterministic across a Claude turn.
-// `gentle-ai review stop-hook --agent <agentID>` reads `hook_event_name` from
+// `axiom review stop-hook --agent <agentID>` reads `hook_event_name` from
 // the payload on stdin: at SessionStart it records the session's starting
 // candidate as the per-session baseline, and at Stop it prints a block
 // decision only when RDD is enabled and the session has produced an
@@ -2087,7 +2128,8 @@ func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (boo
 		return false, err
 	}
 
-	command := fmt.Sprintf("gentle-ai review stop-hook --agent %s", agentID)
+	command := fmt.Sprintf("axiom review stop-hook --agent %s", agentID)
+	legacyCommand := fmt.Sprintf("gentle-ai review stop-hook --agent %s", agentID)
 
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
@@ -2098,32 +2140,44 @@ func ensureClaudeReviewStopHook(settingsPath string, agentID model.AgentID) (boo
 		hooksMap = map[string]any{}
 	}
 
-	stopChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "Stop", settingsPath, command, map[string]any{
-		"matcher": "",
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": command,
-				"timeout": 60,
+	stopChanged := false
+	if replaceHookCommand(hooksMap, "Stop", legacyCommand, command) {
+		stopChanged = true
+	} else {
+		var err error
+		stopChanged, err = appendClaudeReviewStopHookEntry(hooksMap, "Stop", settingsPath, command, map[string]any{
+			"matcher": "",
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": command,
+					"timeout": 60,
+				},
 			},
-		},
-	})
-	if err != nil {
-		return false, err
+		})
+		if err != nil {
+			return false, err
+		}
 	}
 
-	sessionStartChanged, err := appendClaudeReviewStopHookEntry(hooksMap, "SessionStart", settingsPath, command, map[string]any{
-		"matcher": "startup|resume|clear|compact",
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": command,
-				"timeout": 30,
+	sessionStartChanged := false
+	if replaceHookCommand(hooksMap, "SessionStart", legacyCommand, command) {
+		sessionStartChanged = true
+	} else {
+		var err error
+		sessionStartChanged, err = appendClaudeReviewStopHookEntry(hooksMap, "SessionStart", settingsPath, command, map[string]any{
+			"matcher": "startup|resume|clear|compact",
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": command,
+					"timeout": 30,
+				},
 			},
-		},
-	})
-	if err != nil {
-		return false, err
+		})
+		if err != nil {
+			return false, err
+		}
 	}
 
 	if !stopChanged && !sessionStartChanged {
@@ -2183,9 +2237,14 @@ func ensureClaudeTelemetryHooks(settingsPath string) (bool, error) {
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
 	}
-	const command = "gentle-ai telemetry runtime claude --json"
+	const command = "axiom telemetry runtime claude --json"
+	const legacyCommand = "gentle-ai telemetry runtime claude --json"
 	changed := false
 	for _, hookKey := range []string{"SubagentStop", "Stop"} {
+		if replaceHookCommand(hooksMap, hookKey, legacyCommand, command) {
+			changed = true
+			continue
+		}
 		added, err := appendClaudeReviewStopHookEntry(hooksMap, hookKey, settingsPath, command, map[string]any{
 			"matcher": "",
 			"hooks":   []any{map[string]any{"type": "command", "command": command, "async": true, "timeout": 5}},

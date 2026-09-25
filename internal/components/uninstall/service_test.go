@@ -695,7 +695,7 @@ func TestCompleteUninstallKeepsExecutableRemovalAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "To completely remove gentle-ai from your system, delete the executable (e.g., rm -f $(which gentle-ai))"
+	want := "To completely remove axiom from your system, delete the executable (e.g., rm -f $(which axiom))"
 	if !slices.Contains(result.ManualActions, want) {
 		t.Fatalf("ManualActions = %v, want %q", result.ManualActions, want)
 	}

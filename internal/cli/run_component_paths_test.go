@@ -1340,7 +1340,7 @@ func TestComponentInjectionDirScopedWorkspaceSafeguard(t *testing.T) {
 	}
 
 	// Desktop agents without workspace support must fall back to homeDir
-	for _, id := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf} {
+	for _, id := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf, model.AgentAntigravity} {
 		adapter, ok := reg.Get(id)
 		if !ok {
 			continue

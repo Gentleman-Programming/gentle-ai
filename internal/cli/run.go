@@ -482,7 +482,7 @@ func withFailedVerificationNote(report verify.Report, resolved planner.ResolvedP
 	for i, agent := range resolved.Agents {
 		names[i] = string(agent)
 	}
-	report.FinalNote = verify.VerificationIssuesMessageForCommand("gentle-ai install --agent " + strings.Join(names, ","))
+	report.FinalNote = verify.VerificationIssuesMessageForCommand("axiom install --agent " + strings.Join(names, ","))
 	return report
 }
 
@@ -2654,7 +2654,7 @@ func adapterSupportsWorkspace(adapter agents.Adapter) bool {
 		return false
 	}
 	switch adapter.Agent() {
-	case model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf:
+	case model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf, model.AgentAntigravity:
 		return false
 	default:
 		return true

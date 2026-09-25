@@ -83,7 +83,7 @@ func checkManagedPath(configDir, path string) error {
 		return err
 	} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
 		if target, statErr := os.Stat(root); statErr != nil || !target.IsDir() {
-			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink that does not resolve to an existing directory; point it at a directory or replace it with one, then rerun 'gentle-ai sync'", root)
+			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink that does not resolve to an existing directory; point it at a directory or replace it with one, then rerun 'axiom sync'", root)
 		}
 	}
 	for _, candidate := range []string{filepath.Dir(path), path} {
@@ -95,7 +95,7 @@ func checkManagedPath(configDir, path string) error {
 			return err
 		}
 		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink inside the managed root; replace it with a regular file or directory, then rerun 'gentle-ai sync'", candidate)
+			return fmt.Errorf("telemetry runtime symlink conflict: %s is a symlink inside the managed root; replace it with a regular file or directory, then rerun 'axiom sync'", candidate)
 		}
 	}
 	return nil

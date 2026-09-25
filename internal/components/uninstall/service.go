@@ -439,7 +439,7 @@ func (s *Service) CompleteUninstall() (Result, error) {
 		return result, err
 	}
 
-	result.ManualActions = append(result.ManualActions, "To completely remove gentle-ai from your system, delete the executable (e.g., rm -f $(which gentle-ai))")
+	result.ManualActions = append(result.ManualActions, "To completely remove axiom from your system, delete the executable (e.g., rm -f $(which axiom))")
 	return result, nil
 }
 
@@ -720,9 +720,9 @@ func failureManualActions(failures []operationFailure, batch []model.AgentID, ho
 		if location == "" {
 			location = homeDir
 		}
-		command := "gentle-ai uninstall --all --yes"
+		command := "axiom uninstall --all --yes"
 		if len(retry) > 0 {
-			command = "gentle-ai uninstall " + strings.Join(retry, " ") + " --yes"
+			command = "axiom uninstall " + strings.Join(retry, " ") + " --yes"
 		}
 		actions = append(actions, fmt.Sprintf(
 			"Uninstall did not complete for %s at %s: %v. Those agents are still recorded in %s. Resolve the file, then rerun `%s`.",
@@ -1387,7 +1387,16 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 			for _, hook := range hooks {
 				hookMap, ok := hook.(map[string]any)
 				cmd, _ := hookMap["command"].(string)
-				if ok && (strings.Contains(cmd, "gentle-ai skill-registry refresh") || strings.Contains(cmd, "gentle-ai review stop-hook") || strings.Contains(cmd, "gentle-ai sdd-preflight-hook") || cmd == "gentle-ai telemetry runtime claude --json" || cmd == "gentle-ai telemetry runtime codex --json") {
+				if ok && (strings.Contains(cmd, "axiom skill-registry refresh") ||
+					strings.Contains(cmd, "gentle-ai skill-registry refresh") ||
+					strings.Contains(cmd, "axiom review stop-hook") ||
+					strings.Contains(cmd, "gentle-ai review stop-hook") ||
+					strings.Contains(cmd, "axiom sdd-preflight-hook") ||
+					strings.Contains(cmd, "gentle-ai sdd-preflight-hook") ||
+					cmd == "axiom telemetry runtime claude --json" ||
+					cmd == "gentle-ai telemetry runtime claude --json" ||
+					cmd == "axiom telemetry runtime codex --json" ||
+					cmd == "gentle-ai telemetry runtime codex --json") {
 					changed = true
 					continue
 				}
