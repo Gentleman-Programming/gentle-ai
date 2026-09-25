@@ -1044,6 +1044,7 @@ func installFakeCodeGraphScript(t *testing.T, body string) {
 }
 
 func TestCodeGraphIsolatedManifestWithConfiguredAgentDir(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	home := t.TempDir()
 
 	// 1. Initial run under standard Pi config creates a manifest with an owned child.

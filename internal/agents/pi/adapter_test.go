@@ -237,6 +237,7 @@ func TestCodeGraphPathsResolveConfiguredAgentDirectory(t *testing.T) {
 }
 
 func TestCodeGraphPathsDefaultAgentDirectory(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	home := t.TempDir()
 	paths := CodeGraphPaths(home)
 	wantAgentDir := filepath.Join(home, ".pi", "agent")
