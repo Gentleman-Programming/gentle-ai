@@ -14,10 +14,10 @@ func TestResolveInstallScope(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "empty flag and no env defaults to global",
+			name:      "empty flag and no env defaults to workspace",
 			flagValue: "",
 			envValue:  "",
-			want:      ScopeGlobal,
+			want:      ScopeWorkspace,
 		},
 		{
 			name:      "flag global returns global",
@@ -63,7 +63,7 @@ func TestResolveInstallScope(t *testing.T) {
 			name:      "whitespace-only flag treated as unset",
 			flagValue: "   ",
 			envValue:  "",
-			want:      ScopeGlobal,
+			want:      ScopeWorkspace,
 		},
 	}
 

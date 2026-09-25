@@ -1779,9 +1779,6 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentGGA:
-		if s.scope == ScopeWorkspace {
-			return nil
-		}
 		if !ggaAvailable(s.profile) {
 			// GGA not found on any known PATH — install it.
 			if s.profile.OS == "windows" {
@@ -2642,9 +2639,26 @@ func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapte
 
 // componentInjectionDirScoped returns the directory to inject component files for the given adapter,
 // taking the install scope into account. When scope is ScopeWorkspace, agent-scoped
-// components write to workspaceDir instead of the selected agent's global config root.
+// components write to workspaceDir instead of the selected agent's global config root,
+// except for desktop agents that do not support workspace installation (VSCode, Trae, Windsurf),
+// which are always installed in homeDir.
 func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
+	if scope == ScopeWorkspace && !adapterSupportsWorkspace(adapter) {
+		return homeDir
+	}
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+}
+
+func adapterSupportsWorkspace(adapter agents.Adapter) bool {
+	if adapter == nil {
+		return false
+	}
+	switch adapter.Agent() {
+	case model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf:
+		return false
+	default:
+		return true
+	}
 }
 
 // piPersonaConfigRoots returns the roots whose Pi persona state is managed by

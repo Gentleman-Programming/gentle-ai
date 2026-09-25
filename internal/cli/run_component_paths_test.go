@@ -1329,3 +1329,37 @@ func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
 		seen[path] = struct{}{}
 	}
 }
+
+func TestComponentInjectionDirScopedWorkspaceSafeguard(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("registry error: %v", err)
+	}
+
+	// Desktop agents without workspace support must fall back to homeDir
+	for _, id := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentTrae, model.AgentWindsurf} {
+		adapter, ok := reg.Get(id)
+		if !ok {
+			continue
+		}
+		got := componentInjectionDirScoped(home, workspace, ScopeWorkspace, adapter)
+		if got != home {
+			t.Errorf("adapter %s in ScopeWorkspace: got %q, want homeDir %q", id, got, home)
+		}
+	}
+
+	// CLI agents with workspace support must use workspaceDir
+	for _, id := range []model.AgentID{model.AgentClaudeCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentCursor} {
+		adapter, ok := reg.Get(id)
+		if !ok {
+			continue
+		}
+		got := componentInjectionDirScoped(home, workspace, ScopeWorkspace, adapter)
+		if got != workspace {
+			t.Errorf("adapter %s in ScopeWorkspace: got %q, want workspaceDir %q", id, got, workspace)
+		}
+	}
+}

@@ -13,9 +13,9 @@ import (
 type InstallScope string
 
 const (
-	// ScopeGlobal writes to the global agent config dir (default, backward-compatible).
+	// ScopeGlobal writes to the global agent config dir.
 	ScopeGlobal InstallScope = "global"
-	// ScopeWorkspace writes to the current workspace config root for each selected agent.
+	// ScopeWorkspace writes to the current workspace config root for each selected agent (default).
 	ScopeWorkspace InstallScope = "workspace"
 
 	ScopeAxiomEnvVar  = "AXIOM_INSTALL_SCOPE"
@@ -24,7 +24,7 @@ const (
 )
 
 // ResolveInstallScope resolves the install scope from the flag value and env var.
-// Priority: explicit flag > env var > default (global).
+// Priority: explicit flag > env var > default (workspace).
 // An empty flagValue means the flag was not set.
 func ResolveInstallScope(flagValue string) (InstallScope, error) {
 	raw := strings.TrimSpace(flagValue)
@@ -32,7 +32,7 @@ func ResolveInstallScope(flagValue string) (InstallScope, error) {
 		raw = strings.TrimSpace(system.Getenv(ScopeAxiomEnvVar, ScopeGentleEnvVar))
 	}
 	if raw == "" {
-		return ScopeGlobal, nil
+		return ScopeWorkspace, nil
 	}
 	return parseInstallScope(raw)
 }
