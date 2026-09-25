@@ -65,11 +65,11 @@ reported as decided by `default`:
 
 | Command | Effect |
 |---|---|
-| `gentle-ai review mode status --cwd <repo>` | Report the global source, clone-local source, deciding source, and effective mode without mutation. |
-| `gentle-ai review mode enable --scope global --cwd <repo>` | Opt in. Enables receipt-driven development globally for future candidates. This is the only command that turns it on. |
-| `gentle-ai review mode disable --cwd <repo>` | Disable receipt-driven development globally. |
-| `gentle-ai review mode disable --scope clone --cwd <repo>` | Disable it only for this clone; no other clone inherits the override. |
-| `gentle-ai review mode enable --scope clone --cwd <repo>` | Clear this clone's off-only override. Does not turn review on by itself. |
+| `axiom review mode status --cwd <repo>` | Report the global source, clone-local source, deciding source, and effective mode without mutation. |
+| `axiom review mode enable --scope global --cwd <repo>` | Opt in. Enables receipt-driven development globally for future candidates. This is the only command that turns it on. |
+| `axiom review mode disable --cwd <repo>` | Disable receipt-driven development globally. |
+| `axiom review mode disable --scope clone --cwd <repo>` | Disable it only for this clone; no other clone inherits the override. |
+| `axiom review mode enable --scope clone --cwd <repo>` | Clear this clone's off-only override. Does not turn review on by itself. |
 
 Any disabled source wins. A clone may opt out but cannot require review for the
 user, so the global scope is the only way in. Interactive starts ask before
@@ -96,11 +96,11 @@ holding authoritative artifacts, so until now a degraded store had no exit.
 
 | Command | Effect |
 |---|---|
-| `gentle-ai review store-reset --cwd <repo>` | Report, per category, what a reset would remove and what it would preserve. Removes nothing. |
-| `gentle-ai review store-reset --cwd <repo> --confirm` | Remove this clone's review lineage state. Irreversible. |
-| `gentle-ai review store-reset --cwd <repo> --confirm --include-in-flight` | Also remove reviews that have not reached a terminal state. |
-| `gentle-ai review store-reset --cwd <repo> --confirm --include-adapter-reviews` | Also remove the adapter-written `reviews/` graph store, which the lease and the in-flight refusal do not cover. |
-| `gentle-ai review store-reset --cwd <repo> --json` | The same report, machine-readable. |
+| `axiom review store-reset --cwd <repo>` | Report, per category, what a reset would remove and what it would preserve. Removes nothing. |
+| `axiom review store-reset --cwd <repo> --confirm` | Remove this clone's review lineage state. Irreversible. |
+| `axiom review store-reset --cwd <repo> --confirm --include-in-flight` | Also remove reviews that have not reached a terminal state. |
+| `axiom review store-reset --cwd <repo> --confirm --include-adapter-reviews` | Also remove the adapter-written `reviews/` graph store, which the lease and the in-flight refusal do not cover. |
+| `axiom review store-reset --cwd <repo> --json` | The same report, machine-readable. |
 
 Every sub-action is user-initiated only; no adapter and no automation reaches
 it, because the verb carries no negotiated contract row. Preview is the default
@@ -158,7 +158,7 @@ in-flight work is never one keystroke away.
 
 ## Installation and refresh
 
-`gentle-ai install` and `gentle-ai sync` project the same canonical rules into
+`axiom install` and `axiom sync` project the same canonical rules into
 every supported adapter, independently of whether the optional SDD component is
 selected:
 
@@ -170,8 +170,8 @@ selected:
   managed router template.
 
 ```bash
-gentle-ai install   # full install
-gentle-ai sync      # refresh managed content
+axiom install   # full install
+axiom sync      # refresh managed content
 ```
 
 Refresh is idempotent: the managed projection is replaced without duplication.

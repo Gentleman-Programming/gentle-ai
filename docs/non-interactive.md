@@ -5,7 +5,7 @@ Use non-interactive mode for CI, scripts, or reproducible local setup.
 ## Command
 
 ```bash
-go run ./cmd/gentle-ai install [flags]
+go run ./cmd/axiom install [flags]
 ```
 
 ## Supported flags
@@ -16,16 +16,16 @@ go run ./cmd/gentle-ai install [flags]
 - `--persona`: explicit persona id.
 - `--preset`: explicit preset id.
 - `--sdd-mode`: `single` or `multi`.
-- `--scope`: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes agent-scoped files to the current project root `./`).
+- `--scope`: `workspace` (default, writes agent-scoped files to the current project root `./`) or `global` (writes to each selected agent's global config directory).
 - `--dry-run`: render plan without executing.
 
 ## Environment variables
 
 | Variable | Values | Description |
 |----------|--------|-------------|
-| `GENTLE_AI_INSTALL_SCOPE` | `global` \| `workspace` | Sets the install scope without a flag. Useful in CI. Equivalent to `--scope`. Default: `global`. |
+| `AXIOM_INSTALL_SCOPE` | `workspace` \| `global` | Sets the install scope without a flag. Useful in CI. Equivalent to `--scope`. Default: `workspace`. (Legacy `GENTLE_AI_INSTALL_SCOPE` is also supported). |
 
-`workspace` scope is not Claude-only: it applies to the selected agents' agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations, like package installs or agent settings that must live in the tool's global config, remain global.
+`workspace` scope applies to the selected agents' agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations, like package installs or agent settings that must live in the tool's global config, remain global.
 
 ## Platform behavior
 
@@ -45,7 +45,7 @@ The `--dry-run` output includes a `Platform decision` line showing `os`, `distro
 macOS (or any supported platform — same flags, platform is auto-detected):
 
 ```bash
-go run ./cmd/gentle-ai install \
+go run ./cmd/axiom install \
   --agent claude-code,opencode \
   --component engram,sdd,skills \
   --skill sdd-apply \

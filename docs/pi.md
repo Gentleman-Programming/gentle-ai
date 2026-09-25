@@ -7,10 +7,10 @@ Pi support installs the Gentleman harness as Pi packages, then lets Pi own its o
 ## Quick Start
 
 1. Install Pi and make sure `pi` is available on `PATH`.
-2. Install the Pi support stack from Gentle AI™:
+2. Install the Pi support stack from Axiom:
 
 ```bash
-gentle-ai install --agent pi
+axiom install --agent pi
 ```
 
 3. Start Pi in your project:
@@ -77,7 +77,7 @@ Select CodeGraph during Gentle AI installation to add its read-only MCP server t
 | Children | Discovers effective user and project Pi child definitions. Compatible children (`bash` plus explicit tools) receive `mcp`; every readable child receives lazy-init guidance. |
 | Intelligence | Prefers `codegraph_explore`; when MCP is unavailable, guidance uses the upstream CLI's read-only intelligence commands directly rather than routing them through Gentle AI. |
 | Indexes | Guidance resolves a safe project root, initializes a missing `.codegraph/` once, relies on watcher auto-sync after edits, and uses `codegraph sync` only for stale/disabled-watcher recovery. Full rebuild and destructive/admin commands are excluded from routine agent use. |
-| Sync | `gentle-ai sync` reconciles the owned manifest after Pi assets refresh, restoring missing overlays without duplicates. This configuration sync is separate from upstream index freshness. |
+| Sync | `axiom sync` reconciles the owned manifest after Pi assets refresh, restoring missing overlays without duplicates. This configuration sync is separate from upstream index freshness. |
 | Removal | Uninstall removes only manifest-owned MCP and child blocks. Drifted child files are preserved and reported for manual review. |
 
 Package-owned child files are never edited. Gentle AI creates a same-name overlay in Pi's agent directory when needed. A parent `APPEND_SYSTEM.md` CodeGraph marker is not considered proof that any child has CodeGraph tools or guidance.
@@ -172,8 +172,8 @@ If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks. That mode i
 | SDD agents are missing in Pi                           | Start Pi normally in the project so `gentle-pi` can run `session_start`, or run `/gentle:install-sdd`. If you used `pi -ns`, startup hooks were skipped.          |
 | Persona did not change immediately                     | Run `/reload` or start a new Pi session.                                                                                                                          |
 | Model override should be removed                       | Open `/gentle:models` and choose `Inherit active/default model`.                                                                                                  |
-| Memory tools or `/mcp` are missing                     | Re-run `gentle-ai install --agent pi` to refresh `.pi/agent/settings.json`, `.pi/npm/package.json`, and the `pi-engram init` wiring, then check `/gentle:status`. |
-| `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned.                                                                                |
+| Memory tools or `/mcp` are missing                     | Re-run `axiom install --agent pi` to refresh `.pi/agent/settings.json`, `.pi/npm/package.json`, and the `pi-engram init` wiring, then check `/gentle:status`. |
+| `gentle-engram` is installed but Engram is unavailable | Re-run `axiom install --agent pi` so the real Engram component is provisioned.                                                                                |
 
 ## Next Steps
 

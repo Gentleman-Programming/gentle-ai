@@ -23,9 +23,39 @@ El registro aportado indica 291 comprobaciones correctas y tres fallidas, todas 
 - [x] **T2 · Retirada segura de temas** — Eliminar la instalación de temas visuales de presets, catálogo, install y sync; migrar temas Axiom anteriores solo con bytes exactos y ruta sin symlink, conservar preferencias/temas ajenos. Commits: `122769b7` y `a78b99b1` (ajuste de dos goldens del selector). `go test ./internal/components/theme ./internal/components/uninstall -count=1`, CLI focalizada y `TestPresetSelectionNextScreenFlowMatrix` pasan con entorno temporal; `gofmt -l` y `git diff --check` limpios. Las pruebas de symlink se omiten por falta de privilegio Windows; junctions no verificados.
 - [x] **T3 · Rollback de Axiom por defecto** — La TUI distingue procedencia por raíz, preselecciona el respaldo Axiom más reciente y mantiene Gentle AI histórico disponible mediante selección expresa. IDs duplicados entre raíces siguen siendo restaurables; el scroll hace visible la selección. Commit: `ac872ebe`. `go test ./internal/backup ./internal/tui` y `go test ./internal/app -run TestListBackupsKeepsDuplicateIDsRestorableBySelectedRoot -count=1` pasan con HOME/USERPROFILE/GOCACHE temporales. La CLI independiente `axiom restore latest` mantiene su resolución anterior; alcance de T3 limitado a rollback TUI.
 - [x] **T4 · Documentación principal de Axiom** — Actualizar README y guías principales de inicio, uso, componentes, agentes y rollback; conservar identificadores de compatibilidad e historial veraz. Incluye el diagrama del README. Ruta: delegada. Enlaces locales y `git diff --check` correctos; lectura estructural completada. Commit: `65912d8d`.
-- [ ] **T5 · Referencias operativas restantes en documentación** — Presentar como Axiom y actualizar comandos en los documentos vigentes: `docs/architecture.md`, `docs/kiro.md`, `docs/opencode-profiles.md`, `docs/intended-usage.md`, `docs/non-interactive.md`, `docs/pi.md`, `docs/platforms.md`, `docs/release-signing.md`, `docs/trigger-rules.md`, `docs/review-integration.md`, `docs/architecture/organic-rdd.md`, `docs/telemetry.md`, `docs/skill-registry.md`, `docs/skill-style-guide.md` y `docs/codebase/*`. Conservar referencias literales en `docs/archive/ROADMAP.md`, `docs/audits/*`, `docs/upstream-absorption-ledger.md` y `docs/prd-opencode-profiles.md`; no cambiar el wrapper `cmd/gentle-ai` que aún usan las pruebas Docker ni renombrar esquemas `gentle-ai.*`, imports, rutas `.gentle-ai`, variables `GENTLE_AI_*` o nombres externos como `gentle-pi`. Catalogar expresamente las excepciones justificadas para análisis.
-- [x] **T6 · Ámbito workspace por defecto en axiom sync y salvaguarda de usuario** — Configurar `ScopeWorkspace` como ámbito predeterminado en `ResolveInstallScope` (`ScopeGlobal` solo mediante flag `--scope global` o variable `AXIOM_INSTALL_SCOPE=global`). Garantizar que componentes que no pueden residir en workspace (`ComponentGGA`, `ComponentPermission`) y adaptadores sin soporte de workspace (`vscode`, `trae`, `windsurf` user settings) se instalen/sincronicen en el usuario (`homeDir`), evitando la creación de directorios espurios como `AppData/` dentro del repositorio del proyecto.
-- [ ] **T7 · Reemplazo de comandos gentle-ai por axiom en hooks y agentes** — Actualizar los comandos inyectados en hooks de Codex y Claude (`axiom skill-registry refresh`, `axiom telemetry runtime`, `axiom sdd-preflight-hook`, `axiom review stop-hook`), actualizar el desinstalador para reconocer ambos comandos, cambiar `gentle-ai review` por `axiom review` en la guía de enrutamiento común (`routing.go`) e instrucciones de actualización, y regenerar `.codex/hooks.json` y `.codex/AGENTS.md`.
+- [x] **T5 · Referencias operativas restantes en documentación y catálogo de excepciones** — Presentar como Axiom y actualizar comandos en los documentos vigentes: `docs/architecture.md`, `docs/kiro.md`, `docs/opencode-profiles.md`, `docs/intended-usage.md`, `docs/non-interactive.md`, `docs/pi.md`, `docs/platforms.md`, `docs/trigger-rules.md`, `docs/skill-registry.md` y `docs/codebase/*`. Conservar referencias literales de compatibilidad e históricas y catalogar expresamente las excepciones justificadas para análisis posterior.
+- [x] **T6 · Ámbito workspace por defecto en axiom sync y salvaguarda de usuario** — Configurar `ScopeWorkspace` como ámbito predeterminado en `ResolveInstallScope` (`ScopeGlobal` solo mediante flag `--scope global` o variable `AXIOM_INSTALL_SCOPE=global`). Garantizar que componentes que no pueden residir en workspace (`ComponentGGA`, `ComponentPermission`) y adaptadores sin soporte de workspace (`vscode`, `trae`, `windsurf`, `antigravity`) se instalen/sincronicen en el usuario (`homeDir`), evitando la creación de directorios espurios como `AppData/` o `.gemini/` dentro del repositorio del proyecto. Commit: `57aa3740` y ajuste en `34a7cfbc`.
+- [x] **T7 · Reemplazo de comandos gentle-ai por axiom en hooks y agentes** — Actualizar los comandos inyectados en hooks de Codex y Claude (`axiom skill-registry refresh`, `axiom telemetry runtime`, `axiom sdd-preflight-hook`, `axiom review stop-hook`), actualizar el desinstalador para reconocer ambos comandos, cambiar `gentle-ai review` por `axiom review` en la guía de enrutamiento común (`routing.go`) e instrucciones de actualización, y regenerar `.codex/hooks.json` y `.codex/AGENTS.md`. Commit: `34a7cfbc`.
+
+## Catálogo de excepciones técnicas preservadas (análisis de compatibilidad)
+
+Las siguientes referencias a `gentle-ai` se han preservado deliberadamente tras la revisión global porque su modificación unilateral provocaría roturas funcionales en contratos externos, esquemas de serialización, módulos de Go o herramientas de terceros:
+
+1. **Contratos de protocolo y esquemas de máquina (JSON Schemas)**:
+   - `gentle-ai.review-integration/v2`
+   - `gentle-ai.review-integration.consent/v3`
+   - `gentle-ai.review-assessment/v1`
+   - `gentle-ai.review-acknowledged/v1`
+   - `gentle-ai.sdd-status/v1`
+   - `gentle-ai.sdd-integration.consent/v1`
+   - `gentle-ai.telemetry-heartbeat/v1` y `gentle-ai.telemetry-runtime-observation/v1`
+   - `gentle-pi.background-subagents/v1`
+   *Motivo*: Son URIs de esquemas compartidos entre herramientas, serializaciones en disco y validadores de contratos cruzados.
+
+2. **Módulo Go y nombres de paquete**:
+   - `module github.com/gentleman-programming/gentle-ai/v3` en `go.mod`.
+   *Motivo*: Renombrar el módulo raíz de Go requeriría un refactor masivo de rutas de importación que rompería la compatibilidad de importación y el historial de dependencias.
+
+3. **Compatibilidad de migración de estado y rutas locales**:
+   - Directorios de usuario heredados: `~/.gentle-ai/state.json`, `~/.gentle-ai/cache`, `~/.gentle-ai/bin/`.
+   - Variables de entorno de compatibilidad: `GENTLE_AI_*`, `GENTLE_PI_*`.
+   *Motivo*: Permiten la coexistencia y migración transparente de instalaciones y perfiles existentes sin forzar una rotura a los usuarios.
+
+4. **Integraciones con herramientas y ecosistemas externos**:
+   - Paquete y comandos de Pi: `npm:gentle-pi`, `npm:gentle-engram`, `/gentle:status`, etc.
+   - Identificador base del agente en OpenCode: `gentle-orchestrator` en `opencode.json`.
+   - Repositorio y fuentes de skills upstream: `Gentleman-Programming/Gentleman-Skills`.
+   - Wrapper binario `cmd/gentle-ai` (preservado para scripts Docker y compatibilidad de llamadas anteriores).
 
 ## Modo de trabajo y entrega
 
@@ -38,14 +68,15 @@ El registro aportado indica 291 comprobaciones correctas y tres fallidas, todas 
 
 - Rama de trabajo: `codex/codex-sync-sin-temas-y-rollback`, creada desde `main` en `5410abe2`.
 - Exploración: `internal/components/engram/inject.go` condiciona perfiles Codex a la validación del runtime; `internal/cli/run.go` y `internal/cli/sync.go` los verifican sin esa condición. Los temas entran por `full-gentleman`; los respaldos de Axiom y Gentle AI se mezclan por fecha.
-- Pendiente: T5, T7, cierre de comprobaciones y sincronización del espejo Engram.
-- Decisión de entrega: un solo PR, con excepción de tamaño autorizada por el usuario; no se ha autorizado su creación remota ni un push.
-- T1: `verificationComponentPaths` omite los perfiles solo cuando falta el ejecutable Codex; un runtime incompatible mantiene el error. `go test ./internal/cli -run 'TestVerificationComponentPathsCodexRuntimeGate|TestRunSyncCodexVerificationMatchesRuntimeProfileOutput|TestComponentSyncStepCodexRuntimeGate|TestRunInstallCodexKeepsOldRuntimeFailure' -count=1` correcto con `GOCACHE` en temporal (comprobación independiente).
-- T2: `axiom sync` deja de instalar temas y retira activos Axiom previos únicamente con bytes exactos; `settings.theme`, temas modificados y nombres Gentleman sin procedencia quedan intactos.
-- T3: Rollback TUI distingue procedencia por raíz y preselecciona Axiom más reciente.
-- T4: README y guías principales presentan Axiom como producto vigente.
-- T6: `ResolveInstallScope` devuelve `ScopeWorkspace` por defecto cuando no se pasa `--scope` ni variable de entorno; `--scope global` preservado. `componentInjectionDirScoped` redirige adaptadores de escritorio sin soporte de workspace (`vscode-copilot`, `trae-ide`, `windsurf`) al directorio del usuario (`homeDir`), impidiendo la creación de carpetas como `AppData/Roaming/Code/User` en el workspace. `ComponentGGA` ya no se omite en `ScopeWorkspace`, sincronizándose sobre `homeDir`. Carpeta espuria `AppData/` eliminada del workspace. Pruebas `TestResolveInstallScope`, `TestResolveAgentConfigDir`, `TestParseSyncFlagsScope` y `TestComponentInjectionDirScopedWorkspaceSafeguard` pasando.
+- T1: `verificationComponentPaths` omite los perfiles solo cuando falta el ejecutable Codex; un runtime incompatible mantiene el error. Pruebas passing. Commit: `8bc70073`.
+- T2: `axiom sync` deja de instalar temas y retira activos Axiom previos únicamente con bytes exactos; `settings.theme`, temas modificados y nombres Gentleman sin procedencia quedan intactos. Commits: `122769b7` y `a78b99b1`.
+- T3: Rollback TUI distingue procedencia por raíz y preselecciona Axiom más reciente. Commit: `ac872ebe`.
+- T4: README y guías principales presentan Axiom como producto vigente. Commit: `65912d8d`.
+- T6: `ResolveInstallScope` devuelve `ScopeWorkspace` por defecto cuando no se pasa `--scope` ni variable de entorno; `--scope global` preservado. `componentInjectionDirScoped` redirige adaptadores sin soporte de workspace (`vscode-copilot`, `trae-ide`, `windsurf`, `antigravity`) al directorio del usuario (`homeDir`), impidiendo la creación de carpetas como `AppData/` o `.gemini/` en el workspace. Pruebas passing. Commit: `57aa3740` y ajuste en `34a7cfbc`.
+- T7: Comandos inyectados en hooks de Codex y Claude migrados a `axiom` con reemplazo in-place de comandos legacy; desinstalador ampliado; tests unitarios y suites passing. Commit: `34a7cfbc`.
+- T5: Documentación operativa actualizada en `docs/architecture.md`, `docs/intended-usage.md`, `docs/skill-registry.md`, `docs/trigger-rules.md`, `docs/kiro.md`, `docs/opencode-profiles.md`, `docs/non-interactive.md`, `docs/platforms.md`, `docs/pi.md` y `docs/codebase/sync-and-cloud.md`. Catálogo de excepciones técnicas preservadas documentado.
+- Todas las tareas (T1 a T7) completadas.
 
 ## Siguiente paso
 
-Iniciar T7: reemplazar comandos inyectados de `gentle-ai` por `axiom` en hooks de Codex y Claude (`internal/components/sdd/inject.go`), guía de enrutamiento común (`agentguidance/routing.go`), desinstalador y mensajes de actualización.
+Cierre de la tarea ODD y sincronización de estado en memoria persistente Engram (`mem_session_summary`).
