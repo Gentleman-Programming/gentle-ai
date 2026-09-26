@@ -567,3 +567,28 @@ func ParseVersion(raw string) (Version, error) {
 	}
 	return versionFromMatch(match)
 }
+
+// TestDefaultActivationWriteFileForcesLauncherMode pins that the default
+// launcher writer applies the requested mode to an existing file: a launcher
+// that lost its executable bit must become executable again on rewrite, and a
+// rollback must reinstate the recorded mode.
+func TestDefaultActivationWriteFileForcesLauncherMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(path, []byte("old launcher\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{}.normalized()
+	if err := options.WriteFile(path, []byte("new launcher\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("launcher mode = %v, want 0755", got)
+	}
+}

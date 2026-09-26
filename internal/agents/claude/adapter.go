@@ -116,14 +116,11 @@ func MergeUserConfig(homeDir string, overlayJSON []byte) (filemerge.WriteResult,
 			}
 			return filemerge.WriteResult{}, configPath, fmt.Errorf("gave up merging into %q after %d attempts: the file kept changing underneath the merge", configPath, maxAttempts)
 		}
-		writeResult, err := filemerge.WriteFileAtomic(configPath, merged, 0o600)
+		// WriteFileAtomicMode enforces 0600 even on a byte-identical write; the
+		// OAuth-bearing file must end at 0600 regardless.
+		writeResult, err := filemerge.WriteFileAtomicMode(configPath, merged, 0o600)
 		if err != nil {
 			return filemerge.WriteResult{}, configPath, err
-		}
-		// WriteFileAtomic skips byte-identical writes (and their mode);
-		// the OAuth-bearing file must end at 0600 regardless.
-		if chmodErr := os.Chmod(configPath, 0o600); chmodErr != nil {
-			return writeResult, configPath, fmt.Errorf("tighten mode of %q: %w", configPath, chmodErr)
 		}
 		return writeResult, configPath, nil
 	}

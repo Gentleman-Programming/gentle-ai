@@ -417,7 +417,7 @@ func restoreEntry(entry ManifestEntry, trustedSnapshot bool, roots []string) err
 		return fmt.Errorf("create restore directory for %q: %w", entry.OriginalPath, err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(entry.OriginalPath, content, os.FileMode(entry.Mode)); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(entry.OriginalPath, content, os.FileMode(entry.Mode)); err != nil {
 		return fmt.Errorf("restore path %q: %w", entry.OriginalPath, err)
 	}
 

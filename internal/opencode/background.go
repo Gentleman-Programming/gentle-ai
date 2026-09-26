@@ -317,7 +317,9 @@ func (o ActivationOptions) normalized() ActivationOptions {
 	}
 	if o.WriteFile == nil {
 		o.WriteFile = func(path string, content []byte, mode os.FileMode) error {
-			_, err := filemerge.WriteFileAtomic(path, content, mode)
+			// Launchers must be executable and rollback restores a recorded mode,
+			// so the requested mode is always applied, even to an existing file.
+			_, err := filemerge.WriteFileAtomicMode(path, content, mode)
 			return err
 		}
 	}

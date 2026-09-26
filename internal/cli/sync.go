@@ -790,7 +790,7 @@ func (s *openCodeMarkerMigrationSyncStep) Rollback() error {
 	if !s.changed {
 		return nil
 	}
-	_, err := filemerge.WriteFileAtomic(s.path, s.before, s.mode)
+	_, err := filemerge.WriteFileAtomicMode(s.path, s.before, s.mode)
 	return err
 }
 
@@ -1276,7 +1276,7 @@ type syncFileSnapshot struct {
 	targetExists bool
 }
 
-var writeSyncFileAtomic = filemerge.WriteFileAtomic
+var writeSyncFileAtomic = filemerge.WriteFileAtomicMode
 
 func syncRestoreWriteMode(mode os.FileMode) os.FileMode {
 	if mode.Perm() == 0 {

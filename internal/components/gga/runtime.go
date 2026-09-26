@@ -50,7 +50,7 @@ func EnsureRuntimeAssets(homeDir string) error {
 		return fmt.Errorf("read embedded gga runtime asset pr_mode.sh: %w", err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(prModePath, []byte(content), 0o755); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(prModePath, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write gga runtime file %q: %w", prModePath, err)
 	}
 
@@ -68,7 +68,7 @@ func EnsurePowerShellShim(homeDir string) error {
 		return fmt.Errorf("read embedded gga runtime asset gga.ps1: %w", err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(ps1Path, []byte(content), 0o755); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(ps1Path, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write gga runtime file %q: %w", ps1Path, err)
 	}
 
@@ -85,7 +85,7 @@ func EnsureCommandShim(homeDir string) error {
 		return fmt.Errorf("read embedded gga runtime asset gga.cmd: %w", err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(cmdPath, []byte(content), 0o755); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(cmdPath, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write gga runtime file %q: %w", cmdPath, err)
 	}
 

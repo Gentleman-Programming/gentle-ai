@@ -86,6 +86,136 @@ func TestWriteFileAtomicCreatesAndIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestWriteFileAtomicPreservesExistingModeByDefault pins gentle-ai#5006(F5):
+// rewriting an existing file must never widen its permissions, even when the
+// caller passes a wider perm literal — the common case across ~76 call sites
+// that pass a literal 0o644.
+func TestWriteFileAtomicPreservesExistingModeByDefault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := WriteFileAtomic(path, []byte(`{"share":"disabled"}`), 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode after rewrite = %v, want 0600 preserved (not widened to the requested 0644)", got)
+	}
+}
+
+// TestWriteFileAtomicNewFileUsesRequestedPerm confirms perm still applies when
+// there is no existing file whose mode could be preserved.
+func TestWriteFileAtomicNewFileUsesRequestedPerm(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "fresh.json")
+
+	if _, err := WriteFileAtomic(path, []byte("{}"), 0o640); err != nil {
+		t.Fatalf("WriteFileAtomic() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("mode of new file = %v, want the requested 0640", got)
+	}
+}
+
+// TestWriteFileAtomicIdenticalContentNeverTouchesMode pins the existing no-op
+// contract: a byte-identical rewrite through the default (non-forced) API must
+// not touch the file's mode even when perm differs.
+func TestWriteFileAtomicIdenticalContentNeverTouchesMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	content := []byte("{}")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := WriteFileAtomic(path, content, 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode after identical-content no-op = %v, want 0600 untouched", got)
+	}
+}
+
+// TestWriteFileAtomicModeForcesRequestedPermOnExistingFile pins
+// WriteFileAtomicMode's contrasting contract: it always applies perm, even
+// widening an existing file, for callers that own the target mode outright
+// (executable scripts, credential files, backup restores).
+func TestWriteFileAtomicModeForcesRequestedPermOnExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "script.sh")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := WriteFileAtomicMode(path, []byte("new\n"), 0o755); err != nil {
+		t.Fatalf("WriteFileAtomicMode() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("mode after forced rewrite = %v, want 0755", got)
+	}
+}
+
+// TestWriteFileAtomicModeEnforcesPermOnIdenticalContent pins the gga runtime
+// case named in gentle-ai#5006(F5): an existing script whose content already
+// matches the embedded asset but whose mode drifted (e.g. 0644) must still be
+// forced to the intended mode (0755) by the forced API.
+func TestWriteFileAtomicModeEnforcesPermOnIdenticalContent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "script.sh")
+	content := []byte("#!/bin/sh\necho hi\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := WriteFileAtomicMode(path, content, 0o755)
+	if err != nil {
+		t.Fatalf("WriteFileAtomicMode() error = %v", err)
+	}
+	if result.Changed {
+		t.Fatalf("WriteFileAtomicMode() result = %+v, want Changed=false: content did not change", result)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("mode after identical-content forced write = %v, want 0755 enforced", got)
+	}
+}
+
 func TestWriteFileAtomicRejectsExistingSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
