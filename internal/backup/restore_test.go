@@ -65,6 +65,20 @@ func TestRestoreRestoresExistingAndRemovesCreated(t *testing.T) {
 		t.Fatalf("restored content = %q", string(restored))
 	}
 
+	// gentle-ai#5006(F5): the restore must force the recorded mode (0600) even
+	// though originalPath currently sits at a wider mode (0644): restoring a
+	// backup snapshot must reproduce its exact recorded state, not preserve
+	// whatever mode the file happens to have when the restore runs.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(originalPath)
+		if err != nil {
+			t.Fatalf("Stat() restored path error = %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("restored mode = %v, want the recorded 0600", got)
+		}
+	}
+
 	if _, err := os.Stat(removedPath); !os.IsNotExist(err) {
 		t.Fatalf("expected removed path %q to be deleted, err = %v", removedPath, err)
 	}

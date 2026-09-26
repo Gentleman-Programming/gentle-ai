@@ -38,10 +38,10 @@ func RuntimeCMDPath(homeDir string) string {
 // EnsureRuntimeAssets ensures critical gga runtime files are current.
 //
 // Behavior change from "only-if-missing" to "always-write":
-// WriteFileAtomic performs a content-equality check — it is a no-op when the
-// embedded asset matches the file on disk, and an atomic replace when it differs.
-// This guarantees pr_mode.sh stays current after gentle-ai updates without
-// touching the file on every sync when nothing has changed.
+// WriteFileAtomicMode performs a content-equality check: it never replaces the
+// bytes when the embedded asset already matches the file on disk, and does an
+// atomic replace when it differs. It always enforces the executable mode, so a
+// script that lost its exec bit is repaired even when its content is current.
 func EnsureRuntimeAssets(homeDir string) error {
 	prModePath := RuntimePRModePath(homeDir)
 
@@ -50,7 +50,7 @@ func EnsureRuntimeAssets(homeDir string) error {
 		return fmt.Errorf("read embedded gga runtime asset pr_mode.sh: %w", err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(prModePath, []byte(content), 0o755); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(prModePath, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write gga runtime file %q: %w", prModePath, err)
 	}
 
@@ -68,7 +68,7 @@ func EnsurePowerShellShim(homeDir string) error {
 		return fmt.Errorf("read embedded gga runtime asset gga.ps1: %w", err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(ps1Path, []byte(content), 0o755); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(ps1Path, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write gga runtime file %q: %w", ps1Path, err)
 	}
 
@@ -85,7 +85,7 @@ func EnsureCommandShim(homeDir string) error {
 		return fmt.Errorf("read embedded gga runtime asset gga.cmd: %w", err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(cmdPath, []byte(content), 0o755); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(cmdPath, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write gga runtime file %q: %w", cmdPath, err)
 	}
 

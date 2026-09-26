@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	piCodeGraphAtomicWrite  = filemerge.WriteFileAtomic
+	piCodeGraphAtomicWrite  = filemerge.WriteFileAtomicMode
 	piCodeGraphReadFile     = os.ReadFile
 	piCodeGraphRemove       = os.Remove
 	piCodeGraphManifestStat = os.Stat

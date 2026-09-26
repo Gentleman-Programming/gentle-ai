@@ -209,6 +209,15 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
+internal/state/manifest.go	AppendJournal
+internal/state/manifest.go	ComputeBundleDigest
+internal/state/manifest.go	JournalPath
+internal/state/manifest.go	Manifest.WithBundleDigest
+internal/state/manifest.go	ManifestPath
+internal/state/manifest.go	ReadJournal
+internal/state/manifest.go	ReadManifest
+internal/state/manifest.go	WriteManifestAtomic
+internal/state/manifest.go	capJournal
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew

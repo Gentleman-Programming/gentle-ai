@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/qwen"
 	runtimeopencode "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
 )
 
 // telemetryTestSpawnRecorder is the RecordingSpawner installed as
@@ -56,6 +57,14 @@ var telemetryTestSpawnRecorder *telemetry.RecordingSpawner
 // TestRunInstallRefusesMissingKimiRegardlessOfUVPresence for that opposite,
 // deliberately-kept case.
 func TestMain(m *testing.M) {
+	// Neutralize ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
+	// OPENCODE_CONFIG_DIR) before anything else, including before the
+	// stand-in re-exec branch below: this package's catalog.AllAgents() loops
+	// and RunInstall/RunSync calls resolve Pi's config path directly from the
+	// environment, and a developer shell exporting PI_CODING_AGENT_DIR
+	// (Gentle Shell does) would otherwise redirect these tests into the real
+	// ~/.pi regardless of the sandboxed HOME set up below.
+	testenv.Isolate()
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}

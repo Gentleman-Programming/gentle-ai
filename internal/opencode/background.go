@@ -317,7 +317,9 @@ func (o ActivationOptions) normalized() ActivationOptions {
 	}
 	if o.WriteFile == nil {
 		o.WriteFile = func(path string, content []byte, mode os.FileMode) error {
-			_, err := filemerge.WriteFileAtomic(path, content, mode)
+			// Launchers must be executable and rollback restores a recorded mode,
+			// so the requested mode is always applied, even to an existing file.
+			_, err := filemerge.WriteFileAtomicMode(path, content, mode)
 			return err
 		}
 	}
@@ -630,7 +632,9 @@ func (p *ActivationPlan) Apply() error {
 		for _, path := range p.paths {
 			before := p.before[path]
 			desired := p.desired[path]
-			if before.exists && bytes.Equal(before.data, desired) {
+			// Skip only when both the bytes and the executable mode already
+			// match; a launcher that lost its exec bit must be restored.
+			if before.exists && bytes.Equal(before.data, desired) && (p.goos == "windows" || before.mode.Perm() == 0o755) {
 				continue
 			}
 			p.changed = append(p.changed, path)
