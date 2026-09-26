@@ -35,9 +35,18 @@ Consequence for gentle-ai: writing `~/.codex/agents/<role>.toml` is enough, and 
 
 ## Scope (authorized)
 
-- Role set (user decision, 2026-09-26): identical to the OpenCode/Claude Code managed set — `sdd-init`, `sdd-explore`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-research`, `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`, `review-risk`, `review-resilience`, `review-readability`, `review-reliability`, `review-refuter` (**19 roles**). No ODD worker roles (`gentle-ai-explore/worker/verify`) in this slice.
+### T1 — this machine (already delivered)
+
+- Role set (user decision, 2026-09-26): identical to the OpenCode/Claude Code managed set as installed by gentle-ai 3.7.0 on this machine — `sdd-init`, `sdd-explore`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-research`, `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`, `review-risk`, `review-resilience`, `review-readability`, `review-reliability`, `review-refuter` (**19 roles**). No ODD worker roles (`gentle-ai-explore/worker/verify`) in this slice.
 - Format: one `~/.codex/agents/<role>.toml` per role, generated from the installed gentle-ai agent assets; runtime-adapted (skill-root paths, delegation/tool vocabulary), never a blind copy.
 - `~/.codex/config.toml` is **out of scope**: directory discovery makes it unnecessary, and editing it risks the existing `[agents]` table.
+
+### T2–T4 — upstream (scope narrowed 2026-09-26)
+
+Scout result on `origin/main` `3a19dbf8`: the SDD retirement (`e219644b2`) deleted `internal/assets/*/sdd-*` agent assets for **every** runtime, so upstream ships **8 owned agents only**, enumerated by `reviewassets.NativeAgentManifest` (`internal/components/reviewassets/install.go:22`): `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`, `review-risk`, `review-resilience`, `review-readability`, `review-reliability`, `review-refuter`. The 11 local `~/.claude/agents/sdd-*.md` files are gentle-ai 3.7.0 remnants, not something `main` reinstalls.
+
+- **User decision (2026-09-26):** the upstream Codex projection covers **only those 8 managed roles**. Restoring `sdd-*` assets is explicitly NOT in scope; parity means "the same named agents gentle-ai manages for every runtime", not "the stale 3.7.0 set".
+- Consequence for T1's local generator: if a future gentle-ai upgrade removes `~/.claude/agents/sdd-*.md`, `project_from_source` fails loudly with the missing role names instead of silently writing a smaller set. Accepted; T2 supersedes it.
 
 Out of scope / non-goals:
 
@@ -56,16 +65,17 @@ Out of scope / non-goals:
 ## Tasks
 
 - [x] T1 — Local projection on this machine (immediate value; artifact lives outside the repo at `~/.local/bin/` and `~/.codex/agents/`): single-file idempotent generator with `--dry-run`, `--check`, `--selftest`; generates the 19 role TOMLs from `~/.claude/agents/*.md` with a documented adaptation table; `--selftest` builds a scratch `CODEX_HOME` and asserts against `codex doctor` with a negative control. Route: inline (one authored file). Done 2026-09-26 — 19/19 roles generated and loaded; see Delivery.
-- [ ] T2 — Upstream Codex agent-role writer: embedded role assets (`internal/assets/codex/agent-roles/*.toml` or an equivalent rendered source), a targeted install writer in `internal/agents/codex` (or the Codex component), ownership marker, and an inventory test asserting all 19 roles are written with valid schema. Route: delegated (writer trigger: 2+ non-trivial files).
-- [ ] T3 — Lifecycle: `sync` idempotency (byte-identical second run), ownership-safe upgrade, `uninstall` cleanup of owned role files, and regression tests. Route: delegated (same writer, sequential).
-- [ ] T4 — Sandbox e2e in an isolated HOME: fresh `install --agent codex` → 19 role files present, `codex doctor` reports zero malformed-role warnings, re-run is byte-identical, uninstall removes owned files only. Route: inline (bounded action).
+- [ ] T2 — Upstream Codex agent-role writer for the 8 managed roles: reuse `reviewassets`' manifest, RDD gating and ownership ledger; add an `md` → Codex role-TOML rendering path; add Codex-format agent assets for the 8 roles; wire the install and sync stage plans; inventory test asserting all 8 roles are written with schema-valid TOML. Route: delegated (writer trigger: 2+ non-trivial files).
+- [ ] T3 — Lifecycle: `sync` idempotency (byte-identical second run), retired-role reconciliation against owned files, and uninstall parity with claude-code (native agents are preserved today — `TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents`), plus regression tests. Route: delegated (same writer, sequential).
+- [ ] T4 — Sandbox e2e in an isolated HOME: fresh `install --agent codex` → the 8 role files present and `codex doctor` reports zero malformed-role warnings, re-run byte-identical, uninstall leaves owned files intact as designed. Resolve the open inheritance question here. Route: inline (bounded action).
 
 ## Acceptance criteria
 
 1. T1: 19 role files exist under `~/.codex/agents/`; `codex doctor` on the real HOME reports zero `Ignoring malformed agent role definition` warnings; `--selftest` proves the oracle is not vacuous (negative control warns); `--check` reports no drift; re-run is byte-identical.
 2. T1: `~/.codex/config.toml` is byte-identical before and after the projection.
-3. T2–T4: `gentle-ai install/sync --agent codex` produces the same 19 roles in an isolated HOME; `go test ./...` green; `go vet` and `gofmt -l .` clean.
-4. Uninstall removes only owned role files; a pre-existing user role file survives install, sync and uninstall.
+3. T2–T4: `gentle-ai install/sync --agent codex` produces the 8 managed roles in an isolated HOME; each generated role file is accepted by Codex (zero malformed-role warnings); `go test ./...` green; `go vet` and `gofmt -l .` clean.
+4. `SupportsSubAgents()`, `SubAgentsDir()` and `EmbeddedSubAgentsDir()` stay `false`/empty for Codex; `TestAdapterSubAgentsStayFalse` passes unchanged; `~/.codex/config.toml` is never written by the new path.
+5. A pre-existing user-authored `~/.codex/agents/<role>.toml` that gentle-ai does not own survives install, sync and uninstall untouched.
 
 ## Checks
 
@@ -93,6 +103,7 @@ Adaptation applied to every body (checked: zero remaining `.claude` references i
 ## Notes / open questions
 
 - 2026-09-26: exploration (read-only) established the mechanism before any write: Codex 0.151.0 role discovery verified with scratch `CODEX_HOME` homes, `codex-rs/agent-roles/*` read from `openai/codex@main`, the 19-role set confirmed in `~/.claude/agents/`, and `~/.codex/skills/_shared/` confirmed to mirror the Claude skill tree (so skill-root rewriting is the only required path adaptation).
+- 2026-09-26: repo scout (delegated, `gentle-ai-explore`) mapped the upstream install/sync/uninstall path and found that the SDD retirement removed all `sdd-*` agent assets upstream — basis for the T2–T4 scope narrowing above. It also reported: no repo-side reference to `nickname_candidates`, `developer_instructions`, or `~/.codex/agents`; `sddSubAgentPaths` (`internal/cli/run.go:3325`) and `internal/update/upgrade/executor.go:245` copy every entry of `EmbeddedSubAgentsDir()` behind a `SupportsSubAgents()` guard only; `reviewassets` owns the only agents-directory writer plus a per-file sha256 ownership ledger (`.gentle-ai-native-agent-ownership.json`) and a retired-agent manifest; uninstall has no `SubAgentsDir` branch and deliberately preserves native agents; the Codex capability manifest is digest-pinned (`internal/agents/capabilitymanifest/manifest_test.go:134,218`).
 - Codex applies a role as a **bounded override layer** over the parent-derived child config (`codex-rs/core/src/agent/role.rs`: `AgentRoleOverrides` = `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `personality`, `service_tier`, `features`, `skills`; a role may only reduce capabilities). Two consequences: (a) a role file needs no `config.toml` change, and (b) per-role `model` / `model_reasoning_effort` overrides are available for a later parity slice if the OpenCode/Claude model mapping should be mirrored.
 - Open question for T4: whether the child receives the parent's `model_instructions_file` (engram instructions) *in addition* to the role's `developer_instructions`, or instead of it. Resolving this needs one live spawn (`codex exec -p nan …`), which is a billable call — do it in T4, not inline.
 - The `review-*` and `jd-*` personalities in the Claude set are wired to the native RDD review transport (`GENTLE_AI_REVIEW_BINDING` / `GENTLE_AI_REVIEW_CONTEXT` injection). As Codex roles they are inert for native review and only useful for manual invocation until Codex grows an equivalent transport — accepted as part of the requested parity set.
