@@ -854,6 +854,12 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		if nativeReviewAgentSupported(agent) {
 			apply = append(apply, nativeReviewAgentStep{id: "agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, state: r.state})
 		}
+		if agent == model.AgentCodex {
+			// Codex discovers agent roles only under CODEX_HOME (~/.codex/agents),
+			// so this step intentionally ignores scope and stays home-based even for
+			// a workspace-scoped install. See reviewassets.CodexAgentRoleDir.
+			apply = append(apply, codexAgentRoleStep{id: "agent:codex-roles:" + string(agent), agent: agent, homeDir: r.homeDir, state: r.state})
+		}
 	}
 
 	// Routing guidance is scheduled per agent and outside the component loop:
@@ -944,6 +950,41 @@ func (s nativeReviewAgentStep) Run() error {
 
 func nativeReviewPreservedAction(path string) string {
 	return fmt.Sprintf("Native review agent %s was preserved, not updated: its existing bytes are unknown or modified. To receive updates, manually compare it with the current Gentle AI agent template, merge changes into your copy, and remove or replace the file only after saving your changes. Gentle AI will not adopt or delete it automatically.", path)
+}
+
+// codexAgentRoleStep writes the managed Codex agent roles under
+// `~/.codex/agents`. Codex is not a native-manifest runtime (no file-based
+// sub-agents directory), so it has its own targeted writer and step.
+//
+// This step intentionally ignores the install scope: Codex discovers agent
+// roles only under CODEX_HOME (`~/.codex/agents`), never a project-local
+// `.codex/agents/` (verified against Codex CLI 0.151.0). The target stays
+// home-based under both `--scope global` and `--scope workspace`, matching the
+// sibling home-based `~/.codex/hooks.json` backup entry.
+type codexAgentRoleStep struct {
+	id           string
+	agent        model.AgentID
+	homeDir      string
+	changedFiles *[]string
+	state        *runtimeState
+}
+
+func (s codexAgentRoleStep) ID() string { return s.id }
+
+func (s codexAgentRoleStep) Run() error {
+	res, err := reviewassets.InstallCodexAgentRoles(s.homeDir)
+	if err != nil {
+		return fmt.Errorf("install codex agent roles for %q: %w", s.agent, err)
+	}
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, res.Files...)
+	}
+	if s.state != nil {
+		for _, path := range res.Skipped {
+			s.state.nativeReviewActions = append(s.state.nativeReviewActions, nativeReviewPreservedAction(path))
+		}
+	}
+	return nil
 }
 
 type managedOpenCodePluginsInstallStep struct {
@@ -2736,6 +2777,12 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentCodex {
 			paths[filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")] = struct{}{}
+			// Codex agent roles are installed by the dedicated codexAgentRoleStep.
+			dir := reviewassets.CodexAgentRoleDir(homeDir)
+			paths[filepath.Join(dir, reviewassets.OwnershipLedgerFilename)] = struct{}{}
+			for _, name := range reviewassets.CodexAgentRoleNames() {
+				paths[filepath.Join(dir, name)] = struct{}{}
+			}
 		}
 		// Native review and Judgment Day agents are installed independently of SDD.
 		// Retired review agents are listed too: the installer may remove them.

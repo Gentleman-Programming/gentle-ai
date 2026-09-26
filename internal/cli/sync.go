@@ -443,6 +443,12 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		if nativeReviewAgentSupported(agent) {
 			apply = append(apply, nativeReviewAgentStep{id: "sync:agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: ScopeGlobal, selection: r.selection, changedFiles: &r.changedFiles, state: r.state})
 		}
+		if agent == model.AgentCodex {
+			// Codex discovers agent roles only under CODEX_HOME (~/.codex/agents),
+			// so this step intentionally ignores scope and stays home-based even for
+			// a workspace-scoped sync. See reviewassets.CodexAgentRoleDir.
+			apply = append(apply, codexAgentRoleStep{id: "sync:agent:codex-roles:" + string(agent), agent: agent, homeDir: r.homeDir, changedFiles: &r.changedFiles, state: r.state})
+		}
 	}
 
 	// Routing guidance is refreshed per agent and outside the component loop, for
@@ -613,6 +619,12 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		}
 		if adapter.Agent() == model.AgentCodex {
 			paths[filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")] = struct{}{}
+			// Codex agent roles are written by the dedicated codexAgentRoleStep.
+			dir := reviewassets.CodexAgentRoleDir(homeDir)
+			paths[filepath.Join(dir, reviewassets.OwnershipLedgerFilename)] = struct{}{}
+			for _, name := range reviewassets.CodexAgentRoleNames() {
+				paths[filepath.Join(dir, name)] = struct{}{}
+			}
 		}
 	}
 	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, ScopeGlobal, selection.Agents); configDir != "" {

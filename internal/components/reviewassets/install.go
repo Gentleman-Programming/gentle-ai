@@ -105,6 +105,39 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 		}
 		retiredRendered[name] = content
 	}
+	return installNativeAgentFiles(nativeAgentInstallPlan{
+		dir:             dir,
+		names:           names,
+		retired:         retired,
+		rendered:        rendered,
+		retiredRendered: retiredRendered,
+	})
+}
+
+// nativeAgentInstallPlan is the fully-rendered, pre-validated input shared by
+// every agent-file writer (native review/Judgment Day agents and Codex agent
+// roles). Rendering happens before a plan is built so a missing embedded asset
+// never leaves a partially-installed target.
+//
+// retired names are only removed when Gentle AI owns them.
+type nativeAgentInstallPlan struct {
+	dir             string
+	names           []string
+	retired         []string
+	rendered        map[string]string
+	retiredRendered map[string]string
+}
+
+// installNativeAgentFiles applies a rendered agent-file plan with Gentle AI's
+// single ownership machinery: the per-directory sha256 ledger, user-file
+// protection, retired-file reconciliation, and journal-backed rollback. Every
+// agent directory (claude/agents, ~/.codex/agents, ...) shares this path.
+func installNativeAgentFiles(plan nativeAgentInstallPlan) (InstallResult, error) {
+	dir := plan.dir
+	names := plan.names
+	retired := plan.retired
+	rendered := plan.rendered
+	retiredRendered := plan.retiredRendered
 	if len(names) == 0 {
 		// A cleanup-only runtime never creates its agents directory: with no
 		// directory there is nothing earlier releases left behind to remove.
