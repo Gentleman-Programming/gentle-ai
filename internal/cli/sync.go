@@ -769,7 +769,9 @@ type openCodeLegacyMarkerSyncStep struct {
 	changedFiles *[]string
 }
 
-func (s openCodeLegacyMarkerSyncStep) ID() string { return "sync:opencode:legacy-marker:" + filepath.Base(s.path) }
+func (s openCodeLegacyMarkerSyncStep) ID() string {
+	return "sync:opencode:legacy-marker:" + filepath.Base(s.path)
+}
 func (s openCodeLegacyMarkerSyncStep) Run() error {
 	info, err := os.Lstat(s.path)
 	if os.IsNotExist(err) {
