@@ -65,9 +65,9 @@ Out of scope / non-goals:
 ## Tasks
 
 - [x] T1 — Local projection on this machine (immediate value; artifact lives outside the repo at `~/.local/bin/` and `~/.codex/agents/`): single-file idempotent generator with `--dry-run`, `--check`, `--selftest`; generates the 19 role TOMLs from `~/.claude/agents/*.md` with a documented adaptation table; `--selftest` builds a scratch `CODEX_HOME` and asserts against `codex doctor` with a negative control. Route: inline (one authored file). Done 2026-09-26 — 19/19 roles generated and loaded; see Delivery.
-- [ ] T2 — Upstream Codex agent-role writer for the 8 managed roles: reuse `reviewassets`' manifest, RDD gating and ownership ledger; add an `md` → Codex role-TOML rendering path; add Codex-format agent assets for the 8 roles; wire the install and sync stage plans; inventory test asserting all 8 roles are written with schema-valid TOML. Route: delegated (writer trigger: 2+ non-trivial files).
-- [ ] T3 — Lifecycle: `sync` idempotency (byte-identical second run), retired-role reconciliation against owned files, and uninstall parity with claude-code (native agents are preserved today — `TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents`), plus regression tests. Route: delegated (same writer, sequential).
-- [ ] T4 — Sandbox e2e in an isolated HOME: fresh `install --agent codex` → the 8 role files present and `codex doctor` reports zero malformed-role warnings, re-run byte-identical, uninstall leaves owned files intact as designed. Resolve the open inheritance question here. Route: inline (bounded action).
+- [x] T2 — Upstream Codex agent-role writer for the 8 managed roles. Closed in `ecf0105d`.
+- [x] T3 — Lifecycle: idempotency, retired-role reconciliation, scope decision, regression tests. Closed in `ecf0105d`.
+- [x] T4 — Sandbox e2e in an isolated HOME with the real Codex CLI. Closed; evidence below. The one open sub-question (child inheritance of `model_instructions_file`) is deferred, not blocking.
 
 ## Acceptance criteria
 
@@ -75,17 +75,40 @@ Out of scope / non-goals:
 2. T1: `~/.codex/config.toml` is byte-identical before and after the projection.
 3. T2–T4: `gentle-ai install/sync --agent codex` produces the 8 managed roles in an isolated HOME; each generated role file is accepted by Codex (zero malformed-role warnings); `go test ./...` green; `go vet` and `gofmt -l .` clean.
 4. `SupportsSubAgents()`, `SubAgentsDir()` and `EmbeddedSubAgentsDir()` stay `false`/empty for Codex; `TestAdapterSubAgentsStayFalse` passes unchanged; `~/.codex/config.toml` is never written by the new path.
-5. A pre-existing user-authored `~/.codex/agents/<role>.toml` that gentle-ai does not own survives install, sync and uninstall untouched.
+5. A pre-existing user-authored `~/.codex/agents/<role>.toml` that gentle-ai does not own survives install and sync untouched. Verified (`TestInstallCodexAgentRolesIsIdempotentAndPreservesUserFiles`, `TestCodexInstallPreservesUserAuthoredAgentRole`). Uninstall keeps every role file, matching the existing native-agent policy (`TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents`); uninstall parity is therefore "preserved by the same rule", not "removed".
 
 ## Checks
 
 - T1: `~/.local/bin/gentle-codex-agent-roles.py --dry-run`, `--selftest`, `--check`; `codex doctor` on the real HOME (before/after warning count); `diff` of `~/.codex/config.toml` before/after.
 - T2–T4: `go test ./internal/agents/... ./internal/assets/... ./internal/components/... ./internal/cli/...`; `go test ./...`; `go vet ./...`; `gofmt -l .`; isolated-HOME sandbox run.
 
+## Evidence — T2–T4 (2026-09-26, commit `ecf0105d`)
+
+Implementation (delegated to `gentle-ai-worker`, two passes) + independent verification (delegated to `gentle-ai-verify`, read-only) + parent-run e2e oracle with the real Codex CLI 0.151.0.
+
+Delivered shape: `internal/assets/codex/agents/*.md` (8 authored Codex sources, 415 lines) → `reviewassets.RenderCodexAgentRole` renders the four-key Codex schema with the repo TOML encoder → `InstallCodexAgentRoles` writes through the same `installNativeAgentFiles` ownership path the native agents use (per-directory sha256 ledger, user-file protection, retired-role reconciliation, journal rollback). `codexAgentRoleStep` is scheduled on both install and sync; `backupTargets` / `syncBackupTargets` gained the 9 correct paths (8 roles + ledger).
+
+- A/B against the unpatched tree (`git archive 3a19dbf8`, isolated HOMEs): stock writes **0** role files, patched writes **8**. The run1→run2 `config.toml` MCP-table reordering is **byte-identical in both**, i.e. pre-existing and not introduced here.
+- Real Codex CLI on the final tree: `codex doctor` → **0** `malformed agent role` lines; duplicate-name probe → **8/8** roles proven loaded; negative control (a malformed file) still warns, so the oracle is not vacuous; a second install leaves the 8 roles **and** the ledger byte-identical.
+- Scope: Codex reads a project-local `.codex/config.toml` (invalid key there warns) but does **not** discover roles under a project-local `.codex/agents/` — 9 role files including a duplicate probe produced 0 warnings across 3 runs, while the same probe in `CODEX_HOME/agents` warns every time. Decision: role files stay `$HOME/.codex/agents` in both scopes; the exception is documented in `docs/agents.md` and locked by `TestCodexWorkspaceScopedInstallKeepsAgentRolesHomeBased` (workspace scope: 0 role files in the workspace, `AGENTS.md` still in the workspace, 8 roles at home).
+- Guards: `SupportsSubAgents()` / `SubAgentsDir()` / `EmbeddedSubAgentsDir()` unchanged and still false/empty; `TestAdapterSubAgentsStayFalse`, `TestNativeAgentPathsCoverRetiredAgents` (asserts `NativeAgentsSupported(Codex)` is still false) and `TestNativeAgentManifestShipsReviewAgentsOnlyToRDDRuntimes` pass. `model.SupportsReceiptDrivenDevelopment(AgentCodex)` is true, so shipping the review lenses as Codex roles is consistent with every other RDD runtime.
+- `go build ./...`, `gofmt -l .`, `go vet ./...` clean; `go test ./internal/components/reviewassets/... ./internal/cli/... ./internal/agents/...` green. `go test ./...` fails only in 3 unrelated packages (`agentguidance` hostile-environment, `tui` catalog discovery, `update` release-script tests that need bash 4 `declare -A`); all are outside the changed surface and were not base-diff attributed.
+- Retirement is fail-closed: `RetiredCodexAgentRoleManifest` is the (currently empty) extension point; a ledger key in neither the live set nor that list still hard-fails (`invalid ownership ledger entry`), never auto-deletes. Covered by `TestInstallCodexAgentRolesRemovesRetiredOwnedRole` and `TestInstallCodexAgentRolesFailsClosedOnUnknownLedgerKey`.
+- Independent verification verdict on the first pass: G2 (scope) refuted as a defect by the empirical probe above; G4 (retirement hard-fail) confirmed and fixed; G1, G3, G5, G6, G7 confirmed. Reviewer-facing risk: authored diff is ~846 lines excluding the 415 asset lines (287 production+docs, 559 tests) — over the ~400-line review-budget target, so a PR should consider splitting, and the tests are the bulk.
+
 ## Delivery
 
-- 2026-09-26 · T1 committed as `docs(odd): track codex agent-role parity feature` (`bffa2d63`) plus the T1 close-out commit that records this evidence and the `T1 done` state. The T1 artifact itself is machine-local (`~/.local/bin/gentle-codex-agent-roles.py` + `~/.codex/agents/*.toml`) and intentionally not committed to this repo: T2 replaces it with the managed writer.
+- 2026-09-26 · T2–T4 committed as `feat(agents): project managed Codex agent roles into ~/.codex/agents` (`ecf0105d`). The commit carries the writer, the 8 authored assets, the install/sync wiring, the lifecycle tests and the `docs/agents.md` scope exception.
 - No PR yet — push and PR are the user's decision.
+
+## Follow-ups (non-blocking, not in this slice)
+
+- `RetiredCodexAgentRoleManifest` is empty; it needs an entry the day a Codex role is retired (the test proves the path works when it is populated).
+- Consider an independent oracle for the Codex role set (today `TestCodexAgentRoleNamesMirrorTheClaudeManagedSet` compares the derived set against the manifest it derives from — a change detector, not an independent check), and a body-presence assertion so a truncated role body cannot pass.
+- Codex-specific coverage gaps flagged by review: ledger-owned-but-modified file and mid-write failure for the Codex path (the shared journal/ownership tests cover the mechanism generically).
+- Pre-existing quirk in `removeRetiredNativeAgent`: with an empty `managed` render, a zero-byte retired-name file also counts as owned. Unchanged by this slice, but worth a look if retirement is ever wired up for real.
+- The preserved-file action message reused for Codex says "Native review agent …" (`nativeReviewPreservedAction`); wording only.
+- Pre-existing non-idempotency: a fresh Codex install rewrites `config.toml` once more on the second run (MCP table ordering) before converging. Present on `3a19dbf8` too — candidate for its own issue, out of scope here.
 
 ## Evidence — T1 (2026-09-26, Codex 0.151.0, this machine)
 
