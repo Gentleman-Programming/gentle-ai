@@ -218,7 +218,7 @@ func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 			t.Fatal("unchanged runtime reported as changed")
 		}
 	}
-	rt, err := newSyncRuntime(home, selection)
+	rt, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestSyncOpenCodeGuidanceRejectsSymlinkBeforeAssignmentStep(t *testing.T) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	rt, err := newSyncRuntime(home, selection)
+	rt, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,6 +476,27 @@ func TestSyncFlagsRetiredOptionsRejectedAndHelpOmitted(t *testing.T) {
 	PrintSyncHelp(&help)
 	if strings.Contains(strings.ToLower(help.String()), "sdd") || strings.Contains(help.String(), "--profile") {
 		t.Fatalf("sync help advertises retired flags: %s", help.String())
+	}
+}
+
+func TestParseSyncFlagsSupportsForceCommunityTools(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "long form sets", args: []string{"--force-community-tools"}, want: true},
+		{name: "absent defaults to false", args: []string{"--agent", "opencode"}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags, err := ParseSyncFlags(tc.args)
+			if err != nil {
+				t.Fatalf("ParseSyncFlags(%v) error = %v", tc.args, err)
+			}
+			if flags.ForceCommunityTools != tc.want {
+				t.Fatalf("ForceCommunityTools = %v, want %v", flags.ForceCommunityTools, tc.want)
+			}
+		})
 	}
 }
 
@@ -1983,7 +2004,7 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentEngram},
 	}
 	for attempt := 1; attempt <= 2; attempt++ {
-		rt, err := newSyncRuntime(home, selection)
+		rt, err := newSyncRuntime(home, selection, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2066,7 +2087,7 @@ func TestRunSyncRollbackRestoresCodexEngramInstructionFiles(t *testing.T) {
 				Agents:     []model.AgentID{model.AgentCodex},
 				Components: []model.ComponentID{model.ComponentEngram},
 			}
-			rt, err := newSyncRuntime(home, selection)
+			rt, err := newSyncRuntime(home, selection, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2118,7 +2139,7 @@ func TestSyncRollbackRestoresLegacyOpenCodePluginAndRemovesReplacement(t *testin
 		Agents:     []model.AgentID{model.AgentOpenCode},
 		Components: []model.ComponentID{model.ComponentSDD},
 	}
-	runtime, err := newSyncRuntime(home, selection)
+	runtime, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2158,7 +2179,7 @@ func TestSyncSkillBackupRollsBackOpenClawGlobalSkills(t *testing.T) {
 	writeStale(t, globalSkill)
 	writeStale(t, globalReference)
 
-	runtime, err := newSyncRuntime(home, selection)
+	runtime, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2715,9 +2736,9 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		Agents:         []model.AgentID{model.AgentOpenCode},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
-	rt, err := newSyncRuntime(home, selected)
+	rt, err := newSyncRuntime(home, selected, false)
 	if err != nil {
-		t.Fatalf("newSyncRuntime() error = %v", err)
+		t.Fatalf("newSyncRuntime(, false) error = %v", err)
 	}
 	plan := rt.stagePlan()
 	if !hasStepID(plan.Apply, "sync:community-tool:codegraph-guidance") {
@@ -2727,9 +2748,9 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		t.Fatal("sync plan missing selected Pi CodeGraph step")
 	}
 
-	rt, err = newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+	rt, err = newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}, false)
 	if err != nil {
-		t.Fatalf("newSyncRuntime() error = %v", err)
+		t.Fatalf("newSyncRuntime(, false) error = %v", err)
 	}
 	plan = rt.stagePlan()
 	if hasStepID(plan.Apply, "sync:community-tool:codegraph-guidance") {
@@ -2749,6 +2770,95 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		}
 	}
 	t.Fatalf("sync backup targets should include CodeGraph guidance path when refresh step is planned; got %#v", paths)
+}
+
+// TestCommunityToolSyncReconcileStepForwardsForce proves the sync-side
+// community-tool step calls communitytool.InstallWithHome with the exact
+// argument shape and forwards the parsed --force-community-tools flag
+// verbatim. The force param is the only knob that bypasses the
+// CodeGraphReconcileSatisfied()/codeGraphCanRepairWithoutFullInstall gate,
+// so the plumb must be a typed pass-through, not a closure capture.
+func TestCommunityToolSyncReconcileStepForwardsForce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		force bool
+	}{
+		{name: "force false default", force: false},
+		{name: "force true bypass", force: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := communityToolReconcileFn
+			t.Cleanup(func() { communityToolReconcileFn = previous })
+
+			var gotTool model.CommunityToolID
+			var gotWorkspace, gotHome string
+			var gotRunner communitytool.Runner
+			var gotDetector communitytool.Detector
+			var gotForce bool
+			communityToolReconcileFn = func(tool model.CommunityToolID, workspaceDir, homeDir string, runner communitytool.Runner, detector communitytool.Detector, forceCommunityTools bool) (communitytool.Result, error) {
+				gotTool = tool
+				gotWorkspace = workspaceDir
+				gotHome = homeDir
+				gotRunner = runner
+				gotDetector = detector
+				gotForce = forceCommunityTools
+				return communitytool.Result{Tool: tool}, nil
+			}
+
+			home := t.TempDir()
+			step := communityToolSyncReconcileStep{
+				id:           "sync:community-tool:codegraph-reconcile",
+				workspaceDir: "/work/project",
+				homeDir:      home,
+				force:        tc.force,
+			}
+			if err := step.Run(); err != nil {
+				t.Fatalf("step.Run() error = %v", err)
+			}
+			if gotTool != model.CommunityToolCodeGraph {
+				t.Fatalf("InstallWithHome tool = %q, want %q", gotTool, model.CommunityToolCodeGraph)
+			}
+			if gotWorkspace != "/work/project" || gotHome != home {
+				t.Fatalf("workspace/home = (%q, %q), want (%q, %q)", gotWorkspace, gotHome, "/work/project", home)
+			}
+			if gotRunner == nil {
+				t.Fatal("InstallWithHome called with nil runner; the sync step must hand over runCommand")
+			}
+			if gotDetector == nil {
+				t.Fatal("InstallWithHome called with nil detector; the sync step must hand over cmdLookPath")
+			}
+			if gotForce != tc.force {
+				t.Fatalf("InstallWithHome called with force=%v, want %v", gotForce, tc.force)
+			}
+		})
+	}
+}
+
+// TestSyncStagePlanIncludesCodeGraphReconcileStep verifies the wiring: when
+// the selection opts into CodeGraph the sync plan must include the new step
+// alongside the existing guidance and Pi reconciliation steps, and the new
+// step must carry the parsed --force-community-tools flag through
+// syncRuntime. The naming follows the established "sync:community-tool:*"
+// convention so the step is discoverable in the pipeline traces.
+func TestSyncStagePlanIncludesCodeGraphReconcileStep(t *testing.T) {
+	home := t.TempDir()
+	rt, err := newSyncRuntime(home, model.Selection{
+		Agents:         []model.AgentID{model.AgentOpenCode},
+		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+	}, true)
+	if err != nil {
+		t.Fatalf("newSyncRuntime(, false) error = %v", err)
+	}
+	plan := rt.stagePlan()
+	if !hasStepID(plan.Apply, "sync:community-tool:codegraph-reconcile") {
+		t.Fatal("sync plan missing the CodeGraph reconcile step when CodeGraph is selected")
+	}
+	if !hasStepID(plan.Apply, "sync:community-tool:codegraph-guidance") {
+		t.Fatal("sync plan missing the existing CodeGraph guidance step")
+	}
+	if !hasStepID(plan.Apply, "sync:community-tool:pi-codegraph") {
+		t.Fatal("sync plan missing the existing Pi CodeGraph step")
+	}
 }
 
 func TestComponentSyncStepInjectsCodeGraphGuidanceWhenCodeGraphSelected(t *testing.T) {
@@ -3348,7 +3458,7 @@ func TestNativeReviewSyncPipelineRollbackRestoresLedgerAndAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	selection := model.Selection{Agents: []model.AgentID{model.AgentKiroIDE}}
-	runtime, err := newSyncRuntime(home, selection)
+	runtime, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4805,9 +4915,9 @@ func TestSyncCodexGentlemanConvergesWithHooksJSON(t *testing.T) {
 		t.Fatal("default sync selected legacy SDD")
 	}
 	run := func() (int, []string) {
-		rt, err := newSyncRuntime(home, selection)
+		rt, err := newSyncRuntime(home, selection, false)
 		if err != nil {
-			t.Fatalf("newSyncRuntime() error = %v", err)
+			t.Fatalf("newSyncRuntime(, false) error = %v", err)
 		}
 		plan := rt.stagePlan()
 		before, err := snapshotSyncFiles(rt.managedPaths)
@@ -6316,9 +6426,9 @@ func TestRunSync_DefaultPreservesReviewWithoutSDDPhaseModels(t *testing.T) {
 func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection) []string {
 	t.Helper()
 
-	rt, err := newSyncRuntime(home, selection)
+	rt, err := newSyncRuntime(home, selection, false)
 	if err != nil {
-		t.Fatalf("newSyncRuntime() error = %v", err)
+		t.Fatalf("newSyncRuntime(, false) error = %v", err)
 	}
 	for _, step := range rt.stagePlan().Apply {
 		if err := step.Run(); err != nil {
@@ -6332,9 +6442,9 @@ func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection)
 func runSyncComponentSteps(t *testing.T, home string, selection model.Selection) {
 	t.Helper()
 
-	rt, err := newSyncRuntime(home, selection)
+	rt, err := newSyncRuntime(home, selection, false)
 	if err != nil {
-		t.Fatalf("newSyncRuntime() error = %v", err)
+		t.Fatalf("newSyncRuntime(, false) error = %v", err)
 	}
 	for _, step := range rt.stagePlan().Apply {
 		if _, isComponent := step.(componentSyncStep); !isComponent {

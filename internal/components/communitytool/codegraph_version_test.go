@@ -86,12 +86,18 @@ func TestInstallDropsBlindTargetsWhenInstalledCodeGraphPredatesTheContract(t *te
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
 
-	want := []string{"codegraph install --yes"}
+	// R1 routes the stale-but-available CLI through the same install path
+	// the missing-CLI case uses, so the runner also emits the @latest package
+	// upgrade. Targets are still dropped on the second command so the older
+	// binary cannot reject them; the contract gap is reported via the manual
+	// action. The string-by-string exactness preserved here keeps the test
+	// able to surface accidental target additions.
+	want := []string{"npm install -g @colbymchenry/codegraph@latest", "codegraph install --yes"}
 	if !reflect.DeepEqual(result.CommandsRun, want) {
 		t.Fatalf("CommandsRun = %#v, want %#v (target ids must not be passed blind to an older CodeGraph)", result.CommandsRun, want)
 	}
@@ -108,7 +114,7 @@ func TestInstallKeepsExplicitTargetsWhenInstalledCodeGraphMeetsTheContract(t *te
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -130,7 +136,7 @@ func TestInstallKeepsExplicitTargetsWhenVersionProbeCannotDetermineAVersion(t *t
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -155,7 +161,7 @@ func TestInstallProbesTheResolvedCLIPathNotABareName(t *testing.T) {
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/opt/tools/codegraph", nil })); err != nil {
+	}), DetectorFunc(func(string) (string, error) { return "/opt/tools/codegraph", nil }), false); err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
 
@@ -185,7 +191,7 @@ func TestInstallSkipsTheVersionProbeWhenTheCLIIsNotYetInstalled(t *testing.T) {
 			return "", errors.New("codegraph not found in PATH")
 		}
 		return "/bin/codegraph", nil
-	})); err != nil {
+	}), false); err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
 
@@ -204,7 +210,7 @@ func TestInstallCarriesTheVersionGapNoteThroughTheRollbackPath(t *testing.T) {
 
 	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
 		return errors.New("upstream install rejected the invocation")
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err == nil {
 		t.Fatal("InstallWithHome() error = nil, want the runner failure surfaced")
 	}

@@ -210,7 +210,7 @@ func TestCodeGraphRollbackRestoresBytesModesAndRemovesCreatedFiles(t *testing.T)
 		mustWrite(t, global, `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		mustWrite(t, prompt, "created")
 		return errors.New("upstream failed")
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err == nil {
 		t.Fatal("InstallWithHome() error = nil")
 	}
@@ -261,7 +261,7 @@ func TestCodeGraphRollbackAfterGuidanceAndPostconditionFailures(t *testing.T) {
 			tt.setup(t, home)
 			_, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(name string, args ...string) error {
 				return tt.run(t, home, name, args...)
-			}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+			}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 			if err == nil {
 				t.Fatal("InstallWithHome() error = nil")
 			}

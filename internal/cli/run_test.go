@@ -64,7 +64,7 @@ func TestOpenCodeTelemetryRollbackPreservesLateEdits(t *testing.T) {
 						rt := &installRuntime{homeDir: home, workspaceDir: t.TempDir(), backupRoot: filepath.Join(home, "backups"), scope: ScopeGlobal, selection: selection, resolved: planner.ResolvedPlan{Agents: selection.Agents}, state: &runtimeState{}}
 						plan = rt.stagePlan()
 					} else {
-						rt, err := newSyncRuntime(home, selection)
+						rt, err := newSyncRuntime(home, selection, false)
 						if err != nil {
 							t.Fatal(err)
 						}

@@ -929,9 +929,9 @@ func newTestInstallRuntime(t *testing.T, home string, selection model.Selection)
 	t.Helper()
 
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
-	rt, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{PackageManager: "brew"})
+	rt, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{PackageManager: "brew"}, false)
 	if err != nil {
-		t.Fatalf("newInstallRuntime() error = %v", err)
+		t.Fatalf("newInstallRuntime(, false) error = %v", err)
 	}
 	return rt
 }

@@ -62,6 +62,35 @@ func TestParseInstallFlagsSupportsCSVAndRepeated(t *testing.T) {
 	}
 }
 
+func TestParseInstallFlagsSupportsForceCommunityTools(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "long form sets", args: []string{"--force-community-tools"}, want: true},
+		{name: "absent defaults to false", args: []string{"--agent", "opencode"}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags, err := ParseInstallFlags(tc.args)
+			if err != nil {
+				t.Fatalf("ParseInstallFlags(%v) error = %v", tc.args, err)
+			}
+			if flags.ForceCommunityTools != tc.want {
+				t.Fatalf("ForceCommunityTools = %v, want %v", flags.ForceCommunityTools, tc.want)
+			}
+		})
+	}
+}
+
+func TestInstallHelpAdvertisesForceCommunityTools(t *testing.T) {
+	var help strings.Builder
+	PrintInstallHelp(&help)
+	if !strings.Contains(help.String(), "--force-community-tools") {
+		t.Fatalf("install help = %q, want --force-community-tools advertised next to neighbouring flags", help.String())
+	}
+}
+
 func TestInstallChannelHelpMentionsNightly(t *testing.T) {
 	if !strings.Contains(installChannelHelp, "nightly") {
 		t.Fatalf("installChannelHelp = %q, want nightly mentioned", installChannelHelp)

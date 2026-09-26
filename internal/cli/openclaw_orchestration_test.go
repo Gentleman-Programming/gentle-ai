@@ -86,7 +86,7 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 		home, workspace := t.TempDir(), t.TempDir()
 		selection := model.Selection{Agents: []model.AgentID{model.AgentOpenClaw}, StrictTDD: true}
 		runtime, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection,
-			planner.ResolvedPlan{Agents: selection.Agents}, system.PlatformProfile{})
+			planner.ResolvedPlan{Agents: selection.Agents}, system.PlatformProfile{}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -213,7 +213,7 @@ func testGlobalArtifactRoots(t *testing.T, sync bool) {
 				cmdLookPath = func(name string) (string, error) { return filepath.Join(home, "bin", name), nil }
 			}
 			if sync {
-				rt, err := newSyncRuntime(home, selection)
+				rt, err := newSyncRuntime(home, selection, false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -269,7 +269,7 @@ func TestExplicitWorkspaceInstallOverridesOpenClawConfig(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSkills},
 		Skills:     []model.SkillID{model.SkillGoTesting}, Persona: model.PersonaGentleman,
 	}
-	rt, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}, system.PlatformProfile{})
+	rt, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}, system.PlatformProfile{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd(t *testing.T) {
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
 	install := newTestInstallRuntime(t, home, selection)
-	sync, err := newSyncRuntime(home, selection)
+	sync, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
