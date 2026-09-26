@@ -153,15 +153,10 @@ func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
-	mode := os.FileMode(0o644)
-	if info, err := os.Lstat(path); err == nil {
-		mode = info.Mode().Perm()
-		if info.Mode().IsRegular() && mode == 0 {
-			return filemerge.WriteResult{}, fmt.Errorf("settings file %q has mode 0000; explicitly change its permissions (for example, chmod 600) before retrying", path)
-		}
-	} else if !os.IsNotExist(err) {
-		return filemerge.WriteResult{}, fmt.Errorf("stat json file %q: %w", path, err)
+	if err := filemerge.RefuseLockedSettingsFile(path); err != nil {
+		return filemerge.WriteResult{}, err
 	}
+	mode := filemerge.ExistingFileMode(path, 0o644)
 
 	baseJSON, err := osReadFile(path)
 	if err != nil {

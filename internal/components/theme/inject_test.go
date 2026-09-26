@@ -155,7 +155,7 @@ func TestInjectAtPathRejectsZeroPermissionSettingsWithoutChangingThem(t *testing
 	}
 
 	result, err := InjectAtPath(path)
-	if err == nil || !strings.Contains(err.Error(), "0000") || !strings.Contains(err.Error(), "chmod") {
+	if err == nil || !strings.Contains(err.Error(), "0000") || !strings.Contains(err.Error(), "permissions") {
 		t.Errorf("InjectAtPath() = %#v, %v; want actionable mode 0000 error", result, err)
 	}
 	if result.Changed || len(result.Files) != 0 {
@@ -175,6 +175,33 @@ func TestInjectAtPathRejectsZeroPermissionSettingsWithoutChangingThem(t *testing
 	}
 	if readErr != nil || !bytes.Equal(got, before) {
 		t.Fatalf("settings bytes after injection = %q, %v; want %q", got, readErr, before)
+	}
+}
+
+func TestInjectAtPathRefusesSymlinkWithoutChangingLinkOrTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "user.jsonc")
+	selected := filepath.Join(dir, "opencode.jsonc")
+	before := []byte("// private settings\n{\"theme\":\"old\"}\n")
+	if err := os.WriteFile(target, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, selected); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if result, err := InjectAtPath(selected); err == nil || !strings.Contains(err.Error(), "select a regular settings file") || result.Changed {
+		t.Fatalf("InjectAtPath() = %#v, %v; want symlink refusal", result, err)
+	}
+	if link, err := os.Readlink(selected); err != nil || link != target {
+		t.Fatalf("selected symlink changed: %q, %v", link, err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(got, before) {
+		t.Fatalf("target bytes = %q, %v; want %q", got, err, before)
+	}
+	if info, err := os.Stat(target); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+		t.Fatalf("target mode changed: %v, %v", info, err)
 	}
 }
 

@@ -632,8 +632,8 @@ func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (fi
 		if cleanErr != nil {
 			return filemerge.WriteResult{}, cleanErr
 		}
-		if strings.HasSuffix(path, ".jsonc") && !bytes.Equal(cleaned, baseJSON) {
-			baseJSON, err = replaceJSONCAgent(path, baseJSON, cleaned)
+		if preservesJSONComments(path, baseJSON) && !bytes.Equal(cleaned, baseJSON) {
+			baseJSON, err = replaceJSONCAgent(baseJSON, cleaned)
 			if err != nil {
 				return filemerge.WriteResult{}, err
 			}
@@ -642,7 +642,11 @@ func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (fi
 		}
 	}
 
-	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	merge := filemerge.MergeJSONObjects
+	if preservesJSONComments(path, baseJSON) {
+		merge = filemerge.MergeJSONObjectsPreserveJSONC
+	}
+	merged, err := merge(baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
@@ -665,8 +669,8 @@ func removeJSONAgentTools(path string, names ...string) (filemerge.WriteResult, 
 	if bytes.Equal(cleaned, baseJSON) {
 		return filemerge.WriteResult{}, nil
 	}
-	if strings.HasSuffix(path, ".jsonc") {
-		cleaned, err = replaceJSONCAgent(path, baseJSON, cleaned)
+	if preservesJSONComments(path, baseJSON) {
+		cleaned, err = replaceJSONCAgent(baseJSON, cleaned)
 		if err != nil {
 			return filemerge.WriteResult{}, err
 		}
@@ -678,11 +682,8 @@ func removeJSONAgentTools(path string, names ...string) (filemerge.WriteResult, 
 // prompt or any other asset is changed. JSONC comments within custom agents
 // cannot be retained by the existing whole-agent merge.
 func preflightJSONCAgentCleanup(path string, persona model.PersonaID, syncManaged bool) error {
-	if !strings.HasSuffix(path, ".jsonc") {
-		return nil
-	}
 	raw, err := osReadFile(path)
-	if err != nil || !filemerge.JSONCAgentHasComments(raw) {
+	if err != nil || !preservesJSONComments(path, raw) || !filemerge.JSONCAgentHasComments(raw) {
 		return err
 	}
 	root, err := filemerge.UnmarshalJSONObject(raw)
@@ -699,9 +700,20 @@ func preflightJSONCAgentCleanup(path string, persona model.PersonaID, syncManage
 	return nil
 }
 
+// preservesJSONComments reports whether a rewrite must keep the original
+// document text: JSONC files, and .json files that only parse tolerantly
+// because they carry comments or trailing commas.
+func preservesJSONComments(path string, raw []byte) bool {
+	if strings.HasSuffix(path, ".jsonc") || json.Valid(raw) {
+		return strings.HasSuffix(path, ".jsonc")
+	}
+	_, err := filemerge.UnmarshalJSONObject(raw)
+	return err == nil
+}
+
 // replaceJSONCAgent preserves comments outside the managed agent subtree when
 // the legacy tools cleanup re-encodes a JSONC document.
-func replaceJSONCAgent(path string, original, cleaned []byte) ([]byte, error) {
+func replaceJSONCAgent(original, cleaned []byte) ([]byte, error) {
 	if filemerge.JSONCAgentHasComments(original) {
 		return nil, fmt.Errorf("refuse to rewrite JSONC agent with nested comments; remove the owned legacy fields manually or move the comments before retrying")
 	}
@@ -713,7 +725,7 @@ func replaceJSONCAgent(path string, original, cleaned []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return filemerge.MergeJSONObjectsForPath(path, original, overlay)
+	return filemerge.MergeJSONObjectsPreserveJSONC(original, overlay)
 }
 
 func mergeJSONFileToleratingMalformed(path string, overlay []byte) (filemerge.WriteResult, error) {
@@ -932,7 +944,7 @@ func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
 		return false, fmt.Errorf("marshal settings after cleanup: %w", err)
 	}
 	encoded = append(encoded, '\n')
-	if strings.HasSuffix(path, ".jsonc") && parentKey == "agent" {
+	if preservesJSONComments(path, raw) && parentKey == "agent" {
 		// Preserve unrelated comments while replacing the cleaned agent subtree.
 		if _, exists := root[parentKey]; !exists {
 			root[parentKey] = map[string]any{}
@@ -941,7 +953,7 @@ func removeJSONNestedSubKey(path, parentKey, subKey string) (bool, error) {
 				return false, err
 			}
 		}
-		encoded, err = replaceJSONCAgent(path, raw, encoded)
+		encoded, err = replaceJSONCAgent(raw, encoded)
 		if err != nil {
 			return false, err
 		}

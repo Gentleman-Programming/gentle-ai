@@ -2374,6 +2374,58 @@ func TestJSONCCleanupPreservesNestedCustomAgentComments(t *testing.T) {
 	}
 }
 
+func TestCommentBearingJSONCleanupPreservesOrRefusesBeforePromptMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		persona model.PersonaID
+		inject  func(string, agents.Adapter, model.PersonaID, string) (InjectionResult, error)
+		agent   string
+		owned   string
+	}{
+		{"neutral install", model.PersonaNeutral, InjectAtSettingsPath, `"gentleman": {"mode": "primary"}, "custom": {"mode": "subagent"}`, `"gentleman"`},
+		{"neutral sync", model.PersonaNeutral, InjectForSyncAtSettingsPath, `"gentleman": {"mode": "primary"}, "custom": {"mode": "subagent"}`, `"gentleman"`},
+		{"gentleman sync", model.PersonaGentleman, InjectForSyncAtSettingsPath, `"gentleman": {"tools": {"write": true}}`, `"tools"`},
+		{"gentleman install", model.PersonaGentleman, InjectAtSettingsPath, `"gentleman": {"tools": {"write": true}}`, `"tools"`},
+	} {
+		t.Run(tc.name+" preserves outside comments", func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "opencode.json")
+			original := "{\n  // Keep this user note.\n  \"model\": \"user/model\",\n  \"agent\": {" + tc.agent + "}\n}\n"
+			if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tc.inject(home, opencodeAdapter(), tc.persona, path); err != nil {
+				t.Fatalf("inject: %v", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(string(after), "{\n  // Keep this user note.\n  \"model\": \"user/model\",\n") || strings.Contains(string(after), tc.owned) {
+				t.Fatalf("cleanup must keep bytes outside the owned field and remove it: %s", after)
+			}
+		})
+		t.Run(tc.name+" refuses nested agent comments", func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "opencode.json")
+			original := []byte("{\"agent\": {" + tc.agent + " /* user note */}}\n")
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := tc.inject(home, opencodeAdapter(), tc.persona, path)
+			if err == nil || !strings.Contains(err.Error(), "nested comments") {
+				t.Fatalf("expected actionable preflight refusal, got %v", err)
+			}
+			if after, err := os.ReadFile(path); err != nil || string(after) != string(original) {
+				t.Fatalf("settings changed on refusal: %v, %s", err, after)
+			}
+			if _, err := os.Stat(opencodeAdapter().SystemPromptFile(home)); !os.IsNotExist(err) {
+				t.Fatalf("prompt mutated before refusal: %v", err)
+			}
+		})
+	}
+}
+
 func TestInjectForSync_ClaudeGentlemanToNeutral_CleansOutputStyle(t *testing.T) {
 	home := t.TempDir()
 
