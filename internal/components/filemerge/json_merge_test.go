@@ -1,6 +1,7 @@
 package filemerge
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -31,6 +32,29 @@ func TestRemoveLegacyOpenCodeAgentMarkers(t *testing.T) {
 			}
 			if path == "opencode.jsonc" && !strings.Contains(string(got), `"theme":"keep"`) {
 				t.Fatal("lost unrelated formatting")
+			}
+		})
+	}
+}
+
+// empty input is accepted and returned unchanged, matching unmarshalJSONObject.
+func TestRemoveLegacyOpenCodeAgentMarkersEmptyInput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+	}{
+		{"empty object", []byte(`{}`)},
+		{"empty bytes", []byte{}},
+		{"whitespace", []byte("  \n  ")},
+		{"jsonc comments only", []byte("// just a comment\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := RemoveLegacyOpenCodeAgentMarkers("opencode.json", tc.raw, []string{"gentle-orchestrator"})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !bytes.Equal(got, tc.raw) {
+				t.Fatalf("input changed: got %q, want %q", got, tc.raw)
 			}
 		})
 	}

@@ -192,6 +192,9 @@ func unmarshalJSONObject(raw []byte) (map[string]any, error) {
 	}
 
 	normalized := normalizeJSON(raw)
+	if len(bytes.TrimSpace(normalized)) == 0 {
+		return object, nil
+	}
 	if err := json.Unmarshal(normalized, &object); err != nil {
 		return nil, err
 	}
@@ -208,8 +211,15 @@ func UnmarshalJSONObject(raw []byte) (map[string]any, error) {
 
 // rejectDuplicateJSONKeys checks every object before a map decoder can collapse
 // duplicate user keys. The migration must never serialize such a document.
+// Empty or whitespace-only input (or input that normalizes to empty, such as
+// comment-only bodies) is treated as an empty object, matching
+// unmarshalJSONObject's behavior.
 func rejectDuplicateJSONKeys(raw []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(normalizeJSON(raw)))
+	normalized := normalizeJSON(raw)
+	if len(bytes.TrimSpace(normalized)) == 0 {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(normalized))
 	var walk func() error
 	walk = func() error {
 		token, err := decoder.Token()
