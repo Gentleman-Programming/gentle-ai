@@ -170,6 +170,9 @@ func vsCodeEngramOverlayJSON(cmd string) []byte {
 // InjectOptions carries optional configuration for an Inject call.
 // Zero value is always safe — all fields have documented defaults.
 type InjectOptions struct {
+	// OpenCodeSettingsPath overrides only the OpenCode MCP settings merge target.
+	// Empty preserves adapter resolution for other callers and agents.
+	OpenCodeSettingsPath string
 	// CodexMultiAgent controls whether features.multi_agent is written as true
 	// in ~/.codex/config.toml. Default (false) writes multi_agent = false, which
 	// is the safe no-op value for the experimental Codex multi-agent tool set.
@@ -347,8 +350,16 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 
 	case model.StrategyMergeIntoSettings:
 		settingsPath := adapter.SettingsPath(configHomeDir)
+		if adapter.Agent() == model.AgentOpenCode && opts.OpenCodeSettingsPath != "" {
+			settingsPath = opts.OpenCodeSettingsPath
+		}
 		if settingsPath == "" {
 			break
+		}
+		if adapter.Agent() == model.AgentOpenCode {
+			if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+				return InjectionResult{}, err
+			}
 		}
 		overlay := engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()))
 		if adapter.Agent() == model.AgentOpenCode {
@@ -687,6 +698,9 @@ func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath s
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
+	if err := filemerge.RefuseLockedSettingsFile(path); err != nil {
+		return filemerge.WriteResult{}, err
+	}
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
@@ -697,7 +711,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
 }
 
 var osReadFile = func(path string) ([]byte, error) {

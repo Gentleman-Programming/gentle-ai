@@ -26,6 +26,38 @@ func isSymlinkPrivilegeError(err error) bool {
 	return false
 }
 
+func TestRefuseLockedSettingsFileRejectsNonRegular(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(target, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "settings.json")
+	if err := os.Symlink(target, link); err != nil {
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("symlink privilege unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, path, kind string }{
+		{"symlink", link, "symlink"},
+		{"directory", dir, "regular file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RefuseLockedSettingsFile(tc.path)
+			if err == nil || !strings.Contains(err.Error(), tc.kind) || !strings.Contains(err.Error(), "retry") {
+				t.Fatalf("want actionable %s refusal, got %v", tc.kind, err)
+			}
+		})
+	}
+	if err := RefuseLockedSettingsFile(target); err != nil {
+		t.Fatalf("regular settings refused: %v", err)
+	}
+	if err := RefuseLockedSettingsFile(filepath.Join(dir, "absent.json")); err != nil {
+		t.Fatalf("absent settings refused: %v", err)
+	}
+}
+
 func TestWriteFileAtomicReadOnlyDirRelaxesOwnerWritePermission(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 555 semantics differ on Windows")

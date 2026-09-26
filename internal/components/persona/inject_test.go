@@ -28,6 +28,169 @@ func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
 func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
 
+func TestPersonaRefusesDuplicateSettingsBeforePromptMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings string
+	}{
+		{"nested agent", `{"agent":{"gentleman":{"mode":"primary","mode":"secondary"}}}`},
+		{"nested permission", `{"permission":{"bash":{"ssh":"deny","ssh":"allow"}}}`},
+		{"escaped agent key", `{"agent":{},"ag\u0065nt":{"gentleman":{}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter := opencodeAdapter()
+			settingsPath := filepath.Join(home, "opencode.jsonc")
+			promptPath := adapter.SystemPromptFile(home)
+			originalPrompt := []byte("# User instructions\n")
+			if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(promptPath, originalPrompt, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.settings), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, inject := range []struct {
+				name string
+				fn   func(string, agents.Adapter, model.PersonaID, string) (InjectionResult, error)
+			}{
+				{"install", InjectAtSettingsPath},
+				{"sync", InjectForSyncAtSettingsPath},
+			} {
+				t.Run(inject.name, func(t *testing.T) {
+					_, err := inject.fn(home, adapter, model.PersonaGentleman, settingsPath)
+					if err == nil || !strings.Contains(err.Error(), "duplicate JSON key") || !strings.Contains(err.Error(), "retry") {
+						t.Fatalf("want actionable duplicate-key refusal, got %v", err)
+					}
+					for path, want := range map[string]string{promptPath: string(originalPrompt), settingsPath: tc.settings} {
+						got, readErr := os.ReadFile(path)
+						if readErr != nil || string(got) != want {
+							t.Fatalf("%s changed before refusal: %q, %v", path, got, readErr)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPersonaSelectedSettingsRejectsSymlinkBeforePromptMutation(t *testing.T) {
+	for _, promptExists := range []bool{false, true} {
+		for _, inject := range []struct {
+			name string
+			fn   func(string, agents.Adapter, model.PersonaID, string) (InjectionResult, error)
+		}{
+			{"install", InjectAtSettingsPath},
+			{"sync", InjectForSyncAtSettingsPath},
+		} {
+			t.Run(fmt.Sprintf("%s/prompt-exists=%t", inject.name, promptExists), func(t *testing.T) {
+				home := t.TempDir()
+				adapter := opencodeAdapter()
+				target := filepath.Join(home, "user.jsonc")
+				selected := filepath.Join(home, "selected.jsonc")
+				prompt := adapter.SystemPromptFile(home)
+				original := []byte("{\"theme\":\"user\"}\n")
+				if err := os.WriteFile(target, original, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, selected); err != nil {
+					t.Fatal(err)
+				}
+				if promptExists {
+					if err := os.MkdirAll(filepath.Dir(prompt), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(prompt, []byte("# User prompt\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				result, err := inject.fn(home, adapter, model.PersonaGentleman, selected)
+				if err == nil || !strings.Contains(err.Error(), "symlink") || !strings.Contains(err.Error(), "retry") {
+					t.Fatalf("want actionable symlink refusal, got result=%+v err=%v", result, err)
+				}
+				if result.Changed || len(result.Files) != 0 {
+					t.Fatalf("refusal reported mutations: %+v", result)
+				}
+				if got, err := os.ReadFile(target); err != nil || string(got) != string(original) {
+					t.Fatalf("settings target changed: %q, %v", got, err)
+				}
+				if got, err := os.Readlink(selected); err != nil || got != target {
+					t.Fatalf("settings symlink changed: %q, %v", got, err)
+				}
+				if promptExists {
+					if got, err := os.ReadFile(prompt); err != nil || string(got) != "# User prompt\n" {
+						t.Fatalf("prompt changed: %q, %v", got, err)
+					}
+				} else if _, err := os.Lstat(prompt); !os.IsNotExist(err) {
+					t.Fatalf("prompt created before refusal: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestPersonaSelectedSettingsRejectsDirectoryBeforePromptMutation(t *testing.T) {
+	for _, inject := range []struct {
+		name string
+		fn   func(string, agents.Adapter, model.PersonaID, string) (InjectionResult, error)
+	}{
+		{"install", InjectAtSettingsPath},
+		{"sync", InjectForSyncAtSettingsPath},
+	} {
+		t.Run(inject.name, func(t *testing.T) {
+			home := t.TempDir()
+			prompt := opencodeAdapter().SystemPromptFile(home)
+			result, err := inject.fn(home, opencodeAdapter(), model.PersonaGentleman, home)
+			if err == nil || !strings.Contains(err.Error(), "regular file") || !strings.Contains(err.Error(), "retry") {
+				t.Fatalf("want actionable directory refusal, got result=%+v err=%v", result, err)
+			}
+			if result.Changed || len(result.Files) != 0 {
+				t.Fatalf("refusal reported mutations: %+v", result)
+			}
+			if _, err := os.Lstat(prompt); !os.IsNotExist(err) {
+				t.Fatalf("prompt created before refusal: %v", err)
+			}
+		})
+	}
+}
+
+func TestPersonaSelectedSettingsRefusesLockedModeBeforePromptMutation(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "opencode.jsonc")
+	original := []byte("{\"agent\":{}}\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := InjectAtSettingsPath(home, opencodeAdapter(), model.PersonaGentleman, path)
+	if err == nil || !strings.Contains(err.Error(), "refuse") {
+		t.Fatalf("want actionable refusal, got %v", err)
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if info.Mode().Perm() != 0 {
+		t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("settings bytes changed: %q", got)
+	}
+	if _, statErr := os.Stat(opencodeAdapter().SystemPromptFile(home)); !os.IsNotExist(statErr) {
+		t.Fatalf("prompt mutated before refusal: %v", statErr)
+	}
+}
+
 var claudeOutputStyleLanguageGuardrails = []string{
 	"Determine the reply language from the latest actual user request",
 	"For mixed-language prompts, use the dominant language of the user's direct request.",
@@ -2125,6 +2288,89 @@ func TestInjectForSync_OpenCodeNeutral_CleansAgentGentleman(t *testing.T) {
 	}
 	if strings.Contains(string(after), `"gentleman"`) {
 		t.Fatalf("opencode.json still has gentleman agent after InjectForSync(neutral); got:\n%s", string(after))
+	}
+}
+
+func TestPersonaSelectedSettingsPreservePrivateMode(t *testing.T) {
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		t.Run(string(persona), func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "selected.jsonc")
+			if err := os.WriteFile(path, []byte("{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true}}}}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InjectAtSettingsPath(home, opencodeAdapter(), persona, path); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(path)
+			if err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("selected settings mode = %v, error = %v; want 0600", info, err)
+			}
+		})
+	}
+}
+
+func TestJSONCCleanupRefusesBeforePromptMutation(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "selected.jsonc")
+	original := []byte("{\"agent\":{\"gentleman\":{\"tools\":{}},\"custom\":{\"options\":{ /* user note */ \"enabled\":true}}}}\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := InjectForSyncAtSettingsPath(home, opencodeAdapter(), model.PersonaNeutral, path)
+	if err == nil || !strings.Contains(err.Error(), "nested comments") {
+		t.Fatalf("expected actionable preflight refusal, got %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(original) {
+		t.Fatalf("settings changed on refusal: %v, %s", err, after)
+	}
+	if _, err := os.Stat(filepath.Join(home, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("prompt mutated before refusal: %v", err)
+	}
+}
+
+func TestJSONCCleanupPreservesNestedCustomAgentComments(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(string) error
+	}{
+		{"neutral removes gentleman", func(path string) error {
+			_, err := removeJSONNestedSubKey(path, "agent", "gentleman")
+			return err
+		}},
+		{"sync removes legacy tools", func(path string) error {
+			_, err := removeJSONAgentTools(path, "gentleman")
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			original := []byte("{\n  \"agent\": {\n    \"gentleman\": {\"tools\": {\"write\": true}, \"mode\": \"primary\"},\n    \"custom\": {\n      // Keep this custom setting.\n      \"options\": {\"enabled\": true} // Keep this nested note.\n    }\n  }\n}\n")
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := tc.apply(path)
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if err != nil {
+				if string(after) != string(original) || !strings.Contains(err.Error(), "comment") {
+					t.Fatalf("refusal must explain comments and leave settings unchanged: %v, %s", err, after)
+				}
+				return
+			}
+			if !strings.Contains(string(after), "// Keep this custom setting.") || !strings.Contains(string(after), "// Keep this nested note.") {
+				t.Fatalf("cleanup discarded custom agent comments: %s", after)
+			}
+			if tc.name == "neutral removes gentleman" && strings.Contains(string(after), `"gentleman"`) {
+				t.Fatalf("owned agent not removed: %s", after)
+			}
+			if tc.name == "sync removes legacy tools" && strings.Contains(string(after), `"tools"`) {
+				t.Fatalf("owned tools not removed: %s", after)
+			}
+		})
 	}
 }
 

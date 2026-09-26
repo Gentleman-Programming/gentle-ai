@@ -161,7 +161,12 @@ func agentOverlay(id model.AgentID) []byte {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := TargetPath(homeDir, adapter)
+	return InjectAtPath(TargetPath(homeDir, adapter), adapter)
+}
+
+// InjectAtPath writes the permission overlay to the caller-selected settings
+// path while preserving each adapter's permission capability check.
+func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult, error) {
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -181,6 +186,9 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 }
 
 func mergeJSONFile(path string, overlay []byte, defaults bool) (filemerge.WriteResult, error) {
+	if err := filemerge.RefuseLockedSettingsFile(path); err != nil {
+		return filemerge.WriteResult{}, err
+	}
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
@@ -195,7 +203,7 @@ func mergeJSONFile(path string, overlay []byte, defaults bool) (filemerge.WriteR
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
 }
 
 var osReadFile = func(path string) ([]byte, error) {

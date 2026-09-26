@@ -524,7 +524,11 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 					// Persona sync can remove stale managed agent state from settings.
 					// This target is backup-only: syncPersonaPaths intentionally does
 					// not make best-effort cleanup a post-sync verification target.
-					if path := adapter.SettingsPath(componentInjectionDir(homeDir, workspaceDir, adapter)); path != "" {
+					path := adapter.SettingsPath(componentInjectionDir(homeDir, workspaceDir, adapter))
+					if adapter.Agent() == model.AgentOpenCode {
+						path = effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)
+					}
+					if path != "" {
 						paths[path] = struct{}{}
 					}
 				}
@@ -1096,6 +1100,7 @@ func (s componentSyncStep) Run() error {
 			Version:                     engramVersion,
 		}
 		for _, adapter := range adapters {
+			engramOpts.OpenCodeSettingsPath = effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter)
 			var res engram.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {
@@ -1114,7 +1119,13 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-			res, err := mcp.Inject(s.homeDir, targetDir, adapter)
+			var res mcp.InjectionResult
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				res, err = mcp.InjectAtSettingsPath(s.homeDir, targetDir, adapter, effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter))
+			} else {
+				res, err = mcp.Inject(s.homeDir, targetDir, adapter)
+			}
 			if err != nil {
 				return fmt.Errorf("sync context7 for %q: %w", adapter.Agent(), err)
 			}
@@ -1170,7 +1181,13 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentPermission:
 		// Opt-in only — reached when --include-permissions is set.
 		for _, adapter := range adapters {
-			res, err := permissions.Inject(s.homeDir, adapter)
+			var res permissions.InjectionResult
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				res, err = permissions.InjectAtPath(effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter), adapter)
+			} else {
+				res, err = permissions.Inject(s.homeDir, adapter)
+			}
 			if err != nil {
 				return fmt.Errorf("sync permissions for %q: %w", adapter.Agent(), err)
 			}
@@ -1195,7 +1212,11 @@ func (s componentSyncStep) Run() error {
 				continue
 			}
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-			res, err := injectSyncPersona(targetDir, adapter, s.selection.Persona)
+			selectedSettingsPath := ""
+			if adapter.Agent() == model.AgentOpenCode {
+				selectedSettingsPath = effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter)
+			}
+			res, err := injectSyncPersona(targetDir, adapter, s.selection.Persona, selectedSettingsPath)
 			if err != nil {
 				return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 			}

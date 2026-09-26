@@ -21,6 +21,80 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
+func TestSelectedPermissionsRefuseNestedCommentsAndLockedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		mode          os.FileMode
+	}{
+		{"nested comments", "{\"permission\":{\"bash\":{// keep\n\"*\":\"deny\"}}}\n", 0o600},
+		{"locked mode", "{\"permission\":{}}\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			original := []byte(tc.content)
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := InjectAtPath(path, opencode.NewAdapter())
+			if err == nil || !strings.Contains(err.Error(), "refuse") {
+				t.Fatalf("want actionable refusal, got %v", err)
+			}
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if info.Mode().Perm() != tc.mode {
+				t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != tc.content {
+				t.Fatalf("settings bytes changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestSelectedPermissionsPreservePrivateMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	if err := os.WriteFile(path, []byte("{\"permission\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InjectAtPath(path, opencode.NewAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode = %v, error = %v; want 0600", info, err)
+	}
+}
+
+func TestSelectedPermissionsNeverWidenLockedMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(path, []byte(`{"permission":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = InjectAtPath(path, opencode.NewAdapter()) // Refusal is safe when unreadable.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0 && mode != 0o600 {
+		t.Fatalf("locked settings widened: mode = %04o", mode)
+	}
+}
+
 // Fixture port of OpenCode v1.2.27 util/wildcard.ts and permission/service.ts:
 // anchored, case-sensitive POSIX matching, optional trailing " *", last match wins.
 // Inputs are strings only; this does not emulate bash.ts's tree-sitter extraction.

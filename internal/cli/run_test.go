@@ -50,6 +50,97 @@ func themeSettingsFixture(t *testing.T) (home, workspace, selected, decoy string
 	return
 }
 
+func TestInstallOpenCodeSettingsWritersUseSelectedJSONC(t *testing.T) {
+	for _, component := range []model.ComponentID{model.ComponentPersona, model.ComponentPermission, model.ComponentContext7} {
+		t.Run(string(component), func(t *testing.T) {
+			home, workspace, selected, decoy, before := themeSettingsFixture(t)
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{component}, Persona: model.PersonaGentleman}
+			resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+			paths, err := backupTargets(home, workspace, ScopeGlobal, selection, resolved)
+			if err != nil || !slices.Contains(paths, selected) {
+				t.Fatalf("backup targets = %v, %v; selected missing", paths, err)
+			}
+			step := componentApplyStep{component: component, homeDir: home, workspaceDir: workspace, scope: ScopeGlobal, agents: selection.Agents, selection: selection}
+			if err := step.Run(); err != nil {
+				t.Fatal(err)
+			}
+			assertOpenCodeComponentSelectedOnly(t, selected, decoy, before, component)
+		})
+	}
+}
+
+func assertOpenCodeComponentSelectedOnly(t *testing.T, selected, decoy string, before []byte, component model.ComponentID) {
+	t.Helper()
+	data, err := os.ReadFile(selected)
+	if err != nil || bytes.Equal(data, before) || !bytes.Contains(data, []byte("// project settings")) || !bytes.Contains(data, []byte(`"user":true`)) {
+		t.Fatalf("%s selected settings = %s, %v", component, data, err)
+	}
+	data, err = os.ReadFile(decoy)
+	if err != nil || string(data) != `{"theme":"user-owned"}` {
+		t.Fatalf("%s changed decoy settings: %s, %v", component, data, err)
+	}
+}
+
+func TestInstallEngramUsesSelectedOpenCodeJSONC(t *testing.T) {
+	home, workspace, selected, decoy, before := themeSettingsFixture(t)
+	t.Setenv("GENTLE_AI_ENGRAM_SETUP_MODE", "off")
+	originalLookPath := cmdLookPath
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return filepath.Join(home, "test-engram-not-executed"), nil
+		}
+		return originalLookPath(name)
+	}
+	t.Cleanup(func() { cmdLookPath = originalLookPath })
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentEngram}}
+	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+	if err != nil || !slices.Contains(targets, selected) {
+		t.Fatalf("engram backup targets = %v, %v", targets, err)
+	}
+	step := componentApplyStep{component: model.ComponentEngram, homeDir: home, workspaceDir: workspace, scope: ScopeGlobal, agents: selection.Agents, selection: selection}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	assertOpenCodeComponentSelectedOnly(t, selected, decoy, before, model.ComponentEngram)
+}
+
+func TestInstallOpenCodeSettingsWritersWorkspaceScope(t *testing.T) {
+	for _, component := range []model.ComponentID{model.ComponentPersona, model.ComponentPermission, model.ComponentContext7} {
+		t.Run(string(component), func(t *testing.T) {
+			home, workspace, globalJSONC, decoy, _ := themeSettingsFixture(t)
+			selected := opencode.NewAdapter().SettingsPath(workspace)
+			if err := os.MkdirAll(filepath.Dir(selected), 0700); err != nil {
+				t.Fatal(err)
+			}
+			before := []byte(`{"user":true}`)
+			if err := os.WriteFile(selected, before, 0600); err != nil {
+				t.Fatal(err)
+			}
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{component}, Persona: model.PersonaGentleman}
+			paths, err := backupTargets(home, workspace, ScopeWorkspace, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+			if err != nil || !slices.Contains(paths, selected) {
+				t.Fatalf("workspace backup = %v, %v", paths, err)
+			}
+			step := componentApplyStep{component: component, homeDir: home, workspaceDir: workspace, scope: ScopeWorkspace, agents: selection.Agents, selection: selection}
+			if err := step.Run(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(selected)
+			if err != nil || bytes.Equal(got, before) || !bytes.Contains(got, []byte(`"user": true`)) {
+				t.Fatalf("workspace settings = %s, %v", got, err)
+			}
+			got, err = os.ReadFile(globalJSONC)
+			if err != nil || !bytes.Contains(got, []byte("// project settings")) || bytes.Contains(got, []byte(`"agent"`)) || bytes.Contains(got, []byte(`"mcp"`)) || bytes.Contains(got, []byte(`"permission"`)) {
+				t.Fatalf("global project settings changed: %s, %v", got, err)
+			}
+			got, err = os.ReadFile(decoy)
+			if err != nil || string(got) != `{"theme":"user-owned"}` {
+				t.Fatalf("global decoy changed: %s, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestInstallThemeUsesSelectedOpenCodeJSONC(t *testing.T) {
 	home, workspace, selected, decoy, _ := themeSettingsFixture(t)
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentTheme}}
@@ -69,6 +160,63 @@ func TestInstallThemeUsesSelectedOpenCodeJSONC(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertThemeSelectedOnly(t, selected, decoy)
+}
+
+type failAfterOpenCodeSettingsStep struct {
+	selected string
+	before   []byte
+	cause    error
+}
+
+func (s failAfterOpenCodeSettingsStep) ID() string { return "test:fail-after-settings" }
+func (s failAfterOpenCodeSettingsStep) Run() error {
+	data, err := os.ReadFile(s.selected)
+	if err != nil || bytes.Equal(data, s.before) {
+		return errors.New("selected settings were not written before failure")
+	}
+	return s.cause
+}
+
+func TestInstallOpenCodeSettingsWritersRollbackSelectedJSONC(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode assertions do not apply on Windows")
+	}
+	for _, component := range []model.ComponentID{model.ComponentPersona, model.ComponentPermission, model.ComponentContext7} {
+		t.Run(string(component), func(t *testing.T) {
+			home, workspace, selected, decoy, before := themeSettingsFixture(t)
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{component}, Persona: model.PersonaGentleman}
+			targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+			if err != nil || !slices.Contains(targets, selected) {
+				t.Fatalf("snapshot targets = %v, %v", targets, err)
+			}
+			state := &runtimeState{}
+			cause := errors.New("injected failure after settings write")
+			plan := pipeline.StagePlan{
+				Prepare: []pipeline.Step{prepareBackupStep{id: "prepare:backup-snapshot", snapshotter: backup.NewSnapshotter(), snapshotDir: filepath.Join(home, "backup"), targets: []string{selected}, state: state}},
+				Apply: []pipeline.Step{
+					rollbackRestoreStep{id: "apply:rollback-restore", state: state, homeDir: home, workspaceDir: workspace},
+					componentApplyStep{component: component, homeDir: home, workspaceDir: workspace, scope: ScopeGlobal, agents: selection.Agents, selection: selection},
+					failAfterOpenCodeSettingsStep{selected: selected, before: before, cause: cause},
+				},
+			}
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+			if !errors.Is(result.Err, cause) || !result.Rollback.Success {
+				t.Fatalf("failure = %v, rollback = %#v", result.Err, result.Rollback)
+			}
+			got, err := os.ReadFile(selected)
+			if err != nil || !bytes.Equal(got, before) {
+				t.Fatalf("restored bytes = %s, %v", got, err)
+			}
+			info, err := os.Stat(selected)
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatalf("restored mode = %v, %v", info, err)
+			}
+			got, err = os.ReadFile(decoy)
+			if err != nil || string(got) != `{"theme":"user-owned"}` {
+				t.Fatalf("decoy = %s, %v", got, err)
+			}
+		})
+	}
 }
 
 type failAfterThemeStep struct {
