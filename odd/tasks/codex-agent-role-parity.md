@@ -55,7 +55,7 @@ Out of scope / non-goals:
 
 ## Tasks
 
-- [ ] T1 — Local projection on this machine (immediate value; artifact lives outside the repo at `~/.local/bin/` and `~/.codex/agents/`): single-file idempotent generator with `--dry-run`, `--check`, `--selftest`; generates the 19 role TOMLs from `~/.claude/agents/*.md` with a documented adaptation table; `--selftest` builds a scratch `CODEX_HOME` and asserts against `codex doctor` with a negative control. Route: inline (one authored file).
+- [x] T1 — Local projection on this machine (immediate value; artifact lives outside the repo at `~/.local/bin/` and `~/.codex/agents/`): single-file idempotent generator with `--dry-run`, `--check`, `--selftest`; generates the 19 role TOMLs from `~/.claude/agents/*.md` with a documented adaptation table; `--selftest` builds a scratch `CODEX_HOME` and asserts against `codex doctor` with a negative control. Route: inline (one authored file). Done 2026-09-26 — 19/19 roles generated and loaded; see Delivery.
 - [ ] T2 — Upstream Codex agent-role writer: embedded role assets (`internal/assets/codex/agent-roles/*.toml` or an equivalent rendered source), a targeted install writer in `internal/agents/codex` (or the Codex component), ownership marker, and an inventory test asserting all 19 roles are written with valid schema. Route: delegated (writer trigger: 2+ non-trivial files).
 - [ ] T3 — Lifecycle: `sync` idempotency (byte-identical second run), ownership-safe upgrade, `uninstall` cleanup of owned role files, and regression tests. Route: delegated (same writer, sequential).
 - [ ] T4 — Sandbox e2e in an isolated HOME: fresh `install --agent codex` → 19 role files present, `codex doctor` reports zero malformed-role warnings, re-run is byte-identical, uninstall removes owned files only. Route: inline (bounded action).
@@ -74,9 +74,26 @@ Out of scope / non-goals:
 
 ## Delivery
 
-(no PR yet — push and PR are the user's decision)
+- 2026-09-26 · T1 committed as `docs(odd): track codex agent-role parity feature` (`bffa2d63`) plus the T1 close-out commit that records this evidence and the `T1 done` state. The T1 artifact itself is machine-local (`~/.local/bin/gentle-codex-agent-roles.py` + `~/.codex/agents/*.toml`) and intentionally not committed to this repo: T2 replaces it with the managed writer.
+- No PR yet — push and PR are the user's decision.
 
-## Notes
+## Evidence — T1 (2026-09-26, Codex 0.151.0, this machine)
 
-- 2026-09-26: exploration only — no writes. Verified Codex 0.151.0 role discovery and `codex doctor` warning behaviour with scratch `CODEX_HOME` homes; read `codex-rs/agent-roles/*` from `openai/codex@main`; confirmed the 19-role set exists in `~/.claude/agents/`; confirmed `~/.codex/skills/_shared/` mirrors the Claude skill tree (so skill-root rewriting is the only required path adaptation).
+Test-first, oracle = `codex doctor` in scratch `CODEX_HOME` homes (offline, ~5 s per run):
+
+- RED (before generation): `gentle-codex-agent-roles.py --selftest` → exit 1, `SELFTEST FAILED — target ~/.codex/agents not in sync: missing=19 stale=0 extra=0`; `~/.codex/agents/` did not exist. Same run: `negative control warnings 1` (a deliberately description-less role file IS reported), so the oracle can fail.
+- GREEN (after generation): `SELFTEST PASSED · 19 roles · 19 files in sync`; `clean projection warnings 0`; `roles proven loaded 19/19` — positive proof comes from a second file declaring each role name, which makes Codex emit `duplicate agent role name \`<role>\` discovered in …` for every one of the 19 roles.
+- Real HOME: `codex doctor` reports zero role warnings (no `startup warning` line at all) and `auth ✓`.
+- `~/.codex/config.toml` sha256 `dad9bb61a3dc1e1dfe988b26c7eb80032890936520de3d465a331608e705ea58` before and after the projection — byte-identical, criterion 2 satisfied without touching the file.
+- Idempotency: direct re-run → 0 add / 0 update / 0 remove / 19 unchanged; directory digest identical.
+- `--check` → `IN SYNC`, exit 0. `--dry-run` → writes nothing.
+
+Adaptation applied to every body (checked: zero remaining `.claude` references in the generated set): `~/.claude/skills/` → `~/.codex/skills/`, `~/.claude/agents/` → `~/.codex/agents/`, “the Task tool” → “the `spawn_agent` tool”, `TodoWrite` → `update_plan`, `multi_tool_use.parallel` → “parallel tool calls”, plus a short Codex runtime-profile header.
+
+## Notes / open questions
+
+- 2026-09-26: exploration (read-only) established the mechanism before any write: Codex 0.151.0 role discovery verified with scratch `CODEX_HOME` homes, `codex-rs/agent-roles/*` read from `openai/codex@main`, the 19-role set confirmed in `~/.claude/agents/`, and `~/.codex/skills/_shared/` confirmed to mirror the Claude skill tree (so skill-root rewriting is the only required path adaptation).
+- Codex applies a role as a **bounded override layer** over the parent-derived child config (`codex-rs/core/src/agent/role.rs`: `AgentRoleOverrides` = `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `personality`, `service_tier`, `features`, `skills`; a role may only reduce capabilities). Two consequences: (a) a role file needs no `config.toml` change, and (b) per-role `model` / `model_reasoning_effort` overrides are available for a later parity slice if the OpenCode/Claude model mapping should be mirrored.
+- Open question for T4: whether the child receives the parent's `model_instructions_file` (engram instructions) *in addition* to the role's `developer_instructions`, or instead of it. Resolving this needs one live spawn (`codex exec -p nan …`), which is a billable call — do it in T4, not inline.
+- The `review-*` and `jd-*` personalities in the Claude set are wired to the native RDD review transport (`GENTLE_AI_REVIEW_BINDING` / `GENTLE_AI_REVIEW_CONTEXT` injection). As Codex roles they are inert for native review and only useful for manual invocation until Codex grows an equivalent transport — accepted as part of the requested parity set.
 - The Engram mirror was not written: this session has no callable `mem_*` tool.
