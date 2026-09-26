@@ -90,7 +90,7 @@ func EffectiveSettingsPath(homeDir, projectDir string) string {
 		return snapshot.WritePath
 	}
 	if err != nil {
-		return defaultEffectiveSettingsPath(homeDir)
+		return ""
 	}
 	return defaultEffectiveSettingsPath(homeDir)
 }
@@ -98,7 +98,10 @@ func EffectiveSettingsPath(homeDir, projectDir string) string {
 // ResolveEffectiveConfigForHome retains the file-backed write authority for
 // install, sync restoration, profiles, and deletion; it does not merge reads.
 func ResolveEffectiveConfigForHome(homeDir, projectDir string) (ConfigSnapshot, error) {
-	path := findEffectiveConfigPath(homeDir, projectDir)
+	path, err := findEffectiveConfigPathChecked(homeDir, projectDir)
+	if err != nil {
+		return ConfigSnapshot{}, err
+	}
 	snapshot := ConfigSnapshot{
 		Path:        path,
 		WritePath:   path,
@@ -130,25 +133,8 @@ func ReadConfigSnapshot(path string) (ConfigSnapshot, error) {
 }
 
 func findEffectiveConfigPath(homeDir, projectDir string) string {
-	for _, dir := range candidateConfigDirs(homeDir, projectDir) {
-		jsonPath := filepath.Join(dir, "opencode.json")
-		jsoncPath := filepath.Join(dir, "opencode.jsonc")
-		jsonExists := fileExists(jsonPath)
-		jsoncExists := fileExists(jsoncPath)
-
-		switch {
-		case jsonExists && jsoncExists:
-			if managedConfigPriority(jsoncPath) > managedConfigPriority(jsonPath) {
-				return jsoncPath
-			}
-			return jsonPath
-		case jsonExists:
-			return jsonPath
-		case jsoncExists:
-			return jsoncPath
-		}
-	}
-	return ""
+	path, _ := findEffectiveConfigPathChecked(homeDir, projectDir)
+	return path
 }
 
 func candidateConfigDirs(homeDir, projectDir string) []string {
