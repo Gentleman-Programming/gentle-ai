@@ -816,6 +816,15 @@ func (s openCodeLegacyMarkerSyncStep) Run() error {
 				return err
 			}
 		}
+	} else {
+		// For non-selected paths, skip if an authority sidecar already
+		// exists in the directory: only the selected file may be modified.
+		dir := filepath.Dir(s.path)
+		if _, exists, err := opencodeactivation.AuthorityState(dir); err != nil {
+			return err
+		} else if exists {
+			return nil
+		}
 	}
 	result, err := filemerge.WriteFileAtomic(s.path, updated, info.Mode().Perm())
 	if result.Changed {
