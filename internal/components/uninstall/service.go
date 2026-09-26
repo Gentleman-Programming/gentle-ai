@@ -852,6 +852,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 
 	switch componentID {
 	case model.ComponentPersona:
+		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+			for _, path := range settingsTargets(homeDir, adapter) {
+				targets = append(targets, path)
+				ops = append(ops, removeOpenCodeGentleman(path, adapter.Agent()))
+			}
+		}
 		if adapter.SupportsSystemPrompt() {
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)

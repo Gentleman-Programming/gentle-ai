@@ -73,6 +73,7 @@ func TestFullPresetUninstallOpenCodeFamilyAgents(t *testing.T) {
 			}
 			agents["my-agent"] = map[string]any{"prompt": "User owned"}
 			agents["jd-judge-a"].(map[string]any)["prompt"] = "User modified judge"
+			agents["gentleman"].(map[string]any)["prompt"] = "User modified gentleman"
 			orchestrator := agents["gentle-orchestrator"].(map[string]any)
 			permission := orchestrator["permission"].(map[string]any)
 			task := permission["task"].(map[string]any)
@@ -105,8 +106,8 @@ func TestFullPresetUninstallOpenCodeFamilyAgents(t *testing.T) {
 				t.Fatalf("default_agent not restored: %s", first)
 			}
 			remaining := after["agent"].(map[string]any)
-			if remaining["my-agent"] == nil || remaining["jd-judge-a"].(map[string]any)["prompt"] != "User modified judge" {
-				t.Fatalf("user agents lost: %s", first)
+			if remaining["my-agent"] == nil || remaining["jd-judge-a"].(map[string]any)["prompt"] != "User modified judge" || remaining["gentleman"].(map[string]any)["prompt"] != "User modified gentleman" {
+				t.Fatalf("user agent prompt changed: %s", first)
 			}
 			for name, value := range remaining {
 				entry, ok := value.(map[string]any)
@@ -116,12 +117,6 @@ func TestFullPresetUninstallOpenCodeFamilyAgents(t *testing.T) {
 				owned, err := opencodeagents.Shape(name, entry)
 				if err != nil {
 					t.Fatal(err)
-				}
-				if name == "gentleman" {
-					// The installed persona overlay is also managed by gentle-ai.
-					if name == "gentleman" {
-						t.Fatalf("gentleman retained: %s", first)
-					}
 				}
 				if owned {
 					t.Fatalf("managed %s retained: %s", name, first)

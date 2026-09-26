@@ -9,7 +9,42 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
-// removeOpenCodeFamilyAgents rewrites only entries whose installed shape proves ownership.
+// removeOpenCodeGentleman is scoped to the persona component, independently
+// of whether the other components of this runtime are being removed.
+func removeOpenCodeGentleman(path string, agentID model.AgentID) operation {
+	return operation{typeID: opRewriteFile, path: path, apply: func(path string) (bool, bool, error) {
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			return false, false, nil
+		}
+		if err != nil {
+			return false, false, err
+		}
+		root, err := filemerge.UnmarshalJSONObject(raw)
+		if err != nil {
+			return false, false, err
+		}
+		agents, _ := root["agent"].(map[string]any)
+		entry, _ := agents["gentleman"].(map[string]any)
+		if entry == nil {
+			return false, false, nil
+		}
+		owned, err := opencodeagents.GentlemanShape(agentID, entry)
+		if err != nil || !owned {
+			return false, false, err
+		}
+		delete(agents, "gentleman")
+		encoded, err := filemerge.MarshalJSONPreservingPermissions(raw, root)
+		if err != nil {
+			return false, false, err
+		}
+		result, err := filemerge.WriteFileAtomic(path, append(encoded, '\n'), filemerge.ExistingFileMode(path, 0o644))
+		return result.Changed, false, err
+	}}
+}
+
+// removeOpenCodeFamilyAgents rewrites only runtime-owned entries with a
+// managed shape or the legacy v3.7.0 ownership marker.
 func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 	return operation{typeID: opRewriteFile, path: path, apply: func(path string) (bool, bool, error) {
 		raw, err := os.ReadFile(path)
@@ -34,9 +69,24 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 			if !ok {
 				continue
 			}
-			owned, err := opencodeagents.Shape(name, entry)
-			if name == "gentleman" {
+			if entry["__managed_by"] == "gentle-ai/sdd" {
+				// Mirror the migration ownership rules without requiring a sync.
+				if opencodeagents.LegacyOwned(agentID, name) {
+					delete(agents, name)
+					removed[name] = true
+				} else {
+					delete(entry, "__managed_by")
+				}
+				changed = true
+				continue
+			}
+			var owned bool
+			var err error
+			switch {
+			case name == "gentleman":
 				owned, err = opencodeagents.GentlemanShape(agentID, entry)
+			case opencodeagents.UninstallRole(agentID, name):
+				owned, err = opencodeagents.Shape(name, entry)
 			}
 			if err != nil {
 				return false, false, err

@@ -70,6 +70,31 @@ func Roles(agent model.AgentID) []string {
 	return names
 }
 
+// LegacyOwned reports the v3.7.0 marked roles the runtime installed or
+// explicitly retired during migration. Unknown marked names remain user data.
+func LegacyOwned(agent model.AgentID, name string) bool {
+	if name == "gentle-orchestrator" || name == "general" || name == "explore" || strings.HasPrefix(name, "sdd-") {
+		return true
+	}
+	for _, role := range Roles(agent) {
+		if role == name {
+			return true
+		}
+	}
+	return !model.SupportsReceiptDrivenDevelopment(agent) && IsReview(name)
+}
+
+// UninstallRole recognizes current runtime roles and retired Kilo review roles.
+// Shape checks remain necessary before removing any unmarked entry.
+func UninstallRole(agent model.AgentID, name string) bool {
+	for _, role := range Roles(agent) {
+		if role == name {
+			return true
+		}
+	}
+	return agent == model.AgentKilocode && IsReview(name) && name != "review-validator"
+}
+
 func Entry(spec Spec) (map[string]any, error) {
 	prompt, err := assets.Read("opencode/agents/" + spec.Name + ".md")
 	if err != nil {
