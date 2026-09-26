@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,301 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
+
+func TestSyncMigratesLegacyOpenCodeMarker(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	path := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"keep"},"custom":{"__managed_by":"gentle-ai/sdd"}},"theme":"keep"}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.stagePlan()
+	if !containsString(rt.managedPaths, path) {
+		t.Fatal("migration target absent from backup")
+	}
+	changed := runSyncInjectionSteps(t, home, selection)
+	if !containsString(changed, path) {
+		t.Fatalf("migration not reported: %v", changed)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := root["agent"].(map[string]any)
+	if _, ok := agents["gentle-orchestrator"].(map[string]any)["__managed_by"]; ok {
+		t.Fatalf("marker retained: %s", data)
+	}
+	if agents["custom"].(map[string]any)["__managed_by"] != "gentle-ai/sdd" {
+		t.Fatalf("user agent altered: %s", data)
+	}
+	if changed := runSyncInjectionSteps(t, home, selection); containsString(changed, path) {
+		t.Fatalf("migration repeated: %v", changed)
+	}
+}
+
+func TestSyncMigratesBothOpenCodeSettingsAndRollsBack(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	selected := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
+	base := strings.TrimSuffix(selected, filepath.Ext(selected))
+	originals := map[string][]byte{
+		base + ".json":  []byte(`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"json"}}}`),
+		base + ".jsonc": []byte("// user comment\n" + `{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"jsonc"}}}`),
+	}
+	for path, data := range originals {
+		mustWriteFile(t, path, data)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path := range originals {
+		if !containsPath(targets, path) {
+			t.Fatalf("backup excludes %q: %v", path, targets)
+		}
+	}
+	changed := runSyncInjectionSteps(t, home, selection)
+	for path := range originals {
+		if !containsString(changed, path) {
+			t.Fatalf("missing changed path %q: %v", path, changed)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), `"__managed_by"`) {
+			t.Fatalf("marker survived in %q: %s", path, data)
+		}
+	}
+	if changed := runSyncInjectionSteps(t, home, selection); containsString(changed, base+".json") || containsString(changed, base+".jsonc") {
+		t.Fatalf("not idempotent: %v", changed)
+	}
+	for path, data := range originals {
+		mustWriteFile(t, path, data)
+	}
+	// Restrict the transaction to the backup, marker steps, and a failure
+	// explicitly scheduled after both edits. Inspect bytes when failure begins,
+	// before the orchestrator restores the snapshot.
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := rt.stagePlan()
+	var apply []pipeline.Step
+	for _, step := range plan.Apply {
+		if step.ID() == "apply:rollback-restore" || step.ID() == "sync:opencode:legacy-marker" {
+			apply = append(apply, step)
+		}
+	}
+	if len(apply) != 3 {
+		t.Fatalf("expected rollback and two marker steps, got %d", len(apply))
+	}
+	apply = append(apply, componentSyncStep{id: "sync:component:later-failure", component: model.ComponentID("later-failure"), homeDir: home, agents: selection.Agents, changedFiles: &rt.changedFiles})
+	plan.Apply = apply
+	observedBeforeRollback := false
+	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithProgressFunc(func(event pipeline.ProgressEvent) {
+		if event.StepID != "sync:component:later-failure" || event.Status != pipeline.StepStatusRunning {
+			return
+		}
+		observedBeforeRollback = true
+		for path, before := range originals {
+			data, readErr := os.ReadFile(path)
+			if readErr != nil || bytes.Equal(data, before) || strings.Contains(string(data), `"__managed_by"`) {
+				t.Errorf("marker was not removed before failure in %q: %s, %v", path, data, readErr)
+			}
+		}
+	}))
+	execution := orchestrator.Execute(plan)
+	if execution.Err == nil || !observedBeforeRollback || !execution.Rollback.Success {
+		t.Fatalf("expected post-migration failure and rollback: %+v, observed=%v", execution, observedBeforeRollback)
+	}
+	for path, want := range originals {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("rollback %q: %q, %v", path, got, err)
+		}
+	}
+}
+
+func TestSyncPinsSelectedJSONCAndRestoresNewAuthorityOnFailure(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	jsonPath := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
+	jsoncPath := strings.TrimSuffix(jsonPath, ".json") + ".jsonc"
+	mustWriteFile(t, jsonPath, []byte(`{"theme":"user"}`))
+	original := []byte("// comment\n" + `{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"keep"}}}`)
+	mustWriteFile(t, jsoncPath, original)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	if got := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter()); got != jsoncPath {
+		t.Fatalf("selected %q, want %q", got, jsoncPath)
+	}
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := rt.stagePlan()
+	var apply []pipeline.Step
+	for _, step := range plan.Apply {
+		if step.ID() == "apply:rollback-restore" || step.ID() == "sync:opencode:legacy-marker" {
+			apply = append(apply, step)
+		}
+	}
+	sidecar := filepath.Join(filepath.Dir(jsonPath), ".gentle-ai-opencode-write-authority.json")
+	if !containsPath(rt.managedPaths, sidecar) {
+		t.Fatal("sidecar absent from snapshot")
+	}
+	apply = append(apply, componentSyncStep{id: "sync:component:later-failure", component: model.ComponentID("later-failure"), homeDir: home, agents: selection.Agents, changedFiles: &rt.changedFiles})
+	plan.Apply = apply
+	observed := false
+	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithProgressFunc(func(event pipeline.ProgressEvent) {
+		if event.StepID == "sync:component:later-failure" && event.Status == pipeline.StepStatusRunning {
+			observed = true
+			if got := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter()); got != jsoncPath {
+				t.Errorf("lost selection: %q", got)
+			}
+			if !containsString(rt.changedFiles, sidecar) {
+				t.Error("sidecar not reported")
+			}
+		}
+	}))
+	execution := orchestrator.Execute(plan)
+	if execution.Err == nil || !execution.Rollback.Success || !observed {
+		t.Fatalf("expected downstream failure and rollback: %+v", execution)
+	}
+	if _, err := os.Lstat(sidecar); !os.IsNotExist(err) {
+		t.Fatalf("sidecar survived rollback: %v", err)
+	}
+	if data, err := os.ReadFile(jsoncPath); err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("marker not restored: %q, %v", data, err)
+	}
+}
+
+func TestSyncWorkspaceAuthorityPreflight(t *testing.T) {
+	for _, kind := range []string{"malformed", "symlink"} {
+		for _, dryRun := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry=%t", kind, dryRun), func(t *testing.T) {
+				home := t.TempDir()
+				workspace := t.TempDir()
+				setOpenCodeTestHome(t, home)
+				t.Chdir(workspace)
+				settings := filepath.Join(workspace, "opencode.json")
+				mustWriteFile(t, settings, []byte(`{"theme":"keep"}`))
+				marker := filepath.Join(workspace, ".gentle-ai-opencode-write-authority.json")
+				if kind == "malformed" {
+					mustWriteFile(t, marker, []byte(`{`))
+				} else if err := os.Symlink(settings, marker); err != nil {
+					t.Fatal(err)
+				}
+				other := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+				selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+				var err error
+				if dryRun {
+					_, err = RunSync([]string{"--agents", "opencode", "--dry-run"})
+				} else {
+					_, err = RunSyncWithSelection(home, selection)
+				}
+				if err == nil {
+					t.Fatal("invalid workspace authority accepted")
+				}
+				if data, readErr := os.ReadFile(settings); readErr != nil || string(data) != `{"theme":"keep"}` {
+					t.Fatalf("settings mutated: %q, %v", data, readErr)
+				}
+				if _, statErr := os.Lstat(other); !os.IsNotExist(statErr) {
+					t.Fatalf("guidance mutated before authority rejection: %v", statErr)
+				}
+			})
+		}
+	}
+}
+
+func TestSyncWorkspaceAuthorityRejectsBeforePersonaAliasMigration(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Chdir(workspace)
+	mustWriteFile(t, filepath.Join(workspace, "opencode.json"), []byte(`{"theme":"keep"}`))
+	mustWriteFile(t, filepath.Join(workspace, ".gentle-ai-opencode-write-authority.json"), []byte(`{`))
+	original := []byte("{\n  \"installed_agents\": [\"opencode\"],\n  \"persona\": \"gentleman-neutral-artifacts\"\n}\n")
+	mustWriteFile(t, state.Path(home), original)
+
+	_, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+	if err == nil || !strings.Contains(err.Error(), "preflight OpenCode settings authority") {
+		t.Fatalf("sync error = %v, want workspace authority rejection", err)
+	}
+	got, readErr := os.ReadFile(state.Path(home))
+	if readErr != nil || !bytes.Equal(got, original) {
+		t.Fatalf("persona state changed before workspace rejection: got %q, err %v", got, readErr)
+	}
+}
+
+func TestSyncLegacyMarkerPrecedesOtherApplyWrites(t *testing.T) {
+	home := t.TempDir()
+	rt, err := newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentID("agents")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := rt.stagePlan()
+	positions := map[string]int{}
+	for i, step := range plan.Apply {
+		positions[step.ID()] = i
+	}
+	pin, ok := positions["sync:opencode:legacy-marker"]
+	if !ok {
+		t.Fatal("missing marker step")
+	}
+	for _, id := range []string{"apply:rollback-restore", "sync:component:agents", "sync:agent-guidance:opencode"} {
+		at, exists := positions[id]
+		if !exists {
+			t.Fatalf("missing %s", id)
+		}
+		if id == "apply:rollback-restore" && at >= pin || id != "apply:rollback-restore" && pin >= at {
+			t.Fatalf("marker position %d, %s position %d", pin, id, at)
+		}
+	}
+}
+
+func TestSyncRejectsInvalidOpenCodeAuthorityBeforeMutation(t *testing.T) {
+	for _, kind := range []string{"malformed", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			path := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
+			mustWriteFile(t, path, []byte(`{"theme":"keep"}`))
+			sidecar := filepath.Join(filepath.Dir(path), ".gentle-ai-opencode-write-authority.json")
+			if kind == "malformed" {
+				mustWriteFile(t, sidecar, []byte(`{`))
+			} else if err := os.Symlink(path, sidecar); err != nil {
+				t.Fatal(err)
+			}
+			_, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+			if err == nil {
+				t.Fatal("invalid authority accepted")
+			}
+			if data, readErr := os.ReadFile(path); readErr != nil || string(data) != `{"theme":"keep"}` {
+				t.Fatalf("settings mutated: %q, %v", data, readErr)
+			}
+		})
+	}
+}
 
 func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 	home := t.TempDir()
@@ -129,7 +425,7 @@ func TestSyncOpenCodeAssignmentRejectsSettingsSymlink(t *testing.T) {
 	}
 }
 
-func TestSyncOpenCodeGuidanceRejectsSymlinkBeforeAssignmentStep(t *testing.T) {
+func TestSyncOpenCodeSettingsSymlinkRejectedBeforeAssignmentStep(t *testing.T) {
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -160,18 +456,18 @@ func TestSyncOpenCodeGuidanceRejectsSymlinkBeforeAssignmentStep(t *testing.T) {
 	var rejected bool
 	for _, step := range rt.stagePlan().Apply {
 		if err := step.Run(); err != nil {
-			if step.ID() != "sync:agent-guidance:opencode" {
-				t.Fatalf("expected guidance to refuse symlink first, got %s: %v", step.ID(), err)
+			if step.ID() != "sync:opencode:legacy-marker" {
+				t.Fatalf("expected marker migration to refuse settings symlink first, got %s: %v", step.ID(), err)
 			}
 			rejected = true
 			break
 		}
 		if step.ID() == "sync:opencode:model-assignments" {
-			t.Fatal("assignment step ran before guidance refused the symlink")
+			t.Fatal("assignment step ran before settings symlink was refused")
 		}
 	}
 	if !rejected {
-		t.Fatal("guidance accepted settings symlink after priming")
+		t.Fatal("sync accepted settings symlink after priming")
 	}
 	if data, err := os.ReadFile(target); err != nil || !bytes.Equal(data, original) {
 		t.Fatalf("settings target modified: %q, %v", data, err)

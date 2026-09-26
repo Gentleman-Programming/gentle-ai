@@ -327,7 +327,15 @@ type syncRuntime struct {
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	workspaceDir, _ := os.Getwd()
+	workspaceDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("resolve sync workspace: %w", err)
+	}
+	if containsAgent(selection.Agents, model.AgentOpenCode) {
+		if _, err := opencodeactivation.ResolveEffectiveConfigForHome(homeDir, workspaceDir); err != nil {
+			return nil, fmt.Errorf("preflight OpenCode settings authority: %w", err)
+		}
+	}
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, selection.Components, selection)
 	if err != nil {
 		return nil, err
@@ -370,6 +378,14 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 	apply := []pipeline.Step{
 		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir},
+	}
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentOpenCode {
+			selected := effectiveOpenCodeSettingsPath(r.homeDir, r.workspaceDir, ScopeGlobal, adapter)
+			for _, path := range openCodeLegacyMarkerPaths(r.homeDir, r.workspaceDir, adapter) {
+				apply = append(apply, openCodeLegacyMarkerSyncStep{path: path, selected: selected, changedFiles: &r.changedFiles})
+			}
+		}
 	}
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "sync:opencode:telemetry-runtime", configDir: telemetryDir, changedFiles: &r.changedFiles, state: r.state})
@@ -523,6 +539,21 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentInjectionDir(homeDir, workspaceDir, adapter))).Backup {
 					paths[path] = struct{}{}
 				}
+			}
+		}
+	}
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentOpenCode {
+			for _, path := range openCodeLegacyMarkerPaths(homeDir, workspaceDir, adapter) {
+				paths[path] = struct{}{}
+			}
+			selected := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)
+			if selected != "" {
+				sidecar, _, err := opencodeactivation.AuthorityState(filepath.Dir(selected))
+				if err != nil {
+					return nil, err
+				}
+				paths[sidecar] = struct{}{}
 			}
 		}
 	}
@@ -721,6 +752,78 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 // openCodeModelAssignmentSyncStep persists picker choices independently of the
 // retired SDD component. Only current picker identities are eligible; legacy
 // saved SDD keys must not be resurrected by an ordinary sync.
+// Only sibling OpenCode settings files in the selected config directory are
+// migration candidates; the migration step itself never creates a missing file.
+func openCodeLegacyMarkerPaths(homeDir, workspaceDir string, adapter agents.Adapter) []string {
+	selected := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)
+	if selected == "" {
+		return nil
+	}
+	dir := filepath.Dir(selected)
+	return []string{filepath.Join(dir, "opencode.json"), filepath.Join(dir, "opencode.jsonc")}
+}
+
+type openCodeLegacyMarkerSyncStep struct {
+	path         string
+	selected     string
+	changedFiles *[]string
+}
+
+func (s openCodeLegacyMarkerSyncStep) ID() string { return "sync:opencode:legacy-marker" }
+func (s openCodeLegacyMarkerSyncStep) Run() error {
+	info, err := os.Lstat(s.path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat OpenCode settings: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refuse non-regular OpenCode settings %q", s.path)
+	}
+	original, err := os.ReadFile(s.path)
+	if err != nil {
+		return fmt.Errorf("read OpenCode settings: %w", err)
+	}
+	names := []string{"gentle-orchestrator", "sdd-orchestrator", "review-refuter", "review-validator"}
+	names = append(names, opencodeactivation.JDPhases()...)
+	names = append(names, opencodeactivation.ReviewPhases()...)
+	names = append(names, opencodeactivation.SDDPhases()...)
+	updated, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(s.path, original, names)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(original, updated) {
+		return nil
+	}
+	if s.path == s.selected {
+		dir := filepath.Dir(s.path)
+		sidecar, exists, err := opencodeactivation.AuthorityState(dir)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			other := filepath.Join(dir, "opencode.json")
+			if other == s.path {
+				other = filepath.Join(dir, "opencode.jsonc")
+			}
+			if sibling, err := os.Lstat(other); err == nil && sibling.Mode().IsRegular() {
+				if err := opencodeactivation.WriteInitialAuthority(dir, s.path); err != nil {
+					return err
+				}
+				*s.changedFiles = append(*s.changedFiles, sidecar)
+			} else if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	result, err := filemerge.WriteFileAtomic(s.path, updated, info.Mode().Perm())
+	if result.Changed {
+		*s.changedFiles = append(*s.changedFiles, s.path)
+	}
+	return err
+}
+
 type openCodeModelAssignmentSyncStep struct {
 	path         string
 	assignments  map[string]model.ModelAssignment
@@ -1496,6 +1599,15 @@ var compareChangedSyncFiles = changedSyncFiles
 
 func runSyncWithSelection(homeDir string, selection model.Selection, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
 	agentIDs := selection.Agents
+	if containsAgent(agentIDs, model.AgentOpenCode) {
+		workspaceDir, err := os.Getwd()
+		if err != nil {
+			return SyncResult{Agents: agentIDs, Selection: selection}, fmt.Errorf("resolve sync workspace: %w", err)
+		}
+		if _, err := opencodeactivation.ResolveEffectiveConfigForHome(homeDir, workspaceDir); err != nil {
+			return SyncResult{Agents: agentIDs, Selection: selection}, fmt.Errorf("preflight OpenCode settings authority: %w", err)
+		}
+	}
 	// The read error is captured, not discarded: the persona alias migration
 	// below must not rewrite state it could not read. Managed-asset provenance
 	// re-reads under its own lock later (#2685), so this read stays advisory.
