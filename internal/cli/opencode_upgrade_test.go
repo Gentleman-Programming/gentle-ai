@@ -106,6 +106,52 @@ func TestOpenCodeUpgradeRetiresOwnedAgents(t *testing.T) {
 	}
 }
 
+func TestOpenCodeUpgradeUnknownMarkerJSONC(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		input     string
+		wantError bool
+	}{
+		{"preserve comments and v2 agents", `{
+  // user note
+  "agent": {"custom": {"prompt": "keep", "__managed_by": "gentle-ai/sdd"}, "other": {"__managed_by": "another-owner"}},
+  "agents": {"native": {"__managed_by": "gentle-ai/sdd"}},
+}`, false},
+		{"refuse attached comment", `{"agent":{"custom":{"__managed_by": /* keep */ "gentle-ai/sdd","prompt":"keep"}}}`, true},
+		{"refuse attached owned role comment", `{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd",/* keep */"prompt":"old"}}}`, true},
+		{"refuse duplicate keys", `{"agent":{"custom":{"__managed_by":"gentle-ai/sdd","__managed_by":"gentle-ai/sdd"}}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			if err := os.WriteFile(path, []byte(tc.input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			changed, err := migrateLegacyOpenCodeAgents(path, "opencode")
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("expected refusal")
+				}
+				got, readErr := os.ReadFile(path)
+				if readErr != nil || string(got) != tc.input {
+					t.Fatalf("refusal changed settings: %v", readErr)
+				}
+				return
+			}
+			if err != nil || !changed {
+				t.Fatalf("expected cleanup, changed=%v err=%v", changed, err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(got, []byte("// user note")) || !bytes.Contains(got, []byte(`"agents": {"native": {"__managed_by": "gentle-ai/sdd"}}`)) ||
+				!bytes.Contains(got, []byte(`"other": {"__managed_by": "another-owner"}`)) || bytes.Contains(got, []byte(`"custom": {"prompt": "keep", "__managed_by"`)) {
+				t.Fatalf("JSONC preservation/cleanup failed: %s", got)
+			}
+		})
+	}
+}
+
 func TestOpenCodeUpgradePreservesUnmarkedGeneral(t *testing.T) {
 	home := installTestHome(t)
 	path := filepath.Join(home, ".config", "opencode", "opencode.json")

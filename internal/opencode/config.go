@@ -395,7 +395,7 @@ func managedConfigPriority(path string) int {
 			return 2
 		}
 	}
-	for _, key := range managedOpenCodeAgentKeys() {
+	for _, key := range ManagedOpenCodeAgentKeys() {
 		def, _ := agents[key].(map[string]any)
 		if looksLikeManagedOpenCodeAgent(def) {
 			return 1
@@ -404,7 +404,7 @@ func managedConfigPriority(path string) int {
 	return 0
 }
 
-func managedOpenCodeAgentKeys() []string {
+func ManagedOpenCodeAgentKeys() []string {
 	keys := []string{
 		"gentle-orchestrator", "sdd-orchestrator", ReviewRefuterAgent, ReviewValidatorAgent,
 		"gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker",

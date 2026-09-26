@@ -1156,26 +1156,47 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 	if err != nil {
 		return false, err
 	}
+	current := map[string]bool{"gentle-orchestrator": true}
+	roles := []string{"gentle-orchestrator"}
+	for _, name := range openCodeFamilyManagedRoles(agent) {
+		current[name] = true
+		roles = append(roles, name)
+	}
+	// JSONC role edits stay local; never normalize comments outside a role.
+	// Complete both transformations before writing so a refusal is atomic.
+	if strings.HasSuffix(settingsPath, ".jsonc") {
+		updated, err := filemerge.MigrateLegacyOpenCodeRolesJSONC(raw, roles)
+		if err != nil {
+			return false, err
+		}
+		cleaned, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(settingsPath, updated, nil)
+		if err != nil {
+			return false, err
+		}
+		result, err := filemerge.WriteFileAtomic(settingsPath, cleaned, filemerge.ExistingFileMode(settingsPath, 0o644))
+		return result.Changed, err
+	}
+	cleaned, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(settingsPath, raw, nil)
+	if err != nil {
+		return false, err
+	}
 	root, err := filemerge.UnmarshalJSONObject(raw)
 	if err != nil {
 		return false, err
 	}
 	agents, _ := root["agent"].(map[string]any)
-	current := map[string]bool{"gentle-orchestrator": true}
-	for _, name := range openCodeFamilyManagedRoles(agent) {
-		current[name] = true
-	}
 	changed := false
 	for name, value := range agents {
 		entry, ok := value.(map[string]any)
 		if !ok || entry["__managed_by"] != "gentle-ai/sdd" {
 			continue
 		}
-		changed = true
 		switch {
 		case name == "general", name == "explore", strings.HasPrefix(name, "sdd-"):
+			changed = true
 			delete(agents, name)
 		case current[name]:
+			changed = true
 			fresh := map[string]any{}
 			for _, field := range []string{"model", "variant"} {
 				if value, ok := entry[field]; ok {
@@ -1184,17 +1205,18 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 			}
 			agents[name] = fresh
 		default:
-			// User-owned agents (e.g., "custom") must not be mutated by
-			// the migration pass; their __managed_by field is cleaned up
-			// later by the sync-phase RemoveLegacyOpenCodeAgentMarkers.
+			// Unknown agents retain every field except the retired marker.
+			delete(entry, "__managed_by")
 		}
 	}
 	if !changed {
-		return false, nil
+		if len(cleaned) == len(raw) && string(cleaned) == string(raw) {
+			return false, nil
+		}
+		result, err := filemerge.WriteFileAtomic(settingsPath, cleaned, filemerge.ExistingFileMode(settingsPath, 0o644))
+		return result.Changed, err
 	}
-	// Match the existing OpenCode writers: JSONC input is accepted and the
-	// settings document is normalized to JSON on write, retaining permission
-	// rule order and all unrelated top-level values.
+	// Strict JSON retains the existing normalized writer behavior.
 	encoded, err := filemerge.MarshalJSONPreservingPermissions(raw, root)
 	if err != nil {
 		return false, err

@@ -788,7 +788,7 @@ func (s openCodeLegacyMarkerSyncStep) Run() error {
 		return fmt.Errorf("read OpenCode settings: %w", err)
 	}
 	// Validate the marker edit before writing authority or changing either file.
-	updated, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(s.path, original, nil)
+	updated, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(s.path, original, opencodeactivation.ManagedOpenCodeAgentKeys())
 	if err != nil {
 		return err
 	}
@@ -2272,4 +2272,3 @@ func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selec
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
 }
 
-// Commit: force CodeRabbit re-review of stale prompts (2025-09-26)

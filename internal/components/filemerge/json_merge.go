@@ -253,7 +253,7 @@ func rejectDuplicateJSONKeys(raw []byte) error {
 }
 
 // RemoveLegacyOpenCodeAgentMarkers drops only the retired SDD ownership marker
-// from explicitly named agent definitions. JSONC edits remain local to the
+// from every legacy agent definition. JSONC edits remain local to the
 // property, preserving unrelated comments and formatting.
 func RemoveLegacyOpenCodeAgentMarkers(path string, raw []byte, names []string) ([]byte, error) {
 	if err := rejectDuplicateJSONKeys(raw); err != nil {
@@ -264,17 +264,18 @@ func RemoveLegacyOpenCodeAgentMarkers(path string, raw []byte, names []string) (
 		return raw, fmt.Errorf("refuse malformed OpenCode settings: %w", err)
 	}
 	agents, _ := root["agent"].(map[string]any)
-	eligible := make([]string, 0, len(names))
-	for _, name := range names {
-		def, _ := agents[name].(map[string]any)
+	eligible := make([]string, 0, len(agents))
+	for name, value := range agents {
+		def, _ := value.(map[string]any)
 		if def["__managed_by"] == "gentle-ai/sdd" {
 			eligible = append(eligible, name)
 		}
 	}
+	sort.Strings(eligible)
 	if len(eligible) == 0 {
 		return raw, nil
 	}
-	if !strings.HasSuffix(path, ".jsonc") {
+	if !strings.HasSuffix(path, ".jsonc") && json.Valid(raw) {
 		for _, name := range eligible {
 			delete(agents[name].(map[string]any), "__managed_by")
 		}
@@ -364,6 +365,95 @@ func RemoveLegacyOpenCodeAgentMarkers(path string, raw []byte, names []string) (
 		agentText = agentText[:a] + defText[:key] + defText[finish:] + agentText[b:]
 	}
 	return []byte(text[:start] + agentText + text[end:]), nil
+}
+
+// MigrateLegacyOpenCodeRolesJSONC edits marked roles locally and refuses ambiguous comments or keys.
+func MigrateLegacyOpenCodeRolesJSONC(raw []byte, current []string) ([]byte, error) {
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		return raw, fmt.Errorf("refuse duplicate OpenCode settings keys: %w", err)
+	}
+	root, err := unmarshalJSONObject(raw)
+	if err != nil {
+		return raw, err
+	}
+	agents, _ := root["agent"].(map[string]any)
+	managed := make(map[string]bool, len(current))
+	for _, name := range current {
+		managed[name] = true
+	}
+	var selected []string
+	for name, value := range agents {
+		entry, ok := value.(map[string]any)
+		if !ok || entry["__managed_by"] != "gentle-ai/sdd" {
+			continue
+		}
+		if name == "general" || name == "explore" || strings.HasPrefix(name, "sdd-") || managed[name] {
+			selected = append(selected, name)
+		}
+	}
+	if len(selected) == 0 {
+		return raw, nil
+	}
+	sort.Strings(selected)
+	text := string(raw)
+	if topLevelJSONCKeyCount(text, "agent") != 1 {
+		return raw, fmt.Errorf("refuse ambiguous OpenCode agent object")
+	}
+	_, start, end, ok := topLevelJSONCPropertyValueRange(text, "agent")
+	if !ok {
+		return raw, fmt.Errorf("missing OpenCode agent object")
+	}
+	body := text[start:end]
+	for _, name := range selected {
+		if topLevelJSONCKeyCount(body, name) != 1 {
+			return raw, fmt.Errorf("refuse ambiguous OpenCode agent %q", name)
+		}
+		key, value, finish, ok := topLevelJSONCPropertyValueRange(body, name)
+		if !ok || value >= finish || body[value] != '{' {
+			return raw, fmt.Errorf("refuse malformed OpenCode agent %q", name)
+		}
+		role := body[value:finish]
+		if !bytes.Equal(stripJSONComments([]byte(role)), []byte(role)) || topLevelJSONCObjectEnd(role) != len(role)-1 {
+			return raw, fmt.Errorf("refuse OpenCode agent %q with attached comment", name)
+		}
+		prev := key - 1
+		for prev >= 0 && isJSONWhitespace(body[prev]) {
+			prev--
+		}
+		boundary := prev
+		for boundary >= 0 && body[boundary] != ',' && body[boundary] != '{' {
+			boundary--
+		}
+		next := scanJSONCWhitespaceAndComments(body, finish)
+		if boundary < 0 || strings.Contains(body[boundary+1:value], "/") || strings.Contains(body[finish:next], "/") {
+			return raw, fmt.Errorf("refuse OpenCode agent %q with attached comment", name)
+		}
+		if managed[name] && name != "general" && name != "explore" && !strings.HasPrefix(name, "sdd-") {
+			fresh := map[string]any{}
+			for _, field := range []string{"model", "variant"} {
+				if v, present := agents[name].(map[string]any)[field]; present {
+					fresh[field] = v
+				}
+			}
+			encoded, err := json.Marshal(fresh)
+			if err != nil {
+				return raw, err
+			}
+			body = body[:value] + string(encoded) + body[finish:]
+			continue
+		}
+		if next < len(body) && body[next] == ',' {
+			finish = next + 1
+		} else if prev >= 0 && body[prev] == ',' {
+			key = prev
+		}
+		body = body[:key] + body[finish:]
+	}
+	updated := []byte(text[:start] + body + text[end:])
+	if _, err := unmarshalJSONObject(updated); err != nil {
+		return raw, fmt.Errorf("refuse invalid migrated OpenCode settings: %w", err)
+	}
+	return updated, nil
 }
 
 func RemoveJSONAgentTools(raw []byte, names ...string) ([]byte, error) {

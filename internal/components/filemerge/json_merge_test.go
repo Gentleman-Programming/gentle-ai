@@ -22,7 +22,7 @@ func TestRemoveLegacyOpenCodeAgentMarkers(t *testing.T) {
 			if _, ok := agents["gentle-orchestrator"].(map[string]any)["__managed_by"]; ok {
 				t.Fatalf("marker retained: %s", got)
 			}
-			if agents["gentle-orchestrator"].(map[string]any)["prompt"] != "keep" || agents["custom"].(map[string]any)["__managed_by"] != "gentle-ai/sdd" || agents["sdd-apply"].(map[string]any)["__managed_by"] != "other" {
+			if agents["gentle-orchestrator"].(map[string]any)["prompt"] != "keep" || len(agents["custom"].(map[string]any)) != 0 || agents["sdd-apply"].(map[string]any)["__managed_by"] != "other" {
 				t.Fatalf("user data changed: %s", got)
 			}
 			again, err := RemoveLegacyOpenCodeAgentMarkers(path, got, []string{"gentle-orchestrator", "sdd-apply"})
@@ -52,7 +52,7 @@ func TestRemoveLegacyOpenCodeAgentMarkersJSONCCommentsAndRefusals(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"// outside", "// retain prompt note", `"custom": {"__managed_by": "gentle-ai/sdd"}`} {
+	for _, part := range []string{"// outside", "// retain prompt note", `"custom": {}`} {
 		if !strings.Contains(string(got), part) {
 			t.Fatalf("lost %q: %s", part, got)
 		}
@@ -100,6 +100,68 @@ func TestRemoveLegacyOpenCodeAgentMarkersRejectsDuplicateKeys(t *testing.T) {
 					t.Fatalf("duplicate key must fail closed: %s %v", got, err)
 				}
 			})
+		}
+	}
+}
+
+func TestMigrateLegacyOpenCodeRolesJSONC(t *testing.T) {
+	cases := []struct {
+		name, input, want string
+		refuse            bool
+	}{
+		{"outside comments", `{// outside
+"agent":{"sdd-apply":{"__managed_by":"gentle-ai/sdd"},
+"jd-judge-a":{"__managed_by":"gentle-ai/sdd","model":"user/judge","variant":"low","prompt":"old"},
+"custom":{"__managed_by":"gentle-ai/sdd","prompt":"keep"},
+"general":{"__managed_by":"other","prompt":"keep"}},
+"theme":"keep"}`, `// outside`, false},
+		{"attached role comment", `{"agent":{"jd-judge-a":{"__managed_by":"gentle-ai/sdd",/* user note */"model":"user/judge"}}}`, "", true},
+		{"attached key comment", `{"agent":{/* user note */"sdd-apply":{"__managed_by":"gentle-ai/sdd"}}}`, "", true},
+		{"duplicate keys", `{"agent":{"sdd-apply":{"__managed_by":"gentle-ai/sdd"},"sdd-apply":{"prompt":"user"}}}`, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := MigrateLegacyOpenCodeRolesJSONC([]byte(tc.input), []string{"jd-judge-a"})
+			if tc.refuse {
+				if err == nil || string(got) != tc.input {
+					t.Fatalf("unsafe mutation: %s, %v", got, err)
+				}
+				return
+			}
+			if err != nil || !strings.Contains(string(got), tc.want) {
+				t.Fatalf("lost outside comment: %s, %v", got, err)
+			}
+			root, err := UnmarshalJSONObject(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			agents := root["agent"].(map[string]any)
+			if _, ok := agents["sdd-apply"]; ok {
+				t.Fatal("retired role retained")
+			}
+			if !strings.Contains(string(got), `"jd-judge-a":{"model":"user/judge","variant":"low"}`) || !strings.Contains(string(got), `"custom":{"__managed_by":"gentle-ai/sdd","prompt":"keep"}`) {
+				t.Fatalf("role reset or unrelated role changed: %s", got)
+			}
+		})
+	}
+}
+
+func TestMigrateLegacyOpenCodeRolesJSONCCommaPositions(t *testing.T) {
+	for _, input := range []string{
+		`{"agent":{"custom":{"prompt":"keep"},"sdd-apply":{"__managed_by":"gentle-ai/sdd"}}}`,
+		`{"agent":{"sdd-apply":{"__managed_by":"gentle-ai/sdd"},}}`,
+		`{"agent":{"sdd-apply":{"__managed_by":"gentle-ai/sdd"}}}`,
+	} {
+		got, err := MigrateLegacyOpenCodeRolesJSONC([]byte(input), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := UnmarshalJSONObject(got)
+		if err != nil {
+			t.Fatalf("invalid result %s: %v", got, err)
+		}
+		if _, present := root["agent"].(map[string]any)["sdd-apply"]; present {
+			t.Fatalf("retired role remains: %s", got)
 		}
 	}
 }

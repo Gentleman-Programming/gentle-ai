@@ -73,8 +73,8 @@ func TestSyncMigratesLegacyOpenCodeMarker(t *testing.T) {
 	if _, ok := agents["gentle-orchestrator"].(map[string]any)["__managed_by"]; ok {
 		t.Fatalf("marker retained: %s", data)
 	}
-	if agents["custom"].(map[string]any)["__managed_by"] != "gentle-ai/sdd" {
-		t.Fatalf("user agent altered: %s", data)
+	if _, ok := agents["custom"].(map[string]any)["__managed_by"]; ok {
+		t.Fatalf("unknown agent marker retained: %s", data)
 	}
 	if changed := runSyncInjectionSteps(t, home, selection); containsString(changed, path) {
 		t.Fatalf("migration repeated: %v", changed)
@@ -88,7 +88,7 @@ func TestSyncMigratesBothOpenCodeSettingsAndRollsBack(t *testing.T) {
 	selected := effectiveOpenCodeSettingsPath(home, "", ScopeGlobal, opencodeagent.NewAdapter())
 	base := strings.TrimSuffix(selected, filepath.Ext(selected))
 	originals := map[string][]byte{
-		base + ".json":  []byte(`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"json"}}}`),
+		base + ".json":  []byte(`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"json"},"sdd-apply":{"__managed_by":"gentle-ai/sdd","prompt":"retire"},"custom":{"__managed_by":"gentle-ai/sdd","prompt":"user prompt","note":"keep"}}}`),
 		base + ".jsonc": []byte("// user comment\n" + `{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"jsonc"}}}`),
 	}
 	for path, data := range originals {
@@ -116,6 +116,22 @@ func TestSyncMigratesBothOpenCodeSettingsAndRollsBack(t *testing.T) {
 		if strings.Contains(string(data), `"__managed_by"`) {
 			t.Fatalf("marker survived in %q: %s", path, data)
 		}
+		if path == base+".json" {
+			root, err := filemerge.UnmarshalJSONObject(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			agents := root["agent"].(map[string]any)
+			if _, ok := agents["sdd-apply"]; ok {
+				t.Fatalf("selected owned role survived: %s", data)
+			}
+			custom := agents["custom"].(map[string]any)
+			if custom["prompt"] != "user prompt" || custom["note"] != "keep" {
+				t.Fatalf("unknown agent fields changed: %s", data)
+			}
+		} else if !bytes.Contains(data, []byte("// user comment")) {
+			t.Fatalf("nonselected JSONC comment lost: %s", data)
+		}
 	}
 	if changed := runSyncInjectionSteps(t, home, selection); containsString(changed, base+".json") || containsString(changed, base+".jsonc") {
 		t.Fatalf("not idempotent: %v", changed)
@@ -132,13 +148,24 @@ func TestSyncMigratesBothOpenCodeSettingsAndRollsBack(t *testing.T) {
 	}
 	plan := rt.stagePlan()
 	var apply []pipeline.Step
+	selectedSteps := map[string]bool{
+		"apply:rollback-restore":                     false,
+		"sync:opencode:legacy-marker:opencode.json":  false,
+		"sync:opencode:legacy-marker:opencode.jsonc": false,
+	}
 	for _, step := range plan.Apply {
-		if step.ID() == "apply:rollback-restore" || step.ID() == "sync:opencode:legacy-marker" {
+		if _, ok := selectedSteps[step.ID()]; ok {
+			if selectedSteps[step.ID()] {
+				t.Fatalf("duplicate step %s", step.ID())
+			}
+			selectedSteps[step.ID()] = true
 			apply = append(apply, step)
 		}
 	}
-	if len(apply) != 3 {
-		t.Fatalf("expected rollback and two marker steps, got %d", len(apply))
+	for id, found := range selectedSteps {
+		if !found {
+			t.Fatalf("missing rollback or marker step %s", id)
+		}
 	}
 	apply = append(apply, componentSyncStep{id: "sync:component:later-failure", component: model.ComponentID("later-failure"), homeDir: home, agents: selection.Agents, changedFiles: &rt.changedFiles})
 	plan.Apply = apply
@@ -186,9 +213,23 @@ func TestSyncPinsSelectedJSONCAndRestoresNewAuthorityOnFailure(t *testing.T) {
 	}
 	plan := rt.stagePlan()
 	var apply []pipeline.Step
+	selectedSteps := map[string]bool{
+		"apply:rollback-restore":                     false,
+		"sync:opencode:legacy-marker:opencode.json":  false,
+		"sync:opencode:legacy-marker:opencode.jsonc": false,
+	}
 	for _, step := range plan.Apply {
-		if step.ID() == "apply:rollback-restore" || step.ID() == "sync:opencode:legacy-marker" {
+		if _, ok := selectedSteps[step.ID()]; ok {
+			if selectedSteps[step.ID()] {
+				t.Fatalf("duplicate step %s", step.ID())
+			}
+			selectedSteps[step.ID()] = true
 			apply = append(apply, step)
+		}
+	}
+	for id, found := range selectedSteps {
+		if !found {
+			t.Fatalf("missing rollback or marker step %s", id)
 		}
 	}
 	sidecar := filepath.Join(filepath.Dir(jsonPath), ".gentle-ai-opencode-write-authority.json")
@@ -206,6 +247,10 @@ func TestSyncPinsSelectedJSONCAndRestoresNewAuthorityOnFailure(t *testing.T) {
 			}
 			if !containsString(rt.changedFiles, sidecar) {
 				t.Error("sidecar not reported")
+			}
+			data, readErr := os.ReadFile(jsoncPath)
+			if readErr != nil || !bytes.Contains(data, []byte("// comment")) {
+				t.Errorf("selected JSONC comment lost before rollback: %q, %v", data, readErr)
 			}
 		}
 	}))
@@ -291,17 +336,19 @@ func TestSyncLegacyMarkerPrecedesOtherApplyWrites(t *testing.T) {
 	for i, step := range plan.Apply {
 		positions[step.ID()] = i
 	}
-	pin, ok := positions["sync:opencode:legacy-marker"]
-	if !ok {
-		t.Fatal("missing marker step")
-	}
-	for _, id := range []string{"apply:rollback-restore", "sync:component:agents", "sync:agent-guidance:opencode"} {
-		at, exists := positions[id]
-		if !exists {
-			t.Fatalf("missing %s", id)
+	for _, marker := range []string{"sync:opencode:legacy-marker:opencode.json", "sync:opencode:legacy-marker:opencode.jsonc"} {
+		pin, ok := positions[marker]
+		if !ok {
+			t.Fatalf("missing marker step %s", marker)
 		}
-		if id == "apply:rollback-restore" && at >= pin || id != "apply:rollback-restore" && pin >= at {
-			t.Fatalf("marker position %d, %s position %d", pin, id, at)
+		for _, id := range []string{"apply:rollback-restore", "sync:component:agents", "sync:agent-guidance:opencode"} {
+			at, exists := positions[id]
+			if !exists {
+				t.Fatalf("missing %s", id)
+			}
+			if id == "apply:rollback-restore" && at >= pin || id != "apply:rollback-restore" && pin >= at {
+				t.Fatalf("%s position %d, %s position %d", marker, pin, id, at)
+			}
 		}
 	}
 }
@@ -456,7 +503,7 @@ func TestSyncOpenCodeSettingsSymlinkRejectedBeforeAssignmentStep(t *testing.T) {
 	var rejected bool
 	for _, step := range rt.stagePlan().Apply {
 		if err := step.Run(); err != nil {
-			if step.ID() != "sync:opencode:legacy-marker" {
+			if step.ID() != "sync:opencode:legacy-marker:opencode.json" {
 				t.Fatalf("expected marker migration to refuse settings symlink first, got %s: %v", step.ID(), err)
 			}
 			rejected = true
