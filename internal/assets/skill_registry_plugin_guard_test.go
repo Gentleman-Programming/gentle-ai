@@ -52,7 +52,7 @@ console.log(JSON.stringify({ project: projectDir, skills: skillsDir, lines: read
 import { appendFileSync } from "node:fs"
 appendFileSync(process.env.GENTLE_AI_RELAY_LOG, JSON.stringify(process.argv.slice(2)) + "\n")
 `
-	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, relay)
+	output, _, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, relay)
 	// The plugin's stderr skip notices share the combined harness output with
 	// the stdout result; the result is the final line. Skip notices must stay
 	// off stdout so `opencode models --verbose` parsing never sees them, and

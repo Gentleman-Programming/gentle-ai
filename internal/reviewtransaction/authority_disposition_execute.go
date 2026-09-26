@@ -120,11 +120,26 @@ func executeAuthorityDisposition(ctx context.Context, repo string, plan Authorit
 	if err != nil {
 		return CompactReclaimRecord{}, err
 	}
+	// Capture what the store diagnosed BEFORE this execution touches anything
+	// (#2995): the retained-graph readback compares against this set, so a
+	// selector-scoped historical plan may legitimately leave its siblings'
+	// pre-existing diagnostics in place, while any NEW damage still refuses by
+	// name. The exclusive lease is already held, so this pre-state is stable
+	// until lockedAuthorityDispositionMutation releases it.
+	preInspection, _, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+	if err != nil {
+		maintenance.Release()
+		return CompactReclaimRecord{}, err
+	}
+	retainedDiagnostics := make(map[string]string, len(preInspection.EntryDiagnostics))
+	for _, diagnostic := range preInspection.EntryDiagnostics {
+		retainedDiagnostics[diagnostic.LineageID] = diagnostic.Problem
+	}
 	record, err := lockedAuthorityDispositionMutation(ctx, maintenance, base, root, binding, seed, plan)
 	if err != nil {
 		return record, err
 	}
-	return readBackAuthorityDisposition(ctx, root, record)
+	return readBackAuthorityDisposition(ctx, root, record, retainedDiagnostics)
 }
 
 // lockedAuthorityDispositionMutation runs every step that must happen while
@@ -612,7 +627,18 @@ func resumeAuthorityDispositionRecord(ctx context.Context, record CompactReclaim
 // Success" (which checked only the single leaf) to the whole closure
 // (design decision D6): a retained edge naming any closure member is still
 // evidence disposition did not fully remove it.
-func readBackAuthorityDisposition(ctx context.Context, root string, record CompactReclaimRecord) (CompactReclaimRecord, error) {
+// readBackAuthorityDisposition is the retained-graph readback every
+// disposition execution ends with. It no longer demands a fully complete
+// report (#2995): a selector-scoped historical plan is derived FROM a store
+// whose sibling diagnostics keep it incomplete, and demanding complete-after
+// would fail every such execution after its quarantine had already committed.
+// The gate is instead scoped to the plan itself: every retained diagnostic
+// must have been present — with the same problem — before this execution
+// began (retainedDiagnostics, captured under the maintenance lock before the
+// first move), no retained diagnostic may name a quarantined closure member,
+// and no retained edge may reference one. Fresh damage introduced during
+// execution still refuses, by name.
+func readBackAuthorityDisposition(ctx context.Context, root string, record CompactReclaimRecord, retainedDiagnostics map[string]string) (CompactReclaimRecord, error) {
 	if record.Status != CompactReclaimCommitted {
 		return record, fmt.Errorf("authority disposition execution refused: readback observed a non-committed record; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", pathquote.Quote(root))
 	}
@@ -620,10 +646,15 @@ func readBackAuthorityDisposition(ctx context.Context, root string, record Compa
 	if err != nil {
 		return record, fmt.Errorf("authority disposition readback: %w", err)
 	}
-	if !report.Complete {
-		return record, fmt.Errorf("authority disposition execution refused: retained-graph readback is incomplete; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", pathquote.Quote(root))
-	}
 	closureMembers := authorityDispositionClosureMembers(record)
+	for _, diagnostic := range report.EntryDiagnostics {
+		if closureMembers[diagnostic.LineageID] {
+			return record, fmt.Errorf("authority disposition execution refused: retained graph still carries a %q diagnostic for quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", diagnostic.Problem, diagnostic.LineageID, pathquote.Quote(root))
+		}
+		if problem, retained := retainedDiagnostics[diagnostic.LineageID]; !retained || problem != diagnostic.Problem {
+			return record, fmt.Errorf("authority disposition execution refused: retained-graph readback observed %q diagnostic on %q, which the disposed plan never scoped; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", diagnostic.Problem, diagnostic.LineageID, pathquote.Quote(root))
+		}
+	}
 	for _, edge := range report.Edges {
 		if member := edge.PredecessorLineageID; closureMembers[member] {
 			return record, fmt.Errorf("authority disposition execution refused: retained graph still references quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", member, pathquote.Quote(root))
