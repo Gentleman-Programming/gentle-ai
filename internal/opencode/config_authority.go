@@ -143,13 +143,17 @@ func WriteInitialAuthority(dir, path string) error {
 	if err = temp.Close(); err != nil {
 		return err
 	}
-	// A concurrent writer must not be overwritten.
-	if _, err = os.Lstat(authorityPath(dir)); err == nil {
+	// A concurrent writer must not be overwritten. os.Link is atomic and
+	// returns ENOSPC/EBUSY when the target already exists; return the
+	// canonical error for that case.
+	switch err := os.Link(temp.Name(), authorityPath(dir)); err {
+	case nil:
+		return nil
+	case os.ErrExist:
 		return fmt.Errorf("write authority already exists in %s", dir)
-	} else if !os.IsNotExist(err) {
+	default:
 		return err
 	}
-	return os.Link(temp.Name(), authorityPath(dir))
 }
 
 func findEffectiveConfigPathChecked(homeDir, projectDir string) (string, error) {
