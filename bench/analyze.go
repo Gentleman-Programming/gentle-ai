@@ -13,8 +13,8 @@ package main
 //
 // blocks and recovery_round_trips are strong here: the invocation sequence is
 // exactly what happened.
-func analyzeSession(records []SessionRecord) JourneyResult {
-	accumulator := newAccumulator()
+func analyzeSession(records []SessionRecord, normalizer *PathNormalizer) JourneyResult {
+	accumulator := newAccumulatorWithNormalizer(normalizer)
 	result := JourneyResult{
 		ID:     "observed-session",
 		Title:  "Observed agent session",
@@ -37,7 +37,7 @@ func analyzeSession(records []SessionRecord) JourneyResult {
 		accumulator.records = append(accumulator.records, commandRecord)
 		if commandRecord.Unsupported {
 			unsupported++
-			result.UnsupportedSteps = append(result.UnsupportedSteps, joinArgs(record.Argv))
+			result.UnsupportedSteps = append(result.UnsupportedSteps, normalizer.Normalize(joinArgs(record.Argv)))
 		}
 	}
 

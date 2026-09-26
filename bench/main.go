@@ -136,12 +136,29 @@ func commandRunWith(args []string, isExecutable func(string) bool, journeys func
 			resolvedIDs = append(resolvedIDs, journey.ID)
 		}
 	}
+	// The envelope's journey_ids is the selection that will actually run:
+	// every planned journey when no selector narrowed the corpus, the
+	// matched subset otherwise. resolvedIDs above only answers the
+	// selector question; an unselected run drives the whole corpus.
+	selectedIDs := resolvedIDs
+	if len(requested) == 0 {
+		for _, journey := range planned {
+			selectedIDs = append(selectedIDs, journey.ID)
+		}
+	}
 
+	// The canonical projection and the identity envelope are built once
+	// here and carried by every write path below, including the
+	// empty-selector early write: a results file is evidence no matter how
+	// the run ended.
+	normalizer := newPathNormalizer(resolved, "")
+	version := binaryVersion(resolved)
 	results := Results{
 		Schema:        ResultsSchema,
 		Mode:          ModeDriven,
-		Binary:        resolved,
-		BinaryVersion: binaryVersion(resolved),
+		Binary:        normalizer.Normalize(resolved),
+		BinaryVersion: version,
+		Identity:      newDrivenIdentity(resolved, version, selectedIDs, requested),
 	}
 	if len(requested) > 0 && len(resolvedIDs) == 0 {
 		results.RequestedSelectors = requested
@@ -186,13 +203,13 @@ func commandRunWith(args []string, isExecutable func(string) bool, journeys func
 	}
 	sortJourneys(results.Journeys)
 	results.Totals, results.JourneysCounted, results.JourneysUnsupported, results.JourneysFailed = aggregate(results.Journeys)
-	results.Notes = []string{
+	results.Notes = normalizer.NormalizeAll([]string{
 		"Driven mode: every journey ran in a fresh temp dir with its own HOME, XDG_*, throwaway git repo and local bare remote.",
 		"That HOME is a fresh install, so receipt-driven development defaults to ON without persisting a preference. Every journey declares its own precondition: one that reviews explicitly enables it first through `gentle-ai review mode enable --scope global`, uncounted; one whose subject is the switch leaves the mode untouched.",
 		"Reviewer results were synthesized from the binary's own collect envelope. No model was called.",
 		"No wall-clock timing is measured or reported.",
 		"by_design is a carve-out from out_of_band, not a subtraction from it: those blocks are still blocks and still in the total. Every one is listed with its declared shape and the verified quote of the product's own next-action text.",
-	}
+	})
 
 	if err := writeJSON(*out, results); err != nil {
 		fmt.Fprintf(os.Stderr, "write results: %v\n", err)
@@ -302,21 +319,27 @@ func commandAnalyze(args []string) int {
 		return 1
 	}
 
-	journey := analyzeSession(records)
+	// Observed mode records what is knowable: no target identity (the
+	// session drove whatever binary the operator recorded), and a
+	// normalizer that can only project the user home, because a recorded
+	// session has no sandbox whose paths could be tokenized.
+	normalizer := newObservedNormalizer()
+	journey := analyzeSession(records, normalizer)
 	results := Results{
 		Schema:   ResultsSchema,
 		Mode:     ModeObserved,
-		Binary:   *session,
+		Binary:   normalizer.Normalize(*session),
 		Journeys: []JourneyResult{journey},
+		Identity: newObservedIdentity(),
 	}
 	results.Totals, results.JourneysCounted, results.JourneysUnsupported, results.JourneysFailed = aggregate(results.Journeys)
-	results.Notes = []string{
+	results.Notes = normalizer.NormalizeAll([]string{
 		"Observed mode: dimensions are computed from what a real agent session actually invoked.",
 		"model_runs is a PROXY here, not a measurement: the agent's model calls never cross the process boundary.",
 		"human_prompts counts the consent-skipped notice, i.e. times the tool WOULD have asked; an agent session has no TTY.",
 		"blocks and recovery_round_trips are exact: the invocation sequence is what happened.",
 		"out_of_band counts every block whose output named no runnable command, including ones that are correct behaviour: a refusal while reviews are switched off, and the disabled/unmanaged delivery report that exits 0. Read each block's message before treating the count as a defect count.",
-	}
+	})
 
 	if err := writeJSON(*out, results); err != nil {
 		fmt.Fprintf(os.Stderr, "write results: %v\n", err)
@@ -377,6 +400,13 @@ func readResults(path string) (Results, error) {
 	if err := json.Unmarshal(content, &results); err != nil {
 		return Results{}, fmt.Errorf("%s: %w", path, err)
 	}
+	// Fail closed on any schema this build does not speak. A v1 file
+	// predates the identity envelope: its population and classifier rules
+	// cannot be vouched for, and silently accepting it would let a
+	// comparison read a provenance boundary as a measurement.
+	if results.Schema != ResultsSchema {
+		return Results{}, fmt.Errorf("%s: unsupported schema %q, want %q; regenerate the file with this version of gentle-ai-bench", path, results.Schema, ResultsSchema)
+	}
 	if results.Mode == "" {
 		return Results{}, fmt.Errorf("%s: results carry no mode", path)
 	}
@@ -384,7 +414,34 @@ func readResults(path string) (Results, error) {
 }
 
 func writeJSON(path string, value any) error {
-	encoded, err := json.MarshalIndent(value, "", "  ")
+	switch typed := value.(type) {
+	case Results:
+		return writeResultsJSON(path, typed)
+	case *Results:
+		return writeResultsJSON(path, *typed)
+	default:
+		encoded, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(path, append(encoded, '\n'), 0o644)
+	}
+}
+
+// writeResultsJSON is the only writer of Results files. It refuses to write a
+// file whose recorded strings still carry a machine-specific path, then
+// computes EvidenceDigest over the exact canonical bytes with the digest
+// field cleared and writes the file with the digest as its final field.
+func writeResultsJSON(path string, results Results) error {
+	if err := results.ValidateCanonical(); err != nil {
+		return err
+	}
+	digest, err := results.canonicalDigest()
+	if err != nil {
+		return err
+	}
+	results.EvidenceDigest = digest
+	encoded, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -241,7 +241,7 @@ func TestAnalyzeSessionUsesTheSameClassifier(t *testing.T) {
 		{Argv: []string{"review", "capture-result", "--input", "r.json"}, ExitCode: 0,
 			Stdout: `{"admission_decision":"completed"}`, StdoutCaptured: true, StderrCaptured: true},
 	}
-	result := analyzeSession(session)
+	result := analyzeSession(session, nil)
 
 	if result.Metrics.Blocks.InBand != 1 {
 		t.Fatalf("in_band blocks = %d, want 1", result.Metrics.Blocks.InBand)

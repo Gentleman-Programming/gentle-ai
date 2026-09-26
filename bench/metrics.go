@@ -147,7 +147,12 @@ type JourneyResult struct {
 
 // Results is the machine-readable output of both `run` and `analyze`.
 type Results struct {
-	Schema              string          `json:"schema"`
+	Schema string `json:"schema"`
+	// Identity is the v2 provenance envelope: who measured, what corpus,
+	// which target, on which runtime, with which invocation. It is
+	// populated on every write path, including the empty-selector early
+	// write; observed mode fills what is knowable. See provenance.go.
+	Identity            *Identity       `json:"identity,omitempty"`
 	Mode                string          `json:"mode"` // driven | observed
 	Binary              string          `json:"binary"`
 	BinaryVersion       string          `json:"binary_version"`
@@ -166,12 +171,21 @@ type Results struct {
 	CoreJourneys int          `json:"core_journeys,omitempty"`
 	Axes         []AxisRecord `json:"axes,omitempty"`
 	Notes        []string     `json:"notes,omitempty"`
+	// EvidenceDigest is the digest of the exact canonical file bytes with
+	// this field cleared, written LAST so it lives outside the digested
+	// content: two runs of the same corpus produce equal digests, and the
+	// equality is the receipt. See provenance.go.
+	EvidenceDigest string `json:"evidence_digest,omitempty"`
 }
 
 const (
-	ModeDriven    = "driven"
-	ModeObserved  = "observed"
-	ResultsSchema = "gentle-ai-bench.results/v1"
+	ModeDriven   = "driven"
+	ModeObserved = "observed"
+	// ResultsSchema is v2 since the identity envelope (#1866 slice B).
+	// The read path fails closed on any other schema: a v1 file predates
+	// provenance, so a comparison across the boundary would silently mix
+	// files whose classifier rules and populations cannot be vouched for.
+	ResultsSchema = "gentle-ai-bench.results/v2"
 )
 
 // accumulator builds a MetricSet from a stream of observations. It is the one
@@ -199,10 +213,22 @@ type accumulator struct {
 	// with nothing runnable in it, across every observation of the journey.
 	// It is a corpus error, not a metric: see DeadExecuteTransitions.
 	deadTransitions []string
+
+	// normalizer projects machine-specific paths onto the canonical token
+	// vocabulary at record time. Nil means project nothing: every call
+	// site predating the v2 envelope keeps working unchanged.
+	normalizer *PathNormalizer
 }
 
 func newAccumulator() *accumulator {
 	return &accumulator{stderrCaptured: true}
+}
+
+// newAccumulatorWithNormalizer builds an accumulator that projects every
+// recorded string through the canonical token vocabulary at record time.
+// The classifier still reads raw observations either way.
+func newAccumulatorWithNormalizer(normalizer *PathNormalizer) *accumulator {
+	return &accumulator{stderrCaptured: true, normalizer: normalizer}
 }
 
 // observe folds one invocation into the running metrics and returns the
@@ -210,9 +236,12 @@ func newAccumulator() *accumulator {
 func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRun bool) CommandRecord {
 	a.commands++
 	record := CommandRecord{
-		Sequence:    a.commands,
-		Step:        step,
-		Args:        o.Args,
+		Sequence: a.commands,
+		Step:     step,
+		// The record carries the canonical projection, while the
+		// classifier below keeps reading the original observation: the
+		// classification must see exactly the bytes the product emitted.
+		Args:        a.normalizer.NormalizeAll(o.Args),
 		ExitCode:    o.ExitCode,
 		StdoutBytes: len(o.Stdout),
 		StderrBytes: len(o.Stderr),
@@ -254,7 +283,7 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 
 	if IsUnsupported(o) {
 		record.Unsupported = true
-		record.Message = blockMessage(o)
+		record.Message = a.normalizer.Normalize(blockMessage(o))
 		if outcome := byDesignOutcome(o, NotABlock); outcome != nil {
 			outcome.Reason = "this build lacks that CLI surface, so the step recorded `unsupported` rather than a block"
 			record.ByDesign = outcome
@@ -271,7 +300,7 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 	record.ByDesign = byDesignOutcome(o, class)
 	record.DeadEnd = deadEndOutcome(o, class)
 	if class != NotABlock {
-		record.Message = blockMessage(o)
+		record.Message = a.normalizer.Normalize(blockMessage(o))
 		a.blocks.add(class)
 		if class != BlockSelfRecovered {
 			if !a.pendingActive {
