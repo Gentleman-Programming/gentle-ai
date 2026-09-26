@@ -17,6 +17,9 @@ func TestUninstallRemovesUntouchedInstalledOrchestrator(t *testing.T) {
 	}
 	home := installTestHome(t)
 	t.Setenv("HOME", home)
+	// CI runners export XDG_CONFIG_HOME; pin it inside the temp HOME so the
+	// settings path below is the one install and uninstall actually use.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	if _, err := RunInstall([]string{"--agent", "opencode", "--preset", "full-gentleman"}, system.DetectionResult{}); err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +47,8 @@ func TestFullPresetUninstallOpenCodeFamilyAgents(t *testing.T) {
 		t.Run(tc.agent, func(t *testing.T) {
 			home := installTestHome(t)
 			t.Setenv("HOME", home)
+			// CI runners export XDG_CONFIG_HOME; pin it inside the temp HOME.
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 			path := filepath.Join(home, ".config", tc.directory, "opencode.json")
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 				t.Fatal(err)
