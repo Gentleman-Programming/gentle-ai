@@ -3,8 +3,10 @@ package theme
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
@@ -15,6 +17,174 @@ import (
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+
+func TestPrepareJSONFileInvalidJSONCPreflight(t *testing.T) {
+	for _, content := range []string{`{"theme":`, `null`, "directory"} {
+		t.Run(content, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			dir := opencodeAdapter().GlobalConfigDir(home)
+			if err := os.MkdirAll(filepath.Join(dir, "themes"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "tui.jsonc")
+			if content == "directory" {
+				if err := os.Mkdir(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			asset := filepath.Join(dir, "themes", "gentleman.json")
+			if err := os.WriteFile(asset, []byte("original"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := prepareJSONFile(path, themeOverlayJSON); err == nil {
+				t.Fatal("expected JSONC preflight error")
+			}
+			raw, err := os.ReadFile(asset)
+			if err != nil || string(raw) != "original" {
+				t.Fatalf("asset changed: %s, %v", raw, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "tui.json")); !os.IsNotExist(err) {
+				t.Fatalf("unexpected JSON: %v", err)
+			}
+		})
+	}
+}
+
+func TestPrepareJSONFileRejectsTUISymlinkBeforeWritingAsset(t *testing.T) {
+	for _, config := range []struct {
+		name     string
+		dangling bool
+	}{
+		{"tui.json", false},
+		{"tui.jsonc", false},
+		{"tui.jsonc", true},
+	} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dangling=%t/existing-asset=%t", config.name, config.dangling, existing), func(t *testing.T) {
+				home, xdg := t.TempDir(), t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", xdg)
+				dir := opencodeAdapter().GlobalConfigDir(home)
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				path, target := filepath.Join(dir, config.name), filepath.Join(t.TempDir(), "target.json")
+				original := []byte(`{"theme":"other","untouched":true}`)
+				if !config.dangling {
+					if err := os.WriteFile(target, original, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(filepath.Join(dir, "tui.json"), original, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+				asset := filepath.Join(dir, "themes", "gentleman.json")
+				if existing {
+					if err := os.MkdirAll(filepath.Dir(asset), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(asset, original, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if got := TUIConfigPath(home, opencodeAdapter()); got != path {
+					t.Errorf("selected %q, want symlink path %q", got, path)
+				}
+				if _, err := prepareJSONFile(path, themeOverlayJSON); err == nil || !strings.Contains(err.Error(), "json file") || !strings.Contains(err.Error(), path) {
+					t.Errorf("expected contextual preflight error, got %v", err)
+				}
+				if got, err := os.Readlink(path); err != nil || got != target {
+					t.Errorf("link changed: %q, %v", got, err)
+				}
+				if config.dangling {
+					if _, err := os.Lstat(target); !os.IsNotExist(err) {
+						t.Errorf("dangling target created: %v", err)
+					}
+					if got, err := os.ReadFile(filepath.Join(dir, "tui.json")); err != nil || !bytes.Equal(got, original) {
+						t.Errorf("fallback JSON changed: %q, %v", got, err)
+					}
+				} else if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, original) {
+					t.Errorf("link target changed: %q, %v", got, err)
+				}
+				if existing {
+					if got, err := os.ReadFile(asset); err != nil || !bytes.Equal(got, original) {
+						t.Errorf("existing asset changed: %v", err)
+					}
+				} else if _, err := os.Lstat(asset); !os.IsNotExist(err) {
+					t.Errorf("asset created before successful preflight: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestPrepareJSONFileRejectsInvalidTUIBeforeWritingAsset(t *testing.T) {
+	for _, config := range []struct{ name, content string }{
+		{"malformed", `{"theme":`},
+		{"array", `[]`},
+		{"string", `"dark"`},
+		{"number", `42`},
+		{"boolean", `true`},
+		{"null", `null`},
+		{"jsonc-null", "/* comment */ null"},
+		{"read-failure", ""},
+	} {
+		for _, existing := range []bool{false, true} {
+			name := "missing-asset"
+			if existing {
+				name = "existing-asset"
+			}
+			t.Run(config.name+"/"+name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+				configDir := opencodeAdapter().GlobalConfigDir(home)
+				tuiPath := filepath.Join(configDir, "tui.json")
+				themePath := filepath.Join(configDir, "themes", "gentleman.json")
+				if err := os.MkdirAll(configDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if config.name == "read-failure" {
+					if err := os.Mkdir(tuiPath, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(tuiPath, []byte(config.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				before := []byte("user-owned asset bytes\n")
+				if existing {
+					if err := os.MkdirAll(filepath.Dir(themePath), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(themePath, before, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := prepareJSONFile(tuiPath, themeOverlayJSON); err == nil {
+					t.Error("Inject() succeeded with invalid TUI config")
+				}
+				if config.name == "read-failure" {
+					if entries, err := os.ReadDir(tuiPath); err != nil || len(entries) != 0 {
+						t.Errorf("TUI directory changed: %v, %v", entries, err)
+					}
+				} else if got, err := os.ReadFile(tuiPath); err != nil || string(got) != config.content {
+					t.Errorf("TUI config changed: %q, %v", got, err)
+				}
+				if existing {
+					if got, err := os.ReadFile(themePath); err != nil || !bytes.Equal(got, before) {
+						t.Errorf("existing asset changed: %v", err)
+					}
+				} else if _, err := os.Stat(themePath); !os.IsNotExist(err) {
+					t.Errorf("asset created before successful preflight: %v", err)
+				}
+			})
+		}
+	}
+}
 
 func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
 	home := t.TempDir()
