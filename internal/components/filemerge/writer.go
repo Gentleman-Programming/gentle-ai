@@ -103,7 +103,13 @@ func WriteFileAtomicMode(path string, content []byte, perm fs.FileMode) (WriteRe
 
 func writeFileAtomic(path string, content []byte, perm fs.FileMode, forceMode bool) (WriteResult, error) {
 	if perm == 0 {
-		perm = 0o644
+		// A forced zero mode comes from a recorded mode (restore paths); never
+		// widen it past owner-only. An omitted mode for a new file keeps 0644.
+		if forceMode {
+			perm = 0o600
+		} else {
+			perm = 0o644
+		}
 	}
 
 	created := false

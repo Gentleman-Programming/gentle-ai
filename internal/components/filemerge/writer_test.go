@@ -423,3 +423,26 @@ func TestWriteFileAtomicPreservesOriginalOnRenameFailure(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteFileAtomicModeZeroNeverWidens pins that a forced zero mode, as
+// passed by restore paths for a recorded 0000 mode, lands as owner-only
+// instead of the 0644 default used for omitted modes on new files.
+func TestWriteFileAtomicModeZeroNeverWidens(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "restored")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteFileAtomicMode(path, []byte("after"), 0); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got&^0o600 != 0 {
+		t.Fatalf("mode = %v, want no wider than 0600", got)
+	}
+}

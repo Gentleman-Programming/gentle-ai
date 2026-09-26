@@ -592,3 +592,41 @@ func TestDefaultActivationWriteFileForcesLauncherMode(t *testing.T) {
 		t.Fatalf("launcher mode = %v, want 0755", got)
 	}
 }
+
+// TestActivationRestoresLauncherExecutableModeWhenContentMatches pins that
+// re-activation repairs a managed launcher whose bytes are current but whose
+// executable bit was lost; the content-equality skip must not hide it.
+func TestActivationRestoresLauncherExecutableModeWhenContentMatches(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{
+		OS:            "linux",
+		Path:          filepath.Dir(target),
+		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
+		AddToUserPath: func(string) error { return nil },
+		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	}
+	if _, err := Activate(home, options); err != nil {
+		t.Fatal(err)
+	}
+	path := POSIXLauncherPath(home)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Activate(home, options); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("launcher mode after re-activation = %v, want 0755", got)
+	}
+}

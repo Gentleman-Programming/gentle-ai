@@ -632,7 +632,9 @@ func (p *ActivationPlan) Apply() error {
 		for _, path := range p.paths {
 			before := p.before[path]
 			desired := p.desired[path]
-			if before.exists && bytes.Equal(before.data, desired) {
+			// Skip only when both the bytes and the executable mode already
+			// match; a launcher that lost its exec bit must be restored.
+			if before.exists && bytes.Equal(before.data, desired) && (p.goos == "windows" || before.mode.Perm() == 0o755) {
 				continue
 			}
 			p.changed = append(p.changed, path)
