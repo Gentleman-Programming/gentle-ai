@@ -202,6 +202,16 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 
 	if input.DryRun {
+		// Validate authority before reporting a plan that would fail.
+		if containsAgent(resolved.Agents, model.AgentOpenCode) {
+			workspaceDir, werr := os.Getwd()
+			if werr != nil {
+				return InstallResult{}, fmt.Errorf("resolve workspace directory: %w", werr)
+			}
+			if _, err := opencodeactivation.ResolveEffectiveConfigForHome(homeDir, workspaceDir); err != nil {
+				return InstallResult{}, fmt.Errorf("preflight OpenCode write authority: %w", err)
+			}
+		}
 		return result, nil
 	}
 

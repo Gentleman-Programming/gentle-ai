@@ -82,8 +82,11 @@ func TestInstallDryRunWithInvalidOpenCodeAuthorityDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := RunInstall([]string{"--dry-run", "--agent", "opencode"}, system.DetectionResult{})
-	if err != nil || !result.DryRun {
-		t.Fatalf("dry-run planning failed: %v", err)
+	if err == nil {
+		t.Fatal("expected dry-run to fail with invalid authority")
+	}
+	if result.DryRun {
+		t.Fatalf("dry-run should not succeed with invalid authority")
 	}
 	if raw, err := os.ReadFile(authority); err != nil || string(raw) != "invalid" {
 		t.Fatalf("authority changed: %q, %v", raw, err)
