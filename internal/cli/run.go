@@ -1186,9 +1186,9 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 		if !ok || entry["__managed_by"] != "gentle-ai/sdd" {
 			continue
 		}
-		changed = true
 		switch {
 		case name == "general", name == "explore", strings.HasPrefix(name, "sdd-"):
+			changed = true
 			delete(agents, name)
 		case current[name]:
 			fresh := map[string]any{}
@@ -1197,11 +1197,12 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 					fresh[field] = value
 				}
 			}
+			changed = true
 			agents[name] = fresh
 		default:
-			// User-owned agents (e.g., "custom") must not be mutated by
-			// the migration pass; their __managed_by field is cleaned up
-			// later by the sync-phase RemoveLegacyOpenCodeAgentMarkers.
+			// User-owned agents (e.g., "custom") are left untouched;
+			// their __managed_by field is cleaned up later by the
+			// sync-phase RemoveLegacyOpenCodeAgentMarkers.
 		}
 	}
 	if !changed {
