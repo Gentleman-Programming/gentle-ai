@@ -1482,7 +1482,7 @@ func TestConfigureOpenCodeModelsRejectsInvalidAuthorityWithoutReadingSibling(t *
 				t.Fatal(err)
 			}
 			if err := os.Symlink(target, path); err != nil {
-				t.Fatal(err)
+				t.Skipf("symlink creation failed: %v", err)
 			}
 		}},
 	} {

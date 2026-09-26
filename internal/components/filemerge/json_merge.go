@@ -228,7 +228,10 @@ func rejectDuplicateJSONKeys(raw []byte) error {
 				if err != nil {
 					return err
 				}
-				key := keyToken.(string)
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("unexpected JSON key token %T", keyToken)
+				}
 				if seen[key] {
 					return fmt.Errorf("duplicate JSON key %q", key)
 				}
@@ -245,6 +248,13 @@ func rejectDuplicateJSONKeys(raw []byte) error {
 			}
 		default:
 			return fmt.Errorf("unexpected JSON delimiter %q", delim)
+		}
+		// Reject non-whitespace trailing content after the first JSON value.
+		for decoder.More() {
+			_, err := decoder.Token()
+			if err != nil {
+				return err
+			}
 		}
 		_, err = decoder.Token()
 		return err

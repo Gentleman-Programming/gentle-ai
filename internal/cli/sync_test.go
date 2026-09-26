@@ -227,7 +227,9 @@ func TestSyncWorkspaceAuthorityPreflight(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/dry=%t", kind, dryRun), func(t *testing.T) {
 				home := t.TempDir()
 				workspace := t.TempDir()
+				configHome := filepath.Join(home, ".config")
 				setOpenCodeTestHome(t, home)
+				t.Setenv("XDG_CONFIG_HOME", configHome)
 				t.Chdir(workspace)
 				settings := filepath.Join(workspace, "opencode.json")
 				mustWriteFile(t, settings, []byte(`{"theme":"keep"}`))
@@ -282,6 +284,8 @@ func TestSyncWorkspaceAuthorityRejectsBeforePersonaAliasMigration(t *testing.T) 
 
 func TestSyncLegacyMarkerPrecedesOtherApplyWrites(t *testing.T) {
 	home := t.TempDir()
+	configHome := filepath.Join(home, ".config")
+	t.Setenv("XDG_CONFIG_HOME", configHome)
 	rt, err := newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentID("agents")}})
 	if err != nil {
 		t.Fatal(err)
