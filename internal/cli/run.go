@@ -722,6 +722,23 @@ func (s *runtimeState) compatibilityChangedFiles() []string {
 }
 
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
+	workspaceDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("resolve install workspace: %w", err)
+	}
+	if containsAgent(resolved.Agents, model.AgentOpenCode) {
+		if scope == ScopeGlobal {
+			if _, err := opencodeactivation.ResolveEffectiveConfigForHome(homeDir, workspaceDir); err != nil {
+				return nil, fmt.Errorf("preflight OpenCode write authority: %w", err)
+			}
+		} else {
+			adapter := opencodeagent.NewAdapter()
+			target := adapter.SettingsPath(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
+			if _, _, err := opencodeactivation.AuthorityState(filepath.Dir(target)); err != nil {
+				return nil, fmt.Errorf("preflight workspace OpenCode write authority: %w", err)
+			}
+		}
+	}
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
 	if err != nil {
@@ -732,8 +749,6 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 		state.cleanupCompatibilityTransaction()
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
-
-	workspaceDir, _ := os.Getwd()
 
 	return &installRuntime{
 		homeDir:      homeDir,
@@ -1184,7 +1199,9 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 			}
 			agents[name] = fresh
 		default:
-			delete(entry, "__managed_by")
+			// User-owned agents (e.g., "custom") must not be mutated by
+			// the migration pass; their __managed_by field is cleaned up
+			// later by the sync-phase RemoveLegacyOpenCodeAgentMarkers.
 		}
 	}
 	if !changed {

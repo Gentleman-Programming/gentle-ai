@@ -16,8 +16,82 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
+
+func TestInstallRejectsInvalidOpenCodeAuthorityBeforeMutation(t *testing.T) {
+	for _, sidecar := range []string{"invalid", "symlink"} {
+		t.Run(sidecar, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			setOpenCodeTestHome(t, home)
+			config := filepath.Join(home, ".config", "opencode")
+			if err := os.MkdirAll(config, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+				if err := os.WriteFile(filepath.Join(config, name), []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			authority := filepath.Join(config, ".gentle-ai-opencode-write-authority.json")
+			if sidecar == "symlink" {
+				target := filepath.Join(home, "authority-target")
+				if err := os.WriteFile(target, []byte("invalid"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, authority); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+			} else if err := os.WriteFile(authority, []byte("invalid"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+			_, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents}, system.PlatformProfile{})
+			if err == nil {
+				t.Fatal("expected authority preflight failure")
+			}
+			for _, path := range []string{filepath.Join(config, "opencode.json"), filepath.Join(config, "opencode.jsonc")} {
+				raw, readErr := os.ReadFile(path)
+				if readErr != nil || string(raw) != "{}" {
+					t.Fatalf("settings %s changed: %q, %v", path, raw, readErr)
+				}
+			}
+			if _, statErr := os.Stat(filepath.Join(home, ".gentle-ai", "backups")); !os.IsNotExist(statErr) {
+				t.Fatalf("backup root created: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestInstallDryRunWithInvalidOpenCodeAuthorityDoesNotWrite(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	config := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	authority := filepath.Join(config, ".gentle-ai-opencode-write-authority.json")
+	if err := os.WriteFile(authority, []byte("invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunInstall([]string{"--dry-run", "--agent", "opencode"}, system.DetectionResult{})
+	if err != nil || !result.DryRun {
+		t.Fatalf("dry-run planning failed: %v", err)
+	}
+	if raw, err := os.ReadFile(authority); err != nil || string(raw) != "invalid" {
+		t.Fatalf("authority changed: %q, %v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gentle-ai", "backups")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created backup root: %v", err)
+	}
+}
 
 func TestOpenCodeTelemetryRollbackPreservesLateEdits(t *testing.T) {
 	for _, flow := range []string{"install", "sync"} {
