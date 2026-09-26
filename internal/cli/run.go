@@ -2569,7 +2569,8 @@ func commandEnv(name string, args []string, base []string) []string {
 		return base
 	}
 
-	env := base
+	// Copy so appending never writes into the caller's backing array.
+	env := append([]string(nil), base...)
 	for _, kv := range homebrewNoSideEffectEnv {
 		key := strings.SplitN(kv, "=", 2)[0]
 		if !envHasKey(env, key) {

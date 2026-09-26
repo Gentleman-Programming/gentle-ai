@@ -42,6 +42,11 @@ func TestExecuteCommandSetsHomebrewNoAutoUpdateEnvForBrewCommands(t *testing.T) 
 	}
 	restoreStreaming := SetCommandOutputStreaming(false)
 	t.Cleanup(restoreStreaming)
+	// Keep the assertion independent of the developer's own Homebrew settings.
+	for _, key := range []string{"HOMEBREW_NO_AUTO_UPDATE", "HOMEBREW_NO_INSTALL_CLEANUP"} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
 
 	fakeBrew := filepath.Join(t.TempDir(), "brew")
 	script := "#!/bin/sh\nprintf 'HOMEBREW_NO_AUTO_UPDATE=%s\\nHOMEBREW_NO_INSTALL_CLEANUP=%s\\n' \"$HOMEBREW_NO_AUTO_UPDATE\" \"$HOMEBREW_NO_INSTALL_CLEANUP\" > \"$3\"\n"
