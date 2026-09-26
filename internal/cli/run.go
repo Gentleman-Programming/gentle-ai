@@ -2545,8 +2545,54 @@ func runCommandSequenceWithProgress(commands [][]string, progress pipeline.Progr
 	return nil
 }
 
+// homebrewNoSideEffectEnv are the environment variables executeCommand adds
+// to a brew invocation so gentle-ai's own tap/install/reinstall steps never
+// trigger Homebrew's slow, network-dependent auto-update or its
+// post-install cache cleanup as a side effect of an unrelated install.
+var homebrewNoSideEffectEnv = []string{
+	"HOMEBREW_NO_AUTO_UPDATE=1",
+	"HOMEBREW_NO_INSTALL_CLEANUP=1",
+}
+
+// commandEnv returns the environment executeCommand should use for name,
+// derived from base (typically os.Environ()). When name's base is "brew"
+// (matching both the literal command and resolveBrewCommand's resolved
+// absolute path) and the invocation is not the user-requested "brew
+// update"/"brew upgrade" path (see internal/update/upgrade's own
+// brewUpgrade), it adds homebrewNoSideEffectEnv, never overriding a value
+// already present in base — an explicit user override always wins.
+func commandEnv(name string, args []string, base []string) []string {
+	if filepath.Base(name) != "brew" {
+		return base
+	}
+	if len(args) > 0 && (args[0] == "update" || args[0] == "upgrade") {
+		return base
+	}
+
+	env := base
+	for _, kv := range homebrewNoSideEffectEnv {
+		key := strings.SplitN(kv, "=", 2)[0]
+		if !envHasKey(env, key) {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
+// envHasKey reports whether env already sets key, regardless of value.
+func envHasKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func executeCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	cmd.Env = commandEnv(name, args, os.Environ())
 	system.EnsureCommandDir(cmd)
 
 	if streamCommandOutput {
