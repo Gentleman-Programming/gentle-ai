@@ -152,12 +152,25 @@ func (result ReviewRepairResult) Validate() error {
 			for index, selector := range selectors {
 				lineages := [2]string{selector.PredecessorLineageID, selector.SuccessorLineageID}
 				expected := [2]string{selector.PredecessorExpectedRevision, selector.SuccessorExpectedRevision}
-				if lineages[0] == lineages[1] || !validReviewIntegrationLineage(lineages[0]) || !validReviewIntegrationLineage(lineages[1]) ||
-					!validReviewCapabilitySHA256(expected[0]) || !validReviewCapabilitySHA256(expected[1]) || expected[0] != strings.ToLower(expected[0]) || expected[1] != strings.ToLower(expected[1]) ||
-					index > 0 && (lineages[0] < previous[0] || lineages[0] == previous[0] && lineages[1] <= previous[1]) {
+				if lineages[0] == "" && expected[0] == "" {
+					// Historical selector (#2995): successor-only, binding the
+					// entry's raw-byte digest; there is no predecessor side.
+					if !validReviewIntegrationLineage(lineages[1]) || !validReviewCapabilitySHA256(expected[1]) || expected[1] != strings.ToLower(expected[1]) {
+						return errInvalidReviewRepairDispositionSelectors
+					}
+				} else {
+					if lineages[0] == lineages[1] || !validReviewIntegrationLineage(lineages[0]) || !validReviewIntegrationLineage(lineages[1]) ||
+						!validReviewCapabilitySHA256(expected[0]) || !validReviewCapabilitySHA256(expected[1]) || expected[0] != strings.ToLower(expected[0]) || expected[1] != strings.ToLower(expected[1]) {
+						return errInvalidReviewRepairDispositionSelectors
+					}
+				}
+				if index > 0 && (lineages[0] < previous[0] || lineages[0] == previous[0] && lineages[1] <= previous[1]) {
 					return errInvalidReviewRepairDispositionSelectors
 				}
 				for offset, lineage := range lineages {
+					if lineage == "" {
+						continue
+					}
 					if revision, found := revisions[lineage]; found && revision != expected[offset] {
 						return errInvalidReviewRepairDispositionSelectors
 					}
@@ -244,7 +257,7 @@ func (err *reviewRepairOperationError) Error() string {
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When multiple content-mismatched leaves exist, --preflight enumerates exact predecessor/successor selectors; re-run it with one selector before executing its plan.")
+	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When multiple content-mismatched leaves or multiple historical (outdated) authority entries exist, --preflight enumerates exact selectors; re-run it with one selector before executing its plan.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
@@ -281,8 +294,20 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	selectorValues := []string{*predecessorLineage, *predecessorRevision, *successorLineage, *successorRevision}
 	selectorPresent := repairExecutionInputPresent(selectorValues...)
-	if selectorPresent && (strings.TrimSpace(*predecessorLineage) == "" || strings.TrimSpace(*predecessorRevision) == "" || strings.TrimSpace(*successorLineage) == "" || strings.TrimSpace(*successorRevision) == "") {
-		return reviewPreflightError(errors.New("review repair exact selector requires --predecessor-lineage --predecessor-revision --successor-lineage --successor-revision; run `gentle-ai review repair --preflight` to obtain one"))
+	if selectorPresent {
+		switch {
+		case *predecessorLineage != "" || *predecessorRevision != "":
+			// Edge selector (#1892/#2014): all four exact fields.
+			if strings.TrimSpace(*predecessorLineage) == "" || strings.TrimSpace(*predecessorRevision) == "" || strings.TrimSpace(*successorLineage) == "" || strings.TrimSpace(*successorRevision) == "" {
+				return reviewPreflightError(errors.New("review repair exact selector requires --predecessor-lineage --predecessor-revision --successor-lineage --successor-revision; run `gentle-ai review repair --preflight` to obtain one"))
+			}
+		default:
+			// Historical selector (#2995): a historical authority entry names no
+			// predecessor revision, so its selector is successor-only.
+			if strings.TrimSpace(*successorLineage) == "" || strings.TrimSpace(*successorRevision) == "" {
+				return reviewPreflightError(errors.New("review repair historical selector requires --successor-lineage --successor-revision; run `gentle-ai review repair --preflight` to obtain one"))
+			}
+		}
 	}
 	selector := reviewtransaction.AuthorityDispositionSelector{
 		PredecessorLineageID: *predecessorLineage, PredecessorExpectedRevision: *predecessorRevision,

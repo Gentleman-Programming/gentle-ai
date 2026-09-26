@@ -389,6 +389,14 @@ func isTOMLKeyAssignment(line, key string) bool {
 	return strings.HasPrefix(remainder, "=")
 }
 
+// ScanTOMLMultilineString reports the multiline string state after line,
+// given the state before it (0 when outside a multiline string, otherwise the
+// open quote byte). It honors quotes, escapes and comments, so delimiters that
+// appear inside ordinary strings or comments do not change the state.
+func ScanTOMLMultilineString(line string, multilineQuote byte) byte {
+	return updateTOMLMultilineString(line, multilineQuote, nil)
+}
+
 // updateTOMLMultilineString tracks multiline basic and literal string values.
 // When arrayDepth is provided, it also tracks brackets outside strings and comments.
 func updateTOMLMultilineString(line string, multilineQuote byte, arrayDepth *int) byte {

@@ -43,7 +43,9 @@ type Journal struct {
 	roots  []string
 }
 
-var writeFileAtomic = filemerge.WriteFileAtomic
+// writeFileAtomic always applies the requested mode: forward writes pass the
+// file's recorded mode and Restore must reinstate it exactly.
+var writeFileAtomic = filemerge.WriteFileAtomicMode
 
 // New constructs a journal that only accepts paths within the given roots.
 // Roots must be absolute or the path-traversal guard will reject every write.

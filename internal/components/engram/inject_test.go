@@ -2687,3 +2687,70 @@ func TestInjectCodexNilOrchestratorAssignmentPreservesTopLevelModel(t *testing.T
 		t.Fatalf("nil assignment clobbered top-level model:\n%s", content)
 	}
 }
+
+func TestUpsertCodexTableKeyBeforeMCPServersKeepsMCPBlocksAtEOF(t *testing.T) {
+	tests := []struct {
+		name, content, want string
+	}{
+		{
+			name:    "missing table goes before existing MCP block",
+			content: "[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n",
+			want:    "[features]\nmulti_agent = true\n\n[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n",
+		},
+		{
+			name:    "missing table without MCP blocks is appended",
+			content: "model = \"gpt\"\n",
+			want:    "model = \"gpt\"\n\n[features]\nmulti_agent = true\n",
+		},
+		{
+			name:    "existing table is updated in place",
+			content: "[mcp_servers.context7]\nurl = \"u\"\n\n[features]\nmulti_agent = false\n",
+			want:    "[mcp_servers.context7]\nurl = \"u\"\n\n[features]\nmulti_agent = true\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := upsertCodexTableKeyBeforeMCPServers(tt.content, "features", "multi_agent", "true"); got != tt.want {
+				t.Fatalf("upsert =\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestUpsertCodexTableKeyBeforeMCPServersIgnoresMultilineStrings pins that an
+// MCP table header written inside a TOML multiline string is text, not the
+// first MCP block: the new table must land after the string and before the
+// real MCP block instead of splitting the string.
+func TestUpsertCodexTableKeyBeforeMCPServersIgnoresMultilineStrings(t *testing.T) {
+	for _, delimiter := range []string{`"""`, "'''"} {
+		content := "developer_instructions = " + delimiter + "\nExample:\n[mcp_servers.docs]\n" + delimiter + "\n\n[mcp_servers.context7]\ncommand = \"npx\"\n"
+		got := upsertCodexTableKeyBeforeMCPServers(content, "features", "multi_agent", "true")
+		stringEnd := strings.LastIndex(got, delimiter)
+		table := strings.Index(got, "[features]\n")
+		mcp := strings.Index(got, "[mcp_servers.context7]")
+		if table < 0 || table < stringEnd || table > mcp {
+			t.Fatalf("delimiter %s: [features] must be inserted after the multiline string and before the real MCP block:\n%s", delimiter, got)
+		}
+		if !strings.Contains(got, "Example:\n[mcp_servers.docs]\n"+delimiter) {
+			t.Fatalf("delimiter %s: multiline string text was altered:\n%s", delimiter, got)
+		}
+	}
+}
+
+// TestUpsertCodexTableKeyBeforeMCPServersIgnoresDelimitersInStringsAndComments
+// pins that a triple-quote sequence inside an ordinary string or a comment
+// does not open a multiline string, so the real MCP block is still found.
+func TestUpsertCodexTableKeyBeforeMCPServersIgnoresDelimitersInStringsAndComments(t *testing.T) {
+	for _, prefix := range []string{
+		"note = '\"\"\"'\n",
+		"# a comment with \"\"\" in it\n",
+	} {
+		content := prefix + "\n[mcp_servers.context7]\ncommand = \"npx\"\n"
+		got := upsertCodexTableKeyBeforeMCPServers(content, "features", "multi_agent", "true")
+		table := strings.Index(got, "[features]\n")
+		mcp := strings.Index(got, "[mcp_servers.context7]")
+		if table < 0 || table > mcp {
+			t.Fatalf("prefix %q: [features] must be inserted before the MCP block:\n%s", prefix, got)
+		}
+	}
+}

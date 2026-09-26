@@ -70,15 +70,31 @@ func TestInstallScriptBetaGoInstallBypassesPublicGoProxy(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
 
+	// Since #4689 the beta env patterns are derived from the module path
+	// resolved from go.mod at the pinned main commit SHA, so the assertions
+	// guard the derivation form, not a hard-coded /v3 literal.
 	script := string(content)
 	for _, want := range []string{
-		"prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3",
-		"prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3",
-		"prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3",
+		"local env_pattern=\"${module}\"",
+		"prepend_go_env_pattern GONOSUMDB \"${env_pattern}\"",
+		"prepend_go_env_pattern GOPRIVATE \"${env_pattern}\"",
+		"prepend_go_env_pattern GONOPROXY \"${env_pattern}\"",
 		"go install \"$go_package\"",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("scripts/install.sh is missing %q in beta go install proxy-bypass path", want)
+		}
+	}
+
+	// The derived pattern must come from the resolved module, never a
+	// hard-coded owner/major literal (the #4689 regression class).
+	for _, banned := range []string{
+		"prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v",
+		"prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v",
+		"prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v",
+	} {
+		if strings.Contains(script, banned) {
+			t.Fatalf("scripts/install.sh hard-codes the module major in the beta proxy-bypass patterns (%q); derive it from go.mod at the resolved ref", banned)
 		}
 	}
 
@@ -181,10 +197,12 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 }
 
 // TestInstallScriptsGoInstallPackageMatchesModuleMajor guards the install
-// scripts against the regression that shipped in v3.0.1: both scripts build
-// the `go install` package by interpolation, so a module-major migration
-// that rewrites the literal module string misses them. The expected major
-// is derived from go.mod so the next migration fails here first.
+// scripts against the regression that shipped in v3.0.1: a module-major
+// migration that rewrites the literal module string misses them. Since
+// #4689 the Unix installer derives the module path (and its major) from
+// go.mod at the resolved source ref, so its guard asserts that derivation;
+// the PowerShell installer still pins the current major (until #4690) and
+// is guarded against a migration that forgets it.
 func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
@@ -201,7 +219,10 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		script  string
 		pattern string
 	}{
-		{"install.sh", `local go_package="github.com/${owner_lc}/${GITHUB_REPO}/` + major + `/cmd/${BINARY_NAME}@${version}"`},
+		// install.sh resolves the ref (release tag for stable, main commit
+		// SHA for beta) and builds the package from the module declared at
+		// that ref, so a future major bump needs no script change.
+		{"install.sh", `local go_package="${module}/cmd/${BINARY_NAME}@${ref}"`},
 		{"install.ps1", `$goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/` + major + `/cmd/$BINARY_NAME@$version"`},
 	}
 	stale := regexp.MustCompile(`/v[0-9]+/cmd/`)

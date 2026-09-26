@@ -324,10 +324,12 @@ func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
 
 // TestExecuteCommandInheritsPiCodingAgentDirForChildProcesses proves that Pi
 // package-install child processes (spawned through executeCommand, the
-// runCommand default) inherit PI_CODING_AGENT_DIR from the parent process's
-// environment without gentle-ai needing to build an explicit Env slice: Go's
-// os/exec.Cmd defaults to the parent's environment whenever Env is nil, and
-// neither runCommandSequenceWithProgress nor executeCommand ever sets Env.
+// runCommand default) still inherit PI_CODING_AGENT_DIR from the parent
+// process's environment for a non-brew command: commandEnv returns its base
+// (os.Environ()) unchanged whenever the command name is not "brew", so this
+// passthrough is unaffected by executeCommand explicitly building cmd.Env to
+// inject HOMEBREW_NO_AUTO_UPDATE/HOMEBREW_NO_INSTALL_CLEANUP for brew calls
+// (see TestExecuteCommandSetsHomebrewNoAutoUpdateEnvForBrewCommands).
 func TestExecuteCommandInheritsPiCodingAgentDirForChildProcesses(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the child-process probe below runs a POSIX sh one-liner")

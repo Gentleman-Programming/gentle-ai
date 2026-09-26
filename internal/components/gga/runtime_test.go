@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,6 +112,41 @@ func TestEnsureRuntimeAssetsIsNoOpWhenContentMatches(t *testing.T) {
 	// replaced and the modification time must not change.
 	if stat2.ModTime() != stat1.ModTime() {
 		t.Fatalf("EnsureRuntimeAssets re-wrote the file even though content was identical")
+	}
+}
+
+// TestEnsureRuntimeAssetsForcesExecutableModeWhenContentAlreadyMatches pins
+// gentle-ai#5006(F5): pr_mode.sh must stay executable even when its content
+// already matches the embedded asset but its mode drifted to non-executable
+// (e.g. extracted by a tool that does not preserve exec bits).
+func TestEnsureRuntimeAssetsForcesExecutableModeWhenContentAlreadyMatches(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	home := t.TempDir()
+	path := RuntimePRModePath(home)
+	if err := os.MkdirAll(RuntimeLibDir(home), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	content, err := assets.Read("gga/pr_mode.sh")
+	if err != nil {
+		t.Fatalf("assets.Read() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := EnsureRuntimeAssets(home); err != nil {
+		t.Fatalf("EnsureRuntimeAssets() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("pr_mode.sh mode = %v, want 0755 enforced despite matching content", got)
 	}
 }
 

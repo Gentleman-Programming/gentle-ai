@@ -158,6 +158,13 @@ func loadForDecision(homeDir string) (State, error) {
 // must use: it is what makes the id stable across consecutive calls
 // (`status`, `preview`, and the opportunistic sender all resolve to the same
 // persisted value instead of each minting their own).
+//
+// Concurrency invariant: EnsureState mints AND saves directly, which is safe
+// only because Update is its sole caller and already holds the state lock
+// across the whole read-modify-write cycle (see lockState). Any future
+// caller must hold that same lock first. Do not call lockState from inside
+// EnsureState to get it: the lock is not re-entrant, so that would
+// self-deadlock every Update.
 func EnsureState(homeDir string) (State, error) {
 	s, err := Load(homeDir)
 	switch {

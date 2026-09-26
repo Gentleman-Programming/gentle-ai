@@ -34,6 +34,81 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
 )
 
+func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(agent), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+			adapter, _ := svc.registry.Get(agent)
+			path := adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			prompt, err := assets.Read("opencode/agents/jd-judge-b.md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			agents := map[string]any{
+				"jd-judge-b":          map[string]any{"mode": "subagent", "hidden": true, "description": "Judgment Day blind adversarial reviewer B. Read-only; independently reports findings and does not fix code.", "prompt": prompt, "permission": map[string]any{"write": "deny", "edit": "deny", "task": "deny"}, "model": "custom"},
+				"jd-judge-a":          map[string]any{"prompt": "user modified"},
+				"my-agent":            map[string]any{"prompt": "mine"},
+				"gentle-orchestrator": map[string]any{"prompt": "<!-- gentle-ai:orchestrator -->\nmanaged\n<!-- /gentle-ai:orchestrator -->\n", "permission": map[string]any{"task": map[string]any{"jd-judge-b": "allow", "jd-judge-a": "allow", "my-agent": "allow"}}},
+			}
+			if agent == model.AgentKilocode {
+				agents["gentleman"] = map[string]any{"mode": "primary", "description": "Senior Architect mentor - helpful first, challenging when it matters", "prompt": "{file:./AGENTS.md}", "tools": map[string]any{"write": true, "edit": true}}
+			}
+			raw, err := json.Marshal(map[string]any{"agent": agents, "other": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := svc.PartialUninstall([]model.AgentID{agent}, allManagedComponents); err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var root map[string]any
+				if err := json.Unmarshal(body, &root); err != nil {
+					t.Fatal(err)
+				}
+				remaining := root["agent"].(map[string]any)
+				if _, ok := remaining["jd-judge-b"]; ok {
+					t.Fatalf("managed agent retained: %s", body)
+				}
+				if agent == model.AgentKilocode && remaining["gentleman"] != nil {
+					t.Fatalf("Kilo gentleman retained: %s", body)
+				}
+				if remaining["jd-judge-a"] == nil || remaining["my-agent"] == nil {
+					t.Fatalf("user agents lost: %s", body)
+				}
+				if orchestrator, ok := remaining["gentle-orchestrator"].(map[string]any); ok {
+					task := orchestrator["permission"].(map[string]any)["task"].(map[string]any)
+					if _, ok := task["jd-judge-b"]; ok {
+						t.Fatalf("managed task retained: %s", body)
+					}
+					if task["jd-judge-a"] != "allow" || task["my-agent"] != "allow" {
+						t.Fatalf("user tasks lost: %s", body)
+					}
+				}
+				info, err := os.Stat(path)
+				if err != nil || info.Mode().Perm() != 0600 {
+					t.Fatalf("mode: %v, %v", info, err)
+				}
+			}
+		})
+	}
+}
+
 func TestCompleteUninstallLegacyOpenCodeDefaultOwnership(t *testing.T) {
 	for _, tt := range []struct {
 		name, current, want string

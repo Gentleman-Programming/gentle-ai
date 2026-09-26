@@ -33,6 +33,18 @@ jobs:
       - name: Typecheck V2 assets against released 2.0.4
         run: bash scripts/test-opencode-v2-contracts.sh
 
+  installer-module-path:
+    name: Installer Module Path Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Run installer module path derivation tests
+        run: bash scripts/test-install-module-path.sh
+
   go-format:
     name: Go Format
     runs-on: ubuntu-latest

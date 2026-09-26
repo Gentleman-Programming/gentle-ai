@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeagents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
 
@@ -237,7 +238,7 @@ func TestKiloUpgradeRemovesOwnedReviewAgentsAndKeepsUserOnes(t *testing.T) {
 			agents := map[string]any{}
 			task := map[string]any{}
 			for _, name := range kiloRetiredReviewAgentNames {
-				shape, ok := openCodeFamilyManagedReviewShape(name)
+				shape, ok := opencodeagents.ReviewShape(name)
 				if !ok {
 					t.Fatalf("no managed shape for %q", name)
 				}
@@ -302,7 +303,7 @@ func TestKiloUpgradeRemovesOwnedReviewAgentsAndKeepsUserOnes(t *testing.T) {
 
 func TestRetireKiloReviewAgentsPreservesSettingsMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "opencode.json")
-	shape, ok := openCodeFamilyManagedReviewShape("review-risk")
+	shape, ok := opencodeagents.ReviewShape("review-risk")
 	if !ok {
 		t.Fatal("no managed shape for review-risk")
 	}
@@ -364,7 +365,7 @@ func TestKiloReviewTaskPermissionCleanupRequiresOwnershipProof(t *testing.T) {
 			}
 		}},
 	}
-	managedRisk, ok := openCodeFamilyManagedReviewShape("review-risk")
+	managedRisk, ok := opencodeagents.ReviewShape("review-risk")
 	if !ok {
 		t.Fatal("no managed shape for review-risk")
 	}
