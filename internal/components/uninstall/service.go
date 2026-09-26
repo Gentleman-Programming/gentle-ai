@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
@@ -405,18 +404,6 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	if slices.Contains(componentIDs, model.ComponentSDD) {
 		return plan{}, fmt.Errorf("component %q is retired and cannot be uninstalled; existing files and settings were preserved", model.ComponentSDD)
 	}
-	// Fail closed before component planning can select a different JSON/JSONC file.
-	if slices.Contains(agentIDs, model.AgentOpenCode) {
-		path, exists, err := opencodeactivation.GlobalAuthorityState(s.homeDir)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return plan{}, fmt.Errorf("preflight OpenCode write authority: %w", err)
-			}
-			// File doesn't exist is acceptable for uninstall planning.
-		} else if exists && path != "" {
-			// File exists and is valid; ensure it's backed up for removal.
-		}
-	}
 	backupTargets := map[string]struct{}{}
 	operationsByKey := map[string]operation{}
 
@@ -528,54 +515,6 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			operationsByKey[key] = op
 		}
 		configDir := adapter.GlobalConfigDir(s.homeDir)
-		authorityFile, authorityExists, err := opencodeactivation.GlobalAuthorityState(s.homeDir)
-		if err != nil {
-			return plan{}, fmt.Errorf("preflight OpenCode write authority: %w", err)
-		}
-		if authorityExists {
-			authorityBytes, err := os.ReadFile(authorityFile)
-			if err != nil {
-				return plan{}, err
-			}
-			backupTargets[authorityFile] = struct{}{}
-			operationsByKey[operationKey(operation{typeID: opRemoveFile, path: authorityFile})] = operation{
-				typeID: opRemoveFile, path: authorityFile, agents: []model.AgentID{model.AgentOpenCode},
-				apply: func(path string) (bool, bool, error) {
-					info, err := os.Lstat(path)
-					if err != nil {
-						return false, false, err
-					}
-					if !info.Mode().IsRegular() {
-						return false, false, fmt.Errorf("OpenCode write authority is not regular: %s", path)
-					}
-					var beforeStat syscall.Stat_t
-					if err := syscall.Stat(path, &beforeStat); err != nil {
-						return false, false, fmt.Errorf("stat OpenCode write authority: %w", err)
-					}
-					current, err := os.ReadFile(path)
-					if err != nil {
-						return false, false, err
-					}
-					if !bytes.Equal(current, authorityBytes) {
-						return false, false, fmt.Errorf("OpenCode write authority changed before removal: %s", path)
-					}
-					// Detect concurrent replacement: a file replaced with
-					// identical content gets a new inode, which the previous
-					// bytes.Equal check would miss.
-					var afterStat syscall.Stat_t
-					if err := syscall.Stat(path, &afterStat); err != nil {
-						return false, false, fmt.Errorf("stat OpenCode write authority after read: %w", err)
-					}
-					if afterStat.Ino != beforeStat.Ino || afterStat.Dev != beforeStat.Dev {
-						return false, false, fmt.Errorf("OpenCode write authority replaced concurrently: %s", path)
-					}
-					if err := os.Remove(path); err != nil {
-						return false, false, err
-					}
-					return true, true, nil
-				},
-			}
-		}
 		if err := telemetryruntime.CheckManaged(configDir); err != nil {
 			return plan{}, err
 		}
@@ -672,16 +611,7 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
-	// Keep selector authority until state update completes; it is stored here
-	// and removed below, after updateStateAfterUninstall, so that the sidecar
-	// still exists when the state update fails.
-	var authorityRemoval *operation
 	for _, op := range p.operations {
-		if op.typeID == opRemoveFile && filepath.Base(op.path) == ".gentle-ai-opencode-write-authority.json" && slices.Contains(op.agents, model.AgentOpenCode) {
-			copy := op
-			authorityRemoval = &copy
-			continue
-		}
 		changed, removed, err := op.apply(op.path)
 		if err != nil {
 			failures = append(failures, operationFailure{path: op.path, agents: op.agents, err: err})
@@ -734,30 +664,6 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 	}
 	if stateErr != nil {
 		errs = append(errs, stateErr)
-	}
-	if len(errs) > 0 {
-		return result, errors.Join(errs...)
-	}
-
-	// Remove the selector authority sidecar last, after state update has
-	// committed, so that a failing state update leaves the sidecar intact
-	// for retry (see #1809).
-	if authorityRemoval != nil {
-		openCodeFailed := false
-		for _, failure := range failures {
-			if len(failure.agents) == 0 || slices.Contains(failure.agents, model.AgentOpenCode) {
-				openCodeFailed = true
-				break
-			}
-		}
-		if !openCodeFailed {
-			changed, removed, err := authorityRemoval.apply(authorityRemoval.path)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("remove OpenCode write authority: %w", err))
-			} else if changed && removed {
-				result.RemovedFiles = append(result.RemovedFiles, authorityRemoval.path)
-			}
-		}
 	}
 	if len(errs) > 0 {
 		return result, errors.Join(errs...)

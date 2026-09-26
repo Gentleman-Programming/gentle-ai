@@ -1442,87 +1442,6 @@ func TestConfigureModelsEmptyPickerCanContinueWithDefaults(t *testing.T) {
 	}
 }
 
-func TestCurrentOpenCodeSettingsPathFallbacks(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("OPENCODE_CONFIG_DIR", "")
-	project := t.TempDir()
-	withModelPickerWorkingDir(t, project)
-	fallback := filepath.Join(home, "fallback.json")
-	withModelPickerSettingsPath(t, fallback)
-
-	path, err := currentOpenCodeSettingsPath()
-	if err != nil || path != opencode.DefaultSettingsPath() {
-		t.Fatalf("no config path = %q, err = %v, want default settings path", path, err)
-	}
-
-	modelPickerWorkingDir = func() (string, error) { return "", errors.New("cwd unavailable") }
-	path, err = currentOpenCodeSettingsPath()
-	if err != nil || path != fallback {
-		t.Fatalf("cwd unavailable path = %q, err = %v, want %q", path, err, fallback)
-	}
-}
-
-func TestConfigureOpenCodeModelsRejectsInvalidAuthorityWithoutReadingSibling(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		makeSidecar func(t *testing.T, path string)
-	}{
-		{name: "malformed authority", makeSidecar: func(t *testing.T, path string) {
-			t.Helper()
-			if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "symlink authority", makeSidecar: func(t *testing.T, path string) {
-			t.Helper()
-			target := filepath.Join(filepath.Dir(path), "authority-target")
-			if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(target, path); err != nil {
-				t.Fatal(err)
-			}
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", "")
-			t.Setenv("OPENCODE_CONFIG_DIR", "")
-			project := t.TempDir()
-			for _, name := range []string{"opencode.json", "opencode.jsonc"} {
-				if err := os.WriteFile(filepath.Join(project, name), []byte(`{"agent":{"gentle-orchestrator":{"model":"wrong/model"}}}`), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			tc.makeSidecar(t, filepath.Join(project, ".gentle-ai-opencode-write-authority.json"))
-			withModelPickerWorkingDir(t, project)
-			withModelPickerSettingsPath(t, filepath.Join(project, "opencode.jsonc"))
-			reads := 0
-			originalRead := readCurrentAssignmentsFn
-			readCurrentAssignmentsFn = func(path string) (map[string]model.ModelAssignment, error) {
-				reads++
-				return originalRead(path)
-			}
-			t.Cleanup(func() { readCurrentAssignmentsFn = originalRead })
-
-			m := NewModel(system.DetectionResult{}, "dev")
-			m.Screen = ScreenModelConfig
-			m.Cursor = 1
-			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			state := updated.(Model)
-			if reads != 0 || state.Selection.ModelAssignments != nil {
-				t.Fatalf("read %d wrong sibling settings; assignments = %v", reads, state.Selection.ModelAssignments)
-			}
-			if state.Screen != ScreenModelPicker || !strings.Contains(state.View(), "Could not read OpenCode config:") || !strings.Contains(state.View(), "write authority") {
-				t.Fatalf("authority error not visible in picker (screen %v): %s", state.Screen, state.View())
-			}
-		})
-	}
-}
-
 func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -1551,8 +1470,8 @@ func TestConfigureOpenCodeModelsShowsJSONCCustomProviderWithRuntimeProviders(t *
 		t.Fatalf("write opencode.jsonc: %v", err)
 	}
 	withModelPickerWorkingDir(t, dir)
-	if got, err := currentOpenCodeSettingsPath(); err != nil || got != writePath {
-		t.Fatalf("profile/deletion target = %q, err = %v, want %q", got, err, writePath)
+	if got := currentOpenCodeSettingsPath(); got != writePath {
+		t.Fatalf("profile/deletion target = %q, want %q", got, writePath)
 	}
 	withModelPickerCatalogDiscoverer(t, func(_ context.Context, projectDir string) (map[string]opencode.Provider, error) {
 		if projectDir != dir {
@@ -4400,10 +4319,6 @@ func TestNoWrapAroundUpOnBackupScreen(t *testing.T) {
 // previously saved model assignments are pre-populated into
 // m.Selection.ModelAssignments so the picker shows them instead of "(default)".
 func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("OPENCODE_CONFIG_DIR", "")
-	withModelPickerWorkingDir(t, t.TempDir())
 	// Pre-existing assignments that should be read from settings
 	preExisting := map[string]model.ModelAssignment{
 		"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
@@ -4540,10 +4455,6 @@ func TestModelConfigReadsCurrentAssignmentsWithoutChangingSettings(t *testing.T)
 
 // Configure models keeps in-session OpenCode edits across ordinary navigation.
 func TestModelConfigAssignmentsSurviveNavigation(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("OPENCODE_CONFIG_DIR", "")
-	withModelPickerWorkingDir(t, t.TempDir())
 	want := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}
 	original := readCurrentAssignmentsFn
 	readCurrentAssignmentsFn = func(string) (map[string]model.ModelAssignment, error) {

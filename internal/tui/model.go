@@ -153,20 +153,16 @@ var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.Model
 }
 var discoverCodexModels = model.DiscoverCodexModels
 
-func currentOpenCodeSettingsPath() (string, error) {
+func currentOpenCodeSettingsPath() string {
 	projectDir, err := modelPickerWorkingDir()
 	if err != nil {
-		return modelPickerSettingsPath(), nil
+		return modelPickerSettingsPath()
 	}
 	home, _ := os.UserHomeDir()
-	snapshot, err := opencode.ResolveEffectiveConfigForHome(home, projectDir)
-	if err != nil {
-		return "", err
+	if path := opencode.EffectiveSettingsPath(home, projectDir); path != "" {
+		return path
 	}
-	if snapshot.WritePath != "" {
-		return snapshot.WritePath, nil
-	}
-	return modelPickerSettingsPath(), nil
+	return modelPickerSettingsPath()
 }
 
 func sanitizeKnownModelEfforts(assignments map[string]model.ModelAssignment, sddModels map[string][]opencode.Model) map[string]model.ModelAssignment {
@@ -2293,10 +2289,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// Only when there are no in-session assignments yet — the nil guard
 			// ensures we don't overwrite changes the user already made this session.
 			if m.Selection.ModelAssignments == nil {
-				settingsPath, pathErr := currentOpenCodeSettingsPath()
-				if pathErr != nil {
-					m.ModelPicker.ConfigWarning = fmt.Sprintf("Could not read OpenCode config: %v", pathErr)
-				} else if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
+				settingsPath := currentOpenCodeSettingsPath()
+				if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
 					// Sanitize loaded assignments: clear any stale effort values for
 					// models that no longer report variants (e.g. provider refreshed
 					// their catalog since the user last synced). Without this, a stale

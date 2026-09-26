@@ -202,16 +202,6 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 
 	if input.DryRun {
-		// Validate authority before reporting a plan that would fail.
-		if containsAgent(resolved.Agents, model.AgentOpenCode) {
-			workspaceDir, werr := os.Getwd()
-			if werr != nil {
-				return InstallResult{}, fmt.Errorf("resolve workspace directory: %w", werr)
-			}
-			if _, err := opencodeactivation.ResolveEffectiveConfigForHome(homeDir, workspaceDir); err != nil {
-				return InstallResult{}, fmt.Errorf("preflight OpenCode write authority: %w", err)
-			}
-		}
 		return result, nil
 	}
 
@@ -732,23 +722,6 @@ func (s *runtimeState) compatibilityChangedFiles() []string {
 }
 
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
-	workspaceDir, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("resolve install workspace: %w", err)
-	}
-	if containsAgent(resolved.Agents, model.AgentOpenCode) {
-		if scope == ScopeGlobal {
-			if _, err := opencodeactivation.ResolveEffectiveConfigForHome(homeDir, workspaceDir); err != nil {
-				return nil, fmt.Errorf("preflight OpenCode write authority: %w", err)
-			}
-		} else {
-			adapter := opencodeagent.NewAdapter()
-			target := adapter.SettingsPath(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
-			if _, _, err := opencodeactivation.AuthorityState(filepath.Dir(target)); err != nil {
-				return nil, fmt.Errorf("preflight workspace OpenCode write authority: %w", err)
-			}
-		}
-	}
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
 	if err != nil {
@@ -759,6 +732,8 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 		state.cleanupCompatibilityTransaction()
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
+
+	workspaceDir, _ := os.Getwd()
 
 	return &installRuntime{
 		homeDir:      homeDir,
