@@ -454,6 +454,14 @@ func (r Results) ValidateCanonical() error {
 	}
 	record("binary", r.Binary)
 	record("failure_reason", r.FailureReason)
+	for index, selector := range r.RequestedSelectors {
+		record(fmt.Sprintf("requested_selectors[%d]", index), selector)
+	}
+	if identity := r.Identity; identity != nil {
+		for index, selector := range identity.Invocation.Only {
+			record(fmt.Sprintf("identity.invocation.only[%d]", index), selector)
+		}
+	}
 	for index, note := range r.Notes {
 		record(fmt.Sprintf("notes[%d]", index), note)
 	}
@@ -463,6 +471,7 @@ func (r Results) ValidateCanonical() error {
 			record(fmt.Sprintf("%s.unsupported_steps[%d]", journey.ID, index), step)
 		}
 		for _, command := range journey.Commands {
+			record(fmt.Sprintf("%s.commands[%d].step", journey.ID, command.Sequence), command.Step)
 			for index, arg := range command.Args {
 				record(fmt.Sprintf("%s.commands[%d].args[%d]", journey.ID, command.Sequence, index), arg)
 			}

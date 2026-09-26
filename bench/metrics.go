@@ -237,7 +237,9 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 	a.commands++
 	record := CommandRecord{
 		Sequence: a.commands,
-		Step:     step,
+		// The step string is the joined argv and can carry machine paths,
+		// so it projects through the same canonical vocabulary as Args.
+		Step: a.normalizer.Normalize(step),
 		// The record carries the canonical projection, while the
 		// classifier below keeps reading the original observation: the
 		// classification must see exactly the bytes the product emitted.

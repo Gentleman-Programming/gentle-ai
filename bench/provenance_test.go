@@ -503,3 +503,63 @@ func TestAnalyzeSessionProjectsRecordedHomePaths(t *testing.T) {
 		t.Fatalf("observed results with home paths must write canonically, got: %v", err)
 	}
 }
+
+func TestObserveProjectsStepThroughNormalizer(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no user home available: %v", err)
+	}
+	records := []SessionRecord{
+		{Argv: []string{"review", "start", "--cwd", home + "/projects/demo"}, ExitCode: 0, StderrCaptured: true},
+	}
+	result := analyzeSession(records, newObservedNormalizer())
+	for _, command := range result.Commands {
+		if strings.Contains(command.Step, home) {
+			t.Fatalf("command step still carries the user home: %q", command.Step)
+		}
+	}
+	if !strings.Contains(result.Commands[0].Step, HomeToken) {
+		t.Fatalf("expected the home token in the projected step, got %q", result.Commands[0].Step)
+	}
+}
+
+func TestEmptySelectionSelectorIsCanonical(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no user home available: %v", err)
+	}
+	binary, _ := benchmarkTestBinary(t)
+	outDir := t.TempDir()
+	code := commandRunWith(
+		[]string{"--binary", binary, "--only", home + "/not-a-journey", "--out", filepath.Join(outDir, "r.json")},
+		func(string) bool { return true },
+		Journeys,
+	)
+	if code != 1 {
+		t.Fatalf("empty selection must exit 1, got %d", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(outDir, "r.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), home) {
+		t.Fatalf("empty-selection file still carries the user home:\n%s", string(raw)[:400])
+	}
+	var results Results
+	if err := json.Unmarshal(raw, &results); err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range results.RequestedSelectors {
+		if !strings.Contains(selector, HomeToken) {
+			t.Fatalf("requested selector not canonicalized: %q", selector)
+		}
+	}
+	for _, selector := range results.Identity.Invocation.Only {
+		if !strings.Contains(selector, HomeToken) {
+			t.Fatalf("identity selector not canonicalized: %q", selector)
+		}
+	}
+	if err := results.ValidateCanonical(); err != nil {
+		t.Fatalf("empty-selection results must validate canonically: %v", err)
+	}
+}

@@ -152,16 +152,31 @@ func commandRunWith(args []string, isExecutable func(string) bool, journeys func
 	// empty-selector early write: a results file is evidence no matter how
 	// the run ended.
 	normalizer := newPathNormalizer(resolved, "")
+	// Operator-supplied selectors can carry any machine path, and the user
+	// home is the one path the normalizer cannot learn from a journey
+	// sandbox — the empty-selection early write never reaches runJourney,
+	// which is where the sandbox layout registers. Register the home
+	// up-front so selectors project canonically from the first write;
+	// journey sandboxes override these values with their own layout.
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && home != "" {
+		normalizer.setSandbox(home, "")
+	}
+	// Selectors are operator input and may carry machine paths (a pasted
+	// binary path, an unusual journey spelling). They are recorded twice —
+	// RequestedSelectors and the identity envelope — so both take the
+	// canonical projection before any write, including the empty-selection
+	// early write that never reaches runJourney.
+	canonicalRequested := normalizer.NormalizeAll(requested)
 	version := binaryVersion(resolved)
 	results := Results{
 		Schema:        ResultsSchema,
 		Mode:          ModeDriven,
 		Binary:        normalizer.Normalize(resolved),
 		BinaryVersion: version,
-		Identity:      newDrivenIdentity(resolved, version, selectedIDs, requested),
+		Identity:      newDrivenIdentity(resolved, version, selectedIDs, canonicalRequested),
 	}
 	if len(requested) > 0 && len(resolvedIDs) == 0 {
-		results.RequestedSelectors = requested
+		results.RequestedSelectors = canonicalRequested
 		results.ResolvedIDs = &resolvedIDs
 		results.RunStatus = "failed"
 		results.FailureReason = "empty_selected_population"
