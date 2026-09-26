@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +30,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeagents"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
@@ -1162,7 +1162,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 // Current roles are reset to model/variant only, so subsequent writers install
 // their current prompt and permissions without retaining obsolete keys. The
 // current role set is per runtime: Kilo shares the OpenCode config format but
-// not the full role set (see openCodeFamilyManagedRoles).
+// not the full role set (see opencodeagents.Roles).
 //
 // It also reports the review agents it removed under the marker, which is the
 // ownership proof retireOpenCodeFamilyReviewAgents needs to drop their
@@ -1181,7 +1181,7 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 	}
 	agents, _ := root["agent"].(map[string]any)
 	current := map[string]bool{"gentle-orchestrator": true}
-	for _, name := range openCodeFamilyManagedRoles(agent) {
+	for _, name := range opencodeagents.Roles(agent) {
 		current[name] = true
 	}
 	rdd := model.SupportsReceiptDrivenDevelopment(agent)
@@ -1196,7 +1196,7 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 		switch {
 		case name == "general", name == "explore", strings.HasPrefix(name, "sdd-"):
 			delete(agents, name)
-		case !rdd && isOpenCodeFamilyReviewAgent(name):
+		case !rdd && opencodeagents.IsReview(name):
 			// The v3.7.0 marker proves ownership of a review agent this
 			// runtime no longer receives.
 			delete(agents, name)
@@ -1227,42 +1227,6 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 	// WriteFileAtomic may publish the replacement and still report an error;
 	// keep its Changed state so the caller records the file either way.
 	return result.Changed, removedReview, err
-}
-
-// openCodeFamilyManagedRoles lists the subagents the routing owner installs for
-// an OpenCode-compatible runtime, in the v3.7.0 shape for that runtime. Kilo
-// never received review-validator (it hosts no provider relay to issue it) nor
-// the gentle-ai-* ODD trio (its rendered orchestrator routing names no
-// subagents, so it delegates to Kilo's native agents). Review agents belong to
-// receipt-driven development and reach only its runtimes.
-func openCodeFamilyManagedRoles(agent model.AgentID) []string {
-	var names []string
-	if model.SupportsReceiptDrivenDevelopment(agent) {
-		names = append(names, "review-refuter")
-	}
-	if agent == model.AgentOpenCode {
-		names = append(names, "review-validator")
-	}
-	for _, spec := range openCodeFamilyParityAgents(agent) {
-		names = append(names, spec.name)
-	}
-	return names
-}
-
-// openCodeFamilyReviewAgents are the receipt-driven development agents the
-// routing owner has ever written to an OpenCode-compatible settings file.
-var openCodeFamilyReviewAgents = []string{
-	"review-risk", "review-readability", "review-reliability", "review-resilience",
-	"review-refuter", "review-validator",
-}
-
-func isOpenCodeFamilyReviewAgent(name string) bool {
-	for _, candidate := range openCodeFamilyReviewAgents {
-		if candidate == name {
-			return true
-		}
-	}
-	return false
 }
 
 // retireOpenCodeFamilyReviewAgents removes the review agents earlier releases
@@ -1299,12 +1263,12 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 	for _, name := range legacyRemoved {
 		removed[name] = true
 	}
-	for _, name := range openCodeFamilyReviewAgents {
+	for _, name := range opencodeagents.ReviewNames() {
 		entry, ok := agents[name].(map[string]any)
 		if !ok {
 			continue
 		}
-		owned, err := hasOpenCodeFamilyManagedReviewShape(name, entry)
+		owned, err := opencodeagents.Shape(name, entry)
 		if err != nil {
 			return false, err
 		}
@@ -1317,7 +1281,7 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
 	permission, _ := orchestrator["permission"].(map[string]any)
 	if task, ok := permission["task"].(map[string]any); ok {
-		for _, name := range openCodeFamilyReviewAgents {
+		for _, name := range opencodeagents.ReviewNames() {
 			if _, present := agents[name]; present || !removed[name] {
 				continue
 			}
@@ -1338,32 +1302,6 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 	return result.Changed, err
 }
 
-// hasOpenCodeFamilyManagedReviewShape reports whether entry is exactly what the
-// routing owner wrote for a review agent, allowing only the model and variant a
-// user may assign on top of it.
-func hasOpenCodeFamilyManagedReviewShape(name string, entry map[string]any) (bool, error) {
-	shape, ok := openCodeFamilyManagedReviewShape(name)
-	if !ok {
-		return false, nil
-	}
-	comparable := make(map[string]any, len(entry))
-	for key, value := range entry {
-		if key == "model" || key == "variant" {
-			continue
-		}
-		comparable[key] = value
-	}
-	got, err := json.Marshal(comparable)
-	if err != nil {
-		return false, err
-	}
-	want, err := json.Marshal(shape)
-	if err != nil {
-		return false, err
-	}
-	return bytes.Equal(got, want), nil
-}
-
 // Provider STATUS can issue these roles without SDD. Keep their task permissions
 // with the OpenCode routing owner, not with the retired SDD overlay.
 func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID) (bool, error) {
@@ -1372,17 +1310,17 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 		return false, err
 	}
 	task := map[string]any{}
-	for _, name := range openCodeFamilyManagedRoles(agent) {
+	for _, name := range opencodeagents.Roles(agent) {
 		task[name] = "allow"
 	}
 	roles := map[string]any{
 		"gentle-orchestrator": map[string]any{"permission": map[string]any{"task": task}},
 	}
 	if model.SupportsReceiptDrivenDevelopment(agent) {
-		roles["review-refuter"] = reviewRefuterRole()
+		roles["review-refuter"] = opencodeagents.Refuter()
 	}
 	if agent == model.AgentOpenCode {
-		roles["review-validator"] = reviewValidatorRole()
+		roles["review-validator"] = opencodeagents.Validator()
 	}
 	overlay, err := json.Marshal(map[string]any{"agent": roles})
 	if err != nil {
@@ -1396,133 +1334,6 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	return result.Changed, err
 }
 
-// reviewRefuterRole is the review-refuter entry the routing owner writes.
-func reviewRefuterRole() map[string]any {
-	return map[string]any{
-		"mode": "subagent", "hidden": true,
-		"description": "Read-only refuter for provider-issued review findings",
-		"prompt":      "Evaluate only the Go-issued review refuter task. Inspect only the frozen candidate through the provided commands. Do not edit files or delegate. Return only the requested result.",
-		"permission":  map[string]any{"write": "deny", "edit": "deny", "task": "deny"},
-	}
-}
-
-// reviewValidatorRole is the review-validator entry the routing owner writes.
-func reviewValidatorRole() map[string]any {
-	return map[string]any{
-		"mode": "subagent", "hidden": true,
-		"description": "Targeted read-only validator for provider-issued review checks",
-		"prompt":      "Execute only the Go-issued targeted validation. Do not edit files or delegate. Inspect only the frozen candidate using the provided gentle-ai review inspect-candidate command, not the live worktree. Return exactly the requested JSON.",
-		"permission": map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": map[string]any{
-			"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow", "*": "deny",
-		}},
-	}
-}
-
-// openCodeFamilyManagedReviewShape returns the exact entry the routing owner
-// writes for one RDD agent, or ok=false for a name it never writes.
-func openCodeFamilyManagedReviewShape(name string) (map[string]any, bool) {
-	switch name {
-	case "review-refuter":
-		return reviewRefuterRole(), true
-	case "review-validator":
-		return reviewValidatorRole(), true
-	}
-	for _, spec := range openCodeParityAgents {
-		if spec.name == name && strings.HasPrefix(name, "review-") {
-			entry, err := openCodeParityAgentEntry(spec)
-			if err != nil {
-				return nil, false
-			}
-			return entry, true
-		}
-	}
-	return nil, false
-}
-
-// openCodeParityAgentEntry renders one parity spec as the routing owner writes it.
-func openCodeParityAgentEntry(spec openCodeParityAgentSpec) (map[string]any, error) {
-	prompt, err := assets.Read("opencode/agents/" + spec.name + ".md")
-	if err != nil {
-		return nil, fmt.Errorf("read embedded prompt for %q: %w", spec.name, err)
-	}
-	return map[string]any{
-		"mode": "subagent", "hidden": true,
-		"description": spec.description,
-		"prompt":      prompt,
-		"permission":  spec.permission,
-	}, nil
-}
-
-// openCodeParityAgentSpec is one entry of the parity set from #4471: the
-// Gentle Shell global agents (gentle-ai-explore/verify/worker, the three JD
-// roles, and the four review lenses) ported to OpenCode subagents at
-// functional parity.
-type openCodeParityAgentSpec struct {
-	name        string
-	description string
-	// permission holds only the OpenCode permission keys that diverge from
-	// the platform default ("allow"); omitted keys stay at their default.
-	permission map[string]any
-}
-
-// openCodeParityAgents is the canonical parity source (gentle-pi
-// assets/agents/*.md at 89b8de3b5). Prompt bodies are embedded verbatim (with
-// documented OpenCode-specific adaptations) under internal/assets/opencode/agents.
-// Model and variant are deliberately omitted from every entry so a deep merge
-// never overwrites a user's own model assignment for these agents.
-var openCodeParityAgents = []openCodeParityAgentSpec{
-	{
-		name:        "gentle-ai-explore",
-		description: "Read-only exploration and mapping for generic ODD work.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"},
-	},
-	{
-		name:        "gentle-ai-verify",
-		description: "Read-only technical verification for generic ODD work.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "task": "deny"},
-	},
-	{
-		name:        "gentle-ai-worker",
-		description: "Scoped package-owned implementation writer for bounded ODD work. Edits code, runs focused tests, and returns review-ready evidence without committing.",
-		permission:  map[string]any{"task": "deny"},
-	},
-	{
-		name:        "jd-judge-a",
-		description: "Judgment Day blind adversarial reviewer A. Read-only; reports findings and does not fix code.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "task": "deny"},
-	},
-	{
-		name:        "jd-judge-b",
-		description: "Judgment Day blind adversarial reviewer B. Read-only; independently reports findings and does not fix code.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "task": "deny"},
-	},
-	{
-		name:        "jd-fix-agent",
-		description: "Judgment Day surgical fix agent for confirmed findings. Can edit code and run focused tests.",
-		permission:  map[string]any{"task": "deny"},
-	},
-	{
-		name:        "review-risk",
-		description: "R1 Risk reviewer — security, privilege boundaries, data exposure, dependency risks, and merge-blocking vulnerabilities.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"},
-	},
-	{
-		name:        "review-readability",
-		description: "R2 Readability reviewer — naming, complexity, intention, maintainability, review size, and context clarity.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"},
-	},
-	{
-		name:        "review-reliability",
-		description: "R3 Reliability reviewer — behavior-first tests, coverage value, edge cases, determinism, contracts, and regressions.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"},
-	},
-	{
-		name:        "review-resilience",
-		description: "R4 Resilience reviewer — fallbacks, retry/backoff, graceful degradation, observability, load, rollback, and SLO risks.",
-		permission:  map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"},
-	},
-}
-
 // installOpenCodeODDParityAgents installs the ODD/JD/review-lens subagents at
 // functional parity with Gentle Shell's global agents (#4471). Prior to this,
 // only gentle-orchestrator, gentleman, review-refuter, and review-validator
@@ -1532,38 +1343,19 @@ func installOpenCodeODDParityAgents(settingsPath string) (bool, error) {
 	return installOpenCodeFamilyParityAgents(settingsPath, model.AgentOpenCode)
 }
 
-// openCodeFamilyParityAgents returns the parity specs installed for an
-// OpenCode-compatible runtime. Kilo keeps the v3.7.0 JD set with the same
-// prompts and permissions, without the gentle-ai-* ODD trio, and without the
-// review lenses: receipt-driven development reaches only its own runtimes.
-func openCodeFamilyParityAgents(agent model.AgentID) []openCodeParityAgentSpec {
-	if agent == model.AgentOpenCode {
-		return openCodeParityAgents
-	}
-	rdd := model.SupportsReceiptDrivenDevelopment(agent)
-	specs := make([]openCodeParityAgentSpec, 0, len(openCodeParityAgents))
-	for _, spec := range openCodeParityAgents {
-		if strings.HasPrefix(spec.name, "gentle-ai-") || (!rdd && isOpenCodeFamilyReviewAgent(spec.name)) {
-			continue
-		}
-		specs = append(specs, spec)
-	}
-	return specs
-}
-
 func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID) (bool, error) {
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
 		return false, err
 	}
-	specs := openCodeFamilyParityAgents(agent)
+	specs := opencodeagents.Parity(agent)
 	agentsOverlay := make(map[string]any, len(specs))
 	for _, spec := range specs {
-		entry, err := openCodeParityAgentEntry(spec)
+		entry, err := opencodeagents.Entry(spec)
 		if err != nil {
 			return false, err
 		}
-		agentsOverlay[spec.name] = entry
+		agentsOverlay[spec.Name] = entry
 	}
 	overlay, err := json.Marshal(map[string]any{"agent": agentsOverlay})
 	if err != nil {
