@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
 )
 
 // TestMain gives the whole internal/app test binary a safe, sandboxed HOME
@@ -22,6 +23,11 @@ import (
 // touched, and a RecordingSpawner so even a test that re-enables telemetry
 // for its own scope can never start a real process or reach the network.
 func TestMain(m *testing.M) {
+	// Neutralize ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
+	// OPENCODE_CONFIG_DIR): this package's catalog.AllAgents() loops resolve
+	// Pi's config path directly from the environment, independent of the
+	// sandboxed HOME set up below.
+	testenv.Isolate()
 	testHome, err := os.MkdirTemp("", "gentle-ai-app-test-home-*")
 	if err != nil {
 		panic(err)

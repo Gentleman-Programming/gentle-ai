@@ -15,10 +15,18 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
 )
 
 func TestMain(m *testing.M) {
+	// Neutralize ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
+	// OPENCODE_CONFIG_DIR) up front: this package's executor tests resolve
+	// Pi and OpenCode config paths through the real adapters/internal/opencode
+	// package, both of which honor these overrides directly from the
+	// environment. Individual tests keep their own explicit t.Setenv("", "")
+	// resets, which still work fine on top of this baseline.
+	testenv.Isolate()
 	// Existing upgrade fixtures explicitly represent V1, never the ambient CLI.
 	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
 		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil

@@ -16,9 +16,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
 )
 
+// TestMain neutralizes ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
+// OPENCODE_CONFIG_DIR) before anything else: this package's Pi CodeGraph tests
+// already set PI_CODING_AGENT_DIR explicitly per-test, but the codegraph
+// subprocess re-exec path below runs before any such t.Setenv takes effect.
 func TestMain(m *testing.M) {
+	testenv.Isolate()
 	if mode := os.Getenv("GENTLE_AI_CODEGRAPH_TEST_HELPER"); mode != "" {
 		runCodeGraphTestHelper(mode)
 		os.Exit(0)
