@@ -19,16 +19,20 @@ func TestCompactReviewBoundsCandidateCausalityToGenesisLocations(t *testing.T) {
 		wantFix, wantFollow bool
 		wantRefuterRequired bool
 	}{
-		{name: "missing location", causality: CausalIntroduced, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
-		{name: "malformed location", location: "tracked.txt", causality: CausalBehaviorActivated, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
-		{name: "absolute location", location: "/tracked.txt:1", causality: CausalWorsened, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
-		{name: "windows absolute location", location: "C:/tracked.txt:1", causality: CausalWorsened, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
-		{name: "traversal location", location: "../tracked.txt:1", causality: CausalIntroduced, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
-		{name: "outside genesis", location: "legacy/unsafe.go:5", causality: CausalBehaviorActivated, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
+		// Unresolved findings route to the decision_required pause since #1380:
+		// the engine no longer escalates on its own authority at complete-review.
+		// The causality downgrade under test is unchanged; only the terminal
+		// state of the automated flow moved behind the human decision.
+		{name: "missing location", causality: CausalIntroduced, class: EvidenceDeterministic, wantState: StateDecisionRequired, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
+		{name: "malformed location", location: "tracked.txt", causality: CausalBehaviorActivated, class: EvidenceDeterministic, wantState: StateDecisionRequired, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
+		{name: "absolute location", location: "/tracked.txt:1", causality: CausalWorsened, class: EvidenceDeterministic, wantState: StateDecisionRequired, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
+		{name: "windows absolute location", location: "C:/tracked.txt:1", causality: CausalWorsened, class: EvidenceDeterministic, wantState: StateDecisionRequired, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
+		{name: "traversal location", location: "../tracked.txt:1", causality: CausalIntroduced, class: EvidenceDeterministic, wantState: StateDecisionRequired, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
+		{name: "outside genesis", location: "legacy/unsafe.go:5", causality: CausalBehaviorActivated, class: EvidenceDeterministic, wantState: StateDecisionRequired, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
 		{name: "in genesis introduced", location: "tracked.txt:1", causality: CausalIntroduced, class: EvidenceDeterministic, wantState: StateCorrectionRequired, wantCausality: CausalIntroduced, wantOutcome: OutcomeCorroborated, wantFix: true},
 		{name: "pre-existing remains follow-up", location: "legacy/unsafe.go:5", causality: CausalPreExisting, class: EvidenceDeterministic, wantState: StateValidating, wantCausality: CausalPreExisting, wantOutcome: OutcomeInfo, wantFollow: true},
 		{name: "base-only remains follow-up", location: "legacy/unsafe.go:5", causality: CausalBaseOnly, class: EvidenceDeterministic, wantState: StateValidating, wantCausality: CausalBaseOnly, wantOutcome: OutcomeInfo, wantFollow: true},
-		{name: "explicit unknown remains escalated", location: "tracked.txt:1", causality: CausalUnknown, class: EvidenceDeterministic, wantState: StateEscalated, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
+		{name: "explicit unknown remains escalated", location: "tracked.txt:1", causality: CausalUnknown, class: EvidenceDeterministic, wantState: StateDecisionRequired, wantCausality: CausalUnknown, wantOutcome: OutcomeInconclusive},
 		{name: "in genesis inferential requires refuter", location: "tracked.txt:1", causality: CausalIntroduced, class: EvidenceInferential, wantRefuterRequired: true},
 		{name: "in genesis inferential uses one refuter", location: "tracked.txt:1", causality: CausalIntroduced, class: EvidenceInferential, refuter: []EvidenceResult{{FindingID: "R3-001", Outcome: OutcomeCorroborated, Proof: "independent reproduction"}}, wantState: StateCorrectionRequired, wantCausality: CausalIntroduced, wantOutcome: OutcomeCorroborated, wantFix: true},
 		{name: "in genesis inferential refuter inconclusive routes to correction", location: "tracked.txt:1", causality: CausalIntroduced, class: EvidenceInferential, refuter: []EvidenceResult{{FindingID: "R3-001", Outcome: OutcomeInconclusive, Proof: "could not disprove"}}, wantState: StateCorrectionRequired, wantCausality: CausalIntroduced, wantOutcome: OutcomeInconclusive, wantFix: true},

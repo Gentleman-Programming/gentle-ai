@@ -337,7 +337,8 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 	// to admit and remains a terminal native stop.
 	if status.Action == reviewtransaction.TargetStatusActionStop &&
 		status.Authority.State != reviewtransaction.StateReviewing &&
-		status.Authority.State != reviewtransaction.StateCorrectionRequired {
+		status.Authority.State != reviewtransaction.StateCorrectionRequired &&
+		status.Authority.State != reviewtransaction.StateDecisionRequired {
 		return reviewStopTransition("native_stop_required")
 	}
 	switch status.Authority.State {
@@ -428,6 +429,13 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 		// still applies unchanged.
 		status.ActionDisposition = reviewtransaction.RecoveryEscalated
 		return reviewRecoveryCollection(status, binding, input)
+	case reviewtransaction.StateDecisionRequired:
+		// #1380: the pause is the one active state whose exit is a human
+		// decision, so the stop names it instead of collapsing to a native
+		// stop; the narration registry carries the exact decide invocation and
+		// the native STATUS projection carries the runnable continue/stop
+		// twins with the current expected revision.
+		return reviewStopTransition("review_decision_required")
 	default:
 		return reviewStopTransition("manual_intervention_required")
 	}

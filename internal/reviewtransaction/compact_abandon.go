@@ -154,8 +154,13 @@ func compactAbandonV2Rerun(repo, lineage, revision, snapshotIdentity, actor, rea
 
 // compactAbandonTerminalState follows the public authority-status terminal
 // contract. An invalidated lineage remains auditable, but is no longer an
-// abandonment target.
+// abandonment target. A decision_required lineage is explicitly exempt from
+// abandonment (#1380): its sanctioned exit is review decide (continue|stop),
+// so the pause must never be discarded through the abandon escape valve.
 func compactAbandonTerminalState(state State) bool {
+	if state == StateDecisionRequired {
+		return true
+	}
 	switch authorityStatusForState(state) {
 	case AuthorityStatusApproved, AuthorityStatusEscalated, AuthorityStatusInvalidated:
 		return true

@@ -88,54 +88,7 @@ func (state CompactState) EscalationEvidence() *CompactEscalationEvidence {
 	}
 	view, err := state.CompactReviewView()
 	if err == nil {
-		unresolvedIDs := []string{}
-		cause := "unresolved_severe_findings"
-		hasUnknownCausality := false
-		hasInsufficientEvidence := false
-		hasMissingRefuter := false
-
-		refuterMap := make(map[string]EvidenceResult, len(view.RefuterOutcomes))
-		for _, r := range view.RefuterOutcomes {
-			refuterMap[r.FindingID] = r
-		}
-		fixSet := make(map[string]struct{}, len(view.FixFindingIDs))
-		for _, id := range view.FixFindingIDs {
-			fixSet[id] = struct{}{}
-		}
-
-		for id, outcome := range view.Outcomes {
-			if outcome == OutcomeInconclusive {
-				if _, fixing := fixSet[id]; !fixing {
-					unresolvedIDs = append(unresolvedIDs, id)
-					if class, found := view.Classifications[id]; found {
-						if class.Causality == CausalUnknown {
-							hasUnknownCausality = true
-						}
-						if class.Class == EvidenceInsufficient {
-							hasInsufficientEvidence = true
-						}
-						if class.Class == EvidenceInferential {
-							if _, inRefuter := refuterMap[id]; !inRefuter {
-								hasMissingRefuter = true
-							}
-						}
-					}
-				}
-			}
-		}
-		sort.Strings(unresolvedIDs)
-		if len(unresolvedIDs) > 0 {
-			if hasUnknownCausality {
-				cause = "unknown_causality"
-			} else if hasInsufficientEvidence {
-				cause = "insufficient_evidence"
-			} else if hasMissingRefuter {
-				cause = "missing_refuter_outcome"
-			}
-			var refuterOutcomes []EvidenceResult
-			if len(view.RefuterOutcomes) > 0 {
-				refuterOutcomes = append([]EvidenceResult(nil), view.RefuterOutcomes...)
-			}
+		if cause, unresolvedIDs, refuterOutcomes, found := classifyCompactUnresolvedFindings(view); found {
 			return &CompactEscalationEvidence{
 				Cause:           cause,
 				FindingIDs:      unresolvedIDs,

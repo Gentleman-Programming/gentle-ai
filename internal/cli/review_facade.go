@@ -750,6 +750,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewInvalidate(args[1:], stdout)
 	case "abandon":
 		return RunReviewAbandon(args[1:], stdout)
+	case "decide":
+		return RunReviewDecide(args[1:], stdout)
 	case "recover":
 		return RunReviewRecover(args[1:], stdout)
 	case "reclaim":
