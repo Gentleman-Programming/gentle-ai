@@ -1900,3 +1900,5 @@ func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]mode
 	}
 	return removed, nil
 }
+
+// Commit: force CodeRabbit re-review of stale prompts (2025-09-26)
