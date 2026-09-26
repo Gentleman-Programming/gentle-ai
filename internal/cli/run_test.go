@@ -83,15 +83,7 @@ func assertOpenCodeComponentSelectedOnly(t *testing.T, selected, decoy string, b
 
 func TestInstallEngramUsesSelectedOpenCodeJSONC(t *testing.T) {
 	home, workspace, selected, decoy, before := themeSettingsFixture(t)
-	t.Setenv("GENTLE_AI_ENGRAM_SETUP_MODE", "off")
-	originalLookPath := cmdLookPath
-	cmdLookPath = func(name string) (string, error) {
-		if name == "engram" {
-			return filepath.Join(home, "test-engram-not-executed"), nil
-		}
-		return originalLookPath(name)
-	}
-	t.Cleanup(func() { cmdLookPath = originalLookPath })
+	stubEngramLookPath(t, home)
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentEngram}}
 	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
 	if err != nil || !slices.Contains(targets, selected) {
@@ -104,41 +96,76 @@ func TestInstallEngramUsesSelectedOpenCodeJSONC(t *testing.T) {
 	assertOpenCodeComponentSelectedOnly(t, selected, decoy, before, model.ComponentEngram)
 }
 
+// TestInstallOpenCodeSettingsWritersWorkspaceScope proves a workspace-scoped
+// install still writes the one settings document OpenCode loads (the effective
+// global authority) and never strands <workspace>/.config/opencode/opencode.json,
+// which OpenCode never reads (issue #1825).
 func TestInstallOpenCodeSettingsWritersWorkspaceScope(t *testing.T) {
-	for _, component := range []model.ComponentID{model.ComponentPersona, model.ComponentPermission, model.ComponentContext7} {
-		t.Run(string(component), func(t *testing.T) {
-			home, workspace, globalJSONC, decoy, _ := themeSettingsFixture(t)
-			selected := opencode.NewAdapter().SettingsPath(workspace)
-			if err := os.MkdirAll(filepath.Dir(selected), 0700); err != nil {
-				t.Fatal(err)
+	components := []model.ComponentID{model.ComponentPersona, model.ComponentPermission, model.ComponentContext7, model.ComponentTheme, model.ComponentEngram}
+	for _, component := range components {
+		for _, projectFile := range []bool{true, false} {
+			name := string(component) + "/home-settings"
+			if projectFile {
+				name = string(component) + "/project-jsonc"
 			}
-			before := []byte(`{"user":true}`)
-			if err := os.WriteFile(selected, before, 0600); err != nil {
-				t.Fatal(err)
-			}
-			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{component}, Persona: model.PersonaGentleman}
-			paths, err := backupTargets(home, workspace, ScopeWorkspace, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
-			if err != nil || !slices.Contains(paths, selected) {
-				t.Fatalf("workspace backup = %v, %v", paths, err)
-			}
-			step := componentApplyStep{component: component, homeDir: home, workspaceDir: workspace, scope: ScopeWorkspace, agents: selection.Agents, selection: selection}
-			if err := step.Run(); err != nil {
-				t.Fatal(err)
-			}
-			got, err := os.ReadFile(selected)
-			if err != nil || bytes.Equal(got, before) || !bytes.Contains(got, []byte(`"user": true`)) {
-				t.Fatalf("workspace settings = %s, %v", got, err)
-			}
-			got, err = os.ReadFile(globalJSONC)
-			if err != nil || !bytes.Contains(got, []byte("// project settings")) || bytes.Contains(got, []byte(`"agent"`)) || bytes.Contains(got, []byte(`"mcp"`)) || bytes.Contains(got, []byte(`"permission"`)) {
-				t.Fatalf("global project settings changed: %s, %v", got, err)
-			}
-			got, err = os.ReadFile(decoy)
-			if err != nil || string(got) != `{"theme":"user-owned"}` {
-				t.Fatalf("global decoy changed: %s, %v", got, err)
-			}
-		})
+			t.Run(name, func(t *testing.T) {
+				home, workspace, selected, decoy, before := themeSettingsFixture(t)
+				loaded := selected
+				if !projectFile {
+					if err := os.Remove(selected); err != nil {
+						t.Fatal(err)
+					}
+					loaded = decoy
+					var err error
+					if before, err = os.ReadFile(loaded); err != nil {
+						t.Fatal(err)
+					}
+					if got := effectiveOpenCodeSettingsPath(home, workspace, ScopeGlobal, opencode.NewAdapter()); got != loaded {
+						t.Fatalf("effective path = %q, want home settings %q", got, loaded)
+					}
+				}
+				if component == model.ComponentEngram {
+					stubEngramLookPath(t, home)
+				}
+				stranded := opencode.NewAdapter().SettingsPath(workspace)
+				selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{component}, Persona: model.PersonaGentleman}
+				paths, err := backupTargets(home, workspace, ScopeWorkspace, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+				if err != nil || !slices.Contains(paths, loaded) || slices.Contains(paths, stranded) {
+					t.Fatalf("workspace backup targets = %v, %v; want %q and not %q", paths, err, loaded, stranded)
+				}
+				if declared := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, selection, resolveAdapters(selection.Agents), component); slices.Contains(declared, stranded) {
+					t.Fatalf("%s declares stranded workspace settings: %v", component, declared)
+				}
+				step := componentApplyStep{component: component, homeDir: home, workspaceDir: workspace, scope: ScopeWorkspace, agents: selection.Agents, selection: selection}
+				if err := step.Run(); err != nil {
+					t.Fatal(err)
+				}
+				if projectFile {
+					assertOpenCodeComponentSelectedOnly(t, loaded, decoy, before, component)
+				} else if got, err := os.ReadFile(loaded); err != nil || bytes.Equal(got, before) {
+					t.Fatalf("%s home settings = %s, %v; want a write", component, got, err)
+				}
+				if _, err := os.Stat(stranded); !os.IsNotExist(err) {
+					t.Fatalf("%s stranded a settings document OpenCode never loads at %s (stat err = %v)", component, stranded, err)
+				}
+			})
+		}
 	}
+}
+
+// stubEngramLookPath resolves engram to a path that is never executed, with
+// engram setup disabled, so the Engram component only merges its settings.
+func stubEngramLookPath(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("GENTLE_AI_ENGRAM_SETUP_MODE", "off")
+	originalLookPath := cmdLookPath
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return filepath.Join(home, "test-engram-not-executed"), nil
+		}
+		return originalLookPath(name)
+	}
+	t.Cleanup(func() { cmdLookPath = originalLookPath })
 }
 
 func TestInstallThemeUsesSelectedOpenCodeJSONC(t *testing.T) {
@@ -282,35 +309,6 @@ func TestInstallThemeRollbackRestoresSelectedJSONCBytesAndMode(t *testing.T) {
 	got, err = os.ReadFile(decoy)
 	if err != nil || !bytes.Equal(got, decoyBefore) {
 		t.Fatalf("decoy JSON changed: %q, %v", got, err)
-	}
-}
-
-func TestInstallThemeWorkspaceKeepsGlobalSettings(t *testing.T) {
-	home, workspace, _, decoy, _ := themeSettingsFixture(t)
-	selected := opencode.NewAdapter().SettingsPath(workspace)
-	if err := os.MkdirAll(filepath.Dir(selected), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(selected, []byte(`{"theme":"old","user":true}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentTheme}}
-	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
-	paths, err := backupTargets(home, workspace, ScopeWorkspace, selection, resolved)
-	if err != nil || !slices.Contains(paths, selected) {
-		t.Fatalf("workspace backup = %v, %v", paths, err)
-	}
-	step := componentApplyStep{component: model.ComponentTheme, homeDir: home, workspaceDir: workspace, scope: ScopeWorkspace, agents: selection.Agents}
-	if err := step.Run(); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(selected)
-	if err != nil || !bytes.Contains(data, []byte(`"theme": "gentleman"`)) {
-		t.Fatalf("workspace settings = %s, %v", data, err)
-	}
-	data, err = os.ReadFile(decoy)
-	if err != nil || string(data) != `{"theme":"user-owned"}` {
-		t.Fatalf("global settings = %s, %v", data, err)
 	}
 }
 
