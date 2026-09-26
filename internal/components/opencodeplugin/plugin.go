@@ -308,7 +308,7 @@ func (p priorFile) restore(path string) error {
 		}
 		return nil
 	}
-	if _, err := filemerge.WriteFileAtomic(path, p.data, p.mode.Perm()); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(path, p.data, p.mode.Perm()); err != nil {
 		return err
 	}
 	return nil

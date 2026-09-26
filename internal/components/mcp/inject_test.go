@@ -1514,3 +1514,30 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 		t.Fatalf("config.yaml lost pre-existing key on second Inject:\n%s", text2)
 	}
 }
+
+// TestMergeJSONFilePreservesExistingModeOnRewrite is the representative
+// end-to-end regression test for gentle-ai#5006(F5): mergeJSONFile is the
+// settings-merge codepath shared by every non-OpenCode/OpenClaw MCP
+// injection, and rewriting a pre-seeded private settings file must never
+// widen it.
+func TestMergeJSONFilePreservesExistingModeOnRewrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"already":"set"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mergeJSONFile(path, DefaultContext7OverlayJSON()); err != nil {
+		t.Fatalf("mergeJSONFile() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode after mergeJSONFile = %v, want 0600 preserved", got)
+	}
+}

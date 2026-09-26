@@ -6,10 +6,78 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
+
+// TestMergeUserConfigForcesOAuthFileTo0600OnContentChange pins gentle-ai#5006(F5):
+// the OAuth-bearing ~/.claude.json must always end at 0600, tightening it if the
+// file was created insecurely, even though rewriting an existing file otherwise
+// preserves its current mode by default.
+func TestMergeUserConfigForcesOAuthFileTo0600OnContentChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	home := t.TempDir()
+	configPath := UserConfigPath(home)
+	if err := os.WriteFile(configPath, []byte(`{"already":"set"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := MergeUserConfig(home, []byte(`{"added":"value"}`)); err != nil {
+		t.Fatalf("MergeUserConfig() error = %v", err)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode after merge = %v, want 0600", got)
+	}
+}
+
+// TestMergeUserConfigForcesOAuthFileTo0600OnIdenticalContent covers the no-op
+// merge path: the file must still be tightened to 0600 even when the merged
+// bytes are byte-identical to what is already on disk.
+func TestMergeUserConfigForcesOAuthFileTo0600OnIdenticalContent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	home := t.TempDir()
+	configPath := UserConfigPath(home)
+	overlay := []byte(`{"already":"set"}`)
+	canonical, err := filemerge.MergeJSONObjects(nil, overlay)
+	if err != nil {
+		t.Fatalf("MergeJSONObjects() error = %v", err)
+	}
+	if err := os.WriteFile(configPath, canonical, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := MergeUserConfig(home, overlay); err != nil {
+		t.Fatalf("MergeUserConfig() error = %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(canonical) {
+		t.Fatalf("content changed = %q, want unchanged %q", data, canonical)
+	}
+
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode after no-op merge = %v, want 0600 enforced", got)
+	}
+}
 
 func TestDetect(t *testing.T) {
 	tests := []struct {

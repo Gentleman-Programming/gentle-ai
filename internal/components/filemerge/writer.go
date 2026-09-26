@@ -72,6 +72,14 @@ type WriteResult struct {
 // WriteFileAtomic replaces path with content and reports whether the
 // replacement actually occurred.
 //
+// perm applies only when path does not yet exist. Rewriting an existing
+// regular file preserves its current permission bits instead — a private file
+// (for example a settings document holding credentials) must never be widened
+// just because it was reinstalled or resynced. Callers that must force a
+// specific mode regardless of the file's current state (an executable script,
+// a credentials file pinned to a fixed mode, a backup restore recreating a
+// recorded mode) use WriteFileAtomicMode instead.
+//
 // A nil error means the bytes reached stable storage (staged file synced,
 // parent directory synced) and were read back from path. Any other outcome is
 // an error.
@@ -82,20 +90,47 @@ type WriteResult struct {
 // rollback and journalling decisions come from the writer rather than from a
 // guess at each call site (#1676).
 func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
+	return writeFileAtomic(path, content, perm, false)
+}
+
+// WriteFileAtomicMode replaces path with content and always applies perm,
+// widening or narrowing an existing file's mode as needed — including when
+// content is unchanged, so a caller restoring a recorded mode still lands it.
+// Use WriteFileAtomic instead unless the caller owns the target mode outright.
+func WriteFileAtomicMode(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
+	return writeFileAtomic(path, content, perm, true)
+}
+
+func writeFileAtomic(path string, content []byte, perm fs.FileMode, forceMode bool) (WriteResult, error) {
 	if perm == 0 {
-		perm = 0o644
+		// A forced zero mode comes from a recorded mode (restore paths); never
+		// widen it past owner-only. An omitted mode for a new file keeps 0644.
+		if forceMode {
+			perm = 0o600
+		} else {
+			perm = 0o644
+		}
 	}
 
 	created := false
 	existing, err := readComparableFile(path)
 	if err == nil {
 		if bytes.Equal(existing, content) {
+			if forceMode {
+				if chmodErr := os.Chmod(path, perm); chmodErr != nil {
+					return WriteResult{}, fmt.Errorf("set permissions on %q: %w", path, chmodErr)
+				}
+			}
 			return WriteResult{}, nil
 		}
 	} else if !os.IsNotExist(err) {
 		return WriteResult{}, fmt.Errorf("read existing file %q: %w", path, err)
 	} else {
 		created = true
+	}
+
+	if !forceMode && !created {
+		perm = ExistingFileMode(path, perm)
 	}
 
 	landed, _, err := replaceDurably(path, bytes.NewReader(content), perm)
@@ -108,9 +143,10 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 
 // ExistingFileMode returns the permission bits of the regular file at path, or
 // fallback when path is absent or is not a regular file. A regular file with no
-// permission bits yields 0600 so it is never widened. Callers rewriting a
-// user-owned file pass the result to WriteFileAtomic so a private file (for
-// example a settings document holding credentials) is never widened on rewrite.
+// permission bits yields 0600 so it is never widened. WriteFileAtomic uses this
+// internally so a private file (for example a settings document holding
+// credentials) is never widened on rewrite; forced-mode callers computing
+// their own perm from the current file may still call it directly.
 func ExistingFileMode(path string, fallback fs.FileMode) fs.FileMode {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
@@ -134,6 +170,12 @@ type StreamResult struct {
 
 // WriteStreamAtomic replaces path with everything readable from src and returns
 // the size and SHA-256 of the bytes read back from path afterwards.
+//
+// WriteStreamAtomic always applies perm, the same forced-mode contract as
+// WriteFileAtomicMode, never WriteFileAtomic's preserve-by-default one: its
+// callers stream fresh downloads and extracted executables, where the
+// destination's prior mode (if it has one at all) must not survive the
+// replacement.
 //
 // The digest describes the file on disk, never the copied stream: a stream
 // digest certifies its own copy and cannot detect a destination that ends up
