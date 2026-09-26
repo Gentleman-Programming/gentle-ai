@@ -86,6 +86,19 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 	),
 }
 
+// TUIConfigPath selects the OpenCode theme write target, not effective theme
+// ownership. OpenCode loads JSONC after JSON, so an existing JSONC must win.
+// Inspection errors retain that target so read/preflight errors are not hidden
+// by falling back to JSON. Callers that only track paths need no error channel.
+func TUIConfigPath(homeDir string, adapter agents.Adapter) string {
+	configDir := adapter.GlobalConfigDir(homeDir)
+	jsoncPath := filepath.Join(configDir, "tui.jsonc")
+	if _, err := os.Lstat(jsoncPath); !os.IsNotExist(err) {
+		return jsoncPath
+	}
+	return filepath.Join(configDir, "tui.json")
+}
+
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	settingsPath := adapter.SettingsPath(homeDir)
 	if settingsPath == "" {
@@ -148,17 +161,37 @@ func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
-	baseJSON, err := osReadFile(path)
-	if err != nil {
-		return filemerge.WriteResult{}, err
-	}
-
-	merged, err := filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
+	merged, err := prepareJSONFile(path, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
 	return filemerge.WriteFileAtomic(path, merged, 0o644)
+}
+
+func prepareJSONFile(path string, overlay []byte) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect json file %q: %w", path, err)
+	}
+	if err == nil && !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("json file %q must be a regular file, not a symlink or other nonregular file", path)
+	}
+
+	baseJSON, err := osReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	base, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parse json file %q: %w", path, err)
+	}
+	if base == nil {
+		return nil, fmt.Errorf("json file %q must contain an object, not null", path)
+	}
+
+	return filemerge.MergeJSONObjectsForPath(path, baseJSON, overlay)
 }
 
 var osReadFile = func(path string) ([]byte, error) {
