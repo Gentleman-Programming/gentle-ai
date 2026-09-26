@@ -105,6 +105,37 @@ func TestWriteAuthorityInvalidFailsClosed(t *testing.T) {
 	}
 }
 
+func TestWriteAuthorityReadRejectsReplacedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := authorityPath(dir)
+	contents := []byte(`{"version":1}`)
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, filepath.Join(dir, "old-authority")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUnchangedAuthority(path, original); err == nil {
+		t.Fatal("accepted a replaced authority with identical contents")
+	}
+
+	current, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := readUnchangedAuthority(path, current)
+	if err != nil || string(got) != string(contents) {
+		t.Fatalf("unchanged authority: %q %v", got, err)
+	}
+}
+
 func TestWriteAuthoritySymlinkRejected(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "record")

@@ -46,7 +46,7 @@ func readWriteAuthority(dir string) (string, bool, error) {
 	if !info.Mode().IsRegular() {
 		return "", false, fmt.Errorf("write authority %s is not a regular file", path)
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := readUnchangedAuthority(path, info)
 	if err != nil {
 		return "", false, err
 	}
@@ -80,6 +80,23 @@ func readWriteAuthority(dir string) (string, bool, error) {
 		return "", false, fmt.Errorf("write authority target %s is not regular", target)
 	}
 	return target, true, nil
+}
+
+// readUnchangedAuthority reads only from the file validated by the caller's Lstat.
+func readUnchangedAuthority(path string, info os.FileInfo) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, fmt.Errorf("write authority %s changed before read", path)
+	}
+	return io.ReadAll(file)
 }
 
 // WriteInitialAuthority records an explicitly selected config path. Call only
