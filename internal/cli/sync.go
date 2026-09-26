@@ -38,6 +38,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
@@ -242,6 +243,39 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 	}
 }
 
+// installOrderedComponents returns the selected components in the order the
+// install planner applies them. Persisted state records components in
+// selection order (persona last for full-gentleman), and components write the
+// same files: persona replaces the whole prompt for FileReplace agents, and
+// Engram re-appends its MCP block after Context7. Applying them in a different
+// order than install makes the first sync rewrite what install just wrote.
+// Components the planner does not know keep their relative order at the end.
+func installOrderedComponents(components []model.ComponentID) []model.ComponentID {
+	graph := planner.MVPGraph()
+	known := make([]model.ComponentID, 0, len(components))
+	for _, component := range components {
+		if graph.Has(component) {
+			known = append(known, component)
+		}
+	}
+	resolved, err := planner.NewResolver(graph).Resolve(model.Selection{Components: known})
+	if err != nil {
+		return components
+	}
+	ordered := make([]model.ComponentID, 0, len(components))
+	for _, component := range resolved.OrderedComponents {
+		if slices.Contains(components, component) && !slices.Contains(ordered, component) {
+			ordered = append(ordered, component)
+		}
+	}
+	for _, component := range components {
+		if !slices.Contains(ordered, component) {
+			ordered = append(ordered, component)
+		}
+	}
+	return ordered
+}
+
 func RestorePersistedSelection(selection *model.Selection, persisted state.InstallState, flags SyncFlags) {
 	if !persisted.SelectionConfigured {
 		return
@@ -381,7 +415,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, piBackgroundProjectionStep{id: "sync:pi:background-projection", plan: r.piBackgroundProjection})
 	}
 
-	for _, component := range r.selection.Components {
+	for _, component := range installOrderedComponents(r.selection.Components) {
 		apply = append(apply, componentSyncStep{
 			id:               "sync:component:" + string(component),
 			component:        component,
@@ -475,10 +509,11 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 
 	if r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		apply = append(apply, &codeGraphGuidanceSyncStep{
-			id:           "sync:community-tool:codegraph-guidance",
-			homeDir:      r.homeDir,
-			runner:       codeGraphHomeRunner{homeDir: r.homeDir},
-			changedFiles: &r.changedFiles,
+			id:                 "sync:community-tool:codegraph-guidance",
+			homeDir:            r.homeDir,
+			runner:             codeGraphHomeRunner{homeDir: r.homeDir},
+			changedFiles:       &r.changedFiles,
+			guidanceBeforeSync: communitytool.HasAnyCodeGraphGuidance(r.homeDir),
 		})
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
@@ -903,6 +938,10 @@ type codeGraphGuidanceSyncStep struct {
 	runner       communitytool.Runner
 	changedFiles *[]string
 	before       map[string]syncFileSnapshot
+	// guidanceBeforeSync records whether CodeGraph guidance existed before the
+	// sync pipeline ran. Persona may replace whole prompt files earlier in the
+	// same sync, so detecting guidance at Run time would miss it and drop it.
+	guidanceBeforeSync bool
 }
 
 type piCodeGraphSyncStep struct {
@@ -1006,6 +1045,10 @@ func (s *codeGraphGuidanceSyncStep) Run() (runErr error) {
 	}
 
 	res, configured, err := communitytool.RefreshCodeGraphGuidanceIfConfigured(s.homeDir, communitytool.DetectorFunc(cmdLookPath))
+	if err == nil && !configured && s.guidanceBeforeSync && status.CLI == communitytool.AvailabilityAvailable {
+		res, err = communitytool.InjectCodeGraphGuidance(s.homeDir)
+		configured = true
+	}
 	if err != nil {
 		return fmt.Errorf("sync CodeGraph guidance: %w", err)
 	}

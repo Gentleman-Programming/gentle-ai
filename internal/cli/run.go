@@ -807,10 +807,6 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		}
 	}
 
-	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
-	}
-
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		for _, plugin := range r.selection.OpenCodePlugins {
 			apply = append(apply, openCodePluginInstallStep{id: "opencode-plugin:" + string(plugin), plugin: plugin, homeDir: r.homeDir})
@@ -859,6 +855,13 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			workspaceDir:     r.workspaceDir,
 			scope:            r.scope,
 		})
+	}
+
+	// Community tools run after persona and routing guidance, matching sync:
+	// persona replaces whole prompt files for some agents, so CodeGraph guidance
+	// injected before it would be dropped and re-added by the first sync.
+	for _, tool := range r.selection.CommunityTools {
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
 	}
 
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
@@ -2897,6 +2900,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 						paths = append(paths, p)
 					}
 				}
+			case model.StrategyMergeIntoYAML:
+				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
+					paths = append(paths, p)
+				}
 			case model.StrategyTOMLFile:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
 					paths = append(paths, p)
@@ -2992,7 +2999,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				if p := adapter.MCPConfigPath(targetDir, "context7"); p != "" {
 					paths = append(paths, p)
 				}
-			case model.StrategyTOMLFile:
+			case model.StrategyTOMLFile, model.StrategyMergeIntoYAML:
 				if p := adapter.MCPConfigPath(targetDir, "context7"); p != "" {
 					paths = append(paths, p)
 				}

@@ -2687,3 +2687,32 @@ func TestInjectCodexNilOrchestratorAssignmentPreservesTopLevelModel(t *testing.T
 		t.Fatalf("nil assignment clobbered top-level model:\n%s", content)
 	}
 }
+
+func TestUpsertCodexTableKeyBeforeMCPServersKeepsMCPBlocksAtEOF(t *testing.T) {
+	tests := []struct {
+		name, content, want string
+	}{
+		{
+			name:    "missing table goes before existing MCP block",
+			content: "[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n",
+			want:    "[features]\nmulti_agent = true\n\n[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n",
+		},
+		{
+			name:    "missing table without MCP blocks is appended",
+			content: "model = \"gpt\"\n",
+			want:    "model = \"gpt\"\n\n[features]\nmulti_agent = true\n",
+		},
+		{
+			name:    "existing table is updated in place",
+			content: "[mcp_servers.context7]\nurl = \"u\"\n\n[features]\nmulti_agent = false\n",
+			want:    "[mcp_servers.context7]\nurl = \"u\"\n\n[features]\nmulti_agent = true\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := upsertCodexTableKeyBeforeMCPServers(tt.content, "features", "multi_agent", "true"); got != tt.want {
+				t.Fatalf("upsert =\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}
