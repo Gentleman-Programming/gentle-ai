@@ -573,8 +573,26 @@ func upsertCodexTableKeyBeforeMCPServers(content, section, key, rawValue string)
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 	firstMCP := -1
+	// Table headers are only recognized outside TOML multiline strings, so a
+	// developer_instructions value that mentions "[mcp_servers.x]" is text.
+	multiline := ""
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if multiline != "" {
+			if strings.Count(line, multiline)%2 == 1 {
+				multiline = ""
+			}
+			continue
+		}
+		for _, delimiter := range []string{`"""`, "'''"} {
+			if strings.Count(line, delimiter)%2 == 1 {
+				multiline = delimiter
+				break
+			}
+		}
+		if multiline != "" {
+			continue
+		}
 		if trimmed == "["+section+"]" {
 			return filemerge.UpsertTOMLTableKey(content, section, key, rawValue)
 		}
