@@ -1184,7 +1184,9 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 			}
 			agents[name] = fresh
 		default:
-			delete(entry, "__managed_by")
+			// User-owned agents (e.g., "custom") must not be mutated by
+			// the migration pass; their __managed_by field is cleaned up
+			// later by the sync-phase RemoveLegacyOpenCodeAgentMarkers.
 		}
 	}
 	if !changed {
