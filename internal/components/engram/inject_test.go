@@ -2716,3 +2716,23 @@ func TestUpsertCodexTableKeyBeforeMCPServersKeepsMCPBlocksAtEOF(t *testing.T) {
 		})
 	}
 }
+
+// TestUpsertCodexTableKeyBeforeMCPServersIgnoresMultilineStrings pins that an
+// MCP table header written inside a TOML multiline string is text, not the
+// first MCP block: the new table must land after the string and before the
+// real MCP block instead of splitting the string.
+func TestUpsertCodexTableKeyBeforeMCPServersIgnoresMultilineStrings(t *testing.T) {
+	for _, delimiter := range []string{`"""`, "'''"} {
+		content := "developer_instructions = " + delimiter + "\nExample:\n[mcp_servers.docs]\n" + delimiter + "\n\n[mcp_servers.context7]\ncommand = \"npx\"\n"
+		got := upsertCodexTableKeyBeforeMCPServers(content, "features", "multi_agent", "true")
+		stringEnd := strings.LastIndex(got, delimiter)
+		table := strings.Index(got, "[features]\n")
+		mcp := strings.Index(got, "[mcp_servers.context7]")
+		if table < 0 || table < stringEnd || table > mcp {
+			t.Fatalf("delimiter %s: [features] must be inserted after the multiline string and before the real MCP block:\n%s", delimiter, got)
+		}
+		if !strings.Contains(got, "Example:\n[mcp_servers.docs]\n"+delimiter) {
+			t.Fatalf("delimiter %s: multiline string text was altered:\n%s", delimiter, got)
+		}
+	}
+}
