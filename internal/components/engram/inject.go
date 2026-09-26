@@ -698,9 +698,6 @@ func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath s
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
-	if err := filemerge.RefuseLockedSettingsFile(path); err != nil {
-		return filemerge.WriteResult{}, err
-	}
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err

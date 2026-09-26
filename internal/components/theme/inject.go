@@ -87,12 +87,24 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return InjectAtPath(adapter.SettingsPath(homeDir))
+	return injectSettings(adapter.SettingsPath(homeDir))
 }
 
 // InjectAtPath writes the theme to a caller-selected settings file. OpenCode
-// callers pass the effective JSON/JSONC path; other adapters use Inject.
+// callers pass the effective JSON/JSONC path and get a refusal for symlinked,
+// non-regular or locked files; other adapters use Inject and keep the shared
+// writer behavior.
 func InjectAtPath(settingsPath string) (InjectionResult, error) {
+	if settingsPath == "" {
+		return InjectionResult{}, nil
+	}
+	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+		return InjectionResult{}, err
+	}
+	return injectSettings(settingsPath)
+}
+
+func injectSettings(settingsPath string) (InjectionResult, error) {
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -153,9 +165,6 @@ func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
-	if err := filemerge.RefuseLockedSettingsFile(path); err != nil {
-		return filemerge.WriteResult{}, err
-	}
 	mode := filemerge.ExistingFileMode(path, 0o644)
 
 	baseJSON, err := osReadFile(path)

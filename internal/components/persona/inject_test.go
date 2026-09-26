@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -95,7 +96,7 @@ func TestPersonaSelectedSettingsRejectsSymlinkBeforePromptMutation(t *testing.T)
 					t.Fatal(err)
 				}
 				if err := os.Symlink(target, selected); err != nil {
-					t.Fatal(err)
+					t.Skipf("symlinks unavailable: %v", err)
 				}
 				if promptExists {
 					if err := os.MkdirAll(filepath.Dir(prompt), 0o755); err != nil {
@@ -156,6 +157,9 @@ func TestPersonaSelectedSettingsRejectsDirectoryBeforePromptMutation(t *testing.
 }
 
 func TestPersonaSelectedSettingsRefusesLockedModeBeforePromptMutation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not supported on Windows")
+	}
 	home := t.TempDir()
 	path := filepath.Join(home, "opencode.jsonc")
 	original := []byte("{\"agent\":{}}\n")
@@ -188,6 +192,48 @@ func TestPersonaSelectedSettingsRefusesLockedModeBeforePromptMutation(t *testing
 	}
 	if _, statErr := os.Stat(opencodeAdapter().SystemPromptFile(home)); !os.IsNotExist(statErr) {
 		t.Fatalf("prompt mutated before refusal: %v", statErr)
+	}
+}
+
+// The selected-settings refusal is OpenCode-only; other agents keep the base
+// writer behavior for a dotfiles-managed (symlinked) settings file.
+func TestPersonaNonOpenCodeSymlinkedSettingsKeepBaseBehavior(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		persona       model.PersonaID
+	}{
+		{"neutral with malformed target", "{not json\n", model.PersonaNeutral},
+		{"gentleman with valid target", "{\"theme\":\"user\"}\n", model.PersonaGentleman},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter := claudeAdapter()
+			settings := adapter.SettingsPath(home)
+			target := filepath.Join(home, "dotfiles", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(target, []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, settings); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+
+			_, err := Inject(home, adapter, tc.persona)
+			if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+				t.Fatalf("Inject() error = %v; want base writer symlink error, not the OpenCode refusal", err)
+			}
+			if link, err := os.Readlink(settings); err != nil || link != target {
+				t.Fatalf("settings symlink changed: %q, %v", link, err)
+			}
+			if got, err := os.ReadFile(target); err != nil || string(got) != tc.content {
+				t.Fatalf("settings target changed: %q, %v", got, err)
+			}
+		})
 	}
 }
 
@@ -2301,6 +2347,9 @@ func TestPersonaSelectedSettingsPreservePrivateMode(t *testing.T) {
 			}
 			if _, err := InjectAtSettingsPath(home, opencodeAdapter(), persona, path); err != nil {
 				t.Fatal(err)
+			}
+			if runtime.GOOS == "windows" {
+				return // POSIX permission bits are not preserved on Windows.
 			}
 			info, err := os.Stat(path)
 			if err != nil || info.Mode().Perm() != 0o600 {

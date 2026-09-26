@@ -165,7 +165,9 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 }
 
 // InjectAtPath writes the permission overlay to the caller-selected settings
-// path while preserving each adapter's permission capability check.
+// path while preserving each adapter's permission capability check. Only the
+// OpenCode selected settings refuse symlinked, non-regular or locked files;
+// other agents keep the shared writer behavior.
 func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult, error) {
 	if settingsPath == "" {
 		return InjectionResult{}, nil
@@ -174,6 +176,11 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	overlay := agentOverlay(adapter.Agent())
 	if overlay == nil {
 		return InjectionResult{}, nil
+	}
+	if adapter.Agent() == model.AgentOpenCode {
+		if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+			return InjectionResult{}, err
+		}
 	}
 
 	defaults := adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode
@@ -186,9 +193,6 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 }
 
 func mergeJSONFile(path string, overlay []byte, defaults bool) (filemerge.WriteResult, error) {
-	if err := filemerge.RefuseLockedSettingsFile(path); err != nil {
-		return filemerge.WriteResult{}, err
-	}
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err

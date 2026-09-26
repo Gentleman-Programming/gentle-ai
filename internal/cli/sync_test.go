@@ -1564,10 +1564,12 @@ func TestSyncPersonaOnlyRollbackRestoresOpenCodeSettingsAfterGentlemanCleanup(t 
 	if !containsPath(targets, settingsPath) {
 		t.Fatalf("sync backup targets omit OpenCode settings mutated by Gentleman cleanup: %v", targets)
 	}
-	if runtime, err := newSyncRuntime(home, selection); err == nil {
-		if selected := effectiveOpenCodeSettingsPath(home, runtime.workspaceDir, ScopeGlobal, opencodeagent.NewAdapter()); selected != settingsPath {
-			t.Fatalf("actual sync authority = %q, expected %q", selected, settingsPath)
-		}
+	syncRT, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	if selected := effectiveOpenCodeSettingsPath(home, syncRT.workspaceDir, ScopeGlobal, opencodeagent.NewAdapter()); selected != settingsPath {
+		t.Fatalf("actual sync authority = %q, expected %q", selected, settingsPath)
 	}
 
 	if _, err := RunSyncWithSelection(home, selection); err == nil {

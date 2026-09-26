@@ -34,6 +34,9 @@ func TestEngramSelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
 		{"locked mode", "{\"mcp\":{}}\n", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && tc.mode != 0o600 {
+				t.Skip("file permission bits are not supported on Windows")
+			}
 			path := filepath.Join(t.TempDir(), "opencode.jsonc")
 			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
 				t.Fatal(err)
@@ -41,7 +44,7 @@ func TestEngramSelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
 			if err := os.Chmod(path, tc.mode); err != nil {
 				t.Fatal(err)
 			}
-			_, err := mergeJSONFile(path, []byte(`{"mcp":{"engram":{"type":"local"}}}`))
+			_, err := InjectWithOptions(t.TempDir(), opencodeAdapter(), InjectOptions{OpenCodeSettingsPath: path})
 			if err == nil || !strings.Contains(err.Error(), "refuse") {
 				t.Fatalf("want actionable refusal, got %v", err)
 			}
@@ -49,7 +52,7 @@ func TestEngramSelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
 			if statErr != nil {
 				t.Fatal(statErr)
 			}
-			if info.Mode().Perm() != tc.mode {
+			if runtime.GOOS != "windows" && info.Mode().Perm() != tc.mode {
 				t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
 			}
 			if err := os.Chmod(path, 0o600); err != nil {
@@ -74,9 +77,53 @@ func TestEngramSelectedSettingsPreservePrivateMode(t *testing.T) {
 	if _, err := mergeJSONFile(path, []byte(`{"mcp":{"engram":{"type":"local"}}}`)); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS == "windows" {
+		return // POSIX permission bits are not preserved on Windows.
+	}
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("settings mode = %v, error = %v; want 0600", info, err)
+	}
+}
+
+// The selected-settings refusal is OpenCode-only; the shared merge helper keeps
+// the base writer behavior for other agents' dotfiles-managed (symlinked) files.
+func TestSharedMergeKeepsBaseWriterBehaviorForSymlinkedSettings(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles.json")
+	settings := filepath.Join(dir, "settings.json")
+	original := []byte("{\"mcpServers\":{}}\n")
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := mergeJSONFile(settings, []byte(`{"mcpServers":{"engram":{"command":"engram"}}}`))
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("mergeJSONFile() error = %v; want base writer symlink error, not the OpenCode refusal", err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("settings target changed: %q, %v", got, err)
+	}
+}
+
+func TestEngramSelectedSettingsRefuseSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "user.jsonc")
+	selected := filepath.Join(dir, "opencode.jsonc")
+	if err := os.WriteFile(target, []byte("{\"mcp\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, selected); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := InjectWithOptions(t.TempDir(), opencodeAdapter(), InjectOptions{OpenCodeSettingsPath: selected})
+	if err == nil || !strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("InjectWithOptions() error = %v; want OpenCode symlink refusal", err)
 	}
 }
 

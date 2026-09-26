@@ -620,9 +620,6 @@ func gentlemanPersonaContent(agent model.AgentID) string {
 }
 
 func mergeJSONFile(path string, overlay []byte, managedAgentNames ...string) (filemerge.WriteResult, error) {
-	if err := filemerge.RefuseLockedSettingsFile(path); err != nil {
-		return filemerge.WriteResult{}, err
-	}
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err

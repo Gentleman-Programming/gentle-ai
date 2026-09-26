@@ -35,6 +35,9 @@ func TestContext7SelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T)
 		{"locked mode", "{\"mcp\":{}}\n", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && tc.mode != 0o600 {
+				t.Skip("file permission bits are not supported on Windows")
+			}
 			path := filepath.Join(t.TempDir(), "opencode.jsonc")
 			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
 				t.Fatal(err)
@@ -50,7 +53,7 @@ func TestContext7SelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T)
 			if statErr != nil {
 				t.Fatal(statErr)
 			}
-			if info.Mode().Perm() != tc.mode {
+			if runtime.GOOS != "windows" && info.Mode().Perm() != tc.mode {
 				t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
 			}
 			if err := os.Chmod(path, 0o600); err != nil {
@@ -74,6 +77,9 @@ func TestContext7SelectedSettingsPreservePrivateMode(t *testing.T) {
 	}
 	if _, err := injectOpenCodeMergeIntoSettings(path); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return // POSIX permission bits are not preserved on Windows.
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
