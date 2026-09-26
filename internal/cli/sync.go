@@ -769,7 +769,7 @@ type openCodeLegacyMarkerSyncStep struct {
 	changedFiles *[]string
 }
 
-func (s openCodeLegacyMarkerSyncStep) ID() string { return "sync:opencode:legacy-marker" }
+func (s openCodeLegacyMarkerSyncStep) ID() string { return "sync:opencode:legacy-marker:" + filepath.Base(s.path) }
 func (s openCodeLegacyMarkerSyncStep) Run() error {
 	info, err := os.Lstat(s.path)
 	if os.IsNotExist(err) {
@@ -789,6 +789,7 @@ func (s openCodeLegacyMarkerSyncStep) Run() error {
 	names = append(names, opencodeactivation.JDPhases()...)
 	names = append(names, opencodeactivation.ReviewPhases()...)
 	names = append(names, opencodeactivation.SDDPhases()...)
+	names = append(names, opencodeactivation.GentleAIODDPhases()...)
 	updated, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(s.path, original, names)
 	if err != nil {
 		return err

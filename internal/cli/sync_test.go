@@ -235,7 +235,7 @@ func TestSyncWorkspaceAuthorityPreflight(t *testing.T) {
 				if kind == "malformed" {
 					mustWriteFile(t, marker, []byte(`{`))
 				} else if err := os.Symlink(settings, marker); err != nil {
-					t.Fatal(err)
+					t.Skipf("symlink not supported: %v", err)
 				}
 				other := filepath.Join(home, ".config", "opencode", "AGENTS.md")
 				selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
