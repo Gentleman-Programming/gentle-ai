@@ -628,7 +628,7 @@ func TestInstallPersonaOnlyRollbackRestoresOpenCodeSettingsAfterCleanup(t *testi
 		Persona:    model.PersonaGentleman,
 	}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
-	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{})
+	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
