@@ -342,11 +342,11 @@ func TestInstallPublishesIntentTransactionally(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			home := installTestHome(t)
 			oldInject := injectInstallPersona
-			injectInstallPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID) (persona.InjectionResult, error) {
+			injectInstallPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				if tt.injectErr != nil {
 					return persona.InjectionResult{}, tt.injectErr
 				}
-				result, err := oldInject(path, adapter, personaID)
+				result, err := oldInject(path, adapter, personaID, selectedSettingsPath)
 				if err == nil && tt.dropAssets {
 					err = os.Remove(adapter.SystemPromptFile(path))
 				}
@@ -424,9 +424,9 @@ func TestInstallBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 			oldHome, oldInject := osUserHomeDir, injectInstallPersona
 			osUserHomeDir = func() (string, error) { return home, nil }
 			injectCalls := 0
-			injectInstallPersona = func(path string, adapter agents.Adapter, id model.PersonaID) (persona.InjectionResult, error) {
+			injectInstallPersona = func(path string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				injectCalls++
-				return oldInject(path, adapter, id)
+				return oldInject(path, adapter, id, selectedSettingsPath)
 			}
 			t.Cleanup(func() { osUserHomeDir, injectInstallPersona = oldHome, oldInject })
 			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
@@ -561,9 +561,9 @@ func TestSyncBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 			home := syncBackgroundTestHome(t)
 			oldInject := injectSyncPersona
 			injectCalls := 0
-			injectSyncPersona = func(path string, adapter agents.Adapter, id model.PersonaID) (persona.InjectionResult, error) {
+			injectSyncPersona = func(path string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				injectCalls++
-				return oldInject(path, adapter, id)
+				return oldInject(path, adapter, id, selectedSettingsPath)
 			}
 			t.Cleanup(func() { injectSyncPersona = oldInject })
 			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
@@ -630,11 +630,11 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				}
 			}
 			oldInject := injectSyncPersona
-			injectSyncPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID) (persona.InjectionResult, error) {
+			injectSyncPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				if tt.injectErr != nil {
 					return persona.InjectionResult{}, tt.injectErr
 				}
-				result, err := oldInject(path, adapter, personaID)
+				result, err := oldInject(path, adapter, personaID, selectedSettingsPath)
 				if err == nil && tt.dropAsset {
 					err = os.Remove(adapter.SystemPromptFile(path))
 				}

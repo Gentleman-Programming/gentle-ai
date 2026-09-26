@@ -28,6 +28,12 @@ type InjectionResult struct {
 // mcpServers block the legacy workspace path wrote into .claude/settings.json
 // (issue #2213).
 func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult, error) {
+	return InjectAtSettingsPath(homeDir, targetDir, adapter, "")
+}
+
+// InjectAtSettingsPath keeps MCP assets in targetDir while merging OpenCode
+// settings into the selected file when provided by the caller.
+func InjectAtSettingsPath(homeDir, targetDir string, adapter agents.Adapter, selectedSettingsPath string) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
 	}
@@ -42,7 +48,7 @@ func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult,
 		}
 		return injectSeparateFile(targetDir, adapter)
 	case model.StrategyMergeIntoSettings:
-		return injectMergeIntoSettings(targetDir, adapter)
+		return injectMergeIntoSettings(targetDir, adapter, selectedSettingsPath)
 	case model.StrategyMCPConfigFile:
 		return injectMCPConfigFile(targetDir, adapter)
 	case model.StrategyTOMLFile:
@@ -122,8 +128,11 @@ func injectSeparateFile(homeDir string, adapter agents.Adapter) (InjectionResult
 }
 
 // injectMergeIntoSettings merges MCP servers into a config file (OpenCode opencode.json, Gemini settings.json).
-func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+func injectMergeIntoSettings(homeDir string, adapter agents.Adapter, selectedSettingsPath string) (InjectionResult, error) {
 	settingsPath := adapter.SettingsPath(homeDir)
+	if adapter.Agent() == model.AgentOpenCode && selectedSettingsPath != "" {
+		settingsPath = selectedSettingsPath
+	}
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -145,6 +154,9 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 }
 
 func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, error) {
+	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+		return InjectionResult{}, err
+	}
 	baseJSON, err := osReadFile(settingsPath)
 	if err != nil {
 		return InjectionResult{}, err
@@ -185,7 +197,7 @@ func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, erro
 		return InjectionResult{}, err
 	}
 
-	settingsWrite, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
+	settingsWrite, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -213,7 +225,7 @@ func injectOpenClawMergeIntoSettings(settingsPath string) (InjectionResult, erro
 		return InjectionResult{}, err
 	}
 
-	settingsWrite, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
+	settingsWrite, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -352,7 +364,7 @@ func removeInertSettingsMCPServers(settingsPath string) (bool, error) {
 		return false, fmt.Errorf("marshal cleaned settings json: %w", err)
 	}
 
-	writeResult, err := filemerge.WriteFileAtomic(settingsPath, append(encoded, '\n'), 0o644)
+	writeResult, err := filemerge.WriteFileAtomic(settingsPath, append(encoded, '\n'), filemerge.ExistingFileMode(settingsPath, 0o644))
 	if err != nil {
 		return false, err
 	}
@@ -398,7 +410,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
 }
 
 var osReadFile = func(path string) ([]byte, error) {

@@ -141,6 +141,29 @@ func writeFileAtomic(path string, content []byte, perm fs.FileMode, forceMode bo
 	return result, nil
 }
 
+// RefuseLockedSettingsFile rejects locked or non-regular settings before any
+// related assets are changed. ExistingFileMode's 0600 fallback is suitable for
+// other callers, but selected settings must not change a deliberate lock.
+func RefuseLockedSettingsFile(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect settings mode %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refuse to rewrite settings %q: selected path is a symlink; select a regular settings file before retrying", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refuse to rewrite settings %q: selected path is not a regular file; select a regular settings file before retrying", path)
+	}
+	if info.Mode().Perm() == 0 {
+		return fmt.Errorf("refuse to rewrite locked settings %q (mode 0000); restore read/write permissions explicitly before retrying", path)
+	}
+	return nil
+}
+
 // ExistingFileMode returns the permission bits of the regular file at path, or
 // fallback when path is absent or is not a regular file. A regular file with no
 // permission bits yields 0600 so it is never widened. WriteFileAtomic uses this

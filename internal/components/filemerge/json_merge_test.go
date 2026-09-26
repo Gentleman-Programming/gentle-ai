@@ -6,6 +6,58 @@ import (
 	"testing"
 )
 
+func TestJSONCTouchedValueCommentGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, overlay string
+		refuse              bool
+	}{
+		{"permission nested line", `{"permission":{"bash":{// note
+"*":"deny"}}}`, `{"permission":{"read":{"*":"allow"}}}`, true},
+		{"mcp nested block", `{"mcp":{"other":{/* keep */"type":"remote"}}}`, `{"mcp":{"context7":{"type":"remote"}}}`, true},
+		{"untouched subtree", `{"agent":{/* keep */"custom":{}},"mcp":{}}`, `{"mcp":{"context7":{}}}`, false},
+		{"comment in string", `{"mcp":{"other":{"url":"https://example.com"}}}`, `{"mcp":{"context7":{}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := MergeJSONObjectsForPath("opencode.jsonc", []byte(tc.base), []byte(tc.overlay))
+			if (err != nil) != tc.refuse {
+				t.Fatalf("merge error = %v, want refusal %t", err, tc.refuse)
+			}
+		})
+	}
+}
+
+func TestJSONCMergesRefuseDuplicateKeysBeforeMapRewrite(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, overlay string
+	}{
+		{"nested permission", `{"permission":{"bash":{"ssh":"deny","ssh":"allow"}}}`, `{"permission":{"bash":{"*":"ask"}}}`},
+		{"nested mcp", `{"mcp":{"other":{"type":"local","type":"remote"}}}`, `{"mcp":{"context7":{"type":"remote"}}}`},
+		{"escaped touched top-level duplicate", `{"mcp":{},"m\u0063p":{"other":true}}`, `{"mcp":{"context7":{}}}`},
+		{"escaped touched top-level only", `{"m\u0063p":{"other":true}}`, `{"mcp":{"context7":{}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := []byte(tc.base)
+			for _, merge := range []struct {
+				name string
+				fn   func(string, []byte, []byte) ([]byte, error)
+			}{
+				{"overlay", MergeJSONObjectsForPath},
+				{"defaults", MergeJSONDefaultsForPath},
+			} {
+				t.Run(merge.name, func(t *testing.T) {
+					got, err := merge.fn("opencode.jsonc", base, []byte(tc.overlay))
+					if err == nil || !strings.Contains(err.Error(), "refuse") {
+						t.Fatalf("want actionable refusal; got %q, %v", got, err)
+					}
+					if got != nil && string(got) != string(base) {
+						t.Fatalf("refusal changed bytes: %q", got)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestRemoveLegacyOpenCodeAgentMarkers(t *testing.T) {
 	for _, path := range []string{"opencode.json", "opencode.jsonc"} {
 		t.Run(path, func(t *testing.T) {

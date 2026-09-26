@@ -1544,6 +1544,10 @@ func TestSyncRollbackRestoresOpenCodeSettingsAfterManagedToolsCleanup(t *testing
 
 func TestSyncPersonaOnlyRollbackRestoresOpenCodeSettingsAfterGentlemanCleanup(t *testing.T) {
 	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(home, ".pi", "agent"))
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	before := []byte("// preserve exact JSONC bytes\n{\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"keep\"},\"user-owned\":{\"tools\":{\"custom\":true}}}}\n")
 	mustWriteFile(t, settingsPath, before)
@@ -1559,6 +1563,13 @@ func TestSyncPersonaOnlyRollbackRestoresOpenCodeSettingsAfterGentlemanCleanup(t 
 	}
 	if !containsPath(targets, settingsPath) {
 		t.Fatalf("sync backup targets omit OpenCode settings mutated by Gentleman cleanup: %v", targets)
+	}
+	syncRT, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	if selected := effectiveOpenCodeSettingsPath(home, syncRT.workspaceDir, ScopeGlobal, opencodeagent.NewAdapter()); selected != settingsPath {
+		t.Fatalf("actual sync authority = %q, expected %q", selected, settingsPath)
 	}
 
 	if _, err := RunSyncWithSelection(home, selection); err == nil {
@@ -6313,6 +6324,129 @@ func TestRunSync_DefaultPreservesReviewWithoutSDDPhaseModels(t *testing.T) {
 
 // runSyncInjectionSteps executes every staged sync apply step and returns the
 // paths the runtime reported as actually changed.
+func TestSyncOpenCodeSettingsWritersUseSelectedJSONC(t *testing.T) {
+	for _, component := range []model.ComponentID{model.ComponentPersona, model.ComponentPermission, model.ComponentContext7, model.ComponentEngram} {
+		t.Run(string(component), func(t *testing.T) {
+			home, workspace, selected, decoy, before := themeSettingsFixture(t)
+			if component == model.ComponentPersona {
+				before = []byte("// project settings\n{\"theme\":\"original\",\"user\":true,\"agent\":{\"gentleman\":{\"tools\":{\"write\":true},\"description\":\"kept\"}}}\n")
+				if err := os.WriteFile(selected, before, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{component}, Persona: model.PersonaGentleman}
+			paths, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+			if err != nil || !containsString(paths, selected) {
+				t.Fatalf("sync backup targets = %v, %v", paths, err)
+			}
+			var changed []string
+			step := componentSyncStep{component: component, homeDir: home, workspaceDir: workspace, agents: selection.Agents, selection: selection, changedFiles: &changed}
+			if err := step.Run(); err != nil {
+				t.Fatal(err)
+			}
+			assertOpenCodeComponentSelectedOnly(t, selected, decoy, before, component)
+			if !containsString(changed, selected) || containsString(changed, decoy) {
+				t.Fatalf("changed files = %v", changed)
+			}
+		})
+	}
+}
+
+func TestSyncPersonaNeutralRemovesSelectedOpenCodeAgentOnly(t *testing.T) {
+	home, workspace, selected, decoy, _ := themeSettingsFixture(t)
+	before := []byte("// preserve user comment\n{\"user\":true,\"agent\":{\"gentleman\":{\"mode\":\"primary\"},\"custom\":{\"mode\":\"primary\"}}}\n")
+	if err := os.WriteFile(selected, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPersona}, Persona: model.PersonaNeutral}
+	var changed []string
+	step := componentSyncStep{component: model.ComponentPersona, homeDir: home, workspaceDir: workspace, agents: selection.Agents, selection: selection, changedFiles: &changed}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(got, []byte("// preserve user comment")) || !bytes.Contains(got, []byte(`"custom"`)) || bytes.Contains(got, []byte(`"gentleman"`)) {
+		t.Fatalf("neutral selected JSONC = %s, %v", got, err)
+	}
+	got, err = os.ReadFile(decoy)
+	if err != nil || string(got) != `{"theme":"user-owned"}` || !containsString(changed, selected) || containsString(changed, decoy) {
+		t.Fatalf("decoy = %s, %v; changed = %v", got, err, changed)
+	}
+}
+
+func TestSyncOpenCodeSettingsWritersRollbackSelectedJSONC(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode assertions do not apply on Windows")
+	}
+	for _, component := range []model.ComponentID{model.ComponentPersona, model.ComponentPermission, model.ComponentContext7, model.ComponentEngram} {
+		t.Run(string(component), func(t *testing.T) {
+			home, workspace, selected, decoy, before := themeSettingsFixture(t)
+			if component == model.ComponentPersona {
+				before = []byte("// project settings\n{\"theme\":\"original\",\"user\":true,\"agent\":{\"gentleman\":{\"tools\":{\"write\":true}}}}\n")
+				if err := os.WriteFile(selected, before, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{component}, Persona: model.PersonaGentleman}
+			targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+			if err != nil || !containsString(targets, selected) {
+				t.Fatalf("snapshot targets = %v, %v", targets, err)
+			}
+			state := &runtimeState{}
+			cause := errors.New("failure after settings write")
+			var changed []string
+			plan := pipeline.StagePlan{
+				Prepare: []pipeline.Step{prepareBackupStep{id: "prepare:backup-snapshot", snapshotter: backup.NewSnapshotter(), snapshotDir: filepath.Join(home, "backup"), targets: []string{selected}, state: state}},
+				Apply: []pipeline.Step{
+					rollbackRestoreStep{id: "apply:rollback-restore", state: state, homeDir: home, workspaceDir: workspace},
+					componentSyncStep{component: component, homeDir: home, workspaceDir: workspace, agents: selection.Agents, selection: selection, changedFiles: &changed},
+					failAfterOpenCodeSettingsStep{selected: selected, before: before, cause: cause},
+				},
+			}
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+			if !errors.Is(result.Err, cause) || !result.Rollback.Success || !containsString(changed, selected) || containsString(changed, decoy) {
+				t.Fatalf("failure = %v, rollback = %#v, changed = %v", result.Err, result.Rollback, changed)
+			}
+			got, err := os.ReadFile(selected)
+			if err != nil || !bytes.Equal(got, before) {
+				t.Fatalf("restored bytes = %s, %v", got, err)
+			}
+			info, err := os.Stat(selected)
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatalf("restored mode = %v, %v", info, err)
+			}
+			got, err = os.ReadFile(decoy)
+			if err != nil || string(got) != `{"theme":"user-owned"}` {
+				t.Fatalf("decoy = %s, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestSyncThemeUsesSelectedOpenCodeJSONC(t *testing.T) {
+	home, workspace, selected, decoy, _ := themeSettingsFixture(t)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentTheme}}
+	paths, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(paths, selected) {
+		t.Fatalf("sync backup omits selected JSONC: %v", paths)
+	}
+	if containsString(syncComponentPathsWithWorkspace(home, workspace, selection, resolveAdapters(selection.Agents), model.ComponentTheme), decoy) {
+		t.Fatal("theme declares decoy JSON as its write target")
+	}
+	var changed []string
+	step := componentSyncStep{component: model.ComponentTheme, homeDir: home, workspaceDir: workspace, agents: selection.Agents, changedFiles: &changed}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	assertThemeSelectedOnly(t, selected, decoy)
+	if !containsString(changed, selected) || containsString(changed, decoy) {
+		t.Fatalf("sync changed paths = %v, want only selected settings", changed)
+	}
+}
+
 func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection) []string {
 	t.Helper()
 

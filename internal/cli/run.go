@@ -78,8 +78,8 @@ var (
 	goEnv                        = defaultGoEnv
 	installCommunityTool         = communitytool.Install
 	installCommunityToolWithHome = communitytool.InstallWithHome
-	injectInstallPersona         = persona.Inject
-	injectSyncPersona            = persona.InjectForSync
+	injectInstallPersona         = defaultInjectInstallPersona
+	injectSyncPersona            = defaultInjectSyncPersona
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
@@ -121,6 +121,24 @@ var (
 	// Default "dev" matches the ldflags default in app.Version.
 	AppVersion = "dev"
 )
+
+// defaultInjectInstallPersona keeps non-OpenCode installs on persona.Inject and
+// routes only an explicitly selected OpenCode settings file through
+// persona.InjectAtSettingsPath.
+func defaultInjectInstallPersona(homeDir string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
+	if selectedSettingsPath == "" {
+		return persona.Inject(homeDir, adapter, id)
+	}
+	return persona.InjectAtSettingsPath(homeDir, adapter, id, selectedSettingsPath)
+}
+
+// defaultInjectSyncPersona mirrors defaultInjectInstallPersona for sync.
+func defaultInjectSyncPersona(homeDir string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
+	if selectedSettingsPath == "" {
+		return persona.InjectForSync(homeDir, adapter, id)
+	}
+	return persona.InjectForSyncAtSettingsPath(homeDir, adapter, id, selectedSettingsPath)
+}
 
 // SetCommandOutputStreaming toggles whether command stdout/stderr is streamed
 // directly to the terminal. It returns a restore function.
@@ -2141,6 +2159,7 @@ func (s componentApplyStep) Run() error {
 				}
 			}
 			engramOpts := engram.InjectOptions{
+				OpenCodeSettingsPath:        openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter),
 				CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
@@ -2165,7 +2184,13 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-			if _, err := mcp.Inject(s.homeDir, targetDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				_, err = mcp.InjectAtSettingsPath(s.homeDir, targetDir, adapter, openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter))
+			} else {
+				_, err = mcp.Inject(s.homeDir, targetDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject context7 for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -2181,14 +2206,24 @@ func (s componentApplyStep) Run() error {
 				continue
 			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-			if _, err := injectInstallPersona(targetDir, adapter, s.selection.Persona); err != nil {
+			selectedSettingsPath := ""
+			if adapter.Agent() == model.AgentOpenCode {
+				selectedSettingsPath = openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter)
+			}
+			if _, err := injectInstallPersona(targetDir, adapter, s.selection.Persona, selectedSettingsPath); err != nil {
 				return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 			}
 		}
 		return nil
 	case model.ComponentPermission:
 		for _, adapter := range adapters {
-			if _, err := permissions.Inject(s.homeDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				_, err = permissions.InjectAtPath(openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter), adapter)
+			} else {
+				_, err = permissions.Inject(s.homeDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject permissions for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -2260,7 +2295,13 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentTheme:
 		for _, adapter := range adapters {
-			if _, err := theme.Inject(s.homeDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				_, err = theme.InjectAtPath(openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter))
+			} else {
+				_, err = theme.Inject(s.homeDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject theme for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -2664,7 +2705,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 					// Persona can merge or clean a managed agent in settings during
 					// install. This is backup-only: ComponentPersona verification
 					// does not promise a settings write for every persona path.
-					if path := adapter.SettingsPath(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona)); path != "" {
+					path := adapter.SettingsPath(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona))
+					if adapter.Agent() == model.AgentOpenCode {
+						path = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+					}
+					if path != "" {
 						paths[path] = struct{}{}
 					}
 				}
@@ -2883,6 +2928,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
 				}
 			case model.StrategyMergeIntoSettings:
+				if adapter.Agent() == model.AgentOpenCode {
+					paths = append(paths, openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter))
+					break
+				}
 				// MCP settings are always merged into the global config file, not the
 				// workspace-scoped directory. For OpenClaw, SettingsPath(targetDir)
 				// would yield <workspace>/.openclaw/openclaw.json, but engram injection
@@ -2992,7 +3041,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 				paths = append(paths, adapter.MCPConfigPath(targetDir, "context7"))
 			case model.StrategyMergeIntoSettings:
-				if p := adapter.SettingsPath(targetDir); p != "" {
+				p := adapter.SettingsPath(targetDir)
+				if adapter.Agent() == model.AgentOpenCode {
+					p = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+				}
+				if p != "" {
 					paths = append(paths, p)
 				}
 			case model.StrategyMCPConfigFile:
@@ -3028,14 +3081,22 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 			}
 		case model.ComponentPermission:
-			if p := permissions.TargetPath(homeDir, adapter); p != "" {
+			p := permissions.TargetPath(homeDir, adapter)
+			if adapter.Agent() == model.AgentOpenCode {
+				p = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+			}
+			if p != "" {
 				paths = append(paths, p)
 			}
 		case model.ComponentGGA:
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			if p := adapter.SettingsPath(homeDir); p != "" {
+			p := adapter.SettingsPath(homeDir)
+			if adapter.Agent() == model.AgentOpenCode {
+				p = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+			}
+			if p != "" {
 				paths = append(paths, p)
 			}
 		case model.ComponentClaudeTheme:
@@ -3072,6 +3133,16 @@ func effectiveOpenCodeSettingsPath(homeDir, workspaceDir string, scope InstallSc
 		return adapter.SettingsPath(targetDir)
 	}
 	return opencodeactivation.EffectiveSettingsPath(homeDir, workspaceDir)
+}
+
+// openCodeLoadedSettingsPath returns the one settings document OpenCode
+// actually loads: the effective project-over-global authority, regardless of
+// install scope. OpenCode never reads <workspace>/.config/opencode/opencode.json,
+// so a workspace-scoped install must not write settings there (issue #1825).
+// Settings writers (Persona, Permission, Context7, Theme, Engram), their backup
+// targets, and their declared paths all resolve through here.
+func openCodeLoadedSettingsPath(homeDir, workspaceDir string, adapter agents.Adapter) string {
+	return effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)
 }
 
 // routingGuidanceOptions carries OpenCode's caller-resolved effective settings
