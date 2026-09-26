@@ -787,38 +787,54 @@ func (s openCodeLegacyMarkerSyncStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("read OpenCode settings: %w", err)
 	}
-	names := []string{"gentle-orchestrator", "sdd-orchestrator", "review-refuter", "review-validator"}
-	names = append(names, opencodeactivation.JDPhases()...)
-	names = append(names, opencodeactivation.ReviewPhases()...)
-	names = append(names, opencodeactivation.SDDPhases()...)
-	names = append(names, opencodeactivation.GentleAIODDPhases()...)
-	updated, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(s.path, original, names)
+	// Validate the marker edit before writing authority or changing either file.
+	updated, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(s.path, original, nil)
 	if err != nil {
 		return err
 	}
 	if bytes.Equal(original, updated) {
 		return nil
 	}
+	// The selected settings file is the only place where role ownership may be
+	// interpreted. Pin it before touching the nonselected sibling: otherwise a
+	// JSONC edit can change which settings file subsequent steps resolve.
+	dir := filepath.Dir(s.path)
+	selectedInfo, selectedErr := os.Lstat(s.selected)
+	if selectedErr != nil && !os.IsNotExist(selectedErr) {
+		return fmt.Errorf("stat selected OpenCode settings: %w", selectedErr)
+	}
+	if selectedErr == nil && !selectedInfo.Mode().IsRegular() {
+		return fmt.Errorf("refuse non-regular selected OpenCode settings %q", s.selected)
+	}
+	sidecar, exists, err := opencodeactivation.AuthorityState(dir)
+	if err != nil {
+		return err
+	}
+	if !exists && selectedErr == nil {
+		other := filepath.Join(dir, "opencode.json")
+		if other == s.selected {
+			other = filepath.Join(dir, "opencode.jsonc")
+		}
+		if sibling, statErr := os.Lstat(other); statErr == nil && sibling.Mode().IsRegular() {
+			if err := opencodeactivation.WriteInitialAuthority(dir, s.selected); err != nil {
+				return err
+			}
+			*s.changedFiles = append(*s.changedFiles, sidecar)
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return statErr
+		}
+	}
 	if s.path == s.selected {
-		dir := filepath.Dir(s.path)
-		sidecar, exists, err := opencodeactivation.AuthorityState(dir)
+		// Retire/reset owned roles while their marker still proves ownership.
+		// Unknown entries are cleaned textually without normalizing JSONC.
+		changed, err := migrateLegacyOpenCodeAgents(s.path, model.AgentOpenCode)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			other := filepath.Join(dir, "opencode.json")
-			if other == s.path {
-				other = filepath.Join(dir, "opencode.jsonc")
-			}
-			if sibling, err := os.Lstat(other); err == nil && sibling.Mode().IsRegular() {
-				if err := opencodeactivation.WriteInitialAuthority(dir, s.path); err != nil {
-					return err
-				}
-				*s.changedFiles = append(*s.changedFiles, sidecar)
-			} else if err != nil && !os.IsNotExist(err) {
-				return err
-			}
+		if changed {
+			*s.changedFiles = append(*s.changedFiles, s.path)
 		}
+		return nil
 	}
 	result, err := filemerge.WriteFileAtomic(s.path, updated, info.Mode().Perm())
 	if result.Changed {
@@ -2255,3 +2271,5 @@ func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selec
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
 }
+
+// Commit: force CodeRabbit re-review of stale prompts (2025-09-26)
