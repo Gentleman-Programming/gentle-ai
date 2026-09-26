@@ -1206,7 +1206,13 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentTheme:
 		// Opt-in only — reached when --include-theme is set.
 		for _, adapter := range adapters {
-			res, err := theme.Inject(s.homeDir, adapter)
+			var res theme.InjectionResult
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				res, err = theme.InjectAtPath(effectiveOpenCodeSettingsPath(s.homeDir, s.workspaceDir, ScopeGlobal, adapter))
+			} else {
+				res, err = theme.Inject(s.homeDir, adapter)
+			}
 			if err != nil {
 				return fmt.Errorf("sync theme for %q: %w", adapter.Agent(), err)
 			}

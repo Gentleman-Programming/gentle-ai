@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,12 +13,170 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
 )
+
+// themeSettingsFixture puts the effective JSONC in the project and a distinct
+// user-owned JSON at the adapter's default global path.
+func themeSettingsFixture(t *testing.T) (home, workspace, selected, decoy string, original []byte) {
+	t.Helper()
+	home, workspace = t.TempDir(), t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	selected = filepath.Join(workspace, "opencode.jsonc")
+	decoy = opencode.NewAdapter().SettingsPath(home)
+	original = []byte("// project settings\n{\"theme\":\"original\",\"user\":true}\n")
+	if err := os.WriteFile(selected, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(decoy), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(decoy, []byte(`{"theme":"user-owned"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := effectiveOpenCodeSettingsPath(home, workspace, ScopeGlobal, opencode.NewAdapter()); got != selected {
+		t.Fatalf("effective path = %q, want %q", got, selected)
+	}
+	return
+}
+
+func TestInstallThemeUsesSelectedOpenCodeJSONC(t *testing.T) {
+	home, workspace, selected, decoy, _ := themeSettingsFixture(t)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentTheme}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+	paths, err := backupTargets(home, workspace, ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(paths, selected) {
+		t.Fatalf("install backup omits selected JSONC: %v", paths)
+	}
+	if slices.Contains(componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, resolveAdapters(selection.Agents), model.ComponentTheme), decoy) {
+		t.Fatal("theme declares decoy JSON as its write target")
+	}
+	step := componentApplyStep{component: model.ComponentTheme, homeDir: home, workspaceDir: workspace, scope: ScopeGlobal, agents: selection.Agents}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	assertThemeSelectedOnly(t, selected, decoy)
+}
+
+type failAfterThemeStep struct {
+	selected string
+	observed *bool
+	cause    error
+}
+
+func (s failAfterThemeStep) ID() string { return "test:fail-after-theme" }
+func (s failAfterThemeStep) Run() error {
+	data, err := os.ReadFile(s.selected)
+	if err != nil || !bytes.Contains(data, []byte(`"theme":"gentleman"`)) {
+		return errors.New("theme write was not observed before failure")
+	}
+	*s.observed = true
+	return s.cause
+}
+
+func TestInstallThemeRollbackRestoresSelectedJSONCBytesAndMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not preserve POSIX file modes")
+	}
+	home, workspace, selected, decoy, before := themeSettingsFixture(t)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentTheme}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, resolved)
+	if err != nil || !slices.Contains(targets, selected) {
+		t.Fatalf("theme backup targets = %v, %v", targets, err)
+	}
+	decoyBefore, err := os.ReadFile(decoy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &runtimeState{}
+	cause := errors.New("forced failure after theme write")
+	observed := false
+	plan := pipeline.StagePlan{
+		Prepare: []pipeline.Step{prepareBackupStep{
+			id: "prepare:backup-snapshot", snapshotter: backup.NewSnapshotter(),
+			snapshotDir: filepath.Join(home, "theme-backup"), targets: []string{selected}, state: state,
+		}},
+		Apply: []pipeline.Step{
+			rollbackRestoreStep{id: "apply:rollback-restore", state: state, homeDir: home, workspaceDir: workspace},
+			componentApplyStep{component: model.ComponentTheme, homeDir: home, workspaceDir: workspace, scope: ScopeGlobal, agents: selection.Agents},
+			failAfterThemeStep{selected: selected, observed: &observed, cause: cause},
+		},
+	}
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if !errors.Is(result.Err, cause) || !observed || !result.Rollback.Success {
+		t.Fatalf("post-theme failure = %v, observed=%t, rollback=%#v", result.Err, observed, result.Rollback)
+	}
+	if len(result.Apply.Steps) != 3 || result.Apply.Steps[1].Status != pipeline.StepStatusSucceeded || result.Apply.Steps[2].Status != pipeline.StepStatusFailed {
+		t.Fatalf("theme must succeed before injected failure: %#v", result.Apply.Steps)
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Equal(got, before) {
+		t.Fatalf("rollback JSONC bytes = %q, %v; want %q", got, err, before)
+	}
+	info, err := os.Stat(selected)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("rollback JSONC mode = %v, %v; want 0600", info, err)
+	}
+	got, err = os.ReadFile(decoy)
+	if err != nil || !bytes.Equal(got, decoyBefore) {
+		t.Fatalf("decoy JSON changed: %q, %v", got, err)
+	}
+}
+
+func TestInstallThemeWorkspaceKeepsGlobalSettings(t *testing.T) {
+	home, workspace, _, decoy, _ := themeSettingsFixture(t)
+	selected := opencode.NewAdapter().SettingsPath(workspace)
+	if err := os.MkdirAll(filepath.Dir(selected), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(selected, []byte(`{"theme":"old","user":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentTheme}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+	paths, err := backupTargets(home, workspace, ScopeWorkspace, selection, resolved)
+	if err != nil || !slices.Contains(paths, selected) {
+		t.Fatalf("workspace backup = %v, %v", paths, err)
+	}
+	step := componentApplyStep{component: model.ComponentTheme, homeDir: home, workspaceDir: workspace, scope: ScopeWorkspace, agents: selection.Agents}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(data, []byte(`"theme": "gentleman"`)) {
+		t.Fatalf("workspace settings = %s, %v", data, err)
+	}
+	data, err = os.ReadFile(decoy)
+	if err != nil || string(data) != `{"theme":"user-owned"}` {
+		t.Fatalf("global settings = %s, %v", data, err)
+	}
+}
+
+func assertThemeSelectedOnly(t *testing.T, selected, decoy string) {
+	t.Helper()
+	data, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(data, []byte(`"theme":"gentleman"`)) || !bytes.Contains(data, []byte(`"user":true`)) || !bytes.Contains(data, []byte("// project settings")) {
+		t.Fatalf("selected JSONC theme not installed: %s, %v", data, err)
+	}
+	data, err = os.ReadFile(decoy)
+	if err != nil || string(data) != `{"theme":"user-owned"}` {
+		t.Fatalf("decoy JSON changed: %s, %v", data, err)
+	}
+}
 
 func TestOpenCodeTelemetryRollbackPreservesLateEdits(t *testing.T) {
 	for _, flow := range []string{"install", "sync"} {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
@@ -96,6 +98,83 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 	if root.Theme != "gentleman" {
 		t.Fatalf("theme = %q, want gentleman", root.Theme)
+	}
+}
+
+func TestInjectAtPathPreservesSelectedJSONCAndLeavesDecoy(t *testing.T) {
+	root := t.TempDir()
+	selected := filepath.Join(root, "opencode.jsonc")
+	decoy := filepath.Join(root, "opencode.json")
+	before := []byte("// selected\n{\"theme\":\"old\",\"custom\":true}\n")
+	if err := os.WriteFile(selected, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(decoy, []byte(`{"theme":"mine"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := InjectAtPath(selected)
+	if err != nil || !first.Changed || len(first.Files) != 1 || first.Files[0] != selected {
+		t.Fatalf("first injection = %#v, %v", first, err)
+	}
+	second, err := InjectAtPath(selected)
+	if err != nil || second.Changed {
+		t.Fatalf("second injection = %#v, %v", second, err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(selected)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("selected JSONC mode = %v, %v; want 0600", info, err)
+		}
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(got, []byte(`"theme":"gentleman"`)) || !bytes.Contains(got, []byte(`"custom":true`)) || !bytes.Contains(got, []byte("// selected")) {
+		t.Fatalf("selected JSONC = %s, %v", got, err)
+	}
+	got, err = os.ReadFile(decoy)
+	if err != nil || string(got) != `{"theme":"mine"}` {
+		t.Fatalf("decoy JSON = %s, %v", got, err)
+	}
+}
+
+func TestInjectAtPathRejectsZeroPermissionSettingsWithoutChangingThem(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not supported on Windows")
+	}
+
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	before := []byte("// private settings\n{\"theme\":\"old\"}\n")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Skipf("cannot set file mode 0000: %v", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode().Perm() != 0 {
+		t.Skipf("cannot verify file mode 0000: %v, %v", info, err)
+	}
+
+	result, err := InjectAtPath(path)
+	if err == nil || !strings.Contains(err.Error(), "0000") || !strings.Contains(err.Error(), "chmod") {
+		t.Errorf("InjectAtPath() = %#v, %v; want actionable mode 0000 error", result, err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Errorf("InjectAtPath() = %#v; want no changed files", result)
+	}
+	info, err = os.Lstat(path)
+	if err != nil || info.Mode().Perm() != 0 {
+		t.Fatalf("settings mode after injection = %v, %v; want 0000", info, err)
+	}
+	// Restore access only to inspect bytes, then leave the file locked down.
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := os.ReadFile(path)
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if readErr != nil || !bytes.Equal(got, before) {
+		t.Fatalf("settings bytes after injection = %q, %v; want %q", got, readErr, before)
 	}
 }
 

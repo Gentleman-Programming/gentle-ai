@@ -6313,6 +6313,30 @@ func TestRunSync_DefaultPreservesReviewWithoutSDDPhaseModels(t *testing.T) {
 
 // runSyncInjectionSteps executes every staged sync apply step and returns the
 // paths the runtime reported as actually changed.
+func TestSyncThemeUsesSelectedOpenCodeJSONC(t *testing.T) {
+	home, workspace, selected, decoy, _ := themeSettingsFixture(t)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentTheme}}
+	paths, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(paths, selected) {
+		t.Fatalf("sync backup omits selected JSONC: %v", paths)
+	}
+	if containsString(syncComponentPathsWithWorkspace(home, workspace, selection, resolveAdapters(selection.Agents), model.ComponentTheme), decoy) {
+		t.Fatal("theme declares decoy JSON as its write target")
+	}
+	var changed []string
+	step := componentSyncStep{component: model.ComponentTheme, homeDir: home, workspaceDir: workspace, agents: selection.Agents, changedFiles: &changed}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	assertThemeSelectedOnly(t, selected, decoy)
+	if !containsString(changed, selected) || containsString(changed, decoy) {
+		t.Fatalf("sync changed paths = %v, want only selected settings", changed)
+	}
+}
+
 func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection) []string {
 	t.Helper()
 
