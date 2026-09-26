@@ -191,7 +191,7 @@ func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testin
 
 	previousInstall := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previousInstall })
-	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector, bool) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, errors.New("CodeGraph reconciliation failed")
 	}
 
@@ -199,7 +199,7 @@ func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testin
 		Agents:          []model.AgentID{model.AgentOpenCode},
 		OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline},
 		CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
-	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistrati
 			previousInstall := installCommunityToolWithHome
 			t.Cleanup(func() { installCommunityToolWithHome = previousInstall })
 			codeGraphSucceeded := false
-			installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+			installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector, bool) (communitytool.Result, error) {
 				codeGraphSucceeded = true
 				return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
 			}
@@ -250,7 +250,7 @@ func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistrati
 					model.OpenCodePluginGentleLogo,
 				},
 				CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-			}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+			}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -329,7 +329,7 @@ func TestSuccessfulCodeGraphReconciliationStillRegistersOpenCodePlugin(t *testin
 
 	previousInstall := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previousInstall })
-	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector, bool) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
 	}
 
@@ -337,7 +337,7 @@ func TestSuccessfulCodeGraphReconciliationStillRegistersOpenCodePlugin(t *testin
 		Agents:          []model.AgentID{model.AgentOpenCode},
 		OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline},
 		CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
-	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestCommunityToolInstallStepUsesInjectableInstaller(t *testing.T) {
 	var gotTool model.CommunityToolID
 	var gotWorkspace string
 	var runner communitytool.Runner
-	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 		gotTool = tool
 		gotWorkspace = workspaceDir
 		runner = r
@@ -614,7 +614,7 @@ func TestCommunityToolInstallStepPassesRuntimeHomeToPiReconciler(t *testing.T) {
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	var gotHome string
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, home string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, home string, _ communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 		gotHome = home
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
 	}
@@ -627,11 +627,83 @@ func TestCommunityToolInstallStepPassesRuntimeHomeToPiReconciler(t *testing.T) {
 	}
 }
 
+// TestCommunityToolInstallStepForwardsForceCommunityTools wires the CLI
+// runtime contract for --force-community-tools: the step must hand the
+// parsed flag straight down to the install seam so the force bypass is the
+// installer's opt-in, not a global side channel.
+func TestCommunityToolInstallStepForwardsForceCommunityTools(t *testing.T) {
+	previous := installCommunityToolWithHome
+	t.Cleanup(func() { installCommunityToolWithHome = previous })
+
+	tests := []struct {
+		name  string
+		force bool
+	}{
+		{name: "force false", force: false},
+		{name: "force true", force: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotForce bool
+			installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, forceCommunityTools bool) (communitytool.Result, error) {
+				gotForce = forceCommunityTools
+				return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
+			}
+			step := communityToolInstallStep{id: "community-tool:codegraph", tool: model.CommunityToolCodeGraph, workspaceDir: "/work/project", homeDir: "/tmp/runtime-home", forceCommunityTools: tc.force}
+			if err := step.Run(); err != nil {
+				t.Fatal(err)
+			}
+			if gotForce != tc.force {
+				t.Fatalf("forceCommunityTools forwarded = %v, want %v", gotForce, tc.force)
+			}
+		})
+	}
+}
+
+// TestRunInstallPlumbsForceCommunityToolsToRuntime drives the end-to-end CLI
+// contract: --force-community-tools on `gentle-ai install` reaches the
+// communityToolInstallStep that runs against the in-memory installer seam.
+// It validates the parser-to-runtime plumb without depending on the
+// installer itself, which has its own communitytool-level tests.
+func TestRunInstallPlumbsForceCommunityToolsToRuntime(t *testing.T) {
+	previous := installCommunityToolWithHome
+	t.Cleanup(func() { installCommunityToolWithHome = previous })
+
+	var gotForce bool
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, forceCommunityTools bool) (communitytool.Result, error) {
+		gotForce = forceCommunityTools
+		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
+	}
+
+	runtime := &installRuntime{
+		homeDir:             t.TempDir(),
+		workspaceDir:        t.TempDir(),
+		scope:               ScopeGlobal,
+		selection:           model.Selection{Agents: []model.AgentID{model.AgentCodex}, CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}},
+		resolved:            planner.ResolvedPlan{Agents: []model.AgentID{model.AgentCodex}},
+		profile:             system.PlatformProfile{},
+		channel:             ChannelStable,
+		backupRoot:          filepath.Join(t.TempDir(), "backups"),
+		state:               &runtimeState{},
+		forceCommunityTools: true,
+	}
+	for _, step := range runtime.stagePlan().Apply {
+		if step.ID() == "community-tool:codegraph" {
+			if err := step.Run(); err != nil {
+				t.Fatalf("communityToolInstallStep.Run() error = %v", err)
+			}
+		}
+	}
+	if !gotForce {
+		t.Fatalf("forceCommunityTools = false, install runtime did not honour the flag")
+	}
+}
+
 func TestInstallPipelinePropagatesInitialPiPendingWhenPiUnselected(t *testing.T) {
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph runtime verification is pending."}}
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
 	}
 	runtime := &installRuntime{
@@ -658,7 +730,7 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 		reconcilePiCodeGraph = previousReconcile
 	})
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, and direct MCP capability was verified. Pi adapter activation health cannot be machine-verified on the detected Pi version."}}
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
 	}
 	reconcilePiCodeGraph = func(communitytool.PiCodeGraphOptions) (communitytool.PiCodeGraphResult, error) {
@@ -727,7 +799,7 @@ func TestSyncPlanIncludesPiCodeGraphReconciliationAfterComponentsWhenSelected(t 
 	runtime, err := newSyncRuntime(home, model.Selection{
 		Agents:         []model.AgentID{model.AgentPi},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

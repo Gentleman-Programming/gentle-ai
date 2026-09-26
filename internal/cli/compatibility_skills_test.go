@@ -630,14 +630,14 @@ func TestCompatibilityRefreshRollbackRemovesNewFilesAfterDuplicateBackup(t *test
 	created := filepath.Join(home, ".agents", "skills", "go-testing", "references", "examples.md")
 	writeStale(t, existing)
 	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
-	initialRuntime, err := newSyncRuntime(home, selection)
+	initialRuntime, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := initialRuntime.stagePlan().Prepare[0].Run(); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := newSyncRuntime(home, selection)
+	runtime, err := newSyncRuntime(home, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
