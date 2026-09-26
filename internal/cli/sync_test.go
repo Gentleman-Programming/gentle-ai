@@ -2829,15 +2829,23 @@ func TestCommunityToolSyncReconcileStepForwardsForce(t *testing.T) {
 		{name: "force true bypass", force: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			previous := communityToolReconcileFn
-			t.Cleanup(func() { communityToolReconcileFn = previous })
+			previous := communityToolUpgradeFn
+			t.Cleanup(func() { communityToolUpgradeFn = previous })
+			// The step's no-op gate probes PATH for the codegraph CLI. Stub the
+			// lookup so this test is hermetic on machines without codegraph
+			// installed (the established cmdLookPath stub pattern).
+			previousLookPath := cmdLookPath
+			t.Cleanup(func() { cmdLookPath = previousLookPath })
+			cmdLookPath = func(name string) (string, error) {
+				return "/tmp/hermetic-fake-bin/" + name, nil
+			}
 
 			var gotTool model.CommunityToolID
 			var gotWorkspace, gotHome string
 			var gotRunner communitytool.Runner
 			var gotDetector communitytool.Detector
 			var gotForce bool
-			communityToolReconcileFn = func(tool model.CommunityToolID, workspaceDir, homeDir string, runner communitytool.Runner, detector communitytool.Detector, forceCommunityTools bool) (communitytool.Result, error) {
+			communityToolUpgradeFn = func(tool model.CommunityToolID, workspaceDir, homeDir string, runner communitytool.Runner, detector communitytool.Detector, forceCommunityTools bool) (communitytool.Result, error) {
 				gotTool = tool
 				gotWorkspace = workspaceDir
 				gotHome = homeDir
@@ -3014,15 +3022,15 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 	}
 	writeManagedPiCodeGraphManifest(t, home)
 
-	// Stub the sync-side reconcile seam so the legacy-migration fixture
+	// Stub the sync-side upgrade seam so the legacy-migration fixture
 	// does not shell out to npm/@latest. The migration assertions below
 	// exercise the restore-managed-assets + persist path independently
-	// of the reconcile step's installer contract.
-	previousReconcile := communityToolReconcileFn
-	communityToolReconcileFn = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector, bool) (communitytool.Result, error) {
+	// of the upgrade step's installer contract.
+	previousUpgrade := communityToolUpgradeFn
+	communityToolUpgradeFn = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector, bool) (communitytool.Result, error) {
 		return communitytool.Result{}, nil
 	}
-	t.Cleanup(func() { communityToolReconcileFn = previousReconcile })
+	t.Cleanup(func() { communityToolUpgradeFn = previousUpgrade })
 
 	previousRefresh := refreshPiCodeGraphIfConfigured
 	refreshed := false
@@ -3055,15 +3063,6 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	// Stub the sync-side reconcile seam so this test does not shell out to
-	// npm/@latest; the assertion exercises the rollback path of a failed
-	// legacy-migration persistence, not the installer contract.
-	previousReconcile := communityToolReconcileFn
-	communityToolReconcileFn = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector, bool) (communitytool.Result, error) {
-		return communitytool.Result{}, nil
-	}
-	t.Cleanup(func() { communityToolReconcileFn = previousReconcile })
-
 	original := state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}
 	if err := state.Write(home, original); err != nil {
 		t.Fatal(err)
@@ -3086,13 +3085,23 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 
 	previousRefresh := refreshPiCodeGraphIfConfigured
 	previousLookPath := cmdLookPath
+	previousUpgrade := communityToolUpgradeFn
 	refreshPiCodeGraphIfConfigured = func(string, string) (communitytool.PiCodeGraphResult, bool, error) {
 		return communitytool.PiCodeGraphResult{}, true, nil
+	}
+	// Stub the upgrade seam so the legacy-migration failure path does
+	// not shell out to npm/@latest. cmdLookPath returning ErrNotExist
+	// already makes the sync step a no-op locally, but the stub keeps
+	// the test hermetic on machines where `codegraph` happens to be on
+	// PATH.
+	communityToolUpgradeFn = func(tool model.CommunityToolID, workspaceDir, homeDir string, runner communitytool.Runner, detector communitytool.Detector, forceCommunityTools bool) (communitytool.Result, error) {
+		return communitytool.Result{Tool: tool}, nil
 	}
 	cmdLookPath = func(string) (string, error) { return "", os.ErrNotExist }
 	t.Cleanup(func() {
 		refreshPiCodeGraphIfConfigured = previousRefresh
 		cmdLookPath = previousLookPath
+		communityToolUpgradeFn = previousUpgrade
 	})
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})

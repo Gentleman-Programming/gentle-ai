@@ -419,7 +419,7 @@ func TestWindowsCompatibilityTransactionRollbackRemovesCreatedFilesAfterDuplicat
 	writeStale(t, existing)
 	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
 
-	first, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+first, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestWindowsCompatibilityTransactionRollbackRemovesCreatedFilesAfterDuplicat
 	first.state.cleanupRollbackSnapshot()
 	first.state.cleanupCompatibilityTransaction()
 
-	runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

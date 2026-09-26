@@ -1619,3 +1619,234 @@ func TestInstallForceReinstallBypassesReconcileShortCircuit(t *testing.T) {
 		t.Fatal("runner was never called: --force-community-tools must bypass the short-circuit and re-run the install path")
 	}
 }
+
+// ─── UpgradeCodeGraphIfStale (sync-parity contract) ────────────────────────
+//
+// The tests below pin the sync-side entry point that
+// internal/cli/sync.go uses. They are traceable to PR #5015's two CI
+// failures: legacy-migration fixtures and stale-but-wired setups were
+// failing InstallWithHome's validation when sync ran the full install
+// path. UpgradeCodeGraphIfStale closes that surface by running ONLY the
+// package install command on a stale CLI; the freshly-upgraded binary
+// takes over wiring on the next `gentle-ai install` run.
+
+// TestUpgradeCodeGraphIfStaleRunsPackageInstallOnlyOnStaleCLI pins the
+// sync-parity contract: a stale CLI (older than codeGraphUpstreamVersion)
+// MUST trigger exactly the package install command and MUST NOT emit any
+// post-install wiring command. Sync deliberately skips the wiring step
+// because legacy fixtures and stale-but-wired setups would fail the
+// install-time validation.
+func TestUpgradeCodeGraphIfStaleRunsPackageInstallOnlyOnStaleCLI(t *testing.T) {
+	stubCodeGraphVersion(t, "0.9.3", true)
+
+	var commands []string
+	result, err := UpgradeCodeGraphIfStale(
+		model.CommunityToolCodeGraph,
+		"/work/project",
+		t.TempDir(),
+		RunnerFunc(func(name string, args ...string) error {
+			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			return nil
+		}),
+		DetectorFunc(func(string) (string, error) {
+			return "/bin/codegraph", nil
+		}),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("UpgradeCodeGraphIfStale() error = %v", err)
+	}
+	want := []string{"npm install -g @colbymchenry/codegraph@latest"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v (sync must skip the wiring command on a stale CLI)", commands, want)
+	}
+	if !reflect.DeepEqual(result.CommandsRun, want) {
+		t.Fatalf("result.CommandsRun = %#v, want %#v", result.CommandsRun, want)
+	}
+}
+
+// TestUpgradeCodeGraphIfStaleIsNoOpWhenCLIMeetsContract pins the
+// current-version sync path: a CodeGraph CLI whose reported version is
+// at or above codeGraphUpstreamVersion MUST be left alone, so a sync run
+// over an already-current CLI never shells out to npm. The version
+// comparison reuses codeGraphVersionLess / codeGraphUpstreamVersion, so
+// any change to the contract constant flows through this test
+// automatically.
+func TestUpgradeCodeGraphIfStaleIsNoOpWhenCLIMeetsContract(t *testing.T) {
+	stubCodeGraphVersion(t, codeGraphUpstreamVersion, true)
+
+	calls := 0
+	result, err := UpgradeCodeGraphIfStale(
+		model.CommunityToolCodeGraph,
+		"/work/project",
+		t.TempDir(),
+		RunnerFunc(func(string, ...string) error {
+			calls++
+			return nil
+		}),
+		DetectorFunc(func(string) (string, error) {
+			return "/bin/codegraph", nil
+		}),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("UpgradeCodeGraphIfStale() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner calls = %d, want 0 when installed CodeGraph meets the contract", calls)
+	}
+	if len(result.CommandsRun) != 0 {
+		t.Fatalf("result.CommandsRun = %#v, want empty no-op result", result.CommandsRun)
+	}
+}
+
+// TestUpgradeCodeGraphIfStaleIsNoOpWhenCLIAbsent pins the
+// first-install / legacy-migration gate: when no codegraph CLI is on
+// PATH the sync step leaves the result untouched. First installs belong
+// to `gentle-ai install`; this entry is a no-op so the sync step never
+// triggers a fresh install as a side effect, and the version probe never
+// runs (the gate fails before any subprocess invocation).
+func TestUpgradeCodeGraphIfStaleIsNoOpWhenCLIAbsent(t *testing.T) {
+	previous := codeGraphInstalledVersion
+	t.Cleanup(func() { codeGraphInstalledVersion = previous })
+	probeCalls := 0
+	codeGraphInstalledVersion = func(string) (string, bool) {
+		probeCalls++
+		return "0.9.3", true
+	}
+
+	calls := 0
+	result, err := UpgradeCodeGraphIfStale(
+		model.CommunityToolCodeGraph,
+		"/work/project",
+		t.TempDir(),
+		RunnerFunc(func(string, ...string) error {
+			calls++
+			return nil
+		}),
+		DetectorFunc(func(string) (string, error) {
+			return "", fmt.Errorf("not found")
+		}),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("UpgradeCodeGraphIfStale() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner calls = %d, want 0 when the codegraph CLI is not on PATH", calls)
+	}
+	if probeCalls != 0 {
+		t.Fatalf("probe calls = %d, want 0 when the CLI is absent; the probe must not run when the gate fails", probeCalls)
+	}
+	if len(result.CommandsRun) != 0 {
+		t.Fatalf("result.CommandsRun = %#v, want empty no-op result", result.CommandsRun)
+	}
+}
+
+// TestUpgradeCodeGraphIfStaleIsNoOpWhenVersionUnparseable pins the
+// ambiguous-version path: when the installed CLI returns output the
+// version regex cannot parse, sync treats the CLI as out-of-scope and
+// does not trigger an upgrade. Re-running sync later may resolve the
+// ambiguity (a fixed-binary release, a different shell), and sync must
+// not force the user's hand on a single inconclusive probe.
+func TestUpgradeCodeGraphIfStaleIsNoOpWhenVersionUnparseable(t *testing.T) {
+	stubCodeGraphVersion(t, "", false)
+
+	calls := 0
+	result, err := UpgradeCodeGraphIfStale(
+		model.CommunityToolCodeGraph,
+		"/work/project",
+		t.TempDir(),
+		RunnerFunc(func(string, ...string) error {
+			calls++
+			return nil
+		}),
+		DetectorFunc(func(string) (string, error) {
+			return "/bin/codegraph", nil
+		}),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("UpgradeCodeGraphIfStale() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner calls = %d, want 0 when the installed version is unparseable", calls)
+	}
+	if len(result.CommandsRun) != 0 {
+		t.Fatalf("result.CommandsRun = %#v, want empty no-op result", result.CommandsRun)
+	}
+}
+
+// TestUpgradeCodeGraphIfStaleForceRoutesToFullInstall pins the
+// --force-community-tools bypass through the sync entry point: when
+// the flag is true, the function MUST delegate to InstallWithHome and
+// emit the full install path (wiring commands included). The distinct
+// observable against the no-op stale path is the appearance of a
+// `codegraph install --target` command in the runner output, which only
+// the full InstallWithHome path emits on a current CLI with detected
+// native targets.
+func TestUpgradeCodeGraphIfStaleForceRoutesToFullInstall(t *testing.T) {
+	home := installHomeWithTwoNativeTargets(t)
+	stubCodeGraphVersion(t, codeGraphUpstreamVersion, true)
+
+	var commands []string
+	_, err := UpgradeCodeGraphIfStale(
+		model.CommunityToolCodeGraph,
+		"/work/project",
+		home,
+		RunnerFunc(func(name string, args ...string) error {
+			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			// The full path runs validation on the freshly-wired agents;
+			// write the canonical MCP wiring files so the validation
+			// passes and isolates the force-bypass behaviour.
+			mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+			mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+			return nil
+		}),
+		DetectorFunc(func(string) (string, error) {
+			return "/bin/codegraph", nil
+		}),
+		true,
+	)
+	if err != nil {
+		t.Fatalf("UpgradeCodeGraphIfStale() error = %v", err)
+	}
+	// The wiring command is the observable signal that the FULL install
+	// path (not the upgrade-only path) ran; the upgrade-only path emits
+	// only the package install, never a `codegraph install --target`.
+	foundWiring := false
+	for _, command := range commands {
+		if strings.Contains(command, "codegraph install --target") {
+			foundWiring = true
+			break
+		}
+	}
+	if !foundWiring {
+		t.Fatalf("commands = %#v, want a `codegraph install --target` command so the forced path emits the full wiring sequence", commands)
+	}
+	if len(commands) == 0 {
+		t.Fatal("commands empty; the forced path must still emit the wiring command it would on the install entry")
+	}
+}
+
+// TestUpgradeCodeGraphIfStaleRejectsNilRunner pins the failure-closed
+// invariant shared with Install / InstallWithHome: a nil runner is a
+// programmer error, not a quiet no-op.
+func TestUpgradeCodeGraphIfStaleRejectsNilRunner(t *testing.T) {
+	result, err := UpgradeCodeGraphIfStale(
+		model.CommunityToolCodeGraph,
+		"/work/project",
+		t.TempDir(),
+		nil,
+		DetectorFunc(func(string) (string, error) {
+			return "/bin/codegraph", nil
+		}),
+		false,
+	)
+	if err == nil {
+		t.Fatal("UpgradeCodeGraphIfStale() error = nil, want configured runner error")
+	}
+	if result.Tool != "" || len(result.CommandsRun) != 0 {
+		t.Fatalf("result = %#v, want empty result on nil runner", result)
+	}
+}

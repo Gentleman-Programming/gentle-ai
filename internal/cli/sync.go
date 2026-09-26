@@ -469,10 +469,12 @@ type syncRuntime struct {
 	piBackgroundProjection *piBackgroundProjectionPlan
 }
 
-// communityToolReconcileFn is the sync-side seam into communitytool so tests
-// can verify the reconcile contract without shelling out to npm/@latest.
-// Production binds it to communitytool.InstallWithHome.
-var communityToolReconcileFn = communitytool.InstallWithHome
+// communityToolUpgradeFn is the sync-side seam into communitytool so tests
+// can verify the upgrade contract without shelling out to npm/@latest.
+// Production binds it to communitytool.UpgradeCodeGraphIfStale, which
+// runs ONLY the package install on a stale CLI and skips the full
+// InstallWithHome validation path that legacy fixtures would fail.
+var communityToolUpgradeFn = communitytool.UpgradeCodeGraphIfStale
 
 // newSyncRuntimeWithScope builds the sync runtime for the requested scope.
 // ScopeWorkspace never touches the global backup store: the rollback snapshot
@@ -1254,7 +1256,14 @@ type communityToolSyncReconcileStep struct {
 func (s communityToolSyncReconcileStep) ID() string { return s.id }
 
 func (s communityToolSyncReconcileStep) Run() error {
-	_, err := communityToolReconcileFn(
+	// Sync upgrades an EXISTING CodeGraph installation (issue #984). When no
+	// CLI is on PATH this step is a no-op: first installs belong to `gentle-ai
+	// install`, and legacy-migration flows must not trigger a package install
+	// as a side effect of syncing.
+	if _, err := cmdLookPath("codegraph"); err != nil {
+		return nil
+	}
+	_, err := communityToolUpgradeFn(
 		model.CommunityToolCodeGraph,
 		s.workspaceDir,
 		s.homeDir,
@@ -2011,13 +2020,13 @@ func runSyncWithSelectionScopeAfterSkip(homeDir string, selection model.Selectio
 	if scope == ScopeGlobal {
 		preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(selection.Agents, model.AgentPi))
 	}
-	return runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground)
+	return runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground, false)
 }
 
 var syncStagePlan = func(runtime *syncRuntime) pipeline.StagePlan { return runtime.stagePlan() }
 var compareChangedSyncFiles = changedSyncFiles
 
-func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
+func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution, forceCommunityTools bool) (SyncResult, error) {
 	agentIDs := selection.Agents
 	// The read error is captured, not discarded: the persona alias migration
 	// below must not rewrite state it could not read. Managed-asset provenance
@@ -2073,6 +2082,13 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	}
 	defer rt.state.cleanupCompatibilityTransaction()
 	defer rt.state.cleanupRollbackSnapshot()
+	// --force-community-tools must reach the runtime for every caller of this
+	// shared function, not only the dry-run branch. The dry-run path constructs
+	// its own runtime via newSyncRuntimeWithScope and assigns the flag inline
+	// because it never enters this function (its plan is built and returned
+	// directly), so the local assignment below is the single authoritative
+	// plumbing point for the normal sync path.
+	rt.forceCommunityTools = forceCommunityTools
 	rt.backgroundActivation = background.activationPlan
 	if rt.backgroundActivation != nil {
 		rt.runtimeReady = rt.backgroundActivation.Capability().Ready()
@@ -2397,7 +2413,7 @@ func RunSync(args []string) (SyncResult, error) {
 		background.activationPlan = backgroundActivation
 		preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
 	}
-	result, err := runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground)
+	result, err := runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground, flags.ForceCommunityTools)
 	if err != nil {
 		return finishPartialSync(result, err, skipped)
 	}
