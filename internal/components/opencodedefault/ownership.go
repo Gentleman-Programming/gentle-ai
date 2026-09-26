@@ -45,6 +45,9 @@ type UninstallPlan struct {
 }
 
 func OwnershipPath(settingsPath string) string {
+	if settingsPath == "" {
+		return ""
+	}
 	return filepath.Join(filepath.Dir(settingsPath), ".gentle-ai-default-agent.json")
 }
 
