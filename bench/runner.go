@@ -866,10 +866,15 @@ func (r *journeyRun) runTTY(args []string, modelRun bool, exchange func(*bufio.R
 func runJourney(binary string, journey Journey) JourneyResult {
 	result := JourneyResult{ID: journey.ID, Title: journey.Title, Source: journey.Source, Status: StatusCompleted}
 
+	// The normalizer exists before anything that can fail so every recorded
+	// string — command argv, block messages, fixture errors — is projected
+	// onto the canonical tokens at record time, wherever the path came from.
+	normalizer := newPathNormalizer(binary, "")
+
 	root, err := os.MkdirTemp("", "gentle-ai-bench-"+journey.ID+"-")
 	if err != nil {
 		result.Status = StatusFailed
-		result.FailureReason = err.Error()
+		result.FailureReason = normalizer.Normalize(err.Error())
 		return result
 	}
 	defer func() { _ = os.RemoveAll(root) }()
@@ -881,21 +886,24 @@ func runJourney(binary string, journey Journey) JourneyResult {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
+	normalizer.setRunRoot(root)
 
 	sandbox, err := newSandbox(binary, root)
 	if err != nil {
 		result.Status = StatusFailed
-		result.FailureReason = err.Error()
+		result.FailureReason = normalizer.Normalize(err.Error())
 		return result
 	}
+	normalizer.setSandbox(sandbox.Home, sandbox.Repo)
 	accumulator := newAccumulator()
+	accumulator.normalizer = normalizer
 	probe := newCapabilityProbe(sandbox)
 	run := &journeyRun{sandbox: sandbox, probe: probe, accumulator: accumulator}
 
 	if journey.Review == reviewOptedIn {
 		if err := optIntoReviewMode(sandbox); err != nil {
 			result.Status = StatusFailed
-			result.FailureReason = "review precondition: " + err.Error()
+			result.FailureReason = normalizer.Normalize("review precondition: " + err.Error())
 			return result
 		}
 	}
@@ -905,7 +913,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		if step.Skip != nil {
 			if reason := step.Skip(run.sandbox); reason != "" {
 				result.Status = StatusUnsupported
-				result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" ("+reason+")")
+				result.UnsupportedSteps = append(result.UnsupportedSteps, normalizer.Normalize(step.Name+" ("+reason+")"))
 				break
 			}
 		}
@@ -913,14 +921,14 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		if step.Fixture != nil {
 			if err := step.Fixture(sandbox); err != nil {
 				result.Status = StatusFailed
-				result.FailureReason = fmt.Sprintf("fixture %q: %v", step.Name, err)
+				result.FailureReason = normalizer.Normalize(fmt.Sprintf("fixture %q: %v", step.Name, err))
 				break
 			}
 		}
 
 		if supported, reason := probe.supported(step.Requires); !supported {
 			result.Status = StatusUnsupported
-			result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" ("+reason+")")
+			result.UnsupportedSteps = append(result.UnsupportedSteps, normalizer.Normalize(step.Name+" ("+reason+")"))
 			// Continue the journey where later steps do not depend on this
 			// one; abort cleanly where they do.
 			if step.Args != nil || step.Composite != nil {
@@ -932,7 +940,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		if step.Composite != nil {
 			if err := step.Composite(run); err != nil {
 				result.Status = StatusFailed
-				result.FailureReason = fmt.Sprintf("step %q: %v", step.Name, err)
+				result.FailureReason = normalizer.Normalize(fmt.Sprintf("step %q: %v", step.Name, err))
 				break
 			}
 			continue
@@ -945,7 +953,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		args, err := step.Args(sandbox)
 		if err != nil {
 			result.Status = StatusFailed
-			result.FailureReason = fmt.Sprintf("step %q: %v", step.Name, err)
+			result.FailureReason = normalizer.Normalize(fmt.Sprintf("step %q: %v", step.Name, err))
 			break
 		}
 
@@ -964,7 +972,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		if step.After != nil {
 			if err := step.After(sandbox, observation); err != nil {
 				result.Status = StatusFailed
-				result.FailureReason = fmt.Sprintf("step %q after: %v", step.Name, err)
+				result.FailureReason = normalizer.Normalize(fmt.Sprintf("step %q after: %v", step.Name, err))
 				break
 			}
 		}
@@ -980,7 +988,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 	// stated continuation the reader cannot follow.
 	if len(accumulator.deadTransitions) > 0 && result.Status != StatusFailed {
 		result.Status = StatusFailed
-		result.FailureReason = strings.Join(accumulator.deadTransitions, "; ")
+		result.FailureReason = normalizer.Normalize(strings.Join(accumulator.deadTransitions, "; "))
 	}
 
 	result.Metrics = accumulator.metrics("")
