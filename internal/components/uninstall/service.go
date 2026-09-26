@@ -490,6 +490,24 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			}
 		}
 	}
+	if removesAllAgentComponents(componentIDs) {
+		for _, agentID := range agentIDs {
+			if agentID != model.AgentOpenCode && agentID != model.AgentKilocode {
+				continue
+			}
+			adapter, _ := s.registry.Get(agentID)
+			for _, path := range settingsTargets(s.homeDir, adapter) {
+				backupTargets[path] = struct{}{}
+				op := removeOpenCodeFamilyAgents(path, agentID)
+				op.agents = []model.AgentID{agentID}
+				key := operationKey(op)
+				if existing, ok := operationsByKey[key]; ok {
+					op = mergeRewriteOps(existing, op)
+				}
+				operationsByKey[key] = op
+			}
+		}
+	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
 		adapter, _ := s.registry.Get(model.AgentOpenCode)
 		// Only a complete OpenCode removal rolls back defaults owned by an
@@ -834,6 +852,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 
 	switch componentID {
 	case model.ComponentPersona:
+		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+			for _, path := range settingsTargets(homeDir, adapter) {
+				targets = append(targets, path)
+				ops = append(ops, removeOpenCodeGentleman(path, adapter.Agent()))
+			}
+		}
 		if adapter.SupportsSystemPrompt() {
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)
@@ -852,9 +876,6 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			jsonPaths := []jsonPath{{"outputStyle"}}
-			if adapter.Agent() == model.AgentOpenCode {
-				jsonPaths = append(jsonPaths, jsonPath{"agent", "gentleman"})
-			}
 			ops = append(ops, rewriteJSONFile(path, jsonPaths...))
 		}
 	case model.ComponentContext7:
