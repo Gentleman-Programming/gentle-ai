@@ -201,3 +201,5 @@ func findEffectiveConfigPathChecked(homeDir, projectDir string) (string, error) 
 	}
 	return "", nil
 }
+
+// Commit: force CodeRabbit re-review of stale prompts (2025-09-26)
