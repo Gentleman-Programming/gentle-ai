@@ -230,6 +230,7 @@ func TestSyncWorkspaceAuthorityPreflight(t *testing.T) {
 				configHome := filepath.Join(home, ".config")
 				setOpenCodeTestHome(t, home)
 				t.Setenv("XDG_CONFIG_HOME", configHome)
+				t.Setenv("OPENCODE_CONFIG_DIR", "")
 				t.Chdir(workspace)
 				settings := filepath.Join(workspace, "opencode.json")
 				mustWriteFile(t, settings, []byte(`{"theme":"keep"}`))
@@ -286,6 +287,7 @@ func TestSyncLegacyMarkerPrecedesOtherApplyWrites(t *testing.T) {
 	home := t.TempDir()
 	configHome := filepath.Join(home, ".config")
 	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
 	rt, err := newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentID("agents")}})
 	if err != nil {
 		t.Fatal(err)
