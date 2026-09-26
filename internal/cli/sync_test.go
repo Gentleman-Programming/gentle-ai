@@ -6657,3 +6657,5 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
 }
+
+// Commit: force CodeRabbit re-review of stale prompts (2025-09-26)
