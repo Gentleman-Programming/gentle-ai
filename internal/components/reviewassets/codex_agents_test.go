@@ -290,9 +290,11 @@ func TestCodexAgentRoleDirHonorsCodexHomeForRealHome(t *testing.T) {
 		}
 	})
 
-	t.Run("relative codex home falls back to the home default", func(t *testing.T) {
+	t.Run("relative codex home resolves against the working directory", func(t *testing.T) {
+		workDir := t.TempDir()
+		t.Chdir(workDir)
 		t.Setenv("CODEX_HOME", filepath.Join("relative", "codex-home"))
-		want := filepath.Join(userHome, ".codex", codexAgentsSubdir)
+		want := filepath.Join(workDir, "relative", "codex-home", codexAgentsSubdir)
 		if got := CodexAgentRoleDir(userHome); got != want {
 			t.Fatalf("CodexAgentRoleDir(userHome) = %q, want %q", got, want)
 		}

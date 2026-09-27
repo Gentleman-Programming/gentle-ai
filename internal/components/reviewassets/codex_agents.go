@@ -60,20 +60,32 @@ func CodexAgentRoleDir(home string) string {
 	return filepath.Join(codexConfigRoot(home), codexAgentsSubdir)
 }
 
-// codexConfigRoot resolves the Codex configuration root for a home, honouring
-// CODEX_HOME the way the sibling OpenCode resolver honours XDG_CONFIG_HOME
-// (internal/agents/opencode/paths.go): only a non-blank absolute CODEX_HOME is
-// honoured, and only when the supplied home is the real user home from
-// os.UserHomeDir(). Every other home keeps the home-relative default so an
-// ambient CODEX_HOME cannot redirect an isolated test or sandbox HOME.
+// codexConfigRoot resolves the Codex configuration root for a home.
+//
+// CODEX_HOME is honoured only when the supplied home is the real user home from
+// os.UserHomeDir(), so an ambient variable cannot redirect an isolated test or
+// sandbox HOME — the same guard internal/agents/opencode/paths.go applies to
+// XDG_CONFIG_HOME. A relative CODEX_HOME is resolved against the working
+// directory instead of being rejected, because that is what Codex does with it:
+// find_codex_home reads the raw value with std::fs::metadata and then
+// canonicalizes it, which resolves a relative path against the process working
+// directory and makes it absolute. Rejecting one would write the roles to
+// home/.codex/agents while Codex reads them from the requested directory.
 func codexConfigRoot(home string) string {
-	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); filepath.IsAbs(codexHome) {
-		userHome, err := os.UserHomeDir()
-		if err == nil && filepath.Clean(home) == filepath.Clean(userHome) {
-			return codexHome
-		}
+	fallback := filepath.Join(home, ".codex")
+	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if codexHome == "" {
+		return fallback
 	}
-	return filepath.Join(home, ".codex")
+	userHome, err := os.UserHomeDir()
+	if err != nil || filepath.Clean(home) != filepath.Clean(userHome) {
+		return fallback
+	}
+	resolved, err := filepath.Abs(codexHome)
+	if err != nil {
+		return fallback
+	}
+	return resolved
 }
 
 // RetiredCodexAgentRoleManifest is the extension point for Codex role files
