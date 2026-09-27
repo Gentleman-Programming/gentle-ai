@@ -32,6 +32,12 @@ and no way to prove what it did beyond asking you to read every line.
 <strong>Gentle-AI gives it memory, a workflow, and evidence.</strong>
 </p>
 
+<p>
+🎬 <strong>Watch the demo:</strong>
+<a href="https://drive.google.com/file/d/14VaUY04LzX6qZBVuuPwjzr1RWRyrZjkf/view?usp=drive_link"><strong>English</strong></a> &bull;
+<a href="https://drive.google.com/file/d/1Qp3fXX1joynPpwORZMuu6ygm1hnONPKY/view?usp=drive_link"><strong>English with subtitles</strong></a>
+</p>
+
 <br/>
 
 <!--
