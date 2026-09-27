@@ -333,12 +333,12 @@ func allSDDOrchestratorAssetPaths(t *testing.T) []string {
 func allReviewLifecycleAssetPaths(t *testing.T) []string {
 	t.Helper()
 	var paths []string
-	for _, runtime := range []string{"claude", "cursor", "kimi", "kiro"} {
+	for _, runtime := range []string{"claude", "codex", "cursor", "kimi", "kiro"} {
 		for _, role := range []string{"readability", "refuter", "reliability", "resilience", "risk"} {
 			paths = append(paths, runtime+"/agents/review-"+role+".md")
 		}
 	}
-	for _, runtime := range []string{"claude", "kiro"} {
+	for _, runtime := range []string{"claude", "codex", "kiro"} {
 		for _, role := range []string{"fix-agent", "judge-a", "judge-b"} {
 			paths = append(paths, runtime+"/agents/jd-"+role+".md")
 		}

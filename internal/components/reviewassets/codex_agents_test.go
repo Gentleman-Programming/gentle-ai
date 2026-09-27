@@ -11,6 +11,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 )
 
@@ -149,6 +151,124 @@ func TestRenderManagedCodexAgentRolesParseWithCodexSchema(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRenderCodexAgentRoleCarriesNativeReviewerAndJudgeContract is the parity
+// contract for the Codex projection. For a lens reviewer the native claude
+// projection replaces the authored body with ClaudeReviewerPrompt, and for a
+// jd-judge-* role it replaces the ledger section with the shared Judgment Day
+// contract; the Codex projection must materialize the same body. The authored
+// pre-render lens body must not survive, because no runtime installs it. The
+// expectation is derived from the shared contract function and the native
+// projection, never from a copy of the prompt text.
+func TestRenderCodexAgentRoleCarriesNativeReviewerAndJudgeContract(t *testing.T) {
+	adapter := claude.NewAdapter()
+	for _, fileName := range CodexAgentRoleNames() {
+		role := strings.TrimSuffix(fileName, ".toml")
+		t.Run(role, func(t *testing.T) {
+			instructions := codexDeveloperInstructions(t, role)
+			authoredBody := codexAuthoredRoleBody(t, role)
+
+			if prompt, reviewer := ClaudeReviewerPrompt(role); reviewer {
+				native, err := renderNativeAgent(adapter, role+".md", InstallOptions{})
+				if err != nil {
+					t.Fatalf("renderNativeAgent(%s) error = %v", role, err)
+				}
+				_, nativeBody, err := splitAgentFrontmatter(native)
+				if err != nil {
+					t.Fatalf("split native %s: %v", role, err)
+				}
+				if expected := stripCodexInjectedSections(nativeBody); expected != prompt {
+					t.Fatalf("native %s lens body drifted from the shared Claude lens transport", role)
+				}
+				if !strings.Contains(instructions, prompt) {
+					t.Errorf("%s developer_instructions do not carry the native review-lens body", role)
+				}
+				if lead := authoredLeadSentence(authoredBody); lead != "" && strings.Contains(instructions, lead) {
+					t.Errorf("%s developer_instructions still carry the authored pre-render lens body %q", role, lead)
+				}
+				return
+			}
+			if strings.HasPrefix(role, "jd-judge-") {
+				native, err := renderNativeAgent(adapter, role+".md", InstallOptions{})
+				if err != nil {
+					t.Fatalf("renderNativeAgent(%s) error = %v", role, err)
+				}
+				_, nativeBody, err := splitAgentFrontmatter(native)
+				if err != nil {
+					t.Fatalf("split native %s: %v", role, err)
+				}
+				contract := JudgmentDayReviewerContract()
+				if !strings.Contains(stripCodexInjectedSections(nativeBody), contract) {
+					t.Fatalf("native %s does not carry the shared Judgment Day contract; cannot derive the expectation", role)
+				}
+				if !strings.Contains(instructions, contract) {
+					t.Errorf("%s developer_instructions do not carry the shared Judgment Day contract", role)
+				}
+				return
+			}
+			// Non-reviewer, non-judge roles keep their authored body verbatim.
+			if !strings.Contains(instructions, strings.TrimSpace(authoredBody)) {
+				t.Errorf("%s developer_instructions dropped the authored body", role)
+			}
+		})
+	}
+}
+
+// codexDeveloperInstructions renders one managed role and decodes its
+// developer_instructions field.
+func codexDeveloperInstructions(t *testing.T, role string) string {
+	t.Helper()
+	encoded, err := RenderCodexAgentRole(role)
+	if err != nil {
+		t.Fatalf("RenderCodexAgentRole(%s) error = %v", role, err)
+	}
+	var parsed codexAgentRoleTOML
+	if _, err := toml.Decode(encoded, &parsed); err != nil {
+		t.Fatalf("decode %s: %v", role, err)
+	}
+	return parsed.DeveloperInstructions
+}
+
+// codexAuthoredRoleBody returns the authored Codex asset body, the text that is
+// dead for lens reviewers once the native projection replaces it.
+func codexAuthoredRoleBody(t *testing.T, role string) string {
+	t.Helper()
+	source, err := assets.Read("codex/agents/" + role + ".md")
+	if err != nil {
+		t.Fatalf("read authored %s: %v", role, err)
+	}
+	_, body, err := splitAgentFrontmatter(source)
+	if err != nil {
+		t.Fatalf("split authored %s: %v", role, err)
+	}
+	return body
+}
+
+// authoredLeadSentence is the `You are **R1 Risk**`-style lead sentence that
+// opens a lens asset body.
+func authoredLeadSentence(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "You are") {
+			return line
+		}
+	}
+	return ""
+}
+
+// stripCodexInjectedSections removes the trailer sections every projection
+// appends, so only the reviewer/judge body is compared.
+func stripCodexInjectedSections(body string) string {
+	for _, marker := range []string{
+		"<!-- gentle-ai:agent-language-contract -->",
+		"<!-- gentle-ai:remote-authorization -->",
+	} {
+		if idx := strings.Index(body, marker); idx >= 0 {
+			body = body[:idx]
+		}
+	}
+	return strings.TrimSpace(body)
 }
 
 // TestInstallCodexAgentRolesIsIdempotentAndPreservesUserFiles proves the shared

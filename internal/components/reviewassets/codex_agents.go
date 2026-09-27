@@ -129,10 +129,28 @@ func RenderCodexAgentRole(role string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("codex agent role %s: %w", role, err)
 	}
+	body = codexAgentRoleBody(role, body)
 	instructions := strings.TrimSpace(codexRuntimeProfileHeader) + "\n\n" + strings.TrimSpace(body)
 	instructions = filemerge.InjectMarkdownSection(instructions, "agent-language-contract", strings.TrimSpace(assets.MustRead("generic/agent-language-contract.md")))
 	instructions = agentguidance.InjectRemoteAuthorization(instructions)
 	return renderCodexAgentRoleTOML(frontmatter.Name, frontmatter.Description, instructions, codexNicknameCandidates(frontmatter.Name))
+}
+
+// codexAgentRoleBody materializes the shared body the native projection installs
+// for a role, so the Codex role TOML never ships authored text no runtime
+// installs. A lens reviewer gets the tool-free Claude lens transport through
+// the same function the claude path ends with; a jd-judge-* role gets the
+// shared Judgment Day contract in place of its authored ledger section. Every
+// other role keeps its authored body. This mirrors the order in
+// renderNativeAgent (reviewer replacement, then the Judgment Day section).
+func codexAgentRoleBody(role, authoredBody string) string {
+	if prompt, reviewer := ClaudeReviewerPrompt(role); reviewer {
+		return prompt
+	}
+	if strings.HasPrefix(role, "jd-judge-") {
+		return replaceJudgmentSection(authoredBody, JudgmentDayReviewerContract())
+	}
+	return authoredBody
 }
 
 // renderCodexAgentRoleTOML encodes the four-key role record with the repository
