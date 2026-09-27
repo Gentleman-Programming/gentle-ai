@@ -27,10 +27,18 @@ type WelcomeAdvisory struct {
 // When hasEngines is false, "Create your own Agent" is shown as disabled
 // (labelled "(no agents)") to signal that no supported AI engine is installed.
 func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool) []string {
-	return WelcomeOptionsWithShellInstaller(updateResults, updateCheckDone, hasEngines, false)
+	return WelcomeOptionsWithShellInstallerAndGit(updateResults, updateCheckDone, hasEngines, false, true)
+}
+
+func WelcomeOptionsWithGit(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, inGitRepo bool) []string {
+	return WelcomeOptionsWithShellInstallerAndGit(updateResults, updateCheckDone, hasEngines, false, inGitRepo)
 }
 
 func WelcomeOptionsWithShellInstaller(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, shellInstaller bool) []string {
+	return WelcomeOptionsWithShellInstallerAndGit(updateResults, updateCheckDone, hasEngines, shellInstaller, true)
+}
+
+func WelcomeOptionsWithShellInstallerAndGit(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, shellInstaller bool, inGitRepo bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -53,7 +61,11 @@ func WelcomeOptionsWithShellInstaller(updateResults []update.UpdateResult, updat
 	}
 
 	opts = append(opts, "Manage backups")
-	opts = append(opts, "Reset review store")
+	resetLabel := "Reset review store"
+	if !inGitRepo {
+		resetLabel = "Reset review store (requires a Git repository)"
+	}
+	opts = append(opts, resetLabel)
 	opts = append(opts, "Receipt-Driven Development")
 	opts = append(opts, "Managed uninstall")
 	opts = append(opts, "Community Tools")
@@ -73,15 +85,23 @@ func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, upd
 }
 
 func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
-	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, false)
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, false, true)
+}
+
+func RenderWelcomeWithGit(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, inGitRepo bool, width int, height int, advisory WelcomeAdvisory) string {
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, false, inGitRepo)
 }
 
 func RenderShellWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
-	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, true)
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, true, true)
 }
 
-func renderWelcomeWithInstaller(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory, shellInstaller bool) string {
-	options := WelcomeOptions(updateResults, updateCheckDone, hasEngines)
+func RenderShellWelcomeWithGit(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, inGitRepo bool, width int, height int, advisory WelcomeAdvisory) string {
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, true, inGitRepo)
+}
+
+func renderWelcomeWithInstaller(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory, shellInstaller bool, inGitRepo bool) string {
+	options := WelcomeOptionsWithShellInstallerAndGit(updateResults, updateCheckDone, hasEngines, shellInstaller, inGitRepo)
 	menuCursor := cursor
 	if shellInstaller {
 		menuCursor--
@@ -90,7 +110,7 @@ func renderWelcomeWithInstaller(cursor int, version string, updateBanner string,
 		if shellInstaller {
 			return renderShellWelcomeMinimum(width, height, cursor, options)
 		}
-		return renderWelcomeMinimum(width, height, cursor)
+		return renderWelcomeMinimum(width, height, cursor, menuCursor, options)
 	}
 	render := func(includeLogo, includeOptional, compact bool) string {
 		var b strings.Builder
@@ -300,8 +320,18 @@ func renderWelcomeOptions(options []string, cursor int, width int) string {
 	return b.String()
 }
 
-func renderWelcomeMinimum(width int, height int, cursor int) string {
-	return renderWelcomeMinimumLabel(width, height, "Start installation", cursor == 0)
+func renderWelcomeMinimum(width int, height int, cursor int, menuCursor int, options []string) string {
+	label := "Start installation"
+	if menuCursor >= 0 && menuCursor < len(options) {
+		label = options[menuCursor]
+		if strings.HasPrefix(label, "Reset review store (requires") {
+			label = "Needs Git"
+			if width > 0 && width <= lipgloss.Width(label) {
+				label = "Git?"
+			}
+		}
+	}
+	return renderWelcomeMinimumLabel(width, height, label, true)
 }
 
 func renderWelcomeMinimumLabel(width int, height int, primaryAction string, selected bool) string {
@@ -311,7 +341,7 @@ func renderWelcomeMinimumLabel(width int, height int, primaryAction string, sele
 	const narrowHelp = "q"
 
 	primaryLabel := primaryAction
-	if width > 0 && lipgloss.Width(primaryLabel) > width {
+	if width > 0 && lipgloss.Width(primaryLabel) > width && primaryAction == "Start installation" {
 		primaryLabel = compactPrimaryAction
 		if lipgloss.Width(primaryLabel) > width {
 			primaryLabel = narrowPrimaryAction
@@ -325,6 +355,13 @@ func renderWelcomeMinimumLabel(width int, height int, primaryAction string, sele
 			helpLabel = narrowHelp
 		}
 		helpLines = wrapWelcomeLine(helpLabel, width)
+	}
+	if height >= 2 && len(primaryLines) >= height {
+		// Keep a controls row visible on every viewport with room for one.
+		primaryLines = wrapWelcomeLine("Go", width)
+		if len(primaryLines) >= height {
+			primaryLines = primaryLines[:height-1]
+		}
 	}
 
 	lines := append(primaryLines, helpLines...)

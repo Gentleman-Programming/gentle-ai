@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
@@ -72,6 +73,17 @@ func containsOption(opts []string, want string) bool {
 	return false
 }
 
+func TestWelcomeOptions_ResetReviewStoreGitPrecondition(t *testing.T) {
+	inside := screens.WelcomeOptionsWithGit(nil, true, true, true)
+	outside := screens.WelcomeOptionsWithGit(nil, true, true, false)
+	if !containsOption(inside, "Reset review store") {
+		t.Fatalf("in-repository menu lacks active reset entry: %v", inside)
+	}
+	if !containsOption(outside, "Reset review store (requires a Git repository)") {
+		t.Fatalf("outside-repository menu lacks its precondition: %v", outside)
+	}
+}
+
 func TestWelcomeOptions_IncludesManagedUninstall(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true)
 
@@ -85,6 +97,26 @@ func TestWelcomeOptions_IncludesManagedUninstall(t *testing.T) {
 
 	if !found {
 		t.Fatalf("expected 'Managed uninstall' option; got: %v", opts)
+	}
+}
+
+func TestRenderWelcomeMinimumKeepsResetGuidanceAndControls(t *testing.T) {
+	options := screens.WelcomeOptionsWithGit(nil, true, true, false)
+	reset := -1
+	for i, option := range options {
+		if strings.Contains(option, "Reset review store") {
+			reset = i
+		}
+	}
+	if reset < 0 {
+		t.Fatal("reset entry not found")
+	}
+	view := screens.RenderWelcomeWithGit(reset, "dev", "", nil, true, true, false, 4, 2, screens.WelcomeAdvisory{})
+	if !strings.Contains(view, "Git") || !strings.Contains(view, "q") {
+		t.Fatalf("minimum view lost Git precondition or controls:\n%s", view)
+	}
+	if lipgloss.Height(view) > 2 {
+		t.Fatalf("minimum view exceeded height 2: %q", view)
 	}
 }
 
