@@ -164,13 +164,6 @@ func applyOpenCodeAssignment(row *telemetry.RuntimeRow, assignment model.ModelAs
 	}
 }
 
-func readOpenCodeAssignment(home, agent string) model.ModelAssignment {
-	if agent == "" {
-		return model.ModelAssignment{}
-	}
-	return openCodeAssignment(readOpenCodeConfig(home), agent)
-}
-
 func openCodeAssignment(root map[string]any, agent string) model.ModelAssignment {
 	if agent == "" || root == nil {
 		return model.ModelAssignment{}

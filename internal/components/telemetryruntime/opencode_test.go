@@ -99,8 +99,8 @@ func TestReadOpenCodeAssignment(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tt.config), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if got := readOpenCodeAssignment(home, tt.agent); got != tt.want {
-				t.Fatalf("readOpenCodeAssignment() = %+v, want %+v", got, tt.want)
+			if got := openCodeAssignment(readOpenCodeConfig(home), tt.agent); got != tt.want {
+				t.Fatalf("openCodeAssignment() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
