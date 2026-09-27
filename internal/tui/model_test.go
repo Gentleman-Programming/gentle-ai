@@ -1981,11 +1981,11 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	// Without OpenCode detected: 14 options, including the review-mode entry.
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true, true)
 	if len(opts) != 14 {
 		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 14; got %v", len(opts), opts)
 	}
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true)
+	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true, true)
 	if len(optsWithProfiles) != 14 || !reflect.DeepEqual(opts, optsWithProfiles) {
 		t.Fatalf("legacy profile discovery changed welcome menu: %v", optsWithProfiles)
 	}

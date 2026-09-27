@@ -12,7 +12,7 @@ import (
 // TestWelcomeOptions_WithoutProfiles verifies that when showProfiles is false,
 // the "OpenCode SDD Profiles" option is NOT present.
 func TestWelcomeOptions_WithoutProfiles(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, false, 0, true)
+	opts := screens.WelcomeOptions(nil, true, false, 0, true, true)
 	if !containsOption(opts, "OpenCode Community Plugins") {
 		t.Fatalf("expected dedicated OpenCode Community Plugins option; got: %v", opts)
 	}
@@ -26,7 +26,7 @@ func TestWelcomeOptions_WithoutProfiles(t *testing.T) {
 
 func TestWelcomeOptions_LegacyProfilesDoNotAddMenuEntry(t *testing.T) {
 	for _, count := range []int{0, 1, 2} {
-		opts := screens.WelcomeOptions(nil, true, true, count, true)
+		opts := screens.WelcomeOptions(nil, true, true, count, true, true)
 		if len(opts) != 14 || !containsOption(opts, "Configure models") {
 			t.Fatalf("legacy count %d: unexpected menu: %v", count, opts)
 		}
@@ -41,7 +41,7 @@ func TestWelcomeOptions_LegacyProfilesDoNotAddMenuEntry(t *testing.T) {
 // TestWelcomeOptions_OptionCount_WithoutProfiles verifies 14 options when showProfiles=false
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, false, 0, true)
+	opts := screens.WelcomeOptions(nil, true, false, 0, true, true)
 	// Includes the Receipt-Driven Development entry.
 	want := 14
 	if len(opts) != want {
@@ -51,7 +51,7 @@ func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 
 // Legacy profiles must not alter the welcome option count.
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, true, 2, true)
+	opts := screens.WelcomeOptions(nil, true, true, 2, true, true)
 	// Includes the Receipt-Driven Development entry.
 	want := 14
 	if len(opts) != want {
@@ -62,7 +62,7 @@ func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 // TestWelcomeOptions_NoEngines_ShowsDisabledLabel verifies that when hasEngines=false,
 // the agent option is labelled "(no agents)" to signal unavailability.
 func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, false, 0, false)
+	opts := screens.WelcomeOptions(nil, true, false, 0, false, true)
 	found := false
 	for _, opt := range opts {
 		if strings.Contains(opt, "no agents") {
@@ -76,7 +76,7 @@ func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
 
 // TestWelcomeOptions_ProfilesInsertedBeforeManageBackups verifies the retained shortcuts stay adjacent.
 func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, true, 1, true)
+	opts := screens.WelcomeOptions(nil, true, true, 1, true, true)
 
 	agentIdx := -1
 	pluginsIdx := -1
@@ -134,7 +134,7 @@ func containsOption(opts []string, want string) bool {
 }
 
 func TestWelcomeOptions_IncludesManagedUninstall(t *testing.T) {
-	opts := screens.WelcomeOptions(nil, true, false, 0, true)
+	opts := screens.WelcomeOptions(nil, true, false, 0, true, true)
 
 	found := false
 	for _, opt := range opts {
@@ -153,7 +153,7 @@ func TestWelcomeOptions_IncludesManagedUninstall(t *testing.T) {
 
 // TestRenderWelcome_WithoutProfiles verifies no "OpenCode SDD Profiles" in output.
 func TestRenderWelcome_WithoutProfiles(t *testing.T) {
-	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, false, 0, true)
+	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, false, 0, true, true)
 	if strings.Contains(output, "OpenCode SDD Profiles") {
 		snippet := output
 		if len(snippet) > 200 {
@@ -165,7 +165,7 @@ func TestRenderWelcome_WithoutProfiles(t *testing.T) {
 
 // Legacy profile discovery must not show a profile menu entry.
 func TestRenderWelcome_WithProfiles_ZeroCount(t *testing.T) {
-	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 0, true)
+	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 0, true, true)
 	if strings.Contains(output, "OpenCode SDD Profiles") || !strings.Contains(output, "Configure models") {
 		t.Errorf("unexpected legacy profile menu or missing model configuration")
 	}
@@ -176,7 +176,7 @@ func TestRenderWelcome_WithProfiles_ZeroCount(t *testing.T) {
 
 // Discovered legacy profiles do not produce a count badge.
 func TestRenderWelcome_WithProfiles_CountTwo(t *testing.T) {
-	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 2, true)
+	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 2, true, true)
 	if strings.Contains(output, "OpenCode SDD Profiles") {
 		t.Errorf("legacy profile menu remains")
 	}
@@ -184,8 +184,49 @@ func TestRenderWelcome_WithProfiles_CountTwo(t *testing.T) {
 
 // A single legacy profile does not produce a badge.
 func TestRenderWelcome_WithProfiles_CountOne(t *testing.T) {
-	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 1, true)
+	output := screens.RenderWelcome(0, "1.0.0", "", nil, true, true, 1, true, true)
 	if strings.Contains(output, "OpenCode SDD Profiles") {
 		t.Errorf("legacy profile menu remains")
+	}
+}
+
+// TestWelcomeOptions_ResetReviewStoreGitPrecondition verifies that the
+// repository-scoped "Reset review store" entry renders its precondition when
+// the TUI runs outside a Git worktree and stays plain inside one. In both
+// cases it sits between "Manage backups" and "Receipt-Driven Development".
+func TestWelcomeOptions_ResetReviewStoreGitPrecondition(t *testing.T) {
+	tests := []struct {
+		name  string
+		inGit bool
+		want  string
+	}{
+		{name: "outside a Git repository", inGit: false, want: "Reset review store (requires a Git repository)"},
+		{name: "inside a Git repository", inGit: true, want: "Reset review store"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := screens.WelcomeOptions(nil, true, false, 0, true, tt.inGit)
+			reset, backups, rdd := -1, -1, -1
+			for index, option := range opts {
+				switch option {
+				case tt.want:
+					reset = index
+				case "Manage backups":
+					backups = index
+				case "Receipt-Driven Development":
+					rdd = index
+				}
+			}
+			if reset < 0 {
+				t.Fatalf("menu does not render %q: %#v", tt.want, opts)
+			}
+			if reset != backups+1 || reset+1 != rdd {
+				t.Fatalf("reset at %d is not between backups (%d) and Receipt-Driven Development (%d)", reset, backups, rdd)
+			}
+			output := screens.RenderWelcome(0, "1.0.0", "", nil, true, false, 0, true, tt.inGit)
+			if !strings.Contains(output, tt.want) {
+				t.Errorf("rendered welcome (inGit=%v) missing %q; output snippet: %q", tt.inGit, tt.want, output)
+			}
+		})
 	}
 }
