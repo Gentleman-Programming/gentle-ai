@@ -324,6 +324,11 @@ func requireModuleIsIncluded(adapter agents.Adapter, agent model.AgentID, target
 // injectOrchestratorPrompt delivers guidance inside the managed orchestrator
 // agent definition of the adapter's settings document — the always-loaded scope
 // for the OpenCode family. Every other key in that document is preserved.
+// A JSONC settings path is rewritten with the JSONC-preserving merge, so user
+// comments and trailing commas around the touched agent value survive; a
+// document the rewrite cannot safely touch (malformed, duplicate keys, escaped
+// spellings of touched keys, comments inside the touched agent value) fails
+// closed with an error and is never written.
 func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, merge guidanceMerge) (Result, error) {
 	settingsPath := delivery.paths[0]
 
@@ -356,7 +361,7 @@ func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, mer
 		return Result{}, fmt.Errorf("encode routing guidance overlay for %q: %w", agent, err)
 	}
 
-	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
 	if err != nil {
 		return Result{}, fmt.Errorf("merge routing guidance into %q: %w", settingsPath, err)
 	}

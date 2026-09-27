@@ -1469,7 +1469,10 @@ func removeLegacyTriggerRulesModule(modulePath string) (agentguidance.Result, er
 //
 // Every unexpected shape yields a silent no-op rather than an error: this is
 // best-effort cleanup, and the routing injector that runs immediately after is
-// the fail-closed authority on an unreadable settings document.
+// the fail-closed authority on an unreadable settings document. JSONC settings
+// (opencode.jsonc) are rewritten with the JSONC-preserving merge, so comments
+// and trailing commas around untouched members survive; a JSONC refusal is the
+// same silent no-op, because the injector fails closed on identical conditions.
 func stripLegacyTriggerRulesFromOrchestrator(settingsPath string) (agentguidance.Result, error) {
 	if strings.TrimSpace(settingsPath) == "" {
 		return agentguidance.Result{}, nil
@@ -1502,8 +1505,16 @@ func stripLegacyTriggerRulesFromOrchestrator(settingsPath string) (agentguidance
 		return agentguidance.Result{}, fmt.Errorf("encode legacy %q removal for %q: %w", legacyTriggerRulesSection, settingsPath, err)
 	}
 
-	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
 	if err != nil {
+		if strings.HasSuffix(settingsPath, ".jsonc") {
+			// A JSONC refusal (duplicate keys, an escaped spelling of a touched
+			// key, or comments inside the touched agent value) must leave the
+			// user's document byte-for-byte intact. Cleanup stays best-effort:
+			// the routing injector that runs immediately after fails closed on
+			// the same conditions, so a silent no-op loses nothing.
+			return agentguidance.Result{}, nil
+		}
 		return agentguidance.Result{}, fmt.Errorf("merge legacy %q removal into %q: %w", legacyTriggerRulesSection, settingsPath, err)
 	}
 

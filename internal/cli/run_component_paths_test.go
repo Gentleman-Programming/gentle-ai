@@ -1622,3 +1622,103 @@ func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
 		seen[path] = struct{}{}
 	}
 }
+
+// ─── JSONC settings stay JSONC through the legacy trigger-rule cleanup ─────
+//
+// Issue #5035 slice A: cleanup must reuse the JSONC-preserving merge for
+// opencode.jsonc instead of normalizing the whole settings document. Comments
+// and trailing commas around untouched members survive, and documents the
+// JSONC rewrite cannot safely touch are a silent no-op: the cleanup is
+// best-effort and the routing injector that runs immediately after is the
+// fail-closed authority on the same conditions.
+func TestLegacyTriggerCleanupPreservesJSONCCommentsAndTrailingCommas(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+
+	seeded := filemerge.InjectMarkdownSection("# Existing orchestrator policy\n\nHand-written rules that must survive.\n", legacyTriggerRulesSection, "Retired WorkRun ceremony\n")
+	promptJSON, err := json.Marshal(map[string]any{"prompt": seeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := "{\n  // user provider note\n  \"provider\": {\n    \"local\": {\"models\": {\"m\": {},},},\n  },\n  \"theme\": \"default\",\n  \"agent\": {\n    \"gentle-orchestrator\": " + string(promptJSON) + ",\n  },\n}\n"
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(settingsPath), err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(before), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+	}
+
+	result, err := stripLegacyTriggerRulesFromOrchestrator(settingsPath)
+	if err != nil {
+		t.Fatalf("stripLegacyTriggerRulesFromOrchestrator error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("cleanup reported no change for a seeded legacy section")
+	}
+
+	after := readTextFile(t, settingsPath)
+	for _, want := range []string{
+		"// user provider note",
+		`"m": {},`,
+		`"theme": "default",`,
+		",\n}",
+	} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("JSONC comment or trailing comma %q was destroyed:\n%s", want, after)
+		}
+	}
+
+	settings, err := filemerge.UnmarshalJSONObject([]byte(after))
+	if err != nil {
+		t.Fatalf("cleaned JSONC no longer parses: %v\n%s", err, after)
+	}
+	prompt := settings["agent"].(map[string]any)[opencodedefault.ManagedAgent].(map[string]any)["prompt"].(string)
+	if strings.Contains(prompt, legacyTriggerRulesSection) || strings.Contains(prompt, "Retired WorkRun ceremony") {
+		t.Fatalf("legacy trigger-rules content survived the cleanup:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# Existing orchestrator policy") {
+		t.Fatalf("cleanup destroyed unmanaged prompt content:\n%s", prompt)
+	}
+	if provider, ok := settings["provider"].(map[string]any); !ok || provider["local"] == nil {
+		t.Fatalf("untouched provider member was altered: %#v", settings["provider"])
+	}
+}
+
+func TestLegacyTriggerCleanupFailsClosedOnUnsafeJSONC(t *testing.T) {
+	seeded := filemerge.InjectMarkdownSection("# Existing orchestrator policy\n", legacyTriggerRulesSection, "Retired WorkRun ceremony\n")
+	promptJSON, err := json.Marshal(map[string]any{"prompt": seeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": ` + string(promptJSON) + `}}`},
+		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": ` + string(promptJSON) + `}}`},
+		{"duplicate top-level keys", `{"agent": {"gentle-orchestrator": ` + string(promptJSON) + `}, "theme": 1, "theme": 2}`},
+		{"malformed document", "// interrupted user edit\n{\n  \"agent\": {\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(settingsPath), err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+			}
+
+			result, err := stripLegacyTriggerRulesFromOrchestrator(settingsPath)
+			if err != nil {
+				t.Fatalf("best-effort cleanup returned an error: %v", err)
+			}
+			if result.Changed || len(result.Files) != 0 {
+				t.Fatalf("cleanup reported work for unsafe JSONC: %+v", result)
+			}
+			if got := readTextFile(t, settingsPath); got != tc.content {
+				t.Fatalf("cleanup rewrote unsafe JSONC settings:\n got: %s\nwant: %s", got, tc.content)
+			}
+		})
+	}
+}

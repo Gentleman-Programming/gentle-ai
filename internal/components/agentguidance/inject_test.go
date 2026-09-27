@@ -810,3 +810,128 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// ─── JSONC settings documents keep comments and trailing commas ────────────
+//
+// Issue #5035 slice A: routing guidance is delivered into the managed
+// orchestrator agent of the OpenCode family's settings document. When that
+// document is JSONC (opencode.jsonc), the writer must reuse the
+// JSONC-preserving merge instead of normalizing the whole file: everything a
+// user wrote around the touched agent value survives verbatim, and a document
+// whose touched value cannot be safely rewritten fails closed without touching
+// a byte.
+func TestInjectRoutingPreservesJSONCCommentsAndTrailingCommas(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	settingsPath := filepath.Join(targetDir, "opencode.jsonc")
+
+	const before = `{
+  // user provider note
+  "provider": {
+    "local": {"models": {"m": {},},},
+  },
+  "theme": "default",
+  "agent": {
+    "gentle-orchestrator": {
+      "prompt": "# Existing orchestrator policy\n\nHand-written rules that must survive.\n"
+    },
+  },
+}
+`
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(before), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	first, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{SettingsPath: settingsPath})
+	if err != nil {
+		t.Fatalf("InjectRouting error = %v", err)
+	}
+	if !first.Changed || len(first.Files) != 1 || first.Files[0] != settingsPath {
+		t.Fatalf("InjectRouting result = %+v, want a change to %q", first, settingsPath)
+	}
+
+	after := readFile(t, settingsPath)
+	for _, want := range []string{
+		"// user provider note",
+		`"m": {},`,
+		`"theme": "default",`,
+		",\n}", // trailing comma after the rewritten agent member
+	} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("JSONC comment or trailing comma %q was destroyed:\n%s", want, after)
+		}
+	}
+
+	settings, err := filemerge.UnmarshalJSONObject([]byte(after))
+	if err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, after)
+	}
+	agentsMap, ok := settings["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent member was dropped: %#v", settings)
+	}
+	prompt := agentsMap[opencodedefault.ManagedAgent].(map[string]any)["prompt"].(string)
+	if !strings.Contains(prompt, "<!-- gentle-ai:"+RoutingSectionID+" -->") {
+		t.Fatalf("routing guidance was not injected into the managed prompt:\n%s", prompt)
+	}
+	if provider, ok := settings["provider"].(map[string]any); !ok || provider["local"] == nil {
+		t.Fatalf("untouched provider member was altered: %#v", settings["provider"])
+	}
+
+	second, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{SettingsPath: settingsPath})
+	if err != nil {
+		t.Fatalf("second InjectRouting error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("second identical InjectRouting reported a change: %+v", second)
+	}
+	if got := readFile(t, settingsPath); got != after {
+		t.Fatalf("second InjectRouting rewrote the JSONC document:\n%s", got)
+	}
+}
+
+func TestInjectRoutingFailsClosedOnUnsafeJSONCSettings(t *testing.T) {
+	t.Parallel()
+
+	seeded, err := json.Marshal(map[string]any{"prompt": "# Existing orchestrator policy\n\nRetired WorkRun ceremony\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"malformed document", "// interrupted user edit\n{\n  \"mcp\": {\n"},
+		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": ` + string(seeded) + `}}`},
+		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": ` + string(seeded) + `}}`},
+		{"duplicate top-level keys", `{"agent": {"gentle-orchestrator": ` + string(seeded) + `}, "theme": 1, "theme": 2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			settingsPath := filepath.Join(targetDir, "opencode.jsonc")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("WriteFile error = %v", err)
+			}
+
+			result, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{SettingsPath: settingsPath})
+			if err == nil {
+				t.Fatalf("InjectRouting accepted unsafe JSONC settings: %+v", result)
+			}
+			if result.Changed || len(result.Files) != 0 {
+				t.Fatalf("InjectRouting reported work for unsafe JSONC settings: %+v", result)
+			}
+			if got := readFile(t, settingsPath); got != tc.content {
+				t.Fatalf("InjectRouting clobbered unsafe JSONC settings:\n got: %s\nwant: %s", got, tc.content)
+			}
+		})
+	}
+}
