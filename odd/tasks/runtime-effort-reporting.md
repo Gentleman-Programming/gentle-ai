@@ -48,7 +48,7 @@ Out of scope: rewriting historical data, collector renormalisation, Codex fallba
   for them. Evidence: RED `TestClaudeRuntimeBuiltInSubagentsMapToAggregateClasses` failed with
   `general-purpose: got custom/unknown, want built_in/worker` and
   `Explore: got custom/unknown, want built_in/explore`; GREEN after the change; the full
-  verification set passed (see Verification evidence). Commit: pending (parent-owned).
+  verification set passed (see Verification evidence). Commit: `4f242b5a0` (T1+T2 together; same file, one Claude work unit).
 - [x] T2 Claude orchestrator effort (evidence-gated, test-first). Route: delegated writer.
   Risk tier: high. Primary evidence (fetched 2026-09-27): https://code.claude.com/docs/en/hooks
   common input field `effort` = object with `level` in `low|medium|high|xhigh|max`, "the effort
@@ -65,7 +65,7 @@ Out of scope: rewriting historical data, collector renormalisation, Codex fallba
   `~/.claude/settings.json` would guess the selection. A malformed/non-object `effort` never
   discards the hook. Evidence: RED `TestClaudeRuntimeStopReportsHookEffortAsEffective` failed
   for the five documented levels (`effective effort = "unavailable", want "low"` ...); GREEN
-  after the change. Commit: pending (parent-owned).
+  after the change. Commit: `4f242b5a0` (T1+T2 together; same file, one Claude work unit).
 - [x] T3 OpenCode effort from configuration (test-first). Route: delegated writer. Risk tier:
   high. V1 already read `agent.<name>.variant` / `model#variant`; the gap was agents with no
   variant. V1 now falls back to the documented `reasoningEffort` option: `agent.<name>` options
@@ -79,7 +79,7 @@ Out of scope: rewriting historical data, collector renormalisation, Codex fallba
   `TestSendOpenCodeResolvesConfiguredReasoningEffort` failed on the four positive cases
   (`selected effort = "unavailable" ... want selected "high"` ...), then on the added
   model-less-variant guard case (`selected effort = "high"`); GREEN after each change.
-  Commit: pending (parent-owned).
+  Commit: see the T3 OpenCode commit (`fix(telemetry): read the OpenCode selected effort from its configuration`).
 - [ ] T4 Native review and handoff (push/PR decision to the user). Route: parent.
 
 ## Acceptance criteria
@@ -112,13 +112,13 @@ Out of scope: rewriting historical data, collector renormalisation, Codex fallba
 
 ## Open items for the parent
 
-- Commits were not created: the delegated writer contract forbids staging/committing.
-- `docs/telemetry.md` is outside the writer's edit surface and is now stale in three places:
-  lines 274-276 (Claude `SubagentStop` classification must mention `general-purpose` → `worker`
-  and `Explore` → `explore`), lines 310-313 ("The hook contract does not expose effective
-  effort" is no longer true for `Stop`), and lines 246-253 (V1 now also reads the documented
-  `reasoningEffort` agent/model options when no variant is configured).
+- Resolved 2026-09-27: the parent created the commits (T1+T2 `4f242b5a0`, T3 next commit)
+  and updated `docs/telemetry.md` in the same work units (Claude built-ins and `Stop`
+  effective effort with the Claude commit; V1 `reasoningEffort` fallback with T3).
+- Open decision: Claude's orchestrator effort lands in `effective_effort`, while the public
+  open-data "Effort" block groups by `selected_effort`, so that bucket does not shrink for
+  Claude until the exporter considers `effective_effort` when `selected_effort` is unavailable.
 
 ## Next step
 
-Start after the landing feature `open-data-mobile-and-coverage` T1–T3 (single writer at a time).
+T4: independent verification (risk tier high), native review, then push/PR as the user decides.

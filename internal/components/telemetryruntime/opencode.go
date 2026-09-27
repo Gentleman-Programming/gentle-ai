@@ -124,7 +124,16 @@ func sendOpenCode(ctx context.Context, home string, getenv func(string) string, 
 		return "ignored", nil
 	}
 	if envelope.Schema == OpenCodeSchema {
-		applyOpenCodeAssignment(&observation.Row, readOpenCodeAssignment(home, observation.Agent))
+		root := readOpenCodeConfig(home)
+		assignment := openCodeAssignment(root, observation.Agent)
+		if assignment.Effort == "" {
+			provider, modelID := envelope.Info.ProviderID, envelope.Info.ModelID
+			if provider == "" || modelID == "" {
+				provider, modelID = assignment.ProviderID, assignment.ModelID
+			}
+			assignment.Effort = openCodeOptionEffort(root, observation.Agent, provider, modelID)
+		}
+		applyOpenCodeAssignment(&observation.Row, assignment)
 	} else {
 		// V2 start observes the runtime selection, not provider response identity.
 		if observation.Row.ModelEvidence != "unknown" {
@@ -159,21 +168,64 @@ func readOpenCodeAssignment(home, agent string) model.ModelAssignment {
 	if agent == "" {
 		return model.ModelAssignment{}
 	}
+	return openCodeAssignment(readOpenCodeConfig(home), agent)
+}
+
+func openCodeAssignment(root map[string]any, agent string) model.ModelAssignment {
+	if agent == "" || root == nil {
+		return model.ModelAssignment{}
+	}
+	return opencode.ConfigAssignments(root)[agent].Assignment
+}
+
+// readOpenCodeConfig returns nil for a missing, oversized, or invalid file so
+// configuration never blocks the send.
+func readOpenCodeConfig(home string) map[string]any {
 	path := opencode.DefaultSettingsPathForHome(home)
 	file, err := os.Open(path)
 	if err != nil {
-		return model.ModelAssignment{}
+		return nil
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, openCodeConfigMaxBytes+1))
 	if err != nil || len(data) > openCodeConfigMaxBytes {
-		return model.ModelAssignment{}
+		return nil
 	}
 	root, err := filemerge.UnmarshalJSONObject(data)
 	if err != nil {
-		return model.ModelAssignment{}
+		return nil
 	}
-	return opencode.ConfigAssignments(root)[agent].Assignment
+	return root
+}
+
+// openCodeOptionEfforts are the concrete levels also accepted from the V2
+// plugin's selected variant; contract meta values are never configuration.
+var openCodeOptionEfforts = map[string]bool{"off": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
+// openCodeOptionEffort resolves the documented reasoningEffort option used when
+// no variant is configured: agent options (https://opencode.ai/docs/agents/)
+// override the model's global options (https://opencode.ai/docs/models/).
+// Only a concrete level is returned; anything else stays unavailable. Any
+// configured agent variant, even one without a model, can override these
+// options, so its presence withholds the fallback.
+func openCodeOptionEffort(root map[string]any, agent, provider, modelID string) string {
+	agents, _ := root["agent"].(map[string]any)
+	definition, _ := agents[agent].(map[string]any)
+	if _, hasVariant := definition["variant"]; hasVariant {
+		return ""
+	}
+	if effort, _ := definition["reasoningEffort"].(string); agent != "" && openCodeOptionEfforts[effort] {
+		return effort
+	}
+	providers, _ := root["provider"].(map[string]any)
+	providerConfig, _ := providers[provider].(map[string]any)
+	models, _ := providerConfig["models"].(map[string]any)
+	modelConfig, _ := models[modelID].(map[string]any)
+	options, _ := modelConfig["options"].(map[string]any)
+	if effort, _ := options["reasoningEffort"].(string); provider != "" && modelID != "" && openCodeOptionEfforts[effort] {
+		return effort
+	}
+	return ""
 }
 
 // Reject duplicate keys and case aliases before struct decoding. All accepted

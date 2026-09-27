@@ -244,8 +244,11 @@ map to their built-in class. Other non-empty names map to `custom`/`unknown`;
 their raw names never leave native code. Missing names remain `unknown`/`unknown`.
 
 For V1 only, native code reads up to 1 MiB from the local `opencode.json`
-`agent.<name>.model` and `agent.<name>.variant` assignment. A valid contract effort
-becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
+`agent.<name>.model` and `agent.<name>.variant` assignment. When no variant is
+assigned, it falls back to `agent.<name>.reasoningEffort` and then to the
+response model's `provider.<p>.models.<m>.options.reasoningEffort`. Only the
+contract values `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` are
+accepted. A valid contract effort becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
 does not report it. A response provider/model remains authoritative with
 `model_evidence: response`; the assigned model is used with
 `model_evidence: selected` only when the response omits provider/model. Missing,
