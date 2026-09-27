@@ -494,3 +494,62 @@ func intValue(value any) int {
 		return 0
 	}
 }
+
+// managedSettingsWriterKeys are the top-level OpenCode settings document keys
+// the managed install/sync writers touch through the JSONC-preserving merge:
+// routing/parity guidance and Persona (agent), the permission defaults
+// (permission), theme selection (theme), and the managed MCP servers (mcp).
+// The default-agent and share ownership writes go through the shared merge and
+// deliberately keep the shared writer contract, so they are not refusal-scoped
+// here: the JSONC refusal set mirrors exactly the writers that refuse.
+var managedSettingsWriterKeys = []string{"agent", "permission", "theme", "mcp"}
+
+// ValidateSettingsForWriters is the read-only OpenCode settings preflight the
+// install and sync prepare stages run (issue #5035). It applies the refusals
+// the managed settings writers apply — locked, symlinked, or non-regular
+// targets, malformed JSONC, duplicate keys at any depth, and escaped spellings
+// of or comments inside the touched top-level values (managedSettingsWriterKeys)
+// — without writing anything, so an unsafe selected settings document is
+// refused before any managed file is mutated.
+//
+// An empty path and a missing file are accepted: the writers create the
+// document. A strict .json path keeps the shared writer contract, whose merge
+// normalizes malformed or duplicate-key input instead of refusing it; only the
+// target-level (locked/symlink/non-regular) refusal applies to it.
+func ValidateSettingsForWriters(settingsPath string) error {
+	return validateSettingsForWriters(settingsPath, managedSettingsWriterKeys)
+}
+
+func validateSettingsForWriters(settingsPath string, touchedKeys []string) error {
+	if settingsPath == "" {
+		return nil
+	}
+	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read OpenCode settings for validation: %w", err)
+	}
+	if !strings.HasSuffix(settingsPath, ".jsonc") {
+		return nil
+	}
+	if err := filemerge.RejectDuplicateJSONKeys(raw); err != nil {
+		return fmt.Errorf("refuse OpenCode settings %q: %w", settingsPath, err)
+	}
+	if _, err := filemerge.UnmarshalJSONObject(raw); err != nil {
+		return fmt.Errorf("refuse malformed OpenCode settings %q: %w", settingsPath, err)
+	}
+	for _, key := range touchedKeys {
+		if filemerge.JSONCTopLevelKeyIsEscaped(raw, key) {
+			return fmt.Errorf("refuse OpenCode settings %q: managed key %q uses an escaped spelling; use its unescaped spelling and retry", settingsPath, key)
+		}
+		if filemerge.JSONCTopLevelValueHasComments(raw, key) {
+			return fmt.Errorf("refuse OpenCode settings %q: managed key %q has comments inside its value; move them outside the value before retrying", settingsPath, key)
+		}
+	}
+	return nil
+}

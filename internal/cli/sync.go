@@ -533,6 +533,16 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.agentIDs, model.AgentOpenCode) {
 		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir}}, prepare...)
 	}
+	// The read-only settings refusal is prepended last so it runs first in the
+	// prepare stage (issue #5035): an unsafe selected settings document must
+	// fail before the SDK dependency install, telemetry, plugin, Persona,
+	// Engram, or guidance steps can mutate any managed file.
+	if containsAgent(r.agentIDs, model.AgentOpenCode) {
+		prepare = append([]pipeline.Step{openCodeSettingsValidationStep{
+			id:           "prepare:opencode-settings-validation",
+			settingsPath: syncOpenCodeSettingsPath(r.homeDir, r.workspaceDir, r.scope, opencodeagent.NewAdapter()),
+		}}, prepare...)
+	}
 	apply := []pipeline.Step{
 		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir},
 	}

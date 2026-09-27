@@ -796,6 +796,16 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir, consent: r.sdkConsent}}, prepare...)
 	}
+	// The read-only settings refusal is prepended last so it runs first in the
+	// prepare stage (issue #5035): an unsafe selected settings document must
+	// fail before the SDK dependency install, telemetry, plugin, Persona,
+	// Engram, or guidance steps can mutate any managed file.
+	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
+		prepare = append([]pipeline.Step{openCodeSettingsValidationStep{
+			id:           "prepare:opencode-settings-validation",
+			settingsPath: openCodeLoadedSettingsPath(r.homeDir, r.workspaceDir, opencodeagent.NewAdapter()),
+		}}, prepare...)
+	}
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
@@ -2267,6 +2277,19 @@ type openCodeTelemetryStep struct {
 	configDir    string
 	changedFiles *[]string
 	checkOnly    bool
+}
+
+// openCodeSettingsValidationStep validates the effective OpenCode settings
+// before install/sync mutations. Non-OpenCode plans never include this step.
+type openCodeSettingsValidationStep struct {
+	id           string
+	settingsPath string
+}
+
+func (s openCodeSettingsValidationStep) ID() string { return s.id }
+
+func (s openCodeSettingsValidationStep) Run() error {
+	return opencodeactivation.ValidateSettingsForWriters(s.settingsPath)
 }
 
 func (s openCodeTelemetryStep) ID() string { return s.id }

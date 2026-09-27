@@ -29,6 +29,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
@@ -6722,7 +6723,10 @@ func TestSyncV2SDKPreflightBeforeManagedRuntimeWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := rt.stagePlan()
-	if err := plan.Prepare[0].Run(); err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
+	if plan.Prepare[0].ID() != "prepare:opencode-settings-validation" || plan.Prepare[1].ID() != "prepare:opencode-plugin-dependency" {
+		t.Fatalf("prepare order = %s, %s; want settings validation before the SDK preflight", plan.Prepare[0].ID(), plan.Prepare[1].ID())
+	}
+	if err := plan.Prepare[1].Run(); err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
 		t.Fatalf("missing SDK preflight error = %v", err)
 	}
 	for _, name := range append([]string{"telemetry-runtime.ts"}, opencoderuntimeplugins.ManagedOpenCodePluginNames()...) {
@@ -7127,4 +7131,127 @@ func TestPartialSyncKeepsOpenCodeInPersistedSelection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncPrepareRefusesUnsafeOpenCodeSettingsBeforeAnyMutation(t *testing.T) {
+	for _, tc := range []struct{ name, content string }{
+		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": {"prompt": "x"}}}`},
+		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`},
+		{"duplicate top-level keys", `{"agent": {}, "theme": 1, "theme": 2}`},
+		{"malformed document", "// interrupted user edit\n{\n  \"agent\": {\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+			settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+			mustWriteFile(t, settingsPath, []byte(tc.content))
+
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+			rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(rt.stagePlan())
+			if result.Err == nil {
+				t.Fatal("sync accepted unsafe OpenCode settings")
+			}
+
+			if len(result.Prepare.Steps) != 1 {
+				t.Fatalf("prepare recorded %d step(s), want only the failed settings validation: %#v", len(result.Prepare.Steps), result.Prepare.Steps)
+			}
+			last := result.Prepare.Steps[0]
+			if last.StepID != "prepare:opencode-settings-validation" || last.Status != pipeline.StepStatusFailed || last.Err == nil {
+				t.Fatalf("validation step = (%s, %v), want failed with an error", last.Status, last.Err)
+			}
+			if len(result.Apply.Steps) != 0 {
+				t.Fatalf("apply ran %d step(s) after the settings refusal", len(result.Apply.Steps))
+			}
+			if got := readTextFile(t, settingsPath); got != tc.content {
+				t.Fatalf("settings changed by a refused sync:\n got: %s\nwant: %s", got, tc.content)
+			}
+			for _, path := range telemetryruntime.ManagedPaths(opencodeagent.NewAdapter().GlobalConfigDir(home)) {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("telemetry runtime asset created by a refused sync: %s (%v)", path, err)
+				}
+			}
+		})
+	}
+}
+
+// A workspace-scoped sync writes <workspace>/opencode.jsonc, so the prepare
+// gate must validate that document, not the global settings file.
+func TestWorkspaceSyncPrepareRefusesUnsafeWorkspaceOpenCodeSettings(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	unsafe := `{"\u0061gent": {"gentle-orchestrator": {"prompt": "x"}}}`
+	settingsPath := filepath.Join(workspace, "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(unsafe))
+
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	rt, err := newSyncRuntimeWithScope(home, selection, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(rt.stagePlan())
+	if result.Err == nil {
+		t.Fatal("workspace sync accepted unsafe workspace OpenCode settings")
+	}
+	if len(result.Prepare.Steps) != 1 || result.Prepare.Steps[0].StepID != "prepare:opencode-settings-validation" || result.Prepare.Steps[0].Status != pipeline.StepStatusFailed {
+		t.Fatalf("prepare steps = %#v, want only the failed settings validation", result.Prepare.Steps)
+	}
+	if len(result.Apply.Steps) != 0 {
+		t.Fatalf("apply ran %d step(s) after the settings refusal", len(result.Apply.Steps))
+	}
+	if got := readTextFile(t, settingsPath); got != unsafe {
+		t.Fatalf("workspace settings changed by a refused sync:\n got: %s\nwant: %s", got, unsafe)
+	}
+}
+
+func TestSyncPrepareValidationFollowsExistingContract(t *testing.T) {
+	t.Run("missing settings pass the gate and sync succeeds", func(t *testing.T) {
+		home := t.TempDir()
+		setOpenCodeTestHome(t, home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+		t.Setenv("DO_NOT_TRACK", "1")
+		settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.json")
+
+		if _, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}); err != nil {
+			t.Fatalf("sync rejected missing OpenCode settings: %v", err)
+		}
+		if _, err := os.Stat(settingsPath); err != nil {
+			t.Fatalf("sync did not create the settings document: %v", err)
+		}
+	})
+
+	t.Run("valid JSONC passes the gate and keeps user data", func(t *testing.T) {
+		home := t.TempDir()
+		setOpenCodeTestHome(t, home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+		t.Setenv("DO_NOT_TRACK", "1")
+		settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+		mustWriteFile(t, settingsPath, []byte("{\n  // user provider note\n  \"provider\": {\"local\": {\"models\": {\"m\": {}}}},\n  \"agent\": {\"gentle-orchestrator\": {\"prompt\": \"x\"}},\n}\n"))
+
+		if _, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}); err != nil {
+			t.Fatalf("sync rejected valid OpenCode settings: %v", err)
+		}
+		after, err := filemerge.UnmarshalJSONObject([]byte(readTextFile(t, settingsPath)))
+		if err != nil {
+			t.Fatalf("settings unreadable after sync: %v", err)
+		}
+		provider, ok := after["provider"].(map[string]any)
+		if !ok || provider["local"] == nil {
+			t.Fatalf("user provider data destroyed by sync: %#v", after["provider"])
+		}
+	})
 }
