@@ -33,9 +33,21 @@ and no way to prove what it did beyond asking you to read every line.
 </p>
 
 <p>
-🎬 <strong>Watch the demo:</strong>
-<a href="https://drive.google.com/file/d/14VaUY04LzX6qZBVuuPwjzr1RWRyrZjkf/view?usp=drive_link"><strong>English</strong></a> &bull;
-<a href="https://drive.google.com/file/d/1Qp3fXX1joynPpwORZMuu6ygm1hnONPKY/view?usp=drive_link"><strong>English with subtitles</strong></a>
+ <h3>See it in action</h3>
+
+   <p>
+   One prompt, from idea to reviewed commit: memory, workflow, and evidence in a real session.
+   </p>
+
+https://github.com/user-attachments/assets/fa5c0cfe-06e7-4c0d-bd6e-8ac7cb934339
+
+
+   <p>Prefer Spanish subtitles?</p>
+   
+
+https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
+
+
 </p>
 
 <br/>
