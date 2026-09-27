@@ -229,3 +229,32 @@ func TestCodexWorkspaceScopedInstallKeepsAgentRolesHomeBased(t *testing.T) {
 		}
 	}
 }
+
+// TestCodexAgentRolesIgnoreCodexHomeForTempHome documents the real-user-home
+// guard in reviewassets.CodexAgentRoleDir: an absolute CODEX_HOME is honoured
+// only for the real user home, so a lifecycle run under an isolated temp HOME
+// still installs every managed role under <temp home>/.codex/agents and never
+// writes into an ambient CODEX_HOME. This is the case a temp-home lifecycle
+// test can pin; the override branch itself is covered in the reviewassets unit
+// test against os.UserHomeDir().
+func TestCodexAgentRolesIgnoreCodexHomeForTempHome(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}}
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+
+	dir := filepath.Join(home, ".codex", "agents")
+	for _, name := range reviewassets.CodexAgentRoleNames() {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("managed role %s not under the temp home: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, reviewassets.OwnershipLedgerFilename)); err != nil {
+		t.Fatalf("ownership ledger not under the temp home: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(codexHome, "agents")); !os.IsNotExist(err) {
+		t.Fatalf("temp-home install wrote into the ambient CODEX_HOME: %v", err)
+	}
+}

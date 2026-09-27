@@ -2,6 +2,7 @@ package reviewassets
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -49,8 +50,30 @@ func CodexAgentRoleNames() []string {
 // home-based `~/.codex/hooks.json` backup entry in backupTargets. The `--scope`
 // contract documented in docs/agents.md and docs/non-interactive.md is why this
 // exception has to be stated rather than inferred.
+//
+// The config root is resolved by codexConfigRoot: an absolute, non-blank
+// CODEX_HOME wins over `home/.codex`, but only when `home` is the real user
+// home, so an ambient CODEX_HOME cannot redirect a test or sandbox fixture.
+// Anywhere Codex honours CODEX_HOME, this directory must follow it, or install
+// and sync report success while writing roles where Codex never looks.
 func CodexAgentRoleDir(home string) string {
-	return filepath.Join(home, ".codex", codexAgentsSubdir)
+	return filepath.Join(codexConfigRoot(home), codexAgentsSubdir)
+}
+
+// codexConfigRoot resolves the Codex configuration root for a home, honouring
+// CODEX_HOME the way the sibling OpenCode resolver honours XDG_CONFIG_HOME
+// (internal/agents/opencode/paths.go): only a non-blank absolute CODEX_HOME is
+// honoured, and only when the supplied home is the real user home from
+// os.UserHomeDir(). Every other home keeps the home-relative default so an
+// ambient CODEX_HOME cannot redirect an isolated test or sandbox HOME.
+func codexConfigRoot(home string) string {
+	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); filepath.IsAbs(codexHome) {
+		userHome, err := os.UserHomeDir()
+		if err == nil && filepath.Clean(home) == filepath.Clean(userHome) {
+			return codexHome
+		}
+	}
+	return filepath.Join(home, ".codex")
 }
 
 // RetiredCodexAgentRoleManifest is the extension point for Codex role files

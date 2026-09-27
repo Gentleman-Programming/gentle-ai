@@ -271,6 +271,51 @@ func stripCodexInjectedSections(body string) string {
 	return strings.TrimSpace(body)
 }
 
+// TestCodexAgentRoleDirHonorsCodexHomeForRealHome pins the CODEX_HOME
+// resolution and its real-user-home guard: an absolute, non-blank CODEX_HOME
+// wins for the real user home, a relative or blank one falls back to
+// `home/.codex`, and an absolute CODEX_HOME never redirects a non-real home.
+func TestCodexAgentRoleDirHonorsCodexHomeForRealHome(t *testing.T) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir() error = %v", err)
+	}
+
+	t.Run("absolute codex home for the real user home", func(t *testing.T) {
+		codexHome := filepath.Join(t.TempDir(), "codex-home")
+		t.Setenv("CODEX_HOME", codexHome)
+		want := filepath.Join(codexHome, codexAgentsSubdir)
+		if got := CodexAgentRoleDir(userHome); got != want {
+			t.Fatalf("CodexAgentRoleDir(userHome) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("relative codex home falls back to the home default", func(t *testing.T) {
+		t.Setenv("CODEX_HOME", filepath.Join("relative", "codex-home"))
+		want := filepath.Join(userHome, ".codex", codexAgentsSubdir)
+		if got := CodexAgentRoleDir(userHome); got != want {
+			t.Fatalf("CodexAgentRoleDir(userHome) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("blank codex home falls back to the home default", func(t *testing.T) {
+		t.Setenv("CODEX_HOME", "   ")
+		want := filepath.Join(userHome, ".codex", codexAgentsSubdir)
+		if got := CodexAgentRoleDir(userHome); got != want {
+			t.Fatalf("CodexAgentRoleDir(userHome) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("non-real home keeps the home default", func(t *testing.T) {
+		t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex-home"))
+		tempHome := t.TempDir()
+		want := filepath.Join(tempHome, ".codex", codexAgentsSubdir)
+		if got := CodexAgentRoleDir(tempHome); got != want {
+			t.Fatalf("CodexAgentRoleDir(tempHome) = %q, want %q", got, want)
+		}
+	})
+}
+
 // TestInstallCodexAgentRolesIsIdempotentAndPreservesUserFiles proves the shared
 // ownership machinery: the second install is a no-op, and a pre-existing role
 // file Gentle AI does not own is never overwritten or deleted.
