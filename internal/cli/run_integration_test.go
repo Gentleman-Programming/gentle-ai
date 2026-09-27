@@ -265,6 +265,15 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 // the real ~/.pi untouched.
 func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
 	home := t.TempDir()
+	// internal/agents/pi.isRealUserHome only honors an absolute
+	// PI_CODING_AGENT_DIR override for the process's actual home directory,
+	// so this test must make home look real for the duration of the test
+	// (osUserHomeDir below only feeds this package's own home resolution,
+	// not pi's os.UserHomeDir() check).
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 	configured := filepath.Join(t.TempDir(), "gentle-shell-home", "agent")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
 

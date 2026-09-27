@@ -1046,6 +1046,13 @@ func installFakeCodeGraphScript(t *testing.T, body string) {
 func TestCodeGraphIsolatedManifestWithConfiguredAgentDir(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	home := t.TempDir()
+	// internal/agents/pi.isRealUserHome only honors an absolute
+	// PI_CODING_AGENT_DIR override for the process's actual home directory,
+	// so this test must make home look real for the duration of the test.
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 
 	// 1. Initial run under standard Pi config creates a manifest with an owned child.
 	defaultPaths := piagent.CodeGraphPaths(home)
