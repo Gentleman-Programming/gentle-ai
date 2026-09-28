@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -14,8 +16,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
@@ -491,6 +495,240 @@ func setOpenCodeTestHome(t *testing.T, home string) {
 	}
 }
 
+func TestInstallV2SDKPreflightBeforeManagedRuntimeWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name, version string
+		installed     bool
+		wantError     bool
+	}{
+		{name: "V2 missing SDK", version: "2.0.18", wantError: true},
+		{name: "V2 installed SDK", version: "2.0.18", installed: true},
+		{name: "V1 without V2 SDK", version: "1.18.30"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			old := opencodeactivation.VersionRunnerOverride
+			t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = old })
+			opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+				return opencodeactivation.CommandOutput{Stdout: []byte(tc.version)}, nil
+			}
+			config := opencode.NewAdapter().GlobalConfigDir(home)
+			if tc.installed {
+				path := filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(`{"version":"2.0.4"}`), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			custom := filepath.Join(config, "plugins", "custom.ts")
+			if err := os.MkdirAll(filepath.Dir(custom), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(custom, []byte("custom plugin"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			agents := []model.AgentID{model.AgentOpenCode}
+			rt := &installRuntime{homeDir: home, workspaceDir: t.TempDir(), scope: ScopeGlobal, resolved: planner.ResolvedPlan{Agents: agents}, selection: model.Selection{Agents: agents}, state: &runtimeState{}}
+			plan := rt.stagePlan()
+			if plan.Prepare[0].ID() != "prepare:opencode-plugin-dependency" || plan.Prepare[1].ID() != "prepare:opencode-telemetry" {
+				t.Fatalf("preflight must precede telemetry: %s, %s", plan.Prepare[0].ID(), plan.Prepare[1].ID())
+			}
+			err := plan.Prepare[0].Run()
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
+					t.Fatalf("missing SDK preflight error = %v", err)
+				}
+				for _, name := range append([]string{"telemetry-runtime.ts"}, opencoderuntimeplugins.ManagedOpenCodePluginNames()...) {
+					if _, err := os.Lstat(filepath.Join(config, "plugins", name)); !os.IsNotExist(err) {
+						t.Fatalf("preflight wrote %s: %v", name, err)
+					}
+				}
+				if data, _ := os.ReadFile(custom); string(data) != "custom plugin" {
+					t.Fatal("custom plugin modified")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("preflight refused valid runtime: %v", err)
+			}
+			for _, step := range plan.Apply {
+				if step.ID() == "opencode:telemetry-runtime" || step.ID() == "agent:managed-opencode-plugins:opencode" {
+					if err := step.Run(); err != nil {
+						t.Fatalf("%s: %v", step.ID(), err)
+					}
+				}
+			}
+			assetDir := "opencode/plugins/"
+			if tc.installed {
+				assetDir = "opencode/plugins-v2/"
+			}
+			for _, name := range opencoderuntimeplugins.ManagedOpenCodePluginNames() {
+				data, err := os.ReadFile(filepath.Join(config, "plugins", name))
+				if err != nil || string(data) != assets.MustRead(assetDir+name) {
+					t.Fatalf("%s did not use selected asset: %v", name, err)
+				}
+			}
+			if data, _ := os.ReadFile(custom); string(data) != "custom plugin" {
+				t.Fatal("custom plugin modified")
+			}
+		})
+	}
+}
+
+func TestV2SDKPreflightNamesInstalledPackageManagerContinuation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell execution of the displayed continuation")
+	}
+	home := filepath.Join(t.TempDir(), "home with ' quote")
+	if err := os.MkdirAll(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	old := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = old })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{"packageManager":"npm@10.8.0"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "invoked")
+	command := filepath.Join(bin, "npm")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nprintf '%s\\n' \"$PWD|$*\" > \"$SDK_PREFLIGHT_MARKER\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SDK_PREFLIGHT_MARKER", marker)
+	err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run()
+	if err == nil {
+		t.Fatal("missing SDK unexpectedly passed")
+	}
+	start := strings.Index(err.Error(), "`cd ")
+	if start < 0 {
+		t.Fatalf("missing runnable continuation: %v", err)
+	}
+	remainder := err.Error()[start+1:]
+	end := strings.IndexByte(remainder, '`')
+	if end < 0 {
+		t.Fatalf("unterminated command: %v", err)
+	}
+	output, runErr := exec.Command("sh", "-c", remainder[:end]).CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("continuation failed: %v: %s", runErr, output)
+	}
+	got, readErr := os.ReadFile(marker)
+	if readErr != nil || string(got) != config+"|install --save --no-audit --no-fund @opencode/plugin@2.0.4\n" {
+		t.Fatalf("wrong package manager or directory: %q, %v", got, readErr)
+	}
+}
+
+func TestV2SDKPreflightPreservesPackageManagerOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name, manifest, lockfile, available, want string
+	}{
+		{"bun metadata", `{"packageManager":"bun@1.2.0"}`, "", "bun", "bun"},
+		{"npm lockfile", `{}`, "package-lock.json", "npm", "npm"},
+		{"unavailable owner", `{"packageManager":"bun@1.2.0"}`, "", "npm", ""},
+		{"unsupported owner", `{"packageManager":"pnpm@9.0.0"}`, "", "npm", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := t.TempDir()
+			if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(tc.manifest), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if tc.lockfile != "" {
+				if err := os.WriteFile(filepath.Join(config, tc.lockfile), nil, 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			old := cmdLookPath
+			t.Cleanup(func() { cmdLookPath = old })
+			cmdLookPath = func(name string) (string, error) {
+				if name == tc.available {
+					return name, nil
+				}
+				return "", exec.ErrNotFound
+			}
+			if got := openCodePluginPackageManager(config); got != tc.want {
+				t.Fatalf("package manager = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpenCodeV2SDKRefusesAmbiguousLockfiles(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bun.lock", "package-lock.json"} {
+		if err := os.WriteFile(filepath.Join(config, name), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = old })
+	cmdLookPath = func(name string) (string, error) { return name, nil }
+	if manager := openCodePluginPackageManager(config); manager != "" {
+		t.Fatalf("ambiguous ownership chose %q", manager)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil || !strings.Contains(err.Error(), "bun and npm lockfiles conflict") {
+		t.Fatalf("ambiguous ownership refusal = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{"packageManager":"npm@10.8.0"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if manager := openCodePluginPackageManager(config); manager != "npm" {
+		t.Fatalf("explicit package owner was ignored: %q", manager)
+	}
+}
+
+func TestOpenCodeV2SDKWindowsPowerShellContinuation(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "path with ' quote %SDK_PREFLIGHT_MARKER%")
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	command := openCodeSDKInstallContinuation("windows", config, "npm", "@opencode/plugin@2.0.4")
+	if strings.Contains(command, "cd /d") || !strings.Contains(command, "Set-Location -LiteralPath") || !strings.Contains(command, "path with '' quote %SDK_PREFLIGHT_MARKER%'") {
+		t.Fatalf("unsafe or non-PowerShell continuation: %s", command)
+	}
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		t.Skip("PowerShell is unavailable for executable continuation check")
+	}
+	if testing.Short() {
+		t.Skip("PowerShell execution is an external integration check")
+	}
+	marker := filepath.Join(t.TempDir(), "invoked")
+	t.Setenv("SDK_PREFLIGHT_MARKER", marker)
+	definition := "function npm { Set-Content -LiteralPath $env:SDK_PREFLIGHT_MARKER -Value ((Get-Location).Path + '|' + ($args -join ' ')) }\n"
+	output, err := exec.Command("pwsh", "-NoProfile", "-Command", definition+command).CombinedOutput()
+	if err != nil {
+		t.Fatalf("PowerShell continuation failed: %v: %s", err, output)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || strings.TrimSpace(string(data)) != config+"|install --save --no-audit --no-fund @opencode/plugin@2.0.4" {
+		t.Fatalf("PowerShell did not run in target directory: %q, %v", data, err)
+	}
+}
+
 func TestOpenCodeTelemetryInstallRollbackOutsideHome(t *testing.T) {
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
@@ -540,8 +778,13 @@ func TestOpenCodeTelemetryInstallRefusesCustomBeforeSnapshot(t *testing.T) {
 	}
 	rt := &installRuntime{homeDir: home, workspaceDir: t.TempDir(), scope: ScopeGlobal, selection: model.Selection{Agents: agents}, resolved: planner.ResolvedPlan{Agents: agents}, state: &runtimeState{}}
 	plan := rt.stagePlan()
-	if err := plan.Prepare[0].Run(); err == nil {
-		t.Fatal("custom plugin not refused before snapshot")
+	for _, step := range plan.Prepare {
+		if step.ID() == "prepare:opencode-telemetry" {
+			if err := step.Run(); err == nil {
+				t.Fatal("custom plugin not refused before snapshot")
+			}
+			break
+		}
 	}
 	if data, err := os.ReadFile(path); err != nil || string(data) != "custom" {
 		t.Fatal("custom file changed", err)

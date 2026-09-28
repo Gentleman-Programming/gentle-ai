@@ -790,6 +790,9 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if telemetryDir != "" {
 		prepare = append([]pipeline.Step{openCodeTelemetryStep{id: "prepare:opencode-telemetry", configDir: telemetryDir, checkOnly: true}}, prepare...)
 	}
+	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
+		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir}}, prepare...)
+	}
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
@@ -950,6 +953,136 @@ type managedOpenCodePluginsInstallStep struct {
 	id      string
 	agent   model.AgentID
 	homeDir string
+}
+
+// The installed package is the source of truth; a declared dependency alone
+// does not make V2 plugin imports resolvable. Keep this check ahead of both
+// telemetry and managed-plugin writes in install and sync prepare stages.
+type openCodePluginDependencyPreflightStep struct {
+	id, homeDir string
+}
+
+func (s openCodePluginDependencyPreflightStep) ID() string { return s.id }
+
+func (s openCodePluginDependencyPreflightStep) Run() error {
+	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	if err != nil {
+		return err
+	}
+	if major != opencodeactivation.RuntimeV2 {
+		return nil
+	}
+	dependency, err := major.PluginDependency()
+	if err != nil {
+		return err
+	}
+	config := opencodeagent.NewAdapter().GlobalConfigDir(s.homeDir)
+	manifest := filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json")
+	data, err := os.ReadFile(manifest)
+	if err == nil && len(data) <= 1<<20 {
+		var pkg struct {
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(data, &pkg) == nil && pkg.Version == strings.TrimPrefix(dependency, "@opencode/plugin@") {
+			return nil
+		}
+	}
+	manager := openCodePluginPackageManager(config)
+	if manager == "" {
+		if openCodePluginLockfileConflict(config) {
+			// refusal:by-design operator-knowledge: conflicting lockfiles cannot safely establish ownership without user choice
+			return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; bun and npm lockfiles conflict in %s, so choose and reconcile the owning package manager before retrying", dependency, config)
+		}
+		// refusal:by-design world-action: no executable package manager is available for the existing package ownership
+		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; no compatible package manager is available for %s", dependency, config)
+	}
+	location := openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency)
+	if runtime.GOOS == "windows" {
+		// refusal:by-design world-action: this command is generated for PowerShell, not cmd.exe
+		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; in PowerShell run: %s; then retry Gentle AI", dependency, location)
+	}
+	// refusal:by-design world-action: the runnable package-manager command is selected from the user's package ownership and quoted config path at runtime
+	return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; run `%s`, then retry Gentle AI", dependency, location)
+}
+
+func openCodeSDKInstallContinuation(goos, config, manager, dependency string) string {
+	arguments := "bun add " + dependency
+	if manager == "npm" {
+		arguments = "npm install --save --no-audit --no-fund " + dependency
+	}
+	if goos == "windows" {
+		return "Set-Location -LiteralPath '" + strings.ReplaceAll(config, "'", "''") + "'; if ($?) { " + arguments + " }"
+	}
+	return "cd " + shellQuoteOpenCodePluginPath(config) + " && " + arguments
+}
+
+func openCodePluginPackageManager(config string) string {
+	preferred := ""
+	if data, err := os.ReadFile(filepath.Join(config, "package.json")); err == nil {
+		var pkg struct {
+			PackageManager string `json:"packageManager"`
+		}
+		if json.Unmarshal(data, &pkg) == nil {
+			name := strings.ToLower(strings.TrimSpace(pkg.PackageManager))
+			switch {
+			case name == "bun" || strings.HasPrefix(name, "bun@"):
+				preferred = "bun"
+			case name == "npm" || strings.HasPrefix(name, "npm@"):
+				preferred = "npm"
+			case name != "":
+				return ""
+			}
+		}
+	}
+	if preferred == "" {
+		if openCodePluginLockfileConflict(config) {
+			return ""
+		}
+		for _, entry := range []struct{ name, manager string }{
+			{"bun.lock", "bun"}, {"bun.lockb", "bun"}, {"package-lock.json", "npm"}, {"npm-shrinkwrap.json", "npm"},
+		} {
+			if _, err := os.Stat(filepath.Join(config, entry.name)); err == nil {
+				preferred = entry.manager
+				break
+			}
+		}
+	}
+	if preferred != "" {
+		if _, err := cmdLookPath(preferred); err == nil {
+			return preferred
+		}
+		return ""
+	}
+	for _, name := range []string{"bun", "npm"} {
+		if _, err := cmdLookPath(name); err == nil {
+			return name
+		}
+	}
+	return ""
+}
+
+func openCodePluginLockfileConflict(config string) bool {
+	if data, err := os.ReadFile(filepath.Join(config, "package.json")); err == nil {
+		var pkg struct {
+			PackageManager string `json:"packageManager"`
+		}
+		if json.Unmarshal(data, &pkg) == nil && strings.TrimSpace(pkg.PackageManager) != "" {
+			return false
+		}
+	}
+	owned := func(names ...string) bool {
+		for _, name := range names {
+			if _, err := os.Stat(filepath.Join(config, name)); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	return owned("bun.lock", "bun.lockb") && owned("package-lock.json", "npm-shrinkwrap.json")
+}
+
+func shellQuoteOpenCodePluginPath(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
 }
 
 func (s managedOpenCodePluginsInstallStep) ID() string { return s.id }

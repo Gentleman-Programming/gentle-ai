@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
@@ -6483,6 +6485,41 @@ func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection)
 		}
 	}
 	return rt.changedFiles
+}
+
+func TestSyncV2SDKPreflightBeforeManagedRuntimeWrites(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	old := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = old })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencodeagent.NewAdapter().GlobalConfigDir(home)
+	custom := filepath.Join(config, "plugins", "custom.ts")
+	if err := os.MkdirAll(filepath.Dir(custom), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(custom, []byte("custom plugin"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := newSyncRuntime(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := rt.stagePlan()
+	if err := plan.Prepare[0].Run(); err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
+		t.Fatalf("missing SDK preflight error = %v", err)
+	}
+	for _, name := range append([]string{"telemetry-runtime.ts"}, opencoderuntimeplugins.ManagedOpenCodePluginNames()...) {
+		if _, err := os.Lstat(filepath.Join(config, "plugins", name)); !os.IsNotExist(err) {
+			t.Fatalf("preflight wrote %s: %v", name, err)
+		}
+	}
+	if data, _ := os.ReadFile(custom); string(data) != "custom plugin" {
+		t.Fatal("custom plugin modified")
+	}
 }
 
 // runSyncComponentSteps executes only the component steps of a sync plan.
