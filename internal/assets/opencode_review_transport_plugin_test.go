@@ -34,7 +34,7 @@ await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID:
 if (reversed.output !== "captured") throw new Error("non-owner after an owner-delivered completion must pass through; output = " + reversed.output)
 console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Prompt string `json:"prompt"`
 		Output string `json:"output"`
@@ -105,7 +105,7 @@ await transform({ sessionID: "disposed-session" }, { system: disposedSystem })
 unchanged("disposed", disposedSystem)
 console.log(JSON.stringify({ runtimeAgentSystem, legacyTitleSystem, ordinaryAgentSystem, partialTitleSystem, malformedSystem, undefinedSessionIDSystem, deletedSystem, disposedSystem }))
 `
-	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, _, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		RuntimeAgentSystem       []string `json:"runtimeAgentSystem"`
 		LegacyTitleSystem        []string `json:"legacyTitleSystem"`
@@ -151,7 +151,7 @@ for (const [index, completion] of completions.entries()) {
 }
 console.log(JSON.stringify({ prompts: tasks.map((task) => task.args.prompt), outputs: taskOutputs.map((task) => task.output) }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Prompts []string `json:"prompts"`
 		Outputs []string `json:"outputs"`
@@ -185,9 +185,14 @@ func TestOpenCodeReviewTransportPluginUsesActiveHostWithoutVersionOrEnvironmentG
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The plugin must still use the active OpenCode host process and not
+	// branch on OPENCODE_DISABLE_* env gates. Issue #3049 introduces a
+	// gentle-ai --version handshake, so the original blanket --version
+	// ban is narrowed to a positive check on the handshake symbol so a
+	// future env-gate bypass cannot reintroduce the forbidden probe.
 	for _, forbidden := range []string{
 		`spawn("opencode"`, `spawn('opencode'`, `exec("opencode"`, `exec('opencode'`,
-		"OPENCODE_DISABLE_", "--version",
+		"OPENCODE_DISABLE_",
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("OpenCode transport plugin must use the active host process, found forbidden %q", forbidden)
@@ -195,6 +200,9 @@ func TestOpenCodeReviewTransportPluginUsesActiveHostWithoutVersionOrEnvironmentG
 	}
 	if !strings.Contains(source, `spawn(TRANSPORT.Command, ["review", "opencode-transport"]`) {
 		t.Fatal("OpenCode transport plugin must spawn only the shared Go transport")
+	}
+	if !strings.Contains(source, "spawn(\"gentle-ai\", [\"--version\"]") {
+		t.Fatal("OpenCode transport plugin must use the gentle-ai --version handshake from issue #3049")
 	}
 }
 
@@ -219,7 +227,7 @@ try {
 }
 console.log(JSON.stringify({ refused, output: after.output }))
 `
-	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, _, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Refused string `json:"refused"`
 		Output  string `json:"output"`
@@ -235,9 +243,15 @@ console.log(JSON.stringify({ refused, output: after.output }))
 	}
 }
 
-// posixRelayFixture answers one start frame with a Go-materialized prompt and
-// one completion frame with a captured result, logging both inbound frames.
+// posixRelayFixture answers one start frame with a Go-materialized prompt,
+// one completion frame with a captured result, and a leading `gentle-ai
+// --version` probe so the binary handshake can run without per-test mocking.
 const posixRelayFixture = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' "$$" >> "$GENTLE_AI_PROBE_LOG"
+  printf 'gentle-ai 2.4.0\n'
+  exit 0
+fi
 IFS= read -r start
 printf '%s\n' "$start" >> "$GENTLE_AI_RELAY_LOG"
 printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"prompt","nonce":"nonce","prompt":"Go-materialized immutable prompt"}'
@@ -245,6 +259,107 @@ IFS= read -r complete
 printf '%s\n' "$complete" >> "$GENTLE_AI_RELAY_LOG"
 printf '%s\n' '{"schema":"gentle-ai.provider-transport/v1","operation":"result","output":"captured"}'
 `
+
+// posixOldRelayFixture pretends to be a pre-v1 `gentle-ai`: older semver on
+// `--version`, no relay frames, so a path-skew refusal short-circuits.
+const posixOldRelayFixture = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\n' "$$" >> "$GENTLE_AI_PROBE_LOG"
+  printf 'gentle-ai 1.9.0\n'
+  exit 0
+fi
+exit 0
+`
+
+func TestOpenCodeReviewTransportPluginBinaryHandshakeRefusesSkew(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pre-write an older `gentle-ai` shim into a temp dir so the test can
+	// prepend it to PATH ahead of the bundled harness binary. The shim only
+	// answers `--version`; the relay frames never reach it because the
+	// plugin must refuse before spawning.
+	oldBin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(oldBin, "gentle-ai"), []byte(posixOldRelayFixture), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const before = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+let refused = ""
+try {
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
+} catch (cause) {
+  refused = cause instanceof Error ? cause.message : String(cause)
+}
+console.log(JSON.stringify({ prompt: before.args.prompt, refused }))
+`
+	output, log, probeLog := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture, oldBin)
+	var result struct {
+		Prompt  string `json:"prompt"`
+		Refused string `json:"refused"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode skew harness output %q: %v", output, err)
+	}
+	for _, want := range []string{
+		"opencode_review_transport_binary_skew",
+		"1.9.0",
+		"2.0.0",
+		"which -a gentle-ai",
+	} {
+		if !strings.Contains(result.Refused, want) {
+			t.Fatalf("skew refusal %q must contain %q", result.Refused, want)
+		}
+	}
+	if !strings.Contains(result.Prompt, "opencode_review_transport_binary_skew") {
+		t.Fatalf("refused Task prompt %q must carry the typed skew code", result.Prompt)
+	}
+	if log != "" {
+		t.Fatalf("refused skew must not spawn the relay child, got relay frames %q", log)
+	}
+	if probeLog == "" {
+		t.Fatalf("skew path must still probe before refusing, got empty probe log")
+	}
+}
+
+func TestOpenCodeReviewTransportPluginBinaryHandshakeRefusesUnavailable(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import plugin from "./plugin.mts"
+const hooks = await plugin({ directory: process.cwd(), worktree: process.cwd() })
+const before = { args: { subagent_type: "review-risk", prompt: "Go must receive this original host prompt" } }
+let refused = ""
+try {
+  await hooks["tool.execute.before"]({ tool: "task", sessionID: "session", callID: "call" }, before)
+} catch (cause) {
+  refused = cause instanceof Error ? cause.message : String(cause)
+}
+console.log(JSON.stringify({ prompt: before.args.prompt, refused }))
+`
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, "", "")
+	var result struct {
+		Prompt  string `json:"prompt"`
+		Refused string `json:"refused"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode unavailable harness output %q: %v", output, err)
+	}
+	for _, want := range []string{"opencode_review_transport_binary_unavailable", "2971"} {
+		if !strings.Contains(result.Refused, want) {
+			t.Fatalf("unavailable refusal %q must contain %q", result.Refused, want)
+		}
+	}
+	if !strings.Contains(result.Prompt, "opencode_review_transport_binary_unavailable") {
+		t.Fatalf("refused Task prompt %q must carry the typed unavailable code", result.Prompt)
+	}
+	if log != "" {
+		t.Fatalf("refused unavailable must not spawn the relay child, got relay frames %q", log)
+	}
+}
 
 func TestOpenCodeReviewTransportPluginRefusesCompletionWithoutMatchingBeforeHook(t *testing.T) {
 	source, err := Read("opencode/plugins/opencode-review-transport.ts")
@@ -262,7 +377,7 @@ try {
 }
 console.log(JSON.stringify({ refused, output: after.output }))
 `
-	output, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, _, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Refused string `json:"refused"`
 		Output  string `json:"output"`
@@ -299,7 +414,7 @@ const untouched = after.output
 await first["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "call", args: { subagent_type: "review-risk" } }, after)
 console.log(JSON.stringify({ refused, untouched, output: after.output }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Refused   string `json:"refused"`
 		Untouched string `json:"untouched"`
@@ -339,7 +454,7 @@ const after = { output: "untrusted reviewer output", metadata: {} }
 await second["tool.execute.after"]({ tool: "task", sessionID: "session", callID: "second-call", args: { subagent_type: "review-risk" } }, after)
 console.log(JSON.stringify({ output: after.output }))
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"plugin.mts": string(source)}, harness, posixRelayFixture)
 	var result struct {
 		Output string `json:"output"`
 	}
@@ -473,6 +588,10 @@ console.log(JSON.stringify({ ok: true }))
 	const relay = `#!/usr/bin/env node
 import { appendFileSync } from "node:fs"
 import { createInterface } from "node:readline"
+if (process.argv[2] === "--version") {
+  process.stdout.write("gentle-ai 2.4.0\n")
+  process.exit(0)
+}
 const materializationHeader = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION "
 let start
 const lines = createInterface({ input: process.stdin })
@@ -490,7 +609,7 @@ lines.on("line", (line) => {
   process.stdout.write(JSON.stringify({ schema: "gentle-ai.provider-transport/v1", operation: "result", output }) + "\n")
 })
 `
-	output, log := runOpenCodeTransportPluginHarness(t, map[string]string{"current.mts": string(current), "legacy.mts": legacy}, harness, relay)
+	output, log, _ := runOpenCodeTransportPluginHarness(t, map[string]string{"current.mts": string(current), "legacy.mts": legacy}, harness, relay)
 	if string(output) != "{\"ok\":true}\n" {
 		t.Fatalf("mixed transport plugin harness output = %q", output)
 	}
@@ -508,7 +627,21 @@ lines.on("line", (line) => {
 	}
 }
 
-func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, harness, relay string) (string, string) {
+// overridePATH replaces PATH with pathValue (appending would leave the
+// parent's PATH first since getenv(3) returns the first match).
+func overridePATH(parent []string, pathValue, logPath, probePath string) []string {
+	env := make([]string, 0, len(parent)+3)
+	for _, entry := range parent {
+		if strings.HasPrefix(entry, "PATH=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	env = append(env, "PATH="+pathValue, "GENTLE_AI_RELAY_LOG="+logPath, "GENTLE_AI_PROBE_LOG="+probePath)
+	return env
+}
+
+func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, harness, relay string, extraPath ...string) (string, string, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the relay fixture uses a POSIX shell")
@@ -530,24 +663,42 @@ func runOpenCodeTransportPluginHarness(t *testing.T, modules map[string]string, 
 	if err := os.WriteFile(filepath.Join(root, "harness.mts"), []byte(harness), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "gentle-ai"), []byte(relay), 0o700); err != nil {
-		t.Fatal(err)
+	if relay != "" {
+		if err := os.WriteFile(filepath.Join(bin, "gentle-ai"), []byte(relay), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	logPath := filepath.Join(root, "relay.log")
+	probePath := filepath.Join(root, "probe.log")
 	command := exec.Command(node, "harness.mts")
 	command.Dir = root
-	command.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "GENTLE_AI_RELAY_LOG="+logPath)
+	pathValue := bin
+	for _, entry := range extraPath {
+		pathValue = entry + string(os.PathListSeparator) + pathValue
+	}
+	if relay != "" {
+		pathValue = pathValue + string(os.PathListSeparator) + os.Getenv("PATH")
+	}
+	command.Env = overridePATH(os.Environ(), pathValue, logPath, probePath)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("transport plugin harness failed: %v\n%s", err, output)
 	}
 	log, err := os.ReadFile(logPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// A harness that never spawns a relay leaves no frame log behind.
-			return string(output), ""
-		}
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	return string(output), string(log)
+	probe, err := os.ReadFile(probePath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	relayLog := ""
+	if log != nil {
+		relayLog = string(log)
+	}
+	probeLog := ""
+	if probe != nil {
+		probeLog = string(probe)
+	}
+	return string(output), relayLog, probeLog
 }

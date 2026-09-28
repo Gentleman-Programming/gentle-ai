@@ -39,8 +39,7 @@ package cli
 // collectors and their own baseline; nothing here sees them.
 //
 // WHAT THIS RATCHET PROVES: every refusal-origin site in the production
-// sources of internal/cli, internal/reviewtransaction, and internal/sddstatus
-// either
+// sources of internal/cli and internal/reviewtransaction either
 //
 //  (a) names a runnable continuation (a `gentle-ai ...` invocation) in the
 //      message the operator actually reads -- which includes text composed in
@@ -809,13 +808,13 @@ func refusalRatchetReportFieldCarriedRefusals(t *testing.T, analysis refusalRatc
 // --- Analyzer ------------------------------------------------------------
 
 // refusalRatchetProductionDirs maps each audited package directory (relative
-// to this package) to its repository-root-relative slash prefix. These three
-// packages are where every escape in the detection-gap audit lived; other
-// packages are excluded until they earn an entry the same way.
+// to this package) to its repository-root-relative slash prefix. These
+// packages are where the surviving escapes from the detection-gap audit live;
+// the audited internal/sddstatus package was removed with SDD. Other packages
+// are excluded until they earn an entry the same way.
 var refusalRatchetProductionDirs = []struct{ dir, prefix string }{
 	{".", "internal/cli"},
 	{filepath.Join("..", "reviewtransaction"), "internal/reviewtransaction"},
-	{filepath.Join("..", "sddstatus"), "internal/sddstatus"},
 }
 
 // refusalRatchetFile is one production source, labelled by its

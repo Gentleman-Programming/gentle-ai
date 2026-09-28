@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
 const (
@@ -60,6 +60,7 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".pi", "agent", "skills"),
 		filepath.Join(home, ".config", "agents", "skills"),
 		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(home, ".kimi-code", "skills"),
 		filepath.Join(home, ".kimi", "skills"),
 
 		// Agent-specific global skill locations supported by Gentle AI adapters.
@@ -78,6 +79,7 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".kiro", "skills"),
 		filepath.Join(home, ".openclaw", "skills"),
 		filepath.Join(home, ".hermes", "skills"),
+		filepath.Join(home, ".trae", "skills"),
 	}
 }
 

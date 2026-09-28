@@ -1516,18 +1516,18 @@
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/antigravity/sdd-orchestrator.md",
+      "path": "internal/assets/antigravity/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
@@ -1552,180 +1552,180 @@
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/claude/sdd-orchestrator.md",
+      "path": "internal/assets/claude/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/codex/sdd-orchestrator.md",
+      "path": "internal/assets/codex/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/cursor/sdd-orchestrator.md",
+      "path": "internal/assets/cursor/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/gemini/sdd-orchestrator.md",
+      "path": "internal/assets/gemini/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/generic/sdd-orchestrator.md",
+      "path": "internal/assets/generic/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/hermes/sdd-orchestrator.md",
+      "path": "internal/assets/hermes/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/kimi/sdd-orchestrator.md",
+      "path": "internal/assets/kimi/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/kiro/sdd-orchestrator.md",
+      "path": "internal/assets/kiro/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/opencode/sdd-orchestrator.md",
+      "path": "internal/assets/opencode/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/qwen/sdd-orchestrator.md",
+      "path": "internal/assets/qwen/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]
@@ -1750,18 +1750,18 @@
     },
     {
       "earlyDeviation": false,
-      "path": "internal/assets/windsurf/sdd-orchestrator.md",
+      "path": "internal/assets/windsurf/orchestrator.md",
       "publication": [
         {
-          "present": true,
+          "present": false,
           "ref": "origin/main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "main"
         },
         {
-          "present": true,
+          "present": false,
           "ref": "v2.1.11"
         }
       ]

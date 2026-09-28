@@ -8,7 +8,9 @@ import (
 //
 // InstallMethod controls which non-Homebrew upgrade strategy the executor uses:
 //   - InstallBrew: explicitly managed via Homebrew
-//   - InstallGoInstall: installed via `go install <GoImportPath>@version`
+//   - InstallGoInstall: installed via `go install <GoImportPath>@version`,
+//     where GoImportPath is the suffix-less module/import base and the /vN
+//     suffix is derived from the target version via ModulePathForVersion.
 //   - InstallBinary: downloaded binary from GitHub Releases (atomic replace)
 //
 // On platforms where Homebrew is available, the executor selects brew only
@@ -29,7 +31,12 @@ var Tools = []ToolInfo{
 		// deliberately NOT a general opt-in to go-install: effectiveMethod routes
 		// gentle-ai on Linux/macOS to InstallBinary regardless of this field, so
 		// those platforms keep the minisign-verified release download.
-		GoImportPath: "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
+		//
+		// The path stores the module/import base WITHOUT the /vN suffix; the
+		// /vN suffix is derived at composition time from the target version via
+		// ModulePathForVersion so a v2 binary composing "go install ...@v3.0.1"
+		// resolves to github.com/.../v3/... and not the unresolvable /v2 path.
+		GoImportPath: "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai",
 	},
 	{
 		Name:              "engram",
@@ -94,13 +101,5 @@ var Tools = []ToolInfo{
 		VersionPrefix: "v",
 		InstallMethod: InstallOpenCodePlugin,
 		NpmPackage:    "opencode-subagent-statusline",
-	},
-	{
-		Name:          "opencode-sdd-engram-manage",
-		Owner:         "j0k3r-dev-rgl",
-		Repo:          "sdd-engram-plugin",
-		VersionPrefix: "v",
-		InstallMethod: InstallOpenCodePlugin,
-		NpmPackage:    "opencode-sdd-engram-manage",
 	},
 }

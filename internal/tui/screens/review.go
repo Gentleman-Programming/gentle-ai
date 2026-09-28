@@ -3,9 +3,9 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 func ReviewOptions() []string {
@@ -21,6 +21,11 @@ func RenderReview(payload planner.ReviewPayload, cursor int, reviewMode string) 
 	b.WriteString("\n\n")
 
 	b.WriteString("  " + styles.HeadingStyle.Render("Agents") + "  " + styles.UnselectedStyle.Render(joinIDs(payload.Agents)) + "\n")
+	// Catalog-owned notes (currently Conductor only) set expectations for
+	// detection/catalog-only agents before the user confirms the install.
+	for _, note := range payload.AgentNotes {
+		b.WriteString("      " + styles.SubtextStyle.Render(string(note.Agent)+": "+note.Note) + "\n")
+	}
 	b.WriteString("  " + styles.HeadingStyle.Render("Persona") + "  " + styles.UnselectedStyle.Render(reviewPersonaLabel(payload.Persona)) + "\n")
 	b.WriteString("  " + styles.HeadingStyle.Render("Preset") + "  " + styles.UnselectedStyle.Render(reviewPresetLabel(payload.Preset)) + "\n")
 	if reviewMode != "" {
@@ -51,15 +56,6 @@ func RenderReview(payload planner.ReviewPayload, cursor int, reviewMode string) 
 			for _, skill := range payload.Skills {
 				b.WriteString("    " + styles.SubtextStyle.Render(string(skill)) + "\n")
 			}
-		}
-
-		// Issue #149: show Strict TDD status when SDD is in the plan.
-		if payload.HasSDD {
-			strictLabel := "Disabled"
-			if payload.StrictTDD {
-				strictLabel = "Enabled"
-			}
-			b.WriteString("  " + styles.HeadingStyle.Render("Strict TDD") + "  " + styles.UnselectedStyle.Render(strictLabel) + "\n")
 		}
 
 		b.WriteString("\n")

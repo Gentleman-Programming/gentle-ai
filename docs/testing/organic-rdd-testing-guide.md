@@ -270,28 +270,11 @@ If `hdiutil` rejects the filesystem name, `hdiutil create -help` lists the ones 
 3. [ ] → **Expected**: the reviewer result publishes, and the final admitted capture closes and burns the review. A raw `ENOTSUP`, `EINVAL` or `operation not supported` reaching you is the defect.
 4. [ ] Detach with `hdiutil detach /Volumes/RDDTEST` when done.
 
-### Flow 22: First-use store contention (#1850) — **fixed on the branch, still broken in the published asset**
+### Flow 22: First-use store contention (#1850) — retired historical oracle
 
-@edwinsaavedran reported that concurrent first use of a new runtime store leaked a raw `ENOENT` to the losing writers instead of a typed conflict. It was fail-closed and no ledger was corrupted, but a controller cannot classify or retry an untyped errno.
+@edwinsaavedran reported that concurrent first use of the former SDD runtime store leaked a raw `ENOENT` to losing writers instead of a typed conflict. It was fail-closed and no ledger was corrupted, but a controller could not classify or retry an untyped errno. The published Refresh 5 asset (`2551c0a5`) failed 181/200 attempts; the branch after `0bcff694` passed 200/200. The original failure produced no Go data-race report: it was a filesystem race.
 
-**The expected result depends on which candidate you run, and this is the clearest example in the guide of why that matters.** Two independent native macOS runs:
-
-| candidate | result |
-|---|---|
-| published Refresh 5 asset (`2551c0a5`) | **FAIL** — 181/200 with the known `ENOENT` |
-| branch after `0bcff694` | **PASS** — 200/200 |
-
-This needs a source checkout rather than the released binary. From the branch under test:
-
-```bash
-TMPDIR=/private/tmp GIT_CONFIG_NOSYSTEM=1 \
-  go test -p=1 ./internal/sddstatus \
-  -run '^TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal$' -count=20
-```
-
-1. [ ] → **Expected on current branch source**: 20 of 20 pass. A failure here is a regression and worth reporting immediately.
-2. [ ] If you are testing the **published asset** instead, expect failures, and report how many of 20 failed and whether the message is still `review store lock could not be acquired: no such file or directory`.
-3. [ ] Either way, run it with `-race -count=3` as well. The original failure produced no Go data-race report, which is the signature of a filesystem race rather than a memory one.
+The `internal/sddstatus` package and its test oracle are retired on the ODD-only branch. **Do not run Flow 22 against current branch source or treat it as a current regression check.** The other review-store and RDD flows in this guide remain separate; this historical result does not replace their validation.
 
 ### Flow 23: Managed profiles (#1781)
 

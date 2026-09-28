@@ -1,0 +1,16 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "agent": {
+    "gentle-orchestrator": {"__managed_by":"gentle-ai/sdd","mode":"primary","description":"Gentle AI SDD Orchestrator","prompt":"obsolete orchestrator","permission":{"question":"allow","task":{"__replace__":{"*":"deny","sdd-init":"allow","jd-judge-a":"allow"}}},"tools":{"__replace__":{"read":true,"write":true,"edit":true,"bash":true,"question":true,"task":true}},"model":"user/orchestrator"},
+    "sdd-init": {"__managed_by":"gentle-ai/sdd","mode":"subagent","hidden":true,"prompt":"obsolete init","tools":{"read":true,"write":true,"edit":true,"bash":true},"model":"user/retired","variant":"high"},
+    "sdd-research": {"__managed_by":"gentle-ai/sdd","mode":"subagent","hidden":true,"prompt":"obsolete research","tools":{"read":true,"write":true,"edit":true,"bash":true},"permission":{"bash":"deny","webfetch":"deny","websearch":"deny","task":"deny"}},
+    "jd-judge-a": {"__managed_by":"gentle-ai/sdd","mode":"subagent","hidden":true,"prompt":"obsolete judge","tools":{"*":false,"read":true,"write":false,"edit":false,"bash":false,"task":false},"model":"user/judge","variant":"low"},
+    "jd-fix-agent": {"__managed_by":"gentle-ai/sdd","mode":"subagent","hidden":true,"prompt":"obsolete fixer","tools":{"read":true,"write":true,"edit":true,"bash":true}},
+    "review-risk": {"__managed_by":"gentle-ai/sdd","mode":"subagent","hidden":true,"prompt":"obsolete risk","tools":{"*":false,"read":false,"write":false,"edit":false,"bash":false,"task":false},"permission":{"edit":"deny","bash":"deny"},"variant":"medium"},
+    "review-refuter": {"__managed_by":"gentle-ai/sdd","mode":"subagent","hidden":true,"prompt":"obsolete refuter","tools":{"*":false,"read":true,"write":false,"edit":false,"bash":false,"task":false}},
+    "other-marked": {"__managed_by":"gentle-ai/sdd","prompt":"keep this"},
+    "user-owned": {"prompt":"My instructions","permission":{"bash":{"*":"ask"}},"model":"user/custom"}
+  },
+  "mcp": {"my-server": {"type": "local", "command": ["my-tool"]}},
+  "provider": {"my-provider": {"name": "My Provider"}}
+}

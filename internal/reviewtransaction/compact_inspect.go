@@ -210,10 +210,44 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// it just means no edge advertises review repair this round, exactly like
 	// InspectCompactPristineAbandonment's per-edge eligibility below never
 	// aborts the whole exit computation.
+	//
+	// historicalExits (#2995) lists every historical (outdated) entry when the
+	// store's ONLY diagnostics are historical: each entry then has a reachable
+	// selector-scoped repair, so inspection surfaces one exit per entry —
+	// unless a retained edge still references the entry, which the
+	// exact-selector derivation refuses, so the exit is withheld individually
+	// (unreferenced siblings stay advertised). The reference is reachable:
+	// edges are built from loaded successors, so a loaded successor naming a
+	// now-historical predecessor produces it. A
+	// store with ANY non-historical diagnostic keeps today's stricter posture —
+	// no historical exit is advertised unless the selectorless derivation
+	// itself closes (the N=1 j92 case, unchanged below) — because a mixed
+	// store's selectorless preflight still refuses and this surface must never
+	// advertise a continuation the very next command would refuse. Malformed,
+	// unreadable, missing, and unexpected entries never gain an exit.
+	historicalExits := historicalDispositionExitLineages(report)
 	dispositionSeed := ""
+	for _, lineage := range historicalExits {
+		exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: lineage, Operation: CompactRecoveryEdgeExitRepair})
+	}
+	// The derivation runs UNCONDITIONALLY, decoupled from historicalExits:
+	// with historical exits present it must not append a second repair exit
+	// for a historical-class plan (the per-entry exits above already cover
+	// every historical lineage), but a non-historical admitted plan still
+	// feeds dispositionSeed below. That branch is reachable: a store mixing
+	// forensic historical entries (the only diagnostics, so historicalExits
+	// is non-empty) with a loaded content-mismatch pair closes the selectorless
+	// derivation on the EDGE plan. When historicalExits is empty the behavior
+	// is exactly the historical snapshot-identity exit or the seed, unchanged.
+	// A derivation refusal is still not propagated —
+	// it just means no extra plan exists this round, exactly like
+	// InspectCompactPristineAbandonment's per-edge eligibility below never
+	// aborts the whole exit computation.
 	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
 		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
-			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+			if len(historicalExits) == 0 {
+				exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+			}
 		} else {
 			dispositionSeed = plan.SeedSet[0]
 		}
@@ -271,6 +305,49 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		exits = append(exits, exit)
 	}
 	return exits, nil
+}
+
+// historicalDispositionExitLineages returns every historical (outdated)
+// entry lineage, sorted, when the report's diagnostics are ALL historical —
+// the one store shape where every diagnostic has a reachable selector-scoped
+// repair (#2995). A diagnostic lineage any retained report edge still
+// references (on either side) is excluded individually: the exact-selector
+// derivation refuses that repair, and this surface must never advertise a
+// continuation the very next command refuses — unreferenced siblings stay
+// advertised. Any other shape returns nil: malformed, unreadable,
+// missing, and unexpected entries never gain an exit, and a store that mixes
+// them with historical entries keeps its existing exits unchanged.
+func historicalDispositionExitLineages(report CompactRecoveryInspectionReport) []string {
+	if len(report.historical) == 0 || len(report.historical) != len(report.EntryDiagnostics) {
+		return nil
+	}
+	lineages := make([]string, 0, len(report.EntryDiagnostics))
+	for _, diagnostic := range report.EntryDiagnostics {
+		if diagnostic.Problem != compactInspectionEntryOutdated {
+			return nil
+		}
+		if _, found := report.historical[diagnostic.LineageID]; !found {
+			return nil
+		}
+		if historicalLineageEdgeReferenced(report, diagnostic.LineageID) {
+			continue
+		}
+		lineages = append(lineages, diagnostic.LineageID)
+	}
+	slices.Sort(lineages)
+	return lineages
+}
+
+// historicalLineageEdgeReferenced reports whether any retained report edge
+// still names lineage on either side. The predecessor side of the reference
+// is reachable in real stores — edges are built from loaded successors, so a
+// loaded successor naming a now-historical predecessor yields the edge
+// (#2995) — while the successor side stays drift hardening: a historical
+// entry never loads and can never be an edge successor.
+func historicalLineageEdgeReferenced(report CompactRecoveryInspectionReport, lineage string) bool {
+	return slices.ContainsFunc(report.Edges, func(edge CompactRecoveryEdgeInspection) bool {
+		return edge.PredecessorLineageID == lineage || edge.SuccessorLineageID == lineage
+	})
 }
 
 // compactRecoveryReconciliationAnomalyClass reports whether edge carries

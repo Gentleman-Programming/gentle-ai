@@ -9,11 +9,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	piagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Availability string
@@ -473,8 +473,13 @@ func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, s
 	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no CodeGraph MCP or instruction marker was found"
 }
 
-func piCodeGraphStatusPath(homeDir string) string {
+// PiCodeGraphManifestPath returns the effective CodeGraph manifest path for Pi.
+func PiCodeGraphManifestPath(homeDir string) string {
 	return piagent.CodeGraphPaths(homeDir).Manifest
+}
+
+func piCodeGraphStatusPath(homeDir string) string {
+	return PiCodeGraphManifestPath(homeDir)
 }
 
 func hasDetectedCodeGraphToolWiring(homeDir string) bool {

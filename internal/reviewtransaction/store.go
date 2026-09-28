@@ -909,16 +909,6 @@ func WriteTransactionAtomic(path string, transaction Transaction) error {
 	return writeAtomic(path, append(payload, '\n'), 0o644)
 }
 
-// PublishFileNoReplace atomically publishes source only when destination is absent.
-func PublishFileNoReplace(source, destination string) error {
-	return publishNoReplace(source, destination)
-}
-
-// ReplaceFileAtomic atomically replaces destination with source.
-func ReplaceFileAtomic(source, destination string) error {
-	return replaceFileAtomic(source, destination)
-}
-
 func readRevision(path string) (string, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {

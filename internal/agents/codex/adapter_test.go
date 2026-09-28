@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestDetect(t *testing.T) {
@@ -200,6 +200,27 @@ func TestAdapterSubAgentsStayFalse(t *testing.T) {
 	}
 	if got := a.EmbeddedSubAgentsDir(); got != "" {
 		t.Fatalf("EmbeddedSubAgentsDir() = %q, want \"\" — must stay empty for Codex", got)
+	}
+}
+
+// TestAdapterSystemPromptStrategyStaysFileReplaceForMarkerPersona pins the
+// #981 fix contract: Codex keeps StrategyFileReplace (the strategy other
+// components switch on), while the persona component special-cases
+// model.AgentCodex to wrap the persona in a <!-- gentle-ai:persona --> marker
+// section inside ~/.codex/AGENTS.md instead of letting it own the whole file.
+// Flipping the strategy or the agent ID would silently change which injection
+// path Codex takes — e.g. falling back to the generic whole-file replace.
+func TestAdapterSystemPromptStrategyStaysFileReplaceForMarkerPersona(t *testing.T) {
+	a := NewAdapter()
+
+	if got := a.Agent(); got != model.AgentCodex {
+		t.Fatalf("Agent() = %q, want %q — persona marker injection for Codex is keyed on this exact ID", got, model.AgentCodex)
+	}
+	if got := a.SystemPromptStrategy(); got != model.StrategyFileReplace {
+		t.Fatalf("SystemPromptStrategy() = %v, want StrategyFileReplace", got)
+	}
+	if got, want := a.SystemPromptFile("/home/user"), filepath.Join("/home/user", ".codex", "AGENTS.md"); got != want {
+		t.Fatalf("SystemPromptFile() = %q, want %q", got, want)
 	}
 }
 

@@ -10,7 +10,7 @@ Gentle-AI integration code should stay thin: adapters describe where and how an 
 |---|---|---|
 | Agent IDs and config roots | `internal/model/types.go`, `internal/catalog/agents.go` | Declare supported agent names and roots. |
 | Adapter strategies | `internal/agents/<agent>/` | Return path, MCP strategy, prompt strategy, and capabilities. |
-| SDD assets | `internal/assets/<agent>/`, `internal/components/sdd/` | Install orchestrators, sub-agent prompts, and commands. |
+| ODD guidance and review assets | `internal/assets/<agent>/`, `internal/components/agentguidance/`, `internal/components/reviewassets/` | Deliver shared ODD guidance and managed reviewer contracts/agents through agent-specific adapters. |
 | Engram MCP | `internal/components/engram/` | Add external Engram MCP server entries. |
 | Context7 MCP | `internal/components/mcp/` | Add documentation MCP server entries. |
 | Skills | `internal/components/skills/`, `internal/assets/skills/` | Copy curated skill files. |

@@ -17,7 +17,7 @@ Use this page when you know what you need to change but not where it belongs.
 | `internal/system/` | OS detection, dependency checks, path guards. | Agent config injection. |
 | `internal/planner/` | Dependency graph resolution and component ordering. | UI rendering or file writes. |
 | `internal/pipeline/` | Staged execution, progress, rollback policy. | Component decision logic. |
-| `internal/components/` | Reusable component injection and verification helpers, including Engram, SDD, MCP, persona, skills, GGA, community tools, OpenCode plugins, uninstall, and file merge helpers. | Per-agent strategy definitions. |
+| `internal/components/` | Reusable component injection and verification helpers, including Engram, ODD guidance, review assets, MCP, persona, skills, GGA, community tools, OpenCode plugins, uninstall, and file merge helpers. | Per-agent strategy definitions. |
 | `internal/components/communitytool/` | Community tool installation orchestration plus managed guidance/config/MCP reconciliation, currently for CodeGraph. | OpenCode plugin registration or external tool runtime implementation. |
 | `internal/components/uninstall/` | Managed cleanup services for installed component artifacts. | Interactive TUI state or backup storage. |
 | `internal/agents/` | Adapter strategy, config paths, capability flags per agent. | Shared component behavior. |
@@ -37,7 +37,7 @@ Use this page when you know what you need to change but not where it belongs.
 |---|---|---|
 | Add a supported agent | `internal/model/types.go`, `internal/catalog/agents.go` | `internal/agents/<agent>/`, `docs/agents.md` |
 | Change Engram setup | `internal/components/engram/` | `docs/engram.md`, `internal/assets/*/engram-*` |
-| Change SDD prompt sync | `internal/components/sdd/` | `docs/opencode-profiles.md`, `internal/assets/*/sdd-*` |
+| Change OpenCode background-subagent guidance | `internal/components/agentguidance/` | `docs/opencode-profiles.md`, `internal/cli/opencode_background_test.go` |
 | Change CLI flags | `internal/cli/` | `docs/usage.md`, app dispatch tests |
 | Change TUI flow | `internal/tui/model.go`, `internal/tui/router.go` | `internal/tui/screens/` |
 | Change install ordering | `internal/planner/`, `internal/pipeline/` | component tests and dry-run output |

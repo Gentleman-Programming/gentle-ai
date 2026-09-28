@@ -7,10 +7,8 @@ import (
 )
 
 // retiredAtomicJourneyReplacements records every ordinary-path journey that
-// asserted the pre-#3417 durable-receipt or deciding-gate model. #3564
-// reactivates j47 for disabled-mode V2 structural-absence/archive routing: it
-// no longer pins durable-receipt or deciding-gate behavior. The remaining
-// entries are not weakened: the registered corpus replaces that retired surface
+// asserted the pre-#3417 durable-receipt or deciding-gate model. The
+// registered corpus replaces that retired surface
 // with j59, j60, and j111's worktree-bound, explicit-active, and terminal-burn
 // journeys.
 var retiredAtomicJourneyReplacements = map[string]string{
@@ -26,12 +24,6 @@ var retiredAtomicJourneyReplacements = map[string]string{
 	"j46-correction-required-staged-recovery":                              "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j48-recovered-workspace-preserves-full-candidate-scope":               "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j50-candidate-decline-denies-generically-then-disabled":               "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-	"j52-sdd-stale-authority-does-not-shadow-approved-candidate":           "j59-current-status-and-start-ignore-sibling-worktree-transaction",
-	"j53-sdd-ambiguous-authorities-fail-closed":                            "j59-current-status-and-start-ignore-sibling-worktree-transaction",
-	"j54-sdd-missing-authority-receipt-fails-closed":                       "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-	"j55-sdd-mismatched-authority-receipt-fails-closed":                    "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-	"j56-sdd-non-allow-post-apply-gate-fails-closed":                       "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
-	"j58-sdd-foreign-openspec-path-fails-closed":                           "j59-current-status-and-start-ignore-sibling-worktree-transaction",
 	"j61-pre-pr-multi-segment-delivery-denies-without-composition":         "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j65-selectorless-committed-correction-continuation":                   "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j76-scope-changed-four-lens-successor":                                "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
@@ -71,7 +63,12 @@ var retiredAtomicJourneyReplacements = map[string]string{
 	"j91-audited-abandon-preplan-over-budget-correction":                 "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j95-targeted-validator-inspects-provider-bound-corrected-tree":      "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
 	"j99-issue-2906-finalize-missing-contract":                           "j114-last-reviewer-capture-closes-and-burns",
+	"j47-disabled-mode-archives-discovered-scope-changed-authority":      "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j49-status-without-cwd-honors-kill-switch":                          "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j96-sdd-same-parent-repository-edit-authority":                      "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j98-sdd-flat-root-spec-is-discovered":                               "j59-current-status-and-start-ignore-sibling-worktree-transaction",
 	"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding": "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j128-historical-verification-does-not-block-apply":                  "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j108-sdd-post-review-verify-report-is-natively-bound":               "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 	"j109-sdd-legacy-post-review-report-requires-current-attestation":    "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
 }

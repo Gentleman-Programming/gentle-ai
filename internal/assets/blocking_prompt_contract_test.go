@@ -43,25 +43,25 @@ func providerDefectRouteForPublishedFix(installedBuild, fixChannel string, publi
 }
 
 // generic is the provider-neutral source that every agent-specific handoff must project.
-const providerDefectHandoffCanonicalPath = "generic/sdd-orchestrator.md"
+const providerDefectHandoffCanonicalPath = "generic/orchestrator.md"
 
 var blockingPromptRoutes = map[string]blockingPromptRoute{
-	"antigravity/sdd-orchestrator.md": {},
-	"claude/sdd-orchestrator.md":      {nativeTool: "`AskUserQuestion`"},
-	"codex/sdd-orchestrator.md":       {},
-	"cursor/sdd-orchestrator.md":      {},
-	"gemini/sdd-orchestrator.md":      {},
-	"generic/sdd-orchestrator.md":     {},
-	"hermes/sdd-orchestrator.md":      {},
-	"kimi/sdd-orchestrator.md":        {},
-	"kiro/sdd-orchestrator.md":        {},
-	"opencode/sdd-orchestrator.md":    {nativeTool: "`question`"},
-	"qwen/sdd-orchestrator.md":        {},
-	"windsurf/sdd-orchestrator.md":    {},
+	"antigravity/orchestrator.md": {},
+	"claude/orchestrator.md":      {nativeTool: "`AskUserQuestion`"},
+	"codex/orchestrator.md":       {},
+	"cursor/orchestrator.md":      {},
+	"gemini/orchestrator.md":      {},
+	"generic/orchestrator.md":     {},
+	"hermes/orchestrator.md":      {},
+	"kimi/orchestrator.md":        {},
+	"kiro/orchestrator.md":        {},
+	"opencode/orchestrator.md":    {nativeTool: "`question`"},
+	"qwen/orchestrator.md":        {},
+	"windsurf/orchestrator.md":    {},
 }
 
 func TestCoordinatorOrchestratorsCarryLosslessBlockingPromptRule(t *testing.T) {
-	allPaths := allSDDOrchestratorAssetPaths(t)
+	allPaths := allODDOrchestratorAssetPaths(t)
 	if len(allPaths) != len(blockingPromptRoutes) {
 		t.Fatalf("discovered %d orchestrator variants, but %d have an explicit blocking-prompt route; classify every variant",
 			len(allPaths), len(blockingPromptRoutes))
@@ -129,7 +129,7 @@ func TestCoordinatorOrchestratorsCarryLosslessBlockingPromptRule(t *testing.T) {
 // (not "for example") per Matere413's review on 2026-08-14. The issue's
 // reproduction (`la 1`) must be present.
 func TestCoordinatorOrchestratorsCarryClosedSingleSelectDomainContract(t *testing.T) {
-	for _, path := range allSDDOrchestratorAssetPaths(t) {
+	for _, path := range allODDOrchestratorAssetPaths(t) {
 		t.Run(path, func(t *testing.T) {
 			contract := blockingPromptContractSection(t, path)
 			for _, required := range []string{
@@ -165,11 +165,11 @@ func TestCoordinatorOrchestratorsCarryClosedSingleSelectDomainContract(t *testin
 }
 
 func TestBlockingPromptFallbackCoversWindsurfToolResults(t *testing.T) {
-	content := MustRead("windsurf/sdd-orchestrator.md")
+	content := MustRead("windsurf/orchestrator.md")
 	if !strings.Contains(content, "There are no sub-agents") {
 		t.Fatal("Windsurf must still identify its solo-agent execution model")
 	}
-	contract := blockingPromptContractSection(t, "windsurf/sdd-orchestrator.md")
+	contract := blockingPromptContractSection(t, "windsurf/orchestrator.md")
 	for _, required := range []string{
 		"sub-agent or tool",
 		"always use the plain chat or terminal fallback",
@@ -187,8 +187,8 @@ func TestNativeBlockingPromptRulesRetainInteractiveUIWithFailClosedFallback(t *t
 		path string
 		tool string
 	}{
-		{name: "Claude", path: "claude/sdd-orchestrator.md", tool: "`AskUserQuestion`"},
-		{name: "OpenCode", path: "opencode/sdd-orchestrator.md", tool: "`question`"},
+		{name: "Claude", path: "claude/orchestrator.md", tool: "`AskUserQuestion`"},
+		{name: "OpenCode", path: "opencode/orchestrator.md", tool: "`question`"},
 	}
 
 	for _, tt := range tests {
@@ -273,7 +273,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "maintainer-authorized native recovery", text: "an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports"},
 		{name: "no unpublished code resume", text: "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request"},
 	}
-	allPaths := allSDDOrchestratorAssetPaths(t)
+	allPaths := allODDOrchestratorAssetPaths(t)
 	canonicalFound := false
 	for _, path := range allPaths {
 		if path == providerDefectHandoffCanonicalPath {
@@ -289,8 +289,25 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 	for _, path := range allPaths {
 		t.Run(path, func(t *testing.T) {
 			contract := providerDefectHandoffSection(t, path)
-			if contract != canonical {
-				t.Error("provider-defect handoff differs from the canonical cross-variant block")
+			// Runtime-specific examples of client-owned failures may differ;
+			// the classification rule and the subsequent consent flow may not.
+			const boundary = "When anything else produced it, there is no report and no handoff."
+			start, canonicalStart := strings.Index(contract, boundary), strings.Index(canonical, boundary)
+			if start < 0 || canonicalStart < 0 {
+				t.Fatal("provider-defect classification missing the non-Gentle-AI failure boundary")
+			}
+			for _, required := range []string{
+				"Before losslessly relaying any blocking choice envelope, classify its semantic admissibility",
+				"Offer this handoff only when a Gentle AI invocation produced it",
+				"A Gentle AI workflow merely hosting a failure is not enough",
+				"client runtime",
+			} {
+				if !strings.Contains(contract[:start], required) {
+					t.Errorf("provider-defect classification missing %q", required)
+				}
+			}
+			if contract[start:] != canonical[canonicalStart:] {
+				t.Error("provider-defect consent and continuation differ from the canonical cross-variant block")
 			}
 			choiceMatches := semanticChoicePattern.FindAllString(contract, -1)
 			if got := len(choiceMatches); got != 3 {
@@ -418,68 +435,6 @@ func providerDefectHandoffLine(t *testing.T, contract, prefix string) string {
 		return contract[start:]
 	}
 	return contract[start : start+end]
-}
-
-// TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay is #2570's
-// (S6 of #2540) guard: every orchestrator variant teaches the lossless relay
-// of the typed SDD edit-authority consent envelope that native status emits
-// on blocked(edit_authority_missing) (#2563), byte-identical across variants
-// like the provider-defect handoff above.
-func TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay(t *testing.T) {
-	requirements := []string{
-		"When native SDD status reports `blocked(edit_authority_missing)`",
-		"typed `gentle-ai.sdd-integration.consent/v1` envelope",
-		"optional `consent` block",
-		"Treat that envelope as a Lossless Blocking Prompt under this contract",
-		"same discipline as the review consent relay",
-		"Present the complete envelope once in the active conversation language",
-		"faithfully translate the headline, reason, `value`, the missing-root evidence, choice labels, every choice `effect`, and the off-path note",
-		"preserving the original choices, order, selection mode, exact allowed-answer domain, and answer tokens",
-		"Never translate or alter the machine answer tokens (`granted`, `declined`), commands, paths, or invocations",
-		"Never summarize, reshape, reorder, merge, or omit any part",
-		"never answer on the human's behalf and never run the grant unprompted",
-		"Only after the human's explicit `granted` answer",
-		"execute the envelope's exact grant invocation verbatim, exactly once",
-		"then re-enter through native status",
-		"granted roots project into `allowedEditRoots`",
-		"per-change, audited, and dies with archive",
-		"run the envelope's decline invocation",
-		"nothing is persisted",
-		"names both exits",
-		"edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority",
-		"A blocked status without a `consent` block names the same two exits; relay them and stop.",
-	}
-
-	for _, path := range allSDDOrchestratorAssetPaths(t) {
-		t.Run(path, func(t *testing.T) {
-			contract := sddConsentRelaySection(t, path)
-			if canonical := sddConsentRelaySection(t, providerDefectHandoffCanonicalPath); contract != canonical {
-				t.Error("SDD edit-authority consent relay differs from the canonical cross-variant block")
-			}
-			for _, required := range requirements {
-				if !strings.Contains(contract, required) {
-					t.Errorf("SDD edit-authority consent relay missing %q", required)
-				}
-			}
-		})
-	}
-}
-
-func sddConsentRelaySection(t *testing.T, path string) string {
-	t.Helper()
-	const heading = "#### SDD Edit-Authority Consent Relay (MANDATORY)"
-	content := MustRead(path)
-	start := strings.Index(content, heading)
-	if start == -1 {
-		t.Fatalf("%s missing %q", path, heading)
-	}
-	contract := content[start:]
-	const endMarker = "A blocked status without a `consent` block names the same two exits; relay them and stop."
-	end := strings.Index(contract, endMarker)
-	if end == -1 {
-		t.Fatalf("%s SDD edit-authority consent relay missing terminal boundary", path)
-	}
-	return strings.TrimSpace(contract[:end+len(endMarker)])
 }
 
 func providerDefectHandoffSection(t *testing.T, path string) string {

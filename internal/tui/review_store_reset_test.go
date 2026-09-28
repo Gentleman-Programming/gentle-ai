@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
 func reviewStoreResetModel(t *testing.T) Model {
@@ -72,7 +72,7 @@ func TestWelcomeSelectionEntersTheSurvey(t *testing.T) {
 		t.Fatal("selecting the menu entry applied a reset")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines())
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index
@@ -324,7 +324,7 @@ func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
 		t.Fatal("the second Enter after entering the screen destroyed the store")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines())
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index

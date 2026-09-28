@@ -3,9 +3,9 @@
 // isolated from install, pipeline, planner, and config-sync code paths.
 //
 // Import boundary: this package MUST NOT import:
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/pipeline
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/planner
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/cli
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/pipeline
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/planner
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/cli
 package upgrade
 
 import (
@@ -20,18 +20,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // Package-level vars for testability — same pattern as internal/update/detect.go.
@@ -216,6 +219,9 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 			filepath.Join(configDir, "output-style.md"),
 			filepath.Join(configDir, "sdd-orchestrator.md"),
 			filepath.Join(configDir, "strict-tdd-mode.md"),
+			// The routing module carries both the orchestrator and routing
+			// guidance the Jinja router includes; upgrades rewrite it.
+			filepath.Join(configDir, "agent-routing.md"),
 		)
 	}
 
@@ -228,7 +234,12 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	if adapter.SupportsSlashCommands() {
-		add(sdd.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
+		add(legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
+		commands, err := skills.AllSkillCommandPaths(homeDir, adapter)
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping skill commands for %s: %v", adapter.Agent(), err)
+		}
+		add(commands...)
 	}
 
 	if adapter.SupportsSubAgents() {
@@ -247,18 +258,22 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		add(theme.VisualThemePaths(homeDir, adapter)...)
 	case model.AgentOpenCode:
 		add(theme.VisualThemePaths(homeDir, adapter)...)
+		// The routing step records default-agent ownership beside the effective
+		// settings path, which honors an absolute OPENCODE_CONFIG_DIR; the
+		// snapshot must resolve it the same way.
+		add(opencodedefault.OwnershipPath(opencode.EffectiveSettingsPath(homeDir, "")))
 		// The SDD plugin writer resolves the config directory through the
 		// adapter and owns the plugin list; the snapshot must match it (#3219).
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range append([]string{"background-agents.ts"}, sdd.OpenCodePluginLifecycleNames(adapter.Agent())...) {
+		for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
 			add(filepath.Join(pluginsDir, name))
 		}
 		add(
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 		)
-		for _, phase := range sdd.SharedPromptPhases() {
-			add(filepath.Join(sdd.SharedPromptDir(homeDir), phase+".md"))
+		for _, phase := range legacyassets.SharedPromptPhases() {
+			add(filepath.Join(legacyassets.SharedPromptDir(homeDir), phase+".md"))
 		}
 	}
 

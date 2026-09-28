@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestResolveCapabilityVersionTable(t *testing.T) {
@@ -254,40 +254,54 @@ func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := ActivationOptions{
-		OS:            "linux",
+		OS:            runtime.GOOS,
 		Path:          filepath.Dir(target),
 		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
 		AddToUserPath: func(string) error { return nil },
+		AddToUserPathWithResult: func(string) (system.UserPathAddition, error) {
+			return system.UserPathAddition{}, nil
+		},
 		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	}
+	paths := []string{POSIXLauncherPath(home)}
+	if runtime.GOOS == "windows" {
+		paths = []string{WindowsCMDPath(home), WindowsPS1Path(home)}
 	}
 	first, err := Activate(home, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := POSIXLauncherPath(home)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	before := make(map[string]string, len(paths))
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = string(body)
 	}
 	second, err := Activate(home, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) || len(first.ChangedPaths()) == 0 || len(second.ChangedPaths()) != 0 {
+	if len(first.ChangedPaths()) != len(paths) || len(second.ChangedPaths()) != 0 {
 		t.Fatalf("activation changed paths first=%v second=%v", first.ChangedPaths(), second.ChangedPaths())
 	}
+	for _, path := range paths {
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != before[path] {
+			t.Fatalf("launcher %s changed on repeat: %v", path, err)
+		}
+	}
 	if _, err := Deactivate(home, options); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("owned launcher stat error = %v, want absent", err)
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("owned launcher %s stat error = %v, want absent", path, err)
+		}
 	}
-	if _, err := Deactivate(home, options); err != nil {
-		t.Fatal(err)
+	if secondOff, err := Deactivate(home, options); err != nil || len(secondOff.ChangedPaths()) != 0 {
+		t.Fatalf("repeated deactivation = %v, %v; want no changes", secondOff, err)
 	}
 }
 
@@ -566,4 +580,67 @@ func ParseVersion(raw string) (Version, error) {
 		return Version{}, fmt.Errorf("invalid OpenCode version %q", raw)
 	}
 	return versionFromMatch(match)
+}
+
+// TestDefaultActivationWriteFileForcesLauncherMode pins that the default
+// launcher writer applies the requested mode to an existing file: a launcher
+// that lost its executable bit must become executable again on rewrite, and a
+// rollback must reinstate the recorded mode.
+func TestDefaultActivationWriteFileForcesLauncherMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(path, []byte("old launcher\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{}.normalized()
+	if err := options.WriteFile(path, []byte("new launcher\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("launcher mode = %v, want 0755", got)
+	}
+}
+
+// TestActivationRestoresLauncherExecutableModeWhenContentMatches pins that
+// re-activation repairs a managed launcher whose bytes are current but whose
+// executable bit was lost; the content-equality skip must not hide it.
+func TestActivationRestoresLauncherExecutableModeWhenContentMatches(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{
+		OS:            "linux",
+		Path:          filepath.Dir(target),
+		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
+		AddToUserPath: func(string) error { return nil },
+		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	}
+	if _, err := Activate(home, options); err != nil {
+		t.Fatal(err)
+	}
+	path := POSIXLauncherPath(home)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Activate(home, options); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("launcher mode after re-activation = %v, want 0755", got)
+	}
 }

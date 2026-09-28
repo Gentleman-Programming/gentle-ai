@@ -3,9 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // prepareReviewFacadeCompactAtomicStart freezes compact state and its immutable

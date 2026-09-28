@@ -19,10 +19,27 @@ func WithProgressFunc(fn ProgressFunc) OrchestratorOption {
 	}
 }
 
+// WithTerminalCleanup releases transaction-only resources once the caller has
+// finished post-apply work. Cleanup also runs after any pipeline rollback.
+func WithTerminalCleanup(cleanup func()) OrchestratorOption {
+	return func(o *Orchestrator) { o.terminalCleanup = cleanup }
+}
+
 type Orchestrator struct {
-	runner   Runner
-	policy   RollbackPolicy
-	stepByID map[string]Step
+	runner          Runner
+	policy          RollbackPolicy
+	stepByID        map[string]Step
+	terminalCleanup func()
+}
+
+// Finish settles a successful execution after downstream verification and
+// persistence. It is safe to call again after a rollback.
+func (o *Orchestrator) Finish() {
+	if o != nil && o.terminalCleanup != nil {
+		cleanup := o.terminalCleanup
+		o.terminalCleanup = nil
+		cleanup()
+	}
 }
 
 func NewOrchestrator(policy RollbackPolicy, opts ...OrchestratorOption) *Orchestrator {
@@ -45,6 +62,7 @@ func (o *Orchestrator) Execute(plan StagePlan) ExecutionResult {
 
 	prepareResult := o.runner.Run(StagePrepare, plan.Prepare)
 	if !prepareResult.Success {
+		o.Finish()
 		return ExecutionResult{Prepare: prepareResult, Err: prepareResult.Err}
 	}
 
@@ -62,6 +80,7 @@ func (o *Orchestrator) Execute(plan StagePlan) ExecutionResult {
 		}
 	}
 
+	o.Finish()
 	return result
 }
 
@@ -69,6 +88,7 @@ func (o *Orchestrator) Execute(plan StagePlan) ExecutionResult {
 // such as state persistence, fails. It must not be called after apply failure,
 // because Execute already performs that rollback.
 func (o *Orchestrator) Rollback(result ExecutionResult) StageResult {
+	defer o.Finish()
 	return ExecuteRollback(result.Apply.Steps, o.stepByID)
 }
 

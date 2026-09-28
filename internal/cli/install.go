@@ -37,7 +37,6 @@ FLAGS
   --skill, --skills <list>           Skills to install
   --persona <name>                   Persona to apply
   --preset <name>                    Preset to apply
-  --sdd-mode single|multi            SDD orchestrator mode
   --scope global|workspace           Install scope (env: GENTLE_AI_INSTALL_SCOPE)
   --channel stable|beta|nightly      Release channel; nightly is an alias for beta (env: GENTLE_AI_CHANNEL)
   --opencode-background-subagents=auto|on|off
@@ -64,7 +63,6 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	registerListFlag(fs, "skills", &opts.Skills)
 	fs.StringVar(&opts.Persona, "persona", "", "persona to apply")
 	fs.StringVar(&opts.Preset, "preset", "", "preset to apply")
-	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
 	fs.StringVar(&opts.Scope, "scope", "", "install scope: global (default) or workspace — env: GENTLE_AI_INSTALL_SCOPE")
 	fs.StringVar(&opts.Channel, "channel", "", installChannelHelp)
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")

@@ -10,7 +10,7 @@ Use this page before reviewing or making a change. It turns the codebase map int
 |---|---|
 | Agent setup | Does the selected adapter receive the right files without clobbering user content? |
 | Persistent memory wiring | Does Engram MCP setup stay stable across terminals and IDE-launched agents? |
-| SDD workflow | Do orchestrator, phase agents, skills, and model assignment files stay consistent? |
+| ODD workflow | Do shared guidance, feature-task tracking, delegated workers, and supported model assignments stay consistent across agents? |
 | Sync | Is repeated sync a no-op when assets are current? |
 | Backup/rollback | Can users recover from every managed mutation? |
 | TUI | Does the interactive path match CLI behavior where it should? |

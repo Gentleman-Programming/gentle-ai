@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestRoutingPathsMatchesEveryPathInjectRoutingWrites is the anti-drift guard.
@@ -22,6 +22,9 @@ func TestRoutingPathsMatchesEveryPathInjectRoutingWrites(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no guidance path to declare or write.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -32,7 +35,7 @@ func TestRoutingPathsMatchesEveryPathInjectRoutingWrites(t *testing.T) {
 				t.Fatalf("RoutingPaths(%q) error = %v", agent.ID, err)
 			}
 
-			result, err := InjectRouting(targetDir, agent.ID)
+			result, err := InjectRoutingWithOptions(targetDir, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent.ID, err)
 			}
@@ -48,6 +51,9 @@ func TestRoutingPathsWritesNothingToDisk(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: RoutingPaths must not touch disk for it.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 

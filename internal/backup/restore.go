@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
 // UserHomeDirFn is the function used to resolve the user's home directory.
@@ -417,7 +417,7 @@ func restoreEntry(entry ManifestEntry, trustedSnapshot bool, roots []string) err
 		return fmt.Errorf("create restore directory for %q: %w", entry.OriginalPath, err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(entry.OriginalPath, content, os.FileMode(entry.Mode)); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(entry.OriginalPath, content, os.FileMode(entry.Mode)); err != nil {
 		return fmt.Errorf("restore path %q: %w", entry.OriginalPath, err)
 	}
 

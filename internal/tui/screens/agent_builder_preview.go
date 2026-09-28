@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // ABPreviewActions returns the action options shown on the preview screen.
@@ -42,15 +42,6 @@ func RenderABPreview(agent *agentbuilder.GeneratedAgent, targets []string, scrol
 	b.WriteString("\n")
 	b.WriteString(styles.HeadingStyle.Render("Trigger:     ") + styles.SubtextStyle.Render(agent.Trigger))
 	b.WriteString("\n")
-
-	if agent.SDDConfig != nil {
-		sddInfo := string(agent.SDDConfig.Mode)
-		if agent.SDDConfig.TargetPhase != "" {
-			sddInfo += " → " + agent.SDDConfig.TargetPhase
-		}
-		b.WriteString(styles.HeadingStyle.Render("SDD:         ") + styles.SubtextStyle.Render(sddInfo))
-		b.WriteString("\n")
-	}
 
 	b.WriteString("\n")
 

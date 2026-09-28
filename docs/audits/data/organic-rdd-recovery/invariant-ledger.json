@@ -2,7 +2,7 @@
   "invariants": [
     {
       "context": "RAR",
-      "invariant": "real configured-agent journeys cover direct, delegated, optional-SDD, every review tier, one bounded correction, and flexible delivery",
+      "invariant": "real configured-agent journeys cover direct and delegated routing, every review tier, one bounded correction, and flexible delivery",
       "path": "e2e/organicruntime/organic_runtime_test.go",
       "proof": [
         "e2e/organicruntime/organic_runtime_test.go"
@@ -59,7 +59,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/antigravity/sdd-orchestrator.md",
+      "path": "internal/assets/antigravity/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -75,7 +75,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/claude/sdd-orchestrator.md",
+      "path": "internal/assets/claude/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -83,7 +83,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/codex/sdd-orchestrator.md",
+      "path": "internal/assets/codex/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -91,7 +91,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/cursor/sdd-orchestrator.md",
+      "path": "internal/assets/cursor/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -99,7 +99,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/gemini/sdd-orchestrator.md",
+      "path": "internal/assets/gemini/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -107,7 +107,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/generic/sdd-orchestrator.md",
+      "path": "internal/assets/generic/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -115,7 +115,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/hermes/sdd-orchestrator.md",
+      "path": "internal/assets/hermes/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -123,7 +123,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/kimi/sdd-orchestrator.md",
+      "path": "internal/assets/kimi/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -131,7 +131,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/kiro/sdd-orchestrator.md",
+      "path": "internal/assets/kiro/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -139,7 +139,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/opencode/sdd-orchestrator.md",
+      "path": "internal/assets/opencode/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -147,7 +147,7 @@
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/qwen/sdd-orchestrator.md",
+      "path": "internal/assets/qwen/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -157,13 +157,14 @@
       "invariant": "the embedded key skills/_shared/review-ledger-contract.md is unchanged so existing installs still resolve it",
       "path": "internal/assets/skills/_shared/review-ledger-contract.md",
       "proof": [
-        "internal/components/sdd/review_ledger_contract_test.go"
+        "internal/assets/shared_skill_files_test.go",
+        "internal/cli/review_next_transition_docs_test.go"
       ]
     },
     {
       "context": "ACI",
       "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
-      "path": "internal/assets/windsurf/sdd-orchestrator.md",
+      "path": "internal/assets/windsurf/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -234,7 +235,7 @@
     },
     {
       "context": "HCR",
-      "invariant": "the install plan schedules routing injection for every agent outside the SDD component",
+      "invariant": "the install plan schedules routing injection for every configured agent",
       "path": "internal/cli/run.go",
       "proof": [
         "internal/cli/run_component_paths_test.go"
@@ -246,14 +247,6 @@
       "path": "internal/cli/run_component_paths_test.go",
       "proof": [
         "internal/cli/run_component_paths_test.go"
-      ]
-    },
-    {
-      "context": "SDD",
-      "invariant": "the SDD attempt command keeps its own authority and never depends on a WorkRun",
-      "path": "internal/cli/sdd_attempt.go",
-      "proof": [
-        "internal/cli/sdd_attempt_test.go"
       ]
     },
     {
@@ -310,38 +303,6 @@
       "path": "internal/components/golden_test.go",
       "proof": [
         "internal/components/golden_test.go"
-      ]
-    },
-    {
-      "context": "SDD",
-      "invariant": "the bounded review contract text is asserted rather than trusted",
-      "path": "internal/components/sdd/bounded_review_contract_test.go",
-      "proof": [
-        "internal/components/sdd/bounded_review_contract_test.go"
-      ]
-    },
-    {
-      "context": "SDD",
-      "invariant": "the bounded review contract is delivered to agents without remote work vocabulary",
-      "path": "internal/components/sdd/boundedreview.go",
-      "proof": [
-        "internal/components/sdd/bounded_review_contract_test.go"
-      ]
-    },
-    {
-      "context": "SDD",
-      "invariant": "SDD injection carries optional SDD assets alone once routing coupling is removed",
-      "path": "internal/components/sdd/inject.go",
-      "proof": [
-        "internal/components/sdd/inject_test.go"
-      ]
-    },
-    {
-      "context": "SDD",
-      "invariant": "the injected SDD surface is asserted section by section, so a removed step cannot pass silently",
-      "path": "internal/components/sdd/inject_test.go",
-      "proof": [
-        "internal/components/sdd/inject_test.go"
       ]
     },
     {
@@ -438,22 +399,6 @@
       "path": "internal/reviewtransaction/verification_contract_test.go",
       "proof": [
         "internal/reviewtransaction/verification_contract_test.go"
-      ]
-    },
-    {
-      "context": "SDD",
-      "invariant": "attempt authority survives the removal of the WorkRun binding branches",
-      "path": "internal/sddstatus/runtime_ledger.go",
-      "proof": [
-        "internal/sddstatus/runtime_ledger_test.go"
-      ]
-    },
-    {
-      "context": "SDD",
-      "invariant": "attempt transitions stay asserted after the reservation branches are gone",
-      "path": "internal/sddstatus/runtime_ledger_test.go",
-      "proof": [
-        "internal/sddstatus/runtime_ledger_test.go"
       ]
     },
     {

@@ -18,9 +18,11 @@ Use this skill when:
 
 ## Critical Rules
 
+Before any target-host read, obtain explicit authorization for the remote destination (exact target), operation and credential/session; do not probe ambient credentials. Once authorized, reuse fresh target-bound approved issue, default branch, type-label and current check evidence. Commit, push, PR, merge, chain strategy/exception and native RDD consent remain human-owned.
+
 1. **Every PR MUST visibly link an approved base-repository issue** — `Closes/Fixes/Resolves #N` closes it on merge; `Refs #N` is non-closing; malformed, cross-repository, and mixed closing/non-closing references for the same issue are rejected
-2. **Every PR MUST have exactly one `type:*` label**
-3. **Automated checks must pass** before merge is possible
+2. **Every PR MUST have exactly one `type:*` label**. A current direct human instruction for the exact target/action and verified target-host capability are required before its canonical issue-creation workflow mutation; mark checkboxes only after readback.
+3. Establish REQUIRED CI from current target branch rulesets/branch protection and run status before declaring merge-ready. CodeRabbit pending is optional unless required by target policy; unknown requiredness is not merge-ready.
 4. **Blank PRs without issue linkage will be blocked** by GitHub Actions
 
 ---
@@ -28,13 +30,12 @@ Use this skill when:
 ## Workflow
 
 ```
-1. Verify issue has `status:approved` label
-2. Create branch: type/description (see Branch Naming below)
-3. Implement changes with conventional commits
-4. Run shellcheck on modified scripts
-5. Open PR using the template
-6. Add exactly one type:* label
-7. Wait for automated checks to pass
+1. After remote read authorization, verify the base-repository issue has `status:approved` and resolve the target's current default/base branch; reuse fresh target-bound evidence
+2. Ask the human to select closing (`Closes/Fixes/Resolves #N`) vs non-closing (`Refs #N`) intent; preserve the human-selected choice
+3. Implement authorized work; run applicable local checks and report failures honestly
+4. Draft the template; do not auto commit, push, create a PR, merge or grant native RDD consent
+5. Apply a type label only under the canonical issue-creation action contract
+6. Read target policy and status to identify REQUIRED checks; do not infer requiredness from a pending optional run
 ```
 
 ---
@@ -67,12 +68,12 @@ Branch names MUST match this regex:
 
 ## PR Body Format
 
-The PR template is at `.github/PULL_REQUEST_TEMPLATE.md`. Every PR body MUST contain:
+Use the current `.github/PULL_REQUEST_TEMPLATE.md` as the body authority, including all required sections. The items below are schematic guidance, not a complete ready-to-publish body; never precheck unsupported claims:
 
 ### 1. Linked Issue (REQUIRED)
 
 ```markdown
-Closes #<issue-number>
+<human-selected Closes/Fixes/Resolves #N or Refs #N>
 ```
 
 Valid keywords: `Closes #N`, `Fixes #N`, `Resolves #N` (case insensitive) close the issue on merge; `Refs #N` is a non-closing link. Use only visible, well-formed references to approved issues in the base repository.
@@ -106,25 +107,25 @@ Check exactly ONE in the template and add the matching label:
 ### 5. Test Plan
 
 ```markdown
-- [x] Scripts run without errors: `shellcheck scripts/*.sh`
-- [x] Manually tested the affected functionality
-- [x] Skills load correctly in target agent
+- [ ] Scripts run without errors: `shellcheck scripts/*.sh` (check only if run and passed)
+- [ ] Manually tested the affected functionality (check only if observed)
+- [ ] Skills load correctly in target agent (check only if verified)
 ```
 
 ### 6. Contributor Checklist
 
-All boxes must be checked:
-- Linked an approved issue
-- Added exactly one `type:*` label
-- Ran shellcheck on modified scripts
-- Skills tested in at least one agent
+Mark boxes only with observed evidence; leave pending actions unchecked and describe them. An unchecked required gate is not merge-ready:
+- Linked an approved issue using the human-selected closing or non-closing reference
+- Added exactly one `type:*` label (confirmed by target-host readback)
+- Ran shellcheck on modified scripts where applicable
+- Skills tested in at least one agent where applicable
 - Docs updated if behavior changed
 - Conventional commit format
 - No `Co-Authored-By` trailers
 
 ---
 
-## Automated Checks (all must pass)
+## Automated Checks (requiredness depends on target policy)
 
 | Check | Job name | What it verifies |
 |-------|----------|-----------------|
@@ -186,17 +187,4 @@ feat!: redesign skill loading system
 
 ## Commands
 
-```bash
-# Create branch
-git checkout -b feat/my-feature main
-
-# Run shellcheck before pushing
-shellcheck scripts/*.sh
-
-# Push and create PR
-git push -u origin feat/my-feature
-gh pr create --title "feat(scope): description" --body "Closes #N"
-
-# Add type label to PR
-gh pr edit <pr-number> --add-label "type:feature"
-```
+Do not assume `main` or execute branch/remote mutations from examples. Resolve the authorized target's default branch from current metadata first. For protected `status:approved` or `size:exception`, require authenticated actor target-host `viewerPermission` `MAINTAIN` or `ADMIN` and a current direct human instruction binding the exact target/action; do not demand separate proof of the instruction-giver's identity. A human-selected `size:exception` additionally requires documented over-budget rationale. Baseline attribution requires reproducing the same failing command/environment on a comparable isolated clean base, without disturbing user changes; otherwise report baseline unverified. Never stash/pop for this purpose.

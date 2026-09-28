@@ -7,15 +7,33 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
-// supportedAgentCount guards the catalog itself: routing is unconditional for
-// every supported adapter, so a silently shrinking catalog must fail here
-// instead of quietly reducing coverage of the table-driven tests below.
-const supportedAgentCount = 16
+func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi} {
+		rendered, err := RenderRouting(agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"relevant runnable deterministic test", "observe RED before implementation", "GREEN", "refactor", "passive documentation", "no meaningful runnable RED", "Tests or frameworks being present alone"} {
+			if !strings.Contains(rendered, want) {
+				t.Errorf("%s missing %q", agent, want)
+			}
+		}
+		if strings.Contains(rendered, "configured TDD mode") || strings.Contains(rendered, "Resolve effective TDD on/off") {
+			t.Errorf("%s retains toggle-gated ODD guidance", agent)
+		}
+	}
+}
+
+// supportedAgentCount guards the catalog itself: routing renders for every
+// supported adapter (including the catalog-only Conductor, which simply never
+// gets written), so a silently shrinking catalog must fail here instead of
+// quietly reducing coverage of the table-driven tests below.
+const supportedAgentCount = 17
 
 // retiredRemoteControlPlaneVocabulary is the wire and ceremony vocabulary the
 // organic routing projection must never carry. Rendering any of these would
@@ -45,6 +63,26 @@ var retiredRemoteControlPlaneVocabulary = []string{
 	"daemon",
 }
 
+// Every adapter must receive only the ODD workflow, not a selectable legacy route.
+func TestRenderRoutingOffersOnlyODD(t *testing.T) {
+	t.Parallel()
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(rendered, "Organic Driven Development (ODD) is the predefined workflow") {
+				t.Fatal("ODD workflow is missing")
+			}
+			if strings.Contains(strings.ToLower(rendered), "sdd") {
+				t.Fatalf("agent %q still offers SDD routing", agent.ID)
+			}
+		})
+	}
+}
+
 func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
@@ -70,7 +108,6 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 			for _, want := range []string{
 				"Direct inline",
 				"Delegated direct",
-				"Optional SDD",
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing route %q:\n%s", agent.ID, want, rendered)
@@ -107,12 +144,11 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"without a task or storage permission prompt",
 			"Small, understood work creates no durable task artifacts",
 		}},
-		{"optional research without implicit SDD", []string{
+		{"optional research within ODD", []string{
 			"Recommend optional research only for a named uncertainty",
 			"If declined, continue within authorized scope only where safe without the missing evidence",
 			"disclose unresolved uncertainty and pause affected unsafe decisions",
 			"Neither research nor a proposal is mandatory",
-			"Do not recommend SDD merely to resolve ambiguity",
 		}},
 		{"adaptive research and product questions", []string{
 			"Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code",
@@ -121,7 +157,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"ask one focused user question only for a real unresolved product decision, then stop and wait",
 			"Workers return gaps to the parent rather than assuming choices",
 			"forward these research instructions to a fresh general exploration/research worker through existing delegation",
-			"do not create a specialized agent or invoke sdd-research",
+			"do not create a specialized research agent",
 		}},
 		{"external evidence and useful research handoff", []string{
 			"use available authorized documentation/web tools and prefer primary sources",
@@ -151,17 +187,13 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Before implementation or resume, the parent reads both the actual file and full observation",
 			"passes the locator and relevant context; workers read the document before edits",
 		}},
-		{"configured TDD without implicit enablement", []string{
-			"Resolve effective TDD on/off from existing project/session configuration or explicit user choice",
-			"retain its source and exact test runner",
-			"Record resolved mode, source, and runner in the feature document when present",
-			"Tests or frameworks being present does not enable TDD",
-			"Forward mode, source, and runner on every implementation delegation; refresh on resume",
-			"When enabled, require observed RED before implementation, GREEN, then REFACTOR",
-			"When disabled, run ordinary functional checks, not no checks",
-			"If mode is unknown/conflicting or the runner is missing",
-			"resolve only the ambiguity affecting the next action",
-			"never invent precedence or a command, and never invoke sdd-init to determine ODD TDD",
+		{"default applicable test-first policy", []string{
+			"relevant runnable deterministic test and clear expected outcome",
+			"observe RED before implementation, implement GREEN, then refactor",
+			"Tests or frameworks being present alone do not establish applicability",
+			"passive documentation, unavailable runners, or no meaningful runnable RED",
+			"explain the exception and run proportionate functional or structural checks",
+			"never invent RED/GREEN evidence or a runner",
 		}},
 		{"updates require proof", []string{
 			"automatically update affected intent and TODOs",
@@ -170,12 +202,12 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Business scope changes still require user authorization",
 			"Check off only observed outcomes with applicable proof",
 			"failed, unavailable, skipped, or pending checks",
-			"Checkboxes grant no approval or receipt",
+			"Checkboxes grant no approval",
 		}},
 		{"advisory coherent task size", []string{
 			"Use about 400 authored changed lines per ODD task only as a planning heuristic, counting additions plus deletions",
 			"smallest coherent behavior with its tests and docs",
-			"not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger",
+			"not a task acceptance criterion, hard cap, counter-trigger, automatic stop",
 			"naturally exceeds it, briefly explain why and continue without size-only rework loops",
 			"Never delete spaces, blank lines, or comments for cosmetic line savings",
 			"omit tests, minify, add gratuitous abstractions, or split artificially to fit the heuristic",
@@ -200,14 +232,33 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"at most one scoped independent read-only assumption challenge",
 			"high-consequence unproven premise, even in a small security-critical change",
 			"Deterministic failures need fixes, not model debate",
-			"The native RDD refuter owns native review claims; never duplicate or bypass it",
 		}},
 		{"spend-proportional implementation and verification", []string{
 			"Validate consequential premises against available evidence before building",
 			"reuse relevant sibling investigation instead of repeating it",
 			"Run focused checks during iteration and all applicable full checks at task closure",
 			"without a hard spend or line gate",
-			"preserve configured TDD, native RDD, safety, and consent requirements",
+			"preserve the applicable test-first policy",
+		}},
+		{"existing checks", []string{
+			"applicable functional verification",
+			"Run applicable functional checks per task",
+			"Never skip an existing delivery gate",
+		}},
+	}
+	// rddTests hold the receipt-driven development clauses: only runtimes in
+	// model.SupportsReceiptDrivenDevelopment receive them.
+	rddTests := []struct {
+		name    string
+		clauses []string
+	}{
+		{"receipt-bound checkboxes and task size", []string{
+			"Checkboxes grant no approval or receipt",
+			"not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger",
+		}},
+		{"refuter owns native review claims", []string{
+			"The native RDD refuter owns native review claims; never duplicate or bypass it",
+			"preserve the applicable test-first policy, native RDD, safety, and consent requirements",
 		}},
 		{"existing checks and ownership", []string{
 			"Preserve existing native risk selection and applicable functional verification",
@@ -242,7 +293,11 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			if guard < 0 || organic <= guard {
 				t.Fatal("ODD must follow the mutation-authorization guard")
 			}
-			for _, tt := range tests {
+			applicable := tests
+			if model.SupportsReceiptDrivenDevelopment(agent.ID) {
+				applicable = append(append(applicable[:0:0], tests...), rddTests...)
+			}
+			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
 						if !strings.Contains(rendered, clause) {
@@ -250,9 +305,6 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 						}
 					}
 				})
-			}
-			if strings.Contains(rendered, "propose SDD only when durable proposal") {
-				t.Error("organic uncertainty still proactively recommends SDD")
 			}
 		})
 	}
@@ -284,6 +336,24 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"Work-unit commits on the feature branch are part of authorized substantial ODD implementation",
 			"push, pull request creation, and merge remain the user's decisions under ordinary repository policy",
 		}},
+		{"delivery strategy vocabulary and skill resolution", []string{
+			"Delivery follows work units",
+			"forecast authored changed lines (additions plus deletions, generated files excluded) from the task list",
+			"keep a running count from work-unit commits",
+			"`ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`",
+			"apply the chosen strategy before the next commit",
+			"`ask-on-risk` asks once for the chain strategy, `stacked-to-main` or `feature-branch-chain`",
+			"`auto-chain` asks only for a missing chain strategy and slices automatically",
+			"record slice boundaries, which commits each pull request holds, in the feature document",
+			"Resolve the `work-unit-commits` and `chained-pr` skills by registry name before planning or creating any pull request, never hardcode their paths",
+		}},
+	}
+	// rddTests hold the native review assessment clauses: only runtimes in
+	// model.SupportsReceiptDrivenDevelopment receive them.
+	rddTests := []struct {
+		name    string
+		clauses []string
+	}{
 		{"native review candidate is a commit or a slice, never the checkbox or branch", []string{
 			"The native review candidate is a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch",
 		}},
@@ -307,16 +377,19 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"An unavailable or failed assessment never lowers the tier: treat the commit as due and run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
 			"Never infer low risk from a failed assessment",
 		}},
-		{"delivery strategy vocabulary and skill resolution", []string{
-			"Delivery follows work units",
-			"forecast authored changed lines (additions plus deletions, generated files excluded) from the task list",
-			"keep a running count from work-unit commits",
-			"`ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`",
-			"apply the chosen strategy before the next commit",
-			"`ask-on-risk` asks once for the chain strategy, `stacked-to-main` or `feature-branch-chain`",
-			"`auto-chain` asks only for a missing chain strategy and slices automatically",
-			"record slice boundaries, which commits each pull request holds, in the feature document",
-			"Resolve the `work-unit-commits` and `chained-pr` skills by registry name before planning or creating any pull request, never hardcode their paths",
+	}
+	// Runtimes without receipt-driven development verify each work unit by
+	// risk instead of assessing it for native review.
+	oddTests := []struct {
+		name    string
+		clauses []string
+	}{
+		{"verify each work unit by risk", []string{
+			"Verification covers a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch.",
+			"Verify each work-unit commit in proportion to its risk",
+			"an added independent verifier for high-risk or unclear changes",
+			"Record per task the risk tier you applied and the checks you observed",
+			"treat an unclear change as high risk",
 		}},
 	}
 
@@ -328,7 +401,13 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, tt := range tests {
+			applicable := append(tests[:0:0], tests...)
+			if model.SupportsReceiptDrivenDevelopment(agent.ID) {
+				applicable = append(applicable, rddTests...)
+			} else {
+				applicable = append(applicable, oddTests...)
+			}
+			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
 						if !strings.Contains(rendered, clause) {
@@ -338,28 +417,6 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 				})
 			}
 		})
-	}
-}
-
-func TestRenderRoutingKeepsSDDSelectionExplicit(t *testing.T) {
-	t.Parallel()
-
-	rendered, err := RenderRouting(model.AgentClaudeCode)
-	if err != nil {
-		t.Fatalf("RenderRouting error = %v", err)
-	}
-
-	lowered := strings.ToLower(rendered)
-	for _, want := range []string{
-		"explicit request",
-		"accepted proposal",
-	} {
-		if !strings.Contains(lowered, want) {
-			t.Fatalf("rendered routing does not require %q:\n%s", want, rendered)
-		}
-	}
-	if !strings.Contains(lowered, "never select") {
-		t.Fatalf("rendered routing does not state that size or risk alone never selects SDD:\n%s", rendered)
 	}
 }
 
@@ -387,8 +444,7 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 				"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts",
 				"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.",
 				"After explicit change intent is established",
-				"SDD is selected only by an explicit request or an accepted proposal.",
-				"Automatic SDD pace is not mutation authorization",
+				"Every authorized change takes exactly one implementation route: direct inline or delegated direct.",
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing outcome-authorization clause %q:\n%s", agent.ID, want, rendered)
@@ -400,8 +456,9 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 
 // TestRenderRoutingMakesTheReviewKillSwitchDiscoverable guards the product
 // promise that configuring an agent tells it what it may do. The kill switch is
-// only real for the user if every configured agent can name it, so the exact
-// command surface must be projected into the unconditional routing block.
+// only real for the user if every RDD runtime can name it, so the exact command
+// surface must be projected into its routing block. A runtime without
+// receipt-driven development has no switch to name and receives none.
 func TestRenderRoutingMakesTheReviewKillSwitchDiscoverable(t *testing.T) {
 	t.Parallel()
 
@@ -417,6 +474,12 @@ func TestRenderRoutingMakesTheReviewKillSwitchDiscoverable(t *testing.T) {
 			rendered, err := RenderRouting(agent.ID)
 			if err != nil {
 				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+			if !model.SupportsReceiptDrivenDevelopment(agent.ID) {
+				if strings.Contains(rendered, "gentle-ai review mode") {
+					t.Fatalf("RenderRouting(%q) names the RDD switch on a runtime without RDD:\n%s", agent.ID, rendered)
+				}
+				return
 			}
 
 			for _, want := range []string{
@@ -520,10 +583,10 @@ func TestRenderRoutingOmitsRetiredRemoteControlPlaneVocabulary(t *testing.T) {
 func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 	t.Parallel()
 
-	var (
-		referenceAgent model.AgentID
-		reference      []string
-	)
+	// Routing is semantically equal across every runtime that shares an RDD
+	// capability: RDD runtimes carry the review clauses, the rest do not.
+	referenceAgent := map[bool]model.AgentID{}
+	references := map[bool][]string{}
 
 	for _, agent := range catalog.AllAgents() {
 		rendered, err := RenderRouting(agent.ID)
@@ -536,19 +599,21 @@ func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 			t.Fatalf("RenderRouting(%q) carries no routing semantics", agent.ID)
 		}
 
+		group := model.SupportsReceiptDrivenDevelopment(agent.ID)
+		reference := references[group]
 		if reference == nil {
-			referenceAgent = agent.ID
-			reference = semantics
+			referenceAgent[group] = agent.ID
+			references[group] = semantics
 			continue
 		}
 		if len(semantics) != len(reference) {
 			t.Fatalf("agent %q renders %d routing facts, agent %q renders %d",
-				agent.ID, len(semantics), referenceAgent, len(reference))
+				agent.ID, len(semantics), referenceAgent[group], len(reference))
 		}
 		for i := range semantics {
 			if semantics[i] != reference[i] {
 				t.Fatalf("agent %q drifted from %q:\n got: %q\nwant: %q",
-					agent.ID, referenceAgent, semantics[i], reference[i])
+					agent.ID, referenceAgent[group], semantics[i], reference[i])
 			}
 		}
 	}
@@ -618,7 +683,6 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 				"before the first source write",
 				"Tell the user in one line which feature document was created and how many tasks it holds",
 				"Never describe this workflow only when asked about it: run it.",
-				"SDD is a branch inside ODD",
 				"Resume an interrupted feature with `mem_context`",
 			} {
 				if !strings.Contains(rendered, want) {
@@ -670,7 +734,7 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"**Route declaration:**",
 				"record the chosen route per task",
 				"so skipped delegation is observable instead of silent",
-				"These triggers never select SDD and never create SDD artifacts",
+				"These triggers only choose between direct inline and delegated direct inside the organic flow",
 				"honoring its mandatory delegation triggers",
 			} {
 				if !strings.Contains(rendered, want) {

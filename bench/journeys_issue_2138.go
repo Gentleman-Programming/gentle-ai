@@ -10,110 +10,69 @@ import (
 
 const issue2138OpenCodeSettings = ".config/opencode/opencode.json"
 
+// The retired general/explore fallback was SDD-owned. The retained OpenCode
+// install instead supplies provider-issued, hidden read-only review roles.
 func issue2138Journeys() []Journey {
 	return []Journey{{
-		ID:     "j2138-opencode-native-fallback-boundary",
-		Review: reviewUntouched,
-		Title:  "Zero-config OpenCode install emits bounded native fallback agents",
-		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2138",
+		ID: "j2138-opencode-review-role-boundary", Review: reviewUntouched,
+		Title:  "Zero-config OpenCode install bounds provider-issued review roles",
+		Source: "#2138: current OpenCode routing installs review-refuter and review-validator, not SDD general/explore fallbacks",
 		Steps: []Step{
 			{Name: "fixture: zero-config OpenCode runtime", Fixture: issue2138ZeroConfigFixture},
-			{Name: "public multi-mode install", Requires: issue2138InstallCapability, Args: issue2138InstallArgs("multi"), After: issue2138AssertGeneratedFallbacks("multi")},
-			{Name: "fixture: restore zero-config state", Fixture: issue2138ResetConfig},
-			{Name: "public single-mode install", Requires: issue2138InstallCapability, Args: issue2138InstallArgs("single"), After: issue2138AssertGeneratedFallbacks("single")},
+			{Name: "public persona install", Requires: &Capability{Verb: []string{"install"}, Flags: []string{"--agent", "--component", "--scope"}}, Args: func(*Sandbox) ([]string, error) {
+				return []string{"install", "--agent", "opencode", "--component", "persona", "--scope", "global"}, nil
+			}, After: issue2138AssertReviewRoles},
 		},
 	}}
-}
-
-var issue2138InstallCapability = &Capability{
-	Verb:  []string{"install"},
-	Flags: []string{"--agent", "--component", "--sdd-mode", "--scope"},
-}
-
-func issue2138InstallArgs(mode string) func(*Sandbox) ([]string, error) {
-	return func(*Sandbox) ([]string, error) {
-		return []string{"install", "--agent", "opencode", "--component", "sdd", "--sdd-mode", mode, "--scope", "global"}, nil
-	}
 }
 
 func issue2138ZeroConfigFixture(sandbox *Sandbox) error {
 	if err := baseRepo(sandbox); err != nil {
 		return err
 	}
-	// Use the sandbox's version-only native fixture rather than a no-output
-	// stub; capability checks now require explicit supported-version evidence.
 	if _, err := os.Stat(filepath.Join(sandbox.Home, issue2138OpenCodeSettings)); !os.IsNotExist(err) {
 		return fmt.Errorf("zero-config fixture found existing OpenCode settings: %v", err)
 	}
 	return nil
 }
 
-func issue2138ResetConfig(sandbox *Sandbox) error {
-	return os.RemoveAll(filepath.Dir(filepath.Join(sandbox.Home, issue2138OpenCodeSettings)))
-}
-
-func issue2138AssertGeneratedFallbacks(mode string) func(*Sandbox, Observation) error {
-	return func(sandbox *Sandbox, observation Observation) error {
-		if observation.ExitCode != 0 {
-			return fmt.Errorf("public %s install failed: stdout=%s stderr=%s", mode, observation.Stdout, observation.Stderr)
-		}
-		content, err := os.ReadFile(filepath.Join(sandbox.Home, issue2138OpenCodeSettings))
-		if err != nil {
-			return fmt.Errorf("read generated %s OpenCode settings: %w", mode, err)
-		}
-		var root map[string]any
-		if err := json.Unmarshal(content, &root); err != nil {
-			return fmt.Errorf("parse generated %s OpenCode settings: %w", mode, err)
-		}
-		agents, ok := root["agent"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("generated %s OpenCode settings have no agent object", mode)
-		}
-		// Fallback agents use permission boundaries so global sensitive-path read
-		// rules remain authoritative without deprecated agent-local tools maps.
-		wantPermissions := map[string]map[string]string{
-			"general": {"task": "deny"},
-			"explore": {"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"},
-		}
-		for name, permissionsWant := range wantPermissions {
-			raw, ok := agents[name].(map[string]any)
-			if !ok {
-				return fmt.Errorf("generated %s settings omit fallback agent %q", mode, name)
-			}
-			if raw["mode"] != "subagent" || raw["hidden"] != true {
-				return fmt.Errorf("generated %s fallback agent %q has mode=%v hidden=%v", mode, name, raw["mode"], raw["hidden"])
-			}
-			prompt, _ := raw["prompt"].(string)
-			if strings.TrimSpace(prompt) == "" {
-				return fmt.Errorf("generated %s fallback agent %q has an empty prompt", mode, name)
-			}
-			if name == "general" && (!strings.Contains(prompt, "empirical verification") || !strings.Contains(prompt, "Do NOT launch child sub-agents")) {
-				return fmt.Errorf("generated %s general prompt lost its auxiliary-task boundary", mode)
-			}
-			if name == "explore" && (!strings.Contains(prompt, "gentle-pi") || !strings.Contains(prompt, "Do not create, edit, or delete files")) {
-				return fmt.Errorf("generated %s explore prompt lost its read-only boundary", mode)
-			}
-			description, _ := raw["description"].(string)
-			if name == "explore" && strings.Contains(strings.ToLower(description+" "+prompt), "web search") {
-				return fmt.Errorf("generated %s explore fallback advertises unavailable web search", mode)
-			}
-			if _, exists := raw["tools"]; exists {
-				return fmt.Errorf("generated %s fallback agent %q emits deprecated tools", mode, name)
-			}
-			permissions, ok := raw["permission"].(map[string]any)
-			if !ok {
-				return fmt.Errorf("generated %s fallback agent %q has no permission boundary", mode, name)
-			}
-			if len(permissions) != len(permissionsWant) {
-				return fmt.Errorf("generated %s fallback agent %q permissions=%v, want %v", mode, name, permissions, permissionsWant)
-			}
-			for permission, want := range permissionsWant {
-				got, exists := permissions[permission].(string)
-				if !exists || got != want {
-					return fmt.Errorf("generated %s fallback agent %q permission %s=%v, want %s", mode, name, permission, permissions[permission], want)
-				}
-			}
-		}
-		return nil
+func issue2138AssertReviewRoles(sandbox *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("public persona install failed: stdout=%s stderr=%s", observation.Stdout, observation.Stderr)
 	}
+	content, err := os.ReadFile(filepath.Join(sandbox.Home, issue2138OpenCodeSettings))
+	if err != nil {
+		return fmt.Errorf("read installed OpenCode settings: %w", err)
+	}
+	var settings struct {
+		Agent map[string]struct {
+			Mode, Prompt string
+			Hidden       bool
+			Permission   map[string]any
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal(content, &settings); err != nil {
+		return fmt.Errorf("parse installed OpenCode settings: %w", err)
+	}
+	for _, name := range []string{"review-refuter", "review-validator"} {
+		role, ok := settings.Agent[name]
+		if !ok || role.Mode != "subagent" || !role.Hidden || strings.TrimSpace(role.Prompt) == "" {
+			return fmt.Errorf("installed review role %s missing hidden subagent prompt", name)
+		}
+		for _, capability := range []string{"write", "edit", "task"} {
+			if role.Permission[capability] != "deny" {
+				return fmt.Errorf("role %s permits %s: %v", name, capability, role.Permission[capability])
+			}
+		}
+		if !strings.Contains(role.Prompt, "frozen candidate") || !strings.Contains(role.Prompt, "Do not edit files or delegate") {
+			return fmt.Errorf("role %s lost provider-bound read-only prompt", name)
+		}
+		if name == "review-validator" {
+			bash, ok := role.Permission["bash"].(map[string]any)
+			if !ok || bash["gentle-ai review inspect-candidate --purpose targeted-validation *"] != "allow" || bash["*"] != "deny" {
+				return fmt.Errorf("validator bash boundary = %v", role.Permission["bash"])
+			}
+		}
+	}
+	return nil
 }

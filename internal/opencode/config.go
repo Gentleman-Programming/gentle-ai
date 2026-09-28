@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // ConfigSnapshot is the file-backed OpenCode configuration view shared by UI,
@@ -419,7 +419,11 @@ func managedConfigPriority(path string) int {
 }
 
 func managedOpenCodeAgentKeys() []string {
-	keys := []string{"gentle-orchestrator", "sdd-orchestrator", ReviewRefuterAgent, ReviewValidatorAgent}
+	keys := []string{
+		"gentle-orchestrator", "sdd-orchestrator", ReviewRefuterAgent, ReviewValidatorAgent,
+		"gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker",
+		"review-risk", "review-readability", "review-reliability", "review-resilience",
+	}
 	keys = append(keys, SDDPhases()...)
 	keys = append(keys, JDPhases()...)
 	return keys

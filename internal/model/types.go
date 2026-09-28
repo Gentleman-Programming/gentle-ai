@@ -71,6 +71,7 @@ const (
 	AgentPi            AgentID = "pi"
 	AgentTrae          AgentID = "trae-ide"
 	AgentHermes        AgentID = "hermes"
+	AgentConductor     AgentID = "conductor"
 )
 
 // SupportTier indicates how fully an agent supports the Gentleman AI ecosystem.

@@ -8,7 +8,7 @@ Gentle-AI sync refreshes managed agent configuration. Engram sync exports/import
 
 | Flow | Command surface | Owner | What changes |
 |---|---|---|---|
-| Gentle-AI config sync | `gentle-ai sync` | `internal/cli/sync.go`, components, adapters | Agent prompts, skills, MCP configs, SDD profiles, GGA assets, persona assets, and configured community tool guidance. |
+| Gentle-AI config sync | `gentle-ai sync` | `internal/cli/sync.go`, components, adapters | Managed ODD guidance, skills, MCP configs, GGA assets, persona assets, review assets, and configured community tool guidance. |
 | Engram git-friendly sync | `engram sync`, `engram sync --import` | External Engram runtime | `.engram/` memory export/import for team sharing. |
 | Cloud sync | Not present in Gentle-AI source | External or future Engram capability | Do not document implementation here without source. |
 | Autosync | Not present in Gentle-AI source | External or future Engram capability | Do not imply background sync exists in this repo. |
@@ -27,10 +27,9 @@ gentle-ai sync
 
 Important behavior from `internal/cli/sync.go`:
 
-- Default sync scope includes SDD, Engram, Context7, GGA, skills, and persona.
+- Default sync scope includes managed ODD guidance, Engram, Context7, GGA, skills, and persona. Managed review assets remain independent of ODD task tracking.
 - Persona sync resolves the persisted persona from `~/.gentle-ai/state.json` when the selection does not set one explicitly; the safe fallback is neutral.
 - Permissions and theme are user-adjacent and not included by default.
-- OpenCode SDD profile flags preserve and update profile model assignments.
 - Community tool guidance/config, such as CodeGraph guidance, belongs to the managed config sync path when the tool is configured or legacy guidance needs cleanup.
 - Idempotency matters: `FilesChanged == 0` means managed assets were already current.
 

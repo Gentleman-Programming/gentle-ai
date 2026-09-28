@@ -1,19 +1,71 @@
 package agentguidance
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencoderuntime "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
+
+func TestCodexODDRoutingInjectionPreservesUserTextAndResync(t *testing.T) {
+	home := t.TempDir()
+	paths, err := RoutingPaths(home, model.AgentCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths[0]), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const personal = "# Personal instructions\nNever deploy.\n"
+	if err := os.WriteFile(paths[0], []byte(personal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	options := RoutingOptions{
+		CodexPhaseModelAssignments:  map[string]string{"odd-worker": "gpt-custom-worker"},
+		CodexModelAssignments:       map[string]model.CodexEffort{"odd-worker": model.CodexEffortXHigh},
+		CodexCarrilModelAssignments: map[string]string{"sdd-cheap": "gpt-custom-cheap", "sdd-strong": "gpt-custom-strong"},
+	}
+	first, err := InjectRoutingWithOptions(home, model.AgentCodex, options)
+	if err != nil || !first.Changed {
+		t.Fatalf("initial injection: %+v %v", first, err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{personal, "<!-- gentle-ai:agent-routing -->", "| `odd-worker` | `gpt-custom-worker` | `xhigh` |", "| `odd-explorer` | `gpt-custom-cheap` |", "| `odd-verify` | `gpt-custom-strong` |"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("installed guidance missing %q", want)
+		}
+	}
+	second, err := InjectRoutingWithOptions(home, model.AgentCodex, options)
+	if err != nil || second.Changed {
+		t.Fatalf("identical re-sync: %+v %v", second, err)
+	}
+	updated := options
+	updated.CodexPhaseModelAssignments = map[string]string{"odd-worker": "gpt-new-worker"}
+	if _, err := InjectRoutingWithOptions(home, model.AgentCodex, updated); err != nil {
+		t.Fatal(err)
+	}
+	body, err = os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(body), personal) || !strings.Contains(string(body), "gpt-new-worker") || strings.Contains(string(body), "gpt-custom-worker") {
+		t.Fatalf("re-sync failed to preserve personal text and replace managed assignment")
+	}
+}
 
 func TestRemoteAuthorizationSectionPreservesUserText(t *testing.T) {
 	const personal = "Personal instructions: do not deploy.\n"
@@ -59,7 +111,7 @@ func TestRemoteAuthorizationRetainsExistingPermissionMergeBehavior(t *testing.T)
 			if err := os.WriteFile(paths[0], []byte(seed), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := InjectRouting(home, agent); err != nil {
+			if _, err := InjectRoutingWithOptions(home, agent, RoutingOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			got, err := os.ReadFile(paths[0])
@@ -79,10 +131,13 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 		if agent.ID == model.AgentPi {
 			continue // The install/sync step leaves package-owned Pi prompts untouched.
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance carrier (see conductor_catalog_only_test.go).
+		}
 		covered++
 		t.Run(string(agent.ID), func(t *testing.T) {
 			home := t.TempDir()
-			first, err := InjectRouting(home, agent.ID)
+			first, err := InjectRoutingWithOptions(home, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -96,7 +151,7 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 					t.Errorf("primary carrier missing %q", required)
 				}
 			}
-			second, err := InjectRouting(home, agent.ID)
+			second, err := InjectRoutingWithOptions(home, agent.ID, RoutingOptions{})
 			if err != nil || second.Changed {
 				t.Fatalf("repeat injection = %+v, %v", second, err)
 			}
@@ -107,34 +162,61 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 	}
 }
 
+func TestInjectRoutingDeliversOnlyODDWorkflow(t *testing.T) {
+	t.Parallel()
+	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+			result, err := InjectRoutingWithOptions(t.TempDir(), agent.ID, RoutingOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := managedRoutingBlock(deliveredGuidance(t, result.Files[0]))
+			if !strings.Contains(block, "### ODD protocol") {
+				t.Fatal("installed routing has no ODD protocol")
+			}
+			if strings.Contains(strings.ToLower(block), "sdd") {
+				t.Fatalf("agent %q received an SDD route in installed routing", agent.ID)
+			}
+		})
+	}
+}
+
 func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: covered by TestInjectRoutingNoOpsForCatalogOnlyConductor.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
 			targetDir := t.TempDir()
 
-			result, err := InjectRouting(targetDir, agent.ID)
+			result, err := InjectRoutingWithOptions(targetDir, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent.ID, err)
 			}
 			if !result.Changed {
 				t.Fatalf("InjectRouting(%q) reported no change on a fresh target", agent.ID)
 			}
-			if len(result.Files) != 1 {
-				t.Fatalf("InjectRouting(%q) touched %v, want exactly one file", agent.ID, result.Files)
+			if len(result.Files) == 0 {
+				t.Fatalf("InjectRouting(%q) reported no written files", agent.ID)
+			}
+			for _, path := range result.Files {
+				if !filepath.IsAbs(path) {
+					t.Fatalf("InjectRouting(%q) reported non-absolute path %q", agent.ID, path)
+				}
+				if !strings.HasPrefix(path, targetDir) {
+					t.Fatalf("InjectRouting(%q) wrote outside the target dir: %q", agent.ID, path)
+				}
 			}
 
 			path := result.Files[0]
-			if !filepath.IsAbs(path) {
-				t.Fatalf("InjectRouting(%q) reported non-absolute path %q", agent.ID, path)
-			}
-			if !strings.HasPrefix(path, targetDir) {
-				t.Fatalf("InjectRouting(%q) wrote outside the target dir: %q", agent.ID, path)
-			}
-
 			// Read the scope the agent actually loads, not merely the bytes on
 			// disk: adapters whose guidance lives inside a settings document
 			// carry the block as an encoded string, never as raw markdown.
@@ -166,13 +248,27 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 // outside the target dir — into the real user config — and the idempotency
 // guarantee silently breaks because state leaks across runs.
 //
+// The OpenCode --version probe is stubbed to "not installed": a real opencode
+// on PATH would be spawned by that probe, inherit the hostile
+// XDG_CONFIG_HOME, and create its own config dir there. That is the external
+// binary's behavior, not adapter path resolution, and it made this test pass
+// or fail depending on whether the machine had opencode installed.
+//
 // No t.Parallel here: t.Setenv is process-wide and forbids it.
 func TestInjectRoutingStaysContainedUnderHostileEnvironment(t *testing.T) {
 	hostile := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(hostile, "xdg"))
 	t.Setenv("APPDATA", filepath.Join(hostile, "AppData", "Roaming"))
+	previousVersionRunner := opencoderuntime.VersionRunnerOverride
+	opencoderuntime.VersionRunnerOverride = func(context.Context, opencoderuntime.Command) (opencoderuntime.CommandOutput, error) {
+		return opencoderuntime.CommandOutput{}, exec.ErrNotFound
+	}
+	t.Cleanup(func() { opencoderuntime.VersionRunnerOverride = previousVersionRunner })
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			targetDir := t.TempDir()
 
@@ -186,7 +282,7 @@ func TestInjectRoutingStaysContainedUnderHostileEnvironment(t *testing.T) {
 				}
 			}
 
-			result, err := InjectRouting(targetDir, agent.ID)
+			result, err := InjectRoutingWithOptions(targetDir, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent.ID, err)
 			}
@@ -215,7 +311,7 @@ func TestInjectRoutingIsIdempotent(t *testing.T) {
 
 	targetDir := t.TempDir()
 
-	first, err := InjectRouting(targetDir, model.AgentClaudeCode)
+	first, err := InjectRoutingWithOptions(targetDir, model.AgentClaudeCode, RoutingOptions{})
 	if err != nil {
 		t.Fatalf("first InjectRouting error = %v", err)
 	}
@@ -224,7 +320,7 @@ func TestInjectRoutingIsIdempotent(t *testing.T) {
 	}
 	afterFirst := readFile(t, first.Files[0])
 
-	second, err := InjectRouting(targetDir, model.AgentClaudeCode)
+	second, err := InjectRoutingWithOptions(targetDir, model.AgentClaudeCode, RoutingOptions{})
 	if err != nil {
 		t.Fatalf("second InjectRouting error = %v", err)
 	}
@@ -259,7 +355,7 @@ func TestInjectRoutingPreservesUnmanagedUserContent(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	if _, err := InjectRouting(targetDir, model.AgentClaudeCode); err != nil {
+	if _, err := InjectRoutingWithOptions(targetDir, model.AgentClaudeCode, RoutingOptions{}); err != nil {
 		t.Fatalf("InjectRouting error = %v", err)
 	}
 
@@ -270,7 +366,7 @@ func TestInjectRoutingPreservesUnmanagedUserContent(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	result, err := InjectRouting(targetDir, model.AgentClaudeCode)
+	result, err := InjectRoutingWithOptions(targetDir, model.AgentClaudeCode, RoutingOptions{})
 	if err != nil {
 		t.Fatalf("re-inject error = %v", err)
 	}
@@ -292,7 +388,7 @@ func TestInjectRoutingRejectsUnregisteredAgent(t *testing.T) {
 
 	targetDir := t.TempDir()
 
-	result, err := InjectRouting(targetDir, model.AgentID("totally-unregistered-agent"))
+	result, err := InjectRoutingWithOptions(targetDir, model.AgentID("totally-unregistered-agent"), RoutingOptions{})
 	if err == nil {
 		t.Fatalf("InjectRouting accepted an unregistered agent: %+v", result)
 	}
@@ -312,7 +408,7 @@ func TestInjectRoutingRejectsUnregisteredAgent(t *testing.T) {
 func TestInjectRoutingRejectsBlankTargetDir(t *testing.T) {
 	t.Parallel()
 
-	result, err := InjectRouting("   ", model.AgentClaudeCode)
+	result, err := InjectRoutingWithOptions("   ", model.AgentClaudeCode, RoutingOptions{})
 	if err == nil {
 		t.Fatalf("InjectRouting accepted a blank target dir: %+v", result)
 	}
@@ -344,14 +440,19 @@ func TestInjectRoutingSurvivesJinjaTemplateBootstrap(t *testing.T) {
 		t.Fatalf("kimi adapter no longer exposes BootstrapTemplate")
 	}
 
-	result, err := InjectRouting(targetDir, model.AgentKimi)
+	result, err := InjectRoutingWithOptions(targetDir, model.AgentKimi, RoutingOptions{})
 	if err != nil {
 		t.Fatalf("InjectRouting error = %v", err)
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("InjectRouting touched %v, want exactly one file", result.Files)
+	var guidancePath string
+	for _, path := range result.Files {
+		if filepath.Base(path) == routingModuleFile {
+			guidancePath = path
+		}
 	}
-	guidancePath := result.Files[0]
+	if guidancePath == "" {
+		t.Fatalf("InjectRouting touched %v, want %s included", result.Files, routingModuleFile)
+	}
 
 	rendered, err := RenderRouting(model.AgentKimi)
 	if err != nil {
@@ -378,6 +479,42 @@ func TestInjectRoutingSurvivesJinjaTemplateBootstrap(t *testing.T) {
 	}
 }
 
+func TestInjectRoutingCurrentKimiReportsRenderedHubWrite(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	configDir := filepath.Join(targetDir, ".kimi-code")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	declared, err := RoutingPaths(targetDir, model.AgentKimi)
+	if err != nil {
+		t.Fatalf("RoutingPaths error = %v", err)
+	}
+	wantHub := filepath.Join(configDir, "AGENTS.md")
+	wantModule := filepath.Join(configDir, routingModuleFile)
+	if !samePathSet(declared, []string{wantModule, wantHub}) {
+		t.Fatalf("RoutingPaths(current Kimi) = %v, want module and hub", declared)
+	}
+
+	result, err := InjectRoutingWithOptions(targetDir, model.AgentKimi, RoutingOptions{})
+	if err != nil {
+		t.Fatalf("InjectRouting error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("InjectRouting changed = false, want true for first hub/module write")
+	}
+	if !samePathSet(result.Files, declared) {
+		t.Fatalf("InjectRouting files = %v, want declared %v", result.Files, declared)
+	}
+
+	hub := readFile(t, wantHub)
+	if !strings.Contains(hub, "<!-- gentle-ai:kimi-agents-hub -->") || !strings.Contains(hub, "Organic Driven Development") {
+		t.Fatalf("current Kimi hub does not contain rendered managed guidance:\n%s", hub)
+	}
+}
+
 func TestInjectRoutingUsesAlwaysLoadedOrchestratorScope(t *testing.T) {
 	t.Parallel()
 
@@ -392,7 +529,7 @@ func TestInjectRoutingUsesAlwaysLoadedOrchestratorScope(t *testing.T) {
 				t.Fatalf("NewAdapter error = %v", err)
 			}
 
-			result, err := InjectRouting(targetDir, agent)
+			result, err := InjectRoutingWithOptions(targetDir, agent, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent, err)
 			}
@@ -454,7 +591,7 @@ func TestInjectRoutingPreservesUnmanagedOrchestratorSettings(t *testing.T) {
 	}
 	writeJSON(t, settingsPath, existing)
 
-	if _, err := InjectRouting(targetDir, model.AgentOpenCode); err != nil {
+	if _, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{}); err != nil {
 		t.Fatalf("InjectRouting error = %v", err)
 	}
 
@@ -511,7 +648,7 @@ func TestInjectRoutingRejectsMalformedOrchestratorSettings(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	result, err := InjectRouting(targetDir, model.AgentOpenCode)
+	result, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{})
 	if err == nil {
 		t.Fatalf("InjectRouting accepted unreadable settings: %+v", result)
 	}
@@ -549,7 +686,7 @@ func TestInjectRoutingKeepsMarkdownSectionAgentsOnTheirPromptFile(t *testing.T) 
 				t.Fatalf("WriteFile error = %v", err)
 			}
 
-			result, err := InjectRouting(targetDir, agent)
+			result, err := InjectRoutingWithOptions(targetDir, agent, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent, err)
 			}
@@ -562,7 +699,7 @@ func TestInjectRoutingKeepsMarkdownSectionAgentsOnTheirPromptFile(t *testing.T) 
 				t.Fatalf("WriteFile error = %v", err)
 			}
 
-			second, err := InjectRouting(targetDir, agent)
+			second, err := InjectRoutingWithOptions(targetDir, agent, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("re-inject(%q) error = %v", agent, err)
 			}
@@ -585,12 +722,15 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
 			targetDir := t.TempDir()
 
-			first, err := InjectRouting(targetDir, agent.ID)
+			first, err := InjectRoutingWithOptions(targetDir, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("first InjectRouting(%q) error = %v", agent.ID, err)
 			}
@@ -599,7 +739,7 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 			}
 			afterFirst := readFile(t, first.Files[0])
 
-			second, err := InjectRouting(targetDir, agent.ID)
+			second, err := InjectRoutingWithOptions(targetDir, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("second InjectRouting(%q) error = %v", agent.ID, err)
 			}
@@ -617,12 +757,15 @@ func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
 			targetDir := t.TempDir()
 
-			result, err := InjectRouting(targetDir, agent.ID)
+			result, err := InjectRoutingWithOptions(targetDir, agent.ID, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent.ID, err)
 			}
@@ -652,6 +795,9 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		if agent.ID == model.AgentOpenCode || agent.ID == model.AgentKilocode {
 			continue
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: inherits Claude Code config, no prompt file of its own.
+		}
 		adapter, err := agents.NewAdapter(agent.ID)
 		if err != nil {
 			t.Fatalf("NewAdapter(%q) error = %v", agent.ID, err)
@@ -661,8 +807,8 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		}
 		selected = append(selected, agent.ID)
 	}
-	if len(selected) != supportedAgentCount-3 {
-		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-3)
+	if len(selected) != supportedAgentCount-4 {
+		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-4)
 	}
 	return selected
 }

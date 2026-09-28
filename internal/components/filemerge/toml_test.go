@@ -780,3 +780,298 @@ func TestRemoveTOMLTableKeys_Idempotent(t *testing.T) {
 		t.Fatalf("RemoveTOMLTableKeys is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
 	}
 }
+
+// ─── Multiline values hide table-like text (#5022) ───────────────────────────
+
+func TestUpsertTOMLTableKey_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "header inside basic multiline string is text",
+			input: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+`,
+			want: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+
+[features]
+multi_agent = true
+`,
+		},
+		{
+			name: "header inside literal multiline string is text",
+			input: `developer_instructions = '''
+[features]
+multi_agent = false
+'''
+`,
+			want: `developer_instructions = '''
+[features]
+multi_agent = false
+'''
+
+[features]
+multi_agent = true
+`,
+		},
+		{
+			name: "real header after a string mentioning it receives the key",
+			input: `developer_instructions = """
+[features]
+"""
+
+[features]
+other = 1
+`,
+			want: `developer_instructions = """
+[features]
+"""
+
+[features]
+multi_agent = true
+other = 1
+`,
+		},
+		{
+			name: "string mentioning the header after the real table does not receive the key",
+			input: `[features]
+other = 1
+
+[agents]
+developer_instructions = """
+[features]
+"""
+`,
+			want: `[features]
+multi_agent = true
+other = 1
+
+[agents]
+developer_instructions = """
+[features]
+"""
+`,
+		},
+		{
+			name: "triple quotes inside an ordinary string or comment do not hide a real header",
+			input: `note = '"""'
+# a comment with """ and '''
+
+[features]
+multi_agent = false
+`,
+			want: `note = '"""'
+# a comment with """ and '''
+
+[features]
+multi_agent = true
+`,
+		},
+		{
+			name: "header text inside a section value does not end the section",
+			input: `[features]
+notes = """
+[other]
+"""
+multi_agent = false
+`,
+			want: `[features]
+notes = """
+[other]
+"""
+multi_agent = true
+`,
+		},
+		{
+			name: "key text inside a section value is not replaced",
+			input: `[features]
+notes = """
+multi_agent = false
+"""
+`,
+			want: `[features]
+multi_agent = true
+notes = """
+multi_agent = false
+"""
+`,
+		},
+		{
+			name: "replaced key drops its old multiline value",
+			input: `[features]
+multi_agent = """
+[agents]
+"""
+other = 1
+`,
+			want: `[features]
+multi_agent = true
+other = 1
+`,
+		},
+		{
+			name: "commented header ends the section",
+			input: `[features]
+other = 1
+
+[agents] # tuned
+multi_agent = false
+`,
+			want: `[features]
+multi_agent = true
+other = 1
+
+[agents] # tuned
+multi_agent = false
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTOMLTableKey(tt.input, "features", "multi_agent", "true")
+			if got != tt.want {
+				t.Fatalf("UpsertTOMLTableKey() mismatch:\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+			if again := UpsertTOMLTableKey(got, "features", "multi_agent", "true"); again != got {
+				t.Fatalf("UpsertTOMLTableKey() is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, again)
+			}
+		})
+	}
+}
+
+func TestRemoveTOMLTableKeys_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "header inside multiline string does not start the section",
+			input: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+`,
+			want: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+`,
+		},
+		{
+			name: "key text inside a section value is preserved",
+			input: `[features]
+notes = '''
+multi_agent = false
+'''
+multi_agent = true
+`,
+			want: `[features]
+notes = '''
+multi_agent = false
+'''
+`,
+		},
+		{
+			name: "removed key drops its multiline value",
+			input: `[features]
+multi_agent = '''
+x
+'''
+other = 1
+`,
+			want: `[features]
+other = 1
+`,
+		},
+		{
+			name: "header text inside a section value does not end the section",
+			input: `[features]
+notes = """
+[other]
+"""
+multi_agent = true
+`,
+			want: `[features]
+notes = """
+[other]
+"""
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RemoveTOMLTableKeys(tt.input, "features", []string{"multi_agent"})
+			if got != tt.want {
+				t.Fatalf("RemoveTOMLTableKeys() mismatch:\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestRemoveTOMLTable_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "header inside multiline string is not removed",
+			input: `developer_instructions = """
+[mcp_servers.engram]
+command = "engram"
+"""
+model = "gpt-5.5"
+`,
+			want: `developer_instructions = """
+[mcp_servers.engram]
+command = "engram"
+"""
+model = "gpt-5.5"
+`,
+		},
+		{
+			name: "header text inside the removed table's value does not end it",
+			input: `[mcp_servers.engram]
+description = '''
+[other]
+'''
+command = "engram"
+
+[other]
+value = true
+`,
+			want: `[other]
+value = true
+`,
+		},
+		{
+			name: "commented header ends the removed table",
+			input: `[mcp_servers.engram]
+command = "engram"
+[other] # keep
+value = true
+`,
+			want: `[other] # keep
+value = true
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RemoveTOMLTable(tt.input, "mcp_servers.engram"); got != tt.want {
+				t.Fatalf("RemoveTOMLTable() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

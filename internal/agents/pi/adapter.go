@@ -3,6 +3,7 @@ package pi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,10 +12,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const (
@@ -90,13 +91,20 @@ type CodeGraphPathSet struct {
 }
 
 // CodeGraphPaths resolves PI_CODING_AGENT_DIR when set, matching Pi's runtime
-// override instead of assuming the default agent directory.
+// override instead of assuming the default agent directory. When an agent
+// directory override is active, an isolated manifest path is derived to prevent
+// cross-contamination with the default global Pi manifest.
 func CodeGraphPaths(homeDir string) CodeGraphPathSet {
 	agentDir := AgentConfigPath(homeDir)
+	manifest := filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json")
+	if defaultDir := filepath.Join(ConfigPath(homeDir), "agent"); filepath.Clean(agentDir) != filepath.Clean(defaultDir) {
+		sum := sha256.Sum256([]byte(filepath.Clean(agentDir)))
+		manifest = filepath.Join(homeDir, ".gentle-ai", fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
+	}
 	return CodeGraphPathSet{
 		AgentDir:  agentDir,
 		MCPConfig: filepath.Join(agentDir, piEngramMCPConfigFile),
-		Manifest:  filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json"),
+		Manifest:  manifest,
 	}
 }
 
@@ -347,13 +355,28 @@ func ConfigPath(homeDir string) string { return filepath.Join(homeDir, ".pi") }
 // honors PI_CODING_AGENT_DIR when set and non-blank, matching Pi's own
 // runtime override, so gentle-ai's install and sync operations target the
 // same directory Pi itself reads and writes (for example gentle-shell's
-// isolated `~/.gentle-shell/agent` home). Falls back to homeDir/.pi/agent
-// otherwise.
+// isolated `~/.gentle-shell/agent` home). A "~" or "~/..." form always
+// expands against homeDir and stays contained there; an absolute or
+// cwd-relative form is honored only when homeDir is isRealUserHome, so a
+// caller resolving paths for a different home (a sandbox, a test temp dir)
+// can never be redirected outside it by ambient environment. Falls back to
+// homeDir/.pi/agent otherwise.
 func AgentConfigPath(homeDir string) string {
 	if override := piCodingAgentDirOverride(); override != "" {
 		return resolvePiAgentDirOverride(override, homeDir)
 	}
 	return filepath.Join(ConfigPath(homeDir), "agent")
+}
+
+// isRealUserHome reports whether homeDir is the current user's actual home
+// directory — the only case where PI_CODING_AGENT_DIR's absolute or
+// cwd-relative forms may legitimately redirect Pi's agent-owned paths away
+// from homeDir. Mirrors the equivalent guard other relocatable adapters
+// (vscode, windsurf, kiro, trae) already apply to their own override
+// variables.
+func isRealUserHome(homeDir string) bool {
+	userHome, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
 }
 
 // piCodingAgentDirOverride returns the trimmed PI_CODING_AGENT_DIR value, or
@@ -370,23 +393,29 @@ var resolveAbsPath = filepath.Abs
 // resolvePiAgentDirOverride resolves a PI_CODING_AGENT_DIR value the same way
 // Pi itself does: a leading "~/" (or a bare "~") expands against homeDir, an
 // absolute path is used as-is, and a relative path resolves against the
-// process's current working directory. If that cwd resolution fails, it
-// falls back to the default agent directory instead of returning the raw
-// relative string, which would silently resolve to something else entirely
-// once passed to filepath.Join by a caller.
+// process's current working directory. Those last two forms escape homeDir
+// entirely, so they are honored only when homeDir isRealUserHome; a caller
+// resolving paths for a different home falls back to the default agent
+// directory instead, exactly like an unset override. If cwd resolution
+// fails, it likewise falls back to the default agent directory instead of
+// returning the raw relative string, which would silently resolve to
+// something else entirely once passed to filepath.Join by a caller.
 func resolvePiAgentDirOverride(override, homeDir string) string {
+	defaultDir := filepath.Join(ConfigPath(homeDir), "agent")
 	switch {
 	case override == "~":
 		return homeDir
 	case strings.HasPrefix(override, "~/"):
 		return filepath.Join(homeDir, strings.TrimPrefix(override, "~/"))
+	case !isRealUserHome(homeDir):
+		return defaultDir
 	case filepath.IsAbs(override):
 		return filepath.Clean(override)
 	default:
 		if abs, err := resolveAbsPath(override); err == nil {
 			return abs
 		}
-		return filepath.Join(ConfigPath(homeDir), "agent")
+		return defaultDir
 	}
 }
 

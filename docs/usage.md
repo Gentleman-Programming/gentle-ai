@@ -10,7 +10,7 @@ ODD keeps the existing explore → implement → proportionate checks flow. For 
 
 ### The ODD protocol
 
-ODD runs by default on every request, in every configured runtime, without you asking for a workflow, a plan, or task tracking; SDD is a branch inside ODD, entered only by an explicit request or an accepted proposal.
+ODD runs by default on every request, in every configured runtime, without you asking for a workflow, a plan, or task tracking.
 
 1. **Authorize** — establish whether the request authorizes a change; read-only work stays read-only.
 2. **Explore** — explore the existing code and requirements first, proportionately to the request.
@@ -23,16 +23,16 @@ ODD runs by default on every request, in every configured runtime, without you a
 - **One feature document:** `odd/tasks/<feature-name>.md` holds objective, problem, why, scope, constraints, an actionable checklist with stable IDs and acceptance criteria, verification evidence, progress, and next step. Keep concise rationale for meaningful accepted changes here, not a separate plan or exhaustive decision journal. Project-scoped Engram topic `odd/<feature-name>/tasks` mirrors the full current document and file locator.
 - **Task size:** about 400 authored changed lines (additions plus deletions) per task is only a planning heuristic, not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger. Keep the smallest coherent behavior with its tests and docs. If the correct, clear solution naturally exceeds it, briefly explain why and continue without size-only rework loops. Never delete spaces, blank lines, or comments for cosmetic savings, omit tests, minify, add gratuitous abstractions, or split artificially. Forward the same advisory-only instruction to delegated subagents. Existing repository policy and separate PR size gates remain unchanged.
 - **Changes:** accepted user, review, or verification changes update affected intent and tasks together, preserve valid completed and unrelated work, and add new tasks or reopen invalidated tasks with a reason. Findings alone do not authorize expansion or automatic acceptance; routine corrections stay with their tasks. Checkoffs require observed outcomes and applicable proof; they are not approval or a review receipt. New business scope still needs your authorization.
-- **TDD:** resolve on/off from existing project/session configuration or explicit user choice, retaining source and exact runner in the feature document when present; tests existing does not enable it. Forward mode/source/runner to every implementation worker and refresh on resume. Enabled means observed RED before implementation → GREEN → REFACTOR; disabled still runs ordinary functional checks. Unknown/conflicting mode or a missing runner needs only the clarification affecting the next action—never invented precedence, commands, or `sdd-init`.
+- **TDD:** resolve on/off from existing project/session configuration or explicit user choice, retaining source and exact runner in the feature document when present; tests existing does not enable it. Forward mode/source/runner to every implementation worker and refresh on resume. Enabled means observed RED before implementation → GREEN → REFACTOR; disabled still runs ordinary functional checks. Unknown/conflicting mode or a missing runner needs only the clarification affecting the next action—never invent precedence or a runner.
 - **Checking:** run applicable functional checks per task; a TODO checkbox does not trigger a review cycle. The native review candidate is a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch. After each work-unit commit, when RDD is enabled, assess it with `gentle-ai review assess --cwd <repo> --agent <runtime> --base-ref <last reviewed boundary> --committed-only --json` and read `review_due` and `review_due_reason` from the returned envelope. When `review_due` is `true` (`high_risk` or `slice_budget_reached`), execute the returned `next_transition.command` verbatim — it is the exact preflight STATUS invocation for the same `--base-ref`/`--committed-only` selectors — and follow the transitions it returns; the reviewed boundary advances to this commit once that review is acknowledged. When `review_due` is `false`, record the reason (`passive`, `under_budget`, or `already_reviewed`) and continue: a `passive` commit needs no review and the boundary advances immediately, an `under_budget` medium commit stays pending in the slice until a later commit reaches the delivery budget, and `already_reviewed` means this exact range is already covered by terminal authority. The first boundary is the branch point, and every reviewed boundary becomes the next base. Record the assessed tier and outcome per task: `review_due`/`review_due_reason`, or the transition's acknowledged/declined/unavailable outcome. Existing risk, consent, and authority stay unchanged; never infer low risk from a failed assessment. Never skip an existing delivery gate.
 - **Delivery:** at feature-document creation, forecast authored changed lines (additions plus deletions, generated files excluded) from the task list, and keep a running count from work-unit commits. Choose one delivery strategy per feature: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. When the forecast or running count exceeds about 400 authored changed lines, apply the chosen strategy before the next commit. `ask-on-risk` asks once for the chain strategy (`stacked-to-main` or `feature-branch-chain`); `auto-chain` asks only for a missing chain strategy and slices automatically. Cache both choices, and record slice boundaries (which commits each PR holds) in the feature document. Resolve the `work-unit-commits` and `chained-pr` skills by registry name before planning or creating any PR.
 - **RDD consent:** when enabled, native candidate risk assessment comes first: passive/low stays silent with structural checks, no reviewer, and no consent ceremony; medium/high presents existing candidate consent and runs the native review plan only on grant. Declining uses ordinary policy. Disabled RDD never starts or prompts; ordinary checks remain. This is prospective change risk, not defect severity or a model-selected threshold. Failed assessment never implies low risk; existing native continuations and authority still apply.
 - **Resume:** before implementation or resume, the parent reads the full feature-specific Engram observation and actual task file, reconciles current code and evidence, and passes the locator and relevant context; the worker reads the document before edits. Read back both writes: they are not atomic. If Engram is unavailable, keep local progress and report the pending mirror; preserve conflicting versions rather than silently overwriting one.
 - **Uncertainty:** research is optional, and a concise proposal is useful only for a real decision. A high-consequence unproven assumption can receive one independent read-only challenge—even in a small security-critical change. Deterministic failures need fixes, not debate; native RDD claims stay with its own refuter.
 
-### Why ODD is the everyday recommendation
+### Why ODD is the development workflow
 
-SDD adds separate proposal, spec, design, tasks, and verification artifacts with phase coordination. Choose it explicitly when those artifacts serve your work; it remains supported. ODD keeps intent, progress, and evidence in one feature document, so ordinary work does not need the extra handoffs. Size, ambiguity, or risk alone never selects SDD.
+ODD keeps intent, progress, and evidence in one feature document for substantial work. Small work needs no durable task artifacts.
 
 ### Research depth without a new phase
 
@@ -40,7 +40,7 @@ ODD research establishes the problem, intended outcome, constraints, and current
 
 Questions needing external evidence use available authorized documentation/web tools, preferably primary sources. Findings attribute material claims to URLs or code locations and distinguish verified facts, assumptions, contradictions, freshness, and gaps. The concise handoff includes a recommendation, tradeoffs, open questions, and implementation implications. A proposal is needed only for a real decision; unavailable tools are disclosed, never invented, and only unsafe decisions dependent on missing evidence pause.
 
-When delegated, these instructions go to an existing fresh general exploration/research worker—not a new specialized agent or `sdd-research`. Research stays read-only and introduces no SDD request/grant schema, persistence gate, readiness state, or new runtime command.
+When delegated, these instructions go to an existing fresh general exploration/research worker. Research stays read-only and introduces no new runtime command or persistence gate.
 
 ```mermaid
 flowchart TD
@@ -88,7 +88,7 @@ flowchart TD
     X --> TT
 ```
 
-ODD adds shared agent guidance, not a new CLI, state engine, or mandatory planning phase. Instruction tests establish delivery, not autonomous compliance with every create/update/resume step. Existing risk-based functional checks and the user-owned RDD switch are unchanged; ODD never enables RDD. Explicitly selected SDD remains a separate workflow.
+ODD adds shared agent guidance, not a new CLI, state engine, or mandatory planning phase. Instruction tests establish delivery, not autonomous compliance with every create/update/resume step. Existing risk-based functional checks and the user-owned RDD switch are unchanged; ODD never enables RDD.
 
 Gentle Shell (the `gentle-pi` package) owns its separate ODD prompt delivery. Updating Gentle AI's shared renderer does **not** establish Pi parity; parity requires observing the same file, memory, update, and resume behavior in Pi, not merely matching prompt text.
 
@@ -117,7 +117,7 @@ gentle-ai
 The uninstall flow is also available from the TUI menu. It lets you:
 
 - select one or more configured agents
-- select which managed components to remove (for example `sdd`, `persona`, or `context7`)
+- select which managed components to remove (for example `persona` or `context7`)
 - confirm the exact uninstall scope before applying changes
 
 Before any managed file is modified, `gentle-ai` creates a backup snapshot so the configuration can be restored later if needed.
@@ -165,7 +165,7 @@ gentle-ai install \
 # Pick specific components and skills
 gentle-ai install \
   --agent claude-code \
-  --component engram,sdd,skills,context7,persona,permissions \
+  --component engram,skills,context7,persona,permissions \
   --skill go-testing,skill-creator,branch-pr,issue-creation \
   --persona gentleman
 
@@ -199,7 +199,7 @@ The installer’s **Community Tools/Plugins** screen offers opt-in integrations 
 
 ### sync
 
-Refresh managed assets to the current version. Run it after replacing or upgrading the `gentle-ai` binary, including with `brew upgrade`, `gentle-ai upgrade`, or `go install`. It does NOT reinstall binaries (engram, GGA) — only updates prompt content, skills, MCP configs, and SDD orchestrators.
+Refresh managed assets to the current version. Run it after replacing or upgrading the `gentle-ai` binary, including with `brew upgrade`, `gentle-ai upgrade`, or `go install`. It does NOT reinstall binaries (engram, GGA) — only updates managed prompts, skills, MCP configs, and agent guidance.
 
 Managed reviewer and runtime assets are version-bound to the binary. Until sync succeeds, review lifecycle operations fail closed when managed writer provenance is missing or mismatched.
 
@@ -227,9 +227,9 @@ Sync is safe and idempotent — running it twice produces no changes the second 
 
 `sync` refreshes the managed component set for the selected agents. It does not support `--component`; use `--include-permissions` or `--include-theme` for the opt-in components that are excluded from the default sync scope.
 
-After upgrading the binary, `gentle-ai sync --dry-run` previews the selected targets; `gentle-ai sync` refreshes their primary remote-authorization guidance. To select a specific managed client, use e.g. `gentle-ai sync --agent opencode`. This behavioral section is delivered with unconditional routing guidance, without requiring persona, SDD, or `--include-permissions`. It requires explicit destination, operation, and credential/session authorization before remote work or ambient access discovery/reuse.
+After upgrading the binary, `gentle-ai sync --dry-run` previews the selected targets; `gentle-ai sync` refreshes their primary remote-authorization guidance. To select a specific managed client, use e.g. `gentle-ai sync --agent opencode`. This behavioral section is delivered with unconditional routing guidance, without requiring persona or `--include-permissions`. It requires explicit destination, operation, and credential/session authorization before remote work or ambient access discovery/reuse.
 
-This update covers the 15 non-Pi primary instruction carriers only. Executor roles, named profiles, and Pi's package-owned instructions require separate behavioral coverage. Existing automation modes and remembered approvals may suppress runtime prompts. The guidance is not a sandbox or a fresh-human-per-execution guarantee. Shared settings merging and profile cleanup preserve existing permission-rule order.
+This update covers the 15 non-Pi primary instruction carriers only. Executor roles and Pi's package-owned instructions require separate behavioral coverage. Existing automation modes and remembered approvals may suppress runtime prompts. The guidance is not a sandbox or a fresh-human-per-execution guarantee. Shared settings merging and historical profile cleanup (compatibility for existing user configurations) preserve existing permission-rule order.
 
 For OpenCode native remote-command asks, opt in separately: `gentle-ai sync --agent opencode --include-permissions` (or `--agent kilocode` for the shared generated configuration). Defaults ask for direct `ssh`, `scp`, `sftp`, and `rsync`, bare or with arguments; local-only rsync also asks conservatively. Existing restrictions and explicit custom allows remain authoritative, so custom configurations may still allow remote commands. Defaults do not rewrite those personal allows. Agent overrides and remembered approvals may also bypass a prompt.
 
@@ -237,7 +237,7 @@ Matcher fixtures follow OpenCode [v1.2.27 wildcard matching](https://github.com/
 
 For OpenClaw, sync reads the active workspace from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`). It writes `AGENTS.md` / `SOUL.md` into that workspace, while MCP servers stay in the global OpenClaw config under `mcp.servers`.
 
-For Hermes, gentle-ai is detect-only: it cannot install Hermes. Install Hermes manually first. Detection is driven by the `~/.hermes` config directory (the binary being on `PATH` is reported separately). Once Hermes is detected, `gentle-ai install --agent hermes` injects context7 and Engram™ MCP blocks into `~/.hermes/config.yaml`, writes the SDD orchestrator and persona into `~/.hermes/SOUL.md`, and copies skills to `~/.hermes/skills/`. Use `gentle-ai sync --agent hermes` to update the managed configuration after upgrades.
+For Hermes, gentle-ai is detect-only: it cannot install Hermes. Install Hermes manually first. Detection is driven by the `~/.hermes` config directory (the binary being on `PATH` is reported separately). Once Hermes is detected, `gentle-ai install --agent hermes` injects context7 and Engram™ MCP blocks into `~/.hermes/config.yaml`, writes ODD guidance and persona into `~/.hermes/SOUL.md`, and copies skills to `~/.hermes/skills/`. Use `gentle-ai sync --agent hermes` to update the managed configuration after upgrades.
 
 ### uninstall
 
@@ -254,7 +254,7 @@ gentle-ai uninstall \
 # Partial uninstall for specific components only
 gentle-ai uninstall \
   --agent claude-code \
-  --component sdd,persona,context7
+  --component persona,context7
 
 # Complete uninstall of managed config from all supported agents
 gentle-ai uninstall --all
@@ -310,7 +310,7 @@ If you choose to install several tools from this tap, run `brew trust gentleman-
 
 ### model assignment
 
-The TUI **Configure Models** screen can assign different models to SDD phases, `sdd-onboard`, and Judgment Day agents (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`) when the selected agent supports those slots. This lets you keep review or apply phases on stronger models while routing cheaper phases to faster models.
+The TUI **Configure Models** screen lets you assign models to supported agents, including Judgment Day roles (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`). Configure the available slots for your selected agent.
 
 ### doctor
 
@@ -350,7 +350,6 @@ gentle-ai -v
 | `--skill`, `--skills`         | Skills to install (comma-separated)                                                                               |
 | `--persona`                   | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged)                   |
 | `--preset`                    | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
-| `--sdd-mode`                  | SDD orchestrator mode: `single` or `multi`                                                                        |
 | `--scope`                     | Install scope for agent-scoped files: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes to the current project root). Also settable via `GENTLE_AI_INSTALL_SCOPE` env var for CI/non-interactive use. |
 | `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
@@ -360,34 +359,12 @@ gentle-ai -v
 | ------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `--agent`, `--agents`    | Agents to sync (defaults to all installed agents)                                                    |
 | `--skill`, `--skills`    | Skills to sync (comma-separated; defaults to selected preset skills)                                  |
-| `--sdd-mode`             | SDD orchestrator mode: `single` or `multi`                                                           |
-| `--strict-tdd`           | Enable Strict TDD Mode for SDD agents                                                                |
-| `--profile`              | Create or update an SDD profile: `name:provider/model` (sets the default model for all phases)       |
-| `--profile-phase`        | Override a specific phase in a profile: `name:phase:provider/model`                                  |
-| `--sdd-profile-strategy` | OpenCode profile sync strategy: `generated-multi` or `external-single-active`                        |
+| `--strict-tdd`           | Enable Strict TDD Mode for ODD (sync only)                                                           |
 | `--include-permissions`  | Include permissions sync (opt-in)                                                                    |
 | `--include-theme`        | Include theme sync (opt-in)                                                                          |
 | `--dry-run`              | Preview the sync plan without applying changes                                                       |
 
-**Profile examples:**
-
-```bash
-# Create a "cheap" profile using a free model for all phases
-gentle-ai sync --profile cheap:openrouter/qwen/qwen3-30b-a3b:free
-
-# Override the design phase to use a stronger model
-gentle-ai sync --profile-phase cheap:sdd-design:anthropic/claude-sonnet-4-20250514
-
-# Create multiple profiles in one command
-gentle-ai sync \
-  --profile cheap:openrouter/qwen/qwen3-30b-a3b:free \
-  --profile premium:anthropic/claude-sonnet-4-20250514
-
-# Use compatibility mode with an external OpenCode profile manager
-gentle-ai sync --agent opencode --sdd-profile-strategy external-single-active
-```
-
-See [OpenCode SDD Profiles](opencode-profiles.md) for the full guide.
+For OpenCode background execution, see [Native OpenCode background subagents](opencode-profiles.md).
 
 ## CLI Flags (uninstall)
 
@@ -411,8 +388,8 @@ gentle-ai install --agent claude-code,cursor --preset full-gentleman
 brew upgrade gentle-ai
 gentle-ai sync
 
-# Remove only managed SDD + persona config from one agent
-gentle-ai uninstall --agent claude-code --component sdd,persona
+# Remove only managed persona config from one agent
+gentle-ai uninstall --agent claude-code --component persona
 
 # Adding a new agent later
 gentle-ai install --agent windsurf --preset full-gentleman
@@ -459,36 +436,3 @@ Homebrew's Linux sandbox for that command.
 - **Platform-aware hints**: suggests `brew install`, `apt install`, `pacman -S`, `dnf install`, or `winget install` depending on your OS
 - **Node LTS alignment**: on apt/dnf systems, Node.js hints use NodeSource LTS bootstrap before package install
 - **Dependency-first approach**: detects what's installed, calculates what's needed, shows the full dependency tree before installing anything, then verifies each dependency after installation
-
-### Optional SDD verification and honest archive
-
-SDD normally continues from completed implementation directly to archive. Request
-`/sdd-verify` when practical diagnostics are useful; it can inspect partial work,
-run applicable checks, and report real results and limitations. Configured Strict
-TDD still applies to implementation and to assessment of available TDD evidence.
-
-A missing, stale, malformed, or failed verification report is not an archive gate.
-An explicit archive may close unfinished work, preserving task/report history and
-reporting unresolved findings without inventing PASS or completing checkboxes.
-Edit permissions, mechanical copy/move and collision checks, and native delta-spec
-composition still apply. SDD does not invoke RDD; ordinary delivery policy remains.
-
-```mermaid
-flowchart LR
-  A[Implement with configured TDD] --> B{Tasks complete?}
-  B -->|No| A
-  B -->|Yes| C[Archive actual state]
-  A -. Optional diagnostics .-> V[Run practical checks and report findings]
-  V --> B
-  A -. Explicit partial archive .-> C
-  C --> D[Preserve history and safe spec composition]
-```
-
-The retired `sdd-verify-validate` command is no longer required or available;
-reports are diagnostics, not certificates. Gentle Pi companion work is separate.
-
-### Optional SDD research
-
-After exploration, request or accept research when external evidence would clarify a real question. It remains optional even after selection: partial findings, unavailable tools or missing/divergent research metadata do not create a proposal-admission gate. The orchestrator asks focused product questions one at a time and waits; only dependent decisions pause when user input or safety-critical evidence is missing.
-
-Collectors use only available, authorized tools and return source-attributed findings, assumptions, contradictions, freshness limits, tradeoffs and implementation implications. They do not persist state or choose for the user. Existing tool restrictions remain in force, including managed OpenCode web denial; no new access is granted by this guidance. Historical research and preproposal artifacts remain intact, without revision or cross-store equality certificates.

@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type InjectionResult struct {
@@ -87,7 +87,24 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := adapter.SettingsPath(homeDir)
+	return injectSettings(adapter.SettingsPath(homeDir))
+}
+
+// InjectAtPath writes the theme to a caller-selected settings file. OpenCode
+// callers pass the effective JSON/JSONC path and get a refusal for symlinked,
+// non-regular or locked files; other adapters use Inject and keep the shared
+// writer behavior.
+func InjectAtPath(settingsPath string) (InjectionResult, error) {
+	if settingsPath == "" {
+		return InjectionResult{}, nil
+	}
+	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+		return InjectionResult{}, err
+	}
+	return injectSettings(settingsPath)
+}
+
+func injectSettings(settingsPath string) (InjectionResult, error) {
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -148,6 +165,8 @@ func VisualThemePaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
+	mode := filemerge.ExistingFileMode(path, 0o644)
+
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
@@ -158,7 +177,7 @@ func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, mode)
 }
 
 var osReadFile = func(path string) ([]byte, error) {

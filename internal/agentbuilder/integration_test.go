@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // cannedSKILL is a valid SKILL.md response that the MockEngine returns.
@@ -39,9 +39,8 @@ Agent: Scans and reports: "button.css:14 — focus outline removed without alter
 
 func TestIntegration_FullAgentBuilderFlow(t *testing.T) {
 	// Step 1: Compose prompt.
-	sddConfig := (*SDDIntegration)(nil) // standalone
 	installedAgents := []model.AgentID{model.AgentClaudeCode}
-	prompt := ComposePrompt("build an a11y CSS reviewer", sddConfig, installedAgents)
+	prompt := ComposePrompt("build an a11y CSS reviewer", installedAgents)
 
 	if !strings.Contains(prompt, "a11y CSS reviewer") {
 		t.Fatalf("prompt missing user input;\ngot:\n%s", prompt)

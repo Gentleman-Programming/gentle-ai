@@ -9,10 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // compatibilitySkillsRefreshStep refreshes the registry-scanned shared skills
@@ -53,7 +52,7 @@ func (s compatibilitySkillsRefreshStep) ID() string {
 }
 
 func needsCompatibilitySkillsRefresh(components []model.ComponentID) bool {
-	return slices.Contains(components, model.ComponentSkills) || slices.Contains(components, model.ComponentSDD)
+	return slices.Contains(components, model.ComponentSkills)
 }
 
 func compatibilitySkillsDir(homeDir string) (string, bool, error) {
@@ -81,8 +80,7 @@ func compatibilitySkillsRefreshable(homeDir string, selection model.Selection) (
 	if err != nil || !ok {
 		return false, err
 	}
-	return slices.Contains(selection.Components, model.ComponentSDD) ||
-		slices.Contains(selection.Components, model.ComponentSkills) && len(selectedSkillIDs(selection)) > 0, nil
+	return slices.Contains(selection.Components, model.ComponentSkills) && len(selectedSkillIDs(selection)) > 0, nil
 }
 
 func compatibilitySkillFiles(skillDir string, components []model.ComponentID, selection model.Selection) ([]string, error) {
@@ -108,13 +106,13 @@ func compatibilitySkillPaths(skillDir string, components []model.ComponentID, se
 		for _, path := range prospective {
 			paths[path] = struct{}{}
 		}
-	}
-	if slices.Contains(components, model.ComponentSDD) {
-		prospective, err := sdd.SkillDirectoryPaths(skillDir, "")
+		// The compatibility refresh also owns the shared references and the
+		// obsolete marker it removes, as it did in v3.7.0 (#4471).
+		shared, err := skills.SharedReferencePaths(skillDir)
 		if err != nil {
-			return nil, fmt.Errorf("enumerate compatibility SDD skills: %w", err)
+			return nil, fmt.Errorf("enumerate compatibility shared references: %w", err)
 		}
-		for _, path := range prospective {
+		for _, path := range append(shared, skills.LegacySharedMarkerPath(skillDir)) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -194,23 +192,13 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 	if slices.Contains(s.components, model.ComponentSkills) {
 		skillIDs := selectedSkillIDs(s.selection)
 		if len(skillIDs) > 0 {
-			result, injectErr := skills.InjectDirectoryWithWriter(skillDir, skillIDs, writer.Write)
+			result, injectErr := skills.InjectDirectoryWithWriter(skillDir, skillIDs, writer.Write, writer.Remove)
 			if injectErr != nil {
 				return fmt.Errorf("refresh compatibility skills: %w", injectErr)
 			}
 			if result.Changed {
 				changed = append(changed, result.Files...)
 			}
-		}
-	}
-
-	if slices.Contains(s.components, model.ComponentSDD) {
-		result, injectErr := sdd.InjectSkillDirectoryWithCompatibilityWriter(skillDir, "", writer.Write, writer.Remove)
-		if injectErr != nil {
-			return fmt.Errorf("refresh compatibility SDD skills: %w", injectErr)
-		}
-		if result.Changed {
-			changed = append(changed, result.Files...)
 		}
 	}
 

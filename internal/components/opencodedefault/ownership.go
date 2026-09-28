@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
 )
 
 const (
@@ -29,6 +29,9 @@ type fieldValue struct {
 	present bool
 	value   string
 }
+
+// InstallPlan sets default_agent to the managed orchestrator and records the
+// value it replaced, so uninstall can hand the field back (v3.7.0 semantics).
 type InstallPlan struct {
 	settingsPath string
 	owned        *ownership
@@ -44,6 +47,10 @@ type UninstallPlan struct {
 func OwnershipPath(settingsPath string) string {
 	return filepath.Join(filepath.Dir(settingsPath), ".gentle-ai-default-agent.json")
 }
+
+// PrepareInstall must run before the managed orchestrator is merged. When the
+// settings or the orchestrator did not exist yet, any earlier record is stale
+// and the current default is captured again.
 func PrepareInstall(settingsPath string) (*InstallPlan, error) {
 	root, _, exists, _, err := readSettings(settingsPath)
 	if err != nil {
@@ -57,8 +64,12 @@ func PrepareInstall(settingsPath string) (*InstallPlan, error) {
 	_, managedAgentPresent := agents[ManagedAgent]
 	return &InstallPlan{settingsPath: settingsPath, owned: owned, recapture: !exists || !managedAgentPresent}, nil
 }
+
+// Apply writes default_agent and its ownership record together. A record whose
+// managed value is still in place is kept, so a repeated install never
+// captures its own value as the user's previous default.
 func (p *InstallPlan) Apply() (bool, error) {
-	root, raw, _, current, err := readSettings(p.settingsPath)
+	_, raw, _, current, err := readSettings(p.settingsPath)
 	if err != nil {
 		return false, err
 	}
@@ -66,16 +77,43 @@ func (p *InstallPlan) Apply() (bool, error) {
 	if owned == nil || p.recapture || !current.present || current.value != ManagedAgent {
 		owned = newOwnership(current)
 	}
-	root["default_agent"] = ManagedAgent
-	settings := encode(root)
+	// Merge instead of re-encoding so permission rule order and every
+	// unrelated user value are preserved.
+	settings, err := filemerge.MergeJSONObjects(raw, []byte(`{"default_agent":"`+ManagedAgent+`"}`))
+	if err != nil {
+		return false, err
+	}
 	metadata := encode(owned)
 	ownerPath := OwnershipPath(p.settingsPath)
 	ownerRaw, _ := os.ReadFile(ownerPath)
 	changed := !bytes.Equal(raw, settings) || !bytes.Equal(ownerRaw, metadata)
+	if !changed {
+		return false, nil
+	}
 	if err := writePair(p.settingsPath, settings, true, ownerPath, metadata, true); err != nil {
 		return false, err
 	}
-	return changed, nil
+	return true, nil
+}
+
+// ApplyShareDefault disables session sharing in an OpenCode-compatible config
+// (OpenCode or Kilo) unless the user already chose a share mode. Child sessions created for subagents can route through
+// SessionShare.create when sharing is enabled, which has been observed to fail
+// with a SQLite FOREIGN KEY error. An explicit user value is never changed.
+func ApplyShareDefault(settingsPath string) (bool, error) {
+	root, raw, exists, _, err := readSettings(settingsPath)
+	if err != nil || !exists {
+		return false, err
+	}
+	if _, chosen := root["share"]; chosen {
+		return false, nil
+	}
+	settings, err := filemerge.MergeJSONObjects(raw, []byte(`{"share":"disabled"}`))
+	if err != nil {
+		return false, err
+	}
+	written, err := filemerge.WriteFileAtomic(settingsPath, settings, filemerge.ExistingFileMode(settingsPath, 0o644))
+	return written.Changed, err
 }
 func PrepareUninstall(settingsPath string) (*UninstallPlan, error) {
 	_, _, exists, current, err := readSettings(settingsPath)
@@ -89,18 +127,21 @@ func PrepareUninstall(settingsPath string) (*UninstallPlan, error) {
 	return &UninstallPlan{settingsPath: settingsPath, settingsExist: exists, current: current, owned: owned}, nil
 }
 func (p *UninstallPlan) Apply(cleaned []byte, settingsExist bool) (changed, removed bool, err error) {
+	// Only an ownership record proves that gentle-ai may roll back this
+	// field. A user-modified default is not ours to change or release.
+	if p.owned == nil || !p.settingsExist || !p.current.present || p.current.value != ManagedAgent {
+		return false, false, nil
+	}
 	root := map[string]any{}
 	if settingsExist {
 		if root, err = filemerge.UnmarshalJSONObject(cleaned); err != nil {
 			return false, false, fmt.Errorf("parse cleaned OpenCode settings: %w", err)
 		}
 	}
-	if p.settingsExist && p.current.present && p.current.value == ManagedAgent {
-		if p.owned == nil || p.owned.PreviousState == "absent" {
-			delete(root, "default_agent")
-		} else {
-			root["default_agent"] = p.owned.PreviousDefault
-		}
+	if p.owned.PreviousState == "absent" {
+		delete(root, "default_agent")
+	} else {
+		root["default_agent"] = p.owned.PreviousDefault
 	}
 	settingsExist = settingsExist && len(root) > 0
 	var settings []byte
@@ -205,7 +246,13 @@ func writePair(settingsPath string, settings []byte, keepSettings bool, ownerPat
 	}
 	mutate := func(path string, data []byte, keep bool) error {
 		if keep {
-			_, err := journal.WriteWithMode(path, data, 0o644)
+			mode := os.FileMode(0o644)
+			if info, err := os.Lstat(path); err == nil {
+				mode = info.Mode().Perm()
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			_, err := journal.WriteWithMode(path, data, mode)
 			return err
 		}
 		_, err := journal.Remove(path)

@@ -85,7 +85,8 @@ func (m Model) EffortLevels() []string {
 	return m.Variants
 }
 
-// SDDPhases returns the ordered list of SDD phase sub-agent names.
+// SDDPhases retains legacy agent identities for existing configuration parsing.
+// It is not an active model-picker role list.
 func SDDPhases() []string {
 	return []string{
 		"sdd-init",
@@ -114,6 +115,17 @@ func JDPhases() []string {
 	}
 }
 
+// GentleAIODDPhases returns the ordered list of the generic ODD subagents
+// ported from Gentle Shell's global agents (#4471). They support independent
+// model configuration like JD and the review lenses.
+func GentleAIODDPhases() []string {
+	return []string{
+		"gentle-ai-explore",
+		"gentle-ai-verify",
+		"gentle-ai-worker",
+	}
+}
+
 const (
 	ReviewRefuterAgent   = "review-refuter"
 	ReviewValidatorAgent = "review-validator"
@@ -135,11 +147,9 @@ func ReviewPhases() []string {
 	return append(phases, ReviewRefuterAgent, ReviewValidatorAgent)
 }
 
-// ConfigurableAgentPhases returns all agent names that support per-agent
-// model configuration. This includes SDD, Judgment Day, and review agents.
-// Used by the inject model assignment table builder and the configurable agent set
-// in ReadCurrentModelAssignments. The TUI uses each role family separately
-// for row layout control.
+// ConfigurableAgentPhases includes legacy SDD identities so discovery does not
+// reinterpret saved agent definitions as custom agents. Active picker rows are
+// selected separately; legacy assignments are not offered for new edits.
 func ConfigurableAgentPhases() []string {
 	phases := SDDPhases()
 	phases = append(phases, JDPhases()...)

@@ -1,7 +1,6 @@
 package model
 
-// KiroModelAlias represents a Kiro-native model choice for per-phase custom
-// agent assignments.
+// KiroModelAlias represents a Kiro-native model choice for role assignments.
 type KiroModelAlias string
 
 const (
@@ -54,24 +53,22 @@ func KiroModelID(alias KiroModelAlias) string {
 	}
 }
 
-// KiroModelPresetBalanced returns the default Kiro-native assignment table.
-// Auto lets Kiro route most phases while keeping archive/onboard lightweight.
+// KiroModelPresetBalanced lets Kiro route ODD and review roles automatically.
 func KiroModelPresetBalanced() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
-		"sdd-explore":  KiroModelAuto,
-		"sdd-research": KiroModelAuto,
-		"sdd-propose":  KiroModelAuto,
-		"sdd-spec":     KiroModelAuto,
-		"sdd-design":   KiroModelOpus,
-		"sdd-tasks":    KiroModelAuto,
-		"sdd-apply":    KiroModelAuto,
-		"sdd-verify":   KiroModelAuto,
-		"sdd-archive":  KiroModelHaiku,
-		"sdd-onboard":  KiroModelHaiku,
+		"odd-explorer": KiroModelAuto,
+		"odd-worker":   KiroModelAuto,
+		"odd-verify":   KiroModelAuto,
 		"jd-judge-a":   KiroModelAuto,
 		"jd-judge-b":   KiroModelAuto,
 		"jd-fix-agent": KiroModelAuto,
+		"risk":         KiroModelAuto,
+		"readability":  KiroModelAuto,
+		"reliability":  KiroModelAuto,
+		"resilience":   KiroModelAuto,
+		"refuter":      KiroModelAuto,
+		"validator":    KiroModelAuto,
 		"default":      KiroModelAuto,
 	}
 }
@@ -80,19 +77,18 @@ func KiroModelPresetBalanced() map[string]KiroModelAlias {
 func KiroModelPresetPerformance() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelOpus,
-		"sdd-explore":  KiroModelSonnet,
-		"sdd-research": KiroModelSonnet,
-		"sdd-propose":  KiroModelOpus,
-		"sdd-spec":     KiroModelSonnet,
-		"sdd-design":   KiroModelOpus,
-		"sdd-tasks":    KiroModelSonnet,
-		"sdd-apply":    KiroModelSonnet,
-		"sdd-verify":   KiroModelOpus,
-		"sdd-archive":  KiroModelHaiku,
-		"sdd-onboard":  KiroModelHaiku,
+		"odd-explorer": KiroModelSonnet,
+		"odd-worker":   KiroModelSonnet,
+		"odd-verify":   KiroModelOpus,
 		"jd-judge-a":   KiroModelOpus,
 		"jd-judge-b":   KiroModelOpus,
 		"jd-fix-agent": KiroModelSonnet,
+		"risk":         KiroModelOpus,
+		"readability":  KiroModelSonnet,
+		"reliability":  KiroModelOpus,
+		"resilience":   KiroModelOpus,
+		"refuter":      KiroModelOpus,
+		"validator":    KiroModelOpus,
 		"default":      KiroModelSonnet,
 	}
 }
@@ -101,19 +97,18 @@ func KiroModelPresetPerformance() map[string]KiroModelAlias {
 func KiroModelPresetEconomy() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
-		"sdd-explore":  KiroModelQwen,
-		"sdd-research": KiroModelQwen,
-		"sdd-propose":  KiroModelDeepSeek,
-		"sdd-spec":     KiroModelQwen,
-		"sdd-design":   KiroModelMiniMax,
-		"sdd-tasks":    KiroModelQwen,
-		"sdd-apply":    KiroModelQwen,
-		"sdd-verify":   KiroModelDeepSeek,
-		"sdd-archive":  KiroModelQwen,
-		"sdd-onboard":  KiroModelQwen,
+		"odd-explorer": KiroModelQwen,
+		"odd-worker":   KiroModelQwen,
+		"odd-verify":   KiroModelDeepSeek,
 		"jd-judge-a":   KiroModelDeepSeek,
 		"jd-judge-b":   KiroModelQwen,
 		"jd-fix-agent": KiroModelQwen,
+		"risk":         KiroModelDeepSeek,
+		"readability":  KiroModelQwen,
+		"reliability":  KiroModelMiniMax,
+		"resilience":   KiroModelMiniMax,
+		"refuter":      KiroModelDeepSeek,
+		"validator":    KiroModelDeepSeek,
 		"default":      KiroModelQwen,
 	}
 }
@@ -121,8 +116,9 @@ func KiroModelPresetEconomy() map[string]KiroModelAlias {
 // KiroModelPresetOpenWeight favors Kiro's non-Claude model families.
 func KiroModelPresetOpenWeight() map[string]KiroModelAlias {
 	base := KiroModelPresetEconomy()
-	base["sdd-design"] = KiroModelGLM
-	base["sdd-verify"] = KiroModelMiniMax
+	base["orchestrator"] = KiroModelGLM
+	base["odd-verify"] = KiroModelMiniMax
 	base["jd-judge-a"] = KiroModelGLM
+	base["risk"] = KiroModelGLM
 	return base
 }
