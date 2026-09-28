@@ -32,6 +32,24 @@ and no way to prove what it did beyond asking you to read every line.
 <strong>Gentle-AI gives it memory, a workflow, and evidence.</strong>
 </p>
 
+<p>
+ <h3>See it in action</h3>
+
+   <p>
+   One prompt, from idea to reviewed commit: memory, workflow, and evidence in a real session.
+   </p>
+
+https://github.com/user-attachments/assets/fa5c0cfe-06e7-4c0d-bd6e-8ac7cb934339
+
+
+   <p>Prefer Spanish subtitles?</p>
+   
+
+https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
+
+
+</p>
+
 <br/>
 
 <!--

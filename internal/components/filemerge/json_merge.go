@@ -68,7 +68,7 @@ func MergeOpenCodeJSONCObjects(baseJSON []byte, overlayJSON []byte) ([]byte, err
 		return nil, fmt.Errorf("unmarshal overlay json: %w", err)
 	}
 	for key := range overlay {
-		if _, present := base[key]; present && topLevelJSONCKeyCount(string(baseJSON), key) == 0 {
+		if escapedTopLevelJSONCKey(string(baseJSON), base, key) {
 			return baseJSON, fmt.Errorf("refuse to rewrite JSONC %q with an escaped key spelling; use its unescaped spelling and retry", key)
 		}
 		if topLevelJSONCKeyCount(string(baseJSON), key) > 1 {
@@ -146,7 +146,7 @@ func mergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte, openCo
 	}
 	updated := string(baseJSON)
 	for key := range defaults {
-		if _, present := base[key]; openCode && present && topLevelJSONCKeyCount(updated, key) == 0 {
+		if openCode && escapedTopLevelJSONCKey(updated, base, key) {
 			return nil, fmt.Errorf("refuse to rewrite JSONC %q with an escaped key spelling; use its unescaped spelling and retry", key)
 		}
 		if topLevelJSONCKeyCount(updated, key) > 1 {
@@ -411,6 +411,24 @@ func RemoveLegacyOpenCodeAgentMarkers(path string, raw []byte, names []string) (
 		agentText = agentText[:a] + defText[:key] + defText[finish:] + agentText[b:]
 	}
 	return []byte(text[:start] + agentText + text[end:]), nil
+}
+
+// JSONCTopLevelKeyIsEscaped reports whether the decoded top-level key is
+// present only under an escaped spelling (for example "\u0061gent"). The JSONC
+// text rewrite cannot locate such a key, so MergeOpenCodeJSONCObjects refuses
+// to touch it; callers use this to refuse before mutating any other file.
+// Unparseable documents report false.
+func JSONCTopLevelKeyIsEscaped(raw []byte, key string) bool {
+	root, err := unmarshalJSONObject(raw)
+	if err != nil {
+		return false
+	}
+	return escapedTopLevelJSONCKey(string(raw), root, key)
+}
+
+func escapedTopLevelJSONCKey(content string, decoded map[string]any, key string) bool {
+	_, present := decoded[key]
+	return present && topLevelJSONCKeyCount(content, key) == 0
 }
 
 // JSONCTopLevelValueHasComments reports whether replacing the named value

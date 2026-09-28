@@ -1444,7 +1444,7 @@ func TestRestoreOpenCodeModelAssignmentsDoesNotRestoreExplicitClearOnGeneratedAg
 				t.Fatalf("state.Read() error = %v", err)
 			}
 
-			restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti)
+			restored := restoreOpenCodeModelAssignmentsFromState(home, "", persisted, model.SDDModeMulti)
 			if assignment, restoredStale := restored["sdd-apply"]; restoredStale {
 				t.Fatalf("explicitly cleared generated assignment was restored from stale state: %#v", assignment)
 			}
@@ -1467,7 +1467,7 @@ func TestRestoreOpenCodeModelAssignmentsSkipsClearedAssignmentInSingleMode(t *te
 		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
 	}}
 
-	restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeSingle)
+	restored := restoreOpenCodeModelAssignmentsFromState(home, "", persisted, model.SDDModeSingle)
 	if _, exists := restored["sdd-apply"]; exists {
 		t.Fatalf("single-mode cleared assignment restored stale state: %#v", restored)
 	}
@@ -1488,9 +1488,32 @@ func TestRestoreOpenCodeModelAssignmentsRestoresMalformedAssignmentSpec(t *testi
 		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
 	}}
 
-	restored := restoreOpenCodeModelAssignmentsFromState(home, "", ScopeGlobal, persisted, model.SDDModeMulti)
+	restored := restoreOpenCodeModelAssignmentsFromState(home, "", persisted, model.SDDModeMulti)
 	if got := restored["sdd-apply"]; got.ProviderID != "openai" || got.ModelID != "gpt-stale" || got.Effort != "low" {
 		t.Fatalf("malformed assignment spec was not restored from state: %#v", restored)
+	}
+}
+
+// TestRestoreOpenCodeModelAssignmentsReadsLoadedSettingsForWorkspace
+// pins that restoration reads the settings file OpenCode loads, never the
+// stranded <workspace>/.config/opencode/opencode.json (#1825, #5025).
+func TestRestoreOpenCodeModelAssignmentsReadsLoadedSettingsForWorkspace(t *testing.T) {
+	home, workspace, selected, _, _ := themeSettingsFixture(t)
+	mustWriteFile(t, selected, []byte(`{
+	  "agent": {
+	    "sdd-apply": {"mode": "subagent", "model": "openai/gpt-current"}
+	  }
+	}`))
+	persisted := state.InstallState{ModelAssignments: map[string]state.ModelAssignmentState{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-stale", Effort: "low"},
+	}}
+
+	restored := restoreOpenCodeModelAssignmentsFromState(home, workspace, persisted, model.SDDModeMulti)
+	if assignment, exists := restored["sdd-apply"]; exists {
+		t.Fatalf("stale state overrode the loaded settings assignment: %#v", assignment)
+	}
+	if _, err := os.Stat(opencodeagent.NewAdapter().SettingsPath(workspace)); !os.IsNotExist(err) {
+		t.Fatalf("restoration created stranded workspace settings (stat err = %v)", err)
 	}
 }
 

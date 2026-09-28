@@ -9,12 +9,25 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
+
+// setRealHome makes homeDir look like the current user's real home
+// directory for the duration of t's test, matching isRealUserHome's
+// os.UserHomeDir() lookup, so absolute/cwd-relative PI_CODING_AGENT_DIR
+// overrides resolve exactly as they do for a genuine user home.
+func setRealHome(t *testing.T, homeDir string) {
+	t.Helper()
+	t.Setenv("HOME", homeDir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", homeDir)
+	}
+}
 
 func TestAdapterIdentityAndCapabilities(t *testing.T) {
 	a := NewAdapter()
@@ -82,6 +95,7 @@ func TestAdapterPaths(t *testing.T) {
 
 func TestAgentConfigPathHonorsPiCodingAgentDir(t *testing.T) {
 	homeDir := t.TempDir()
+	setRealHome(t, homeDir)
 	defaultPath := filepath.Join(homeDir, ".pi", "agent")
 
 	t.Run("unset uses default", func(t *testing.T) {
@@ -145,9 +159,29 @@ func TestAgentConfigPathHonorsPiCodingAgentDir(t *testing.T) {
 	})
 }
 
+func TestAgentConfigPathIgnoresAbsoluteOverrideForNonRealHome(t *testing.T) {
+	homeDir := t.TempDir()
+	sentinel := filepath.Join(t.TempDir(), "sentinel-agent-dir")
+	t.Setenv("PI_CODING_AGENT_DIR", sentinel)
+
+	got := AgentConfigPath(homeDir)
+	if got == sentinel {
+		t.Fatalf("AgentConfigPath() = %q, want the sentinel override ignored for a non-real home", got)
+	}
+	if !strings.HasPrefix(got, homeDir) {
+		t.Fatalf("AgentConfigPath() = %q, want a path under %q (non-real home must ignore absolute overrides)", got, homeDir)
+	}
+
+	a := NewAdapter()
+	if gotFile := a.SystemPromptFile(homeDir); !strings.HasPrefix(gotFile, homeDir) {
+		t.Fatalf("SystemPromptFile() = %q, want a path under %q", gotFile, homeDir)
+	}
+}
+
 func TestAdapterPathsFollowConfiguredAgentDirectory(t *testing.T) {
 	a := NewAdapter()
 	homeDir := t.TempDir()
+	setRealHome(t, homeDir)
 	piDir := filepath.Join(homeDir, ".pi")
 	configured := filepath.Join(t.TempDir(), "isolated-home", "agent")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
@@ -179,6 +213,7 @@ func TestAdapterPathsFollowConfiguredAgentDirectory(t *testing.T) {
 func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntouched(t *testing.T) {
 	a := NewAdapter()
 	realHome := t.TempDir()
+	setRealHome(t, realHome)
 	override := filepath.Join(t.TempDir(), "gentle-shell-home", "agent")
 	t.Setenv("PI_CODING_AGENT_DIR", override)
 
@@ -219,6 +254,7 @@ func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntou
 
 func TestCodeGraphPathsResolveConfiguredAgentDirectory(t *testing.T) {
 	home := t.TempDir()
+	setRealHome(t, home)
 	configured := filepath.Join(home, "custom-pi")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
 
@@ -252,6 +288,7 @@ func TestCodeGraphPathsDefaultAgentDirectory(t *testing.T) {
 
 func TestCodeGraphPathsKeepsAgentDirectoryWhenProjectMCPOverrides(t *testing.T) {
 	home := t.TempDir()
+	setRealHome(t, home)
 	configured := filepath.Join(home, "custom-pi")
 	workspace := filepath.Join(home, "project")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)

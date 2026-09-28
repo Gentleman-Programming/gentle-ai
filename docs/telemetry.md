@@ -244,8 +244,12 @@ map to their built-in class. Other non-empty names map to `custom`/`unknown`;
 their raw names never leave native code. Missing names remain `unknown`/`unknown`.
 
 For V1 only, native code reads up to 1 MiB from the local `opencode.json`
-`agent.<name>.model` and `agent.<name>.variant` assignment. A valid contract effort
-becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
+`agent.<name>.model` and `agent.<name>.variant` assignment. When no variant is
+assigned, it falls back to `agent.<name>.reasoningEffort` and then to the
+model's `provider.<p>.models.<m>.options.reasoningEffort`, using the response
+provider/model or, when the response omits it, the assigned model. Only the
+contract values `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` are
+accepted for these `reasoningEffort` fallbacks. A valid contract effort becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
 does not report it. A response provider/model remains authoritative with
 `model_evidence: response`; the assigned model is used with
 `model_evidence: selected` only when the response omits provider/model. Missing,
@@ -272,8 +276,11 @@ uses the same 16 KiB/500 ms input bound, and sends at most once with no daemon,
 queue, persistence, retry, or filesystem mutation.
 
 For `SubagentStop`, the documented `agent_type` names the subagent frontmatter.
-Names in Gentle AI's runtime agent-class registry become `built_in` observations;
-all other names become `custom`/`unknown` without transmitting the name.
+Names in Gentle AI's runtime agent-class registry become `built_in` observations.
+Claude Code's own built-in subagents map by exact, case-sensitive name:
+`general-purpose` to the built-in `worker` class and `Explore` to the built-in
+`explore` class. All other names become `custom`/`unknown` without transmitting
+the name.
 
 For `SubagentStop`, the adapter reads at most the last 512 KiB of the matching
 agent transcript, from inside the user's home only. It scans backward for the
@@ -308,10 +315,16 @@ is available, the observation falls back to a fresh delivery id, exactly like
 
 For a known named subagent, at most 64 KiB of
 `~/.claude/agents/<agent_type>.md` supplies selected model and selected effort.
-The selected model is used only when no response model exists. The hook contract
-does not expose effective effort, duration, or an error shape: effective effort
-and duration remain unavailable, while successful `Stop`/`SubagentStop` events
-use error category `none` (API failures fire the separate `StopFailure` event).
+The selected model is used only when no response model exists. On `Stop`, the
+hook's common `effort.level` field (`low`, `medium`, `high`, `xhigh`, `max`) is
+the level in effect after fallback and caps, so it becomes `effective_effort`;
+any other value stays `unavailable`. It never becomes `selected_effort`, because
+settings defaults are overridden by `/effort`, `--effort`, and
+`CLAUDE_CODE_EFFORT_LEVEL`, so the orchestrator's `selected_effort` remains
+`unavailable`. `SubagentStop` does not read `effort.level`. The hook contract does
+not expose duration or an error shape: duration remains unavailable, while
+successful `Stop`/`SubagentStop` events use error category `none` (API failures
+fire the separate `StopFailure` event).
 Selected aliases map as `sonnet` to `claude-sonnet-5`, `opus` to
 `claude-opus-5`, and `haiku` to `claude-haiku-4-5`; `inherit`, `default`, and an
 empty selector remain unknown. Transcript release/revision suffixes are reduced
