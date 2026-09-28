@@ -801,3 +801,22 @@ func TestSharedJSONMergesKeepBaseBehaviorWithoutOpenCodeOptIn(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONCTopLevelKeyIsEscaped(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		want      bool
+	}{
+		{"escaped touched key", "{\n  // note\n  \"\\u0061gent\": {}\n}\n", true},
+		{"plain key", "{\n  // note\n  \"agent\": {}\n}\n", false},
+		{"absent key", `{"theme":"x"}`, false},
+		{"escaped nested key only", `{"agent":{"\u0067entleman":{}}}`, false},
+		{"unparseable document", `{"\u0061gent":`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := JSONCTopLevelKeyIsEscaped([]byte(tc.raw), "agent"); got != tc.want {
+				t.Fatalf("JSONCTopLevelKeyIsEscaped() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

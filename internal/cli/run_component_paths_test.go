@@ -360,15 +360,30 @@ func TestComponentPathsLegacyCommandsExactAndAbsentFromODD(t *testing.T) {
 	}
 }
 
-func TestComponentPathsSDDIncludesOpenCodeSettingsAndCommands(t *testing.T) {
+// TestComponentPathsSDDOmitsOpenCodeSettingsButKeepsCommands pins that the
+// retired SDD component declares no OpenCode settings or default-agent
+// ownership file: its apply step is a no-op, and the routing guidance owner
+// declares the ownership file it writes (#5025). Legacy commands stay in the
+// inventory for cleanup.
+func TestComponentPathsSDDOmitsOpenCodeSettingsButKeepsCommands(t *testing.T) {
 	home := t.TempDir()
+	workspace := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode})
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
 
-	settings := filepath.Join(home, ".config", "opencode", "opencode.json")
-	if !containsPath(paths, settings) {
-		t.Fatalf("componentPaths(sdd) missing OpenCode settings path %q\npaths=%v", settings, paths)
+	for _, scope := range []InstallScope{ScopeGlobal, ScopeWorkspace} {
+		declared := componentPathsWithWorkspaceScoped(home, workspace, scope, model.Selection{}, adapters, model.ComponentSDD)
+		for _, settings := range []string{
+			filepath.Join(home, ".config", "opencode", "opencode.json"),
+			effectiveOpenCodeSettingsPath(home, workspace, scope, adapters[0]),
+		} {
+			for _, retired := range []string{settings, opencodedefault.OwnershipPath(settings)} {
+				if containsPath(declared, retired) {
+					t.Fatalf("componentPaths(sdd, %s) declares %q, which the retired SDD step never writes\npaths=%v", scope, retired, declared)
+				}
+			}
+		}
 	}
 
 	command := filepath.Join(home, ".config", "opencode", "commands", "sdd-init.md")
@@ -1259,6 +1274,57 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 	if second := readTextFile(t, openCodeSettingsPath(home)); second != first {
 		t.Fatalf("second workspace-scoped run rewrote the home settings; delivery is not idempotent")
+	}
+}
+
+// TestRoutingLegacyTriggerCleanupTargetsSelectedOpenCodeSettings covers issue
+// #5025 item 2: the retired trigger-rules cleanup must act on the settings file
+// OpenCode loads, never on a non-loaded global decoy, for install and sync.
+func TestRoutingLegacyTriggerCleanupTargetsSelectedOpenCodeSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sync bool
+	}{{"install", false}, {"sync", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, workspace, selected, decoy, _ := themeSettingsFixture(t)
+			seeded := filemerge.InjectMarkdownSection("", "trigger-rules", "Retired WorkRun ceremony\n")
+			payload, err := json.Marshal(map[string]any{
+				"agent": map[string]any{opencodedefault.ManagedAgent: map[string]any{"prompt": seeded}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWriteFile(t, decoy, payload)
+			mustWriteFile(t, selected, payload)
+
+			var changed []string
+			step := agentRoutingGuidanceStep{
+				id:           "agent-guidance:" + string(model.AgentOpenCode),
+				agent:        model.AgentOpenCode,
+				homeDir:      home,
+				workspaceDir: workspace,
+				scope:        ScopeGlobal,
+			}
+			if tc.sync {
+				step.changedFiles = &changed
+			}
+			if err := step.Run(); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if got := readTextFile(t, decoy); got != string(payload) {
+				t.Fatalf("legacy cleanup rewrote the non-loaded decoy %q:\n%s", decoy, got)
+			}
+			if containsPath(changed, decoy) {
+				t.Fatalf("sync reported the non-loaded decoy %q as changed: %v", decoy, changed)
+			}
+			if strings.Contains(readTextFile(t, selected), "Retired WorkRun ceremony") {
+				t.Fatalf("legacy trigger-rules content survived in the selected settings %q", selected)
+			}
+			if tc.sync && !containsPath(changed, selected) {
+				t.Fatalf("sync did not report the selected settings %q as changed: %v", selected, changed)
+			}
+		})
 	}
 }
 

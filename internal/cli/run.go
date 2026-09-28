@@ -1081,15 +1081,16 @@ func (s agentRoutingGuidanceStep) Run() error {
 		}
 	}
 
+	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
+
 	// Strip first: an installation upgraded from an older release still carries
 	// the retired block, and leaving it beside fresh guidance would hand the
 	// agent two conflicting sets of instructions.
-	stripped, err := stripLegacyTriggerRules(targetDir, adapter)
+	stripped, err := stripLegacyTriggerRules(targetDir, adapter, options.SettingsPath)
 	if err != nil {
 		return err
 	}
 
-	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
 	if s.agent == model.AgentCodex {
 		options.CodexPhaseModelAssignments = s.codexPhaseModels
 		options.CodexModelAssignments = s.codexEfforts
@@ -1403,10 +1404,17 @@ func (s agentRoutingGuidanceStep) recordChanged(result agentguidance.Result) {
 // Removal reuses filemerge.InjectMarkdownSection with empty content, which is
 // already the defined "delete this section" operation, so no second merge
 // implementation exists that could drift from the injector.
-func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter) (agentguidance.Result, error) {
+//
+// settingsPath is the caller-resolved settings authority the routing injector
+// writes (OpenCode's effective loaded file); when empty, orchestrator-prompt
+// adapters keep their targetDir-derived settings path.
+func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter, settingsPath string) (agentguidance.Result, error) {
 	switch {
 	case adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode:
-		return stripLegacyTriggerRulesFromOrchestrator(adapter.SettingsPath(targetDir))
+		if settingsPath == "" {
+			settingsPath = adapter.SettingsPath(targetDir)
+		}
+		return stripLegacyTriggerRulesFromOrchestrator(settingsPath)
 	case adapter.SystemPromptStrategy() == model.StrategyJinjaModules:
 		return removeLegacyTriggerRulesModule(filepath.Join(adapter.GlobalConfigDir(targetDir), legacyTriggerRulesSection+".md"))
 	default:
@@ -2085,6 +2093,16 @@ func (s componentApplyStep) Run() error {
 			fmt.Fprintf(os.Stderr, "WARNING: multiple engram.exe entries were found on PATH and %s resolved first. Refreshed managed Engram at %s and moved %s ahead of the stale entry in the user PATH.\n", installedPath, binaryPath, binDir)
 		} else {
 			engramCommand = installedPath
+		}
+		// Refuse unsafe selected OpenCode settings before `engram setup`, whose
+		// external writes the later merge refusal could not undo.
+		for _, adapter := range adapters {
+			if adapter.Agent() != model.AgentOpenCode {
+				continue
+			}
+			if err := engram.ValidateOpenCodeSettings(openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter)); err != nil {
+				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
+			}
 		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
 		setupStrict := engram.ParseSetupStrict(os.Getenv(engram.SetupStrictEnvVar))
@@ -2982,9 +3000,8 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(targetDir))...)
 			}
 			if adapter.Agent() == model.AgentOpenCode {
-				if p := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter); p != "" {
-					paths = append(paths, p, opencodedefault.OwnershipPath(p))
-				}
+				// The retired SDD step writes no OpenCode settings; the routing
+				// guidance owner declares the default-agent ownership file (#5025).
 				paths = append(paths, openCodeSDDPluginPaths(adapter, targetDir)...)
 				// Shared prompt files in the selected OpenCode config scope — back these up
 				// so a sync does not silently overwrite user-customized prompt content.

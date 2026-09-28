@@ -691,10 +691,13 @@ func removeJSONAgentTools(path string, names ...string) (filemerge.WriteResult, 
 	return filemerge.WriteFileAtomic(path, cleaned, filemerge.ExistingFileMode(path, 0o644))
 }
 
-// preflightJSONCAgentCleanup refuses a lossy agent rewrite before the persona
-// prompt or any other asset is changed. JSONC comments within custom agents
-// cannot be retained by the existing whole-agent merge, and the Gentleman
-// install cannot merge its agent into malformed JSONC at all.
+// preflightJSONCAgentCleanup refuses a lossy or failing agent rewrite before
+// the persona prompt or any other asset is changed. JSONC comments within
+// custom agents cannot be retained by the existing whole-agent merge, an
+// escaped "agent" spelling cannot be located by the JSONC text rewrite, and
+// the Gentleman install cannot merge its agent into malformed JSONC at all.
+// Documents the later cleanup cannot parse are never rewritten by it, so sync
+// and non-Gentleman flows keep tolerating them.
 func preflightJSONCAgentCleanup(path string, persona model.PersonaID, syncManaged bool) error {
 	raw, err := osReadFile(path)
 	if err != nil {
@@ -705,18 +708,33 @@ func preflightJSONCAgentCleanup(path string, persona model.PersonaID, syncManage
 			return fmt.Errorf("refuse OpenCode persona install: %q is malformed JSONC; fix its syntax and retry: %w", path, parseErr)
 		}
 	}
-	if !preservesJSONComments(path, raw) || !filemerge.JSONCAgentHasComments(raw) {
+	if !preservesJSONComments(path, raw) {
 		return nil
 	}
 	root, err := filemerge.UnmarshalJSONObject(raw)
 	if err != nil {
-		return fmt.Errorf("refuse malformed JSONC agent before persona mutation: %w", err)
+		// Sync cleanups skip settings they cannot parse, so only install can
+		// reach a lossy rewrite of a malformed, comment-bearing agent value.
+		if !syncManaged && filemerge.JSONCAgentHasComments(raw) {
+			return fmt.Errorf("refuse malformed JSONC agent before persona mutation: %w", err)
+		}
+		return nil
 	}
+	// Mirror the presence checks of the cleanups below: an explicit null value
+	// still triggers their rewrite.
 	agents, _ := root["agent"].(map[string]any)
 	gentleman, _ := agents["gentleman"].(map[string]any)
-	rewrites := !isGentlemanConversationPersona(persona) && agents["gentleman"] != nil ||
-		isGentlemanConversationPersona(persona) && (!syncManaged || gentleman["tools"] != nil)
-	if rewrites {
+	_, hasGentleman := agents["gentleman"]
+	_, hasTools := gentleman["tools"]
+	rewrites := !isGentlemanConversationPersona(persona) && hasGentleman ||
+		isGentlemanConversationPersona(persona) && (!syncManaged || hasTools)
+	if !rewrites {
+		return nil
+	}
+	if filemerge.JSONCTopLevelKeyIsEscaped(raw, "agent") {
+		return fmt.Errorf("refuse OpenCode persona mutation: %q writes its \"agent\" key with an escaped spelling; use its unescaped spelling and retry", path)
+	}
+	if filemerge.JSONCAgentHasComments(raw) {
 		return fmt.Errorf("refuse to rewrite JSONC agent with nested comments; remove the owned legacy fields manually or move the comments before retrying")
 	}
 	return nil
@@ -736,14 +754,21 @@ func preservesJSONComments(path string, raw []byte) bool {
 // replaceJSONCAgent preserves comments outside the managed agent subtree when
 // the legacy tools cleanup re-encodes a JSONC document.
 func replaceJSONCAgent(original, cleaned []byte) ([]byte, error) {
-	if filemerge.JSONCAgentHasComments(original) {
-		return nil, fmt.Errorf("refuse to rewrite JSONC agent with nested comments; remove the owned legacy fields manually or move the comments before retrying")
+	return replaceJSONCTopLevelValue(original, cleaned, "agent")
+}
+
+// replaceJSONCTopLevelValue replaces only the named top-level value of the
+// original JSONC document with its cleaned counterpart, preserving comments
+// outside that subtree. It refuses when the subtree itself carries comments.
+func replaceJSONCTopLevelValue(original, cleaned []byte, key string) ([]byte, error) {
+	if filemerge.JSONCTopLevelValueHasComments(original, key) {
+		return nil, fmt.Errorf("refuse to rewrite JSONC %s with nested comments; remove the owned legacy fields manually or move the comments before retrying", key)
 	}
 	root, err := filemerge.UnmarshalJSONObject(cleaned)
 	if err != nil {
 		return nil, err
 	}
-	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": root["agent"]}})
+	overlay, err := json.Marshal(map[string]any{key: map[string]any{"__replace__": root[key]}})
 	if err != nil {
 		return nil, err
 	}
@@ -930,8 +955,8 @@ func removeJSONKeyIfValue(path, key, wantValue string) (bool, error) {
 // parentKey is absent, or subKey is not present, it is a no-op and returns false.
 //
 // Only OpenCode settings parse comment-bearing JSON and keep comments outside
-// the cleaned agent subtree; other agents skip documents that are not strict
-// JSON.
+// the cleaned parentKey subtree; other agents skip documents that are not
+// strict JSON.
 func removeJSONNestedSubKey(path, parentKey, subKey string, openCode bool) (bool, error) {
 	raw, err := osReadFile(path)
 	if err != nil {
@@ -975,8 +1000,8 @@ func removeJSONNestedSubKey(path, parentKey, subKey string, openCode bool) (bool
 		return false, fmt.Errorf("marshal settings after cleanup: %w", err)
 	}
 	encoded = append(encoded, '\n')
-	if openCode && preservesJSONComments(path, raw) && parentKey == "agent" {
-		// Preserve unrelated comments while replacing the cleaned agent subtree.
+	if openCode && preservesJSONComments(path, raw) {
+		// Preserve unrelated comments while replacing the cleaned subtree.
 		if _, exists := root[parentKey]; !exists {
 			root[parentKey] = map[string]any{}
 			encoded, err = json.Marshal(root)
@@ -984,7 +1009,7 @@ func removeJSONNestedSubKey(path, parentKey, subKey string, openCode bool) (bool
 				return false, err
 			}
 		}
-		encoded, err = replaceJSONCAgent(raw, encoded)
+		encoded, err = replaceJSONCTopLevelValue(raw, encoded, parentKey)
 		if err != nil {
 			return false, err
 		}

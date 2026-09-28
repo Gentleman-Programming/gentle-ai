@@ -99,8 +99,8 @@ func TestReadOpenCodeAssignment(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tt.config), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if got := readOpenCodeAssignment(home, tt.agent); got != tt.want {
-				t.Fatalf("readOpenCodeAssignment() = %+v, want %+v", got, tt.want)
+			if got := openCodeAssignment(readOpenCodeConfig(home), tt.agent); got != tt.want {
+				t.Fatalf("openCodeAssignment() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
@@ -141,6 +141,89 @@ func TestApplyOpenCodeAssignment(t *testing.T) {
 			applyOpenCodeAssignment(&tt.row, tt.assignment)
 			if tt.row.Model != tt.wantModel || tt.row.ModelEvidence != tt.wantProof || tt.row.SelectedEffort != tt.wantEffort {
 				t.Fatalf("row = %+v", tt.row)
+			}
+		})
+	}
+}
+
+// V1 falls back to OpenCode's documented reasoningEffort options when the agent
+// has no configured variant: agent options (https://opencode.ai/docs/agents/,
+// "Additional options") override the model's global options
+// (https://opencode.ai/docs/models/, "Configure models").
+func TestSendOpenCodeResolvesConfiguredReasoningEffort(t *testing.T) {
+	modelOption := func(effort string) string {
+		return `"provider":{"openai":{"models":{"gpt-5.6":{"options":{"reasoningEffort":` + effort + `}}}}}`
+	}
+	for _, tt := range []struct {
+		name   string
+		schema string
+		agent  string
+		config string
+		want   string
+	}{
+		{name: "agent reasoningEffort option", schema: "v1", agent: "build", config: `{"agent":{"build":{"reasoningEffort":"high"}}}`, want: "high"},
+		{name: "model reasoningEffort option", schema: "v1", agent: "build", config: `{` + modelOption(`"low"`) + `}`, want: "low"},
+		{name: "model option without an agent name", schema: "v1", agent: "", config: `{` + modelOption(`"minimal"`) + `}`, want: "minimal"},
+		{name: "agent option overrides model option", schema: "v1", agent: "build", config: `{"agent":{"build":{"reasoningEffort":"xhigh"}},` + modelOption(`"low"`) + `}`, want: "xhigh"},
+		{name: "agent variant wins over options", schema: "v1", agent: "build", config: `{"agent":{"build":{"model":"openai/gpt-5.6","variant":"medium","reasoningEffort":"high"}},` + modelOption(`"low"`) + `}`, want: "medium"},
+		{name: "custom variant blocks option fallback", schema: "v1", agent: "build", config: `{"agent":{"build":{"model":"openai/gpt-5.6","variant":"thinking"}},` + modelOption(`"high"`) + `}`, want: "unavailable"},
+		{name: "variant without a model blocks option fallback", schema: "v1", agent: "build", config: `{"agent":{"build":{"variant":"thinking","reasoningEffort":"high"}},` + modelOption(`"high"`) + `}`, want: "unavailable"},
+		{name: "option for another model is ignored", schema: "v1", agent: "build", config: `{"provider":{"openai":{"models":{"gpt-5.4":{"options":{"reasoningEffort":"high"}}}}}}`, want: "unavailable"},
+		{name: "unenumerated provider value", schema: "v1", agent: "build", config: `{` + modelOption(`"none"`) + `}`, want: "unavailable"},
+		{name: "contract meta value is not an effort", schema: "v1", agent: "build", config: `{"agent":{"build":{"reasoningEffort":"unknown"}}}`, want: "unavailable"},
+		{name: "free text is dropped", schema: "v1", agent: "build", config: `{"agent":{"build":{"reasoningEffort":"PRIVATE_TEXT"}}}`, want: "unavailable"},
+		{name: "non-string option is dropped", schema: "v1", agent: "build", config: `{` + modelOption(`3`) + `}`, want: "unavailable"},
+		{name: "malformed provider shape is dropped", schema: "v1", agent: "build", config: `{"provider":{"openai":"PRIVATE_TEXT"}}`, want: "unavailable"},
+		{name: "no configuration evidence", schema: "v1", agent: "build", config: `{}`, want: "unavailable"},
+		{name: "v2 never consults configuration", schema: "v2", agent: "build", config: `{"agent":{"build":{"reasoningEffort":"high"}},` + modelOption(`"low"`) + `}`, want: "unavailable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			for _, key := range []string{"DO_NOT_TRACK", "GENTLE_AI_TELEMETRY", "CI", "GITHUB_ACTIONS"} {
+				t.Setenv(key, "")
+			}
+			if err := telemetry.Save(home, telemetry.State{InstallID: "local", Enabled: true, NoticeShown: true}); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(home, ".config", "opencode", "opencode.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var got telemetry.RuntimeEvent
+			var sent []byte
+			client := &http.Client{Transport: openCodeTestRoundTrip(func(request *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sent = body
+				got, err = telemetry.ParseRuntimeEvent(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"schema":"gentle-ai.telemetry-runtime-delivery/v1","decision":"stored"}`))}, nil
+			})}
+			agent := ""
+			if tt.agent != "" {
+				agent = `,"agent":"` + tt.agent + `"`
+			}
+			envelope := `{"schema":"gentle-ai.telemetry-opencode/` + tt.schema + `","info":{"role":"assistant","time":{"created":1,"completed":3},"providerID":"openai","modelID":"gpt-5.6"` + agent + `}}`
+			if decision := SendOpenCode(context.Background(), home, os.Getenv, strings.NewReader(envelope), client); decision != "stored" {
+				t.Fatalf("SendOpenCode() decision = %q, want stored", decision)
+			}
+			if len(got.Rows) != 1 {
+				t.Fatalf("runtime rows = %d, want 1", len(got.Rows))
+			}
+			if got.Rows[0].SelectedEffort != tt.want || got.Rows[0].EffectiveEffort != "unavailable" {
+				t.Fatalf("selected effort = %q, effective = %q, want selected %q", got.Rows[0].SelectedEffort, got.Rows[0].EffectiveEffort, tt.want)
+			}
+			if strings.Contains(string(sent), "PRIVATE") {
+				t.Fatalf("private configuration leaked: %s", sent)
 			}
 		})
 	}

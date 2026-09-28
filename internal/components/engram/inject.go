@@ -356,15 +356,10 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if settingsPath == "" {
 			break
 		}
-		if adapter.Agent() == model.AgentOpenCode {
-			if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
-				return InjectionResult{}, err
-			}
-		}
 		overlay := engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()))
 		if adapter.Agent() == model.AgentOpenCode {
 			var err error
-			overlay, err = nativeOpenCodeEngramOverlay(settingsPath, overlay)
+			overlay, err = openCodeEngramOverlay(settingsPath)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -1058,6 +1053,37 @@ func isVersionedHomebrewCellarPath(path string) bool {
 func isStableHomebrewEngramPath(path string) bool {
 	clean := filepath.ToSlash(filepath.Clean(path))
 	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram") && isEngramCommand(clean)
+}
+
+// ValidateOpenCodeSettings applies the refusals the OpenCode Engram merge
+// applies to settingsPath (locked, non-regular or symlinked file, malformed
+// JSONC, duplicate or escaped keys, comments inside the touched value) without
+// writing, so install can refuse unsafe input before the external
+// `engram setup opencode` side effects. An empty path is accepted.
+func ValidateOpenCodeSettings(settingsPath string) error {
+	if settingsPath == "" {
+		return nil
+	}
+	overlay, err := openCodeEngramOverlay(settingsPath)
+	if err != nil {
+		return err
+	}
+	base, err := osReadFile(settingsPath)
+	if err != nil {
+		return err
+	}
+	_, err = filemerge.MergeJSONObjectsForPath(settingsPath, base, overlay)
+	return err
+}
+
+// openCodeEngramOverlay refuses a locked selected settings file, then returns
+// the Engram overlay in the format the file already uses.
+func openCodeEngramOverlay(settingsPath string) ([]byte, error) {
+	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+		return nil, err
+	}
+	overlay := engramOverlayJSON(model.AgentOpenCode, stableEngramCommandForMergedConfig(settingsPath, model.AgentOpenCode))
+	return nativeOpenCodeEngramOverlay(settingsPath, overlay)
 }
 
 // nativeOpenCodeEngramOverlay updates only the managed server in its existing

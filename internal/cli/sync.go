@@ -1663,7 +1663,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
 		workspaceDir, _ := os.Getwd()
-		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir, ScopeGlobal, persistedState, selection.SDDMode)
+		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir, persistedState, selection.SDDMode)
 	}
 
 	// Migrate a persisted legacy alias BEFORE any early return: a no-agent
@@ -1909,7 +1909,7 @@ func RunSync(args []string) (SyncResult, error) {
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
 		workspaceDir, _ := os.Getwd()
-		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir, ScopeGlobal, persistedState, selection.SDDMode)
+		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir, persistedState, selection.SDDMode)
 	}
 	if selection.CodexOrchestratorAssignment == nil && persistedState.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(persistedState.CodexOrchestratorAssignment)
@@ -1998,12 +1998,14 @@ func RunSync(args []string) (SyncResult, error) {
 	return result, nil
 }
 
-func restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir string, scope InstallScope, persistedState state.InstallState, sddMode model.SDDModeID) map[string]model.ModelAssignment {
+// restoreOpenCodeModelAssignmentsFromState reads current assignments from the
+// settings file OpenCode loads, whatever the install scope (#1825).
+func restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir string, persistedState state.InstallState, sddMode model.SDDModeID) map[string]model.ModelAssignment {
 	if len(persistedState.ModelAssignments) == 0 {
 		return nil
 	}
 	presence := map[string]opencodeactivation.AssignmentPresence{}
-	settingsPath := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter())
+	settingsPath := openCodeLoadedSettingsPath(homeDir, workspaceDir, opencodeagent.NewAdapter())
 	if settingsPath != "" {
 		if _, err := os.Stat(settingsPath); err == nil {
 			snapshot, err := opencodeactivation.ReadConfigSnapshot(settingsPath)

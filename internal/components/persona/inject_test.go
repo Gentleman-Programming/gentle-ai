@@ -3543,3 +3543,190 @@ func TestMalformedSelectedJSONCKeepsToleranceOutsideGentlemanInstall(t *testing.
 		})
 	}
 }
+
+// TestEscapedAgentKeyRefusesBeforePromptMutation covers issue #5025 items 3
+// and 4: a selected JSONC whose touched "agent" key uses an escaped spelling
+// passes the duplicate-key check, so the persona preflight must refuse it
+// before the prompt write whenever the flow would rewrite that key.
+func TestEscapedAgentKeyRefusesBeforePromptMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		persona  model.PersonaID
+		inject   func(string, agents.Adapter, model.PersonaID, string) (InjectionResult, error)
+		content  string
+		rewrites bool
+	}{
+		{"gentleman install", model.PersonaGentleman, InjectAtSettingsPath, "{\n  // user note\n  \"\\u0061gent\": {\"custom\": {}}\n}\n", true},
+		{"gentleman sync removing legacy tools", model.PersonaGentleman, InjectForSyncAtSettingsPath, "{\n  // user note\n  \"\\u0061gent\": {\"gentleman\": {\"tools\": {\"write\": true}}}\n}\n", true},
+		{"gentleman sync removing null legacy tools", model.PersonaGentleman, InjectForSyncAtSettingsPath, "{\n  // user note\n  \"\\u0061gent\": {\"gentleman\": {\"tools\": null}}\n}\n", true},
+		{"neutral install removing gentleman", model.PersonaNeutral, InjectAtSettingsPath, "{\n  // user note\n  \"\\u0061gent\": {\"gentleman\": {}}\n}\n", true},
+		{"neutral sync removing gentleman", model.PersonaNeutral, InjectForSyncAtSettingsPath, "{\n  // user note\n  \"\\u0061gent\": {\"gentleman\": {}}\n}\n", true},
+		{"gentleman sync without legacy tools", model.PersonaGentleman, InjectForSyncAtSettingsPath, "{\n  // user note\n  \"\\u0061gent\": {\"gentleman\": {}}\n}\n", false},
+		{"neutral sync without gentleman", model.PersonaNeutral, InjectForSyncAtSettingsPath, "{\n  // user note\n  \"\\u0061gent\": {\"custom\": {}}\n}\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter := opencodeAdapter()
+			path := filepath.Join(home, "workspace", "opencode.jsonc")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := tc.inject(home, adapter, tc.persona, path)
+			after, readErr := os.ReadFile(path)
+			if readErr != nil || string(after) != tc.content {
+				t.Fatalf("settings changed: %v\n%s", readErr, after)
+			}
+			if !tc.rewrites {
+				if err != nil {
+					t.Fatalf("flow does not rewrite \"agent\"; want no refusal, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "escaped") || !strings.Contains(err.Error(), path) {
+				t.Fatalf("error = %v; want actionable escaped-key refusal naming the file", err)
+			}
+			if _, statErr := os.Stat(adapter.SystemPromptFile(home)); !os.IsNotExist(statErr) {
+				t.Fatalf("prompt written before escaped-key refusal: %v", statErr)
+			}
+		})
+	}
+}
+
+// TestGentlemanSyncToleratesUnparseableSelectedJSONC pins the #5025 item 4
+// boundary: the sync tools cleanup cannot parse the document, so it never
+// rewrites it, and the documented malformed-settings tolerance still applies.
+func TestGentlemanSyncToleratesUnparseableSelectedJSONC(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "workspace", "opencode.jsonc")
+	original := []byte("{\"agent\": {\"gentleman\": {\"tools\": {\"write\": true}}}")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := InjectForSyncAtSettingsPath(home, opencodeAdapter(), model.PersonaGentleman, path); err != nil {
+		t.Fatalf("unparseable settings the sync cleanup never rewrites must stay tolerated, got %v", err)
+	}
+	if after, err := os.ReadFile(path); err != nil || string(after) != string(original) {
+		t.Fatalf("malformed settings must be preserved untouched: %v\n%s", err, after)
+	}
+}
+
+// TestSyncToleratesUnparseableSelectedJSONCWithAgentComments pins the sync
+// boundary: both sync cleanups skip settings they cannot parse, so a comment
+// inside the agent value must not turn tolerated input into a refusal.
+func TestSyncToleratesUnparseableSelectedJSONCWithAgentComments(t *testing.T) {
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		t.Run(string(persona), func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "workspace", "opencode.jsonc")
+			original := []byte("{\"agent\": {/* user note */ \"gentleman\": {\"tools\": {\"write\": true}}}")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := InjectForSyncAtSettingsPath(home, opencodeAdapter(), persona, path); err != nil {
+				t.Fatalf("sync must tolerate unparseable settings it never rewrites, got %v", err)
+			}
+			if after, err := os.ReadFile(path); err != nil || string(after) != string(original) {
+				t.Fatalf("malformed settings must be preserved untouched: %v\n%s", err, after)
+			}
+		})
+	}
+}
+
+// TestRemoveJSONNestedSubKeyPreservesCommentsForAnyParentKey covers issue
+// #5025 item 6: OpenCode JSONC cleanup keeps comments outside the cleaned
+// subtree for every parent key, and refuses before mutation when the cleaned
+// subtree itself carries comments.
+func TestRemoveJSONNestedSubKeyPreservesCommentsForAnyParentKey(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		refuse  bool
+		want    []string
+	}{
+		{
+			name:    "comments outside the parent",
+			content: "{\n  // top note\n  \"mcp\": {\"gentleman\": {\"enabled\": true}, \"other\": {\"enabled\": true}},\n  \"theme\": \"x\" // trailing note\n}\n",
+			want:    []string{"// top note", "// trailing note", `"other"`},
+		},
+		{
+			name:    "last sub-key leaves an empty parent",
+			content: "{\n  // top note\n  \"mcp\": {\"gentleman\": {}}\n}\n",
+			want:    []string{"// top note", `"mcp": {}`},
+		},
+		{
+			name:    "comments inside the parent",
+			content: "{\n  \"mcp\": {\"gentleman\": {}, /* keep */ \"other\": {}}\n}\n",
+			refuse:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			removed, err := removeJSONNestedSubKey(path, "mcp", "gentleman", true)
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tc.refuse {
+				if err == nil || !strings.Contains(err.Error(), "comments") || string(after) != tc.content {
+					t.Fatalf("want comment refusal with unchanged settings; got %v\n%s", err, after)
+				}
+				return
+			}
+			if err != nil || !removed {
+				t.Fatalf("removeJSONNestedSubKey() = %v, %v; want removal", removed, err)
+			}
+			if strings.Contains(string(after), `"gentleman"`) {
+				t.Fatalf("sub-key not removed:\n%s", after)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(string(after), want) {
+					t.Fatalf("cleanup lost %q:\n%s", want, after)
+				}
+			}
+		})
+	}
+}
+
+// TestRemoveJSONNestedSubKeyNonOpenCodeKeepsStrictBehavior pins base behavior
+// for other agents: comment-bearing documents are skipped, strict JSON is
+// re-encoded without the sub-key.
+func TestRemoveJSONNestedSubKeyNonOpenCodeKeepsStrictBehavior(t *testing.T) {
+	dir := t.TempDir()
+	commented := filepath.Join(dir, "commented.json")
+	commentedContent := "{\n  // note\n  \"mcp\": {\"gentleman\": {}}\n}\n"
+	if err := os.WriteFile(commented, []byte(commentedContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := removeJSONNestedSubKey(commented, "mcp", "gentleman", false); err != nil || removed {
+		t.Fatalf("non-OpenCode commented cleanup = %v, %v; want skipped", removed, err)
+	}
+	if after, _ := os.ReadFile(commented); string(after) != commentedContent {
+		t.Fatalf("non-OpenCode commented settings changed:\n%s", after)
+	}
+
+	strict := filepath.Join(dir, "strict.json")
+	if err := os.WriteFile(strict, []byte(`{"mcp":{"gentleman":{}},"theme":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := removeJSONNestedSubKey(strict, "mcp", "gentleman", false); err != nil || !removed {
+		t.Fatalf("non-OpenCode strict cleanup = %v, %v; want removal", removed, err)
+	}
+	if after, _ := os.ReadFile(strict); string(after) != "{\n  \"theme\": \"x\"\n}\n" {
+		t.Fatalf("non-OpenCode strict cleanup = %q", after)
+	}
+}
