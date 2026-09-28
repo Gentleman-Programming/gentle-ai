@@ -11,19 +11,121 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/qwen"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
+
+func TestEngramSelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		mode          os.FileMode
+	}{
+		{"nested comments", "{\"mcp\":{\"other\":{/* keep */\"type\":\"remote\"}}}\n", 0o600},
+		{"locked mode", "{\"mcp\":{}}\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && tc.mode != 0o600 {
+				t.Skip("file permission bits are not supported on Windows")
+			}
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := InjectWithOptions(t.TempDir(), opencodeAdapter(), InjectOptions{OpenCodeSettingsPath: path})
+			if err == nil || !strings.Contains(err.Error(), "refuse") {
+				t.Fatalf("want actionable refusal, got %v", err)
+			}
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != tc.mode {
+				t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != tc.content {
+				t.Fatalf("settings bytes changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestEngramSelectedSettingsPreservePrivateMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	if err := os.WriteFile(path, []byte("{\"mcp\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mergeJSONFile(path, []byte(`{"mcp":{"engram":{"type":"local"}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return // POSIX permission bits are not preserved on Windows.
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode = %v, error = %v; want 0600", info, err)
+	}
+}
+
+// The selected-settings refusal is OpenCode-only; the shared merge helper keeps
+// the base writer behavior for other agents' dotfiles-managed (symlinked) files.
+func TestSharedMergeKeepsBaseWriterBehaviorForSymlinkedSettings(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles.json")
+	settings := filepath.Join(dir, "settings.json")
+	original := []byte("{\"mcpServers\":{}}\n")
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := mergeJSONFile(settings, []byte(`{"mcpServers":{"engram":{"command":"engram"}}}`))
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("mergeJSONFile() error = %v; want base writer symlink error, not the OpenCode refusal", err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("settings target changed: %q, %v", got, err)
+	}
+}
+
+func TestEngramSelectedSettingsRefuseSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "user.jsonc")
+	selected := filepath.Join(dir, "opencode.jsonc")
+	if err := os.WriteFile(target, []byte("{\"mcp\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, selected); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := InjectWithOptions(t.TempDir(), opencodeAdapter(), InjectOptions{OpenCodeSettingsPath: selected})
+	if err == nil || !strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("InjectWithOptions() error = %v; want OpenCode symlink refusal", err)
+	}
+}
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
@@ -589,7 +691,7 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
+func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, antigravityAdapter())
@@ -600,17 +702,11 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("Inject(antigravity) changed = false")
 	}
 
+	// #797: Engram registration is plugin-owned only; the global
+	// ~/.gemini/antigravity-cli/mcp_config.json is never written for Engram.
 	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
-	content, err := os.ReadFile(cliMCPPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", cliMCPPath, err)
-	}
-	text := string(content)
-	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
-		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
-	}
-	if strings.Contains(text, `--tools=`) {
-		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
+	if _, err := os.Stat(cliMCPPath); !os.IsNotExist(err) {
+		t.Fatalf("global Antigravity MCP config %q must not be written for Engram; stat err = %v", cliMCPPath, err)
 	}
 
 	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
@@ -618,14 +714,28 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("Antigravity Engram plugin manifest missing: %v", err)
 	}
 
+	// #797: the plugin MCP config must use the canonical Engram agent tool
+	// profile (args ["mcp", "--tools=agent"]).
 	pluginMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
 	pluginMCPContent, err := os.ReadFile(pluginMCPPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
 	}
-	pluginMCPText := string(pluginMCPContent)
-	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
-		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	var pluginCfg struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(pluginMCPContent, &pluginCfg); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", pluginMCPPath, err)
+	}
+	server, ok := pluginCfg.MCPServers["engram"]
+	if !ok || server.Command == "" {
+		t.Fatalf("Antigravity Engram plugin MCP config must register the engram server; got:\n%s", pluginMCPContent)
+	}
+	if len(server.Args) != 2 || server.Args[0] != "mcp" || server.Args[1] != "--tools=agent" {
+		t.Fatalf("Antigravity Engram plugin MCP config args = %v, want [mcp --tools=agent]; got:\n%s", server.Args, pluginMCPContent)
 	}
 
 	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
@@ -655,6 +765,225 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	desktopMCPPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
 	if _, err := os.Stat(desktopMCPPath); !os.IsNotExist(err) {
 		t.Fatalf("legacy desktop MCP path %q should not be written for antigravity; stat err = %v", desktopMCPPath, err)
+	}
+}
+
+func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+		args    string
+	}{{
+		name:    "default invocation",
+		command: "/custom/bin/engram",
+		args:    `["mcp"]`,
+	}, {
+		name:    "legacy agent tool profile",
+		command: "/usr/local/bin/engram",
+		args:    `["mcp", "--tools=agent"]`,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+			mcpPath := filepath.Join(cliDir, "mcp_config.json")
+			if err := os.MkdirAll(cliDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q) error = %v", cliDir, err)
+			}
+			global := fmt.Sprintf(`{
+  "mcpServers": {
+    "context7": {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]},
+    "engram": {"command": %q, "args": %s}
+  }
+}
+`, tc.command, tc.args)
+			if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
+				t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+			}
+
+			result, err := Inject(home, antigravityAdapter())
+			if err != nil {
+				t.Fatalf("Inject(antigravity) error = %v", err)
+			}
+			if !result.Changed {
+				t.Fatalf("Inject(antigravity) changed = false")
+			}
+
+			// The duplicate global Engram owner is removed; unrelated servers
+			// in the same file are preserved untouched.
+			raw, err := os.ReadFile(mcpPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", mcpPath, err)
+			}
+			var cfg struct {
+				MCPServers map[string]json.RawMessage `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("Unmarshal(%q) error = %v", mcpPath, err)
+			}
+			if _, ok := cfg.MCPServers["engram"]; ok {
+				t.Fatalf("duplicate global Engram entry must be removed; got:\n%s", raw)
+			}
+			if _, ok := cfg.MCPServers["context7"]; !ok {
+				t.Fatalf("unrelated context7 server must be preserved; got:\n%s", raw)
+			}
+
+			// The plugin carries the canonical agent tool profile.
+			pluginMCPPath := filepath.Join(cliDir, "plugins", "gentle-ai-engram", "mcp_config.json")
+			pluginRaw, err := os.ReadFile(pluginMCPPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
+			}
+			if !strings.Contains(string(pluginRaw), "--tools=agent") {
+				t.Fatalf("plugin MCP config must use --tools=agent; got:\n%s", pluginRaw)
+			}
+			if !strings.Contains(string(pluginRaw), tc.command) {
+				t.Fatalf("plugin MCP config must preserve selected command %q; got:\n%s", tc.command, pluginRaw)
+			}
+
+			second, err := Inject(home, antigravityAdapter())
+			if err != nil {
+				t.Fatalf("second Inject(antigravity) error = %v", err)
+			}
+			if second.Changed {
+				t.Fatalf("second Inject(antigravity) changed = true, want false")
+			}
+			secondRaw, err := os.ReadFile(mcpPath)
+			if err != nil {
+				t.Fatalf("second ReadFile(%q) error = %v", mcpPath, err)
+			}
+			if string(secondRaw) != string(raw) {
+				t.Fatalf("global MCP config changed on second injection\nfirst:\n%s\nsecond:\n%s", raw, secondRaw)
+			}
+			secondPluginRaw, err := os.ReadFile(pluginMCPPath)
+			if err != nil {
+				t.Fatalf("second ReadFile(%q) error = %v", pluginMCPPath, err)
+			}
+			if string(secondPluginRaw) != string(pluginRaw) {
+				t.Fatalf("plugin MCP config changed on second injection\nfirst:\n%s\nsecond:\n%s", pluginRaw, secondPluginRaw)
+			}
+		})
+	}
+}
+
+func TestInjectAntigravityIgnoresNonEngramGlobalCommandWhenPreservingPlugin(t *testing.T) {
+	home := t.TempDir()
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	mcpPath := filepath.Join(cliDir, "mcp_config.json")
+	pluginDir := filepath.Join(cliDir, "plugins", "gentle-ai-engram")
+	pluginMCPPath := filepath.Join(pluginDir, "mcp_config.json")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", pluginDir, err)
+	}
+	global := `{
+  "mcpServers": {
+    "engram": {"command": "npx", "args": ["-y", "not-engram"]}
+  }
+}
+`
+	if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDir, "settings.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(antigravityEngramPluginJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin.json) error = %v", err)
+	}
+	pluginRaw := engramOverlayJSON(model.AgentAntigravity, "/custom/bin/engram")
+	if err := os.WriteFile(pluginMCPPath, pluginRaw, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", pluginMCPPath, err)
+	}
+	hooksRaw := antigravityEngramHooksJSON()
+	if err := os.WriteFile(filepath.Join(pluginDir, "hooks.json"), hooksRaw, 0o644); err != nil {
+		t.Fatalf("WriteFile(hooks.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+	gotGlobal, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", mcpPath, err)
+	}
+	if string(gotGlobal) != global {
+		t.Fatalf("non-Engram global MCP entry changed\nwant:\n%s\ngot:\n%s", global, gotGlobal)
+	}
+	gotPlugin, err := os.ReadFile(pluginMCPPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
+	}
+	if string(gotPlugin) != string(pluginRaw) {
+		t.Fatalf("plugin MCP config should preserve existing Engram command when global command is not Engram\nwant:\n%s\ngot:\n%s", pluginRaw, gotPlugin)
+	}
+}
+
+func TestInjectAntigravityRemovesFileContainingOnlyManagedEngram(t *testing.T) {
+	home := t.TempDir()
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	mcpPath := filepath.Join(cliDir, "mcp_config.json")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cliDir, err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"engram":{"command":"/usr/local/bin/engram","args":["mcp"]}}}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+	}
+
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Fatalf("global MCP config holding only the managed Engram entry should be removed; stat err = %v", err)
+	}
+}
+
+func TestInjectAntigravityLeavesUserModifiedGlobalEngramUntouched(t *testing.T) {
+	home := t.TempDir()
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	mcpPath := filepath.Join(cliDir, "mcp_config.json")
+	if err := os.MkdirAll(cliDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cliDir, err)
+	}
+	global := `{
+  "mcpServers": {
+    "engram": {"command": "/opt/engram/bin/engram", "args": ["mcp", "--profile=custom"]}
+  }
+}
+`
+	if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+	}
+
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", mcpPath, err)
+	}
+	if string(raw) != global {
+		t.Fatalf("user-modified global Engram entry must be preserved untouched; got:\n%s", raw)
+	}
+}
+
+func TestStableEngramCommandRecognizesLinuxbrewPath(t *testing.T) {
+	SetLookPathForTest(t, "/home/linuxbrew/.linuxbrew/bin/engram", "")
+
+	if !isStableHomebrewEngramPath("/home/linuxbrew/.linuxbrew/bin/engram") {
+		t.Fatalf("Linuxbrew stable path must be recognized as a stable Homebrew engram path")
+	}
+	if got := preferredStableEngramCommand(); got != "/home/linuxbrew/.linuxbrew/bin/engram" {
+		t.Fatalf("preferredStableEngramCommand() = %q, want the Linuxbrew stable path", got)
+	}
+
+	// Standard agents (including Antigravity plugin install) resolve the
+	// stable command through stableEngramCommandForMergedConfig when no prior
+	// config exists — the Linuxbrew stable path must be preserved there too.
+	home := t.TempDir()
+	got := stableEngramCommandForMergedConfig(filepath.Join(home, "missing", "mcp_config.json"), model.AgentAntigravity)
+	if got != "/home/linuxbrew/.linuxbrew/bin/engram" {
+		t.Fatalf("stableEngramCommandForMergedConfig(antigravity) = %q, want the Linuxbrew stable path", got)
 	}
 }
 
@@ -1195,6 +1524,51 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 	count := strings.Count(string(content), "[mcp_servers.engram]")
 	if count != 1 {
 		t.Fatalf("config.toml has %d [mcp_servers.engram] blocks, want exactly 1; got:\n%s", count, string(content))
+	}
+}
+
+func TestInjectCodexPreservesEngramHeaderInsideMultilineString(t *testing.T) {
+	validCodexRuntime(t)
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	instructions := `developer_instructions = """
+Example config:
+[mcp_servers.engram]
+command = "fake"
+Keep this text.
+"""`
+	if err := os.WriteFile(configPath, []byte(instructions+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject(codex) first error = %v", err)
+	}
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(codex) second changed = true (should be idempotent)")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, instructions) {
+		t.Fatalf("developer_instructions was not preserved byte-for-byte; got:\n%s", text)
+	}
+	// One header lives in the preserved string, the other is the managed block.
+	if count := strings.Count(text, "[mcp_servers.engram]"); count != 2 {
+		t.Fatalf("config.toml has %d [mcp_servers.engram] lines, want 2; got:\n%s", count, text)
+	}
+	if !strings.Contains(text, `"--tools=agent"`) {
+		t.Fatalf("config.toml missing managed engram block; got:\n%s", text)
 	}
 }
 
@@ -2733,6 +3107,29 @@ func TestUpsertCodexTableKeyBeforeMCPServersIgnoresMultilineStrings(t *testing.T
 		}
 		if !strings.Contains(got, "Example:\n[mcp_servers.docs]\n"+delimiter) {
 			t.Fatalf("delimiter %s: multiline string text was altered:\n%s", delimiter, got)
+		}
+	}
+}
+
+// TestUpsertCodexTableKeyBeforeMCPServersIgnoresTargetHeaderInMultilineStrings
+// pins #5022: a [features] line inside developer_instructions is text, so the
+// key must go to a real [features] table created outside the string, with or
+// without an MCP block after it.
+func TestUpsertCodexTableKeyBeforeMCPServersIgnoresTargetHeaderInMultilineStrings(t *testing.T) {
+	for _, delimiter := range []string{`"""`, "'''"} {
+		instructions := "developer_instructions = " + delimiter + "\n[features]\nmulti_agent = false\n" + delimiter + "\n"
+		for _, tail := range []string{"", "\n[mcp_servers.context7]\ncommand = \"npx\"\n"} {
+			got := upsertCodexTableKeyBeforeMCPServers(instructions+tail, "features", "multi_agent", "true")
+			if !strings.HasPrefix(got, instructions) {
+				t.Fatalf("delimiter %s tail %q: multiline string text was altered:\n%s", delimiter, tail, got)
+			}
+			table := strings.Index(got, delimiter+"\n\n[features]\nmulti_agent = true\n")
+			if table < 0 {
+				t.Fatalf("delimiter %s tail %q: [features] must be created after the multiline string:\n%s", delimiter, tail, got)
+			}
+			if mcp := strings.Index(got, "[mcp_servers.context7]"); tail != "" && (mcp < 0 || mcp < table) {
+				t.Fatalf("delimiter %s: [features] must stay before the MCP block:\n%s", delimiter, got)
+			}
 		}
 	}
 }

@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testing.T) {
@@ -724,10 +724,10 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 
 func TestSyncPlanIncludesPiCodeGraphReconciliationAfterComponentsWhenSelected(t *testing.T) {
 	home := t.TempDir()
-	runtime, err := newSyncRuntime(home, model.Selection{
+	runtime, err := newSyncRuntimeWithScope(home, model.Selection{
 		Agents:         []model.AgentID{model.AgentPi},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-	})
+	}, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

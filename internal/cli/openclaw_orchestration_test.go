@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
@@ -213,7 +213,7 @@ func testGlobalArtifactRoots(t *testing.T, sync bool) {
 				cmdLookPath = func(name string) (string, error) { return filepath.Join(home, "bin", name), nil }
 			}
 			if sync {
-				rt, err := newSyncRuntime(home, selection)
+				rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -299,7 +299,7 @@ func TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd(t *testing.T) {
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
 	install := newTestInstallRuntime(t, home, selection)
-	sync, err := newSyncRuntime(home, selection)
+	sync, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

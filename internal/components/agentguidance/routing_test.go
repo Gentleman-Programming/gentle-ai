@@ -7,9 +7,9 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
@@ -29,10 +29,11 @@ func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
 	}
 }
 
-// supportedAgentCount guards the catalog itself: routing is unconditional for
-// every supported adapter, so a silently shrinking catalog must fail here
-// instead of quietly reducing coverage of the table-driven tests below.
-const supportedAgentCount = 16
+// supportedAgentCount guards the catalog itself: routing renders for every
+// supported adapter (including the catalog-only Conductor, which simply never
+// gets written), so a silently shrinking catalog must fail here instead of
+// quietly reducing coverage of the table-driven tests below.
+const supportedAgentCount = 17
 
 // retiredRemoteControlPlaneVocabulary is the wire and ceremony vocabulary the
 // organic routing projection must never carry. Rendering any of these would

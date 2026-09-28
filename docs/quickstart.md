@@ -51,23 +51,23 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
-# Stable channel (`@latest`, currently v2.6.0)
-go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
+# Stable channel (`@latest` after v4.0.0 is published)
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
 ```
 
-This command uses the `/v2` module path. Go requires that suffix for major
-version 2 and above.
+This command uses the `/v4` module path. Go requires that suffix for major
+version 2 and above. Before v4.0.0 is published, `@latest` on this path cannot resolve.
 
 ## Version Policy
 
 Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` made it the supported stable path. Those are historical milestones. The negotiated public review contract was published in `v2.1.6`.
 
-The current stable release is [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0). `@latest` explicitly tracks this stable channel. No prerelease is ahead of stable. `@main` installs unreleased development changes.
+The latest published stable release before v4.0.0 is [`v3.7.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v3.7.0). After v4.0.0 is published, `@latest` on the `/v4` module path tracks that stable channel. Until then, use `@main` only to test unreleased development changes; do not assume an unpublished v4 tag resolves.
 
-### Install the stable channel
+### Install the stable channel (after v4.0.0 publication)
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
@@ -77,11 +77,11 @@ Only use `main` when testing changes that are not part of a release yet:
 
 ```bash
 # macOS / Linux
-go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
 gentle-ai version
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main
+$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
 gentle-ai version
 ```
 
@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
 ```
 
-> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main`).
+> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main`).
 
 The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 

@@ -18,26 +18,26 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeplugin"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 )
 
 // tuiNowFn returns the current time for the update-check cooldown gate.
@@ -4962,7 +4962,17 @@ func buildInstalledAgentIDs(adapters []agentbuilder.AdapterInfo) []model.AgentID
 // agentBuilderSkillsDir returns the skills directory for the given agent and a
 // flag indicating whether the path was found among the well-known agents.
 func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
-	home := homeDir()
+	return agentBuilderSkillsDirIn(homeDir(), agentID)
+}
+
+// agentBuilderSkillsDirIn resolves the skills directory for agentID under the
+// given home directory. Kimi prefers the current kimi-code v0.11+ native
+// skills root (~/.kimi-code/skills) when the ~/.kimi-code directory exists,
+// and falls back to the shared legacy skills path. Only ENOENT/ENOTDIR mean
+// the current root is absent; any other stat failure leaves the layout
+// undeterminable and Kimi is omitted (ok=false) instead of silently being
+// routed to the legacy path.
+func agentBuilderSkillsDirIn(home string, agentID model.AgentID) (string, bool) {
 	switch agentID {
 	case model.AgentClaudeCode:
 		return filepath.Join(home, ".claude", "skills"), true
@@ -4972,6 +4982,15 @@ func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
 		return filepath.Join(home, ".gemini", "skills"), true
 	case model.AgentCodex:
 		return filepath.Join(home, ".codex", "skills"), true
+	case model.AgentKimi:
+		if info, err := osStatPathFn(filepath.Join(home, ".kimi-code")); err != nil {
+			if !os.IsNotExist(err) {
+				return "", false
+			}
+		} else if info.IsDir() {
+			return filepath.Join(home, ".kimi-code", "skills"), true
+		}
+		return filepath.Join(home, ".config", "agents", "skills"), true
 	default:
 		return "", false
 	}

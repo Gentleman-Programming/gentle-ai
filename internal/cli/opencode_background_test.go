@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestOpenCodeBackgroundIntentValidation(t *testing.T) {
@@ -342,11 +342,11 @@ func TestInstallPublishesIntentTransactionally(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			home := installTestHome(t)
 			oldInject := injectInstallPersona
-			injectInstallPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID) (persona.InjectionResult, error) {
+			injectInstallPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				if tt.injectErr != nil {
 					return persona.InjectionResult{}, tt.injectErr
 				}
-				result, err := oldInject(path, adapter, personaID)
+				result, err := oldInject(path, adapter, personaID, selectedSettingsPath)
 				if err == nil && tt.dropAssets {
 					err = os.Remove(adapter.SystemPromptFile(path))
 				}
@@ -424,9 +424,9 @@ func TestInstallBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 			oldHome, oldInject := osUserHomeDir, injectInstallPersona
 			osUserHomeDir = func() (string, error) { return home, nil }
 			injectCalls := 0
-			injectInstallPersona = func(path string, adapter agents.Adapter, id model.PersonaID) (persona.InjectionResult, error) {
+			injectInstallPersona = func(path string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				injectCalls++
-				return oldInject(path, adapter, id)
+				return oldInject(path, adapter, id, selectedSettingsPath)
 			}
 			t.Cleanup(func() { osUserHomeDir, injectInstallPersona = oldHome, oldInject })
 			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
@@ -561,9 +561,9 @@ func TestSyncBackgroundInvalidSourcesFailBeforeMutation(t *testing.T) {
 			home := syncBackgroundTestHome(t)
 			oldInject := injectSyncPersona
 			injectCalls := 0
-			injectSyncPersona = func(path string, adapter agents.Adapter, id model.PersonaID) (persona.InjectionResult, error) {
+			injectSyncPersona = func(path string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				injectCalls++
-				return oldInject(path, adapter, id)
+				return oldInject(path, adapter, id, selectedSettingsPath)
 			}
 			t.Cleanup(func() { injectSyncPersona = oldInject })
 			t.Setenv(OpenCodeBackgroundSubagentsEnv, tt.env)
@@ -630,11 +630,11 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				}
 			}
 			oldInject := injectSyncPersona
-			injectSyncPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID) (persona.InjectionResult, error) {
+			injectSyncPersona = func(path string, adapter agents.Adapter, personaID model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
 				if tt.injectErr != nil {
 					return persona.InjectionResult{}, tt.injectErr
 				}
-				result, err := oldInject(path, adapter, personaID)
+				result, err := oldInject(path, adapter, personaID, selectedSettingsPath)
 				if err == nil && tt.dropAsset {
 					err = os.Remove(adapter.SystemPromptFile(path))
 				}
@@ -648,7 +648,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				Persona:    model.PersonaNeutral,
 			}
 			background := OpenCodeBackgroundResolution{Intent: tt.intent, Effective: tt.intent, Persist: tt.intent}
-			result, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{})
+			result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{})
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
 			}
@@ -699,7 +699,7 @@ func TestSyncReportsManagedLauncherChanges(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentPersona},
 		Persona:    model.PersonaNeutral,
 	}
-	result, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{})
+	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -732,7 +732,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 		Persona:    model.PersonaNeutral,
 	}
 	background := OpenCodeBackgroundResolution{Intent: model.OpenCodeBackgroundOn, Effective: model.OpenCodeBackgroundOn, Persist: model.OpenCodeBackgroundOn}
-	if _, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{}); err != nil {
+	if _, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{}); err != nil {
 		t.Fatalf("initial sync error = %v", err)
 	}
 	persisted, err := state.Read(home)
@@ -743,7 +743,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 	if err := state.Write(home, persisted); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{})
+	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{})
 	if err != nil {
 		t.Fatalf("no-op sync error = %v", err)
 	}

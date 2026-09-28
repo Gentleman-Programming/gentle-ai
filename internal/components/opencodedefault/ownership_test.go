@@ -49,8 +49,11 @@ func TestLegacyUninstallOwnership(t *testing.T) {
 				t.Fatalf("unexpected settings: %s", body)
 			}
 			info, err := os.Stat(settings)
-			if err != nil || info.Mode().Perm() != 0600 {
-				t.Fatalf("settings permissions changed: %v, %v", info, err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+				t.Fatalf("settings permissions changed: %v", info.Mode().Perm())
 			}
 			_, err = os.Stat(ownerPath)
 			if tt.removeRecord && !os.IsNotExist(err) || !tt.removeRecord && err != nil {

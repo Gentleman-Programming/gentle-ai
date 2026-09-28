@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
 // TestMain gives the whole internal/app test binary a safe, sandboxed HOME

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type InjectionResult struct {
@@ -161,7 +161,14 @@ func agentOverlay(id model.AgentID) []byte {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := TargetPath(homeDir, adapter)
+	return InjectAtPath(TargetPath(homeDir, adapter), adapter)
+}
+
+// InjectAtPath writes the permission overlay to the caller-selected settings
+// path while preserving each adapter's permission capability check. Only the
+// OpenCode selected settings refuse symlinked, non-regular or locked files;
+// other agents keep the shared writer behavior.
+func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult, error) {
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -170,9 +177,20 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if overlay == nil {
 		return InjectionResult{}, nil
 	}
+	if adapter.Agent() == model.AgentOpenCode {
+		if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 
-	defaults := adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode
-	writeResult, err := mergeJSONFile(settingsPath, overlay, defaults)
+	merge := filemerge.MergeJSONObjectsForPath
+	switch adapter.Agent() {
+	case model.AgentOpenCode:
+		merge = filemerge.MergeOpenCodeJSONDefaultsForPath
+	case model.AgentKilocode:
+		merge = filemerge.MergeJSONDefaultsForPath
+	}
+	writeResult, err := mergeJSONFile(settingsPath, overlay, merge)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -180,22 +198,18 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
-func mergeJSONFile(path string, overlay []byte, defaults bool) (filemerge.WriteResult, error) {
+func mergeJSONFile(path string, overlay []byte, merge func(string, []byte, []byte) ([]byte, error)) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
-	merge := filemerge.MergeJSONObjectsForPath
-	if defaults {
-		merge = filemerge.MergeJSONDefaultsForPath
-	}
 	merged, err := merge(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
 }
 
 var osReadFile = func(path string) ([]byte, error) {

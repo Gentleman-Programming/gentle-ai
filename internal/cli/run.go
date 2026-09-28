@@ -15,39 +15,39 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	codexagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
-	opencodeagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agenthooks"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/legacyassets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeagents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/permissions"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	codexagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agenthooks"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
 )
 
 type InstallResult struct {
@@ -78,8 +78,8 @@ var (
 	goEnv                        = defaultGoEnv
 	installCommunityTool         = communitytool.Install
 	installCommunityToolWithHome = communitytool.InstallWithHome
-	injectInstallPersona         = persona.Inject
-	injectSyncPersona            = persona.InjectForSync
+	injectInstallPersona         = defaultInjectInstallPersona
+	injectSyncPersona            = defaultInjectSyncPersona
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
@@ -121,6 +121,24 @@ var (
 	// Default "dev" matches the ldflags default in app.Version.
 	AppVersion = "dev"
 )
+
+// defaultInjectInstallPersona keeps non-OpenCode installs on persona.Inject and
+// routes only an explicitly selected OpenCode settings file through
+// persona.InjectAtSettingsPath.
+func defaultInjectInstallPersona(homeDir string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
+	if selectedSettingsPath == "" {
+		return persona.Inject(homeDir, adapter, id)
+	}
+	return persona.InjectAtSettingsPath(homeDir, adapter, id, selectedSettingsPath)
+}
+
+// defaultInjectSyncPersona mirrors defaultInjectInstallPersona for sync.
+func defaultInjectSyncPersona(homeDir string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
+	if selectedSettingsPath == "" {
+		return persona.InjectForSync(homeDir, adapter, id)
+	}
+	return persona.InjectForSyncAtSettingsPath(homeDir, adapter, id, selectedSettingsPath)
+}
 
 // SetCommandOutputStreaming toggles whether command stdout/stderr is streamed
 // directly to the terminal. It returns a restore function.
@@ -1063,15 +1081,16 @@ func (s agentRoutingGuidanceStep) Run() error {
 		}
 	}
 
+	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
+
 	// Strip first: an installation upgraded from an older release still carries
 	// the retired block, and leaving it beside fresh guidance would hand the
 	// agent two conflicting sets of instructions.
-	stripped, err := stripLegacyTriggerRules(targetDir, adapter)
+	stripped, err := stripLegacyTriggerRules(targetDir, adapter, options.SettingsPath)
 	if err != nil {
 		return err
 	}
 
-	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
 	if s.agent == model.AgentCodex {
 		options.CodexPhaseModelAssignments = s.codexPhaseModels
 		options.CodexModelAssignments = s.codexEfforts
@@ -1385,10 +1404,17 @@ func (s agentRoutingGuidanceStep) recordChanged(result agentguidance.Result) {
 // Removal reuses filemerge.InjectMarkdownSection with empty content, which is
 // already the defined "delete this section" operation, so no second merge
 // implementation exists that could drift from the injector.
-func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter) (agentguidance.Result, error) {
+//
+// settingsPath is the caller-resolved settings authority the routing injector
+// writes (OpenCode's effective loaded file); when empty, orchestrator-prompt
+// adapters keep their targetDir-derived settings path.
+func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter, settingsPath string) (agentguidance.Result, error) {
 	switch {
 	case adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode:
-		return stripLegacyTriggerRulesFromOrchestrator(adapter.SettingsPath(targetDir))
+		if settingsPath == "" {
+			settingsPath = adapter.SettingsPath(targetDir)
+		}
+		return stripLegacyTriggerRulesFromOrchestrator(settingsPath)
 	case adapter.SystemPromptStrategy() == model.StrategyJinjaModules:
 		return removeLegacyTriggerRulesModule(filepath.Join(adapter.GlobalConfigDir(targetDir), legacyTriggerRulesSection+".md"))
 	default:
@@ -2068,6 +2094,16 @@ func (s componentApplyStep) Run() error {
 		} else {
 			engramCommand = installedPath
 		}
+		// Refuse unsafe selected OpenCode settings before `engram setup`, whose
+		// external writes the later merge refusal could not undo.
+		for _, adapter := range adapters {
+			if adapter.Agent() != model.AgentOpenCode {
+				continue
+			}
+			if err := engram.ValidateOpenCodeSettings(openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter)); err != nil {
+				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
+			}
+		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
 		setupStrict := engram.ParseSetupStrict(os.Getenv(engram.SetupStrictEnvVar))
 
@@ -2141,6 +2177,7 @@ func (s componentApplyStep) Run() error {
 				}
 			}
 			engramOpts := engram.InjectOptions{
+				OpenCodeSettingsPath:        openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter),
 				CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
@@ -2165,7 +2202,13 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-			if _, err := mcp.Inject(s.homeDir, targetDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				_, err = mcp.InjectAtSettingsPath(s.homeDir, targetDir, adapter, openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter))
+			} else {
+				_, err = mcp.Inject(s.homeDir, targetDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject context7 for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -2181,14 +2224,24 @@ func (s componentApplyStep) Run() error {
 				continue
 			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-			if _, err := injectInstallPersona(targetDir, adapter, s.selection.Persona); err != nil {
+			selectedSettingsPath := ""
+			if adapter.Agent() == model.AgentOpenCode {
+				selectedSettingsPath = openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter)
+			}
+			if _, err := injectInstallPersona(targetDir, adapter, s.selection.Persona, selectedSettingsPath); err != nil {
 				return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 			}
 		}
 		return nil
 	case model.ComponentPermission:
 		for _, adapter := range adapters {
-			if _, err := permissions.Inject(s.homeDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				_, err = permissions.InjectAtPath(openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter), adapter)
+			} else {
+				_, err = permissions.Inject(s.homeDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject permissions for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -2260,7 +2313,13 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentTheme:
 		for _, adapter := range adapters {
-			if _, err := theme.Inject(s.homeDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenCode {
+				_, err = theme.InjectAtPath(openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter))
+			} else {
+				_, err = theme.Inject(s.homeDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject theme for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -2664,7 +2723,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 					// Persona can merge or clean a managed agent in settings during
 					// install. This is backup-only: ComponentPersona verification
 					// does not promise a settings write for every persona path.
-					if path := adapter.SettingsPath(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona)); path != "" {
+					path := adapter.SettingsPath(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona))
+					if adapter.Agent() == model.AgentOpenCode {
+						path = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+					}
+					if path != "" {
 						paths[path] = struct{}{}
 					}
 				}
@@ -2861,14 +2924,6 @@ func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adap
 	return paths
 }
 
-func componentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
-	return componentPathsWithWorkspace(homeDir, "", selection, adapters, component)
-}
-
-func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
-	return componentPathsWithWorkspaceScoped(homeDir, workspaceDir, ScopeGlobal, selection, adapters, component)
-}
-
 func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
@@ -2883,6 +2938,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
 				}
 			case model.StrategyMergeIntoSettings:
+				if adapter.Agent() == model.AgentOpenCode {
+					paths = append(paths, openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter))
+					break
+				}
 				// MCP settings are always merged into the global config file, not the
 				// workspace-scoped directory. For OpenClaw, SettingsPath(targetDir)
 				// would yield <workspace>/.openclaw/openclaw.json, but engram injection
@@ -2933,9 +2992,8 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(targetDir))...)
 			}
 			if adapter.Agent() == model.AgentOpenCode {
-				if p := effectiveOpenCodeSettingsPath(homeDir, workspaceDir, scope, adapter); p != "" {
-					paths = append(paths, p, opencodedefault.OwnershipPath(p))
-				}
+				// The retired SDD step writes no OpenCode settings; the routing
+				// guidance owner declares the default-agent ownership file (#5025).
 				paths = append(paths, openCodeSDDPluginPaths(adapter, targetDir)...)
 				// Shared prompt files in the selected OpenCode config scope — back these up
 				// so a sync does not silently overwrite user-customized prompt content.
@@ -2992,7 +3050,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 				paths = append(paths, adapter.MCPConfigPath(targetDir, "context7"))
 			case model.StrategyMergeIntoSettings:
-				if p := adapter.SettingsPath(targetDir); p != "" {
+				p := adapter.SettingsPath(targetDir)
+				if adapter.Agent() == model.AgentOpenCode {
+					p = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+				}
+				if p != "" {
 					paths = append(paths, p)
 				}
 			case model.StrategyMCPConfigFile:
@@ -3028,14 +3090,22 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 			}
 		case model.ComponentPermission:
-			if p := permissions.TargetPath(homeDir, adapter); p != "" {
+			p := permissions.TargetPath(homeDir, adapter)
+			if adapter.Agent() == model.AgentOpenCode {
+				p = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+			}
+			if p != "" {
 				paths = append(paths, p)
 			}
 		case model.ComponentGGA:
 			paths = append(paths, gga.ConfigPath(homeDir))
 			paths = append(paths, gga.AgentsTemplatePath(homeDir))
 		case model.ComponentTheme:
-			if p := adapter.SettingsPath(homeDir); p != "" {
+			p := adapter.SettingsPath(homeDir)
+			if adapter.Agent() == model.AgentOpenCode {
+				p = openCodeLoadedSettingsPath(homeDir, workspaceDir, adapter)
+			}
+			if p != "" {
 				paths = append(paths, p)
 			}
 		case model.ComponentClaudeTheme:
@@ -3074,6 +3144,16 @@ func effectiveOpenCodeSettingsPath(homeDir, workspaceDir string, scope InstallSc
 	return opencodeactivation.EffectiveSettingsPath(homeDir, workspaceDir)
 }
 
+// openCodeLoadedSettingsPath returns the one settings document OpenCode
+// actually loads: the effective project-over-global authority, regardless of
+// install scope. OpenCode never reads <workspace>/.config/opencode/opencode.json,
+// so a workspace-scoped install must not write settings there (issue #1825).
+// Settings writers (Persona, Permission, Context7, Theme, Engram), their backup
+// targets, and their declared paths all resolve through here.
+func openCodeLoadedSettingsPath(homeDir, workspaceDir string, adapter agents.Adapter) string {
+	return effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)
+}
+
 // routingGuidanceOptions carries OpenCode's caller-resolved effective settings
 // authority into the routing-guidance adapter. Routing remains global because
 // OpenCode does not load workspace-scoped orchestrator guidance; other agents
@@ -3085,10 +3165,6 @@ func routingGuidanceOptions(homeDir, workspaceDir string, adapter agents.Adapter
 		options.SettingsPath = effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)
 	}
 	return options
-}
-
-func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {
-	return componentInjectionDirScoped(homeDir, workspaceDir, ScopeGlobal, adapter)
 }
 
 // routingGuidanceDir resolves the installation root routing guidance is

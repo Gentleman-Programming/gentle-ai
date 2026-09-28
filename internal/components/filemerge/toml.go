@@ -23,35 +23,7 @@ func UpsertCodexEngramBlock(content, engramCmd string) string {
 	// e.g. C:\Users\foo → C:\\Users\\foo — prevents TOML unicode escape errors (\U).
 	escapedCmd := strings.ReplaceAll(engramCmd, `\`, `\\`)
 	codexEngramBlock := "[mcp_servers.engram]\ncommand = \"" + escapedCmd + "\"\nargs = [\"mcp\", \"--tools=agent\"]"
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	lines := strings.Split(content, "\n")
-
-	var kept []string
-	for i := 0; i < len(lines); {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "[mcp_servers.engram]" {
-			// Skip the old block header and all its key-value lines.
-			i++
-			for i < len(lines) {
-				next := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		kept = append(kept, lines[i])
-		i++
-	}
-
-	base := strings.TrimSpace(strings.Join(kept, "\n"))
-	if base == "" {
-		return codexEngramBlock + "\n"
-	}
-
-	return base + "\n\n" + codexEngramBlock + "\n"
+	return replaceCodexMCPServerBlock(content, "[mcp_servers.engram]", codexEngramBlock)
 }
 
 // UpsertCodexMCPServerBlock removes any existing [mcp_servers.<serverID>] block
@@ -77,35 +49,7 @@ func UpsertCodexMCPServerBlock(content, serverID, command string, args []string)
 
 	block := header + "\ncommand = \"" + escapedCmd + "\"\n" + argsLine
 
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	lines := strings.Split(content, "\n")
-
-	var kept []string
-	for i := 0; i < len(lines); {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == header {
-			// Skip the old block header and all its key-value lines.
-			i++
-			for i < len(lines) {
-				next := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		kept = append(kept, lines[i])
-		i++
-	}
-
-	base := strings.TrimSpace(strings.Join(kept, "\n"))
-	if base == "" {
-		return block + "\n"
-	}
-
-	return base + "\n\n" + block + "\n"
+	return replaceCodexMCPServerBlock(content, header, block)
 }
 
 // UpsertCodexRemoteMCPServerBlock removes any existing [mcp_servers.<serverID>]
@@ -118,17 +62,25 @@ func UpsertCodexRemoteMCPServerBlock(content, serverID, url string) string {
 	escapedURL := strings.ReplaceAll(url, `\`, `\\`)
 	block := header + "\nurl = \"" + escapedURL + "\""
 
+	return replaceCodexMCPServerBlock(content, header, block)
+}
+
+// replaceCodexMCPServerBlock removes every existing table whose header is
+// exactly header, together with its key-value lines, and appends block at EOF.
+// Header-like lines inside a multiline string are value text: they neither
+// start nor end a removed block, so user strings are kept byte-for-byte.
+func replaceCodexMCPServerBlock(content, header, block string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
+	inString := tomlMultilineStringLines(lines)
 
 	var kept []string
 	for i := 0; i < len(lines); {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == header {
+		if !inString[i] && strings.TrimSpace(lines[i]) == header {
+			// Skip the old block header and all its key-value lines.
 			i++
 			for i < len(lines) {
-				next := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+				if !inString[i] && isTOMLTableHeader(strings.TrimSpace(lines[i])) {
 					break
 				}
 				i++
@@ -163,12 +115,15 @@ func UpsertCodexRemoteMCPServerBlock(content, serverID, url string) string {
 // All other sections and top-level keys are preserved verbatim. The result is
 // idempotent: calling with the same arguments twice yields the same output.
 // Only the simple single-line-per-key subset is handled (no inline tables or
-// arrays-of-tables — the Codex config does not require those).
+// arrays-of-tables — the Codex config does not require those). Lines inside a
+// multiline string are value text: they are never headers or key lines, and a
+// replaced key's multiline string value is dropped along with it.
 func UpsertTOMLTableKey(content, section, key, rawValue string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 	header := "[" + section + "]"
 	newLine := key + " = " + rawValue
+	inString := tomlMultilineStringLines(lines)
 
 	// Find the section header and collect the indices of the key lines within it.
 	sectionLine := -1  // line index of the [section] header
@@ -176,6 +131,9 @@ func UpsertTOMLTableKey(content, section, key, rawValue string) string {
 
 	inSection := false
 	for i, line := range lines {
+		if inString[i] {
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == header {
 			sectionLine = i
@@ -184,7 +142,7 @@ func UpsertTOMLTableKey(content, section, key, rawValue string) string {
 		}
 		if inSection {
 			// A new [header] ends the current section.
-			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			if isTOMLTableHeader(trimmed) {
 				inSection = false
 				continue
 			}
@@ -214,15 +172,17 @@ func UpsertTOMLTableKey(content, section, key, rawValue string) string {
 		}
 
 		var out []string
-		for i, line := range lines {
-			if dupSet[i] {
-				continue // drop duplicates
-			}
+		for i := 0; i < len(lines); i++ {
 			if i == firstKey {
 				out = append(out, newLine) // replace in place
+			} else if !dupSet[i] {
+				out = append(out, lines[i])
 				continue
 			}
-			out = append(out, line)
+			// Drop the old or duplicate value's multiline string body too.
+			for i+1 < len(lines) && inString[i+1] {
+				i++
+			}
 		}
 		return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
 	}
@@ -243,7 +203,8 @@ func UpsertTOMLTableKey(content, section, key, rawValue string) string {
 //
 // It intentionally matches only exact TOML keys in the target section. This is
 // useful for cleaning up previously generated entries without disturbing
-// unrelated user configuration.
+// unrelated user configuration. Lines inside a multiline string are value text,
+// never headers or keys; a removed key's multiline string value goes with it.
 func RemoveTOMLTableKeys(content, section string, keys []string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	if len(keys) == 0 {
@@ -257,17 +218,23 @@ func RemoveTOMLTableKeys(content, section string, keys []string) string {
 
 	header := "[" + section + "]"
 	lines := strings.Split(content, "\n")
+	inString := tomlMultilineStringLines(lines)
 	inSection := false
 	var out []string
 
-	for _, line := range lines {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if inString[i] {
+			out = append(out, line)
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == header {
 			inSection = true
 			out = append(out, line)
 			continue
 		}
-		if inSection && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		if inSection && isTOMLTableHeader(trimmed) {
 			inSection = false
 		}
 		if inSection {
@@ -279,6 +246,10 @@ func RemoveTOMLTableKeys(content, section string, keys []string) string {
 				}
 			}
 			if removeLine {
+				// Drop the removed value's multiline string body too.
+				for i+1 < len(lines) && inString[i+1] {
+					i++
+				}
 				continue
 			}
 		}
@@ -293,20 +264,21 @@ func RemoveTOMLTableKeys(content, section string, keys []string) string {
 // LF like the other string-based TOML merge helpers in this package.
 //
 // It matches only the exactly-spelled [tableName] header and leaves subtables
-// alone.
+// alone. Header-like lines inside a multiline string are value text: they
+// neither start nor end the removed table.
 func RemoveTOMLTable(content, tableName string) string {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 	header := "[" + tableName + "]"
+	inString := tomlMultilineStringLines(lines)
 
 	kept := make([]string, 0, len(lines))
 	for i := 0; i < len(lines); {
 		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == header {
+		if !inString[i] && trimmed == header {
 			i++
 			for i < len(lines) {
-				next := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+				if !inString[i] && isTOMLTableHeader(strings.TrimSpace(lines[i])) {
 					break
 				}
 				i++
@@ -387,6 +359,19 @@ func isTOMLKeyAssignment(line, key string) bool {
 		remainder = remainder[1:]
 	}
 	return strings.HasPrefix(remainder, "=")
+}
+
+// tomlMultilineStringLines reports, for each line, whether it begins inside a
+// multiline string. Such a line is value text: it is never a table header or a
+// key assignment, whatever it looks like.
+func tomlMultilineStringLines(lines []string) []bool {
+	inString := make([]bool, len(lines))
+	var multilineQuote byte
+	for i, line := range lines {
+		inString[i] = multilineQuote != 0
+		multilineQuote = ScanTOMLMultilineString(line, multilineQuote)
+	}
+	return inString
 }
 
 // ScanTOMLMultilineString reports the multiline string state after line,

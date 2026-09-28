@@ -35,19 +35,29 @@ func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 // MergeJSONObjectsForPath selects the JSON object merge mode appropriate for
 // path. JSONC files preserve comments and formatting around untouched values;
 // strict JSON files are normalized through standard JSON encoding.
+//
+// Only the OpenCode adapter resolves a .jsonc settings path, so the JSONC branch
+// is the OpenCode merge (see MergeOpenCodeJSONCObjects); every .json path keeps
+// the shared merge behavior for all agents.
 func MergeJSONObjectsForPath(path string, baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	if strings.HasSuffix(path, ".jsonc") {
-		return MergeJSONObjectsPreserveJSONC(baseJSON, overlayJSON)
+		return MergeOpenCodeJSONCObjects(baseJSON, overlayJSON)
 	}
 	return MergeJSONObjects(baseJSON, overlayJSON)
 }
 
-// MergeJSONObjectsPreserveJSONC merges JSON object overlays while preserving the
-// surrounding JSONC document text. It rewrites only top-level values touched by
-// the overlay, keeping unrelated comments and trailing commas intact.
-func MergeJSONObjectsPreserveJSONC(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+// MergeOpenCodeJSONCObjects merges JSON object overlays into OpenCode settings
+// while preserving the surrounding JSONC document text. It rewrites only
+// top-level values touched by the overlay, keeping unrelated comments and
+// trailing commas intact. It refuses duplicate keys at any depth, escaped
+// spellings of touched keys and comments inside touched values, all of which
+// the map-based rewrite would silently collapse or discard.
+func MergeOpenCodeJSONCObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	if len(bytes.TrimSpace(baseJSON)) == 0 {
 		return MergeJSONObjects(baseJSON, overlayJSON)
+	}
+	if err := RejectDuplicateJSONKeys(baseJSON); err != nil {
+		return baseJSON, fmt.Errorf("refuse to merge JSONC settings; resolve duplicate keys and retry: %w", err)
 	}
 	base, err := unmarshalJSONObject(baseJSON)
 	if err != nil {
@@ -58,8 +68,14 @@ func MergeJSONObjectsPreserveJSONC(baseJSON []byte, overlayJSON []byte) ([]byte,
 		return nil, fmt.Errorf("unmarshal overlay json: %w", err)
 	}
 	for key := range overlay {
+		if escapedTopLevelJSONCKey(string(baseJSON), base, key) {
+			return baseJSON, fmt.Errorf("refuse to rewrite JSONC %q with an escaped key spelling; use its unescaped spelling and retry", key)
+		}
 		if topLevelJSONCKeyCount(string(baseJSON), key) > 1 {
 			return baseJSON, fmt.Errorf("refuse to merge jsonc with duplicate touched top-level key %q", key)
+		}
+		if JSONCTopLevelValueHasComments(baseJSON, key) {
+			return baseJSON, fmt.Errorf("refuse to rewrite JSONC %q with nested comments; move comments outside this value before retrying", key)
 		}
 	}
 
@@ -93,6 +109,22 @@ func MarshalJSONPreservingPermissions(base []byte, value any) ([]byte, error) {
 // New rules precede existing rules, except an initial catch-all allow remains
 // the fallback before new defaults. Existing rule order and scalar values win.
 func MergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byte, error) {
+	return mergeJSONDefaultsForPath(path, baseJSON, defaultsJSON, false)
+}
+
+// MergeOpenCodeJSONDefaultsForPath is MergeJSONDefaultsForPath for OpenCode
+// settings writers. It additionally refuses duplicate keys at any depth,
+// escaped spellings of touched keys and comments inside touched JSONC values.
+func MergeOpenCodeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byte, error) {
+	return mergeJSONDefaultsForPath(path, baseJSON, defaultsJSON, true)
+}
+
+func mergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte, openCode bool) ([]byte, error) {
+	if openCode {
+		if err := RejectDuplicateJSONKeys(baseJSON); err != nil {
+			return nil, fmt.Errorf("refuse defaults over settings; resolve duplicate keys and retry: %w", err)
+		}
+	}
 	base, err := unmarshalJSONObject(baseJSON)
 	if err != nil {
 		return nil, fmt.Errorf("refuse defaults over unreadable settings: %w", err)
@@ -114,8 +146,14 @@ func MergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byt
 	}
 	updated := string(baseJSON)
 	for key := range defaults {
+		if openCode && escapedTopLevelJSONCKey(updated, base, key) {
+			return nil, fmt.Errorf("refuse to rewrite JSONC %q with an escaped key spelling; use its unescaped spelling and retry", key)
+		}
 		if topLevelJSONCKeyCount(updated, key) > 1 {
 			return nil, fmt.Errorf("duplicate defaults key %q", key)
+		}
+		if openCode && JSONCTopLevelValueHasComments([]byte(updated), key) {
+			return nil, fmt.Errorf("refuse to rewrite JSONC %q with nested comments; move comments outside this value before retrying", key)
 		}
 		updated = upsertTopLevelJSONCValue(updated, key, string(members[key]))
 	}
@@ -204,6 +242,12 @@ func unmarshalJSONObject(raw []byte) (map[string]any, error) {
 // removed before falling back to strict JSON decoding errors.
 func UnmarshalJSONObject(raw []byte) (map[string]any, error) {
 	return unmarshalJSONObject(raw)
+}
+
+// RejectDuplicateJSONKeys checks decoded JSON/JSONC object keys at every depth.
+// Call before decoding user settings into a map for a rewrite.
+func RejectDuplicateJSONKeys(raw []byte) error {
+	return rejectDuplicateJSONKeys(raw)
 }
 
 // rejectDuplicateJSONKeys checks every object before a map decoder can collapse
@@ -367,6 +411,46 @@ func RemoveLegacyOpenCodeAgentMarkers(path string, raw []byte, names []string) (
 		agentText = agentText[:a] + defText[:key] + defText[finish:] + agentText[b:]
 	}
 	return []byte(text[:start] + agentText + text[end:]), nil
+}
+
+// JSONCTopLevelKeyIsEscaped reports whether the decoded top-level key is
+// present only under an escaped spelling (for example "\u0061gent"). The JSONC
+// text rewrite cannot locate such a key, so MergeOpenCodeJSONCObjects refuses
+// to touch it; callers use this to refuse before mutating any other file.
+// Unparseable documents report false.
+func JSONCTopLevelKeyIsEscaped(raw []byte, key string) bool {
+	root, err := unmarshalJSONObject(raw)
+	if err != nil {
+		return false
+	}
+	return escapedTopLevelJSONCKey(string(raw), root, key)
+}
+
+func escapedTopLevelJSONCKey(content string, decoded map[string]any, key string) bool {
+	_, present := decoded[key]
+	return present && topLevelJSONCKeyCount(content, key) == 0
+}
+
+// JSONCTopLevelValueHasComments reports whether replacing the named value
+// would discard a comment. Comments elsewhere in the document remain safe.
+func JSONCTopLevelValueHasComments(raw []byte, key string) bool {
+	text := string(raw)
+	if topLevelJSONCKeyCount(text, key) != 1 {
+		return false
+	}
+	start, end, ok := topLevelJSONCValueRange(text, key)
+	if !ok {
+		return false
+	}
+	value := []byte(text[start:end])
+	return !bytes.Equal(value, stripJSONComments(value))
+}
+
+// JSONCAgentHasComments reports whether rewriting the agent value would erase
+// user comments. Callers must refuse before mutating any other files when this
+// subtree cannot be safely edited with the current JSONC merge machinery.
+func JSONCAgentHasComments(raw []byte) bool {
+	return JSONCTopLevelValueHasComments(raw, "agent")
 }
 
 func RemoveJSONAgentTools(raw []byte, names ...string) ([]byte, error) {

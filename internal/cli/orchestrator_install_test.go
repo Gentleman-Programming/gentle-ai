@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const (
@@ -49,7 +49,7 @@ func installedGuidance(t *testing.T, home string, agent model.AgentID) (string, 
 		t.Fatalf("NewAdapter(%q) error = %v", agent, err)
 	}
 	paths, err := agentguidance.RoutingPathsWithOptions(home, agent, routingGuidanceOptions(home, "", adapter))
-	if err != nil || len(paths) != 1 {
+	if err != nil || len(paths) == 0 {
 		t.Fatalf("RoutingPathsWithOptions(%q) = %v, %v", agent, paths, err)
 	}
 	raw := readTextFile(t, paths[0])
