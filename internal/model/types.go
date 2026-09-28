@@ -72,6 +72,7 @@ const (
 	AgentTrae          AgentID = "trae-ide"
 	AgentHermes        AgentID = "hermes"
 	AgentConductor     AgentID = "conductor"
+	AgentCommandCode   AgentID = "command-code"
 )
 
 const AgentGitHubCopilotCLI AgentID = "github-copilot-cli"

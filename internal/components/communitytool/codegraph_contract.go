@@ -49,6 +49,7 @@ var codeGraphCompatibilityTable = map[model.AgentID]codeGraphCompatibility{
 	model.AgentPi:            reconciledCompatibility(model.AgentPi, ""),
 	model.AgentTrae:          excludedCompatibility(model.AgentTrae),
 	model.AgentHermes:        nativeCompatibility(model.AgentHermes, "hermes"),
+	model.AgentCommandCode:   excludedCompatibility(model.AgentCommandCode),
 	// Conductor is detection/catalog-only and inherits Claude Code
 	// configuration for its workspaces, so it owns no direct CodeGraph wiring;
 	// it stays in the table so a future capability claim cannot silently
