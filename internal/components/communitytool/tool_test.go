@@ -1592,32 +1592,75 @@ func TestInstallFirstInstallPathUnchangedByVersionReconcile(t *testing.T) {
 	}
 }
 
-// TestInstallForceReinstallBypassesReconcileShortCircuit closes R2: the
-// explicit --force-community-tools flag must bypass the
-// CodeGraphReconcileSatisfied()/codeGraphCanRepairWithoutFullInstall short-
-// circuit even when the installed CodeGraph already meets
-// codeGraphUpstreamVersion and every detected agent is configured. The runner
-// writes the expected MCP wiring so the post-install validation succeeds,
-// isolating the bypass behaviour from any unrelated validate error.
+// TestInstallForceReinstallBypassesReconcileShortCircuit pins the dual
+// behaviour of --force-community-tools end-to-end:
+//
+//   - force=false on a home where every detected agent is already wired
+//     and the installed CodeGraph meets codeGraphUpstreamVersion MUST
+//     short-circuit (zero runner invocations). The pre-installed wiring
+//     uses the canonical Claude MCP server shape in `~/.claude.json`,
+//     the CodeGraph server shape in `~/.cursor/mcp.json`, and the
+//     gentle-ai:codegraph-guidance marker in both SystemPromptFile
+//     paths (`~/.claude/CLAUDE.md`, `~/.cursor/rules/gentle-ai.mdc`).
+//     These match the JSON / markdown shapes the install path itself
+//     produces for the same agents.
+//   - force=true MUST bypass that short-circuit and re-run the install
+//     path even on a reconciled home, exercising the runner at least
+//     once.
+//
+// The wiring helper is file-local because no other test in this file
+// needs this state. installHomeWithTwoNativeTargets is left untouched
+// (its bare `{}` shape is reused by tests that exercise the long path
+// through the runner's own writes).
 func TestInstallForceReinstallBypassesReconcileShortCircuit(t *testing.T) {
-	home := installHomeWithTwoNativeTargets(t)
 	stubCodeGraphVersion(t, codeGraphUpstreamVersion, true)
 
-	calls := 0
-	_, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
-		calls++
-		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
-		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
-		return nil
-	}), DetectorFunc(func(string) (string, error) {
-		return "/bin/codegraph", nil
-	}), true)
-	if err != nil {
-		t.Fatalf("InstallWithHome() error = %v", err)
+	cases := []struct {
+		name            string
+		force           bool
+		wantRunnerCalls int
+	}{
+		{name: "force false short-circuits on reconciled home", force: false, wantRunnerCalls: 0},
+		{name: "force true bypasses the short-circuit", force: true, wantRunnerCalls: 1},
 	}
-	if calls == 0 {
-		t.Fatal("runner was never called: --force-community-tools must bypass the short-circuit and re-run the install path")
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := installReconciledCodeGraphHome(t)
+			calls := 0
+			_, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
+				calls++
+				return nil
+			}), DetectorFunc(func(string) (string, error) {
+				return "/bin/codegraph", nil
+			}), tc.force)
+			if err != nil {
+				t.Fatalf("InstallWithHome() error = %v", err)
+			}
+			if calls < tc.wantRunnerCalls {
+				t.Fatalf("runner calls = %d, want ≥%d (force=%v): --force-community-tools must bypass the reconcile short-circuit when true and short-circuit when false", calls, tc.wantRunnerCalls, tc.force)
+			}
+		})
 	}
+}
+
+// installReconciledCodeGraphHome layers valid CodeGraph wiring on top of
+// installHomeWithTwoNativeTargets so the reconcile-satisfied short-circuit
+// has something to recognise. The JSON / markdown shapes mirror what the
+// install path itself writes for Claude and Cursor: canonical Claude MCP
+// server in `~/.claude.json`, codegraph server in `~/.cursor/mcp.json`,
+// and the gentle-ai:codegraph-guidance marker in both SystemPromptFile
+// paths (`~/.claude/CLAUDE.md`, `~/.cursor/rules/gentle-ai.mdc`). The
+// helper is file-local because no other test in this file needs this
+// state.
+func installReconciledCodeGraphHome(t *testing.T) string {
+	t.Helper()
+	home := installHomeWithTwoNativeTargets(t)
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+	mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "<!-- gentle-ai:codegraph-guidance -->\n")
+	mustWrite(t, filepath.Join(home, ".cursor", "rules", "gentle-ai.mdc"), "<!-- gentle-ai:codegraph-guidance -->\n")
+	return home
 }
 
 // ─── UpgradeCodeGraphIfStale (sync-parity contract) ────────────────────────
