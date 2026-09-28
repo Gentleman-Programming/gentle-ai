@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -512,6 +513,9 @@ type ExecuteFunc func(
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult
 
+// ExecuteSDKFunc carries consent only from this install invocation.
+type ExecuteSDKFunc func(model.Selection, planner.ResolvedPlan, system.DetectionResult, model.OpenCodeBackgroundIntent, model.OpenCodeBackgroundIntent, model.PiBackgroundIntent, model.PiBackgroundIntent, pipeline.ProgressFunc, *cli.OpenCodeSDKConsent) pipeline.ExecutionResult
+
 // RestoreFunc restores a backup from a manifest.
 type RestoreFunc func(manifest backup.Manifest) error
 
@@ -553,6 +557,7 @@ const (
 	ScreenReview
 	ScreenOpenCodeBackground
 	ScreenPiBackground
+	ScreenOpenCodeSDKConfirm
 	ScreenInstalling
 	ScreenModelPicker
 	ScreenComplete
@@ -667,7 +672,10 @@ type Model struct {
 
 	// ExecuteFn is called to run the real pipeline. When nil, the installing
 	// screen falls back to manual step-through (useful for tests/development).
-	ExecuteFn ExecuteFunc
+	ExecuteFn    ExecuteFunc
+	ExecuteSDKFn ExecuteSDKFunc
+	sdkProposal  *cli.OpenCodeSDKConsent
+	sdkConsent   *cli.OpenCodeSDKConsent
 
 	// RestoreFn is called to restore a backup. When nil, restore is a no-op.
 	RestoreFn RestoreFunc
@@ -1540,11 +1548,20 @@ func (m Model) View() string {
 	case ScreenInstallReviewMode:
 		return screens.RenderInstallReviewMode(m.InstallReviewModeStatus, m.InstallReviewModeLoadErr, m.Cursor)
 	case ScreenReview:
-		return screens.RenderReview(m.Review, m.Cursor, m.installReviewModeSummary())
+		out := screens.RenderReview(m.Review, m.Cursor, m.installReviewModeSummary())
+		if m.Err != nil {
+			out += "\n\nOpenCode SDK: " + m.Err.Error()
+		}
+		return out
 	case ScreenOpenCodeBackground:
 		return screens.RenderOpenCodeBackground(m.Cursor)
 	case ScreenPiBackground:
 		return screens.RenderPiBackground(m.Cursor)
+	case ScreenOpenCodeSDKConfirm:
+		if m.sdkProposal != nil {
+			return screens.RenderOpenCodeSDKConfirm(m.sdkProposal.Dependency, m.sdkProposal.Manager, m.sdkProposal.ConfigDir, m.Cursor)
+		}
+		return ""
 	case ScreenInstalling:
 		return screens.RenderInstalling(m.Progress.ViewModel(), screens.SpinnerChar(m.SpinnerFrame))
 	case ScreenComplete:
@@ -2594,6 +2611,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		return m, nil
 	case ScreenReview:
 		if m.Cursor == 0 {
+			m.Err = nil
+			m.sdkConsent = nil
+			m.sdkProposal = nil
 			if m.shouldShowOpenCodeBackgroundScreen() {
 				resolution, err := cli.ResolveOpenCodeBackgroundInteractive(m.BackgroundIntent)
 				if err != nil {
@@ -2656,12 +2676,23 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.PiBackgroundIntent = model.PiBackgroundOff
 			}
 			m.PiBackgroundPersist = m.PiBackgroundIntent
-			return m.startInstalling()
+			return m.continueToSDKOrInstall()
 		}
 		m.PiBackgroundIntent = m.piBackgroundPromptOriginal
 		m.PiBackgroundPersist = ""
 		m.Err = nil
 		m.setScreen(ScreenReview)
+	case ScreenOpenCodeSDKConfirm:
+		if m.Cursor != 0 || m.sdkProposal == nil {
+			m.sdkConsent = nil
+			m.sdkProposal = nil
+			m.setScreen(ScreenReview)
+			return m, nil
+		}
+		consent := *m.sdkProposal
+		m.sdkConsent = &consent
+		m.sdkProposal = nil
+		return m.startInstalling()
 	case ScreenInstalling:
 		if m.Progress.Done() && !m.pipelineRunning && !m.InstallReviewModePersisting {
 			m.setScreen(ScreenComplete)
@@ -2822,6 +2853,26 @@ func (m Model) continueToPiBackgroundOrInstall() (tea.Model, tea.Cmd) {
 		m.PiBackgroundIntent = resolution.Effective
 		m.PiBackgroundPersist = resolution.Persist
 	}
+	return m.continueToSDKOrInstall()
+}
+
+func (m Model) continueToSDKOrInstall() (tea.Model, tea.Cmd) {
+	m.sdkConsent = nil
+	m.sdkProposal = nil
+	if slices.Contains(m.DependencyPlan.Agents, model.AgentOpenCode) {
+		proposal, err := cli.OpenCodeSDKInstallProposal(homeDir())
+		if err != nil {
+			m.Err = err
+			m.setScreen(ScreenReview)
+			return m, nil
+		}
+		if proposal != nil {
+			m.sdkProposal = proposal
+			m.setScreen(ScreenOpenCodeSDKConfirm)
+			m.Cursor = 1 // Back is the safe default.
+			return m, nil
+		}
+	}
 	return m.startInstalling()
 }
 
@@ -2846,7 +2897,7 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	m.Progress.Start(0)
 	m.Progress.AppendLog("starting installation")
 
-	if m.ExecuteFn == nil {
+	if m.ExecuteFn == nil && m.ExecuteSDKFn == nil {
 		// No real executor; fall back to manual step-through.
 		return m, tickCmd()
 	}
@@ -2859,6 +2910,9 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 
 	// Capture values for the goroutine closure.
 	executeFn := m.ExecuteFn
+	executeSDKFn := m.ExecuteSDKFn
+	consent := m.sdkConsent
+	m.sdkConsent = nil
 	selection := m.Selection
 	resolved := m.DependencyPlan
 	detection := m.Detection
@@ -2872,7 +2926,12 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 			progressRun.publish(event)
 		}
 
-		result := executeFn(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress)
+		var result pipeline.ExecutionResult
+		if executeSDKFn != nil {
+			result = executeSDKFn(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress, consent)
+		} else {
+			result = executeFn(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress)
+		}
 		progressRun.complete(result)
 		return nil
 	}
@@ -3635,6 +3694,12 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		m.setScreen(ScreenReview)
 		return m
 	}
+	if m.Screen == ScreenOpenCodeSDKConfirm {
+		m.sdkConsent = nil
+		m.sdkProposal = nil
+		m.setScreen(ScreenReview)
+		return m
+	}
 	if m.Screen == ScreenRestoreResult || m.Screen == ScreenDeleteResult {
 		return m.finishBackupResult(m.Screen == ScreenDeleteResult)
 	}
@@ -4029,6 +4094,8 @@ func (m Model) optionCount() int {
 		return len(screens.OpenCodeBackgroundOptions()) + 1
 	case ScreenPiBackground:
 		return len(screens.PiBackgroundOptions()) + 1
+	case ScreenOpenCodeSDKConfirm:
+		return 2
 	case ScreenInstalling:
 		return 0
 	case ScreenComplete:

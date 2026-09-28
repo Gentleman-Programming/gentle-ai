@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -684,6 +686,7 @@ type installRuntime struct {
 	channel      InstallChannel
 	backupRoot   string
 	state        *runtimeState
+	sdkConsent   *OpenCodeSDKConsent
 
 	background           OpenCodeBackgroundResolution
 	runtimeReady         bool
@@ -791,7 +794,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		prepare = append([]pipeline.Step{openCodeTelemetryStep{id: "prepare:opencode-telemetry", configDir: telemetryDir, checkOnly: true}}, prepare...)
 	}
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
-		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir}}, prepare...)
+		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir, consent: r.sdkConsent}}, prepare...)
 	}
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
 	if telemetryDir != "" {
@@ -960,6 +963,206 @@ type managedOpenCodePluginsInstallStep struct {
 // telemetry and managed-plugin writes in install and sync prepare stages.
 type openCodePluginDependencyPreflightStep struct {
 	id, homeDir string
+	consent     *OpenCodeSDKConsent
+}
+
+// OpenCodeSDKConsent describes one reviewed package-manager mutation, not a
+// persisted preference. Only the TUI's separate confirmation supplies it.
+type OpenCodeSDKConsent struct {
+	ConfigDir      string
+	Manager        string
+	Dependency     string
+	stateSignature [32]byte
+	physicalDir    string
+	dirInfo        os.FileInfo
+	executable     string
+	physicalExe    string
+	exeInfo        os.FileInfo
+	exeDigest      [32]byte
+}
+
+const openCodeSDKRegistry = "https://registry.npmjs.org"
+
+// Tests shorten this deadline; production never waits indefinitely for a manager.
+var openCodeSDKInstallTimeout = 2 * time.Minute
+
+// OpenCodeSDKInstallProposal returns nil when no SDK operation is needed.
+// A conflicting or unavailable package manager is never guessed.
+func OpenCodeSDKInstallProposal(homeDir string) (*OpenCodeSDKConsent, error) {
+	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if major != opencodeactivation.RuntimeV2 {
+		return nil, nil
+	}
+	dependency, err := major.PluginDependency()
+	if err != nil {
+		return nil, err
+	}
+	config := opencodeagent.NewAdapter().GlobalConfigDir(homeDir)
+	if openCodeSDKInstalled(config, dependency) {
+		return nil, nil
+	}
+	physicalDir, dirInfo, err := openCodeSDKConfigTarget(config)
+	if err != nil {
+		return nil, fmt.Errorf("OpenCode SDK automatic install cannot establish a stable config directory: %w; install %s manually before retrying", err, dependency)
+	}
+	if err := openCodeSDKCheckProjectConfig(config); err != nil {
+		manager := openCodePluginPackageManager(config)
+		if openCodeSDKManualBunOwner(config) {
+			manager = "bun"
+		} else if manager == "" {
+			manager = "npm"
+		}
+		return nil, fmt.Errorf("automatic OpenCode SDK install refused: %w; run `%s` manually, then retry Gentle AI", err, openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency))
+	}
+	executable, err := cmdLookPath("npm")
+	if err != nil {
+		return nil, fmt.Errorf("resolve approved npm executable: %w; install %s manually before retrying", err, dependency)
+	}
+	physicalExe, exeInfo, err := openCodeSDKPhysicalTarget(executable, false)
+	if err != nil {
+		return nil, fmt.Errorf("resolve approved npm executable: %w", err)
+	}
+	exeDigest, err := openCodeSDKExecutableDigest(physicalExe)
+	if err != nil {
+		return nil, fmt.Errorf("inspect approved npm executable: %w", err)
+	}
+	signature, err := openCodeSDKPackageState(config)
+	if err != nil {
+		return nil, err
+	}
+	return &OpenCodeSDKConsent{ConfigDir: config, Manager: "npm", Dependency: dependency, stateSignature: signature, physicalDir: physicalDir, dirInfo: dirInfo, executable: executable, physicalExe: physicalExe, exeInfo: exeInfo, exeDigest: exeDigest}, nil
+}
+
+func openCodeSDKConfigTarget(config string) (string, os.FileInfo, error) {
+	if physical, info, err := openCodeSDKPhysicalTarget(config, true); err == nil {
+		return physical, info, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", nil, err
+	}
+	// Resolve the nearest existing ancestor without creating a directory before consent.
+	ancestor := config
+	for {
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			// refusal:by-design operator-knowledge: no stable filesystem root exists for this target
+			return "", nil, fmt.Errorf("no existing config ancestor")
+		}
+		ancestor = parent
+		if _, err := os.Lstat(ancestor); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", nil, err
+		}
+	}
+	physical, info, err := openCodeSDKPhysicalTarget(ancestor, true)
+	if err != nil {
+		return "", nil, err
+	}
+	rel, err := filepath.Rel(ancestor, config)
+	if err != nil {
+		return "", nil, err
+	}
+	return filepath.Join(physical, rel), info, nil
+}
+
+func openCodeSDKExecutableDigest(path string) ([32]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer f.Close()
+	var digest [32]byte
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return [32]byte{}, err
+	}
+	copy(digest[:], h.Sum(nil))
+	return digest, nil
+}
+
+func openCodeSDKPhysicalTarget(path string, directory bool) (string, os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", nil, err
+	}
+	if directory && !info.IsDir() {
+		// refusal:by-design operator-knowledge: redirected or missing config cannot be safely targeted
+		return "", nil, fmt.Errorf("config path is not a real directory")
+	}
+	physical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", nil, err
+	}
+	physical, err = filepath.Abs(physical)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err = os.Stat(path)
+	if err != nil {
+		return "", nil, err
+	}
+	if directory && !info.IsDir() {
+		// refusal:by-design operator-knowledge: only a physical package directory may be targeted
+		return "", nil, fmt.Errorf("config path is not a directory")
+	}
+	if !directory && !info.Mode().IsRegular() {
+		// refusal:by-design operator-knowledge: package manager executable cannot be identified
+		return "", nil, fmt.Errorf("package manager is not a regular executable")
+	}
+	return physical, info, nil
+}
+
+func openCodeSDKCheckProjectConfig(config string) error {
+	for _, name := range []string{"package.json", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", ".npmrc", "bunfig.toml", "node_modules"} {
+		_, err := os.Lstat(filepath.Join(config, name))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect %s: %w", name, err)
+		}
+		if err == nil {
+			// refusal:by-design human-authority: existing dependency state is manual-only
+			return fmt.Errorf("%s is present in the OpenCode package directory, including symlinks", name)
+		}
+	}
+	return nil
+}
+
+func (c *OpenCodeSDKConsent) matches(current *OpenCodeSDKConsent) bool {
+	return c != nil && current != nil && c.ConfigDir == current.ConfigDir && c.Manager == current.Manager &&
+		c.Dependency == current.Dependency && c.stateSignature == current.stateSignature &&
+		c.physicalDir == current.physicalDir && c.executable == current.executable &&
+		c.physicalExe == current.physicalExe && c.exeDigest == current.exeDigest &&
+		((c.dirInfo == nil && current.dirInfo == nil) || (c.dirInfo != nil && current.dirInfo != nil && os.SameFile(c.dirInfo, current.dirInfo))) &&
+		os.SameFile(c.exeInfo, current.exeInfo)
+}
+
+func openCodeSDKPackageState(config string) ([32]byte, error) {
+	h := sha256.New()
+	for _, name := range []string{"package.json", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", ".npmrc", "bunfig.toml"} {
+		data, err := os.ReadFile(filepath.Join(config, name))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return [32]byte{}, fmt.Errorf("inspect %s: %w", name, err)
+		}
+		fmt.Fprintf(h, "%s:%t:%d:", name, err == nil, len(data))
+		h.Write(data)
+	}
+	var signature [32]byte
+	copy(signature[:], h.Sum(nil))
+	return signature, nil
+}
+
+func openCodeSDKInstalled(config, dependency string) bool {
+	manifest := filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json")
+	data, err := os.ReadFile(manifest)
+	if err != nil || len(data) > 1<<20 {
+		return false
+	}
+	var pkg struct {
+		Version string `json:"version"`
+	}
+	return json.Unmarshal(data, &pkg) == nil && pkg.Version == strings.TrimPrefix(dependency, "@opencode/plugin@")
 }
 
 func (s openCodePluginDependencyPreflightStep) ID() string { return s.id }
@@ -977,15 +1180,35 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 		return err
 	}
 	config := opencodeagent.NewAdapter().GlobalConfigDir(s.homeDir)
-	manifest := filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json")
-	data, err := os.ReadFile(manifest)
-	if err == nil && len(data) <= 1<<20 {
-		var pkg struct {
-			Version string `json:"version"`
+	if openCodeSDKInstalled(config, dependency) {
+		return nil
+	}
+	if s.consent != nil {
+		proposal, err := OpenCodeSDKInstallProposal(s.homeDir)
+		if err != nil {
+			return err
 		}
-		if json.Unmarshal(data, &pkg) == nil && pkg.Version == strings.TrimPrefix(dependency, "@opencode/plugin@") {
-			return nil
+		if !s.consent.matches(proposal) {
+			// refusal:by-design human-authority: changed ownership needs fresh explicit confirmation
+			return fmt.Errorf("OpenCode SDK package ownership changed after confirmation; review the operation again before retrying")
 		}
+		if err := openCodeSDKRunApprovedManager(proposal); err != nil {
+			return err
+		}
+		if !openCodeSDKInstalled(config, dependency) {
+			// refusal:by-design world-action: the external manager did not materialize the requested package
+			return fmt.Errorf("%s completed without materializing %s in %s; package-manager changes are not covered by Gentle AI rollback; run `%s` manually, then retry", proposal.Manager, dependency, config, openCodeSDKInstallContinuation(runtime.GOOS, config, proposal.Manager, dependency))
+		}
+		return nil
+	}
+	if err := openCodeSDKCheckProjectConfig(config); err == nil {
+		location := openCodeSDKInstallContinuation(runtime.GOOS, config, "npm", dependency)
+		if runtime.GOOS == "windows" {
+			// refusal:by-design world-action: PowerShell must run the displayed manual install
+			return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; in PowerShell run: %s; then retry Gentle AI", dependency, location)
+		}
+		// refusal:by-design world-action: the operator must run the displayed manual install
+		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; run `%s`, then retry Gentle AI", dependency, location)
 	}
 	manager := openCodePluginPackageManager(config)
 	if manager == "" {
@@ -993,8 +1216,14 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 			// refusal:by-design operator-knowledge: conflicting lockfiles cannot safely establish ownership without user choice
 			return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; bun and npm lockfiles conflict in %s, so choose and reconcile the owning package manager before retrying", dependency, config)
 		}
+		if openCodeSDKManualBunOwner(config) {
+			return openCodeSDKManualBunError(config, dependency)
+		}
 		// refusal:by-design world-action: no executable package manager is available for the existing package ownership
 		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; no compatible package manager is available for %s", dependency, config)
+	}
+	if manager == "bun" {
+		return openCodeSDKManualBunError(config, dependency)
 	}
 	location := openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency)
 	if runtime.GOOS == "windows" {
@@ -1003,6 +1232,121 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 	}
 	// refusal:by-design world-action: the runnable package-manager command is selected from the user's package ownership and quoted config path at runtime
 	return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; run `%s`, then retry Gentle AI", dependency, location)
+}
+
+// Bun ownership is a manual-only route even when Bun is unavailable on PATH.
+func openCodeSDKManualBunOwner(config string) bool {
+	if data, err := os.ReadFile(filepath.Join(config, "package.json")); err == nil {
+		var pkg struct {
+			PackageManager string `json:"packageManager"`
+		}
+		if json.Unmarshal(data, &pkg) == nil && strings.TrimSpace(pkg.PackageManager) != "" {
+			owner := strings.ToLower(strings.TrimSpace(pkg.PackageManager))
+			return owner == "bun" || strings.HasPrefix(owner, "bun@")
+		}
+	}
+	for _, name := range []string{"bun.lock", "bun.lockb"} {
+		if _, err := os.Stat(filepath.Join(config, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func openCodeSDKManualBunError(config, dependency string) error {
+	location := openCodeSDKInstallContinuation(runtime.GOOS, config, "bun", dependency)
+	if runtime.GOOS == "windows" {
+		// refusal:by-design world-action: Bun-owned packages require an operator-run PowerShell continuation
+		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; Bun-owned packages cannot be provisioned automatically; in PowerShell run: %s; then retry Gentle AI", dependency, location)
+	}
+	// refusal:by-design world-action: Bun-owned packages require an operator-run continuation
+	return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; Bun-owned packages cannot be provisioned automatically; run `%s`, then retry Gentle AI", dependency, location)
+}
+
+// The process receives no ambient package-manager auth, user configuration,
+// proxy or runtime injection variables. The project config check is repeated
+// immediately before launch; OS-level path swaps after that check remain a
+// platform race and are not claimed to be eliminated here.
+func openCodeSDKRunApprovedManager(proposal *OpenCodeSDKConsent) error {
+	if proposal == nil || proposal.Manager != "npm" {
+		// refusal:by-design human-authority: no consent can authorize an automatic Bun operation
+		return fmt.Errorf("automatic OpenCode SDK install is available only for npm-owned packages")
+	}
+	currentDir, dirInfo, err := openCodeSDKConfigTarget(proposal.ConfigDir)
+	if err != nil || currentDir != proposal.physicalDir || !os.SameFile(dirInfo, proposal.dirInfo) {
+		// refusal:by-design human-authority: physical target changed since confirmation
+		return fmt.Errorf("OpenCode SDK config directory changed before launch; review it again and retry")
+	}
+	currentExe, exeInfo, err := openCodeSDKPhysicalTarget(proposal.executable, false)
+	if err != nil || currentExe != proposal.physicalExe || !os.SameFile(exeInfo, proposal.exeInfo) {
+		// refusal:by-design human-authority: executable target changed since confirmation
+		return fmt.Errorf("OpenCode package manager executable changed before launch; review it again and retry")
+	}
+	digest, err := openCodeSDKExecutableDigest(currentExe)
+	if err != nil || digest != proposal.exeDigest {
+		// refusal:by-design human-authority: executable bytes changed since confirmation
+		return fmt.Errorf("OpenCode package manager executable changed before launch; review it again and retry")
+	}
+	if err := openCodeSDKCheckProjectConfig(proposal.ConfigDir); err != nil {
+		return fmt.Errorf("automatic OpenCode SDK install refused: %w; run `%s` manually, then retry Gentle AI", err, openCodeSDKInstallContinuation(runtime.GOOS, proposal.ConfigDir, proposal.Manager, proposal.Dependency))
+	}
+	state, err := openCodeSDKPackageState(proposal.ConfigDir)
+	if err != nil || state != proposal.stateSignature {
+		// refusal:by-design human-authority: package state changed after consent
+		return fmt.Errorf("OpenCode package state changed before launch; review it again and retry")
+	}
+	if err := os.MkdirAll(proposal.ConfigDir, 0755); err != nil {
+		return fmt.Errorf("create OpenCode config directory after SDK consent: %w", err)
+	}
+	physicalConfig, _, err := openCodeSDKPhysicalTarget(proposal.ConfigDir, true)
+	if err != nil || physicalConfig != proposal.physicalDir {
+		// refusal:by-design human-authority: changed physical target needs fresh consent
+		return fmt.Errorf("OpenCode SDK config directory changed before launch; review it again and retry")
+	}
+	if err := openCodeSDKCheckProjectConfig(proposal.ConfigDir); err != nil {
+		return fmt.Errorf("automatic OpenCode SDK install refused: %w; run `%s` manually, then retry Gentle AI", err, openCodeSDKInstallContinuation(runtime.GOOS, proposal.ConfigDir, proposal.Manager, proposal.Dependency))
+	}
+	isolated, err := os.MkdirTemp("", "gentle-ai-opencode-sdk-")
+	if err != nil {
+		return fmt.Errorf("prepare isolated SDK installer environment: %w", err)
+	}
+	defer os.RemoveAll(isolated)
+	ctx, cancel := context.WithTimeout(context.Background(), openCodeSDKInstallTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, proposal.physicalExe, openCodeSDKInstallArgs(proposal.Dependency, proposal.physicalDir)...)
+	cmd.Dir = proposal.ConfigDir
+	cmd.Env = openCodeSDKIsolatedEnv(isolated, proposal)
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	cmd.WaitDelay = 200 * time.Millisecond
+	err = cmd.Run()
+	if err == nil {
+		return nil
+	}
+	// Never reflect raw command errors or output: both may embed credentials.
+	if ctx.Err() != nil {
+		// refusal:by-design world-action: the external installer exceeded its bounded deadline
+		return fmt.Errorf("%s SDK install timed out; package-manager changes are not covered by Gentle AI rollback; run `%s` manually, then retry", proposal.Manager, openCodeSDKInstallContinuation(runtime.GOOS, proposal.ConfigDir, proposal.Manager, proposal.Dependency))
+	}
+	// refusal:by-design world-action: package manager failed without exposing its possibly sensitive output
+	return fmt.Errorf("%s SDK install failed; package-manager changes are not covered by Gentle AI rollback; run `%s` manually, then retry", proposal.Manager, openCodeSDKInstallContinuation(runtime.GOOS, proposal.ConfigDir, proposal.Manager, proposal.Dependency))
+}
+
+func openCodeSDKIsolatedEnv(isolated string, proposal *OpenCodeSDKConsent) []string {
+	path := strings.Join([]string{filepath.Dir(proposal.executable), filepath.Dir(proposal.physicalExe), "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"}, string(os.PathListSeparator))
+	env := []string{
+		"PATH=" + path, "HOME=" + isolated, "USERPROFILE=" + isolated,
+		"XDG_CONFIG_HOME=" + isolated, "APPDATA=" + isolated, "LOCALAPPDATA=" + isolated,
+		"TMPDIR=" + isolated, "TMP=" + isolated, "TEMP=" + isolated,
+		"NPM_CONFIG_USERCONFIG=" + filepath.Join(isolated, "user.npmrc"),
+		"NPM_CONFIG_GLOBALCONFIG=" + filepath.Join(isolated, "global.npmrc"),
+		"NPM_CONFIG_CACHE=" + filepath.Join(isolated, "npm-cache"),
+		"NPM_CONFIG_REGISTRY=" + openCodeSDKRegistry,
+		"CI=true", "NO_COLOR=1",
+	}
+	if runtime.GOOS == "windows" {
+		env = append(env, "SystemRoot="+os.Getenv("SystemRoot"))
+	}
+	return env
 }
 
 func openCodeSDKInstallContinuation(goos, config, manager, dependency string) string {
@@ -1014,6 +1358,10 @@ func openCodeSDKInstallContinuation(goos, config, manager, dependency string) st
 		return "Set-Location -LiteralPath '" + strings.ReplaceAll(config, "'", "''") + "'; if ($?) { " + arguments + " }"
 	}
 	return "cd " + shellQuoteOpenCodePluginPath(config) + " && " + arguments
+}
+
+func openCodeSDKInstallArgs(dependency, config string) []string {
+	return []string{"install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=" + openCodeSDKRegistry, dependency}
 }
 
 func openCodePluginPackageManager(config string) string {
@@ -2524,11 +2872,11 @@ var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 // the orchestrator so downstream persistence failures can be compensated.
 // After successful persistence, callers must call orchestrator.Finish() to
 // release a deduplicated temporary rollback snapshot.
-func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
-	return executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, piBackground, onProgress)
+func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
+	return executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
 }
 
-func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
+func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}, nil
@@ -2544,6 +2892,13 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	}
 	runtime.background = backgroundResolution
 	runtime.progress = onProgress
+	if len(consent) > 0 && consent[0] != nil {
+		if !containsAgent(resolved.Agents, model.AgentOpenCode) {
+			// refusal:by-design human-authority: invocation consent cannot apply to a different selection
+			return pipeline.ExecutionResult{Err: fmt.Errorf("OpenCode SDK consent does not match selected agents")}, nil
+		}
+		runtime.sdkConsent = consent[0]
+	}
 	runtime.backgroundActivation = backgroundActivation
 	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
 	piBackgroundResolution := PiBackgroundResolution{

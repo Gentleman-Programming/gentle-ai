@@ -34,6 +34,76 @@ import (
 	"github.com/muesli/termenv"
 )
 
+func TestOpenCodeV2SDKConfirmationSeparateAndDefaultsBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersion })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := filepath.Join(home, "xdg", "opencode")
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{"packageManager":"npm@10"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.DependencyPlan.Agents = m.Selection.Agents
+	m.Screen = ScreenReview
+	m.Cursor = 0
+	// Existing dependency state must never offer automatic installation.
+	blocked, _ := m.continueToSDKOrInstall()
+	manual := blocked.(Model)
+	if manual.Screen != ScreenReview || manual.sdkProposal != nil || manual.sdkConsent != nil || manual.Err == nil || !strings.Contains(manual.Err.Error(), "package.json is present") || !strings.Contains(manual.Err.Error(), "manually") {
+		t.Fatalf("manifest-backed config did not remain manual: screen=%v proposal=%+v consent=%+v err=%v", manual.Screen, manual.sdkProposal, manual.sdkConsent, manual.Err)
+	}
+	if err := os.Remove(filepath.Join(config, "package.json")); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := m.continueToSDKOrInstall()
+	confirm := updated.(Model)
+	if confirm.Screen != ScreenOpenCodeSDKConfirm || confirm.Cursor != 1 || !strings.Contains(confirm.View(), "@opencode/plugin@2.0.4") || !strings.Contains(confirm.View(), config) || !strings.Contains(confirm.View(), "rollback") || !strings.Contains(confirm.View(), "No / Back") {
+		t.Fatalf("separate SDK confirmation = %v, cursor=%d, view=%s", confirm.Screen, confirm.Cursor, confirm.View())
+	}
+	updated, _ = confirm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	back := updated.(Model)
+	if back.Screen != ScreenReview || back.sdkConsent != nil {
+		t.Fatalf("default choice began install or retained consent: %+v", back)
+	}
+	confirm.Cursor = 0
+	var received *cli.OpenCodeSDKConsent
+	confirm.ExecuteSDKFn = func(_ model.Selection, _ planner.ResolvedPlan, _ system.DetectionResult, _, _ model.OpenCodeBackgroundIntent, _, _ model.PiBackgroundIntent, _ pipeline.ProgressFunc, consent *cli.OpenCodeSDKConsent) pipeline.ExecutionResult {
+		received = consent
+		return pipeline.ExecutionResult{}
+	}
+	updated, _ = confirm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	accepted := updated.(Model)
+	if accepted.Screen != ScreenInstalling || accepted.sdkConsent != nil {
+		t.Fatalf("affirmative choice did not consume invocation consent: screen=%v consent=%+v", accepted.Screen, accepted.sdkConsent)
+	}
+	_, command := confirm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("accepted confirmation did not schedule installation")
+	}
+	commands, ok := command().(tea.BatchMsg)
+	if !ok || len(commands) == 0 {
+		t.Fatal("accepted confirmation did not schedule execution")
+	}
+	commands[0]()
+	if received == nil || received.Dependency != "@opencode/plugin@2.0.4" || received.Manager != "npm" || received.ConfigDir != config {
+		t.Fatalf("executor did not receive the approved operation: %+v", received)
+	}
+}
+
 func TestSyncDetailedPreservedActionsReachCompletion(t *testing.T) {
 	path := "/home/example/.cursor/agents/review-risk.md"
 	m := NewModel(system.DetectionResult{}, "dev")

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
@@ -602,7 +603,7 @@ func TestV2SDKPreflightNamesInstalledPackageManagerContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	marker := filepath.Join(t.TempDir(), "invoked")
+	marker := filepath.Join(config, "invoked")
 	command := filepath.Join(bin, "npm")
 	if err := os.WriteFile(command, []byte("#!/bin/sh\nprintf '%s\\n' \"$PWD|$*\" > \"$SDK_PREFLIGHT_MARKER\"\n"), 0755); err != nil {
 		t.Fatal(err)
@@ -698,6 +699,570 @@ func TestOpenCodeV2SDKRefusesAmbiguousLockfiles(t *testing.T) {
 	}
 	if manager := openCodePluginPackageManager(config); manager != "npm" {
 		t.Fatalf("explicit package owner was ignored: %q", manager)
+	}
+}
+
+func TestV2SDKProvisionRequiresMatchingInvocationConsent(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	marker := filepath.Join(config, "invoked")
+	command := filepath.Join(bin, "npm")
+	stub := "#!/bin/sh\nprintf '%s' \"$PWD|$*\" > \"$PWD/invoked\"\nmkdir -p node_modules/@opencode/plugin\nprintf '{\"version\":\"2.0.4\"}' > node_modules/@opencode/plugin/package.json\n"
+	if err := os.WriteFile(command, []byte(stub), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	proposal, err := OpenCodeSDKInstallProposal(home)
+	if err != nil || proposal == nil || proposal.Manager != "npm" || proposal.Dependency != "@opencode/plugin@2.0.4" || proposal.ConfigDir != config {
+		t.Fatalf("proposal = %+v, %v", proposal, err)
+	}
+	for _, tc := range []struct {
+		name    string
+		consent *OpenCodeSDKConsent
+	}{
+		{"absent", nil},
+		{"different config", &OpenCodeSDKConsent{ConfigDir: t.TempDir(), Manager: "npm", Dependency: proposal.Dependency}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: tc.consent}).Run(); err == nil {
+				t.Fatal("missing or mismatched consent passed")
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("package manager ran without consent: %v", err)
+			}
+		})
+	}
+	consent := OpenCodeSDKConsent(*proposal)
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: &consent}).Run(); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	got, err := os.ReadFile(marker)
+	physicalConfig, pathErr := filepath.EvalSymlinks(config)
+	if pathErr != nil {
+		t.Fatal(pathErr)
+	}
+	if err != nil || string(got) != physicalConfig+"|install --save --no-audit --no-fund --ignore-scripts --workspaces=false --prefix="+physicalConfig+" --registry=https://registry.npmjs.org @opencode/plugin@2.0.4" {
+		t.Fatalf("manager operation = %q, %v", got, err)
+	}
+}
+
+func TestV2SDKFreshOnlyProposalAndRecheck(t *testing.T) {
+	for _, name := range []string{"package.json", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", ".npmrc", "bunfig.toml"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			oldVersion := opencodeactivation.VersionRunnerOverride
+			t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+			opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+				return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+			}
+			config := opencode.NewAdapter().GlobalConfigDir(home)
+			if err := os.MkdirAll(config, 0755); err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\ntouch \"$PWD/invoked\"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			proposal, err := OpenCodeSDKInstallProposal(home)
+			if err != nil || proposal == nil {
+				t.Fatalf("fresh proposal = %+v, %v", proposal, err)
+			}
+			if err := os.WriteFile(filepath.Join(config, name), []byte(`{"dependencies":{"private":"github:owner/repo"},"overrides":{"private":"git+ssh://private/repo"}}`), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if next, err := OpenCodeSDKInstallProposal(home); next != nil || err == nil {
+				t.Fatalf("existing state proposal = %+v, %v", next, err)
+			}
+			if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run(); err == nil {
+				t.Fatal("stale consent accepted")
+			}
+			if _, err := os.Lstat(filepath.Join(config, "invoked")); !os.IsNotExist(err) {
+				t.Fatalf("manager ran: %v", err)
+			}
+		})
+	}
+}
+
+func TestV2SDKFreshMissingConfigCreatedOnlyAfterConsent(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	bin := t.TempDir()
+	stub := "#!/bin/sh\nmkdir -p node_modules/@opencode/plugin\nprintf '{\"version\":\"2.0.4\"}' > node_modules/@opencode/plugin/package.json\n"
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(stub), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	proposal, err := OpenCodeSDKInstallProposal(home)
+	if err != nil || proposal == nil {
+		t.Fatalf("proposal = %+v, %v", proposal, err)
+	}
+	if _, err := os.Lstat(config); !os.IsNotExist(err) {
+		t.Fatalf("proposal created config: %v", err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil {
+		t.Fatal("missing consent passed")
+	}
+	if _, err := os.Lstat(config); !os.IsNotExist(err) {
+		t.Fatalf("refusal created config: %v", err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run(); err != nil {
+		t.Fatalf("fresh provision: %v", err)
+	}
+	if !openCodeSDKInstalled(config, proposal.Dependency) {
+		t.Fatal("matching SDK not installed")
+	}
+}
+
+func TestV2SDKProvisionRejectsChangedOwnershipAndUnmaterializedPackage(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(config, "package.json")
+	bin := t.TempDir()
+	marker := filepath.Join(config, "invoked")
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\ntouch \"$PWD/invoked\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	proposal, err := OpenCodeSDKInstallProposal(home)
+	if err != nil || proposal == nil {
+		t.Fatalf("proposal = %+v, %v", proposal, err)
+	}
+	if err := os.WriteFile(manifest, []byte(`{"packageManager":"npm@11"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run(); err == nil || !strings.Contains(err.Error(), "package.json is present") {
+		t.Fatalf("stale consent = %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("manager ran with stale consent: %v", err)
+	}
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
+	proposal, err = OpenCodeSDKInstallProposal(home)
+	if err != nil || proposal == nil {
+		t.Fatalf("refreshed proposal = %+v, %v", proposal, err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run(); err == nil || !strings.Contains(err.Error(), "without materializing") || !strings.Contains(err.Error(), "not covered by Gentle AI rollback") {
+		t.Fatalf("successful manager without SDK passed: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("fake manager did not run: %v", err)
+	}
+}
+
+func TestV2SDKProposalRefusesUnownedExistingManifest(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, content string }{{"unowned", `{}`}, {"invalid", `{`}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(tc.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			proposal, err := OpenCodeSDKInstallProposal(home)
+			if proposal != nil || err == nil {
+				t.Fatalf("unowned manifest proposal = %+v, %v", proposal, err)
+			}
+		})
+	}
+}
+
+func TestV2SDKProvisionRefusesProjectManagerConfig(t *testing.T) {
+	for _, name := range []string{".npmrc", "bunfig.toml"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			oldVersion := opencodeactivation.VersionRunnerOverride
+			t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+			opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+				return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+			}
+			config := opencode.NewAdapter().GlobalConfigDir(home)
+			if err := os.MkdirAll(config, 0755); err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			proposal, err := OpenCodeSDKInstallProposal(home)
+			if err != nil || proposal == nil {
+				t.Fatalf("proposal = %+v, %v", proposal, err)
+			}
+			if err := os.Symlink(filepath.Join(t.TempDir(), "secret"), filepath.Join(config, name)); err != nil {
+				t.Fatal(err)
+			}
+			if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run(); err == nil || !strings.Contains(err.Error(), "manual") {
+				t.Fatalf("project config refusal = %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(config, "ran")); !os.IsNotExist(err) {
+				t.Fatalf("manager ran with project config: %v", err)
+			}
+			if err := os.Remove(filepath.Join(config, name)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(config, name), []byte("private registry configuration"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if next, err := OpenCodeSDKInstallProposal(home); next != nil || err == nil || !strings.Contains(err.Error(), "manually") {
+				t.Fatalf("existing project config proposal = %+v, %v", next, err)
+			}
+		})
+	}
+}
+
+func TestV2SDKProvisionTimesOutWithoutReflectingManagerOutput(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG'; sleep 3\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldTimeout := openCodeSDKInstallTimeout
+	openCodeSDKInstallTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { openCodeSDKInstallTimeout = oldTimeout })
+	proposal, err := OpenCodeSDKInstallProposal(home)
+	if err != nil || proposal == nil {
+		t.Fatalf("proposal = %+v, %v", proposal, err)
+	}
+	start := time.Now()
+	err = (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run()
+	if err == nil || time.Since(start) > 2*time.Second || strings.Contains(err.Error(), "SECRET_TOKEN_DO_NOT_LOG") || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("bounded sanitized timeout = %v, duration=%s", err, time.Since(start))
+	}
+}
+
+func TestV2SDKProvisionBoundsFailedManagerOutput(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG' >&2\nhead -c 1048576 /dev/zero\nexit 17\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	proposal, err := OpenCodeSDKInstallProposal(home)
+	if err != nil || proposal == nil {
+		t.Fatalf("proposal = %+v, %v", proposal, err)
+	}
+	err = (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run()
+	if err == nil || len(err.Error()) > 1024 || strings.Contains(err.Error(), "SECRET_TOKEN_DO_NOT_LOG") || !strings.Contains(err.Error(), "manually") {
+		t.Fatalf("unsafe manager failure = %v", err)
+	}
+}
+
+func TestV2SDKProvisionRejectsChangedExecutableAndPhysicalConfig(t *testing.T) {
+	for _, change := range []string{"executable", "executable in place", "config"} {
+		t.Run(change, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			oldVersion := opencodeactivation.VersionRunnerOverride
+			t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+			opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+				return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+			}
+			config := opencode.NewAdapter().GlobalConfigDir(home)
+			if err := os.MkdirAll(config, 0755); err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			binary := filepath.Join(bin, "npm")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			proposal, err := OpenCodeSDKInstallProposal(home)
+			if err != nil || proposal == nil {
+				t.Fatalf("proposal = %+v, %v", proposal, err)
+			}
+			switch change {
+			case "executable":
+				if err := os.Remove(binary); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "executable in place":
+				if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n# changed\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "config":
+				if err := os.Rename(config, config+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(config, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run(); err == nil {
+				t.Fatal("replaced executable or config directory passed consent check")
+			}
+			if _, err := os.Lstat(filepath.Join(config, "ran")); !os.IsNotExist(err) {
+				t.Fatalf("manager ran against changed target: %v", err)
+			}
+		})
+	}
+}
+
+func TestV2SDKProvisionUsesAnonymousIsolatedManagerEnvironment(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("NPM_TOKEN", "LEAKED_TOKEN")
+	t.Setenv("NPM_CONFIG_REGISTRY", "https://private.example")
+	t.Setenv("BUN_CONFIG_TOKEN", "LEAKED_TOKEN")
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\nprintenv > \"$PWD/probe-env\"\nprintf '%s' \"$*\" > \"$PWD/probe-args\"\nmkdir -p node_modules/@opencode/plugin\nprintf '{\"version\":\"2.0.4\"}' > node_modules/@opencode/plugin/package.json\n"
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	proposal, err := OpenCodeSDKInstallProposal(home)
+	if err != nil || proposal == nil {
+		t.Fatalf("proposal = %+v, %v", proposal, err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: proposal}).Run(); err != nil {
+		t.Fatalf("anonymous provision: %v", err)
+	}
+	env, err := os.ReadFile(filepath.Join(config, "probe-env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(filepath.Join(config, "probe-args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"LEAKED_TOKEN", "private.example", "HOME=" + home, "XDG_CONFIG_HOME=" + filepath.Join(home, "xdg"), "NPM_TOKEN="} {
+		if strings.Contains(string(env), leak) {
+			t.Fatalf("manager environment inherited %q", leak)
+		}
+	}
+	for _, option := range []string{"--ignore-scripts", "--registry=https://registry.npmjs.org"} {
+		if !strings.Contains(string(args), option) {
+			t.Errorf("manager args missing %q: %s", option, args)
+		}
+	}
+}
+
+func TestV2SDKBunOwnerRefusesAutomaticProvision(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("BUN_CONFIG_TOKEN", "SECRET_BUN_TOKEN")
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "bun.lock"), []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\ntouch \"$PWD/probe\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "bun"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	proposal, err := OpenCodeSDKInstallProposal(home)
+	if proposal != nil || err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+		t.Fatalf("Bun owner must give manual continuation, proposal = %+v, %v", proposal, err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+		t.Fatalf("Bun preflight must give manual continuation: %v", err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: &OpenCodeSDKConsent{ConfigDir: config, Manager: "bun"}}).Run(); err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+		t.Fatalf("Bun consent must not permit execution: %v", err)
+	}
+	if err := openCodeSDKRunApprovedManager(&OpenCodeSDKConsent{Manager: "bun"}); err == nil {
+		t.Fatal("direct manager execution accepted Bun")
+	}
+	if _, err := os.Stat(filepath.Join(config, "probe")); !os.IsNotExist(err) {
+		t.Fatalf("Bun manager ran: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(config, "node_modules", "@opencode", "plugin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json"), []byte(`{"version":"2.0.4"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if proposal, err := OpenCodeSDKInstallProposal(home); proposal != nil || err != nil {
+		t.Fatalf("installed Bun SDK must bypass proposal: %+v, %v", proposal, err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err != nil {
+		t.Fatalf("installed Bun SDK must bypass install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(config, "probe")); !os.IsNotExist(err) {
+		t.Fatalf("Bun manager ran despite installed SDK: %v", err)
+	}
+}
+
+func TestV2SDKBunMetadataWithoutExecutableStillNamesManualContinuation(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{"packageManager":"bun@1.2.0"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = oldPath })
+	cmdLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	if proposal, err := OpenCodeSDKInstallProposal(home); proposal != nil || err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+		t.Fatalf("Bun-owned proposal without executable = %+v, %v", proposal, err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+		t.Fatalf("Bun-owned preflight without executable = %v", err)
+	}
+}
+
+func TestV2SDKProposalRefusesSymlinkConfigDirectory(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := opencode.NewAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(filepath.Dir(config), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), config); err != nil {
+		t.Fatal(err)
+	}
+	if proposal, err := OpenCodeSDKInstallProposal(home); proposal != nil || err == nil {
+		t.Fatalf("symlink config proposal = %+v, %v", proposal, err)
+	}
+}
+
+func TestV2SDKProposalRefusesNonPublicDependencySources(t *testing.T) {
+	for _, tc := range []struct{ name, manifest, lockName, lock string }{
+		{"manifest URL", `{"packageManager":"npm@10","dependencies":{"other":"https://private.example/pkg.tgz"}}`, "", ""},
+		{"lockfile URL", `{"packageManager":"npm@10"}`, "package-lock.json", `{"packages":{"node_modules/other":{"resolved":"https://private.example/other.tgz"}}}`},
+		{"escaped lockfile URL", `{"packageManager":"npm@10"}`, "package-lock.json", `{"packages":{"node_modules/other":{"resolved":"https:\/\/private.example\/other.tgz"}}}`},
+		{"embedded credentials", `{"packageManager":"npm@10"}`, "package-lock.json", `{"packages":{"node_modules/other":{"resolved":"https://user:secret@registry.npmjs.org/other.tgz"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			oldVersion := opencodeactivation.VersionRunnerOverride
+			t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+			opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+				return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
+			}
+			config := opencode.NewAdapter().GlobalConfigDir(home)
+			if err := os.MkdirAll(config, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(tc.manifest), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if tc.lockName != "" {
+				if err := os.WriteFile(filepath.Join(config, tc.lockName), []byte(tc.lock), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			proposal, err := OpenCodeSDKInstallProposal(home)
+			if proposal != nil || err == nil || !strings.Contains(err.Error(), "manually") {
+				t.Fatalf("unsafe dependency source proposal = %+v, %v", proposal, err)
+			}
+		})
 	}
 }
 

@@ -257,6 +257,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 		m := tui.NewModel(result, Version, installedState)
 		m.ExecuteFn = tuiExecuteWithBackground
+		m.ExecuteSDKFn = tuiExecuteWithSDK
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
 			return backup.DeleteBackup(manifest)
@@ -618,6 +619,20 @@ func tuiExecuteWithBackground(
 	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult {
+	return tuiExecuteWithSDK(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress, nil)
+}
+
+func tuiExecuteWithSDK(
+	selection model.Selection,
+	resolved planner.ResolvedPlan,
+	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
+	onProgress pipeline.ProgressFunc,
+	consent *cli.OpenCodeSDKConsent,
+) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
 	defer restoreCommandOutput()
 
@@ -629,10 +644,12 @@ func tuiExecuteWithBackground(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
 	// The TUI settles asynchronously: keep its deduplicated rollback snapshot
 	// until state persistence succeeds or the failure has been compensated.
-	defer orchestrator.Finish()
+	if orchestrator != nil {
+		defer orchestrator.Finish()
+	}
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
