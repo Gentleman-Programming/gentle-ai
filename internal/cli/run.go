@@ -787,6 +787,17 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
 	telemetryDir := openCodeTelemetryConfigDir(r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents)
+	// Validation is prepended before the telemetry probe and its own prepend
+	// runs after this block, so the read-only settings refusal stays the first
+	// OpenCode gate of the prepare stage (issue #5035): an unsafe selected
+	// settings document must fail before telemetry, plugin, Persona, Engram, or
+	// guidance steps can mutate any managed file.
+	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
+		prepare = append([]pipeline.Step{openCodeSettingsValidationStep{
+			id:           "prepare:opencode-settings-validation",
+			settingsPath: openCodeLoadedSettingsPath(r.homeDir, r.workspaceDir, opencodeagent.NewAdapter()),
+		}}, prepare...)
+	}
 	if telemetryDir != "" {
 		prepare = append([]pipeline.Step{openCodeTelemetryStep{id: "prepare:opencode-telemetry", configDir: telemetryDir, checkOnly: true}}, prepare...)
 	}
@@ -1469,7 +1480,10 @@ func removeLegacyTriggerRulesModule(modulePath string) (agentguidance.Result, er
 //
 // Every unexpected shape yields a silent no-op rather than an error: this is
 // best-effort cleanup, and the routing injector that runs immediately after is
-// the fail-closed authority on an unreadable settings document.
+// the fail-closed authority on an unreadable settings document. JSONC settings
+// (opencode.jsonc) are rewritten with the JSONC-preserving merge, so comments
+// and trailing commas around untouched members survive; a JSONC refusal is the
+// same silent no-op, because the injector fails closed on identical conditions.
 func stripLegacyTriggerRulesFromOrchestrator(settingsPath string) (agentguidance.Result, error) {
 	if strings.TrimSpace(settingsPath) == "" {
 		return agentguidance.Result{}, nil
@@ -1770,6 +1784,19 @@ type openCodeTelemetryStep struct {
 	configDir    string
 	changedFiles *[]string
 	checkOnly    bool
+}
+
+// openCodeSettingsValidationStep validates the effective OpenCode settings
+// before install/sync mutations. Non-OpenCode plans never include this step.
+type openCodeSettingsValidationStep struct {
+	id           string
+	settingsPath string
+}
+
+func (s openCodeSettingsValidationStep) ID() string { return s.id }
+
+func (s openCodeSettingsValidationStep) Run() error {
+	return opencodeactivation.ValidateSettingsForWriters(s.settingsPath)
 }
 
 func (s openCodeTelemetryStep) ID() string { return s.id }

@@ -399,6 +399,17 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	telemetryDir := openCodeTelemetryConfigDir(r.homeDir, r.workspaceDir, ScopeGlobal, r.agentIDs)
+	// Read-only settings validation is prepended before the telemetry probe and
+	// its own prepend runs after this block, so the refusal stays the first
+	// OpenCode gate of the prepare stage (issue #5035): an unsafe selected
+	// settings document must fail before telemetry, plugin, Persona, Engram, or
+	// guidance steps can mutate any managed file.
+	if containsAgent(r.agentIDs, model.AgentOpenCode) {
+		prepare = append([]pipeline.Step{openCodeSettingsValidationStep{
+			id:           "prepare:opencode-settings-validation",
+			settingsPath: openCodeLoadedSettingsPath(r.homeDir, r.workspaceDir, opencodeagent.NewAdapter()),
+		}}, prepare...)
+	}
 	if telemetryDir != "" {
 		prepare = append([]pipeline.Step{openCodeTelemetryStep{id: "prepare:opencode-telemetry", configDir: telemetryDir, checkOnly: true}}, prepare...)
 	}
