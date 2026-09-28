@@ -2375,6 +2375,9 @@ func (s communityToolInstallStep) ID() string { return s.id }
 func (s communityToolInstallStep) Run() error {
 	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath), s.forceCommunityTools)
 	if err != nil {
+		if len(result.ManualActions) > 0 {
+			return fmt.Errorf("install community tool %q: %w\n%s", s.tool, err, strings.Join(result.ManualActions, "\n"))
+		}
 		return fmt.Errorf("install community tool %q: %w", s.tool, err)
 	}
 	if result.PiCodeGraph != nil && s.state != nil {
