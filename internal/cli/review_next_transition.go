@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -924,6 +925,14 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 	switch status.Projection.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		baseRef := status.Projection.BaseTree
+		// Preserve a caller's immutable commit object, but keep symbolic refs
+		// pinned to the frozen tree so moving branches cannot change START scope.
+		selectorRef := status.decision.Selector.BaseRef
+		if len(selectorRef) == len(status.Projection.BaseTree) {
+			if _, err := hex.DecodeString(selectorRef); err == nil {
+				baseRef = selectorRef
+			}
+		}
 		// Issue #4412: a selectorless STATUS that derived a committed range
 		// discloses the exact merge-base commit it resolved, not the tree
 		// object the derived snapshot froze, so the caller can see and
