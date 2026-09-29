@@ -1025,6 +1025,10 @@ func OpenCodeSDKInstallProposal(homeDir string) (*OpenCodeSDKConsent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve approved npm executable: %w", err)
 	}
+	if blocker := openCodeSDKIsolationBlocker(executable, physicalExe); blocker != "" {
+		// refusal:by-design world-action: credential isolation stays mandatory, so a manager that needs the user's shell environment runs manually
+		return nil, fmt.Errorf("automatic OpenCode SDK install refused: npm on PATH %s and cannot run in the credential-isolated installer environment; run `%s` manually in your normal shell, then retry Gentle AI", blocker, openCodeSDKInstallContinuation(runtime.GOOS, config, "npm", dependency))
+	}
 	exeDigest, err := openCodeSDKExecutableDigest(physicalExe)
 	if err != nil {
 		return nil, fmt.Errorf("inspect approved npm executable: %w", err)
@@ -1197,7 +1201,7 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 		}
 		if !openCodeSDKInstalled(config, dependency) {
 			// refusal:by-design world-action: the external manager did not materialize the requested package
-			return fmt.Errorf("%s completed without materializing %s in %s; package-manager changes are not covered by Gentle AI rollback; run `%s` manually, then retry", proposal.Manager, dependency, config, openCodeSDKInstallContinuation(runtime.GOOS, config, proposal.Manager, dependency))
+			return fmt.Errorf("%s SDK install verification failed: %s completed without materializing %s in %s; package-manager changes are not covered by Gentle AI rollback; run `%s` manually in your normal shell, then retry", proposal.Manager, proposal.Manager, dependency, config, openCodeSDKInstallContinuation(runtime.GOOS, config, proposal.Manager, dependency))
 		}
 		return nil
 	}
@@ -1323,16 +1327,13 @@ func openCodeSDKRunApprovedManager(proposal *OpenCodeSDKConsent) error {
 		return nil
 	}
 	// Never reflect raw command errors or output: both may embed credentials.
-	if ctx.Err() != nil {
-		// refusal:by-design world-action: the external installer exceeded its bounded deadline
-		return fmt.Errorf("%s SDK install timed out; package-manager changes are not covered by Gentle AI rollback; run `%s` manually, then retry", proposal.Manager, openCodeSDKInstallContinuation(runtime.GOOS, proposal.ConfigDir, proposal.Manager, proposal.Dependency))
-	}
+	// Only the failure class (start, exit code, signal, deadline) is reported.
 	// refusal:by-design world-action: package manager failed without exposing its possibly sensitive output
-	return fmt.Errorf("%s SDK install failed; package-manager changes are not covered by Gentle AI rollback; run `%s` manually, then retry", proposal.Manager, openCodeSDKInstallContinuation(runtime.GOOS, proposal.ConfigDir, proposal.Manager, proposal.Dependency))
+	return fmt.Errorf("%s SDK install failed: %s %s; package-manager changes are not covered by Gentle AI rollback; run `%s` manually in your normal shell, then retry", proposal.Manager, proposal.Manager, openCodeSDKFailureClass(err, ctx.Err(), openCodeSDKInstallTimeout), openCodeSDKInstallContinuation(runtime.GOOS, proposal.ConfigDir, proposal.Manager, proposal.Dependency))
 }
 
 func openCodeSDKIsolatedEnv(isolated string, proposal *OpenCodeSDKConsent) []string {
-	path := strings.Join([]string{filepath.Dir(proposal.executable), filepath.Dir(proposal.physicalExe), "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"}, string(os.PathListSeparator))
+	path := strings.Join(openCodeSDKIsolatedPathDirs(proposal.executable, proposal.physicalExe), string(os.PathListSeparator))
 	env := []string{
 		"PATH=" + path, "HOME=" + isolated, "USERPROFILE=" + isolated,
 		"XDG_CONFIG_HOME=" + isolated, "APPDATA=" + isolated, "LOCALAPPDATA=" + isolated,
