@@ -11,6 +11,32 @@ spec = importlib.util.spec_from_file_location("host", Path(__file__).with_name("
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
 
+class HostVersionTests(unittest.TestCase):
+    def test_explicit_selectors(self):
+        with tempfile.TemporaryDirectory() as root:
+            for selector in ('2.x', '2.0.18', '2.0.19'):
+                with self.subTest(selector=selector):
+                    args = host.parse_args(['host', 'deps', '--host-version', selector, '--temp-root', root])
+                    self.assertEqual(args.host_version, selector)
+            for selector in ('1.x', '3.x', '1.0.18', '3.0.0', '2', '2.0', 'unknown'):
+                with self.subTest(selector=selector), patch('sys.stderr', new_callable=io.StringIO):
+                    with self.assertRaises(SystemExit):
+                        host.parse_args(['host', 'deps', '--host-version', selector, '--temp-root', root])
+
+    def test_observed_host_version_matches_selector(self):
+        for version in ('2.0.18', '2.0.19'):
+            for selector in ('2.x', version):
+                with self.subTest(version=version, selector=selector):
+                    self.assertEqual(host.validate_host_version('opencode v' + version + '\n', selector), version)
+        for output in ('opencode v1.0.18', 'opencode v3.0.0', 'unknown', '', '2.0.18',
+                       'opencode v2.0', 'opencode v2.0.19-dev', 'opencode v2.0.19 extra',
+                       'warning\nopencode v2.0.19', 'opencode v2.０.19'):
+            with self.subTest(output=output), self.assertRaisesRegex(RuntimeError, 'host version'):
+                host.validate_host_version(output, '2.x')
+        with self.assertRaisesRegex(RuntimeError, 'host version'):
+            host.validate_host_version('opencode v2.0.19', '2.0.18')
+
+
 class ActivationTests(unittest.TestCase):
     def poll(self, replies):
         now = [0]
@@ -177,7 +203,8 @@ class GenericSafetyTests(unittest.TestCase):
                  patch.object(host.urllib.request, "build_opener", return_value=Mock(open=open_request)), \
                  patch("opencode_v2_loopback.prove_generic_dispatch") as generic, \
                  patch("opencode_v2_loopback.prove_dispatch") as review, patch("sys.stdout", new_callable=io.StringIO) as output:
-                host.main([str(binary), str(dependencies), "--host-version", "2.0.18", "--temp-root", directory, "--generic-task-only"])
+                host.main([str(binary), str(dependencies), "--host-version", "2.x", "--temp-root", directory, "--generic-task-only"])
+                self.assertIn('host opencode v2.0.18', output.getvalue())
                 self.assertEqual(paths, ["/openapi.json", "/api/plugin"] * 2)
                 self.assertEqual(generic.call_count, 2)
                 self.assertEqual(stop.call_count, 2)
@@ -236,6 +263,255 @@ class RequestBoundaryTests(unittest.TestCase):
                 with self.subTest(path=path), self.assertRaises(ValueError):
                     request(path)
             factory.return_value.open.assert_not_called()
+
+
+class InstalledActivationTests(unittest.TestCase):
+    def fixture(self, root):
+        root = Path(root).resolve()
+        for name in ('home', 'config/opencode/plugins', 'data', 'state', 'cache', 'tmp', 'run', 'workspace'):
+            (root / name).mkdir(parents=True, exist_ok=True)
+        config = root / 'config/opencode'
+        package = config / 'node_modules/@opencode/plugin'
+        package.mkdir(parents=True)
+        (package / 'package.json').write_text('{"version":"2.0.4"}')
+        (config / 'opencode.json').write_text('{"default_agent":"gentle-orchestrator"}')
+        for name in host.PLUGIN_IDS:
+            (config / 'plugins' / (name.removeprefix('gentle-ai.') + '.ts')).write_text(name)
+        binary = root / 'host'
+        binary.touch()
+        return [str(binary), str(config / 'node_modules'), '--host-version', '2.x',
+                '--temp-root', str(root), '--installed-activation-only',
+                '--installed-root', str(root), '--installed-config', str(config),
+                '--installed-workspace', str(root / 'workspace')]
+
+    def test_installed_mode_preserves_inputs_and_uses_get_only_exact_location(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory)
+            root = Path(directory).resolve()
+            config = root / 'config/opencode'
+            paths = []
+            def open_request(req, **kwargs):
+                paths.append(req.full_url)
+                self.assertEqual(req.get_method(), 'GET')
+                path = host.urllib.parse.urlsplit(req.full_url)
+                self.assertEqual(path.netloc, '127.0.0.1:1234')
+                if path.path == '/openapi.json':
+                    reply = {'paths': {'/api/plugin': {'get': {'operationId': 'plugin.list'}}}}
+                else:
+                    self.assertEqual(path.path, '/api/plugin')
+                    self.assertEqual(host.urllib.parse.parse_qs(path.query), {'location[directory]': [str(root / 'workspace')]})
+                    reply = {'location': {'directory': str(root / 'workspace')}, 'data': [
+                        {'id': name, 'state': {'status': 'active'}, 'source': {'type': 'local',
+                         'path': str(config / 'plugins' / (name.removeprefix('gentle-ai.') + '.ts'))}}
+                        for name in host.PLUGIN_IDS]}
+                response = io.StringIO(json.dumps(reply))
+                response.status = 200
+                return response
+            before = {p: p.read_bytes() for p in config.rglob('*') if p.is_file()}
+            with patch.object(host, 'network_prefix', return_value=['sandbox']), \
+                 patch.object(host.subprocess, 'Popen') as launch, patch.object(host, 'stop') as stop, \
+                 patch.object(host, 'read_address', return_value='http://127.0.0.1:1234'), \
+                 patch.object(host.urllib.request, 'build_opener', return_value=Mock(open=open_request)), \
+                 patch.object(host.shutil, 'copytree') as copy, patch.object(host.shutil, 'copy2') as copy2, \
+                 patch.object(host.os, 'symlink') as link, patch.object(host.os, 'killpg'), \
+                 patch('sys.stdout', new_callable=io.StringIO) as output:
+                launch.return_value.communicate.return_value = ('opencode v2.0.19\n', '')
+                launch.return_value.returncode = 0
+                host.main(args)
+                self.assertIn('host opencode v2.0.19', output.getvalue())
+                self.assertEqual(len(paths), 2)
+                self.assertEqual(stop.call_count, 2)
+                commands = [call.args[0] for call in launch.call_args_list]
+                self.assertTrue(all(command[0] == 'sandbox' for command in commands))
+                self.assertEqual(commands[0][-1], '--version')
+                self.assertEqual(commands[1][-4:], ['serve', '--stdio', '--port', '0'])
+                env = launch.call_args.kwargs['env']
+                self.assertEqual(env['OPENCODE_CONFIG_DIR'], str(config))
+                self.assertEqual(env['HOME'], str(root / 'home'))
+                self.assertEqual(launch.call_args.kwargs['cwd'], root / 'workspace')
+                self.assertNotIn('OPENCODE_CONFIG_CONTENT', env)
+                copy.assert_not_called()
+                copy2.assert_not_called()
+                link.assert_not_called()
+            self.assertEqual(before, {p: p.read_bytes() for p in config.rglob('*') if p.is_file()})
+
+    def test_installed_failures_always_stop_host(self):
+        for failure in ('timeout', 'cancel', 'opencode.json', 'plugins/model-variants.ts',
+                        'node_modules/@opencode/plugin/package.json', 'source', 'missing-source',
+                        'null-source', 'package-source', 'file-mode', 'directory-mode', 'empty-directory',
+                        'location', 'route'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                args = self.fixture(directory)
+                root = Path(directory).resolve()
+                def request(path):
+                    if path == '/openapi.json':
+                        route = '/api/session' if failure == 'route' else '/api/plugin'
+                        return {'paths': {route: {'get': {'operationId': 'plugin.list'}}}}
+                    if failure == 'timeout':
+                        raise TimeoutError('poll timeout')
+                    if failure == 'cancel':
+                        host.signal.getsignal(host.signal.SIGTERM)(host.signal.SIGTERM, None)
+                    if failure.endswith(('.json', '.ts')):
+                        (root / 'config/opencode' / failure).write_text('{}')
+                    if failure == 'file-mode':
+                        target = root / 'config/opencode/plugins/model-variants.ts'
+                        target.chmod((target.stat().st_mode & 0o7777) ^ 0o100)
+                    if failure == 'directory-mode':
+                        target = root / 'config/opencode/node_modules'
+                        target.chmod((target.stat().st_mode & 0o7777) ^ 0o010)
+                    if failure == 'empty-directory':
+                        (root / 'config/opencode/added-empty').mkdir()
+                    def source(name):
+                        if failure == 'missing-source':
+                            return {}
+                        if failure == 'null-source':
+                            return {'source': None}
+                        return {'source': {'type': 'package' if failure == 'package-source' else 'local',
+                                'path': '/wrong' if failure == 'source' else str(root / 'config/opencode/plugins' /
+                                         (name.removeprefix('gentle-ai.') + '.ts'))}}
+                    return {'location': {'directory': '/wrong' if failure == 'location' else str(root / 'workspace')},
+                            'data': [{'id': name, 'state': {'status': 'active'}, **source(name)}
+                                for name in host.PLUGIN_IDS]}
+                with patch.object(host, 'network_prefix', return_value=['sandbox']), \
+                     patch.object(host.subprocess, 'Popen') as launch, patch.object(host, 'stop') as stop, \
+                     patch.object(host, 'read_address', return_value='http://127.0.0.1:1234'), \
+                     patch.object(host, 'fixture_request', return_value=request), patch.object(host.os, 'killpg'):
+                    launch.return_value.communicate.return_value = ('opencode v2.0.18', '')
+                    launch.return_value.returncode = 0
+                    with self.assertRaises((RuntimeError, TimeoutError, ValueError)):
+                        host.main(args)
+                    self.assertEqual(stop.call_count, 2)
+
+    def test_installed_snapshot_records_entry_types_modes_and_empty_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.fixture(directory)
+            config = Path(directory).resolve() / 'config/opencode'
+            empty = config / 'empty'
+            empty.mkdir()
+            before = host.installed_hashes(config)
+            self.assertIn('.', before)
+            self.assertIn('empty', before)
+            empty.rmdir()
+            empty.touch()
+            self.assertNotEqual(before['empty'], host.installed_hashes(config)['empty'])
+            target = config / 'opencode.json'
+            target.chmod((target.stat().st_mode & 0o7777) ^ 0o100)
+            self.assertNotEqual(before['opencode.json'], host.installed_hashes(config)['opencode.json'])
+
+    def test_installed_sandbox_allows_only_runtime_directory_writes(self):
+        with patch.object(host.sys, 'platform', 'darwin'), patch.object(host.Path, 'is_file', return_value=True):
+            profile = host.network_prefix(Path('/fixture'))[-1]
+        self.assertIn('(deny network*)', profile)
+        self.assertIn('(deny file-write*)', profile)
+        for name in ('data', 'state', 'cache', 'tmp', 'run'):
+            self.assertIn('(subpath "/fixture/' + name + '")', profile)
+        for name in ('', '/config', '/config/opencode', '/workspace', '/home'):
+            self.assertNotIn('(subpath "/fixture' + name + '")', profile)
+
+    def test_installed_snapshot_accepts_internal_npm_links_without_traversing_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.fixture(directory)
+            config = Path(directory).resolve() / 'config/opencode'
+            package = config / 'node_modules/arborist'
+            package.mkdir()
+            target = package / 'bin.js'
+            target.write_text('original')
+            bindir = config / 'node_modules/.bin'
+            bindir.mkdir()
+            link = bindir / 'arborist'
+            link.symlink_to('../arborist/bin.js')
+            (config / 'package-alias').symlink_to(package, target_is_directory=True)
+            before = host.installed_hashes(config)
+            self.assertIn('node_modules/.bin/arborist', before)
+            self.assertIn('node_modules/arborist/bin.js', before)
+            self.assertNotIn('package-alias/bin.js', before)
+            target.write_text('changed')
+            self.assertNotEqual(before, host.installed_hashes(config))
+            target.write_text('original')
+            replacement = bindir / 'replacement'
+            replacement.symlink_to('../arborist/bin.js')
+            replacement.replace(link)
+            self.assertNotEqual(before, host.installed_hashes(config))
+            link.unlink()
+            link.symlink_to('../arborist/./bin.js')
+            self.assertNotEqual(before, host.installed_hashes(config))
+            other = package / 'other.js'
+            other.write_text('original')
+            before_retarget = host.installed_hashes(config)
+            link.unlink()
+            link.symlink_to('../arborist/other.js')
+            self.assertNotEqual(before_retarget, host.installed_hashes(config))
+            # Replacing the link with a regular file also changes entry type.
+            link.unlink()
+            link.write_text('original')
+            self.assertNotEqual(before, host.installed_hashes(config))
+
+    def test_installed_snapshot_rejects_escaping_dangling_and_looping_links(self):
+        for kind in ('external', 'dangling', 'loop', 'directory-escape'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                self.fixture(directory)
+                root = Path(directory).resolve()
+                config = root / 'config/opencode'
+                link = config / 'link'
+                target = {'external': root / 'host', 'dangling': config / 'missing',
+                          'loop': link, 'directory-escape': root / 'home'}[kind]
+                link.symlink_to(target)
+                with self.assertRaises(ValueError):
+                    host.installed_hashes(config)
+
+    def test_installed_request_allowlist_rejects_mutations_and_wrong_location(self):
+        with patch.object(host.urllib.request, 'build_opener') as opener:
+            request = host.fixture_request('http://127.0.0.1:1234', 'Basic private',
+                                           allowed_gets={'/openapi.json', '/api/plugin?location%5Bdirectory%5D=%2Ffixture'})
+            for path, body in [('/api/session', None), ('/api/model', None), ('/api/shell', {}),
+                               ('/api/plugin', None), ('/openapi.json', {})]:
+                with self.assertRaises(ValueError):
+                    request(path, body)
+            opener.return_value.open.assert_not_called()
+
+    def test_installed_cancellation_during_launch_reaps_owned_process(self):
+        process = Mock()
+        def launch(*args, **kwargs):
+            host.signal.getsignal(host.signal.SIGINT)(host.signal.SIGINT, None)
+            return process
+        with patch.object(host.subprocess, 'Popen', side_effect=launch), \
+             patch.object(host, 'stop') as stop, patch.object(host.os, 'killpg') as kill:
+            with self.assertRaisesRegex(TimeoutError, 'during process launch'):
+                with host.installed_process(['host'], Path('/fixture'), {}):
+                    self.fail('cancelled launch must not run requests')
+            stop.assert_called_once_with(process)
+            kill.assert_called_once_with(process.pid, host.signal.SIGKILL)
+
+    def test_installed_version_timeout_reaps_before_any_server(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory)
+            with patch.object(host, 'network_prefix', return_value=['sandbox']), \
+                 patch.object(host.subprocess, 'Popen') as launch, patch.object(host, 'stop') as stop, \
+                 patch.object(host.os, 'killpg'):
+                launch.return_value.communicate.side_effect = host.subprocess.TimeoutExpired('host', 10)
+                with self.assertRaises(host.subprocess.TimeoutExpired):
+                    host.main(args)
+                self.assertEqual(launch.call_count, 1)
+                stop.assert_called_once_with(launch.return_value)
+
+    def test_installed_invalid_inputs_refuse_before_launch(self):
+        for failure in ('missing-root', 'different-config', 'symlink', 'wrong-sdk', 'no-sandbox'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                args = self.fixture(directory)
+                config = Path(directory) / 'config/opencode'
+                if failure == 'missing-root':
+                    args[args.index('--installed-root') + 1] = 'relative'
+                elif failure == 'different-config':
+                    args[args.index('--installed-config') + 1] = directory
+                elif failure == 'symlink':
+                    (config / 'link').symlink_to(Path(directory) / 'host')
+                elif failure == 'wrong-sdk':
+                    (config / 'node_modules/@opencode/plugin/package.json').write_text('{"version":"2.0.3"}')
+                with patch.object(host, 'network_prefix', side_effect=RuntimeError('no sandbox') if failure == 'no-sandbox' else None), \
+                     patch.object(host.subprocess, 'Popen') as launch, patch('sys.stderr', new_callable=io.StringIO):
+                    with self.assertRaises((SystemExit, ValueError, RuntimeError)):
+                        host.main(args)
+                    launch.assert_not_called()
 
 
 class CleanupTests(unittest.TestCase):

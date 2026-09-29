@@ -324,12 +324,41 @@ func runSDKFullApplyIntegration(t *testing.T, home, config, log string, realSDK 
 }
 
 // This is wrapper-assisted offline evidence, not unchanged production network
-// behavior or plugin activation. Only an explicitly supplied cache is seeded.
+// behavior. Plugin activation requires a second explicit opt-in. Only an
+// explicitly supplied cache is seeded.
 func TestTUIOpenCodeSDKConsentRealNPMOfflineIntegration(t *testing.T) {
 	if testing.Short() || os.Getenv("GENTLE_AI_REAL_NPM_OFFLINE") != "1" {
 		t.Skip("opt in with GENTLE_AI_REAL_NPM_OFFLINE=1 and exact NPM, NODE, CACHE paths")
 	}
 	npm, node, cache := realSDKOfflineInputs(t)
+	// Capture opt-ins and paths before isolation clears GENTLE_AI_* and PATH.
+	activate := os.Getenv("GENTLE_AI_INSTALLED_ACTIVATION") == "1"
+	var host, python, launcher string
+	if activate {
+		if deadline, ok := t.Deadline(); ok && time.Until(deadline) < 150*time.Second {
+			t.Fatal("installed activation requires -timeout=3m or longer to reserve cleanup after Apply")
+		}
+		for key, target := range map[string]*string{"GENTLE_AI_REAL_OPENCODE": &host, "GENTLE_AI_REAL_PYTHON": &python} {
+			value := os.Getenv(key)
+			if !filepath.IsAbs(value) {
+				t.Fatalf("%s must be an explicit absolute executable path", key)
+			}
+			resolved, err := filepath.EvalSymlinks(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(resolved)
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+				t.Fatalf("invalid %s: %v", key, err)
+			}
+			*target = resolved
+		}
+		var err error
+		launcher, err = filepath.Abs(filepath.Join("..", "..", "scripts", "test-opencode-v2-host.py"))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	const approved = "/private/var/folders/k1/2nnhpdfx0wq8k6w8n2nqx9_h0000gn/T/opencode"
 	if filepath.Clean(os.Getenv("TMPDIR")) != approved {
 		t.Fatal("parent TMPDIR must equal the approved temporary root")
@@ -344,13 +373,32 @@ func TestTUIOpenCodeSDKConsentRealNPMOfflineIntegration(t *testing.T) {
 	// Keep dependency probes fake; only the affirmative pinned install can reach
 	// the helper. Its clean environment has no ambient tokens or npm settings.
 	script := "#!/bin/sh\nset -eu\nif [ \"$1\" = --version ]; then printf '10.0.0\\n'; exit 0; fi\nexec /usr/bin/env -i "
-	for _, item := range []string{"GENTLE_AI_REAL_NPM_OFFLINE=1", "GENTLE_AI_REAL_NPM=" + npm, "GENTLE_AI_REAL_NODE=" + node, "GENTLE_AI_REAL_NPM_CACHE=" + cache} {
+	for _, item := range []string{"GENTLE_AI_REAL_NPM_OFFLINE=1", "GENTLE_AI_REAL_NPM=" + npm, "GENTLE_AI_REAL_NODE=" + node, "GENTLE_AI_REAL_NPM_CACHE=" + cache,
+		"GOMODCACHE=" + os.Getenv("GOMODCACHE"), "GOCACHE=" + os.Getenv("GOCACHE")} {
 		script += quote(item) + " "
 	}
 	script += "\"NPM_CONFIG_CACHE=${NPM_CONFIG_CACHE:?}\" "
 	script += quote(binary) + " -test.run '^TestSDKRealNPMOfflineHelper$' -- sdk-offline " + quote(root) + " \"$@\" > " + quote(filepath.Join(root, "npm-helper.log")) + " 2>&1\n"
 	writeSDKBridgeFile(t, filepath.Join(root, "bin", "npm"), script, 0700)
 	runSDKFullApplyIntegration(t, home, config, log, true)
+	if activate {
+		// Python's 45s deadline and bounded group cleanup complete before this
+		// fallback. SIGINT enters its finally blocks; WaitDelay allows reaping.
+		ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, python, "-I", "-B", launcher, host, filepath.Join(config, "node_modules"),
+			"--host-version", "2.x", "--temp-root", root, "--installed-activation-only",
+			"--installed-root", root, "--installed-config", config, "--installed-workspace", filepath.Join(root, "workspace"))
+		cmd.Dir = filepath.Join(root, "workspace")
+		cmd.Env = []string{"HOME=" + home, "TMPDIR=" + filepath.Join(root, "tmp"), "PATH=/usr/bin:/bin"}
+		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+		cmd.WaitDelay = 15 * time.Second
+		output, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(output), "PASS: installed activation:") {
+			t.Fatalf("installed activation failed: %v\n%s", err, output)
+		}
+		t.Logf("%s", output)
+	}
 }
 
 func realSDKOfflineInputs(t *testing.T) (npm, node, cache string) {
@@ -515,6 +563,45 @@ func sdkOfflineExportContained(root, path string) bool {
 	}
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
+}
+
+func TestSDKOfflineHelperStartupWithoutGo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test starts an isolated test binary")
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		optIn  string
+		marker bool
+	}{
+		{name: "marker without opt-in", marker: true},
+		{name: "opt-in without marker", optIn: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			args := []string{"-test.run=^TestSDKRealNPMOfflineHelper$", "-test.v"}
+			if tc.marker {
+				args = append(args, "--", "sdk-offline")
+			}
+			cmd := exec.CommandContext(ctx, binary, args...)
+			cmd.Env = []string{
+				"PATH=" + root, "HOME=" + root, "TMPDIR=" + root,
+				"GOMODCACHE=" + filepath.Join(root, "modules"),
+				"GOCACHE=" + filepath.Join(root, "build"),
+				"GENTLE_AI_REAL_NPM_OFFLINE=" + tc.optIn,
+			}
+			output, err := cmd.CombinedOutput()
+			if err != nil || !strings.Contains(string(output), "--- SKIP: TestSDKRealNPMOfflineHelper") || !strings.Contains(string(output), "private opt-in npm wrapper helper") {
+				t.Fatalf("helper must start without Go and retain both invocation guards: %v\n%s", err, output)
+			}
+		})
+	}
 }
 
 func TestSDKOfflineCacheSeparation(t *testing.T) {

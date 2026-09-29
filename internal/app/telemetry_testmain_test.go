@@ -28,16 +28,23 @@ import (
 func TestMain(m *testing.M) {
 	// Resolve Go's effective caches before replacing HOME so nested real-binary
 	// builds reuse the caller's dependencies without changing runtime isolation.
-	output, err := exec.Command("go", "env", "-json", "GOMODCACHE", "GOCACHE").Output()
-	if err != nil {
-		panic(fmt.Errorf("resolve Go caches before HOME isolation: %w", err))
-	}
-	var caches map[string]string
-	if err := json.Unmarshal(output, &caches); err != nil {
-		panic(err)
-	}
+	// Helpers with explicit caches need no Go toolchain on their isolated PATH.
+	var missing []string
 	for _, key := range []string{"GOMODCACHE", "GOCACHE"} {
 		if os.Getenv(key) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		output, err := exec.Command("go", append([]string{"env", "-json"}, missing...)...).Output()
+		if err != nil {
+			panic(fmt.Errorf("resolve Go caches before HOME isolation: %w", err))
+		}
+		var caches map[string]string
+		if err := json.Unmarshal(output, &caches); err != nil {
+			panic(err)
+		}
+		for _, key := range missing {
 			if err := os.Setenv(key, caches[key]); err != nil {
 				panic(err)
 			}
