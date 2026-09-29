@@ -821,7 +821,7 @@ func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 	for _, response := range responses {
 		t.Run(response, func(t *testing.T) {
 			home := t.TempDir()
-					if runtime.GOOS == "windows" {
+			if runtime.GOOS == "windows" {
 				t.Setenv("GENTLE_AI_CODEGRAPH_TEST_RESPONSE", response)
 				installFakeCodeGraphHelper(t, "invalid-response")
 			} else {
