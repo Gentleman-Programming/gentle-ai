@@ -30,7 +30,6 @@ func TestRenderDependencyTreePiOnlyEngramPlanShowsComponentAndPiInstallCopy(t *t
 		"Pi agent support will be installed.",
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
 		"npm exec --yes --package gentle-engram@latest -- pi-engram init",
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",
@@ -38,6 +37,9 @@ func TestRenderDependencyTreePiOnlyEngramPlanShowsComponentAndPiInstallCopy(t *t
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderDependencyTree() missing %q for Pi-only plan; output:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "pi-mcp-adapter") {
+		t.Fatalf("RenderDependencyTree() still installs the retired pi-mcp-adapter for Pi-only plan; output:\n%s", out)
 	}
 }
 
@@ -70,7 +72,6 @@ func TestRenderDependencyTreeMixedPiEmptyPlanShowsPiInstallCopy(t *testing.T) {
 		"Pi agent support will be installed.",
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
 		"npm exec --yes --package gentle-engram@latest -- pi-engram init",
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",
@@ -78,5 +79,8 @@ func TestRenderDependencyTreeMixedPiEmptyPlanShowsPiInstallCopy(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderDependencyTree() missing %q for mixed Pi plan; output:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "pi-mcp-adapter") {
+		t.Fatalf("RenderDependencyTree() still installs the retired pi-mcp-adapter for mixed Pi plan; output:\n%s", out)
 	}
 }
