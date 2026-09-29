@@ -1862,16 +1862,22 @@ var organicRoutingGuidanceRequiredFragments = []string{
 	"observe RED before implementation, implement GREEN, then refactor while tests stay green",
 	"For passive documentation, unavailable runners, or no meaningful runnable RED",
 	"run proportionate functional or structural checks",
+	// The remote execution boundary is unconditional for every configured
+	// agent (#4324): ODD-only runtimes receive it through the routing block
+	// and the remote-authorization permissions component alike, so it is a
+	// required fragment, never RDD-only guidance.
+	"Remote execution boundary",
+	"SSH ControlMaster",
 }
 
 // organicRoutingGuidanceRDDFragments pins the receipt-driven development
 // switch. Only RDD-capable runtimes (Claude Code, Codex, OpenCode) receive
-// it; every other runtime is ODD-only and must not.
+// it; every other runtime is ODD-only and must not. The remote execution
+// boundary is NOT here: #4324 makes it unconditional for every configured
+// agent, so it lives in organicRoutingGuidanceRequiredFragments.
 var organicRoutingGuidanceRDDFragments = []string{
 	"gentle-ai review mode enable|disable|status",
 	"disabled/unmanaged",
-	"Remote execution boundary",
-	"SSH ControlMaster",
 }
 
 // TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor proves the
