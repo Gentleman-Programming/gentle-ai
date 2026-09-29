@@ -28,6 +28,13 @@ func claudeSkillRegistryCommand(platform string) string {
 	return claudeLegacySkillRegistryCommand
 }
 
+func commandCodeSkillRegistryCommand(platform string) string {
+	if platform == "windows" {
+		return `powershell -NoProfile -Command 'if (Test-Path env:COMMANDCODE_PROJECT_DIR) { $dir = $env:COMMANDCODE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
+	}
+	return `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${COMMANDCODE_PROJECT_DIR:-$PWD}" || true`
+}
+
 // pruneClaudeLegacySkillRegistryHooks removes only the retired POSIX command
 // under UserPromptSubmit, preserving unrelated hooks and their outer entries.
 func pruneClaudeLegacySkillRegistryHooks(entries []any) ([]any, bool) {
@@ -86,6 +93,13 @@ func installSkillRegistry(homeDir string, adapter agents.Adapter, platform strin
 		path = adapter.SettingsPath(homeDir)
 		event = "UserPromptSubmit"
 		command = claudeSkillRegistryCommand(platform)
+	case model.AgentID("command-code"):
+		path = adapter.SettingsPath(homeDir)
+		if path == "" && homeDir != "" {
+			path = filepath.Join(homeDir, ".commandcode", "settings.json")
+		}
+		event = "SessionStart"
+		command = commandCodeSkillRegistryCommand(platform)
 	default:
 		return Result{}, nil
 	}

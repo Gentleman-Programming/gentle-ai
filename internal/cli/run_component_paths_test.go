@@ -1666,6 +1666,40 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	assertNoDuplicatePaths(t, "backupTargets", targets)
 }
 
+func TestBackupTargetsTrackCommandCodeSettingsPath(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	cmdCodeAgent := model.AgentID("command-code")
+	selection := model.Selection{Agents: []model.AgentID{cmdCodeAgent}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents}
+
+	wantPath := filepath.Join(home, ".commandcode", "settings.json")
+
+	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+	if !containsPath(targets, wantPath) {
+		t.Fatalf("backupTargets missing Command Code settings path %q; targets=%v", wantPath, targets)
+	}
+
+	syncTargets, err := syncBackupTargetsScoped(home, workspace, ScopeGlobal, selection, nil)
+	if err != nil {
+		t.Fatalf("syncBackupTargetsScoped() error = %v", err)
+	}
+	if !containsPath(syncTargets, wantPath) {
+		t.Fatalf("syncBackupTargetsScoped missing Command Code settings path %q; targets=%v", wantPath, syncTargets)
+	}
+
+	wsTargets, err := syncBackupTargetsScoped(home, workspace, ScopeWorkspace, selection, nil)
+	if err != nil {
+		t.Fatalf("syncBackupTargetsScoped(workspace) error = %v", err)
+	}
+	if containsPath(wsTargets, wantPath) {
+		t.Fatalf("syncBackupTargetsScoped(workspace) must not track home settings path %q; targets=%v", wantPath, wsTargets)
+	}
+}
+
 func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
 	t.Helper()
 

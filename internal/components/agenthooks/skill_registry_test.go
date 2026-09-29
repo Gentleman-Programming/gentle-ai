@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
@@ -154,5 +155,74 @@ func TestSkillRegistryHooksWithoutSDD(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type stubCommandCodeAdapter struct{ *cursor.Adapter }
+
+func (stubCommandCodeAdapter) Agent() model.AgentID { return model.AgentID("command-code") }
+func (stubCommandCodeAdapter) SettingsPath(home string) string {
+	return filepath.Join(home, ".commandcode", "settings.json")
+}
+
+func TestSkillRegistryCommandCodeSessionStartHook(t *testing.T) {
+	home := t.TempDir()
+	adapter := stubCommandCodeAdapter{cursor.NewAdapter()}
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo keep"}]}]}}`
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := InstallSkillRegistry(home, adapter)
+	if err != nil || !result.Changed || len(result.Files) != 1 || result.Files[0] != path {
+		t.Fatalf("InstallSkillRegistry() = %+v, %v", result, err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(content, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	hooks, ok := doc["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing hooks object: %s", content)
+	}
+	if !strings.Contains(string(content), "echo keep") {
+		t.Fatalf("existing PreToolUse hook lost: %s", content)
+	}
+	if _, bad := hooks["UserPromptSubmit"]; bad {
+		t.Fatalf("Command Code must NEVER have UserPromptSubmit hook: %s", content)
+	}
+	if _, bad := hooks["Stop"]; bad {
+		t.Fatalf("Command Code must have NO Stop hook: %s", content)
+	}
+	if sessionStart, ok := hooks["SessionStart"].([]any); !ok || len(sessionStart) != 1 {
+		t.Fatalf("unexpected SessionStart hooks: %v", hooks["SessionStart"])
+	}
+
+	if again, err := InstallSkillRegistry(home, adapter); err != nil || again.Changed {
+		t.Fatalf("second install changed = %v, %v", again.Changed, err)
+	}
+
+	for _, tc := range []struct{ platform, match string }{
+		{"windows", "powershell -NoProfile -Command"},
+		{"linux", `${COMMANDCODE_PROJECT_DIR:-$PWD}`},
+	} {
+		res, err := installSkillRegistry(t.TempDir(), adapter, tc.platform)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(res.Files[0])
+		if err != nil || !strings.Contains(string(data), tc.match) {
+			t.Fatalf("%s hook command missing %q: %s", tc.platform, tc.match, data)
+		}
 	}
 }
