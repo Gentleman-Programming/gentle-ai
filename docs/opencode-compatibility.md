@@ -7,15 +7,15 @@ version evidence refuses incompatible writes rather than assuming V2.
 | Surface | V1 | V2 (tested release: 2.0.4) |
 | --- | --- | --- |
 | Config, model references and permissions | Existing behavior retained | Native config/profile/MCP handling and permission-preserving merges tested |
-| Managed plugins | Existing assets retained | Separate telemetry, model catalog, skill registry, SDD and staged review assets |
+| Managed plugins | Existing assets retained | Four assets: telemetry, model catalog, skill registry and staged review transport |
 | Gentle logo | Existing placement unchanged | Explicitly skipped; no equivalent `home_logo` slot, no relocation or config writes |
 | Community TUI plugins | Existing integration retained | Compatibility unproven; installation/update refuses, not silently omitted |
 | Native review | Existing V1 capability path retained | Unavailable; no positive review admission advertised |
 
 ## What has actually been checked
 
-All five V2 assets typecheck against released `@opencode/plugin@2.0.4` declarations.
-Isolated actual-host fixtures activated them in separate global and project scopes.
+The four current V2 managed assets target released `@opencode/plugin@2.0.4`
+declarations. Earlier isolated actual-host fixtures checked global and project scopes.
 A scripted loopback provider proved foreground subagent dispatch, hook ordering,
 structured completed output and exact raw child bytes. It also proved inherited
 project/child-agent instructions and an empty deny-all child tool inventory.
@@ -44,3 +44,29 @@ a supported per-process network guard and never uses an external model. CI check
 released SDK types and fixture unit tests; it does not imply that the Darwin-only
 organic host fixture ran on every supported operating system. Positive V2 native
 review conformance and the broader runtime matrix remain incomplete.
+
+### Generic-only host check
+
+Select the host release independently of the existing SDK 2.0.4 fixture:
+
+```sh
+python3 -B scripts/test-opencode-v2-host.py /path/to/opencode /path/to/node_modules \
+  --host-version 2.0.18 --temp-root "$TMPDIR" --generic-task-only
+```
+
+The temporary root must already exist and be writable; an explicitly provided
+`TMPDIR` also works without `--temp-root`. Both version and server subprocesses
+run under the Darwin loopback-only network sandbox, with isolated HOME/XDG/TMPDIR
+and explicit config/test-home directories. No dependencies are installed.
+
+This mode checks only generic foreground dispatch, raw output, hooks, inherited
+instructions and tool inventory. It does not copy a native binary, call shell or
+review APIs, or configure a review actor. Reviewer/refuter/validator behavior and
+native admission, receipts and capability remain **NOT PROVEN**. The legacy
+`--loopback /path/to/gentle-ai` review check is mutually exclusive with this mode.
+The 25 fixture unit tests pass. An isolated OpenCode 2.0.18 run with SDK 2.0.4
+also passed in both global and project scopes: four managed plugins activated,
+the foreground child returned the expected raw output, hook ordering and
+instruction inheritance matched expectations, and the deny-all child exposed
+no tools. External network access was blocked. This does not prove the TUI
+installation path or positive native review admission.

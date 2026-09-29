@@ -6,7 +6,9 @@ import threading
 import time
 
 
-def scripted_reply(body):
+def scripted_reply(body, generic_task_only=False):
+    if generic_task_only and "NEGATIVE_REVIEW" in json.dumps(body):
+        raise ValueError("review disabled in generic-task-only fixture")
     model = body["model"]
     if model == "child":
         return {"content": "RAW_CHILD_SENTINEL"}
@@ -24,7 +26,7 @@ def scripted_reply(body):
 
 
 @contextmanager
-def local_provider():
+def local_provider(generic_task_only=False):
     requests, failures = [], []
 
     class Handler(BaseHTTPRequestHandler):
@@ -57,7 +59,7 @@ def local_provider():
             try:
                 body = json.loads(self.rfile.read(length))
                 requests.append(body)
-                reply = scripted_reply(body)
+                reply = scripted_reply(body, generic_task_only=generic_task_only)
             except (ValueError, KeyError) as error:
                 return self.reject(str(error))
             self.send_response(200)
@@ -86,7 +88,7 @@ def local_provider():
         thread.join(timeout=5)
 
 
-def prepare_fixture(root, plugin_directory, provider):
+def prepare_fixture(root, plugin_directory, provider, generic_task_only=False):
     config = {
         "model": "fixture/parent",
         "providers": {"fixture": {
@@ -106,6 +108,9 @@ def prepare_fixture(root, plugin_directory, provider):
                             "permissions": [{"action": "*", "resource": "*", "effect": "deny"}]},
         },
     }
+    if generic_task_only:
+        del config["agents"]["review-risk"]
+        config["agents"]["fixture-parent"]["permissions"][-1]["resource"] = "fixture-child"
     (root / "project/opencode.json").write_text(json.dumps(config))
     (root / "project/AGENTS.md").write_text("PROJECT_INSTRUCTION_SENTINEL\n")
     log = root / "observations.jsonl"
@@ -129,23 +134,14 @@ export default Plugin.define({id:"fixture.observer", async setup(ctx) {
     return log
 
 
-def prove_dispatch(request, observation_log, requests, failures):
-    # Exercise the real native gate independently of hook-error projection.
-    shell = request("/api/shell", {"command": "gentle-ai review opencode-transport </dev/null", "timeout": 5000})["data"]
-    deadline = time.monotonic() + 10
-    while shell["status"] == "running" and time.monotonic() < deadline:
-        time.sleep(0.1)
-        shell = request("/api/shell/" + shell["id"])["data"]
-    assert shell["status"] == "exited" and shell.get("exit") != 0, "native shell result: " + repr(shell)
-    refused = request("/api/shell/" + shell["id"] + "/output")["data"]["output"]
-    assert "immutable_review_transport_unsupported" in refused, "real native gate did not refuse"
+def run_parent(request, text):
+    session = request("/api/session", {"agent": "fixture-parent", "model": {"providerID": "fixture", "id": "parent"}})["data"]
+    request("/api/session/" + session["id"] + "/prompt", {"text": text})
+    request("/api/experimental/session/" + session["id"] + "/wait", {}, timeout=25)
 
-    def run(text):
-        session = request("/api/session", {"agent": "fixture-parent", "model": {"providerID": "fixture", "id": "parent"}})["data"]
-        request("/api/session/" + session["id"] + "/prompt", {"text": text})
-        request("/api/experimental/session/" + session["id"] + "/wait", {}, timeout=25)
 
-    run("FOREGROUND_PARENT")
+def prove_generic_dispatch(request, observation_log, requests, failures):
+    run_parent(request, "FOREGROUND_PARENT")
     observations = [json.loads(line) for line in observation_log.read_text().splitlines()]
     before = [item for item in observations if item["type"] == "before"]
     after = [item for item in observations if item["type"] == "after"]
@@ -168,7 +164,23 @@ def prove_dispatch(request, observation_log, requests, failures):
     assert "PROJECT_INSTRUCTION_SENTINEL" in wire_messages and "CHILD_AGENT_SENTINEL" in wire_messages
     assert "PARENT_AGENT_SENTINEL" not in wire_messages
     assert not child_request.get("tools"), "provider received denied child tools"
-    run("NEGATIVE_REVIEW")
+    assert not failures, "unexpected network/provider requests: " + repr(failures)
+    assert not any(item["type"] == "forbidden-network" for item in observations)
+
+
+def prove_dispatch(request, observation_log, requests, failures):
+    # Legacy review conformance is deliberately separate from generic dispatch.
+    shell = request("/api/shell", {"command": "gentle-ai review opencode-transport </dev/null", "timeout": 5000})["data"]
+    deadline = time.monotonic() + 10
+    while shell["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(0.1)
+        shell = request("/api/shell/" + shell["id"])["data"]
+    assert shell["status"] == "exited" and shell.get("exit") != 0, "native shell result: " + repr(shell)
+    refused = request("/api/shell/" + shell["id"] + "/output")["data"]["output"]
+    assert "immutable_review_transport_unsupported" in refused, "real native gate did not refuse"
+    prove_generic_dispatch(request, observation_log, requests, failures)
+    child_requests = sum(body["model"] == "child" for body in requests)
+    run_parent(request, "NEGATIVE_REVIEW")
     assert sum(body["model"] == "child" for body in requests) == child_requests, "refused review reached child provider"
     observations = [json.loads(line) for line in observation_log.read_text().splitlines()]
     assert not any(item.get("agent") == "review-risk" for item in observations), "review child context reached after refusal"
