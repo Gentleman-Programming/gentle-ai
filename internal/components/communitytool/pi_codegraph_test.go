@@ -411,8 +411,9 @@ func TestVerifyPiCodeGraphRejectsNonCanonicalMCP(t *testing.T) {
 	}
 }
 
-func TestVerifyPiMCPFailsClosedWithoutAdapterOrProcess(t *testing.T) {
+func TestVerifyPiMCPFailsClosedWithoutMCPProcess(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
 	mcpPath := filepath.Join(home, "mcp.json")
 	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 	previous := piCodeGraphEffectiveMCPProbe
@@ -420,7 +421,7 @@ func TestVerifyPiMCPFailsClosedWithoutAdapterOrProcess(t *testing.T) {
 	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
 
 	if _, err := verifyPiMCP(mcpPath); err == nil {
-		t.Fatal("verifyPiMCP() succeeded without a Pi MCP adapter or MCP process")
+		t.Fatal("verifyPiMCP() succeeded without a CodeGraph MCP process")
 	}
 }
 
@@ -567,7 +568,6 @@ func TestPiCodeGraphPendingProbePreservesConfiguredFiles(t *testing.T) {
 	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
 	manifestPath := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
 	writePiFile(t, childPath, "---\ntools: bash\n---\nwork\n")
-	writePiFile(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 	installFakeCodeGraph(t)
 	previousProbe := piCodeGraphEffectiveMCPProbe
 	piCodeGraphEffectiveMCPProbe = probePiCodeGraphMCP
@@ -727,15 +727,15 @@ func TestPiCodeGraphFailsClosedForBrokenProjectMCPOverride(t *testing.T) {
 	}
 }
 
+// Pi >= 0.99.0 runs MCP servers through its built-in MCP support, so the
+// probe must not require the retired pi-mcp-adapter package on disk.
 func TestPiCodeGraphProbeVerifiesDirectMCPWithoutPiProcess(t *testing.T) {
 	home := t.TempDir()
-	agentDir := filepath.Join(home, "custom-agent")
 	mcpPath := filepath.Join(home, "project", ".mcp.json")
-	writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 	installFakeCodeGraph(t)
 
-	result, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir)
+	result, err := probePiCodeGraphMCP(mcpPath)
 	if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
 		t.Fatalf("probe error = %v, want unavailable adapter health", err)
 	}
@@ -821,16 +821,14 @@ func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 	for _, response := range responses {
 		t.Run(response, func(t *testing.T) {
 			home := t.TempDir()
-			agentDir := filepath.Join(home, "custom-agent")
-			writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
-			if runtime.GOOS == "windows" {
+					if runtime.GOOS == "windows" {
 				t.Setenv("GENTLE_AI_CODEGRAPH_TEST_RESPONSE", response)
 				installFakeCodeGraphHelper(t, "invalid-response")
 			} else {
 				installFakeCodeGraphScript(t, `while IFS= read -r request; do printf '%s\n' '`+response+`'; done`)
 			}
 
-			_, err := probePiCodeGraphMCPWithAgentDir(filepath.Join(home, "mcp.json"), agentDir)
+			_, err := probePiCodeGraphMCP(filepath.Join(home, "mcp.json"))
 			if err == nil || !strings.Contains(err.Error(), "invalid JSON-RPC 2.0 result") {
 				t.Fatalf("probe error = %v, want invalid initialize response", err)
 			}

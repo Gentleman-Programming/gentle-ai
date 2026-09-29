@@ -704,7 +704,6 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			writePiInstallFixture(t, home)
-			mustWriteFile(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), []byte("export default {}\n"))
 			installFakeCodeGraphMCP(t, tc.tools)
 
 			result, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true})

@@ -31,7 +31,11 @@ Pi 0.99.0 ships `builtin:mcp`, which reads `mcp.json`. Per Pi `docs/mcp.md`, any
   - `InstallCommand` no longer runs `pi install npm:pi-mcp-adapter`; `pi-engram init` now follows `gentle-engram`. New `pi.UninstallPackageSources()` keeps `pi remove npm:pi-mcp-adapter` in uninstall cleanup.
   - RED observed: new adapter/engram tests failed (undefined helpers; adapter still written). GREEN: `go test ./internal/agents/pi/ ./internal/components/engram/` ok.
   - Checks: `go build ./...` ok; `go test ./internal/agents/pi/... ./internal/components/... ./internal/tui/...` ok; `go test -timeout 40m ./internal/cli/` ok (748s; the default 10m timeout is too short for this package). Risk tier: medium (behavior change, focused tests).
-- [ ] T2 — CodeGraph Pi probe: remove adapter-path precondition (+ tests). Route: delegated.
+- [x] T2 — CodeGraph Pi probe: remove adapter-path precondition (+ tests). Route: delegated.
+  - T1 commit: `7d51a6773`.
+  - `probePiCodeGraphMCP` no longer stats `npm/node_modules/pi-mcp-adapter/index.ts`; the unused agent-dir variants collapsed into `probePiCodeGraphMCPContext`. Fail-closed tests now pin `PATH` to an empty dir so a host `codegraph` binary cannot satisfy them.
+  - RED observed: 4 communitytool tests failed with "Pi MCP adapter extension is unavailable". GREEN: `go test ./internal/components/communitytool/` ok.
+  - Checks: `go build ./...` ok; `go vet ./internal/components/... ./internal/cli/...` ok; `go test ./internal/agents/pi/... ./internal/components/... ./internal/tui/...` ok; `go test ./internal/cli/ -run 'CodeGraph|CommunityTool|Pi'` ok (full CLI suite runs at T3). Risk tier: medium.
 - [ ] T3 — TUI install plan, docs, and remaining test fixtures. Route: delegated.
 
 ## Acceptance criteria
