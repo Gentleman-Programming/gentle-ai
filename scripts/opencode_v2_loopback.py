@@ -275,6 +275,12 @@ def check_review_step(step, child_prompts, tool_texts, observed_texts, before, a
             problems.append(f"expected {step['child_requests']} child requests, observed {len(child_prompts)}")
         if not any(RELAY_REFUSED in text for text in tool_texts + observed_texts):
             problems.append("refusal was not observed")
+        reason = step.get("reason")
+        # The parent sees "<code> (reason: <reason>)"; the after hook records the
+        # structured {"code", "reason"} result, so either proves the bounded cause.
+        if reason and not any(f"(reason: {reason})" in text or f'"reason": "{reason}"' in text
+                              for text in tool_texts + observed_texts):
+            problems.append(f"refusal reason {reason!r} was not observed")
         if before != after:
             problems.append("authority changed by a refused step")
     return problems

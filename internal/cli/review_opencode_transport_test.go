@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
@@ -1276,5 +1277,113 @@ func TestOpenCodeTransportStartRequiresHostAgentOnlyUnderV2Declaration(t *testin
 	start.Agent = reviewtransaction.LensRisk
 	if err := validateOpenCodeTransportStart(start); err != nil {
 		t.Fatalf("V2 start with an agent refused: %v", err)
+	}
+}
+
+// Every Go refusal reaches the V2 parent only as one bounded, allow-listed
+// reason code: never raw child output, paths, or free text.
+func TestOpenCodeTransportRefusalReasonClassifiesEveryRefusal(t *testing.T) {
+	outputError := func(raw string) error {
+		_, err := decodeOpenCodeTaskHostOutput([]byte(raw))
+		if err == nil {
+			t.Fatalf("host output %q was admitted", raw)
+		}
+		return err
+	}
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"capability refused", errors.New(reviewImmutableTransportUnsupportedCode), openCodeRefusalCapabilityUnavailable},
+		{"strict envelope", errors.New("opencode_review_transport_envelope_invalid: relay start requires only the original Task prompt"), openCodeRefusalEnvelopeInvalid},
+		{"host agent", validateOpenCodeTransportAgent(openCodeTransportTaskBinding{Role: reviewerprovider.RoleRefuter}, reviewtransaction.LensRisk), openCodeRefusalAgentMismatch},
+		{"task binding", openCodeTransportBindingInvalid("Task target does not match the resolved repository context"), openCodeRefusalBindingMismatch},
+		{"live authority moved", openCodeTransportStaleAuthority("Task binding does not match live compact review authority"), openCodeRefusalStaleAuthority},
+		{"authority unavailable", openCodeTransportAuthorityUnavailable(errors.New("/private/secret/path is locked")), openCodeRefusalStaleAuthority},
+		{"completion revision moved", openCodeTransportFailure("opencode_review_transport_completion_unavailable"), openCodeRefusalStaleAuthority},
+		{"empty output", outputError(" \n"), openCodeRefusalOutputRefused},
+		{"truncated output", outputError("<task id=\"x\" state=\"completed\">\n<task_result>\n{\"findings\""), openCodeRefusalOutputRefused},
+		{"malformed output", outputError("<task"), openCodeRefusalOutputRefused},
+		{"reviewer result refused", openCodeTransportFailure("opencode_reviewer_result_refused"), openCodeRefusalOutputRefused},
+		{"role result refused", openCodeTransportCaptureRefusal(errors.New("RAW CHILD OUTPUT")), openCodeRefusalOutputRefused},
+		{"child task error", outputError("<task id=\"x\" state=\"error\">\n<task_error>\nprovider 400\n</task_error>\n</task>"), openCodeRefusalProviderFailed},
+		{"host output unavailable", openCodeTransportFailure("opencode_task_transport_failed"), openCodeRefusalProviderFailed},
+		{"provider result missing", openCodeTransportFailure("opencode_review_transport_provider_result_missing"), openCodeRefusalProviderFailed},
+		{"materialization unavailable", openCodeTransportFailure("opencode_review_transport_materialization_unavailable"), openCodeRefusalRelayUnavailable},
+		{"capture failed", openCodeTransportFailure("opencode_review_transport_capture_failed"), openCodeRefusalRelayUnavailable},
+		{"unclassified free text", errors.New("RAW CHILD OUTPUT at /Users/someone/repo"), openCodeRefusalRelayUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.err == nil {
+				t.Fatal("fixture produced no refusal")
+			}
+			got := openCodeTransportRefusalReason(test.err)
+			if got != test.want {
+				t.Fatalf("reason = %q, want %q (err=%v)", got, test.want, test.err)
+			}
+			if !slicesContainsString(openCodeRefusalReasons, got) {
+				t.Fatalf("reason %q is outside the allow-list", got)
+			}
+		})
+	}
+}
+
+func slicesContainsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+// The refusal frame is V2-only: the V1 plugin keeps reading Go's stderr text,
+// so a V1 relay must not start emitting a frame it would treat as malformed.
+func TestOpenCodeTransportRefusalFrameIsEmittedOnlyUnderTheV2Declaration(t *testing.T) {
+	start, err := json.Marshal(openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: "no provider binding", Agent: reviewtransaction.LensRisk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(openCodeRelayContractEnvironment, "")
+	var v1 bytes.Buffer
+	if err := runReviewOpenCodeTransport(nil, bytes.NewReader(start), &v1); err == nil {
+		t.Fatal("unbound V1 start admitted")
+	}
+	if v1.Len() != 0 {
+		t.Fatalf("V1 relay wrote a refusal frame: %q", v1.String())
+	}
+
+	// Until V2 capability is admitted, the declared relay refuses at the gate
+	// and names that bounded cause.
+	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
+	var v2 bytes.Buffer
+	transportErr := runReviewOpenCodeTransport(nil, bytes.NewReader(start), &v2)
+	if transportErr == nil {
+		t.Fatal("declared relay admitted an unbound start")
+	}
+	var frame openCodeTransportEnvelope
+	decoder := json.NewDecoder(&v2)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&frame); err != nil {
+		t.Fatalf("V2 refusal frame = %q: %v", v2.String(), err)
+	}
+	want := openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "refused", Error: openCodeTransportRefusalReason(transportErr)}
+	if !reflect.DeepEqual(frame, want) || decoder.More() {
+		t.Fatalf("V2 refusal frame = %#v, want exactly %#v", frame, want)
+	}
+}
+
+// The plugin keeps its own copy of the allow-list so arbitrary relay text can
+// never reach the parent; it must name exactly the reasons Go can emit.
+func TestOpenCodeV2PluginRefusalAllowListMatchesGo(t *testing.T) {
+	source, err := assets.Read("opencode/plugins-v2/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range openCodeRefusalReasons {
+		if !strings.Contains(source, `"`+reason+`"`) {
+			t.Fatalf("V2 plugin allow-list lacks Go refusal reason %q", reason)
+		}
 	}
 }

@@ -907,6 +907,16 @@ class ReviewStepCheckTests(unittest.TestCase):
         self.assertIn("parent received the raw child output",
                       self.check(review_step(expect="refused", tool_contains=[]), tool_texts=[refusal + review_step()["child"]], after="a"))
 
+    def test_refused_step_with_a_reason_requires_that_bounded_reason(self):
+        step = review_step(expect="refused", child_requests=0, tool_contains=[], reason="agent_mismatch")
+        refusal = "opencode_review_transport_relay_refused"
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[refusal + " (reason: agent_mismatch)"], after="a"), [])
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], observed_texts=['{"reason": "agent_mismatch", "code": "' + refusal + '"}'], after="a"), [])
+        self.assertIn("refusal reason 'agent_mismatch' was not observed",
+                      self.check(step, child_prompts=[], tool_texts=[refusal + " (reason: relay_unavailable)"], after="a"))
+        self.assertIn("refusal reason 'agent_mismatch' was not observed",
+                      self.check(step, child_prompts=[], tool_texts=[refusal], after="a"))
+
 
 class ReviewModeArgumentTests(unittest.TestCase):
     def test_review_mode_requires_existing_absolute_inputs(self):

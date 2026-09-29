@@ -57,7 +57,10 @@ func (err *openCodeTaskOutputError) Error() string {
 	}
 }
 
-type openCodeTransportBindingError struct{ code, detail string }
+type openCodeTransportBindingError struct {
+	code, detail string
+	stale        bool
+}
 
 func (err *openCodeTransportBindingError) Error() string {
 	code := err.code
@@ -204,7 +207,21 @@ func RunReviewOpenCodeTransport(args []string, stdout io.Writer) error {
 	return runReviewOpenCodeTransport(args, os.Stdin, stdout)
 }
 
+// runReviewOpenCodeTransport runs one relay. Under the exact V2 relay
+// declaration a refusal also ends stdout with one bounded refused frame, so
+// the managed V2 plugin can name the cause to its parent; the V1 plugin keeps
+// its existing stderr-only refusal wire.
 func runReviewOpenCodeTransport(args []string, stdin io.Reader, stdout io.Writer) error {
+	err := runReviewOpenCodeTransportFrames(args, stdin, stdout)
+	if err != nil && openCodeRelayDeclaresV2() {
+		_ = json.NewEncoder(stdout).Encode(openCodeTransportEnvelope{
+			Schema: openCodeReviewTransportSchema, Operation: "refused", Error: openCodeTransportRefusalReason(err),
+		})
+	}
+	return err
+}
+
+func runReviewOpenCodeTransportFrames(args []string, stdin io.Reader, stdout io.Writer) error {
 	if !reviewImmutableRuntimeCapability(model.AgentOpenCode).supportsImmutableReceiptReview() {
 		return errors.New(reviewImmutableTransportUnsupportedCode)
 	}
@@ -375,7 +392,7 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt, agent string) 
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, binding.LineageID, false)
 	if err != nil {
-		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lineage does not match live compact review authority")
+		return openCodeTransportSession{}, openCodeTransportStaleAuthority("Task lineage does not match live compact review authority")
 	}
 	if err := validateReviewProviderTaskAuthorityBinding(ReviewTransitionBinding{
 		LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
@@ -594,7 +611,7 @@ func validateReviewProviderTaskAuthorityBinding(binding ReviewTransitionBinding,
 	// freshly discovered record prevents a stale locator from selecting another
 	// authority before any provider prompt can be materialized.
 	if record.State.LineageID != binding.LineageID || record.State.CapturePhaseRevision != binding.Revision {
-		return openCodeTransportBindingInvalid("Task binding does not match live compact review authority")
+		return openCodeTransportStaleAuthority("Task binding does not match live compact review authority")
 	}
 	return nil
 }
@@ -836,4 +853,72 @@ func openCodeTransportCaptureRefusal(err error) error {
 
 func openCodeTransportAuthorityUnavailable(cause error) error {
 	return fmt.Errorf("opencode_review_transport_authority_unavailable: OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying: %w", cause)
+}
+
+// Bounded refusal reasons the V2 relay may surface to the parent. The plugin
+// forwards only these exact codes; everything else is relay_unavailable.
+const (
+	openCodeRefusalCapabilityUnavailable = "capability_unavailable"
+	openCodeRefusalEnvelopeInvalid       = "envelope_invalid"
+	openCodeRefusalAgentMismatch         = "agent_mismatch"
+	openCodeRefusalBindingMismatch       = "binding_mismatch"
+	openCodeRefusalStaleAuthority        = "stale_authority"
+	openCodeRefusalOutputRefused         = "output_refused"
+	openCodeRefusalProviderFailed        = "provider_failed"
+	openCodeRefusalRelayUnavailable      = "relay_unavailable"
+)
+
+var openCodeRefusalReasons = []string{
+	openCodeRefusalCapabilityUnavailable, openCodeRefusalEnvelopeInvalid, openCodeRefusalAgentMismatch,
+	openCodeRefusalBindingMismatch, openCodeRefusalStaleAuthority, openCodeRefusalOutputRefused,
+	openCodeRefusalProviderFailed, openCodeRefusalRelayUnavailable,
+}
+
+// openCodeTransportRefusalReason maps a relay refusal to its bounded reason.
+// It reads only typed errors and the leading Go-owned code token; the detail
+// text, raw child output, and paths never influence or reach the result.
+func openCodeTransportRefusalReason(err error) string {
+	var binding *openCodeTransportBindingError
+	if errors.As(err, &binding) {
+		switch {
+		case binding.code == openCodeTransportAgentMismatchCode:
+			return openCodeRefusalAgentMismatch
+		case binding.stale:
+			return openCodeRefusalStaleAuthority
+		default:
+			return openCodeRefusalBindingMismatch
+		}
+	}
+	var output *openCodeTaskOutputError
+	if errors.As(err, &output) {
+		if output.Code == "opencode_task_error" {
+			return openCodeRefusalProviderFailed
+		}
+		return openCodeRefusalOutputRefused
+	}
+	if err == nil {
+		return openCodeRefusalRelayUnavailable
+	}
+	message := err.Error()
+	code := message[:len(message)-len(strings.TrimLeft(message, "abcdefghijklmnopqrstuvwxyz0123456789_"))]
+	switch code {
+	case reviewImmutableTransportUnsupportedCode:
+		return openCodeRefusalCapabilityUnavailable
+	case "opencode_review_transport_envelope_invalid":
+		return openCodeRefusalEnvelopeInvalid
+	case "opencode_review_transport_authority_unavailable", "opencode_review_transport_completion_unavailable":
+		return openCodeRefusalStaleAuthority
+	case "opencode_reviewer_result_refused", "opencode_provider_role_result_refused":
+		return openCodeRefusalOutputRefused
+	case "opencode_task_transport_failed", "opencode_review_transport_provider_result_missing":
+		return openCodeRefusalProviderFailed
+	default:
+		return openCodeRefusalRelayUnavailable
+	}
+}
+
+// openCodeTransportStaleAuthority is a well-formed binding that no longer
+// matches live compact authority: its lineage or revision has moved on.
+func openCodeTransportStaleAuthority(detail string) error {
+	return &openCodeTransportBindingError{detail: detail, stale: true}
 }

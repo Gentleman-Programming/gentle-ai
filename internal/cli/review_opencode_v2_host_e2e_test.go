@@ -45,6 +45,7 @@ type openCodeV2HostStep struct {
 	Background     bool     `json:"background,omitempty"`
 	SessionID      string   `json:"session_id,omitempty"`
 	Expect         string   `json:"expect"`
+	Reason         string   `json:"reason,omitempty"`
 	ToolContains   []string `json:"tool_contains,omitempty"`
 	ChildRequests  *int     `json:"child_requests,omitempty"`
 	HostInjected   []string `json:"host_injected,omitempty"`
@@ -268,8 +269,8 @@ func TestOpenCodeV2RealHostLensRelayAdmitsBoundResultAndRefusesNegatives(t *test
 	steps := []openCodeV2HostStep{
 		refused("stale-revision", openCodeV2HostStep{Prompt: openCodeV2MutatedLensPrompt(t, task.Prompt, "revision"), Child: payload, ChildRequests: openCodeV2Count(0)}),
 		refused("wrong-target", openCodeV2HostStep{Prompt: openCodeV2MutatedLensPrompt(t, task.Prompt, "target"), Child: payload, ChildRequests: openCodeV2Count(0)}),
-		refused("background-true", openCodeV2HostStep{Background: true, Child: payload, ChildRequests: openCodeV2Count(0)}),
-		refused("session-id", openCodeV2HostStep{SessionID: "ses_fixture_resume", Child: payload, ChildRequests: openCodeV2Count(0)}),
+		refused("background-true", openCodeV2HostStep{Background: true, Child: payload, ChildRequests: openCodeV2Count(0), Reason: "dispatch_refused"}),
+		refused("session-id", openCodeV2HostStep{SessionID: "ses_fixture_resume", Child: payload, ChildRequests: openCodeV2Count(0), Reason: "dispatch_refused"}),
 		refused("truncated-json", openCodeV2HostStep{Child: payload[:len(payload)/2]}),
 		refused("empty-output", openCodeV2HostStep{}),
 		refused("task-prefixed-output", openCodeV2HostStep{Child: "<task"}),
