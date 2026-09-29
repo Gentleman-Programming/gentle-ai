@@ -1739,7 +1739,8 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 // ComponentOpenCodeGentleLogo is in state, but OpenCode is not selected (e.g. only
 // Claude Code is selected), sync does not touch OpenCode directories or fail (issue #1212).
 func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
-	home := t.TempDir()
+	// An unrelated ancestor named opencode must not count as its config tree.
+	home := filepath.Join(t.TempDir(), "opencode", "home")
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents:     []string{"claude-code"},
 		SelectionConfigured: true,
@@ -1771,7 +1772,11 @@ func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
 	}
 
 	for _, p := range result.ChangedFiles {
-		if strings.Contains(p, "opencode") {
+		rel, err := filepath.Rel(opencodeDir, p)
+		if err != nil {
+			t.Fatalf("resolve changed path %q relative to OpenCode config: %v", p, err)
+		}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			t.Fatalf("unexpected opencode path in ChangedFiles: %s", p)
 		}
 	}

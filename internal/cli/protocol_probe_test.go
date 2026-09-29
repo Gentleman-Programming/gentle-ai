@@ -65,6 +65,11 @@ func TestMain(m *testing.M) {
 	// (Gentle Shell does) would otherwise redirect these tests into the real
 	// ~/.pi regardless of the sandboxed HOME set up below.
 	testenv.Isolate()
+	// The default fake is V1; an inherited host declaration must not override
+	// it, including in stand-in subprocesses. V2 tests set their own declaration.
+	if err := os.Unsetenv("GENTLE_AI_OPENCODE_RELAY_CONTRACT"); err != nil {
+		panic(err)
+	}
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}
