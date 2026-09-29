@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -181,6 +182,11 @@ func TestTUIOpenCodeSDKConsentFullApplyIntegration(t *testing.T) {
 		t.Skip("fake npm fixture requires a POSIX shell")
 	}
 	home, config, log := isolateSDKBridgeTest(t, t.TempDir(), "2.0.4")
+	runSDKFullApplyIntegration(t, home, config, log, false)
+}
+
+func runSDKFullApplyIntegration(t *testing.T, home, config, log string, realSDK bool) {
+	t.Helper()
 	// Remove only the deliberate negative-test ownership conflict, before consent.
 	if err := os.Remove(filepath.Join(config, "plugins", "telemetry-runtime.ts")); err != nil {
 		t.Fatal(err)
@@ -237,8 +243,16 @@ func TestTUIOpenCodeSDKConsentFullApplyIntegration(t *testing.T) {
 	if m.Screen != tui.ScreenInstalling || cmd == nil {
 		t.Fatalf("affirmative did not schedule installation: screen=%v", m.Screen)
 	}
-	m = drainSDKBridgeCommands(t, m, cmd)
+	if realSDK {
+		m = drainSDKBridgeCommands(t, m, cmd, 60*time.Second)
+	} else {
+		m = drainSDKBridgeCommands(t, m, cmd)
+	}
 	if m.Execution.Err != nil || !m.Execution.Prepare.Success || !m.Execution.Apply.Success {
+		if realSDK {
+			output, _ := os.ReadFile(filepath.Join(filepath.Dir(log), "npm-helper.log"))
+			t.Logf("offline npm helper: %s", output)
+		}
 		t.Fatalf("full installation failed: %+v", m.Execution)
 	}
 	for name, stage := range map[string]pipeline.StageResult{"Prepare": m.Execution.Prepare, "Apply": m.Execution.Apply} {
@@ -270,7 +284,7 @@ func TestTUIOpenCodeSDKConsentFullApplyIntegration(t *testing.T) {
 	if got := string(read(log)); got != wantNPM {
 		t.Fatalf("expected exactly one pinned SDK install with isolated arguments: got %q, want %q", got, wantNPM)
 	}
-	if got := string(read(filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json"))); got != "{\"version\":\"2.0.4\"}\n" {
+	if got := string(read(filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json"))); !realSDK && got != "{\"version\":\"2.0.4\"}\n" {
 		t.Fatalf("unexpected fake SDK manifest: %s", got)
 	}
 	for _, name := range []string{"model-variants.ts", "skill-registry.ts", "opencode-review-transport.ts", "telemetry-runtime.ts"} {
@@ -306,6 +320,288 @@ func TestTUIOpenCodeSDKConsentFullApplyIntegration(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(m.Progress.Logs, "\n"), "pipeline completed successfully") {
 		t.Fatalf("terminal success not surfaced to TUI: %v", m.Progress.Logs)
+	}
+}
+
+// This is wrapper-assisted offline evidence, not unchanged production network
+// behavior or plugin activation. Only an explicitly supplied cache is seeded.
+func TestTUIOpenCodeSDKConsentRealNPMOfflineIntegration(t *testing.T) {
+	if testing.Short() || os.Getenv("GENTLE_AI_REAL_NPM_OFFLINE") != "1" {
+		t.Skip("opt in with GENTLE_AI_REAL_NPM_OFFLINE=1 and exact NPM, NODE, CACHE paths")
+	}
+	npm, node, cache := realSDKOfflineInputs(t)
+	const approved = "/private/var/folders/k1/2nnhpdfx0wq8k6w8n2nqx9_h0000gn/T/opencode"
+	if filepath.Clean(os.Getenv("TMPDIR")) != approved {
+		t.Fatal("parent TMPDIR must equal the approved temporary root")
+	}
+	root := t.TempDir()
+	home, config, log := isolateSDKBridgeTest(t, root, "")
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	// Keep dependency probes fake; only the affirmative pinned install can reach
+	// the helper. Its clean environment has no ambient tokens or npm settings.
+	script := "#!/bin/sh\nset -eu\nif [ \"$1\" = --version ]; then printf '10.0.0\\n'; exit 0; fi\nexec /usr/bin/env -i "
+	for _, item := range []string{"GENTLE_AI_REAL_NPM_OFFLINE=1", "GENTLE_AI_REAL_NPM=" + npm, "GENTLE_AI_REAL_NODE=" + node, "GENTLE_AI_REAL_NPM_CACHE=" + cache} {
+		script += quote(item) + " "
+	}
+	script += "\"NPM_CONFIG_CACHE=${NPM_CONFIG_CACHE:?}\" "
+	script += quote(binary) + " -test.run '^TestSDKRealNPMOfflineHelper$' -- sdk-offline " + quote(root) + " \"$@\" > " + quote(filepath.Join(root, "npm-helper.log")) + " 2>&1\n"
+	writeSDKBridgeFile(t, filepath.Join(root, "bin", "npm"), script, 0700)
+	runSDKFullApplyIntegration(t, home, config, log, true)
+}
+
+func realSDKOfflineInputs(t *testing.T) (npm, node, cache string) {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Fatal("real offline integration requires macOS sandbox-exec")
+	}
+	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
+		t.Fatal(err)
+	}
+	paths := []*string{&npm, &node, &cache}
+	for i, key := range []string{"GENTLE_AI_REAL_NPM", "GENTLE_AI_REAL_NODE", "GENTLE_AI_REAL_NPM_CACHE"} {
+		value := os.Getenv(key)
+		if !filepath.IsAbs(value) {
+			t.Fatalf("%s must be an explicit absolute path", key)
+		}
+		resolved, err := filepath.EvalSymlinks(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || (i == 2 && !info.IsDir()) || (i != 2 && !info.Mode().IsRegular()) {
+			t.Fatalf("invalid %s: %v", key, err)
+		}
+		*paths[i] = resolved
+	}
+	return
+}
+
+// Invoked only by the consent-pinned fixture wrapper, never by ordinary tests.
+func TestSDKRealNPMOfflineHelper(t *testing.T) {
+	marker := -1
+	for i, arg := range os.Args {
+		if arg == "sdk-offline" {
+			marker = i
+			break
+		}
+	}
+	if marker < 0 || os.Getenv("GENTLE_AI_REAL_NPM_OFFLINE") != "1" {
+		t.Skip("private opt-in npm wrapper helper")
+	}
+	npm, node, source := realSDKOfflineInputs(t)
+	if marker+2 >= len(os.Args) {
+		t.Fatal("missing fixture root or install arguments")
+	}
+	root, err := filepath.EvalSymlinks(os.Args[marker+1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	const approved = "/private/var/folders/k1/2nnhpdfx0wq8k6w8n2nqx9_h0000gn/T/opencode/"
+	if !strings.HasPrefix(root, approved) || !sdkOfflineCacheSeparate(root, source) {
+		t.Fatal("fixture must be beneath approved root and separate from source cache")
+	}
+	config := filepath.Join(root, "config", "opencode")
+	args := os.Args[marker+2:]
+	want := []string{"install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4"}
+	if strings.Join(args, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("refusing unexpected npm arguments: %q", args)
+	}
+	cachePath := os.Getenv("NPM_CONFIG_CACHE")
+	cacheParent, err := filepath.EvalSymlinks(filepath.Dir(cachePath))
+	if err != nil || !strings.HasPrefix(cacheParent, root+"/") || filepath.Base(cachePath) != "npm-cache" {
+		t.Fatalf("npm cache must be a fresh private fixture directory: %v", err)
+	}
+	privateCache := filepath.Join(cacheParent, "npm-cache")
+	if err := os.Mkdir(privateCache, 0700); err != nil {
+		t.Fatalf("refusing existing or unavailable private cache: %v", err)
+	}
+	entries, err := os.ReadDir(privateCache)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("refusing nonempty private cache: %v", err)
+	}
+	// sandbox-exec must succeed before any real Node/npm execution. A failed
+	// sandbox is terminal, with no unsandboxed fallback. Even cache copying is
+	// network-denied and cannot write outside the fixture (including the source).
+	userConfig, globalConfig := filepath.Join(root, "user.npmrc"), filepath.Join(root, "global.npmrc")
+	writeSDKBridgeFile(t, userConfig, "", 0600)
+	writeSDKBridgeFile(t, globalConfig, "", 0600)
+	env := []string{"HOME=" + filepath.Join(root, "home"), "PATH=" + filepath.Join(root, "bin"), "TMPDIR=" + filepath.Join(root, "tmp"), "NPM_CONFIG_CACHE=" + privateCache, "NPM_CONFIG_USERCONFIG=" + userConfig, "NPM_CONFIG_GLOBALCONFIG=" + globalConfig, "NPM_CONFIG_OFFLINE=true", "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false"}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	run := func(command string, arguments ...string) []byte {
+		t.Helper()
+		cmd := sdkOfflineCommand(ctx, root, command, arguments...)
+		cmd.Dir, cmd.Env = config, env
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("sandboxed %s failed (offline misses never authorize downloads): %v\n%s", command, err, output)
+		}
+		return output
+	}
+	run("/bin/cp", "-R", source+"/.", privateCache)
+	writeSDKBridgeFile(t, filepath.Join(root, "npm-install.log"), config+"\n"+strings.Join(args, "\n")+"\n", 0600)
+	run(node, append([]string{npm, "--offline", "--ignore-scripts"}, args...)...)
+	// Import the installed SDK only, never the managed plugins or an OpenCode
+	// host. Check the root export used by all four managed V2 assets and its
+	// actual dist file, not merely the version or an unrelated SDK subpath.
+	resolved := run(node, "--input-type=module", "-e", `
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+const manifest = JSON.parse(fs.readFileSync('node_modules/@opencode/plugin/package.json', 'utf8'));
+if (manifest.name !== '@opencode/plugin' || manifest.version !== '2.0.4' || !manifest.exports) throw Error('invalid SDK manifest');
+console.log(JSON.stringify(['@opencode/plugin'].map(spec =>
+  fs.realpathSync(fileURLToPath(import.meta.resolve(spec))))));
+`)
+	var exports []string
+	if err := json.Unmarshal(resolved, &exports); err != nil || len(exports) != 1 {
+		t.Fatalf("invalid resolved SDK exports: %s (%v)", resolved, err)
+	}
+	for _, path := range exports {
+		if !sdkOfflineExportContained(root, path) {
+			t.Fatalf("SDK export escapes the fixture package dist: %s", path)
+		}
+	}
+	// Import only the canonical paths admitted above, never the original
+	// specifiers again. No module code executes during the resolution phase.
+	run(node, "--input-type=module", "-e", `
+import { pathToFileURL } from 'node:url';
+for (const path of process.argv.slice(1)) {
+  const sdk = await import(pathToFileURL(path).href);
+  if (typeof sdk.Plugin?.define !== 'function') throw Error('missing SDK Plugin.define export');
+}
+`, "--", exports[0])
+}
+
+func sdkOfflineCacheSeparate(root, source string) bool {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	source, err = filepath.EvalSymlinks(source)
+	return err == nil && !sdkOfflinePathWithin(root, source) && !sdkOfflinePathWithin(source, root)
+}
+
+func sdkOfflinePathWithin(parent, path string) bool {
+	relative, err := filepath.Rel(parent, path)
+	return err == nil && !filepath.IsAbs(relative) && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func sdkOfflineCommand(ctx context.Context, root, command string, arguments ...string) *exec.Cmd {
+	// Refuse descendants instead of relying on nonportable process-group fields
+	// or a racy process-tree walk. A package requiring a fork is unavailable in
+	// this fixture; never relax the sandbox or fall back to an unguarded launch.
+	profile := fmt.Sprintf("(version 1) (allow default) (deny network*) (deny process-fork) (deny file-write*) (allow file-write* (subpath %q) (literal \"/dev/null\"))", root)
+	cmd := exec.CommandContext(ctx, "/usr/bin/sandbox-exec", append([]string{"-p", profile, command}, arguments...)...)
+	cmd.WaitDelay = 200 * time.Millisecond
+	return cmd
+}
+
+func sdkOfflineExportContained(root, path string) bool {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	dist, err := filepath.EvalSymlinks(filepath.Join(root, "config", "opencode", "node_modules", "@opencode", "plugin", "dist"))
+	if err != nil || !sdkOfflinePathWithin(root, dist) {
+		return false
+	}
+	path, err = filepath.EvalSymlinks(path)
+	if err != nil || !sdkOfflinePathWithin(dist, path) {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func TestSDKOfflineCacheSeparation(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "fixture")
+	if err := os.MkdirAll(filepath.Join(root, "cache"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, source string
+		want         bool
+	}{
+		{"equal", root, false},
+		{"descendant", filepath.Join(root, "cache"), false},
+		{"ancestor", base, false},
+		{"sibling", filepath.Join(base, "cache"), true},
+		{"prefix sibling", root + "-cache", true},
+		{"canonical equal", alias, false},
+		{"canonical descendant", filepath.Join(alias, "cache"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.MkdirAll(tc.source, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if got := sdkOfflineCacheSeparate(root, tc.source); got != tc.want {
+				t.Fatalf("cache separation = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSDKOfflineExportProvenance(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "fixture")
+	inside := filepath.Join(root, "config", "opencode", "node_modules", "@opencode", "plugin", "dist", "promise", "index.js")
+	outside := filepath.Join(base, "outside", "node_modules", "@opencode", "plugin", "dist", "promise", "index.js")
+	writeSDKBridgeFile(t, inside, "", 0600)
+	writeSDKBridgeFile(t, outside, "", 0600)
+	link := filepath.Join(filepath.Dir(inside), "escaped-index.js")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, path string
+		want       bool
+	}{
+		{"installed V2 root entry", inside, true},
+		{"outside matching substring", outside, false},
+		{"symlink escape", link, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sdkOfflineExportContained(root, tc.path); got != tc.want {
+				t.Fatalf("export provenance = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSDKOfflineProcessBounds(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS sandbox guard")
+	}
+	root := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Shell must fork to run the conditional command. Success means the
+	// sandbox allowed a descendant, which is unsafe for direct-child cleanup.
+	cmd := sdkOfflineCommand(ctx, root, "/bin/sh", "-c", "if /bin/sleep 0; then exit 99; fi")
+	cmd.Env = []string{"HOME=" + root, "PATH=/usr/bin:/bin", "TMPDIR=" + root}
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "Operation not permitted") {
+		t.Fatalf("descendant was not refused: %v, %s", err, output)
+	}
+	if cmd.WaitDelay <= 0 || cmd.WaitDelay > time.Second {
+		t.Fatal("pipe drain must have a positive bound of at most one second")
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	cmd = sdkOfflineCommand(ctx, root, "/bin/sleep", "10")
+	cmd.Env = []string{"HOME=" + root}
+	if _, err := cmd.CombinedOutput(); err == nil || ctx.Err() == nil || time.Since(start) > 2*time.Second {
+		t.Fatalf("direct child deadline not enforced: %v", err)
 	}
 }
 
@@ -373,7 +669,7 @@ func assertSDKBridgeMissing(t *testing.T, path string) {
 	}
 }
 
-func drainSDKBridgeCommands(t *testing.T, m tui.Model, initial tea.Cmd) tui.Model {
+func drainSDKBridgeCommands(t *testing.T, m tui.Model, initial tea.Cmd, timeout ...time.Duration) tui.Model {
 	t.Helper()
 	messages := make(chan tea.Msg, 16)
 	stop := make(chan struct{})
@@ -390,7 +686,11 @@ func drainSDKBridgeCommands(t *testing.T, m tui.Model, initial tea.Cmd) tui.Mode
 		}
 	}
 	launch(initial)
-	deadline := time.NewTimer(10 * time.Second)
+	wait := 10 * time.Second
+	if len(timeout) != 0 {
+		wait = timeout[0]
+	}
+	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	for count := 0; count < 128; count++ {
 		select {
@@ -411,7 +711,7 @@ func drainSDKBridgeCommands(t *testing.T, m tui.Model, initial tea.Cmd) tui.Mode
 			}
 			launch(cmd)
 		case <-deadline.C:
-			t.Fatal("TUI bridge did not deliver PipelineDoneMsg within 10 seconds")
+			t.Fatalf("TUI bridge did not deliver PipelineDoneMsg within %s", wait)
 		}
 	}
 	t.Fatal("TUI bridge exceeded 128 command/progress messages")
