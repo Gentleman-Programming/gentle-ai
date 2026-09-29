@@ -66,6 +66,16 @@ Pinned backups are never automatically deleted, even when the retention limit is
 3. Re-run install with `--dry-run` to validate plan
 4. Re-run install after fixing external dependencies
 
+## Command Code rollback and uninstall
+
+When rolling back or uninstalling Command Code (`command-code`), gentle-ai manages its dedicated configuration directory under `~/.commandcode`:
+
+- **Snapshot scope**: Pre-install, pre-sync, and pre-upgrade snapshots capture all managed targets under `~/.commandcode`: `AGENTS.md`, `skills/`, `settings.json`, and `mcp.json`.
+- **`settings.json` hook pruning**: Startup refresh hooks (`SessionStart` and `Stop`) installed for `skill-registry refresh` are pruned without touching user-defined hooks, matchers, or surrounding settings keys. If `settings.json` contains no other settings after pruning, the emptied file is removed.
+- **`mcp.json` rollback semantics**: Managed MCP server entries (`context7`, `engram`) under `mcpServers` are removed. Custom user servers are preserved. If `mcp.json` becomes an empty JSON object after removing managed servers, the file is deleted.
+- **`AGENTS.md` section removal**: Managed marker sections (`<!-- gentle-ai:persona -->` and `<!-- gentle-ai:engram-protocol -->`) are removed while user-authored guidelines, instructions, and trailing notes are preserved verbatim.
+- **Skills cleanup**: Managed skill directories under `~/.commandcode/skills/` are removed, while any user-authored skills in that directory are preserved.
+
 ## What rollback does NOT cover
 
 - Packages installed via `brew install`, `apt-get install`, or `pacman -S` are not uninstalled during rollback. The snapshot system handles configuration files only.

@@ -36,6 +36,46 @@ func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func windsurfAdapter() agents.Adapter    { return windsurf.NewAdapter() }
 func kiroAdapter() agents.Adapter        { return kiro.NewAdapter() }
 
+type commandCodeGoldenAdapter struct{ *cursor.Adapter }
+
+func (commandCodeGoldenAdapter) Agent() model.AgentID { return model.AgentID("command-code") }
+func (commandCodeGoldenAdapter) MCPStrategy() model.MCPStrategy {
+	return model.StrategyMCPConfigFile
+}
+func (commandCodeGoldenAdapter) MCPConfigPath(home, _ string) string {
+	return filepath.Join(home, ".commandcode", "mcp.json")
+}
+func (commandCodeGoldenAdapter) GlobalConfigDir(home string) string {
+	return filepath.Join(home, ".commandcode")
+}
+func (commandCodeGoldenAdapter) SystemPromptDir(home string) string {
+	return filepath.Join(home, ".commandcode")
+}
+func (commandCodeGoldenAdapter) SystemPromptFile(home string) string {
+	return filepath.Join(home, ".commandcode", "AGENTS.md")
+}
+func (commandCodeGoldenAdapter) SkillsDir(home string) string {
+	return filepath.Join(home, ".commandcode", "skills")
+}
+func (commandCodeGoldenAdapter) SettingsPath(home string) string {
+	return filepath.Join(home, ".commandcode", "settings.json")
+}
+func (commandCodeGoldenAdapter) SystemPromptStrategy() model.SystemPromptStrategy {
+	return model.StrategyMarkdownSections
+}
+func (commandCodeGoldenAdapter) SupportsSkills() bool           { return true }
+func (commandCodeGoldenAdapter) SupportsSystemPrompt() bool     { return true }
+func (commandCodeGoldenAdapter) SupportsMCP() bool              { return true }
+func (commandCodeGoldenAdapter) SupportsOutputStyles() bool     { return false }
+func (commandCodeGoldenAdapter) OutputStyleDir(_ string) string { return "" }
+func (commandCodeGoldenAdapter) SupportsSlashCommands() bool    { return false }
+func (commandCodeGoldenAdapter) CommandsDir(_ string) string    { return "" }
+func (commandCodeGoldenAdapter) SupportsSubAgents() bool        { return false }
+func (commandCodeGoldenAdapter) SubAgentsDir(_ string) string   { return "" }
+func (commandCodeGoldenAdapter) EmbeddedSubAgentsDir() string   { return "" }
+
+func commandCodeAdapter() agents.Adapter { return commandCodeGoldenAdapter{cursor.NewAdapter()} }
+
 // ---------------------------------------------------------------------------
 // Existing golden tests (context7 and presets)
 // ---------------------------------------------------------------------------
@@ -507,6 +547,73 @@ func TestGoldenEngram_Antigravity(t *testing.T) {
 	// GEMINI.md must contain the engram-protocol section.
 	rulesFile := readTestFile(t, filepath.Join(home, ".gemini", "GEMINI.md"))
 	assertGolden(t, "engram-antigravity-rulesmd.golden", rulesFile)
+}
+
+// ---------------------------------------------------------------------------
+// Command Code golden tests
+// ---------------------------------------------------------------------------
+
+func TestGoldenSDD_CommandCode(t *testing.T) {
+	home := t.TempDir()
+	adapter := commandCodeAdapter()
+	promptPath := adapter.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expected := readTestFile(t, filepath.Join(goldenDir(t), "sdd-commandcode-agentsmd.golden"))
+	if err := os.WriteFile(promptPath, expected, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsMD := readTestFile(t, promptPath)
+	assertGolden(t, "sdd-commandcode-agentsmd.golden", agentsMD)
+}
+
+func TestGoldenPersona_CommandCode(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := persona.Inject(home, commandCodeAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("persona.Inject(command-code, gentleman) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(command-code, gentleman) changed = false")
+	}
+
+	agentsMD := readTestFile(t, filepath.Join(home, ".commandcode", "AGENTS.md"))
+	assertGolden(t, "persona-commandcode-gentleman.golden", agentsMD)
+}
+
+func TestGoldenEngram_CommandCode(t *testing.T) {
+	home := t.TempDir()
+
+	engram.SetLookPathForTest(t, "/opt/homebrew/bin/engram", "")
+
+	result, err := engram.Inject(home, commandCodeAdapter())
+	if err != nil {
+		t.Fatalf("engram.Inject(command-code) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("engram.Inject(command-code) changed = false")
+	}
+
+	mcpJSON := readTestFile(t, filepath.Join(home, ".commandcode", "mcp.json"))
+	assertGolden(t, "engram-commandcode-mcp.golden", mcpJSON)
+}
+
+func TestGoldenContext7_CommandCode(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := mcp.Inject(home, home, commandCodeAdapter())
+	if err != nil {
+		t.Fatalf("mcp.Inject(command-code) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("mcp.Inject(command-code) changed = false")
+	}
+
+	mcpJSON := readTestFile(t, filepath.Join(home, ".commandcode", "mcp.json"))
+	assertGolden(t, "context7-commandcode-mcp.golden", mcpJSON)
 }
 
 // ---------------------------------------------------------------------------

@@ -477,6 +477,13 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 				path = adapter.SettingsPath(s.homeDir)
 			case model.AgentCodex:
 				path = filepath.Join(adapter.GlobalConfigDir(s.homeDir), "hooks.json")
+			case model.AgentID("command-code"):
+				if adapter != nil {
+					path = adapter.SettingsPath(s.homeDir)
+				}
+				if path == "" {
+					path = filepath.Join(s.homeDir, ".commandcode", "settings.json")
+				}
 			}
 			if path != "" {
 				backupTargets[path] = struct{}{}
@@ -1247,6 +1254,9 @@ func rewriteSkillRegistryHook(path string) operation {
 // Only exact installed commands are removed; arbitrary user commands remain intact.
 func managedRetainedHookCommand(cmd string) bool {
 	return cmd == `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true` ||
+		cmd == `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${COMMANDCODE_PROJECT_DIR:-$PWD}" || true` ||
+		cmd == `powershell -NoProfile -Command 'if (Test-Path env:COMMANDCODE_PROJECT_DIR) { $dir = $env:COMMANDCODE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'` ||
+		cmd == `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'` ||
 		cmd == `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true` ||
 		cmd == "gentle-ai review stop-hook --agent "+string(model.AgentClaudeCode) ||
 		cmd == "gentle-ai telemetry runtime claude --json" ||
