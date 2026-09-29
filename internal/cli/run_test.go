@@ -1041,7 +1041,9 @@ func TestV2SDKProvisionRejectsChangedExecutableAndPhysicalConfig(t *testing.T) {
 			}
 			switch change {
 			case "executable":
-				if err := os.Remove(binary); err != nil {
+				// Keep the approved file alive so the byte-identical replacement
+				// gets a new inode; Linux filesystems reuse a freed inode at once.
+				if err := os.Rename(binary, filepath.Join(t.TempDir(), "npm-approved")); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n"), 0755); err != nil {
