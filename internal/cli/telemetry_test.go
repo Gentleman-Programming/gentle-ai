@@ -110,7 +110,7 @@ func TestTelemetryPolicyFlagsAndHelp(t *testing.T) {
 func TestTelemetryContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "telemetry", "v1", "schemas")
 	want := map[string]string{
-		"event.schema.json":   "fa0aafba3314fea4b9a17a7df75fa53559c43f42963bd7a1783884c51caec20d",
+		"event.schema.json":   "6c8a9ec0bda83ffd9a115e1bec3330f8638d1692330748d914692fbae2bf0c31",
 		"status.schema.json":  "1ae7ee2f80b1cc51e66093e2a3ab6f10a85a940966c1e84451b44e9456dca822",
 		"trigger.schema.json": "0e810811c5a673bc21f06a9fb0c5ce03841d46e3b35fc436b25860c2f0fded58",
 	}
