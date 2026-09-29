@@ -121,6 +121,19 @@ func RenderRouting(agent model.AgentID) (string, error) {
 		output.WriteString("- Preserve applicable functional verification. Run applicable functional checks per task, not a verification ceremony per TODO checkbox. Verify each work-unit commit in proportion to its risk, as the orchestrator's Delegated Verification Gate describes: structural readback for passive changes, writer self-verification for ordinary changes, and an added independent verifier for high-risk or unclear changes. Record per task the risk tier you applied and the checks you observed. Never infer low risk without evidence, and treat an unclear change as high risk. Never skip an existing delivery gate. A task list or assumption challenge never replaces verification or adds an execution harness.\n")
 	}
 	output.WriteString("- Delivery follows work units. At feature-document creation, forecast authored changed lines (additions plus deletions, generated files excluded) from the task list, and keep a running count from work-unit commits. Choose one delivery strategy per feature: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. When the forecast or the running count exceeds about 400 authored changed lines, apply the chosen strategy before the next commit: `ask-on-risk` asks once for the chain strategy, `stacked-to-main` or `feature-branch-chain`; `auto-chain` asks only for a missing chain strategy and slices automatically. Cache both choices, and record slice boundaries, which commits each pull request holds, in the feature document. Resolve the `work-unit-commits` and `chained-pr` skills by registry name before planning or creating any pull request, never hardcode their paths.\n")
+
+	// The remote execution boundary ships in the routing block, not only in the
+	// optional permission profiles, for the same reason as the kill switch below:
+	// it is unconditional for every configured agent, including agents with no
+	// permission profile at all. Ambient authenticated sessions (SSH
+	// ControlMaster sockets) let a local agent reach remote infrastructure
+	// without any permission rule firing (#4324). It must render BEFORE the
+	// non-RDD early return so every agent gets it, not only RDD runtimes.
+	output.WriteString("\n### Remote execution boundary\n\n")
+	output.WriteString("Remote systems are outside every authorized workspace. Never execute commands on remote infrastructure — `ssh`, `scp`, `sftp`, `rsync`, or equivalents — unless the user explicitly requested that remote action in this conversation.\n")
+	output.WriteString("- Never discover, enumerate, or attach to authenticated sessions or Unix domain sockets outside the workspace, including SSH ControlMaster sockets under `/tmp` or `~/.ssh` reached through the process table or socket files.\n")
+	output.WriteString("- Local problems stay local: when a task appears to need remote access (database outages, service checks), report findings and ask the user to run the remote step or grant explicit direction first.\n")
+
 	if !rdd {
 		return output.String(), nil
 	}
@@ -138,17 +151,6 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	output.WriteString("- While it is disabled, keep implementing organically through direct inline or delegated direct: do not start reviews, do not retry, do not reactivate it, and do not fall back to any retired path.\n")
 	output.WriteString("- Delivery under a disabled switch follows ordinary repository policy and reports `disabled/unmanaged`, never a fabricated approval.\n")
 	output.WriteString("- Never toggle the mode automatically or persist a preference just because the default is on. Never enable receipt-driven development on the user's behalf unless the user explicitly asks for it.\n")
-
-	// The remote execution boundary ships in the routing block, not only in the
-	// optional permission profiles, for the same reason as the kill switch above:
-	// it is unconditional for every configured agent, including agents with no
-	// permission profile at all. Ambient authenticated sessions (SSH
-	// ControlMaster sockets) let a local agent reach remote infrastructure
-	// without any permission rule firing (#4324).
-	output.WriteString("\n### Remote execution boundary\n\n")
-	output.WriteString("Remote systems are outside every authorized workspace. Never execute commands on remote infrastructure — `ssh`, `scp`, `sftp`, `rsync`, or equivalents — unless the user explicitly requested that remote action in this conversation.\n")
-	output.WriteString("- Never discover, enumerate, or attach to authenticated sessions or Unix domain sockets outside the workspace, including SSH ControlMaster sockets under `/tmp` or `~/.ssh` reached through the process table or socket files.\n")
-	output.WriteString("- Local problems stay local: when a task appears to need remote access (database outages, service checks), report findings and ask the user to run the remote step or grant explicit direction first.\n")
 
 	return output.String(), nil
 }
