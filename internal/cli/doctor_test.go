@@ -1623,7 +1623,8 @@ func TestRunDoctor_SandboxHome_CommandCode(t *testing.T) {
 	if !strings.Contains(output, "(Windows-only matrix, detect-don't-manage)") {
 		t.Errorf("expected non-Windows informational detail in doctor report; got:\n%s", output)
 	}
-	if !strings.Contains(output, "command-code") {
-		t.Errorf("expected command-code in state report; got:\n%s", output)
+	wantStateLine := "state file OK — 1 agent(s) installed: command-code"
+	if !strings.Contains(output, wantStateLine) {
+		t.Errorf("expected state report to contain %q; got:\n%s", wantStateLine, output)
 	}
 }

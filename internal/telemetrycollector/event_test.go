@@ -80,6 +80,9 @@ func TestParseEvent_AcceptsConductorAgent(t *testing.T) {
 
 func TestParseEvent_AcceptsCommandCodeAgent(t *testing.T) {
 	body := strings.Replace(validHeartbeatEvent, `"claude-code", "opencode"`, `"claude-code", "command-code", "opencode"`, 1)
+	if !strings.Contains(body, "command-code") {
+		t.Fatal("strings.Replace failed to inject command-code into test payload")
+	}
 	if _, err := ParseEvent([]byte(body)); err != nil {
 		t.Fatalf("ParseEvent with command-code agent: unexpected error: %v", err)
 	}

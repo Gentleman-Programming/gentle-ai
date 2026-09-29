@@ -72,16 +72,37 @@ func TestNormalizeInstallFlagsAcceptsSupportedAgent(t *testing.T) {
 	}
 }
 
-// TestDefaultAgentsFromDetection_CommandCode proves defaultAgentsFromDetection
-// maps a detected command-code config directory to model.AgentID("command-code").
-func TestDefaultAgentsFromDetection_CommandCode(t *testing.T) {
+// TestDefaultAgentsFromDetection_ExcludesCommandCode proves defaultAgentsFromDetection
+// does not add command-code to install defaults because it is detect-only and managed
+// externally (install is unsupported by design).
+func TestDefaultAgentsFromDetection_ExcludesCommandCode(t *testing.T) {
+	// Case 1: command-code detected alongside an installable agent.
 	detection := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+			{Agent: "claude-code", Exists: true},
+		},
+	}
+	agents := defaultAgentsFromDetection(detection)
+	for _, a := range agents {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("defaultAgentsFromDetection() unexpectedly included command-code in install defaults: %v", agents)
+		}
+	}
+	if len(agents) != 1 || agents[0] != model.AgentClaudeCode {
+		t.Fatalf("defaultAgentsFromDetection() = %v, want [claude-code]", agents)
+	}
+
+	// Case 2: only command-code detected; fallback to catalog defaults must also not include command-code.
+	detectionSolo := system.DetectionResult{
 		Configs: []system.ConfigState{
 			{Agent: "command-code", Exists: true},
 		},
 	}
-	agents := defaultAgentsFromDetection(detection)
-	if len(agents) != 1 || agents[0] != model.AgentID("command-code") {
-		t.Fatalf("defaultAgentsFromDetection() = %v, want [command-code]", agents)
+	soloAgents := defaultAgentsFromDetection(detectionSolo)
+	for _, a := range soloAgents {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("defaultAgentsFromDetection() with solo command-code unexpectedly included command-code: %v", soloAgents)
+		}
 	}
 }

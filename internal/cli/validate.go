@@ -223,7 +223,9 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 		case string(model.AgentHermes):
 			agents = append(agents, model.AgentHermes)
 		case "command-code":
-			agents = append(agents, model.AgentID("command-code"))
+			// command-code is detect-only and managed externally; install is
+			// unsupported by design (matching adapter InstallCommand AgentNotInstallableError).
+			// Exclude from install defaults.
 		}
 	}
 
