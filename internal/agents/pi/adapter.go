@@ -32,10 +32,29 @@ const (
 	piGentleEngramPackageSource = "npm:gentle-engram"
 	piAppendSystemFile          = "APPEND_SYSTEM.md"
 	piEngramMCPConfigFile       = "mcp.json"
+	piMCPAdapterConfigFile      = "mcp-adapter.json"
+	piMCPServersKey             = "mcpServers"
+	piEngramMCPServerName       = "engram"
 	piSettingsFile              = "settings.json"
 	piNPMDirectory              = "npm"
 	piNPMPackageFile            = "package.json"
 )
+
+// piEngramMCPLauncher is the node -e launcher gentle-engram's `pi-engram init`
+// writes for the Engram MCP server (gentle-engram cli.js MCP_LAUNCHER, 0.1.15
+// and 0.1.16). It honors ENGRAM_BIN and falls back to the engram on PATH.
+const piEngramMCPLauncher = "const { spawn } = require('node:child_process'); const bin = process.env.ENGRAM_BIN?.trim() ? process.env.ENGRAM_BIN : 'engram'; const child = spawn(bin, ['mcp', '--tools=agent'], { stdio: 'inherit' }); child.on('error', () => process.exit(127)); child.on('exit', (code, signal) => { if (typeof code === 'number') process.exit(code); process.kill(process.pid, signal || 'SIGTERM'); });"
+
+// piEngramMCPServer returns the Engram server entry exactly as `pi-engram
+// init` writes it (gentle-engram cli.js createEngramServerConfig).
+func piEngramMCPServer() map[string]any {
+	return map[string]any{
+		"command":     "node",
+		"args":        []any{"-e", piEngramMCPLauncher},
+		"lifecycle":   "lazy",
+		"directTools": false,
+	}
+}
 
 var legacyPiSubagentPackageIdentities = map[string]struct{}{
 	"npm:pi-subagents":          {},
@@ -431,18 +450,26 @@ func resolvePiAgentDirOverride(override, homeDir string) string {
 }
 
 // ProvisionEngramMCP prepares Pi's Engram MCP runtime. Pi >= 0.99.0 runs MCP
-// servers from mcp.json through its built-in MCP support, so this only retires
-// what would shadow it: the pi-mcp-adapter package in settings.json (plus the
-// legacy and retired companion packages) and the pi-mcp-adapter dependency in
-// <agentDir>/npm/package.json. It is invoked by ComponentEngram; keeping it
-// here lets Pi own the exact config shape without teaching the generic Engram
-// injector about Pi internals.
+// servers from <agentDir>/mcp.json through its built-in MCP support. It is
+// invoked by ComponentEngram on install and sync; keeping it here lets Pi own
+// the exact config shape without teaching the generic Engram injector about
+// Pi internals. It:
 //
-// Missing files are never created, and files with nothing to retire are left
-// byte-identical. The returned paths are the files actually rewritten.
+//  1. retires what would shadow built-in MCP: the pi-mcp-adapter package in
+//     settings.json (plus the legacy and retired companion packages) and the
+//     pi-mcp-adapter dependency in <agentDir>/npm/package.json;
+//  2. merges the mcpServers entries of a legacy <agentDir>/mcp-adapter.json
+//     (the file pi-mcp-adapter 3.x read) into mcp.json, creating mcp.json when
+//     absent. Entries already in mcp.json win; mcp-adapter.json is never
+//     modified or removed;
+//  3. adds the Engram server entry `pi-engram init` writes when mcp.json still
+//     has none, so post-sync verification finds mcp.json without depending on
+//     the install-only pi-engram init step.
 //
-// mcp.json is NOT written here. pi-engram init (invoked by InstallCommand)
-// is the sole writer of that file and owns its schema.
+// Malformed JSON in any of these files is reported, never overwritten.
+// Missing settings and npm manifests are never created, and files with
+// nothing to change are left byte-identical. The returned paths are the files
+// actually rewritten.
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	settingsPath := a.SettingsPath(homeDir)
 	// Pi's npm manifest lives at <agentDir>/npm/package.json
@@ -452,12 +479,13 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	var paths []string
 	for _, step := range []struct {
 		path  string
-		prune func(string) (filemerge.WriteResult, error)
+		apply func(string) (filemerge.WriteResult, error)
 	}{
 		{settingsPath, prunePiSettingsFile},
 		{npmPackagePath, prunePiNPMPackageFile},
+		{a.MCPConfigPath(homeDir, piEngramMCPServerName), ensurePiMCPConfigFile},
 	} {
-		write, err := step.prune(step.path)
+		write, err := step.apply(step.path)
 		if err != nil {
 			return false, nil, err
 		}
@@ -508,6 +536,52 @@ func prunePiNPMPackageFile(path string) (filemerge.WriteResult, error) {
 	delete(dependencies, retiredPiMCPAdapterDependency)
 
 	return writePiJSONObject(path, manifest)
+}
+
+// ensurePiMCPConfigFile makes the mcp.json at path carry every server from a
+// sibling mcp-adapter.json plus an Engram server, adding only missing entries
+// and preserving every other key. It writes nothing when nothing is missing.
+func ensurePiMCPConfigFile(path string) (filemerge.WriteResult, error) {
+	legacy, legacyExists, err := readExistingPiJSONObject(filepath.Join(filepath.Dir(path), piMCPAdapterConfigFile))
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+	config, err := readPiJSONObject(path)
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+
+	servers := map[string]any{}
+	if existing, present := config[piMCPServersKey]; present && existing != nil {
+		object, isObject := existing.(map[string]any)
+		if !isObject {
+			return filemerge.WriteResult{}, fmt.Errorf("pi mcp config %q: %s must be a JSON object", path, piMCPServersKey)
+		}
+		servers = object
+	}
+
+	changed := false
+	if legacyServers, isObject := legacy[piMCPServersKey].(map[string]any); legacyExists && isObject {
+		for name, server := range legacyServers {
+			if _, present := servers[name]; !present {
+				servers[name] = server
+				changed = true
+			}
+		}
+	}
+	if _, present := servers[piEngramMCPServerName]; !present {
+		servers[piEngramMCPServerName] = piEngramMCPServer()
+		changed = true
+	}
+	if !changed {
+		return filemerge.WriteResult{}, nil
+	}
+	config[piMCPServersKey] = servers
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("create pi agent dir for %q: %w", path, err)
+	}
+	return writePiJSONObject(path, config)
 }
 
 func readExistingPiJSONObject(path string) (map[string]any, bool, error) {

@@ -228,8 +228,9 @@ func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntou
 	if !changed {
 		t.Fatalf("ProvisionEngramMCP() changed = false, want true")
 	}
-	if !reflect.DeepEqual(paths, []string{wantSettings, wantNPMPackage}) {
-		t.Fatalf("ProvisionEngramMCP() paths = %v, want [%q %q]", paths, wantSettings, wantNPMPackage)
+	wantMCP := filepath.Join(override, "mcp.json")
+	if !reflect.DeepEqual(paths, []string{wantSettings, wantNPMPackage, wantMCP}) {
+		t.Fatalf("ProvisionEngramMCP() paths = %v, want [%q %q %q]", paths, wantSettings, wantNPMPackage, wantMCP)
 	}
 
 	for _, path := range []string{wantSettings, wantNPMPackage} {
@@ -247,22 +248,25 @@ func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntou
 	}
 }
 
-func TestProvisionEngramMCPFreshAgentDirectoryWritesNoAdapterFiles(t *testing.T) {
+func TestProvisionEngramMCPFreshAgentDirectoryWritesOnlyEngramMCPConfig(t *testing.T) {
 	a := NewAdapter()
 	home := t.TempDir()
 	setRealHome(t, home)
 	t.Setenv("PI_CODING_AGENT_DIR", "")
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 
 	changed, paths, err := a.ProvisionEngramMCP(home)
 	if err != nil {
 		t.Fatalf("ProvisionEngramMCP() error = %v", err)
 	}
-	if changed || len(paths) != 0 {
-		t.Fatalf("ProvisionEngramMCP() = (%v, %v), want (false, []) on a fresh agent directory", changed, paths)
+	if !changed || !reflect.DeepEqual(paths, []string{mcpPath}) {
+		t.Fatalf("ProvisionEngramMCP() = (%v, %v), want (true, [%q]) on a fresh agent directory", changed, paths, mcpPath)
 	}
+	assertPiMCPServers(t, mcpPath, map[string]any{"engram": piEngramInitServerForTest()})
 	for _, path := range []string{
 		filepath.Join(home, ".pi", "agent", "settings.json"),
 		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+		filepath.Join(home, ".pi", "agent", "mcp-adapter.json"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("stat %q err = %v, want IsNotExist (nothing to retire, nothing to create)", path, err)
@@ -335,19 +339,22 @@ func TestProvisionEngramMCPLeavesFilesWithoutAdapterUntouched(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
 	npmPath := filepath.Join(home, ".pi", "agent", "npm", "package.json")
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 	settingsBody := `{"theme":"kanagawa","packages":["npm:gentle-pi"]}`
 	npmBody := `{"dependencies":{"left-pad":"^1.0.0"}}`
+	mcpBody := `{"mcpServers":{"engram":{"command":"engram","args":["mcp"]}}}`
 	writeTestFile(t, settingsPath, settingsBody)
 	writeTestFile(t, npmPath, npmBody)
+	writeTestFile(t, mcpPath, mcpBody)
 
 	changed, _, err := a.ProvisionEngramMCP(home)
 	if err != nil {
 		t.Fatalf("ProvisionEngramMCP() error = %v", err)
 	}
 	if changed {
-		t.Fatalf("ProvisionEngramMCP() changed = true, want false without adapter entries")
+		t.Fatalf("ProvisionEngramMCP() changed = true, want false without adapter entries or a missing Engram server")
 	}
-	for path, want := range map[string]string{settingsPath: settingsBody, npmPath: npmBody} {
+	for path, want := range map[string]string{settingsPath: settingsBody, npmPath: npmBody, mcpPath: mcpBody} {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile(%q) error = %v", path, err)

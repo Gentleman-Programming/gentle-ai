@@ -925,19 +925,22 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectPiProvisioningWritesNoMCPAdapterOnFreshHome(t *testing.T) {
+func TestInjectPiProvisioningWritesOnlyMCPConfigOnFreshHome(t *testing.T) {
 	home := t.TempDir()
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 
 	result, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
-	if result.Changed {
-		t.Fatalf("Inject() changed = true, want false (Pi's built-in MCP needs no adapter)")
+	if !result.Changed || len(result.Files) != 1 || result.Files[0] != mcpPath {
+		t.Fatalf("Inject() = (changed %v, files %v), want only %q written (Pi's built-in MCP reads mcp.json)", result.Changed, result.Files, mcpPath)
 	}
+	assertNestedString(t, readJSONFile(t, mcpPath), "node", "mcpServers", "engram", "command")
 	for _, path := range []string{
 		filepath.Join(home, ".pi", "agent", "settings.json"),
 		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+		filepath.Join(home, ".pi", "agent", "mcp-adapter.json"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("stat %q err = %v, want IsNotExist", path, err)
