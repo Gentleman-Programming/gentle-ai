@@ -4634,6 +4634,8 @@ func (m *Model) buildDependencyPlan() {
 // A persisted selection is authoritative, including a deliberately configured
 // empty selection. Only state without an install selection falls back to detected
 // agents, then to the first-install catalog default.
+var catalogAllAgents = catalog.AllAgents
+
 func agentsToManage(installState state.InstallState, detectedIDs []model.AgentID) []model.AgentID {
 	scope := agents.SelectionScopeFromInstallState(installState)
 	if scope.Mode == agents.SelectionScopeConfigured {
@@ -4642,9 +4644,15 @@ func agentsToManage(installState state.InstallState, detectedIDs []model.AgentID
 	if len(detectedIDs) > 0 {
 		return detectedIDs
 	}
-	catalogAgents := catalog.AllAgents()
+	catalogAgents := catalogAllAgents()
 	all := make([]model.AgentID, 0, len(catalogAgents))
 	for _, agent := range catalogAgents {
+		if agent.ID == model.AgentID("command-code") {
+			// command-code is detect-only and managed externally; install is
+			// unsupported by design (matching adapter InstallCommand AgentNotInstallableError).
+			// Exclude from TUI preselect defaults.
+			continue
+		}
 		all = append(all, agent.ID)
 	}
 	return all

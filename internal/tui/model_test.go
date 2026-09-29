@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeplugin"
@@ -3920,20 +3921,41 @@ func TestPreselectedAgents_ExcludesCommandCode(t *testing.T) {
 		t.Fatalf("preselectedAgents() = %v, want [claude-code]", selected)
 	}
 
-	// Case 2: only command-code detected; fallback to catalog defaults must also not include command-code.
+	// Case 2: only command-code detected; fallback to catalog defaults must also not include command-code
+	// even when the catalog contains command-code (simulating Slice 1 addition).
+	origCatalog := catalogAllAgents
+	defer func() { catalogAllAgents = origCatalog }()
+	catalogAllAgents = func() []catalog.Agent {
+		return append(catalog.AllAgents(), catalog.Agent{ID: model.AgentID("command-code"), Name: "Command Code"})
+	}
+
 	detectionSolo := system.DetectionResult{
 		Configs: []system.ConfigState{
 			{Agent: "command-code", Exists: true},
 		},
 	}
 	soloSelected := preselectedAgents(detectionSolo, state.InstallState{})
+	if len(soloSelected) == 0 {
+		t.Fatal("preselectedAgents() with solo command-code returned empty selection")
+	}
 	for _, a := range soloSelected {
 		if a == model.AgentID("command-code") {
 			t.Fatalf("preselectedAgents() with solo command-code unexpectedly included command-code: %v", soloSelected)
 		}
 	}
 
-	// Case 3: detectedAgentIDs directly excludes command-code.
+	// Case 3: direct agentsToManage fallback with empty detection.
+	fallbackSelected := agentsToManage(state.InstallState{}, nil)
+	if len(fallbackSelected) == 0 {
+		t.Fatal("agentsToManage() fallback returned empty selection")
+	}
+	for _, a := range fallbackSelected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("agentsToManage() fallback unexpectedly included command-code: %v", fallbackSelected)
+		}
+	}
+
+	// Case 4: detectedAgentIDs directly excludes command-code.
 	detected := detectedAgentIDs(detection)
 	for _, a := range detected {
 		if a == model.AgentID("command-code") {
