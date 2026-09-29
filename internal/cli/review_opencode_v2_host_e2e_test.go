@@ -99,7 +99,7 @@ type openCodeV2HostEvidence struct {
 func openCodeV2HostE2EInputs(t *testing.T) openCodeV2HostInputs {
 	t.Helper()
 	if testing.Short() || os.Getenv("GENTLE_AI_REAL_OPENCODE") == "" {
-		t.Skip("opt in with GENTLE_AI_REAL_OPENCODE, GENTLE_AI_REAL_PYTHON, GENTLE_AI_REAL_OPENCODE_SDK and an explicit approved TMPDIR")
+		t.Skip("opt in with GENTLE_AI_REAL_OPENCODE, GENTLE_AI_REAL_PYTHON, GENTLE_AI_REAL_OPENCODE_SDK, GENTLE_AI_APPROVED_TMPDIR, and TMPDIR equal to that approved root")
 	}
 	if runtime.GOOS != "darwin" {
 		t.Fatal("real OpenCode V2 host E2E requires macOS sandbox-exec network denial")
@@ -130,8 +130,16 @@ func openCodeV2HostE2EInputs(t *testing.T) openCodeV2HostInputs {
 	if _, err := os.Stat(filepath.Join(in.sdk, "@opencode", "plugin", "package.json")); err != nil {
 		t.Fatal(err)
 	}
-	if temporary := os.Getenv("TMPDIR"); !filepath.IsAbs(temporary) {
-		t.Fatal("TMPDIR must be an explicit absolute approved temporary root")
+	// The operator names the approved temporary root explicitly; no per-user
+	// path is hard-coded, and TMPDIR must resolve to exactly that root.
+	approved := os.Getenv("GENTLE_AI_APPROVED_TMPDIR")
+	if !filepath.IsAbs(approved) {
+		t.Fatal("GENTLE_AI_APPROVED_TMPDIR must name the approved absolute temporary root for this opt-in run")
+	}
+	approvedRoot, approvedErr := filepath.EvalSymlinks(approved)
+	temporary, temporaryErr := filepath.EvalSymlinks(os.Getenv("TMPDIR"))
+	if approvedErr != nil || temporaryErr != nil || !filepath.IsAbs(os.Getenv("TMPDIR")) || temporary != approvedRoot {
+		t.Fatalf("TMPDIR must be the explicit absolute approved temporary root GENTLE_AI_APPROVED_TMPDIR=%s", approved)
 	}
 	harness, err := filepath.Abs(filepath.Join("..", "..", "scripts", "test-opencode-v2-host.py"))
 	if err != nil {
@@ -320,7 +328,7 @@ func TestOpenCodeV2RealHostLensRelayAdmitsBoundResultAndRefusesNegatives(t *test
 		refused("wrong-role-payload", openCodeV2HostStep{Child: wrongRole}),
 		refused("lens-task-under-refuter-agent", openCodeV2HostStep{Agent: "review-refuter", Child: payload, ChildRequests: openCodeV2Count(0)}),
 		openCodeV2Admitted("lens-admitted", task.Agent, task.Prompt, payload, `"operation":"review/capture-result"`, `"state":"approved"`),
-		refused("replay-captured-task", openCodeV2HostStep{Child: payload}),
+		refused("replay-captured-task", openCodeV2HostStep{Child: payload, ChildRequests: openCodeV2Count(0)}),
 	}
 	evidence := runOpenCodeV2HostScenario(t, in, repo, host, store.Dir, steps)
 	admitted := evidence.Steps[len(steps)-2]

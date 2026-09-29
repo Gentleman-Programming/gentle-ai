@@ -332,6 +332,7 @@ func TestTUIOpenCodeSDKConsentRealNPMOfflineIntegration(t *testing.T) {
 	}
 	npm, node, cache := realSDKOfflineInputs(t)
 	// Capture opt-ins and paths before isolation clears GENTLE_AI_* and PATH.
+	approved := approvedSDKTempRoot(t)
 	activate := os.Getenv("GENTLE_AI_INSTALLED_ACTIVATION") == "1"
 	var host, python, launcher string
 	if activate {
@@ -359,9 +360,8 @@ func TestTUIOpenCodeSDKConsentRealNPMOfflineIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const approved = "/private/var/folders/k1/2nnhpdfx0wq8k6w8n2nqx9_h0000gn/T/opencode"
-	if filepath.Clean(os.Getenv("TMPDIR")) != approved {
-		t.Fatal("parent TMPDIR must equal the approved temporary root")
+	if temporary, err := filepath.EvalSymlinks(os.Getenv("TMPDIR")); err != nil || temporary != approved {
+		t.Fatalf("parent TMPDIR must equal the approved temporary root GENTLE_AI_APPROVED_TMPDIR=%s", approved)
 	}
 	root := t.TempDir()
 	home, config, log := isolateSDKBridgeTest(t, root, "")
@@ -373,7 +373,7 @@ func TestTUIOpenCodeSDKConsentRealNPMOfflineIntegration(t *testing.T) {
 	// Keep dependency probes fake; only the affirmative pinned install can reach
 	// the helper. Its clean environment has no ambient tokens or npm settings.
 	script := "#!/bin/sh\nset -eu\nif [ \"$1\" = --version ]; then printf '10.0.0\\n'; exit 0; fi\nexec /usr/bin/env -i "
-	for _, item := range []string{"GENTLE_AI_REAL_NPM_OFFLINE=1", "GENTLE_AI_REAL_NPM=" + npm, "GENTLE_AI_REAL_NODE=" + node, "GENTLE_AI_REAL_NPM_CACHE=" + cache,
+	for _, item := range []string{"GENTLE_AI_REAL_NPM_OFFLINE=1", "GENTLE_AI_APPROVED_TMPDIR=" + approved, "GENTLE_AI_REAL_NPM=" + npm, "GENTLE_AI_REAL_NODE=" + node, "GENTLE_AI_REAL_NPM_CACHE=" + cache,
 		"GOMODCACHE=" + os.Getenv("GOMODCACHE"), "GOCACHE=" + os.Getenv("GOCACHE")} {
 		script += quote(item) + " "
 	}
@@ -445,6 +445,25 @@ func realSDKOfflineInputs(t *testing.T) (npm, node, cache string) {
 	return
 }
 
+// approvedSDKTempRoot is the operator-approved temporary root for the private
+// real-npm fixtures, taken from GENTLE_AI_APPROVED_TMPDIR instead of any
+// hard-coded per-user path. An opted-in run without it fails clearly.
+func approvedSDKTempRoot(t *testing.T) string {
+	t.Helper()
+	value := os.Getenv("GENTLE_AI_APPROVED_TMPDIR")
+	if value == "" || !filepath.IsAbs(value) {
+		t.Fatal("opt-in real npm fixtures require GENTLE_AI_APPROVED_TMPDIR set to the approved absolute temporary root (and TMPDIR equal to it)")
+	}
+	resolved, err := filepath.EvalSymlinks(value)
+	if err != nil {
+		t.Fatalf("GENTLE_AI_APPROVED_TMPDIR must name an existing directory: %v", err)
+	}
+	if info, err := os.Stat(resolved); err != nil || !info.IsDir() {
+		t.Fatalf("GENTLE_AI_APPROVED_TMPDIR must name an existing directory: %v", err)
+	}
+	return resolved
+}
+
 // Invoked only by the consent-pinned fixture wrapper, never by ordinary tests.
 func TestSDKRealNPMOfflineHelper(t *testing.T) {
 	marker := -1
@@ -465,9 +484,8 @@ func TestSDKRealNPMOfflineHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const approved = "/private/var/folders/k1/2nnhpdfx0wq8k6w8n2nqx9_h0000gn/T/opencode/"
-	if !strings.HasPrefix(root, approved) || !sdkOfflineCacheSeparate(root, source) {
-		t.Fatal("fixture must be beneath approved root and separate from source cache")
+	if approved := approvedSDKTempRoot(t); !strings.HasPrefix(root, approved+string(filepath.Separator)) || !sdkOfflineCacheSeparate(root, source) {
+		t.Fatal("fixture must be beneath the GENTLE_AI_APPROVED_TMPDIR root and separate from source cache")
 	}
 	config := filepath.Join(root, "config", "opencode")
 	args := os.Args[marker+2:]
