@@ -96,11 +96,24 @@ func TestMain(m *testing.M) {
 		// here without an import cycle): strip the verb, reject anything else,
 		// and run the real flag parsing and sync execution.
 		args := os.Args[1:]
-		if len(args) == 0 || args[0] != "sync" {
+		var err error
+		switch {
+		case len(args) > 0 && args[0] == "sync":
+			_, err = RunSync(args[1:])
+		case len(args) == 2 && args[0] == "review" && args[1] == "opencode-transport":
+			// The real OpenCode V2 host E2E (review_opencode_v2_host_e2e_test.go)
+			// reaches the real Go relay through this stand-in. TEST-ONLY STUB: the
+			// managed plugin declares GENTLE_AI_OPENCODE_RELAY_CONTRACT when it
+			// spawns the relay, which production treats as a refusal, and the host
+			// runtime is V2. Both were neutralized above (the declaration is unset
+			// and the version runner reports V1), so the immutable-transport
+			// capability gate is stubbed open here; the gate itself is not proven.
+			err = RunReview(args[1:], os.Stdout)
+		default:
 			fmt.Fprintf(os.Stderr, "stand-in: unsupported CLI arguments %q\n", args)
 			os.Exit(1)
 		}
-		if _, err := RunSync(args[1:]); err != nil {
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

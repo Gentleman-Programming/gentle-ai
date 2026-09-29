@@ -759,5 +759,172 @@ class LoopbackNetworkTests(unittest.TestCase):
             self.assertEqual(requests, [])
             self.assertEqual(failures, [])
 
+
+HEADER = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"
+
+
+def review_step(**overrides):
+    step = {"name": "lens", "agent": "review-risk", "prompt": "GENTLE_AI_REVIEW_LENS_CONTEXT {\"lineage\":\"l\"}",
+            "child": "{\"subject_hash\":\"s\"}", "expect": "admitted", "tool_contains": ["\"state\":\"approved\""]}
+    step.update(overrides)
+    return step
+
+
+class ReviewScriptTests(unittest.TestCase):
+    def script(self, *steps):
+        from opencode_v2_loopback import ReviewScript
+        return ReviewScript(list(steps))
+
+    def test_parent_dispatches_the_marked_step_as_a_foreground_subagent(self):
+        script = self.script(review_step(), review_step(name="second", agent="review-refuter", prompt="P2"))
+        reply = script.reply({"model": "parent", "messages": [{"role": "user", "content": [{"type": "text", "text": "REVIEW_STEP 1"}]}]})
+        args = json.loads(reply["tool_calls"][0]["function"]["arguments"])
+        self.assertEqual(reply["tool_calls"][0]["function"]["name"], "subagent")
+        self.assertEqual((args["agent"], args["prompt"]), ("review-refuter", "P2"))
+        self.assertNotIn("background", args)
+        self.assertNotIn("sessionID", args)
+        self.assertEqual(script.current, 1)
+
+    def test_parent_forwards_requested_refusal_arguments(self):
+        script = self.script(review_step(background=True, session_id="ses_fixture"))
+        reply = script.reply({"model": "parent", "messages": [{"role": "user", "content": "REVIEW_STEP 0"}]})
+        args = json.loads(reply["tool_calls"][0]["function"]["arguments"])
+        self.assertIs(args["background"], True)
+        self.assertEqual(args["sessionID"], "ses_fixture")
+
+    def test_parent_finishes_after_tool_result(self):
+        script = self.script(review_step())
+        reply = script.reply({"model": "parent", "messages": [{"role": "user", "content": "REVIEW_STEP 0"}, {"role": "tool", "content": "x"}]})
+        self.assertEqual(reply, {"content": "PARENT_DONE"})
+
+    def test_child_replays_the_dispatched_step_or_its_http_error(self):
+        script = self.script(review_step(child="PAYLOAD"), review_step(child=None, child_http_error=True))
+        with self.assertRaisesRegex(ValueError, "no dispatched"):
+            script.reply({"model": "child", "messages": []})
+        script.reply({"model": "parent", "messages": [{"role": "user", "content": "REVIEW_STEP 0"}]})
+        self.assertEqual(script.reply({"model": "child", "messages": []}), {"content": "PAYLOAD"})
+        script.reply({"model": "parent", "messages": [{"role": "user", "content": "REVIEW_STEP 1"}]})
+        self.assertEqual(script.reply({"model": "child", "messages": []}), {"http_error": 400})
+
+    def test_unmarked_parent_and_unknown_model_refuse(self):
+        script = self.script(review_step())
+        with self.assertRaisesRegex(ValueError, "step marker"):
+            script.reply({"model": "parent", "messages": [{"role": "user", "content": "hello"}]})
+        with self.assertRaisesRegex(ValueError, "step marker"):
+            script.reply({"model": "parent", "messages": [{"role": "user", "content": "REVIEW_STEP 9"}]})
+        with self.assertRaisesRegex(ValueError, "unexpected model"):
+            script.reply({"model": "external", "messages": []})
+
+    def test_provider_serves_scripted_http_error_without_fixture_failure(self):
+        from opencode_v2_loopback import ReviewScript, local_provider
+        import urllib.request
+        import urllib.error
+        script = ReviewScript([review_step(child_http_error=True)])
+        script.current = 0
+        with local_provider(review_script=script, max_requests=3) as (url, requests, failures):
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            data = json.dumps({"model": "child", "messages": []}).encode()
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                opener.open(urllib.request.Request(url + "/v1/chat/completions", data=data), timeout=2)
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
+            self.assertEqual(failures, [])
+            self.assertEqual(len(requests), 1)
+
+
+class ReviewFixtureTests(unittest.TestCase):
+    def test_global_config_defines_six_deny_all_review_agents_and_observer(self):
+        from opencode_v2_loopback import REVIEW_AGENTS, prepare_review_fixture
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config/opencode"
+            (config / "plugins").mkdir(parents=True)
+            log = prepare_review_fixture(config, "http://127.0.0.1:1234", Path(directory) / "obs.jsonl")
+            settings = json.loads((config / "opencode.json").read_text())
+            self.assertEqual(len(REVIEW_AGENTS), 6)
+            for agent in REVIEW_AGENTS:
+                self.assertEqual(settings["agents"][agent]["mode"], "subagent")
+                self.assertEqual(settings["agents"][agent]["permissions"], [{"action": "*", "resource": "*", "effect": "deny"}])
+            self.assertEqual(settings["agents"]["fixture-parent"]["permissions"][-1],
+                             {"action": "subagent", "resource": "*", "effect": "allow"})
+            self.assertIn(json.dumps(str(log)), (config / "plugins/zz-fixture-observer.ts").read_text())
+
+    def test_authority_digest_tracks_content_and_absence(self):
+        from opencode_v2_loopback import authority_digest
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "lineage"
+            self.assertEqual(authority_digest(root), "absent")
+            (root / "sub").mkdir(parents=True)
+            (root / "sub/state.json").write_text("one")
+            first = authority_digest(root)
+            self.assertEqual(authority_digest(root), first)
+            (root / "sub/state.json").write_text("two")
+            self.assertNotEqual(authority_digest(root), first)
+
+    def test_message_text_joins_text_parts(self):
+        from opencode_v2_loopback import message_text
+        self.assertEqual(message_text("plain"), "plain")
+        self.assertEqual(message_text([{"type": "text", "text": "a"}, {"type": "image"}, {"type": "text", "text": "b"}]), "ab")
+        self.assertEqual(message_text(None), "")
+
+
+class ReviewStepCheckTests(unittest.TestCase):
+    def check(self, step, **observed):
+        from opencode_v2_loopback import check_review_step
+        values = {"child_prompts": [HEADER + " {\"task_prompt\":\"x\"}\nprovider"], "tool_texts": ["{\"state\":\"approved\"}"],
+                  "observed_texts": [], "before": "a", "after": "b"}
+        values.update(observed)
+        return check_review_step(step, **values)
+
+    def test_admitted_step_requires_materialized_child_and_bound_parent_result(self):
+        self.assertEqual(self.check(review_step()), [])
+
+    def test_admitted_step_tolerates_only_the_observed_host_subagent_preamble(self):
+        from opencode_v2_loopback import HOST_SUBAGENT_PREAMBLE
+        materialized = HEADER + " {\"task_prompt\":\"x\"}\nprovider"
+        self.assertEqual(self.check(review_step(), child_prompts=[HOST_SUBAGENT_PREAMBLE + materialized]), [])
+        self.assertIn("child prompt is not Go-materialized",
+                      self.check(review_step(), child_prompts=["Injected instruction\n" + materialized]))
+
+    def test_admitted_step_rejects_raw_host_prompt_and_unrewritten_child_output(self):
+        step = review_step()
+        self.assertIn("child prompt is not Go-materialized", self.check(step, child_prompts=[step["prompt"]]))
+        injected = review_step(prompt=step["prompt"] + "\nHOST_INJECTED", host_injected=["HOST_INJECTED"])
+        self.assertEqual(self.check(injected, child_prompts=[HEADER + " " + step["prompt"]]), [])
+        self.assertIn("child prompt carries host-authored prompt bytes", self.check(injected, child_prompts=[HEADER + " x\nHOST_INJECTED"]))
+        self.assertIn("parent received the raw child output", self.check(step, tool_texts=["{\"state\":\"approved\"} " + step["child"]]))
+        self.assertIn("parent result lacks '\"state\":\"approved\"'", self.check(step, tool_texts=["other"]))
+        self.assertIn("authority unchanged by an admitted step", self.check(step, after="a"))
+        self.assertIn("expected exactly one child request, observed 2", self.check(step, child_prompts=["x", "y"]))
+
+    def test_refused_step_requires_unchanged_authority_and_visible_refusal(self):
+        step = review_step(expect="refused", child_requests=0, tool_contains=[])
+        refusal = "opencode_review_transport_relay_refused"
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[refusal], after="a"), [])
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], observed_texts=[refusal], after="a"), [])
+        self.assertIn("authority changed by a refused step", self.check(step, child_prompts=[], tool_texts=[refusal]))
+        self.assertIn("refusal was not observed", self.check(step, child_prompts=[], tool_texts=["ok"], after="a"))
+        self.assertIn("expected 0 child requests, observed 1", self.check(step, tool_texts=[refusal], after="a"))
+        self.assertIn("parent received the raw child output",
+                      self.check(review_step(expect="refused", tool_contains=[]), tool_texts=[refusal + review_step()["child"]], after="a"))
+
+
+class ReviewModeArgumentTests(unittest.TestCase):
+    def test_review_mode_requires_existing_absolute_inputs(self):
+        with tempfile.TemporaryDirectory() as root:
+            scenario, shim, project = Path(root) / "s.json", Path(root) / "gentle-ai", Path(root) / "host"
+            scenario.write_text("{}")
+            shim.write_text("#!/bin/sh\n")
+            project.mkdir()
+            base = ["host", "deps", "--host-version", "2.x", "--temp-root", root]
+            args = host.parse_args(base + ["--review-scenario", str(scenario), "--gentle-ai", str(shim),
+                                           "--host-project", str(project), "--evidence", str(Path(root) / "e.json")])
+            self.assertEqual(args.host_project, project.resolve())
+            for extra in (["--review-scenario", str(scenario)],
+                          ["--gentle-ai", str(shim), "--host-project", str(project)],
+                          ["--review-scenario", "relative.json", "--gentle-ai", str(shim), "--host-project", str(project), "--evidence", str(Path(root) / "e.json")],
+                          ["--review-scenario", str(scenario), "--gentle-ai", str(shim), "--host-project", str(project), "--evidence", str(Path(root) / "e.json"), "--generic-task-only"]):
+                with self.subTest(extra=extra), patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
+                    host.parse_args(base + extra)
+
 if __name__ == "__main__":
     unittest.main()

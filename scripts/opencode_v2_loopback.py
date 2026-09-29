@@ -1,9 +1,77 @@
 """Deterministic test-only provider and observer; never real review admission."""
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
 import json
+from pathlib import Path
+import re
 import threading
 import time
+
+MATERIALIZATION_HEADER = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"
+RELAY_REFUSED = "opencode_review_transport_relay_refused"
+REVIEW_AGENTS = ("review-risk", "review-resilience", "review-readability", "review-reliability",
+                 "review-refuter", "review-validator")
+REVIEW_STEP = re.compile(r"REVIEW_STEP ([0-9]+)")
+# Observed on OpenCode 2.0.19: the host prepends this line to every subagent
+# prompt, so the child never receives the Go materialization byte-first.
+HOST_SUBAGENT_PREAMBLE = "You are a subagent spawned by another session.\n"
+
+
+def strip_host_preamble(prompt):
+    return prompt[len(HOST_SUBAGENT_PREAMBLE):] if prompt.startswith(HOST_SUBAGENT_PREAMBLE) else prompt
+
+
+def message_text(content):
+    """Normalize OpenAI-compatible string or text-part message content."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+    return ""
+
+
+class ReviewScript:
+    """Replays Go-computed review steps: the parent dispatches, the child answers.
+
+    The model is replaced; every byte the child returns was computed by the Go
+    test before the host launched, so this never judges a review.
+    """
+
+    def __init__(self, steps):
+        self.steps = steps
+        self.current = None
+        self.lock = threading.Lock()
+
+    def reply(self, body):
+        model = body["model"]
+        with self.lock:
+            if model == "child":
+                if self.current is None:
+                    raise ValueError("child request with no dispatched review step")
+                step = self.steps[self.current]
+                if step.get("child_http_error"):
+                    return {"http_error": 400}
+                return {"content": step.get("child") or ""}
+            if model != "parent":
+                raise ValueError("unexpected model: " + str(model))
+            messages = body["messages"]
+            if any(message.get("role") == "tool" for message in messages):
+                return {"content": "PARENT_DONE"}
+            marks = [int(match[1]) for message in messages if message.get("role") == "user"
+                     for match in [REVIEW_STEP.search(message_text(message.get("content")))] if match]
+            if len(marks) != 1 or not 0 <= marks[0] < len(self.steps):
+                raise ValueError("parent request lacks exactly one valid review step marker")
+            self.current = marks[0]
+            step = self.steps[self.current]
+            arguments = {"agent": step["agent"], "description": "Review step " + step["name"], "prompt": step["prompt"]}
+            if step.get("background"):
+                arguments["background"] = True
+            if step.get("session_id"):
+                arguments["sessionID"] = step["session_id"]
+            return {"tool_calls": [{"index": 0, "id": "review-call-" + str(self.current), "type": "function", "function": {
+                "name": "subagent", "arguments": json.dumps(arguments),
+            }}]}
 
 
 def scripted_reply(body, generic_task_only=False):
@@ -26,7 +94,7 @@ def scripted_reply(body, generic_task_only=False):
 
 
 @contextmanager
-def local_provider(generic_task_only=False):
+def local_provider(generic_task_only=False, review_script=None, max_requests=12):
     requests, failures = [], []
 
     class Handler(BaseHTTPRequestHandler):
@@ -54,14 +122,24 @@ def local_provider(generic_task_only=False):
             if self.path != "/v1/chat/completions":
                 return self.reject("unexpected request target: " + self.path)
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 1024 * 1024 or len(requests) >= 12:
+            if not 0 < length <= 1024 * 1024 or len(requests) >= max_requests:
                 return self.reject("request bound exceeded")
             try:
                 body = json.loads(self.rfile.read(length))
                 requests.append(body)
-                reply = scripted_reply(body, generic_task_only=generic_task_only)
+                reply = review_script.reply(body) if review_script else scripted_reply(body, generic_task_only=generic_task_only)
             except (ValueError, KeyError) as error:
                 return self.reject(str(error))
+            if "http_error" in reply:
+                # A scripted provider failure, not a fixture failure.
+                payload = json.dumps({"error": {"message": "fixture child provider error", "type": "invalid_request_error"}}).encode()
+                self.send_response(reply["http_error"])
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
@@ -91,13 +169,7 @@ def local_provider(generic_task_only=False):
 def prepare_fixture(root, plugin_directory, provider, generic_task_only=False):
     config = {
         "model": "fixture/parent",
-        "providers": {"fixture": {
-            "name": "Loopback fixture", "package": "@opencode/ai/providers/openai-compatible",
-            "settings": {"baseURL": provider + "/v1", "apiKey": "fixture-only"},
-            "models": {name: {"limit": {"context": 32768, "output": 1024}, "capabilities": {
-                "tools": True, "input": ["text"], "output": ["text"],
-            }} for name in ("parent", "child")},
-        }},
+        "providers": fixture_provider_config(provider),
         "agents": {
             "fixture-parent": {"mode": "primary", "model": "fixture/parent", "system": "PARENT_AGENT_SENTINEL", "steps": 4,
                                "permissions": [{"action": "*", "resource": "*", "effect": "deny"},
@@ -114,7 +186,11 @@ def prepare_fixture(root, plugin_directory, provider, generic_task_only=False):
     (root / "project/opencode.json").write_text(json.dumps(config))
     (root / "project/AGENTS.md").write_text("PROJECT_INSTRUCTION_SENTINEL\n")
     log = root / "observations.jsonl"
-    observer = '''import { Plugin } from "@opencode/plugin"
+    write_observer(plugin_directory, log, provider)
+    return log
+
+
+OBSERVER = '''import { Plugin } from "@opencode/plugin"
 import { appendFileSync } from "node:fs"
 const log = (value: unknown) => appendFileSync(LOG, JSON.stringify(value)+"\\n")
 export default Plugin.define({id:"fixture.observer", async setup(ctx) {
@@ -129,9 +205,120 @@ export default Plugin.define({id:"fixture.observer", async setup(ctx) {
  registrations.push(await ctx.tool.hook("execute.after", call => {if(call.tool==="subagent")log({type:"after",id:call.id,status:call.status,...(call.status==="completed"?{result:call.result}:{error:call.error})})}))
  return async()=>{await Promise.all(registrations.map(r=>r.dispose()))}
 }})
-'''.replace("LOG", json.dumps(str(log))).replace("ORIGIN", json.dumps(provider))
-    (plugin_directory / "zz-fixture-observer.ts").write_text(observer)
+'''
+
+
+def write_observer(plugin_directory, log, provider):
+    source = OBSERVER.replace("LOG", json.dumps(str(log))).replace("ORIGIN", json.dumps(provider))
+    (plugin_directory / "zz-fixture-observer.ts").write_text(source)
+
+
+def fixture_provider_config(provider):
+    return {"fixture": {
+        "name": "Loopback fixture", "package": "@opencode/ai/providers/openai-compatible",
+        "settings": {"baseURL": provider + "/v1", "apiKey": "fixture-only"},
+        "models": {name: {"limit": {"context": 32768, "output": 1024}, "capabilities": {
+            "tools": True, "input": ["text"], "output": ["text"],
+        }} for name in ("parent", "child")},
+    }}
+
+
+def prepare_review_fixture(config_directory, provider, log):
+    """Global-scope review fixture: settings live in the config dir, never the host project."""
+    deny = [{"action": "*", "resource": "*", "effect": "deny"}]
+    agents = {"fixture-parent": {"mode": "primary", "model": "fixture/parent", "system": "PARENT_AGENT_SENTINEL", "steps": 4,
+                                 "permissions": deny + [{"action": "subagent", "resource": "*", "effect": "allow"}]}}
+    for agent in REVIEW_AGENTS:
+        agents[agent] = {"mode": "subagent", "model": "fixture/child", "system": "REVIEW_AGENT_SENTINEL", "steps": 2,
+                         "permissions": list(deny)}
+    config = {"model": "fixture/parent", "providers": fixture_provider_config(provider), "agents": agents}
+    (config_directory / "opencode.json").write_text(json.dumps(config))
+    write_observer(config_directory / "plugins", log, provider)
     return log
+
+
+def authority_digest(directory):
+    """Digest every regular file under a review lineage directory."""
+    root = Path(directory)
+    if not root.exists():
+        return "absent"
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and not path.is_symlink():
+            digest.update(str(path.relative_to(root)).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def check_review_step(step, child_prompts, tool_texts, observed_texts, before, after):
+    """Return every violated expectation for one host-dispatched review step."""
+    problems = []
+    child = step.get("child") or ""
+    if child and any(child in text for text in tool_texts):
+        problems.append("parent received the raw child output")
+    if step["expect"] == "admitted":
+        if len(child_prompts) != 1:
+            problems.append(f"expected exactly one child request, observed {len(child_prompts)}")
+        for prompt in map(strip_host_preamble, child_prompts):
+            if not prompt.startswith(MATERIALIZATION_HEADER + " "):
+                problems.append("child prompt is not Go-materialized")
+            elif any(fragment in prompt for fragment in step.get("host_injected", [])):
+                # The host prompt equals Go's canonical binding when unmodified, so
+                # only host-authored additions can prove Go-only materialization.
+                problems.append("child prompt carries host-authored prompt bytes")
+        for fragment in step.get("tool_contains", []):
+            if not any(fragment in text for text in tool_texts):
+                problems.append(f"parent result lacks {fragment!r}")
+        if before == after:
+            problems.append("authority unchanged by an admitted step")
+    else:
+        if "child_requests" in step and len(child_prompts) != step["child_requests"]:
+            problems.append(f"expected {step['child_requests']} child requests, observed {len(child_prompts)}")
+        if not any(RELAY_REFUSED in text for text in tool_texts + observed_texts):
+            problems.append("refusal was not observed")
+        if before != after:
+            problems.append("authority changed by a refused step")
+    return problems
+
+
+def run_review_scenario(request, scenario, observation_log, requests, failures, script, run=None):
+    """Drive one parent session per step and record evidence for each."""
+    run = run or run_parent
+    evidence = []
+    for index, step in enumerate(scenario["steps"]):
+        first_request = len(requests)
+        observed_before = len(observation_log.read_text().splitlines()) if observation_log.exists() else 0
+        before = authority_digest(scenario["authority_dir"])
+        host_error = None
+        try:
+            run(request, "REVIEW_STEP " + str(index))
+        except Exception as error:  # A refused step may surface as a host error.
+            host_error = repr(error)[:500]
+        after = authority_digest(scenario["authority_dir"])
+        bodies = requests[first_request:]
+        child_contents = [next((m.get("content") for m in reversed(body["messages"]) if m.get("role") == "user"), "")
+                          for body in bodies if body["model"] == "child"]
+        child_prompts = [message_text(content) for content in child_contents]
+        tool_texts = [message_text(message.get("content")) for body in bodies if body["model"] == "parent"
+                      for message in body["messages"] if message.get("role") == "tool"]
+        lines = observation_log.read_text().splitlines()[observed_before:] if observation_log.exists() else []
+        observations = [json.loads(line) for line in lines]
+        observed_texts = [json.dumps(item) for item in observations if item["type"] == "after"]
+        problems = check_review_step(step, child_prompts, tool_texts, observed_texts, before, after)
+        evidence.append({
+            "name": step["name"], "agent": step["agent"], "expect": step["expect"], "problems": problems,
+            "child_requests": len(child_prompts),
+            "child_prompt_prefixes": [prompt[:120] for prompt in child_prompts],
+            "child_user_content_shape": [json.dumps(content)[:300] for content in child_contents],
+            "child_prompt_host_preamble": [prompt.startswith(HOST_SUBAGENT_PREAMBLE) for prompt in child_prompts],
+            "child_prompt_materialized": [strip_host_preamble(prompt).startswith(MATERIALIZATION_HEADER + " ") for prompt in child_prompts],
+            "tool_texts": [text[:2000] for text in tool_texts],
+            "hooks": [{key: item.get(key) for key in ("type", "status", "error")} for item in observations if item["type"] in ("before", "after")],
+            "after_hooks": [text[:2000] for text in observed_texts],
+            "authority_before": before, "authority_after": after, "host_error": host_error,
+        })
+    if failures:
+        evidence.append({"name": "fixture", "problems": ["unexpected network/provider requests: " + repr(failures)]})
+    return evidence
 
 
 def run_parent(request, text):

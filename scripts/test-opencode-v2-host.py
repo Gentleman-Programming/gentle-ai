@@ -157,6 +157,11 @@ def parse_args(argv=None):
     modes.add_argument("--loopback", metavar="NATIVE_GENTLE_AI")
     modes.add_argument("--generic-task-only", action="store_true")
     modes.add_argument("--installed-activation-only", action="store_true")
+    modes.add_argument("--review-scenario", metavar="FILE",
+                       help="replay Go-computed review steps through the real managed review plugin (global scope)")
+    parser.add_argument("--gentle-ai", metavar="SHIM", help="review mode: executable placed on the host PATH as gentle-ai")
+    parser.add_argument("--host-project", metavar="DIR", help="review mode: registered sibling worktree used as host cwd")
+    parser.add_argument("--evidence", metavar="FILE", help="review mode: JSON evidence output path")
     for name in ("root", "config", "workspace"):
         parser.add_argument("--installed-" + name)
     parser.add_argument("--installed-sdk-missing", action="store_true",
@@ -183,6 +188,19 @@ def parse_args(argv=None):
             parser.error("installed paths must match the existing Go fixture layout")
     elif any((args.installed_root, args.installed_config, args.installed_workspace, args.installed_sdk_missing)):
         parser.error("installed paths require --installed-activation-only")
+    review = (args.gentle_ai, args.host_project, args.evidence)
+    if args.review_scenario:
+        for name in ("review_scenario", "gentle_ai", "host_project"):
+            value = getattr(args, name)
+            if not value or not Path(value).is_absolute() or not Path(value).exists():
+                parser.error(name + " must be an explicit existing absolute path")
+            setattr(args, name, Path(value).resolve(strict=True))
+        evidence = Path(args.evidence or "")
+        if not args.evidence or not evidence.is_absolute() or not evidence.parent.is_dir():
+            parser.error("--evidence must be an absolute path in an existing directory")
+        args.evidence = evidence
+    elif any(review):
+        parser.error("--gentle-ai, --host-project, and --evidence require --review-scenario")
     return args
 
 
@@ -378,10 +396,66 @@ def installed_activation(args):
     print("NOT PROVEN: reviewer/refuter/validator; native admission/receipt/capability")
 
 
+def review_scenario(args):
+    """Real host, real managed review plugin, real Go relay; only the model is replayed."""
+    from opencode_v2_loopback import ReviewScript, local_provider, prepare_review_fixture, run_review_scenario
+    scenario = json.loads(args.review_scenario.read_text())
+    prefix = network_prefix()
+    binary = Path(args.binary).resolve(strict=True)
+    dependencies = Path(args.dependencies).resolve(strict=True)
+    if json.loads((dependencies / "@opencode/plugin/package.json").read_text())["version"] != "2.0.4":
+        raise ValueError("requires the released SDK dependency fixture")
+    assets = Path(__file__).resolve().parents[1] / "internal/assets/opencode/plugins-v2"
+    script = ReviewScript(scenario["steps"])
+    with tempfile.TemporaryDirectory(prefix="gentle-ai-opencode-v2-review-", dir=args.temp_root) as directory, ExitStack() as stack:
+        root = Path(directory).resolve()
+        for name in ("home", "config", "data", "state", "cache", "tmp", "bin"):
+            (root / name).mkdir()
+        shutil.copytree(dependencies, root / "node_modules", symlinks=True)
+        (root / "package.json").write_text('{"private":true,"type":"module"}\n')
+        config = root / "config/opencode"
+        shutil.copytree(assets, config / "plugins")
+        provider, requests, failures = stack.enter_context(
+            local_provider(review_script=script, max_requests=6 * len(scenario["steps"]) + 6))
+        log = prepare_review_fixture(config, provider, root / "observations.jsonl")
+        shutil.copy2(args.gentle_ai, root / "bin/gentle-ai")
+        env = {
+            "HOME": str(root / "home"), "XDG_CONFIG_HOME": str(root / "config"),
+            "XDG_DATA_HOME": str(root / "data"), "XDG_STATE_HOME": str(root / "state"),
+            "XDG_CACHE_HOME": str(root / "cache"), "TMPDIR": str(root / "tmp"),
+            "OPENCODE_CONFIG_DIR": str(config), "OPENCODE_TEST_HOME": str(root / "home"),
+            "PATH": str(root / "bin") + ":/usr/bin:/bin", "SHELL": "/bin/sh", "TERM": "dumb", "DO_NOT_TRACK": "1",
+            "OPENCODE_PASSWORD": "isolated-conformance-only", "OPENCODE_MODELS_URL": provider + "/catalog",
+            "HTTP_PROXY": provider, "HTTPS_PROXY": provider, "NO_PROXY": "127.0.0.1,localhost",
+        }
+        version = subprocess.run(prefix + [str(binary), "--version"], cwd=args.host_project, env=env,
+                                 capture_output=True, text=True, timeout=10, check=True)
+        host_version = validate_host_version(version.stdout, args.host_version)
+        process = subprocess.Popen(prefix + [str(binary), "serve", "--stdio", "--port", "0"], cwd=args.host_project, env=env,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   text=True, start_new_session=True)
+        try:
+            request = fixture_request(read_address(process), "Basic " + base64.b64encode(b"opencode:isolated-conformance-only").decode())
+            wait_for_plugins(lambda: request("/api/plugin"), PLUGIN_IDS | {"fixture.observer"})
+            steps = run_review_scenario(request, scenario, log, requests, failures, script)
+        finally:
+            stop(process)
+    args.evidence.write_text(json.dumps({"host_version": host_version, "steps": steps}, indent=2))
+    failed = [step for step in steps if step["problems"]]
+    for step in steps:
+        print(("FAIL: " if step["problems"] else "PASS: ") + step["name"] + ": " + "; ".join(step["problems"] or [step.get("expect", "")]))
+    print("SCOPE: real OpenCode host + managed V2 review plugin + Go relay/admission; model replayed by loopback; "
+          "capability gate stubbed in the test binary; gate itself not proven")
+    if failed:
+        raise RuntimeError(f"{len(failed)} review step(s) violated expectations; evidence: {args.evidence}")
+
+
 def main(argv=None):
     args = parse_args(argv)
     if args.installed_activation_only:
         return installed_activation(args)
+    if args.review_scenario:
+        return review_scenario(args)
     loopback, generic = bool(args.loopback), args.generic_task_only
     fixture = loopback or generic
     prefix = network_prefix() if fixture else []
