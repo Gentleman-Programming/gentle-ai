@@ -1,8 +1,11 @@
 package engram
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -255,44 +258,194 @@ func mustJSONString(v any) string {
 	return string(b)
 }
 
+// antigravityAssetBackup is the exact before-image of one Antigravity plugin
+// asset: whether it existed, its permission bits when it did, and its bytes.
+type antigravityAssetBackup struct {
+	path    string
+	existed bool
+	mode    fs.FileMode
+	content []byte
+}
+
+// captureAntigravityPluginAsset records the exact before-image of one plugin
+// asset. A missing asset records existed=false. Anything that is not a
+// readable regular file is an error, so the injection pass never overwrites or
+// recovers an asset it could not classify (symlink, directory, FIFO,
+// unreadable file).
+func captureAntigravityPluginAsset(path string) (antigravityAssetBackup, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return antigravityAssetBackup{path: path}, nil
+		}
+		return antigravityAssetBackup{}, fmt.Errorf("inspect Antigravity plugin asset %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return antigravityAssetBackup{}, fmt.Errorf("inspect Antigravity plugin asset %q: refusing to overwrite or recover unsupported file type %s; select a regular file before retrying", path, info.Mode().Type())
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return antigravityAssetBackup{}, fmt.Errorf("read Antigravity plugin asset %q: %w", path, err)
+	}
+	return antigravityAssetBackup{path: path, existed: true, mode: info.Mode().Perm(), content: content}, nil
+}
+
+// matches reports whether the asset on disk now is exactly the recorded
+// before-image: same existence, same bytes, same permission bits.
+func (a antigravityAssetBackup) matches(other antigravityAssetBackup) bool {
+	if a.existed != other.existed {
+		return false
+	}
+	if !a.existed {
+		return true
+	}
+	return a.mode == other.mode && bytes.Equal(a.content, other.content)
+}
+
+// restoreAntigravityFileAtomic is the recovery writer boundary for restoring a
+// recorded before-image (exact bytes, forced recorded mode). Tests replace it
+// to prove restoration failures surface instead of being swallowed.
+var restoreAntigravityFileAtomic = filemerge.WriteFileAtomicMode
+
+// readAntigravityPluginAsset is the recovery read-back boundary used to verify
+// the final on-disk state after restoration. It is deliberately separate from
+// captureAntigravityPluginAsset so a test can fault the post-recovery read
+// without disturbing the initial before-image capture. Tests replace it to
+// prove that a read failure never becomes a claimed rollback success.
+var readAntigravityPluginAsset = captureAntigravityPluginAsset
+
+// restoreAntigravityPluginAssets restores each recorded before-image and then
+// rereads every asset from disk to classify the final state. Preexisting
+// assets are rewritten with their exact bytes and recorded mode; assets that
+// did not exist before are removed. Only the recorded assets are touched —
+// never the plugin directory, never unrelated files. Every restoration or
+// read-back failure is returned; when any error is present the final plugin
+// state could not be confirmed, and the caller must report uncertainty instead
+// of a successful rollback. The helper is intentionally independent of the
+// three plugin asset paths so later #1635 units can reuse it for other
+// snapshot/restore scopes.
+func restoreAntigravityPluginAssets(before []antigravityAssetBackup) error {
+	var errs []error
+	for _, asset := range before {
+		if !asset.existed {
+			if err := os.Remove(asset.path); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, fmt.Errorf("remove newly created Antigravity plugin asset %q: %w", asset.path, err))
+			}
+			continue
+		}
+		if _, err := restoreAntigravityFileAtomic(asset.path, asset.content, asset.mode); err != nil {
+			errs = append(errs, fmt.Errorf("restore Antigravity plugin asset %q: %w", asset.path, err))
+		}
+	}
+	for _, asset := range before {
+		current, err := readAntigravityPluginAsset(asset.path)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("verify Antigravity plugin asset %q after recovery: %w", asset.path, err))
+			continue
+		}
+		if !asset.matches(current) {
+			errs = append(errs, fmt.Errorf("verify Antigravity plugin asset %q after recovery: file on disk does not match its state before this run", asset.path))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// writeAntigravityFileAtomic is the private writer boundary for the Antigravity
+// injection pass (managed global rewrite, settings bootstrap, plugin
+// manifest/MCP/hooks). Production default is the real durable writer; tests
+// route real bytes through it and then inject an error at one exact write so
+// landed-vs-before-replacement accounting is proved against files actually on
+// disk.
+var writeAntigravityFileAtomic = filemerge.WriteFileAtomic
+
 func ensureJSONFileIfMissing(path string) (filemerge.WriteResult, error) {
 	if _, err := os.Stat(path); err == nil {
 		return filemerge.WriteResult{Changed: false}, nil
 	} else if !os.IsNotExist(err) {
 		return filemerge.WriteResult{}, err
 	}
-	return filemerge.WriteFileAtomic(path, []byte("{}\n"), 0o644)
+	return writeAntigravityFileAtomic(path, []byte("{}\n"), 0o644)
+}
+
+// validateAntigravityGlobalMCPConfig prevalidates the shared global Antigravity
+// MCP config before any injection writes (#1635). A missing, empty, or
+// whitespace-only file is accepted without normalization; anything else must
+// be readable and parse as a JSON object. Malformed JSON, unreadable paths,
+// and non-object top-level values (including null) are an error here, so
+// injection never mutates any file or activates the plugin next to input it
+// could not classify.
+func validateAntigravityGlobalMCPConfig(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read Antigravity global MCP config %q: %w", path, err)
+	}
+	if strings.TrimSpace(string(raw)) == "" {
+		return nil
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return fmt.Errorf("parse Antigravity global MCP config %q: %w", path, err)
+	}
+	if root == nil {
+		return fmt.Errorf("parse Antigravity global MCP config %q: top-level JSON value is not an object", path)
+	}
+	return nil
 }
 
 func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []string, error) {
 	pluginDir := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
-	files := make([]string, 0, 3)
+	type pluginAsset struct {
+		path    string
+		content []byte
+	}
+	assets := []pluginAsset{
+		{path: filepath.Join(pluginDir, "plugin.json"), content: []byte(antigravityEngramPluginJSON)},
+		{path: filepath.Join(pluginDir, "mcp_config.json"), content: engramOverlayJSON(model.AgentAntigravity, engramCommand)},
+		{path: filepath.Join(pluginDir, "hooks.json"), content: antigravityEngramHooksJSON()},
+	}
+
+	// #1635 UNIT2: capture the exact before-image of every plugin asset —
+	// existence, type, bytes, mode — BEFORE any plugin write, and refuse to
+	// touch the plugin at all when an existing asset cannot be classified.
+	before := make([]antigravityAssetBackup, len(assets))
+	for i, asset := range assets {
+		snapshot, err := captureAntigravityPluginAsset(asset.path)
+		if err != nil {
+			return false, nil, err
+		}
+		before[i] = snapshot
+	}
+
 	changed := false
-
-	pluginPath := filepath.Join(pluginDir, "plugin.json")
-	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(antigravityEngramPluginJSON), 0o644)
-	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram plugin manifest: %w", err)
+	files := make([]string, 0, len(assets))
+	for i, asset := range assets {
+		writeResult, err := writeAntigravityFileAtomic(asset.path, asset.content, 0o644)
+		if err == nil {
+			changed = changed || writeResult.Changed
+			files = append(files, asset.path)
+			continue
+		}
+		// #1635 UNIT2: a landed replacement is accounted even alongside the
+		// error — and even though recovery below restores its before-image —
+		// because the mutation did occur. Changed/Files describe what
+		// happened, not the final state.
+		if writeResult.Changed {
+			changed = true
+			files = append(files, asset.path)
+		}
+		// Restore ONLY the assets this pass touched (this one and everything
+		// before it); assets after the failure were never written.
+		if recoveryErr := restoreAntigravityPluginAssets(before[:i+1]); recoveryErr != nil {
+			// Persistent IO prevented recovery or the final check: report the
+			// original error AND the recovery errors, and state explicitly that
+			// rollback and convergence are unconfirmed — never claim success.
+			return changed, files, fmt.Errorf("write Antigravity Engram plugin asset %q: %w; recovery did not complete and the final plugin state could not be confirmed: %w", asset.path, err, recoveryErr)
+		}
+		return changed, files, fmt.Errorf("write Antigravity Engram plugin asset %q: %w; the touched plugin assets were restored to their exact state before this run", asset.path, err)
 	}
-	changed = changed || pluginWrite.Changed
-	files = append(files, pluginPath)
-
-	pluginMCPPath := filepath.Join(pluginDir, "mcp_config.json")
-	mcpWrite, err := filemerge.WriteFileAtomic(pluginMCPPath, engramOverlayJSON(model.AgentAntigravity, engramCommand), 0o644)
-	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram plugin MCP config: %w", err)
-	}
-	changed = changed || mcpWrite.Changed
-	files = append(files, pluginMCPPath)
-
-	hooksPath := filepath.Join(pluginDir, "hooks.json")
-	hooksWrite, err := filemerge.WriteFileAtomic(hooksPath, antigravityEngramHooksJSON(), 0o644)
-	if err != nil {
-		return false, nil, fmt.Errorf("write Antigravity Engram hooks: %w", err)
-	}
-	changed = changed || hooksWrite.Changed
-	files = append(files, hooksPath)
-
 	return changed, files, nil
 }
 
@@ -378,9 +531,19 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			// with other MCP servers (e.g. Context7), so gentle-ai never
 			// writes it for Engram and removes only its own exact managed
 			// duplicate entry left behind by older versions.
+			//
+			// #1635: the shared global config is prevalidated BEFORE any
+			// writes so malformed, unreadable, or non-object content stops
+			// injection before any mutation or plugin activation.
+			if err := validateAntigravityGlobalMCPConfig(mcpPath); err != nil {
+				return InjectionResult{}, err
+			}
 			removed, removalFiles, removalErr := removeManagedAntigravityGlobalEngram(mcpPath)
 			if removalErr != nil {
-				return InjectionResult{}, removalErr
+				// #1635: a landed rewrite is reported even alongside the error.
+				changed = changed || removed
+				files = append(files, removalFiles...)
+				return InjectionResult{Changed: changed, Files: files}, removalErr
 			}
 			changed = changed || removed
 			files = append(files, removalFiles...)
@@ -388,17 +551,25 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			settingsTarget := adapter.SettingsPath(configHomeDir)
 			settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsTarget)
 			if settingsErr != nil {
-				return InjectionResult{}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
+				// #1635: a landed settings creation is reported even alongside
+				// the error; a failure before replacement claims no mutation.
+				changed = changed || settingsWrite.Changed
+				if settingsWrite.Changed {
+					files = append(files, settingsTarget)
+				}
+				return InjectionResult{Changed: changed, Files: files}, fmt.Errorf("ensure Antigravity settings: %w", settingsErr)
 			}
 			changed = changed || settingsWrite.Changed
 			files = append(files, settingsTarget)
 
 			pluginChanged, pluginFiles, pluginErr := installAntigravityEngramPlugin(configHomeDir, engramCommand)
-			if pluginErr != nil {
-				return InjectionResult{}, pluginErr
-			}
+			// #1635: the plugin install reports every file it already landed
+			// even when a later write fails; keep them in the cumulative result.
 			changed = changed || pluginChanged
 			files = append(files, pluginFiles...)
+			if pluginErr != nil {
+				return InjectionResult{Changed: changed, Files: files}, pluginErr
+			}
 			break
 		}
 
@@ -1164,8 +1335,14 @@ func removeManagedAntigravityGlobalEngram(path string) (bool, []string, error) {
 	if err != nil {
 		return false, nil, fmt.Errorf("encode Antigravity global MCP config %q: %w", path, err)
 	}
-	writeResult, err := filemerge.WriteFileAtomic(path, append(merged, '\n'), filemerge.ExistingFileMode(path, 0o644))
+	writeResult, err := writeAntigravityFileAtomic(path, append(merged, '\n'), filemerge.ExistingFileMode(path, 0o644))
 	if err != nil {
+		// #1635: the writer reports Changed when the replacement landed even
+		// though it then failed; keep that signal so the entry is not reported
+		// as still registered. Ownership classification is unchanged.
+		if writeResult.Changed {
+			return true, []string{path}, fmt.Errorf("rewrite Antigravity global MCP config %q: %w", path, err)
+		}
 		return false, nil, fmt.Errorf("rewrite Antigravity global MCP config %q: %w", path, err)
 	}
 	return writeResult.Changed, []string{path}, nil
