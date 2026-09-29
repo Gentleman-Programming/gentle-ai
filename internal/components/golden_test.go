@@ -553,22 +553,6 @@ func TestGoldenEngram_Antigravity(t *testing.T) {
 // Command Code golden tests
 // ---------------------------------------------------------------------------
 
-func TestGoldenSDD_CommandCode(t *testing.T) {
-	home := t.TempDir()
-	adapter := commandCodeAdapter()
-	promptPath := adapter.SystemPromptFile(home)
-	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	expected := readTestFile(t, filepath.Join(goldenDir(t), "sdd-commandcode-agentsmd.golden"))
-	if err := os.WriteFile(promptPath, expected, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	agentsMD := readTestFile(t, promptPath)
-	assertGolden(t, "sdd-commandcode-agentsmd.golden", agentsMD)
-}
-
 func TestGoldenPersona_CommandCode(t *testing.T) {
 	home := t.TempDir()
 

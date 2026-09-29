@@ -72,7 +72,7 @@ When rolling back or uninstalling Command Code (`command-code`), gentle-ai manag
 
 - **Snapshot scope**: Pre-install, pre-sync, and pre-upgrade snapshots capture all managed targets under `~/.commandcode`: `AGENTS.md`, `skills/`, `settings.json`, and `mcp.json`.
 - **`settings.json` hook pruning**: Startup refresh hooks (`SessionStart` and `Stop`) installed for `skill-registry refresh` are pruned without touching user-defined hooks, matchers, or surrounding settings keys. If `settings.json` contains no other settings after pruning, the emptied file is removed.
-- **`mcp.json` rollback semantics**: Managed MCP server entries (`context7`, `engram`) under `mcpServers` are removed. Custom user servers are preserved. If `mcp.json` becomes an empty JSON object after removing managed servers, the file is deleted.
+- **`mcp.json` pruning vs. snapshot restore**: Snapshot restore recovers the selected snapshot (which may reinstate managed entries), whereas uninstall pruning removes managed MCP server entries (`context7`, `engram`) under `mcpServers` while preserving custom user servers. If `mcp.json` becomes an empty JSON object after pruning managed servers, the file is deleted.
 - **`AGENTS.md` section removal**: Managed marker sections (`<!-- gentle-ai:persona -->` and `<!-- gentle-ai:engram-protocol -->`) are removed while user-authored guidelines, instructions, and trailing notes are preserved verbatim.
 - **Skills cleanup**: Managed skill directories under `~/.commandcode/skills/` are removed, while any user-authored skills in that directory are preserved.
 
