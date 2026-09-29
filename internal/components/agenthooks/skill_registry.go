@@ -153,11 +153,16 @@ func installSkillRegistry(homeDir string, adapter agents.Adapter, platform strin
 		}
 	} else {
 		hook := map[string]any{"type": "command", "command": command}
-		entry := map[string]any{"matcher": "", "hooks": []any{hook}}
-		if adapter.Agent() == model.AgentCodex {
+		entry := map[string]any{"hooks": []any{hook}}
+		switch adapter.Agent() {
+		case model.AgentCodex:
 			entry["matcher"] = "startup|resume|clear|compact"
 			hook["timeout"] = 30
 			hook["statusMessage"] = "Refreshing skill registry"
+		case model.AgentID("command-code"):
+			// Command Code requires matcher to be absent for SessionStart entries.
+		default:
+			entry["matcher"] = ""
 		}
 		hooks[event] = append(entries, entry)
 	}

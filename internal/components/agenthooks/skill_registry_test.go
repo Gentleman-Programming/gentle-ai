@@ -138,7 +138,17 @@ func TestSkillRegistryHooksWithoutSDD(t *testing.T) {
 			if again.Changed {
 				t.Fatalf("not idempotent: %+v", again)
 			}
+			if tc.agent == model.AgentClaudeCode {
+				entry := entries[0].(map[string]any)
+				if matcher, ok := entry["matcher"].(string); !ok || matcher != "" {
+					t.Fatalf("Claude hook matcher = %v, want empty string", entry["matcher"])
+				}
+			}
 			if tc.agent == model.AgentCodex {
+				entry := entries[0].(map[string]any)
+				if matcher, ok := entry["matcher"].(string); !ok || matcher != "startup|resume|clear|compact" {
+					t.Fatalf("Codex hook matcher = %v, want startup|resume|clear|compact", entry["matcher"])
+				}
 				if !strings.Contains(string(content), `startup|resume|clear|compact`) || !strings.Contains(string(content), `"SessionStart"`) {
 					t.Fatalf("Codex startup sources missing: %s", content)
 				}
@@ -204,8 +214,16 @@ func TestSkillRegistryCommandCodeSessionStartHook(t *testing.T) {
 	if _, bad := hooks["Stop"]; bad {
 		t.Fatalf("Command Code must have NO Stop hook: %s", content)
 	}
-	if sessionStart, ok := hooks["SessionStart"].([]any); !ok || len(sessionStart) != 1 {
+	sessionStart, ok := hooks["SessionStart"].([]any)
+	if !ok || len(sessionStart) != 1 {
 		t.Fatalf("unexpected SessionStart hooks: %v", hooks["SessionStart"])
+	}
+	sessionStartEntry, ok := sessionStart[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected SessionStart hook entry shape: %T", sessionStart[0])
+	}
+	if _, hasMatcher := sessionStartEntry["matcher"]; hasMatcher {
+		t.Fatalf("Command Code SessionStart hook must omit matcher key: %v", sessionStartEntry)
 	}
 
 	if again, err := InstallSkillRegistry(home, adapter); err != nil || again.Changed {

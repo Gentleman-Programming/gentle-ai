@@ -28,8 +28,11 @@ func TestCommandCodeSkillsInjection(t *testing.T) {
 
 	skillPath := filepath.Join(adapter.SkillsDir(home), "go-testing", "SKILL.md")
 	info, err := os.Stat(skillPath)
-	if err != nil || info.Size() == 0 {
-		t.Fatalf("Stat(%q) error = %v, size = %d", skillPath, err, info.Size())
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatalf("Stat(%q) size = 0", skillPath)
 	}
 
 	second, err := Inject(home, adapter, skillIDs)
