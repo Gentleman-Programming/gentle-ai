@@ -48,3 +48,5 @@ Post-sync verification expects `<Pi agent dir>/mcp.json` (`internal/cli/run.go`,
   - GREEN: same tests pass; `TestInjectPiProvisioningWritesOnlyMCPConfigOnFreshHome` replaces the old no-write expectation.
   - Checks: `go build ./...`, `go vet ./...`, `go run ./internal/gofmtcheck`, `go test ./internal/agents/pi/... ./internal/components/...`, `go test -timeout 40m ./internal/cli/...` all pass (cli: ok 747.9s).
   - Risk tier: medium (ordinary behavior change covered by focused tests; writes a user config file only when entries are missing).
+- Native review (base c4de51f2a, risk high, consent granted): lineage `review-437d9b60008c2978`, 4 lenses, approved and acknowledged (authority burned). Advisory (non-blocking): R4 malformed `mcp-adapter.json` hard-fails sync; R3 partial write not reported in returned paths; R1 `mcp.json` file mode; R3 launcher drift vs gentle-engram unguarded; R2 readability nits.
+- Follow-up (gentle-engram): `pi-engram init` 0.1.16 still adds `npm:pi-mcp-adapter` to Pi `settings.json`.
