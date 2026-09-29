@@ -360,69 +360,55 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
+func TestInjectPiProvisioningWritesNoMCPAdapterOnFreshHome(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
-	if !result.Changed {
-		t.Fatalf("Inject() changed = false")
+	if result.Changed {
+		t.Fatalf("Inject() changed = true, want false (Pi's built-in MCP needs no adapter)")
 	}
-
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
-	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
-
-	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"))
-	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+	for _, path := range []string{
+		filepath.Join(home, ".pi", "agent", "settings.json"),
+		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stat %q err = %v, want IsNotExist", path, err)
+		}
+	}
 }
 
-func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
+func TestInjectPiProvisioningRetiresMCPAdapterAndPreservesUnrelatedContent(t *testing.T) {
 	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0"]}`)
-	writeFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0","npm:pi-mcp-adapter@2.0.0"]}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
 
-	_, err := Inject(home, piAdapter())
+	first, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() changed = false, want the adapter retired")
 	}
 
 	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
 	assertNestedString(t, settings, "kanagawa", "theme")
-	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
+	assertNestedStrings(t, settings, []string{"npm:other@1.0.0"}, "packages")
 
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"))
 	assertNestedString(t, npmPackage, "pi-user", "name")
 	assertNestedString(t, npmPackage, "^1.0.0", "dependencies", "left-pad")
-	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+	assertNestedMissing(t, npmPackage, "dependencies", "pi-mcp-adapter")
 	assertNestedString(t, npmPackage, "^1.0.0", "devDependencies", "vitest")
-}
-
-func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *testing.T) {
-	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"packages":["npm:pi-mcp-adapter@2.0.0"]}`)
-	writeFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), `{"dependencies":{"pi-mcp-adapter":"^2.0.0"}}`)
-
-	first, err := Inject(home, piAdapter())
-	if err != nil {
-		t.Fatalf("Inject() first error = %v", err)
-	}
-	if !first.Changed {
-		t.Fatalf("Inject() first changed = false")
-	}
-
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
-	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
-	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"))
-	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
 
 	second, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
 	if second.Changed {
-		t.Fatalf("Inject() second changed = true")
+		t.Fatalf("Inject() second changed = true, want idempotent no-op")
 	}
 }
 
@@ -437,7 +423,7 @@ func TestInjectPiProvisioningMigratesLegacyObjectPackages(t *testing.T) {
 
 	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
 	assertNestedString(t, settings, "kanagawa", "theme")
-	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
+	assertNestedStrings(t, settings, []string{"npm:other@1.0.0"}, "packages")
 }
 
 // TestInjectOpenCodeMigratesFromOldFormat verifies that when a user's
@@ -1809,37 +1795,6 @@ func assertNestedStrings(t *testing.T, root map[string]any, want []string, path 
 	for i, wantItem := range want {
 		if items[i] != wantItem {
 			t.Fatalf("JSON path %v[%d] = %#v, want %q", path, i, items[i], wantItem)
-		}
-	}
-}
-
-func assertNestedStringsUnordered(t *testing.T, root map[string]any, want []string, path ...string) {
-	t.Helper()
-	got, ok := nestedValue(t, root, path...)
-	if !ok {
-		t.Fatalf("missing JSON path %v in %#v", path, root)
-	}
-	items, ok := got.([]any)
-	if !ok {
-		t.Fatalf("JSON path %v = %#v, want string array", path, got)
-	}
-	if len(items) != len(want) {
-		t.Fatalf("JSON path %v length = %d, want %d (%#v)", path, len(items), len(want), got)
-	}
-	remaining := make(map[string]int, len(want))
-	for _, item := range want {
-		remaining[item]++
-	}
-	for _, item := range items {
-		itemString, ok := item.(string)
-		if !ok {
-			t.Fatalf("JSON path %v contains non-string item %#v", path, item)
-		}
-		remaining[itemString]--
-	}
-	for item, count := range remaining {
-		if count != 0 {
-			t.Fatalf("JSON path %v missing/extra %q count delta %d; got %#v", path, item, count, got)
 		}
 	}
 }

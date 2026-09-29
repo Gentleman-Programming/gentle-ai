@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -18,13 +19,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 )
 
+// pi-mcp-adapter is retired: Pi >= 0.99.0 ships built-in MCP support that
+// reads mcp.json, and any installed extension registering /mcp (such as
+// pi-mcp-adapter) replaces that built-in support. Gentle AI therefore never
+// installs the adapter and removes it wherever it finds it.
 const (
-	piMCPAdapterPackage         = "npm:pi-mcp-adapter"
-	piMCPAdapterPackageSpec     = "npm:pi-mcp-adapter"
+	retiredPiMCPAdapterPackage    = "npm:pi-mcp-adapter"
+	retiredPiMCPAdapterDependency = "pi-mcp-adapter"
+)
+
+const (
 	piGentleEngramPackageSource = "npm:gentle-engram"
-	piMCPAdapterDependency      = "pi-mcp-adapter"
-	piMCPAdapterVersion         = "2.6.0"
-	piMCPAdapterVersionRange    = "^2.6.0"
 	piAppendSystemFile          = "APPEND_SYSTEM.md"
 	piEngramMCPConfigFile       = "mcp.json"
 	piSettingsFile              = "settings.json"
@@ -58,7 +63,6 @@ var retiredPiPackageIdentities = map[string]struct{}{
 var managedPackageSources = []string{
 	"npm:gentle-pi",
 	piGentleEngramPackageSource,
-	piMCPAdapterPackage,
 	"npm:pi-web-access",
 	"npm:pi-btw",
 }
@@ -67,6 +71,13 @@ var managedPackageSources = []string{
 // adapter. Callers receive a copy so package ownership remains adapter-owned.
 func ManagedPackageSources() []string {
 	return slices.Clone(managedPackageSources)
+}
+
+// UninstallPackageSources returns every Pi package source an uninstall should
+// remove: the managed sources plus the retired pi-mcp-adapter, which older
+// Gentle AI releases installed and which may still be present.
+func UninstallPackageSources() []string {
+	return append(ManagedPackageSources(), retiredPiMCPAdapterPackage)
 }
 
 var piWalkDir = filepath.WalkDir
@@ -273,7 +284,7 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 	commands := make([][]string, 0, len(managedPackageSources)+1)
 	for _, source := range ManagedPackageSources() {
 		commands = append(commands, []string{"pi", "install", source})
-		if source == piMCPAdapterPackage {
+		if source == piGentleEngramPackageSource {
 			commands = append(commands, a.engramInitCommand())
 		}
 	}
@@ -419,58 +430,101 @@ func resolvePiAgentDirOverride(override, homeDir string) string {
 	}
 }
 
-// ProvisionEngramMCP declares pi-mcp-adapter in Pi's settings.json and
-// package.json. It is invoked by ComponentEngram; keeping it here lets Pi
-// own the exact config shape without teaching the generic Engram injector
-// about Pi internals.
+// ProvisionEngramMCP prepares Pi's Engram MCP runtime. Pi >= 0.99.0 runs MCP
+// servers from mcp.json through its built-in MCP support, so this only retires
+// what would shadow it: the pi-mcp-adapter package in settings.json (plus the
+// legacy and retired companion packages) and the pi-mcp-adapter dependency in
+// <agentDir>/npm/package.json. It is invoked by ComponentEngram; keeping it
+// here lets Pi own the exact config shape without teaching the generic Engram
+// injector about Pi internals.
+//
+// Missing files are never created, and files with nothing to retire are left
+// byte-identical. The returned paths are the files actually rewritten.
 //
 // mcp.json is NOT written here. pi-engram init (invoked by InstallCommand)
 // is the sole writer of that file and owns its schema.
 func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
-	paths := []string{
-		a.SettingsPath(homeDir),
-		// Pi's npm manifest lives at <agentDir>/npm/package.json
-		// (package-manager.ts:2033), not under GlobalConfigDir's ~/.pi root.
-		filepath.Join(AgentConfigPath(homeDir), piNPMDirectory, piNPMPackageFile),
-	}
-	overlays := [][]byte{
-		nil,
-		mustJSON(map[string]any{
-			"dependencies": map[string]any{
-				piMCPAdapterDependency: piMCPAdapterVersionRange,
-			},
-		}),
-	}
+	settingsPath := a.SettingsPath(homeDir)
+	// Pi's npm manifest lives at <agentDir>/npm/package.json
+	// (package-manager.ts:2033), not under GlobalConfigDir's ~/.pi root.
+	npmPackagePath := filepath.Join(AgentConfigPath(homeDir), piNPMDirectory, piNPMPackageFile)
 
-	changed := false
-	for i, path := range paths {
-		var write filemerge.WriteResult
-		var err error
-		if i == 0 {
-			write, err = mergePiSettingsFile(path)
-		} else {
-			write, err = mergePiJSONFile(path, overlays[i])
-		}
+	var paths []string
+	for _, step := range []struct {
+		path  string
+		prune func(string) (filemerge.WriteResult, error)
+	}{
+		{settingsPath, prunePiSettingsFile},
+		{npmPackagePath, prunePiNPMPackageFile},
+	} {
+		write, err := step.prune(step.path)
 		if err != nil {
 			return false, nil, err
 		}
-		changed = changed || write.Changed
+		if write.Changed {
+			paths = append(paths, step.path)
+		}
 	}
 
-	return changed, paths, nil
+	return len(paths) > 0, paths, nil
 }
 
-func mergePiSettingsFile(path string) (filemerge.WriteResult, error) {
-	settings, err := readPiJSONObject(path)
-	if err != nil {
+// prunePiSettingsFile drops retired packages from an existing settings.json.
+// A missing file, a file without packages, or one with nothing to drop is
+// left untouched.
+func prunePiSettingsFile(path string) (filemerge.WriteResult, error) {
+	settings, exists, err := readExistingPiJSONObject(path)
+	if err != nil || !exists {
 		return filemerge.WriteResult{}, err
 	}
+	existing, ok := settings["packages"]
+	if !ok {
+		return filemerge.WriteResult{}, nil
+	}
 
-	settings["packages"] = appendPiPackage(settings["packages"], piMCPAdapterPackageSpec)
+	retained := retainPiPackages(existing)
+	if current, isSlice := existing.([]any); isSlice && reflect.DeepEqual(current, retained) {
+		return filemerge.WriteResult{}, nil
+	}
+	settings["packages"] = retained
 
-	encoded, err := json.MarshalIndent(settings, "", "  ")
+	return writePiJSONObject(path, settings)
+}
+
+// prunePiNPMPackageFile removes the retired pi-mcp-adapter dependency from an
+// existing <agentDir>/npm/package.json, leaving every other key in place.
+func prunePiNPMPackageFile(path string) (filemerge.WriteResult, error) {
+	manifest, exists, err := readExistingPiJSONObject(path)
+	if err != nil || !exists {
+		return filemerge.WriteResult{}, err
+	}
+	dependencies, ok := manifest["dependencies"].(map[string]any)
+	if !ok {
+		return filemerge.WriteResult{}, nil
+	}
+	if _, present := dependencies[retiredPiMCPAdapterDependency]; !present {
+		return filemerge.WriteResult{}, nil
+	}
+	delete(dependencies, retiredPiMCPAdapterDependency)
+
+	return writePiJSONObject(path, manifest)
+}
+
+func readExistingPiJSONObject(path string) (map[string]any, bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("stat pi json file %q: %w", path, err)
+	}
+	object, err := readPiJSONObject(path)
+	return object, err == nil, err
+}
+
+func writePiJSONObject(path string, object map[string]any) (filemerge.WriteResult, error) {
+	encoded, err := json.MarshalIndent(object, "", "  ")
 	if err != nil {
-		return filemerge.WriteResult{}, fmt.Errorf("marshal pi settings %q: %w", path, err)
+		return filemerge.WriteResult{}, fmt.Errorf("marshal pi json file %q: %w", path, err)
 	}
 	return filemerge.WriteFileAtomic(path, append(encoded, '\n'), 0o644)
 }
@@ -494,19 +548,22 @@ func readPiJSONObject(path string) (map[string]any, error) {
 	return object, nil
 }
 
-func appendPiPackage(existing any, desired string) []any {
+// retainPiPackages returns the packages Gentle AI keeps in Pi's settings:
+// everything except the retired pi-mcp-adapter, the legacy subagent packages,
+// and the retired companion packages.
+func retainPiPackages(existing any) []any {
 	packages := piPackagesAsSlice(existing)
-	filtered := make([]any, 0, len(packages)+1)
+	filtered := make([]any, 0, len(packages))
 	keepSubagents := !gentlePiShipsSubagents(packages)
 	for _, pkg := range packages {
 		identity := piPackageIdentity(pkg)
 		retired := isRetiredPiPackage(identity) && !(keepSubagents && identity == "npm:pi-subagents-j0k3r")
-		if identity == piMCPAdapterPackage || isLegacyPiSubagentPackage(identity) || retired {
+		if identity == retiredPiMCPAdapterPackage || isLegacyPiSubagentPackage(identity) || retired {
 			continue
 		}
 		filtered = append(filtered, pkg)
 	}
-	return append(filtered, desired)
+	return filtered
 }
 
 func piPackagesAsSlice(existing any) []any {
@@ -544,8 +601,8 @@ func piPackageIdentity(pkg any) string {
 		}
 		source, _ = object["source"].(string)
 	}
-	if strings.HasPrefix(source, piMCPAdapterPackage+"@") || source == piMCPAdapterPackage {
-		return piMCPAdapterPackage
+	if strings.HasPrefix(source, retiredPiMCPAdapterPackage+"@") || source == retiredPiMCPAdapterPackage {
+		return retiredPiMCPAdapterPackage
 	}
 	for legacy := range legacyPiSubagentPackageIdentities {
 		if source == legacy || strings.HasPrefix(source, legacy+"@") {
@@ -582,31 +639,6 @@ func gentlePiShipsSubagents(packages []any) bool {
 func isRetiredPiPackage(identity string) bool {
 	_, ok := retiredPiPackageIdentities[identity]
 	return ok
-}
-
-func mergePiJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
-	base, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return filemerge.WriteResult{}, fmt.Errorf("read pi json file %q: %w", path, err)
-		}
-		base = nil
-	}
-
-	merged, err := filemerge.MergeJSONObjects(base, overlay)
-	if err != nil {
-		return filemerge.WriteResult{}, err
-	}
-
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
-}
-
-func mustJSON(value map[string]any) []byte {
-	encoded, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		panic(err)
-	}
-	return append(encoded, '\n')
 }
 
 func defaultStat(path string) statResult {
