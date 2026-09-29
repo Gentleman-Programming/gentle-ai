@@ -257,6 +257,14 @@ func TestInjectAntigravityAccountsEachWriteFailure(t *testing.T) {
 					}
 					continue
 				}
+				if i >= 2 { // #1635 UNIT2: a plugin asset landed, but recovery restored
+					// the newly created file to its absent before-image; the write is
+					// still accounted in result.Files above.
+					if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+						t.Fatalf("%q was newly created and must be restored to absent; stat err = %v", path, statErr)
+					}
+					continue
+				}
 				raw, readErr := os.ReadFile(path)
 				if readErr != nil {
 					t.Fatalf("ReadFile(%q) error = %v", path, readErr)
@@ -270,25 +278,319 @@ func TestInjectAntigravityAccountsEachWriteFailure(t *testing.T) {
 					if strings.TrimSpace(string(raw)) != "{}" {
 						t.Fatalf("settings on disk = %q, want empty JSON object", raw)
 					}
-				case 2: // plugin manifest landed
-					if string(raw) != antigravityEngramPluginJSON {
-						t.Fatalf("plugin manifest on disk = %q, want canonical manifest", raw)
-					}
-				case 3: // plugin MCP config landed
-					if !strings.Contains(string(raw), "--tools=agent") || !strings.Contains(string(raw), "/usr/local/bin/engram") {
-						t.Fatalf("plugin MCP config on disk wrong:\n%s", raw)
-					}
-				case 4: // plugin hooks landed
-					if !strings.Contains(string(raw), "PreInvocation") {
-						t.Fatalf("plugin hooks on disk wrong:\n%s", raw)
-					}
 				}
 			}
 		})
 	}
 }
 
+// ─── #1635 UNIT2 Antigravity plugin before-image and recovery tests ──────────
+
+// antigravityRecoveryFixture seeds a home whose plugin directory already holds
+// user-owned plugin assets (custom bytes, non-default modes), one absent
+// plugin asset, and an unrelated third-party file. It returns the paths the
+// recovery tests assert against plus the before-image of every seeded asset.
+func antigravityRecoveryFixture(t *testing.T) (home, settingsPath, pluginDir, pluginPath, pluginMCPPath, hooksPath, unrelatedPath string, before map[string]antigravityAssetBackup) {
+	t.Helper()
+	home = t.TempDir()
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	pluginDir = filepath.Join(cliDir, "plugins", "gentle-ai-engram")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", pluginDir, err)
+	}
+	settingsPath = filepath.Join(cliDir, "settings.json")
+	pluginPath = filepath.Join(pluginDir, "plugin.json")
+	pluginMCPPath = filepath.Join(pluginDir, "mcp_config.json")
+	hooksPath = filepath.Join(pluginDir, "hooks.json")
+	unrelatedPath = filepath.Join(pluginDir, "user-notes.txt")
+
+	before = make(map[string]antigravityAssetBackup)
+	write := func(path, content string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatalf("Chmod(%q) error = %v", path, err)
+			}
+		}
+		snapshot, err := captureAntigravityPluginAsset(path)
+		if err != nil {
+			t.Fatalf("captureAntigravityPluginAsset(%q) error = %v", path, err)
+		}
+		before[path] = snapshot
+	}
+	write(pluginPath, "{\n  \"name\": \"gentle-ai-engram\",\n  \"user\": true\n}\n", 0o640)
+	write(pluginMCPPath, `{"mcpServers":{"engram":{"command":"/custom/engram","args":["mcp"]}}}`+"\n", 0o600)
+	write(unrelatedPath, "user notes\n", 0o644)
+	// hooks.json is deliberately absent so recovery exercises both preexisting
+	// and newly created assets.
+	if _, err := os.Stat(hooksPath); !os.IsNotExist(err) {
+		t.Fatalf("hooks.json must be absent in this fixture; stat err = %v", err)
+	}
+	return home, settingsPath, pluginDir, pluginPath, pluginMCPPath, hooksPath, unrelatedPath, before
+}
+
+// assertAntigravityAssetState asserts the actual on-disk state of one asset
+// against its recorded before-image: existence, type, exact bytes, and mode.
+func assertAntigravityAssetState(t *testing.T, label, path string, want antigravityAssetBackup) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if !want.existed {
+		if !os.IsNotExist(err) {
+			t.Fatalf("%s: %q must not exist; stat err = %v", label, path, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("%s: %q missing; stat err = %v", label, path, err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("%s: %q is not a regular file: %v", label, path, info.Mode())
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("%s: ReadFile(%q) error = %v", label, path, readErr)
+	}
+	if !bytes.Equal(got, want.content) {
+		t.Fatalf("%s: %q bytes changed\nwant:\n%s\ngot:\n%s", label, path, want.content, got)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != want.mode {
+		t.Fatalf("%s: %q mode = %04o, want %04o", label, path, info.Mode().Perm(), want.mode)
+	}
+}
+
+func TestInjectAntigravityRejectsUnclassifiablePluginAssetBeforeWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		plant func(t *testing.T, hooksPath, pluginPath string)
+		skip  string
+	}{
+		{
+			name: "directory where hooks.json belongs",
+			plant: func(t *testing.T, hooksPath, _ string) {
+				if err := os.Mkdir(hooksPath, 0o755); err != nil {
+					t.Fatalf("Mkdir(%q) error = %v", hooksPath, err)
+				}
+			},
+		},
+		{
+			name: "symlink where hooks.json belongs",
+			plant: func(t *testing.T, hooksPath, pluginPath string) {
+				if err := os.Symlink(pluginPath, hooksPath); err != nil {
+					t.Fatalf("Symlink(%q) error = %v", hooksPath, err)
+				}
+			},
+		},
+		{
+			name: "unreadable hooks.json",
+			skip: "permission bits",
+			plant: func(t *testing.T, hooksPath, _ string) {
+				if err := os.WriteFile(hooksPath, []byte("{}\n"), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q) error = %v", hooksPath, err)
+				}
+				if err := os.Chmod(hooksPath, 0o000); err != nil {
+					t.Fatalf("Chmod(%q) error = %v", hooksPath, err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skip != "" {
+				if runtime.GOOS == "windows" {
+					t.Skip("file permission bits are not supported on Windows")
+				}
+				if os.Geteuid() == 0 {
+					t.Skip("root ignores file permission bits")
+				}
+			}
+			home, _, _, pluginPath, pluginMCPPath, hooksPath, unrelatedPath, before := antigravityRecoveryFixture(t)
+			tc.plant(t, hooksPath, pluginPath)
+
+			_, err := Inject(home, antigravityAdapter())
+			if err == nil {
+				t.Fatalf("Inject(antigravity) succeeded; want a plugin asset classification error")
+			}
+			if !strings.Contains(err.Error(), hooksPath) || !strings.Contains(err.Error(), "plugin asset") {
+				t.Fatalf("error = %v, want it to name the unclassifiable plugin asset %q", err, hooksPath)
+			}
+			// The rejection happens before any plugin write: every preexisting
+			// asset keeps its exact bytes and mode, and the unsupported asset is
+			// never written through or removed.
+			assertAntigravityAssetState(t, "preserved", pluginPath, before[pluginPath])
+			assertAntigravityAssetState(t, "preserved", pluginMCPPath, before[pluginMCPPath])
+			assertAntigravityAssetState(t, "preserved", unrelatedPath, before[unrelatedPath])
+			info, statErr := os.Lstat(hooksPath)
+			if statErr != nil {
+				t.Fatalf("Lstat(%q) error = %v", hooksPath, statErr)
+			}
+			if tc.name == "directory where hooks.json belongs" && !info.IsDir() {
+				t.Fatalf("hooks.json directory was replaced: %v", info.Mode())
+			}
+			if tc.name == "symlink where hooks.json belongs" && info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("hooks.json symlink was replaced: %v", info.Mode())
+			}
+		})
+	}
+}
+
+func TestInjectAntigravityRestoresTouchedPluginAssetsToExactBeforeImage(t *testing.T) {
+	pluginAssetOrder := []string{"plugin.json", "mcp_config.json", "hooks.json"}
+	for _, tc := range []struct {
+		name   string
+		suffix string
+		land   bool
+	}{
+		{name: "manifest failing before replacement", suffix: pluginAssetOrder[0]},
+		{name: "manifest failing after landing", suffix: pluginAssetOrder[0], land: true},
+		{name: "MCP config failing before replacement", suffix: pluginAssetOrder[1]},
+		{name: "MCP config failing after landing", suffix: pluginAssetOrder[1], land: true},
+		{name: "hooks failing before replacement", suffix: pluginAssetOrder[2]},
+		{name: "hooks failing after landing", suffix: pluginAssetOrder[2], land: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, settingsPath, pluginDir, pluginPath, pluginMCPPath, hooksPath, unrelatedPath, before := antigravityRecoveryFixture(t)
+			paths := map[string]string{
+				pluginAssetOrder[0]: pluginPath,
+				pluginAssetOrder[1]: pluginMCPPath,
+				pluginAssetOrder[2]: hooksPath,
+			}
+			failAntigravityWrite(t, filepath.Join(".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", tc.suffix), tc.land)
+
+			result, err := Inject(home, antigravityAdapter())
+
+			if err == nil {
+				t.Fatalf("Inject(antigravity) succeeded; want the injected write fault")
+			}
+			if !errors.Is(err, errAntigravityWriteFault) {
+				t.Fatalf("error = %v, want errors.Is(err, errAntigravityWriteFault)", err)
+			}
+			// Only the plugin write fails, so the settings bootstrap before it
+			// landed, and every plugin write up to and including the faulted one
+			// occurred — recovery restores the assets but must not erase the
+			// accounting of mutations that happened.
+			wantFiles := []string{settingsPath}
+			for _, name := range pluginAssetOrder {
+				wantFiles = append(wantFiles, paths[name])
+				if name == tc.suffix {
+					if !tc.land {
+						wantFiles = wantFiles[:len(wantFiles)-1]
+					}
+					break
+				}
+			}
+			if !result.Changed {
+				t.Fatalf("result.Changed = false; the settings creation and landed plugin writes are real mutations")
+			}
+			if len(result.Files) != len(wantFiles) {
+				t.Fatalf("result.Files = %v, want %v", result.Files, wantFiles)
+			}
+			for i, want := range wantFiles {
+				if result.Files[i] != want {
+					t.Fatalf("result.Files[%d] = %q, want %q (all: %v)", i, result.Files[i], want, result.Files)
+				}
+			}
+			// Every touched plugin asset is back to its exact before-image:
+			// preexisting bytes and mode, absent for newly created files.
+			for _, name := range pluginAssetOrder {
+				assertAntigravityAssetState(t, "restored", paths[name], before[paths[name]])
+			}
+			// The unrelated third-party asset and the plugin directory itself
+			// are never part of any restore.
+			assertAntigravityAssetState(t, "unrelated", unrelatedPath, before[unrelatedPath])
+			info, statErr := os.Stat(pluginDir)
+			if statErr != nil || !info.IsDir() {
+				t.Fatalf("plugin directory must survive recovery; stat err = %v", statErr)
+			}
+		})
+	}
+}
+
+func TestInjectAntigravityRecoveryFailureIsExplicit(t *testing.T) {
+	t.Run("restoration write failure", func(t *testing.T) {
+		home, settingsPath, _, pluginPath, pluginMCPPath, hooksPath, _, _ := antigravityRecoveryFixture(t)
+		failAntigravityWrite(t, filepath.Join(".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json"), true)
+		restoreFault := errors.New("injected antigravity restore fault")
+		origRestore := restoreAntigravityFileAtomic
+		restoreAntigravityFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+			return filemerge.WriteResult{}, restoreFault
+		}
+		t.Cleanup(func() { restoreAntigravityFileAtomic = origRestore })
+
+		result, err := Inject(home, antigravityAdapter())
+
+		if err == nil {
+			t.Fatalf("Inject(antigravity) succeeded; want the injected write fault")
+		}
+		// Both the original write error and the recovery error must survive.
+		if !errors.Is(err, errAntigravityWriteFault) {
+			t.Fatalf("error must preserve the original write fault: %v", err)
+		}
+		if !errors.Is(err, restoreFault) {
+			t.Fatalf("error must preserve the restoration failure: %v", err)
+		}
+		if !strings.Contains(err.Error(), "could not be confirmed") {
+			t.Fatalf("error must state the final plugin state could not be confirmed: %v", err)
+		}
+		// The landed writes are still accounted even though recovery failed.
+		wantFiles := []string{settingsPath, pluginPath, pluginMCPPath, hooksPath}
+		if !result.Changed || len(result.Files) != len(wantFiles) {
+			t.Fatalf("result = %+v, want Changed with Files %v", result, wantFiles)
+		}
+		for i, want := range wantFiles {
+			if result.Files[i] != want {
+				t.Fatalf("result.Files[%d] = %q, want %q (all: %v)", i, result.Files[i], want, result.Files)
+			}
+		}
+		// Restoration was refused for the preexisting assets, so they still
+		// hold the injected canonical bytes; the newly created hooks file
+		// was still removable. This is reported, never claimed as success.
+		if got, readErr := os.ReadFile(pluginPath); readErr != nil || string(got) != antigravityEngramPluginJSON {
+			t.Fatalf("plugin manifest must still hold the landed canonical bytes while restoration is broken; got %q, err %v", got, readErr)
+		}
+		if _, statErr := os.Stat(hooksPath); !os.IsNotExist(statErr) {
+			t.Fatalf("newly created hooks.json must still be removed by recovery; stat err = %v", statErr)
+		}
+	})
+
+	t.Run("recovery readback failure", func(t *testing.T) {
+		home, _, _, _, _, _, _, before := antigravityRecoveryFixture(t)
+		failAntigravityWrite(t, filepath.Join(".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json"), true)
+		readbackFault := errors.New("injected antigravity readback fault")
+		origRead := readAntigravityPluginAsset
+		readAntigravityPluginAsset = func(path string) (antigravityAssetBackup, error) {
+			return antigravityAssetBackup{}, readbackFault
+		}
+		t.Cleanup(func() { readAntigravityPluginAsset = origRead })
+
+		result, err := Inject(home, antigravityAdapter())
+
+		if err == nil {
+			t.Fatalf("Inject(antigravity) succeeded; want the injected write fault")
+		}
+		if !errors.Is(err, errAntigravityWriteFault) {
+			t.Fatalf("error must preserve the original write fault: %v", err)
+		}
+		if !errors.Is(err, readbackFault) {
+			t.Fatalf("error must preserve the readback failure: %v", err)
+		}
+		if !strings.Contains(err.Error(), "could not be confirmed") {
+			t.Fatalf("error must state the final plugin state could not be confirmed: %v", err)
+		}
+		if !result.Changed {
+			t.Fatalf("result.Changed = false; the landed writes are real mutations")
+		}
+		// Restoration itself succeeded: every asset matches its before-image,
+		// but the failed readback means recovery still refuses to claim it.
+		for path, want := range before {
+			assertAntigravityAssetState(t, "restored", path, want)
+		}
+	})
+}
+
 func TestEngramSelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
+
 	for _, tc := range []struct {
 		name, content string
 		mode          os.FileMode
