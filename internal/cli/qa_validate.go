@@ -58,16 +58,16 @@ func RunQAValidateFromReader(args []string, stdin io.Reader, stdout io.Writer) e
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected qa-validate argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected qa-validate argument %q; run `gentle-ai qa-validate --help` for valid flags", flags.Arg(0))
 	}
 	if strings.TrimSpace(*input) == "" {
-		return errors.New("qa-validate requires --input")
+		return errors.New("qa-validate requires --input; run `gentle-ai qa-validate --help` for usage")
 	}
 	if strings.TrimSpace(*change) == "" {
-		return errors.New("qa-validate requires --change")
+		return errors.New("qa-validate requires --change; run `gentle-ai qa-validate --help` for usage")
 	}
 	if strings.TrimSpace(*stage) == "" {
-		return errors.New("qa-validate requires --stage")
+		return errors.New("qa-validate requires --stage; run `gentle-ai qa-validate --help` for usage")
 	}
 
 	reader := stdin
@@ -84,7 +84,7 @@ func RunQAValidateFromReader(args []string, stdin io.Reader, stdout io.Writer) e
 		return fmt.Errorf("read qa artifact: %w", err)
 	}
 	if len(payload) > maxQAValidateBytes {
-		return fmt.Errorf("qa artifact exceeds %d-byte limit", maxQAValidateBytes)
+		return fmt.Errorf("qa artifact exceeds %d-byte limit", maxQAValidateBytes) // refusal:by-design world-action: the exit is shrinking the artifact content, not a command to run
 	}
 
 	admission := qastage.NewCanonicalArtifactValidator().Validate(payload, *stage, *sourceRevision)

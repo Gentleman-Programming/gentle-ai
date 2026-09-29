@@ -46,7 +46,7 @@ func checkExpectedRevision(ctx context.Context, machine *qastage.QAStateMachine,
 		return err
 	}
 	if status.Revision != expected {
-		return fmt.Errorf("expected-revision %q does not match current revision %q; rerun qa-status for the current value", expected, status.Revision)
+		return fmt.Errorf("expected-revision %q does not match current revision %q; rerun `gentle-ai qa-status` for the current value", expected, status.Revision)
 	}
 	return nil
 }
@@ -82,16 +82,16 @@ func RunQABegin(args []string, stdout io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected qa-begin argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected qa-begin argument %q; run `gentle-ai qa-begin --help` for valid flags", flags.Arg(0))
 	}
 	if strings.TrimSpace(*change) == "" {
-		return errors.New("qa-begin requires --change")
+		return errors.New("qa-begin requires --change; run `gentle-ai qa-begin --help` for usage")
 	}
 	if strings.TrimSpace(*stage) == "" {
-		return errors.New("qa-begin requires --stage")
+		return errors.New("qa-begin requires --stage; run `gentle-ai qa-begin --help` for usage")
 	}
 	if strings.TrimSpace(*requestID) == "" {
-		return errors.New("qa-begin requires --request-id")
+		return errors.New("qa-begin requires --request-id; run `gentle-ai qa-begin --help` for usage")
 	}
 
 	ctx := context.Background()
@@ -166,19 +166,19 @@ func RunQAFinish(args []string, stdout io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected qa-finish argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected qa-finish argument %q; run `gentle-ai qa-finish --help` for valid flags", flags.Arg(0))
 	}
 	if strings.TrimSpace(*change) == "" {
-		return errors.New("qa-finish requires --change")
+		return errors.New("qa-finish requires --change; run `gentle-ai qa-finish --help` for usage")
 	}
 	if strings.TrimSpace(*requestID) == "" {
-		return errors.New("qa-finish requires --request-id")
+		return errors.New("qa-finish requires --request-id; run `gentle-ai qa-finish --help` for usage")
 	}
 	if strings.TrimSpace(*outcome) == "" {
-		return errors.New("qa-finish requires --outcome")
+		return errors.New("qa-finish requires --outcome; run `gentle-ai qa-finish --help` for usage")
 	}
 	if strings.TrimSpace(*evidenceRevision) == "" {
-		return errors.New("qa-finish requires --evidence-revision")
+		return errors.New("qa-finish requires --evidence-revision; run `gentle-ai qa-finish --help` for usage")
 	}
 
 	ctx := context.Background()
@@ -251,11 +251,11 @@ func RunQAApprove(args []string, stdout io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected qa-approve argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected qa-approve argument %q; run `gentle-ai qa-approve --help` for valid flags", flags.Arg(0))
 	}
 	for name, value := range map[string]string{"change": *change, "stage": *stage, "evidence-revision": *evidenceRevision, "actor": *actor, "reason": *reason, "request-id": *requestID} {
 		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("qa-approve requires --%s", name)
+			return fmt.Errorf("qa-approve requires --%s; run `gentle-ai qa-approve --help` for usage", name)
 		}
 	}
 
@@ -318,11 +318,11 @@ func RunQAReset(args []string, stdout io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected qa-reset argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected qa-reset argument %q; run `gentle-ai qa-reset --help` for valid flags", flags.Arg(0))
 	}
 	for name, value := range map[string]string{"change": *change, "actor": *actor, "reason": *reason} {
 		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("qa-reset requires --%s", name)
+			return fmt.Errorf("qa-reset requires --%s; run `gentle-ai qa-reset --help` for usage", name)
 		}
 	}
 
@@ -375,10 +375,10 @@ func RunQAStatus(args []string, stdout io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected qa-status argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected qa-status argument %q; run `gentle-ai qa-status --help` for valid flags", flags.Arg(0))
 	}
 	if strings.TrimSpace(*change) == "" {
-		return errors.New("qa-status requires --change")
+		return errors.New("qa-status requires --change; run `gentle-ai qa-status --help` for usage")
 	}
 
 	ctx := context.Background()
