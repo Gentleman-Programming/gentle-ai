@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestCanonicalImplementationRoutingBoundaries(t *testing.T) {
@@ -132,6 +132,7 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 		model.AgentAntigravity:   "sha256:8e09945cd860b793c59f73db19827bcb4dcfd75c9ecc7f876167ab52fe77ccc2",
 		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
 		model.AgentCodex:         "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
+		model.AgentConductor:     "sha256:89aef785eec3869abd880764a35eacdb529dc70de2b5ea8e6428b4ec78575198",
 		model.AgentCursor:        "sha256:08e32b28b4cde7ffaf67210354fb95df2aaf424016ec6093190fb38c5f7226cb",
 		model.AgentGeminiCLI:     "sha256:5738280648925ebc011e6564b59bd6108bb573b5615771286fbcba97876a61dc",
 		model.AgentHermes:        "sha256:25a9583f4b1fe58dbc64a33a016e9a1d88acb545d3d6f6648bbf08dc29cb5656",
@@ -216,6 +217,7 @@ func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 		model.AgentAntigravity:   "sha256:8e09945cd860b793c59f73db19827bcb4dcfd75c9ecc7f876167ab52fe77ccc2",
 		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
 		model.AgentCodex:         "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
+		model.AgentConductor:     "sha256:89aef785eec3869abd880764a35eacdb529dc70de2b5ea8e6428b4ec78575198",
 		model.AgentCursor:        "sha256:08e32b28b4cde7ffaf67210354fb95df2aaf424016ec6093190fb38c5f7226cb",
 		model.AgentGeminiCLI:     "sha256:5738280648925ebc011e6564b59bd6108bb573b5615771286fbcba97876a61dc",
 		model.AgentHermes:        "sha256:25a9583f4b1fe58dbc64a33a016e9a1d88acb545d3d6f6648bbf08dc29cb5656",
@@ -235,8 +237,8 @@ func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 		nonPiAgents = append(nonPiAgents, agent)
 	}
 
-	if got := len(nonPiAgents); got != 15 {
-		t.Fatalf("want 15 non-Pi agents, got %d", got)
+	if got := len(nonPiAgents); got != 16 {
+		t.Fatalf("want 16 non-Pi agents, got %d", got)
 	}
 
 	for _, agent := range nonPiAgents {

@@ -9,12 +9,12 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -131,17 +131,11 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 			},
 		}
 	} else {
-		args := []string{"mcp", "--tools=agent"}
-		if agentID == model.AgentAntigravity {
-			// Antigravity should launch the default Engram MCP server without
-			// narrowing the exposed tool set.
-			args = []string{"mcp"}
-		}
 		cfg = map[string]any{
 			"mcpServers": map[string]any{
 				"engram": map[string]any{
 					"command": cmd,
-					"args":    args,
+					"args":    []string{"mcp", "--tools=agent"},
 				},
 			},
 		}
@@ -377,21 +371,20 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			break
 		}
 		engramCommand := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
-		var overlay []byte
-		if adapter.Agent() == model.AgentVSCodeCopilot {
-			overlay = vsCodeEngramOverlayJSON(engramCommand)
-		} else {
-			overlay = engramOverlayJSON(adapter.Agent(), engramCommand)
-		}
-
-		mcpWrite, err := mergeJSONFile(mcpPath, overlay)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-		changed = changed || mcpWrite.Changed
-		files = append(files, mcpPath)
-
 		if adapter.Agent() == model.AgentAntigravity {
+			engramCommand = stableAntigravityEngramCommand(configHomeDir, mcpPath)
+			// #797: Engram registration for Antigravity is plugin-owned only.
+			// The global ~/.gemini/antigravity-cli/mcp_config.json is shared
+			// with other MCP servers (e.g. Context7), so gentle-ai never
+			// writes it for Engram and removes only its own exact managed
+			// duplicate entry left behind by older versions.
+			removed, removalFiles, removalErr := removeManagedAntigravityGlobalEngram(mcpPath)
+			if removalErr != nil {
+				return InjectionResult{}, removalErr
+			}
+			changed = changed || removed
+			files = append(files, removalFiles...)
+
 			settingsTarget := adapter.SettingsPath(configHomeDir)
 			settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsTarget)
 			if settingsErr != nil {
@@ -406,7 +399,22 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			}
 			changed = changed || pluginChanged
 			files = append(files, pluginFiles...)
+			break
 		}
+
+		var overlay []byte
+		if adapter.Agent() == model.AgentVSCodeCopilot {
+			overlay = vsCodeEngramOverlayJSON(engramCommand)
+		} else {
+			overlay = engramOverlayJSON(adapter.Agent(), engramCommand)
+		}
+
+		mcpWrite, err := mergeJSONFile(mcpPath, overlay)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		changed = changed || mcpWrite.Changed
+		files = append(files, mcpPath)
 
 	case model.StrategyMergeIntoYAML:
 		// Hermes: upsert the engram MCP server block under mcp_servers: in
@@ -790,6 +798,23 @@ func stableEngramCommandForExisting(cmd string, agentID model.AgentID) string {
 	return cmd
 }
 
+func stableAntigravityEngramCommand(homeDir, globalPath string) string {
+	paths := []string{
+		globalPath,
+		filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"),
+	}
+	for _, path := range paths {
+		raw, err := osReadFile(path)
+		if err != nil {
+			continue
+		}
+		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) {
+			return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
+		}
+	}
+	return preferredStableEngramCommand()
+}
+
 func preferredStableEngramCommand() string {
 	p, err := EngramLookPath("engram")
 	if err == nil && isStableHomebrewEngramPath(p) {
@@ -1052,7 +1077,98 @@ func isVersionedHomebrewCellarPath(path string) bool {
 
 func isStableHomebrewEngramPath(path string) bool {
 	clean := filepath.ToSlash(filepath.Clean(path))
-	return (clean == "/opt/homebrew/bin/engram" || clean == "/usr/local/bin/engram") && isEngramCommand(clean)
+	switch clean {
+	case "/opt/homebrew/bin/engram", "/usr/local/bin/engram", "/home/linuxbrew/.linuxbrew/bin/engram":
+		return isEngramCommand(clean)
+	default:
+		return false
+	}
+}
+
+// isManagedAntigravityGlobalEngramServer reports whether server is exactly the
+// Engram entry gentle-ai itself wrote to the global Antigravity mcp_config.json:
+// only the command and args keys, an engram command, and one of the historical
+// args shapes (the default invocation, or the pre-#797 agent tool profile).
+// Anything else may be user-authored or third-party and is left untouched.
+func isManagedAntigravityGlobalEngramServer(server map[string]any) bool {
+	if len(server) != 2 {
+		return false
+	}
+	command, ok := server["command"].(string)
+	if !ok || !isEngramCommand(command) {
+		return false
+	}
+	rawArgs, ok := server["args"].([]any)
+	if !ok {
+		return false
+	}
+	args := make([]string, 0, len(rawArgs))
+	for _, raw := range rawArgs {
+		arg, ok := raw.(string)
+		if !ok {
+			return false
+		}
+		args = append(args, arg)
+	}
+	switch {
+	case len(args) == 1 && args[0] == "mcp":
+		return true
+	case len(args) == 2 && args[0] == "mcp" && args[1] == "--tools=agent":
+		return true
+	default:
+		return false
+	}
+}
+
+// removeManagedAntigravityGlobalEngram removes the duplicate global Engram
+// registration gentle-ai wrote to the Antigravity mcp_config.json before
+// registration became plugin-owned (#797). Only the exact managed shape is
+// touched: the file is removed when it holds nothing but the managed Engram
+// entry; otherwise only the engram key is dropped and every other server and
+// top-level key is preserved. User-modified or third-party entries are never
+// removed.
+func removeManagedAntigravityGlobalEngram(path string) (bool, []string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil, nil
+		}
+		return false, nil, fmt.Errorf("read Antigravity global MCP config %q: %w", path, err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		// Not valid JSON — nothing gentle-ai owns can be identified here.
+		return false, nil, nil
+	}
+	mcpServers, ok := root["mcpServers"].(map[string]any)
+	if !ok {
+		return false, nil, nil
+	}
+	server, ok := mcpServers["engram"].(map[string]any)
+	if !ok || !isManagedAntigravityGlobalEngramServer(server) {
+		return false, nil, nil
+	}
+
+	if len(root) == 1 && len(mcpServers) == 1 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return false, nil, fmt.Errorf("remove managed Antigravity Engram config %q: %w", path, err)
+		}
+		return true, []string{path}, nil
+	}
+
+	delete(mcpServers, "engram")
+	if len(mcpServers) == 0 {
+		delete(root, "mcpServers")
+	}
+	merged, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, nil, fmt.Errorf("encode Antigravity global MCP config %q: %w", path, err)
+	}
+	writeResult, err := filemerge.WriteFileAtomic(path, append(merged, '\n'), filemerge.ExistingFileMode(path, 0o644))
+	if err != nil {
+		return false, nil, fmt.Errorf("rewrite Antigravity global MCP config %q: %w", path, err)
+	}
+	return writeResult.Changed, []string{path}, nil
 }
 
 // ValidateOpenCodeSettings applies the refusals the OpenCode Engram merge

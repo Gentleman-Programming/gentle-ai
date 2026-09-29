@@ -4,13 +4,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const (
@@ -21,7 +22,9 @@ const (
 )
 
 // orchestratorRuntimes lists every agent whose installed prompt carries the
-// orchestrator. Pi is excluded because its prompt is owned by Gentle Shell.
+// orchestrator. Pi is excluded because its prompt is owned by Gentle Shell,
+// and Conductor is excluded because it is detection/catalog-only and has no
+// prompt file of its own.
 func orchestratorRuntimes(t *testing.T) []model.AgentID {
 	t.Helper()
 
@@ -29,6 +32,9 @@ func orchestratorRuntimes(t *testing.T) []model.AgentID {
 	for _, agent := range catalog.AllAgents() {
 		if agent.ID == model.AgentPi {
 			continue
+		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
 		}
 		adapter, err := agents.NewAdapter(agent.ID)
 		if err != nil {
@@ -39,8 +45,8 @@ func orchestratorRuntimes(t *testing.T) []model.AgentID {
 		}
 		selected = append(selected, agent.ID)
 	}
-	if len(selected) != supportedAgentCount-1 {
-		t.Fatalf("selected %d orchestrator runtimes, want %d", len(selected), supportedAgentCount-1)
+	if len(selected) != supportedAgentCount-2 {
+		t.Fatalf("selected %d orchestrator runtimes, want %d", len(selected), supportedAgentCount-2)
 	}
 	return selected
 }
@@ -232,7 +238,7 @@ func TestInjectRoutingReplacesLegacySDDOrchestratorBlockInPlace(t *testing.T) {
 			}
 			if info, err := os.Stat(promptPath); err != nil {
 				t.Fatal(err)
-			} else if info.Mode().Perm() != 0o600 {
+			} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 				t.Fatalf("prompt mode = %v, want preserved 0600", info.Mode().Perm())
 			}
 		})

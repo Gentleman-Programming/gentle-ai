@@ -9,17 +9,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
@@ -29,6 +30,7 @@ func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
 func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
 func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
+func codexAdapter() agents.Adapter       { return codex.NewAdapter() }
 
 func TestPersonaRefusesDuplicateSettingsBeforePromptMutation(t *testing.T) {
 	for _, tc := range []struct {
@@ -3503,7 +3505,7 @@ func TestMalformedSelectedJSONCRefusesGentlemanInstallBeforePromptMutation(t *te
 	}
 
 	_, err := InjectAtSettingsPath(home, adapter, model.PersonaGentleman, path)
-	if err == nil || !strings.Contains(err.Error(), "malformed JSONC") || !strings.Contains(err.Error(), path) {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q is malformed JSONC; fix its syntax and retry", path)) {
 		t.Fatalf("InjectAtSettingsPath() error = %v; want actionable malformed JSONC refusal naming the file", err)
 	}
 	if _, statErr := os.Stat(adapter.SystemPromptFile(home)); !os.IsNotExist(statErr) {
@@ -3586,7 +3588,7 @@ func TestEscapedAgentKeyRefusesBeforePromptMutation(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), "escaped") || !strings.Contains(err.Error(), path) {
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q writes its \"agent\" key with an escaped spelling; use its unescaped spelling and retry", path)) {
 				t.Fatalf("error = %v; want actionable escaped-key refusal naming the file", err)
 			}
 			if _, statErr := os.Stat(adapter.SystemPromptFile(home)); !os.IsNotExist(statErr) {
@@ -3728,5 +3730,269 @@ func TestRemoveJSONNestedSubKeyNonOpenCodeKeepsStrictBehavior(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(strict); string(after) != "{\n  \"theme\": \"x\"\n}\n" {
 		t.Fatalf("non-OpenCode strict cleanup = %q", after)
+	}
+}
+
+// --- Codex persona marker injection (issue #981) ---
+
+func codexAgentsMDPath(home string) string {
+	return filepath.Join(home, ".codex", "AGENTS.md")
+}
+
+// TestInjectCodexGentlemanFreshInstallWrapsPersonaInMarkers is the #981
+// regression test: a fresh Codex persona install must write the persona
+// inside a managed <!-- gentle-ai:persona --> marker section in
+// ~/.codex/AGENTS.md, not as markerless prose that owns the whole file.
+func TestInjectCodexGentlemanFreshInstallWrapsPersonaInMarkers(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false, want true")
+	}
+	if len(result.Files) != 1 || result.Files[0] != codexAgentsMDPath(home) {
+		t.Fatalf("Inject() files = %v, want [%q]", result.Files, codexAgentsMDPath(home))
+	}
+
+	content, err := os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona open marker, got %d", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if strings.Count(text, "<!-- /gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona close marker, got %d", strings.Count(text, "<!-- /gentle-ai:persona -->"))
+	}
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("AGENTS.md missing real persona content")
+	}
+	// No markerless persona prose may exist outside the managed section:
+	// everything before the open marker must be free of persona fingerprints.
+	beforeMarker := text[:strings.Index(text, "<!-- gentle-ai:persona -->")]
+	if strings.Contains(beforeMarker, "Senior Architect") {
+		t.Fatalf("markerless persona prose found before the managed section:\n%s", beforeMarker)
+	}
+}
+
+// TestInjectCodexPreservesUserPrefaceContent ensures an existing user-authored
+// AGENTS.md is never replaced wholesale: user content stays and the managed
+// persona is appended as a marker section. This includes lookalike user
+// content that shares persona fingerprints but has no managed persona marker.
+func TestInjectCodexPreservesUserPrefaceContent(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(codexAgentsMDPath(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	existing := "# My team rules\n\n- Always answer in Spanish.\n\n## Rules\n\n- Keep PRs small.\n"
+	if err := os.WriteFile(codexAgentsMDPath(home), []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	if !strings.HasPrefix(text, "# My team rules") {
+		t.Fatalf("user preface was removed or reordered:\n%s", text)
+	}
+	if !strings.Contains(text, "Always answer in Spanish.") || !strings.Contains(text, "Keep PRs small.") {
+		t.Fatal("user-authored rules were stripped")
+	}
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona marker, got %d", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+}
+
+// TestInjectCodexDoesNotStripLookalikeUserContent pins the conservative
+// legacy-stripping rule: pre-marker user content that merely resembles the
+// persona (all fingerprints present) must survive when no managed persona
+// marker exists.
+func TestInjectCodexDoesNotStripLookalikeUserContent(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(codexAgentsMDPath(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	lookalike := "## Personality\n\nSenior Architect in my org.\n\n## Rules\n\n- My own rule.\n"
+	if err := os.WriteFile(codexAgentsMDPath(home), []byte(lookalike), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(content), "My own rule.") {
+		t.Fatal("lookalike user content was stripped without a managed persona marker")
+	}
+
+	if _, err := Inject(home, codexAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	content, err = os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() after second injection error = %v", err)
+	}
+	if !strings.Contains(string(content), "My own rule.") {
+		t.Fatal("lookalike user content was stripped on repeated injection")
+	}
+}
+
+// TestInjectCodexReplacesExactLegacyAssetWithoutDuplication covers the
+// whole-file legacy case: old installers wrote the persona asset as the
+// entire AGENTS.md with no markers. That installer-owned content is safe to
+// replace with a single marker section — no duplication.
+func TestInjectCodexReplacesExactLegacyAssetWithoutDuplication(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(codexAgentsMDPath(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacyContent := assets.MustRead("generic/persona-gentleman.md")
+	if err := os.WriteFile(codexAgentsMDPath(home), []byte(legacyContent), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona marker after legacy replacement, got %d", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if !strings.Contains(text, "Senior Architect") {
+		t.Fatal("persona content missing after replacing legacy asset")
+	}
+}
+
+// TestInjectCodexMigratesLegacyPersonaAboveManagedSections reproduces the
+// exact on-disk state reported in #981 (v1.43.2): markerless legacy persona
+// prose at the top of AGENTS.md followed by managed engram/SDD sections. The
+// installer-owned pre-marker zone must be removed, the managed sections must
+// be preserved, and the persona must land in a single marker section.
+func TestInjectCodexMigratesLegacyPersonaAboveManagedSections(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(codexAgentsMDPath(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := assets.MustRead("generic/persona-gentleman.md")
+	existing := legacy + "\n" +
+		"<!-- gentle-ai:engram-protocol -->\nEngram protocol here.\n<!-- /gentle-ai:engram-protocol -->\n\n" +
+		"<!-- gentle-ai:sdd-orchestrator -->\nSDD orchestrator here.\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(codexAgentsMDPath(home), []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona marker after migration, got %d", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	// The legacy prose must be gone: the fingerprint may only appear inside
+	// the managed persona section (exactly once in the whole file).
+	if got := strings.Count(text, "Senior Architect, 15+ years experience, GDE & MVP"); got != 1 {
+		t.Fatalf("legacy persona prose survived migration — %d occurrences of the fingerprint, want exactly 1 (inside the managed section)", got)
+	}
+	beforeMarker := text[:strings.Index(text, "<!-- gentle-ai:persona -->")]
+	if strings.Contains(beforeMarker, "Senior Architect") {
+		t.Fatalf("markerless legacy persona prose found before the managed section:\n%s", beforeMarker)
+	}
+	engramIdx := strings.Index(text, "<!-- gentle-ai:engram-protocol -->")
+	if engramIdx < 0 {
+		t.Fatal("managed engram section was not preserved during migration")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:engram-protocol -->\nEngram protocol here.\n<!-- /gentle-ai:engram-protocol -->") {
+		t.Fatal("managed engram section body was not preserved during migration")
+	}
+	sddIdx := strings.Index(text, "<!-- gentle-ai:sdd-orchestrator -->")
+	if sddIdx < 0 {
+		t.Fatal("managed SDD section was not preserved during migration")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->\nSDD orchestrator here.\n<!-- /gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("managed SDD section body was not preserved during migration")
+	}
+	personaIdx := strings.Index(text, "<!-- gentle-ai:persona -->")
+	if !(personaIdx < engramIdx && personaIdx < sddIdx) {
+		t.Fatalf("persona section must precede existing managed sections; persona=%d engram=%d sdd=%d\n%s", personaIdx, engramIdx, sddIdx, text)
+	}
+}
+
+// TestInjectCodexIsIdempotent ensures repeated persona injections keep a
+// single marker section and do not duplicate content.
+func TestInjectCodexIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first Inject() changed = false, want true")
+	}
+
+	second, err := Inject(home, codexAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject() changed = true, want false (idempotent)")
+	}
+
+	content, err := os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona marker after re-injection, got %d", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if strings.Count(text, "Senior Architect") != 1 {
+		t.Fatalf("expected persona content exactly once after re-injection, got %d occurrences", strings.Count(text, "Senior Architect"))
+	}
+}
+
+// TestInjectCodexNeutralFreshInstallWrapsPersonaInMarkers ensures the neutral
+// persona gets the same marker-bound treatment on Codex.
+func TestInjectCodexNeutralFreshInstallWrapsPersonaInMarkers(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, codexAdapter(), model.PersonaNeutral); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(codexAgentsMDPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	if strings.Count(text, "<!-- gentle-ai:persona -->") != 1 {
+		t.Fatalf("expected exactly 1 persona marker, got %d", strings.Count(text, "<!-- gentle-ai:persona -->"))
+	}
+	if !strings.Contains(text, assets.MustRead("generic/persona-neutral.md")) {
+		t.Fatal("neutral persona content missing from managed section")
 	}
 }

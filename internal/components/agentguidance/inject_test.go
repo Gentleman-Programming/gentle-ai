@@ -10,12 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencoderuntime "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencoderuntime "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 func TestCodexODDRoutingInjectionPreservesUserTextAndResync(t *testing.T) {
@@ -131,6 +131,9 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 		if agent.ID == model.AgentPi {
 			continue // The install/sync step leaves package-owned Pi prompts untouched.
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance carrier (see conductor_catalog_only_test.go).
+		}
 		covered++
 		t.Run(string(agent.ID), func(t *testing.T) {
 			home := t.TempDir()
@@ -162,6 +165,9 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 func TestInjectRoutingDeliversOnlyODDWorkflow(t *testing.T) {
 	t.Parallel()
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 			result, err := InjectRoutingWithOptions(t.TempDir(), agent.ID, RoutingOptions{})
@@ -183,6 +189,9 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: covered by TestInjectRoutingNoOpsForCatalogOnlyConductor.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -195,18 +204,19 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 			if !result.Changed {
 				t.Fatalf("InjectRouting(%q) reported no change on a fresh target", agent.ID)
 			}
-			if len(result.Files) != 1 {
-				t.Fatalf("InjectRouting(%q) touched %v, want exactly one file", agent.ID, result.Files)
+			if len(result.Files) == 0 {
+				t.Fatalf("InjectRouting(%q) reported no written files", agent.ID)
+			}
+			for _, path := range result.Files {
+				if !filepath.IsAbs(path) {
+					t.Fatalf("InjectRouting(%q) reported non-absolute path %q", agent.ID, path)
+				}
+				if !strings.HasPrefix(path, targetDir) {
+					t.Fatalf("InjectRouting(%q) wrote outside the target dir: %q", agent.ID, path)
+				}
 			}
 
 			path := result.Files[0]
-			if !filepath.IsAbs(path) {
-				t.Fatalf("InjectRouting(%q) reported non-absolute path %q", agent.ID, path)
-			}
-			if !strings.HasPrefix(path, targetDir) {
-				t.Fatalf("InjectRouting(%q) wrote outside the target dir: %q", agent.ID, path)
-			}
-
 			// Read the scope the agent actually loads, not merely the bytes on
 			// disk: adapters whose guidance lives inside a settings document
 			// carry the block as an encoded string, never as raw markdown.
@@ -256,6 +266,9 @@ func TestInjectRoutingStaysContainedUnderHostileEnvironment(t *testing.T) {
 	t.Cleanup(func() { opencoderuntime.VersionRunnerOverride = previousVersionRunner })
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			targetDir := t.TempDir()
 
@@ -431,10 +444,15 @@ func TestInjectRoutingSurvivesJinjaTemplateBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InjectRouting error = %v", err)
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("InjectRouting touched %v, want exactly one file", result.Files)
+	var guidancePath string
+	for _, path := range result.Files {
+		if filepath.Base(path) == routingModuleFile {
+			guidancePath = path
+		}
 	}
-	guidancePath := result.Files[0]
+	if guidancePath == "" {
+		t.Fatalf("InjectRouting touched %v, want %s included", result.Files, routingModuleFile)
+	}
 
 	rendered, err := RenderRouting(model.AgentKimi)
 	if err != nil {
@@ -458,6 +476,42 @@ func TestInjectRoutingSurvivesJinjaTemplateBootstrap(t *testing.T) {
 	include := `{% include "` + filepath.Base(guidancePath) + `"`
 	if !strings.Contains(entry, include) {
 		t.Fatalf("router template %q does not include %q:\n%s", adapter.SystemPromptFile(targetDir), filepath.Base(guidancePath), entry)
+	}
+}
+
+func TestInjectRoutingCurrentKimiReportsRenderedHubWrite(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	configDir := filepath.Join(targetDir, ".kimi-code")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	declared, err := RoutingPaths(targetDir, model.AgentKimi)
+	if err != nil {
+		t.Fatalf("RoutingPaths error = %v", err)
+	}
+	wantHub := filepath.Join(configDir, "AGENTS.md")
+	wantModule := filepath.Join(configDir, routingModuleFile)
+	if !samePathSet(declared, []string{wantModule, wantHub}) {
+		t.Fatalf("RoutingPaths(current Kimi) = %v, want module and hub", declared)
+	}
+
+	result, err := InjectRoutingWithOptions(targetDir, model.AgentKimi, RoutingOptions{})
+	if err != nil {
+		t.Fatalf("InjectRouting error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("InjectRouting changed = false, want true for first hub/module write")
+	}
+	if !samePathSet(result.Files, declared) {
+		t.Fatalf("InjectRouting files = %v, want declared %v", result.Files, declared)
+	}
+
+	hub := readFile(t, wantHub)
+	if !strings.Contains(hub, "<!-- gentle-ai:kimi-agents-hub -->") || !strings.Contains(hub, "Organic Driven Development") {
+		t.Fatalf("current Kimi hub does not contain rendered managed guidance:\n%s", hub)
 	}
 }
 
@@ -668,6 +722,9 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -700,6 +757,9 @@ func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -735,6 +795,9 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		if agent.ID == model.AgentOpenCode || agent.ID == model.AgentKilocode {
 			continue
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: inherits Claude Code config, no prompt file of its own.
+		}
 		adapter, err := agents.NewAdapter(agent.ID)
 		if err != nil {
 			t.Fatalf("NewAdapter(%q) error = %v", agent.ID, err)
@@ -744,8 +807,8 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		}
 		selected = append(selected, agent.ID)
 	}
-	if len(selected) != supportedAgentCount-3 {
-		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-3)
+	if len(selected) != supportedAgentCount-4 {
+		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-4)
 	}
 	return selected
 }

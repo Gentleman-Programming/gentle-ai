@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	componentskills "github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	componentskills "github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 )
 
 func temporaryUserHome(t *testing.T) string {
@@ -334,7 +334,7 @@ func TestCompatibilityManagedPathErrorsReachBackupPreparation(t *testing.T) {
 		},
 		{
 			name: "sync",
-			plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan(),
+			plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, scope: ScopeGlobal, state: &runtimeState{}}).stagePlan(),
 		},
 	}
 	for _, tt := range tests {
@@ -389,7 +389,7 @@ func TestCompatibilityDirectoryStatErrorsReachBackupPreparation(t *testing.T) {
 				plan pipeline.StagePlan
 			}{
 				{name: "install", plan: (&installRuntime{homeDir: home, selection: selection, resolved: resolved, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan()},
-				{name: "sync", plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan()},
+				{name: "sync", plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, scope: ScopeGlobal, state: &runtimeState{}}).stagePlan()},
 			}
 			for _, tt := range plans {
 				t.Run(tt.name, func(t *testing.T) {
@@ -517,7 +517,7 @@ func TestCompatibilitySkillFilesAreInstallAndSyncBackupTargets(t *testing.T) {
 	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
 	resolved := planner.ResolvedPlan{OrderedComponents: selection.Components}
 	installTargets, installErr := backupTargets(home, "", ScopeGlobal, selection, resolved)
-	syncTargets, syncErr := syncBackupTargets(home, "", selection, nil)
+	syncTargets, syncErr := syncBackupTargetsScoped(home, "", ScopeGlobal, selection, nil)
 	if installErr != nil || syncErr != nil {
 		t.Fatalf("resolve backup targets: install=%v sync=%v", installErr, syncErr)
 	}
@@ -542,7 +542,7 @@ func TestAdapterSkillFilesAreBackupTargets(t *testing.T) {
 	}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
 	installTargets, installErr := backupTargets(home, "", ScopeGlobal, selection, resolved)
-	syncTargets, syncErr := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	syncTargets, syncErr := syncBackupTargetsScoped(home, "", ScopeGlobal, selection, resolveAdapters(selection.Agents))
 	if installErr != nil || syncErr != nil {
 		t.Fatalf("resolve adapter backup targets: install=%v sync=%v", installErr, syncErr)
 	}
@@ -630,14 +630,14 @@ func TestCompatibilityRefreshRollbackRemovesNewFilesAfterDuplicateBackup(t *test
 	created := filepath.Join(home, ".agents", "skills", "go-testing", "references", "examples.md")
 	writeStale(t, existing)
 	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
-	initialRuntime, err := newSyncRuntime(home, selection)
+	initialRuntime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := initialRuntime.stagePlan().Prepare[0].Run(); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := newSyncRuntime(home, selection)
+	runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,7 +663,7 @@ func TestStagePlansRefreshCompatibilitySkillsOncePerOperation(t *testing.T) {
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
 	plans := []pipeline.StagePlan{
 		(&installRuntime{selection: selection, resolved: resolved, state: &runtimeState{}}).stagePlan(),
-		(&syncRuntime{selection: selection, agentIDs: selection.Agents, state: &runtimeState{}}).stagePlan(),
+		(&syncRuntime{selection: selection, agentIDs: selection.Agents, scope: ScopeGlobal, state: &runtimeState{}}).stagePlan(),
 	}
 	for _, plan := range plans {
 		count := 0

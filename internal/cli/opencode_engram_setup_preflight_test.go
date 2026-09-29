@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // stubEngramSetupRunner resolves engram to a fake binary with setup enabled and

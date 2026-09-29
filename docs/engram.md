@@ -63,6 +63,81 @@ Add `.engram/` to your repo and commit it. When a teammate clones and runs `engr
 
 ---
 
+## Cloud Sync (Optional)
+
+Engram Cloud is optional replication for people who want project memories to follow them across machines they own. Local SQLite memory remains the default and authoritative source. Gentle AI ships the Engram client, but the cloud runtime and server lifecycle are owned by Engram upstream.
+
+Use this only when you already have an Engram Cloud server URL and token.
+
+### Quick path
+
+```bash
+# Persist the cloud server URL in ~/.engram/cloud.json
+engram cloud config --server https://your-cloud-server.example
+
+# Keep the token out of repos and docs; provide it through your user environment
+export ENGRAM_CLOUD_TOKEN=<your-token>
+
+# Confirm the local client can reach the configured server
+engram cloud status
+
+# Enroll one project explicitly, then run the first cloud sync
+engram cloud enroll <project-name>
+engram sync --cloud --project <project-name>
+```
+
+On each additional machine, configure the same server and token, enroll the project, and import existing cloud memories:
+
+```bash
+engram cloud enroll <project-name>
+engram sync --cloud --import --project <project-name>
+```
+
+To let Engram's own runtime attempt background cloud sync, set autosync in the environment used to launch that runtime:
+
+```bash
+export ENGRAM_CLOUD_AUTOSYNC=1
+```
+
+`ENGRAM_CLOUD_SERVER` can also provide the server URL at runtime, but `engram cloud config --server ...` is easier to inspect and repeat.
+
+### Environment carriers
+
+| Setup | Environment carrier |
+|---|---|
+| macOS GUI sessions | `launchctl setenv ENGRAM_CLOUD_TOKEN <token>` and `launchctl setenv ENGRAM_CLOUD_AUTOSYNC 1` |
+| Linux systemd user sessions | `systemctl --user import-environment ENGRAM_CLOUD_TOKEN ENGRAM_CLOUD_AUTOSYNC` after exporting them in the current shell |
+| Shell-only use | `export ENGRAM_CLOUD_TOKEN=<token>` and `export ENGRAM_CLOUD_AUTOSYNC=1` in your shell profile |
+
+The macOS and Linux manager commands update the current launchd or systemd user-manager environment. Reapply them after that manager restarts or after reboot, unless you configure a persistent service environment for the Engram process.
+
+Treat `ENGRAM_CLOUD_TOKEN` like any other credential: do not commit it, paste it into issue reports, or put it in project-local scripts. Environment variables are inherited by child processes, so use the narrowest carrier that fits how you launch Engram.
+
+### Verify and repair
+
+```bash
+# Readiness for the configured cloud connection
+engram cloud status
+
+# Inspect cloud-sync state for one project
+engram sync --cloud --status --project <project-name>
+
+# Diagnose and repair upgrade issues for one project
+engram cloud upgrade doctor --project <project-name>
+engram cloud upgrade repair --project <project-name> --dry-run
+engram cloud upgrade repair --project <project-name> --apply
+```
+
+### What Gentle AI does not manage
+
+- It does not provision or operate an Engram Cloud server.
+- It does not make cloud sync mandatory; local memory is still the default.
+- It does not replace git-based team sharing via `engram sync` and `.engram/`.
+
+Full upstream docs: [Engram Cloud](https://github.com/Gentleman-Programming/engram/blob/main/docs/engram-cloud/README.md) and [Engram cloud CLI reference](https://github.com/Gentleman-Programming/engram/blob/main/DOCS.md#cloud-cli-opt-in).
+
+---
+
 ## MCP Tools Reference
 
 These are the tools the AI agent uses behind the scenes. You never call them directly, but understanding them helps you know what your agent is doing.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
 // isolateSentinelSubprocessEnv triggers the sentinel-check stand-in below.

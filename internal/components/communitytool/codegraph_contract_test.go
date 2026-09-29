@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestCodeGraphCompatibilityTableIsExhaustive(t *testing.T) {
@@ -52,7 +52,7 @@ func TestCodeGraphCompatibilityStrategies(t *testing.T) {
 	}{
 		{codeGraphNative, []model.AgentID{model.AgentClaudeCode, model.AgentCursor, model.AgentCodex, model.AgentGeminiCLI, model.AgentHermes, model.AgentAntigravity, model.AgentKiroIDE}},
 		{codeGraphReconciled, []model.AgentID{model.AgentOpenCode, model.AgentPi}},
-		{codeGraphExcluded, []model.AgentID{model.AgentKilocode, model.AgentVSCodeCopilot, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentOpenClaw, model.AgentTrae}},
+		{codeGraphExcluded, []model.AgentID{model.AgentKilocode, model.AgentVSCodeCopilot, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentOpenClaw, model.AgentTrae, model.AgentConductor}},
 	}
 	for _, tt := range tests {
 		for _, id := range tt.agents {

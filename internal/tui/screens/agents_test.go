@@ -3,7 +3,7 @@ package screens
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestAgentOptionsShowsAntigravityOnly(t *testing.T) {

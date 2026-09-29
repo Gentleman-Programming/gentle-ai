@@ -12,7 +12,7 @@
 <p>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/releases"><img src="https://img.shields.io/github/v/release/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Release"></a>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/stargazers"><img src="https://img.shields.io/github/stars/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Stars"></a>
-<img src="https://img.shields.io/badge/agents-16-F095C8?style=for-the-badge&labelColor=1A1218" alt="16 agents">
+<img src="https://img.shields.io/badge/agents-17-F095C8?style=for-the-badge&labelColor=1A1218" alt="17 agents">
 <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform">
 <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
 </p>
@@ -33,9 +33,21 @@ and no way to prove what it did beyond asking you to read every line.
 </p>
 
 <p>
-🎬 <strong>Watch the demo:</strong>
-<a href="https://drive.google.com/file/d/14VaUY04LzX6qZBVuuPwjzr1RWRyrZjkf/view?usp=drive_link"><strong>English</strong></a> &bull;
-<a href="https://drive.google.com/file/d/1Qp3fXX1joynPpwORZMuu6ygm1hnONPKY/view?usp=drive_link"><strong>English with subtitles</strong></a>
+ <h3>See it in action</h3>
+
+   <p>
+   One prompt, from idea to reviewed commit: memory, workflow, and evidence in a real session.
+   </p>
+
+https://github.com/user-attachments/assets/fa5c0cfe-06e7-4c0d-bd6e-8ac7cb934339
+
+
+   <p>Prefer Spanish subtitles?</p>
+   
+
+https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
+
+
 </p>
 
 <br/>
@@ -91,9 +103,10 @@ and no way to prove what it did beyond asking you to read every line.
 <strong><a href="docs/agents.md#antigravity">Antigravity</a></strong> ·
 <strong><a href="docs/agents.md#windsurf">Windsurf</a></strong> ·
 <strong><a href="docs/agents.md#openclaw">OpenClaw</a></strong> ·
-<strong><a href="docs/agents.md#trae">Trae</a></strong>
+<strong><a href="docs/agents.md#trae">Trae</a></strong> ·
+<strong><a href="docs/agents.md#conductor">Conductor</a></strong>
 
-<sub>16 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
+<sub>17 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
 
 </div>
 
@@ -161,11 +174,11 @@ Gentle Shell is a separate Pi integration package. Gentle AI configures supporte
 
 ---
 
-### 16 agents — Keep the agent you already use
+### 17 agents — Keep the agent you already use
 
 <img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
-Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and twelve more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
+Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and thirteen more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
 
 **[Docs →](docs/agents.md)**
 
@@ -201,7 +214,7 @@ brew install gentleman-programming/tap/gentle-ai
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
 # Windows (PowerShell) — source install, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
 ```
 
 ```bash
@@ -223,7 +236,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 | :--- | :--- |
 | **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
 | **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
-| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 16 |
+| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 17 |
 | **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct and delegated work |
 | **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
 | **[Engram](docs/engram.md)** · **[Components](docs/components.md)** | Memory commands, skills, presets and personas |

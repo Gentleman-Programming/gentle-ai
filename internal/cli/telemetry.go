@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
 )
 
 // TelemetryStatusSchema identifies the `gentle-ai telemetry status|enable|disable`

@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type SchemaVersion string
@@ -291,6 +291,10 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 	model.AgentAntigravity: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
+	// Conductor inherits Claude Code configuration and is managed through Claude
+	// Code's own adapter surface, so Gentle AI claims no write capabilities for
+	// it: no skills, MCP, system prompt, or other managed file writes.
+	model.AgentConductor: {},
 	model.AgentClaudeCode: {
 		OutputStyles: true, SlashCommands: true,
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
