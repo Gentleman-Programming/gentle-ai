@@ -13,6 +13,20 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
 
+// openCodeRelayContractEnvironment carries the managed V2 plugin's relay
+// declaration into its relay child and ordinary host shells.
+const openCodeRelayContractEnvironment = "GENTLE_AI_OPENCODE_RELAY_CONTRACT"
+
+// openCodeRelayContractV2 is the exact relay contract the managed OpenCode V2
+// review plugin declares.
+const openCodeRelayContractV2 = "gentle-ai.opencode-relay/v2-staged"
+
+// openCodeRelayDeclaresV2 reports whether this process was started under the
+// exact managed V2 relay declaration.
+func openCodeRelayDeclaresV2() bool {
+	return os.Getenv(openCodeRelayContractEnvironment) == openCodeRelayContractV2
+}
+
 const reviewImmutableTransportUnsupportedCode = "immutable_review_transport_unsupported"
 
 var reviewImmutableTransportUnsupportedReason = reviewPreflightReason{
@@ -70,7 +84,7 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentOpenCode:
 		// A managed host declaration can only narrow capability, never enable it.
 		// This also refuses active V2 when PATH resolves a coexisting V1 binary.
-		if os.Getenv("GENTLE_AI_OPENCODE_RELAY_CONTRACT") != "" {
+		if os.Getenv(openCodeRelayContractEnvironment) != "" {
 			return policy
 		}
 		// V2 wire transport is staged, not organically certified. Version evidence

@@ -31,12 +31,15 @@ const (
 // with the managed OpenCode shim. It relays only opaque prompt and output
 // bytes; Go owns prompt materialization, admission, and capture.
 type openCodeTransportEnvelope struct {
-	Schema    string  `json:"schema"`
-	Operation string  `json:"operation"`
-	Nonce     string  `json:"nonce,omitempty"`
-	Prompt    string  `json:"prompt,omitempty"`
-	Output    *string `json:"output,omitempty"`
-	Error     string  `json:"error,omitempty"`
+	Schema    string `json:"schema"`
+	Operation string `json:"operation"`
+	Nonce     string `json:"nonce,omitempty"`
+	Prompt    string `json:"prompt,omitempty"`
+	// Agent is the host subagent that will run the Task. The managed plugin
+	// reads it from the dispatched tool input; Go binds it to the Task role.
+	Agent  string  `json:"agent,omitempty"`
+	Output *string `json:"output,omitempty"`
+	Error  string  `json:"error,omitempty"`
 }
 
 type openCodeTaskOutputError struct{ Code string }
@@ -54,10 +57,39 @@ func (err *openCodeTaskOutputError) Error() string {
 	}
 }
 
-type openCodeTransportBindingError struct{ detail string }
+type openCodeTransportBindingError struct{ code, detail string }
 
 func (err *openCodeTransportBindingError) Error() string {
-	return "opencode_review_transport_binding_invalid: " + err.detail
+	code := err.code
+	if code == "" {
+		code = "opencode_review_transport_binding_invalid"
+	}
+	return code + ": " + err.detail
+}
+
+const openCodeTransportAgentMismatchCode = "opencode_review_transport_agent_mismatch"
+
+// openCodeTransportBoundAgent is the only host agent allowed to run a Task:
+// the lens agent for a lens slot, or the Go-issued agent for a provider role.
+func openCodeTransportBoundAgent(binding openCodeTransportTaskBinding) string {
+	if binding.Role != "" {
+		return reviewProviderRoleOpenCodeAgent(binding.Role)
+	}
+	return binding.Lens
+}
+
+// validateOpenCodeTransportAgent binds the dispatched host agent to the role
+// the Task prompt carries, so a prompt can never select its own role under an
+// unrelated subagent. An absent agent is the V1 wire shape; the V2 start frame
+// requires it (validateOpenCodeTransportStart).
+func validateOpenCodeTransportAgent(binding openCodeTransportTaskBinding, agent string) error {
+	if agent == "" {
+		return nil
+	}
+	if bound := openCodeTransportBoundAgent(binding); bound == "" || agent != bound {
+		return &openCodeTransportBindingError{code: openCodeTransportAgentMismatchCode, detail: "the host agent running this Task is not the agent bound to its review role"}
+	}
+	return nil
 }
 
 func openCodeTransportBindingInvalid(detail string) error {
@@ -275,6 +307,9 @@ func validateOpenCodeTransportStart(envelope openCodeTransportEnvelope) error {
 	if envelope.Operation != "start" || envelope.Prompt == "" || envelope.Nonce != "" || envelope.Output != nil || envelope.Error != "" {
 		return errors.New("opencode_review_transport_envelope_invalid: relay start requires only the original Task prompt") // refusal:by-design world-action: the shim must relay the original bound Task prompt before the host Task starts
 	}
+	if envelope.Agent == "" && openCodeRelayDeclaresV2() {
+		return errors.New("opencode_review_transport_envelope_invalid: the V2 relay start must name the host agent dispatched for the Task") // refusal:by-design world-action: the managed V2 plugin must forward the dispatched subagent name with the Task prompt
+	}
 	return nil
 }
 
@@ -290,7 +325,7 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
-	session, err := openCodeTransportStartBound(ctx, taskPrompt)
+	session, err := openCodeTransportStartBound(ctx, taskPrompt, envelope.Agent)
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
@@ -320,9 +355,12 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 	return session, nil
 }
 
-func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCodeTransportSession, error) {
+func openCodeTransportStartBound(ctx context.Context, taskPrompt, agent string) (openCodeTransportSession, error) {
 	binding, err := decodeOpenCodeTransportBinding(taskPrompt)
 	if err != nil {
+		return openCodeTransportSession{}, err
+	}
+	if err := validateOpenCodeTransportAgent(binding, agent); err != nil {
 		return openCodeTransportSession{}, err
 	}
 	requested := reviewtransaction.ReviewRepositoryContextBinding{

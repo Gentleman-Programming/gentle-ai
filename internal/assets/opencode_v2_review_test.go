@@ -40,6 +40,8 @@ try {
     await a.hooks['execute.before'](c);
     const child=children.at(-1);
     if(children.length!==count+1||child.frames[0].prompt!==originalPrompt||c.input.prompt!=='GO PROMPT')throw Error(agent+': prompt forwarding');
+    // Go binds the dispatched host agent to the Task role; the prompt alone never selects it.
+    if(child.frames[0].agent!==agent||Object.keys(child.frames[0]).sort().join()!=='agent,operation,prompt,schema')throw Error(agent+': start frame must name the dispatched agent');
     const result=completed(c);result.result.output.output=raw;
     await a.hooks['execute.after'](result);
     const frame=child.frames[1];

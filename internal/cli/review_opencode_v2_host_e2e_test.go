@@ -275,6 +275,7 @@ func TestOpenCodeV2RealHostLensRelayAdmitsBoundResultAndRefusesNegatives(t *test
 		refused("task-prefixed-output", openCodeV2HostStep{Child: "<task"}),
 		refused("child-provider-http-error", openCodeV2HostStep{ChildHTTPError: true}),
 		refused("wrong-role-payload", openCodeV2HostStep{Child: wrongRole}),
+		refused("lens-task-under-refuter-agent", openCodeV2HostStep{Agent: "review-refuter", Child: payload, ChildRequests: openCodeV2Count(0)}),
 		openCodeV2Admitted("lens-admitted", task.Agent, task.Prompt, payload, `"operation":"review/capture-result"`, `"state":"approved"`),
 		refused("replay-captured-task", openCodeV2HostStep{Child: payload}),
 	}
@@ -372,6 +373,7 @@ func TestOpenCodeV2RealHostValidatorRelayClosesApproved(t *testing.T) {
 	payload := string(providerTargetedValidationPayload(t, request))
 	runOpenCodeV2HostScenario(t, in, repo, host, store.Dir, []openCodeV2HostStep{
 		{Name: "validator-empty-output", Agent: task.Agent, Prompt: task.Prompt, Expect: "refused"},
+		{Name: "validator-task-under-refuter-agent", Agent: "review-refuter", Prompt: task.Prompt, Child: payload, Expect: "refused", ChildRequests: openCodeV2Count(0)},
 		openCodeV2Admitted("validator-admitted", task.Agent, task.Prompt, payload, `"operation":"review/capture-validation"`, `"state":"approved"`),
 	})
 	current, err := store.Load()
@@ -381,22 +383,21 @@ func TestOpenCodeV2RealHostValidatorRelayClosesApproved(t *testing.T) {
 	assertApprovedCompactAuthorityBurned(t, store, lineage)
 }
 
-// KNOWN GAP (T4 finding): the relay envelope carries no agent field, and the
-// plugin forwards only the prompt, so Go cannot tell which host subagent ran
-// a role Task. A refuter Task dispatched to a lens agent name is admitted.
-// This test pins the current fail-open behavior so a T4 fix must flip it
-// deliberately; it is not a claim that the behavior is correct.
-func TestOpenCodeV2RealHostKnownGapRefuterTaskUnderLensAgentIsAdmitted(t *testing.T) {
+// T4 F1 fix: the managed plugin forwards the dispatched host agent and Go binds
+// it to the Task role, so a refuter Task dispatched to a lens agent is refused
+// before any child request, and the same Task is admitted under its own agent.
+func TestOpenCodeV2RealHostRefuterTaskUnderLensAgentIsRefused(t *testing.T) {
 	in := openCodeV2HostE2EInputs(t)
 	reviewEnabledHome(t)
 	repo, _, store, task, payload := openCodeV2RefuterReady(t)
 	host := openCodeV2RegisteredHost(t, repo)
 	runOpenCodeV2HostScenario(t, in, repo, host, store.Dir, []openCodeV2HostStep{
-		openCodeV2Admitted("refuter-task-under-lens-agent", "review-risk", task.Prompt, payload, `"state":"correction_required"`),
+		{Name: "refuter-task-under-lens-agent", Agent: "review-risk", Prompt: task.Prompt, Child: payload, Expect: "refused", ChildRequests: openCodeV2Count(0)},
+		{Name: "refuter-task-under-validator-agent", Agent: "review-validator", Prompt: task.Prompt, Child: payload, Expect: "refused", ChildRequests: openCodeV2Count(0)},
+		openCodeV2Admitted("refuter-admitted-under-its-agent", task.Agent, task.Prompt, payload, `"state":"correction_required"`),
 	})
 	current, err := store.Load()
 	if err != nil || !recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
-		t.Fatalf("known gap changed: refuter Task under a lens agent was not admitted (state=%q err=%v); update the T4 finding", current.State.State, err)
+		t.Fatalf("refuter was not admitted under its own agent after the agent-mismatch refusals (state=%q err=%v)", current.State.State, err)
 	}
-	t.Logf("FINDING (T4): refuter Task dispatched to host agent %q was admitted as the refuter role; the relay envelope has no agent binding", "review-risk")
 }

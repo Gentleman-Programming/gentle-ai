@@ -320,7 +320,7 @@ func TestOpenCodeReviewTransportRefusesCanonicalTaskAuthorityMismatchesBeforePro
 
 			prompt := forged.Prompt
 			if test.materialized {
-				issuedSession, err := openCodeTransportStartBound(t.Context(), issued.Prompt)
+				issuedSession, err := openCodeTransportStartBound(t.Context(), issued.Prompt, "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1169,5 +1169,112 @@ func TestOpenCodeTransportCaptureRefusalCause(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The host subagent that runs a Task is part of the binding: a role Task may
+// only run under the agent Go issued for that role, and a lens Task only under
+// its own lens agent. The prompt alone must never decide the admitted role.
+func TestOpenCodeReviewTransportRefusesHostAgentNotBoundToTheTaskRole(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
+	reviewEnabledHome(t)
+	repo, _, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	otherLens := reviewtransaction.LensRisk
+	if lens == otherLens {
+		otherLens = reviewtransaction.LensResilience
+	}
+	contextHandle := rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	roleTask := func(role reviewProviderRole) string {
+		task, err := newReviewProviderTask(role, ReviewTransitionBinding{
+			LineageID: record.State.LineageID, Revision: record.State.CapturePhaseRevision,
+			TargetIdentity: record.State.InitialSnapshot.Identity, RepositoryContext: contextHandle,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task.Prompt
+	}
+	lensPrompt := openCodeLensTransportStart(t, repo, record, lens).Prompt
+	t.Chdir(repo)
+	_, before, err := discoverCompactFacadeReview(t.Context(), repo, record.State.LineageID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, prompt, agent string }{
+		{"refuter task under a lens agent", roleTask(reviewerprovider.RoleRefuter), lens},
+		{"refuter task under the validator agent", roleTask(reviewerprovider.RoleRefuter), "review-validator"},
+		{"validator task under the refuter agent", roleTask(reviewerprovider.RoleTargetedValidator), "review-refuter"},
+		{"validator task under a lens agent", roleTask(reviewerprovider.RoleTargetedValidator), lens},
+		{"lens task under the refuter agent", lensPrompt, "review-refuter"},
+		{"lens task under another lens agent", lensPrompt, otherLens},
+		{"lens task under an unknown agent", lensPrompt, "general"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
+				Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: test.prompt, Agent: test.agent,
+			})
+			assertOpenCodeTransportRefusal(t, err, []string{openCodeTransportAgentMismatchCode})
+			assertOpenCodeRelayAuthorityUnchanged(t, repo, record.State.LineageID, store, before)
+		})
+	}
+
+	relay := startOpenCodeTransportRelay(t, repo, openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: lensPrompt, Agent: lens,
+	})
+	if !strings.HasPrefix(relay.prompt.Prompt, openCodeTransportMaterializationHeader+" ") {
+		t.Fatalf("bound lens agent was not materialized: %q", relay.prompt.Prompt)
+	}
+	if err := relay.closeWithoutCompletion(); err == nil {
+		t.Fatal("relay closed without a completion must still refuse")
+	}
+	assertOpenCodeRelayAuthorityUnchanged(t, repo, record.State.LineageID, store, before)
+}
+
+func TestOpenCodeTransportBoundAgentFollowsTheIssuedRole(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		binding openCodeTransportTaskBinding
+		want    string
+	}{
+		{"lens slot", openCodeTransportTaskBinding{Lens: reviewtransaction.LensReliability}, reviewtransaction.LensReliability},
+		{"refuter", openCodeTransportTaskBinding{Role: reviewerprovider.RoleRefuter}, "review-refuter"},
+		{"targeted validator", openCodeTransportTaskBinding{Role: reviewerprovider.RoleTargetedValidator}, "review-validator"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := openCodeTransportBoundAgent(test.binding); got != test.want {
+				t.Fatalf("bound agent = %q, want %q", got, test.want)
+			}
+			if err := validateOpenCodeTransportAgent(test.binding, test.want); err != nil {
+				t.Fatalf("bound agent refused: %v", err)
+			}
+			// An absent agent is the V1 wire shape; the V2 start frame requires it.
+			if err := validateOpenCodeTransportAgent(test.binding, ""); err != nil {
+				t.Fatalf("absent V1 agent refused: %v", err)
+			}
+			if err := validateOpenCodeTransportAgent(test.binding, "unbound-"+test.want); err == nil {
+				t.Fatal("unbound agent admitted")
+			}
+		})
+	}
+}
+
+func TestOpenCodeTransportStartRequiresHostAgentOnlyUnderV2Declaration(t *testing.T) {
+	start := openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: "opaque"}
+	t.Setenv(openCodeRelayContractEnvironment, "")
+	if err := validateOpenCodeTransportStart(start); err != nil {
+		t.Fatalf("V1 start without an agent refused: %v", err)
+	}
+	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
+	if err := validateOpenCodeTransportStart(start); err == nil || !strings.Contains(err.Error(), "opencode_review_transport_envelope_invalid") {
+		t.Fatalf("V2 start without an agent = %v, want envelope refusal", err)
+	}
+	start.Agent = reviewtransaction.LensRisk
+	if err := validateOpenCodeTransportStart(start); err != nil {
+		t.Fatalf("V2 start with an agent refused: %v", err)
 	}
 }

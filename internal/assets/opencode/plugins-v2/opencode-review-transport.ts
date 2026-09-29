@@ -19,6 +19,7 @@ interface TransportFrame {
   operation: string
   nonce?: string
   prompt?: string
+  agent?: string
   output?: string
   error?: string
 }
@@ -41,7 +42,9 @@ function decodeTransportFrame(line: string): TransportFrame {
   return frame as TransportFrame
 }
 
-function startRelay(cwd: string, prompt: string): Relay {
+// The dispatched host agent travels with the prompt so Go can bind it to the
+// Task role; the prompt alone never selects the admitted role.
+function startRelay(cwd: string, prompt: string, agent: string): Relay {
   const child = spawn(TRANSPORT.Command, ["review", "opencode-transport"], { cwd, env: { ...process.env, [RELAY_CONTRACT_ENV]: RELAY_CONTRACT }, stdio: ["pipe", "pipe", "pipe"] })
   let buffered = ""
   let closed = false
@@ -91,7 +94,7 @@ function startRelay(cwd: string, prompt: string): Relay {
   child.on("close", (code) => {
     if (!closed) fail(new Error(Buffer.concat(stderr).toString("utf8").trim() || `Go review relay exited before completion (${code ?? "signal"})`))
   })
-  child.stdin.write(JSON.stringify({ schema: TRANSPORT.Schema, operation: TRANSPORT.Start, prompt }) + "\n", (cause) => {
+  child.stdin.write(JSON.stringify({ schema: TRANSPORT.Schema, operation: TRANSPORT.Start, prompt, agent }) + "\n", (cause) => {
     if (cause) fail(cause)
   })
   return {
@@ -167,7 +170,7 @@ export default Plugin.define({
           return
         }
         try {
-          const relay = startRelay(ctx.location.directory, input.prompt)
+          const relay = startRelay(ctx.location.directory, input.prompt, input.agent as string)
           relays.set(key, { owner, relay, completing: false })
           input.prompt = (await relay.prompt).prompt
         } catch {
