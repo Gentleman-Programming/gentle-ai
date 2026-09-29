@@ -243,7 +243,7 @@ func antigravityEngramHooksJSON() []byte {
 			},
 			"PreToolUse": []any{
 				map[string]any{
-					"matcher": "mem_save|mem_session_summary|mem_capture_passive",
+					"matcher": "call_mcp_tool|mcp_engram_.*|mem_save|mem_session_summary|mem_capture_passive",
 					"hooks": []any{
 						map[string]any{
 							"type":    "command",

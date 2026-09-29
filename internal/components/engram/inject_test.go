@@ -757,7 +757,7 @@ func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 		"optional mem_review",
 		"if mem_review is unavailable",
 		"PreToolUse",
-		"mem_save|mem_session_summary|mem_capture_passive",
+		"call_mcp_tool|mcp_engram_.*|mem_save|mem_session_summary|mem_capture_passive",
 		"gentle-ai engram hook-antigravity --event PreToolUse",
 		"Stop",
 		"gentle-ai engram hook-antigravity --event Stop",
