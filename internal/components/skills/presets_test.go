@@ -183,3 +183,51 @@ func TestRequestedBundledSkillsAreInPresetSkillSets(t *testing.T) {
 		})
 	}
 }
+
+func TestQASkillsAreInEcosystemAndFullPresetsNotMinimal(t *testing.T) {
+	qaSkills := []model.SkillID{
+		model.SkillQASupervisor,
+		model.SkillQAExplore,
+		model.SkillQASpec,
+		model.SkillQAApply,
+		model.SkillQAVerify,
+		model.SkillQADocs,
+		model.SkillQALocatorHunting,
+		model.SkillQADocReference,
+		model.SkillQADocAccess,
+	}
+
+	minimalSet := make(map[model.SkillID]struct{})
+	for _, skill := range SkillsForPreset(model.PresetMinimal) {
+		minimalSet[skill] = struct{}{}
+	}
+	for _, skill := range qaSkills {
+		if _, ok := minimalSet[skill]; ok {
+			t.Errorf("minimal preset should not include QA skill %q (QA is a product feature, not the SDD core)", skill)
+		}
+	}
+
+	for _, preset := range []model.PresetID{model.PresetEcosystemOnly, model.PresetFullGentleman} {
+		t.Run(string(preset), func(t *testing.T) {
+			present := make(map[model.SkillID]struct{})
+			for _, skill := range SkillsForPreset(preset) {
+				present[skill] = struct{}{}
+			}
+			for _, skill := range qaSkills {
+				if _, ok := present[skill]; !ok {
+					t.Errorf("SkillsForPreset(%q) missing QA skill %q", preset, skill)
+				}
+			}
+		})
+	}
+
+	allSet := make(map[model.SkillID]struct{})
+	for _, skill := range AllSkillIDs() {
+		allSet[skill] = struct{}{}
+	}
+	for _, skill := range qaSkills {
+		if _, ok := allSet[skill]; !ok {
+			t.Errorf("AllSkillIDs() missing QA skill %q", skill)
+		}
+	}
+}

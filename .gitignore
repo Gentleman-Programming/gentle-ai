@@ -34,6 +34,9 @@ dist/
 .atl/
 .pi/
 
+# CodeGraph local index (per-worktree, never shared/copied between checkouts)
+.codegraph/
+
 # Engram local runtime state (project sync chunks are intentionally versioned)
 .engram/engram.db
 .engram/cloud.json

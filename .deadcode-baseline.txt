@@ -72,11 +72,14 @@ internal/components/sdd/inject.go	injectClaudeModelAssignments
 internal/components/sdd/inject.go	resolveClaudeModelAlias
 internal/components/sdd/read_assignments.go	ReadCurrentProfiles
 internal/components/telemetryruntime/managed.go	Reconcile
+internal/filecoord/lock.go	UnsupportedError.Error
+internal/filecoord/lock.go	UnsupportedError.Unwrap
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv
 internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
+internal/qastage/state_machine.go	QAStateMachine.Attempts
 internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
 internal/reviewerprovider/windows_batch_cmdline.go	isWindowsBatchFile
 internal/reviewerprovider/windows_batch_cmdline.go	quoteWindowsArgument

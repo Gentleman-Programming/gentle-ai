@@ -486,3 +486,83 @@ func requiredBundledSkillIDs() []model.SkillID {
 		model.SkillGentleAIBench,
 	}
 }
+
+// TestInjectQASkillsAreRealInstallableAndDiscoverable is the 3B.7 mandatory
+// verification: it does not assume creating skills/qa-*/SKILL.md is enough —
+// it actually installs the 9 QA-Orchestrator v3 skills into an isolated
+// home for both OpenCode and Claude Code, and confirms they land on disk
+// with real content AND that the skill registry (what an agent session
+// actually reads to discover skills) finds them.
+func TestInjectQASkillsAreRealInstallableAndDiscoverable(t *testing.T) {
+	qaSkills := []model.SkillID{
+		model.SkillQASupervisor,
+		model.SkillQAExplore,
+		model.SkillQASpec,
+		model.SkillQAApply,
+		model.SkillQAVerify,
+		model.SkillQADocs,
+		model.SkillQALocatorHunting,
+		model.SkillQADocReference,
+		model.SkillQADocAccess,
+	}
+
+	t.Run("opencode", func(t *testing.T) {
+		home := t.TempDir()
+		project := t.TempDir()
+
+		result, err := Inject(home, opencodeAdapter(), qaSkills)
+		if err != nil {
+			t.Fatalf("Inject() error = %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("Inject() changed = false, expected the 9 QA skills to be newly written")
+		}
+
+		registryEntries := skillregistry.List(project, home)
+		registryByName := make(map[string]string, len(registryEntries))
+		for _, entry := range registryEntries {
+			registryByName[entry.Name] = entry.Path
+		}
+
+		for _, id := range qaSkills {
+			wantPath := filepath.Join(home, ".config", "opencode", "skills", string(id), "SKILL.md")
+			assertNonEmptyFile(t, wantPath)
+
+			if registryByName[string(id)] != wantPath {
+				t.Errorf("skill registry did not discover %q at %q (got %q)", id, wantPath, registryByName[string(id)])
+			}
+		}
+	})
+
+	t.Run("claude-code", func(t *testing.T) {
+		home := t.TempDir()
+
+		result, err := Inject(home, claude.NewAdapter(), qaSkills)
+		if err != nil {
+			t.Fatalf("Inject() error = %v", err)
+		}
+		if !result.Changed {
+			t.Fatal("Inject() changed = false, expected the 9 QA skills to be newly written")
+		}
+
+		for _, id := range qaSkills {
+			wantPath := filepath.Join(home, ".claude", "skills", string(id), "SKILL.md")
+			assertNonEmptyFile(t, wantPath)
+		}
+	})
+
+	// qa-locator-hunting ships reference files alongside SKILL.md — verify
+	// those are installed too, not just the top-level SKILL.md.
+	t.Run("qa-locator-hunting references are installed", func(t *testing.T) {
+		home := t.TempDir()
+
+		_, err := Inject(home, opencodeAdapter(), []model.SkillID{model.SkillQALocatorHunting})
+		if err != nil {
+			t.Fatalf("Inject() error = %v", err)
+		}
+
+		base := filepath.Join(home, ".config", "opencode", "skills", "qa-locator-hunting", "references")
+		assertNonEmptyFile(t, filepath.Join(base, "erp-mf-catalog.md"))
+		assertNonEmptyFile(t, filepath.Join(base, "locator-fallback.md"))
+	})
+}

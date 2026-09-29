@@ -39,6 +39,17 @@ var mvpSkills = []Skill{
 	{ID: model.SkillWorkUnitCommits, Name: "work-unit-commits", Category: "workflow", Priority: "p0"},
 	{ID: model.SkillRDDDefectWorkflow, Name: "rdd-defect-workflow", Category: "workflow", Priority: "p0"},
 	{ID: model.SkillSystemicIssueTriage, Name: "systemic-issue-triage", Category: "workflow", Priority: "p0"},
+	// QA-Orchestrator skills
+	{ID: model.SkillQASupervisor, Name: "qa-supervisor", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQAExplore, Name: "qa-explore", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQASpec, Name: "qa-spec", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQAApply, Name: "qa-apply", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQAVerify, Name: "qa-verify", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQADocs, Name: "qa-docs", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQALocatorHunting, Name: "qa-locator-hunting", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQADocReference, Name: "qa-doc-reference", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQADocAccess, Name: "qa-doc-access", Category: "qa", Priority: "p0"},
+	{ID: model.SkillQAEvidence, Name: "qa-evidence", Category: "qa", Priority: "p0"},
 }
 
 func MVPSkills() []Skill {

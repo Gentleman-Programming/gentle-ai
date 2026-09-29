@@ -2270,6 +2270,58 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 	}
 }
 
+// TestRunInstallExplicitQASkillsFlagIsAccepted guards the gap found during
+// Fase 3B.8's real OpenCode smoke test: the QA skills were registered in
+// model.SkillID and in presets.go's selectableFoundationSkills, but
+// catalog.MVPSkills() (a separate allowlist that gates the CLI's explicit
+// --skill/--skills flag in normalizeSkills) was never updated, so
+// `--skill qa-supervisor,...` failed with `unsupported skill "qa-supervisor"`
+// even though the same skill installs fine via --preset.
+func TestRunInstallExplicitQASkillsFlagIsAccepted(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	result, err := RunInstall(
+		[]string{
+			"--agent", "claude-code",
+			"--preset", "custom",
+			"--component", "skills",
+			"--skills", "qa-supervisor,qa-explore,qa-spec,qa-apply,qa-verify,qa-docs,qa-locator-hunting,qa-doc-reference,qa-doc-access",
+		},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	for _, id := range []string{
+		"qa-supervisor", "qa-explore", "qa-spec", "qa-apply", "qa-verify",
+		"qa-docs", "qa-locator-hunting", "qa-doc-reference", "qa-doc-access",
+	} {
+		path := filepath.Join(home, ".claude", "skills", id, "SKILL.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected QA skill file %q: %v", path, err)
+		}
+	}
+}
+
 func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir

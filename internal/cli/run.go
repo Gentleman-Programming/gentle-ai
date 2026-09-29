@@ -1778,6 +1778,9 @@ func (s componentApplyStep) Run() error {
 			if _, err := skills.Inject(targetDir, adapter, skillIDs); err != nil {
 				return fmt.Errorf("inject skills for %q: %w", adapter.Agent(), err)
 			}
+			if _, err := skills.InjectQACommands(targetDir, adapter, skillIDs); err != nil {
+				return fmt.Errorf("inject QA commands for %q: %w", adapter.Agent(), err)
+			}
 		}
 		return nil
 	case model.ComponentGGA:
@@ -2481,6 +2484,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					paths = append(paths, path)
 				}
 			}
+			paths = append(paths, skills.QACommandPaths(adapter, targetDir, selectedSkillIDs(selection))...)
 		case model.ComponentContext7:
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:

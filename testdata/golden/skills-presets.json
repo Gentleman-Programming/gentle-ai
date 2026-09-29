@@ -20,7 +20,17 @@
       "skill-registry",
       "chained-pr",
       "cognitive-doc-design",
-      "work-unit-commits"
+      "work-unit-commits",
+      "qa-supervisor",
+      "qa-explore",
+      "qa-spec",
+      "qa-apply",
+      "qa-verify",
+      "qa-docs",
+      "qa-locator-hunting",
+      "qa-doc-reference",
+      "qa-doc-access",
+      "qa-evidence"
     ]
   },
   {
@@ -44,7 +54,17 @@
       "skill-registry",
       "chained-pr",
       "cognitive-doc-design",
-      "work-unit-commits"
+      "work-unit-commits",
+      "qa-supervisor",
+      "qa-explore",
+      "qa-spec",
+      "qa-apply",
+      "qa-verify",
+      "qa-docs",
+      "qa-locator-hunting",
+      "qa-doc-reference",
+      "qa-doc-access",
+      "qa-evidence"
     ]
   },
   {

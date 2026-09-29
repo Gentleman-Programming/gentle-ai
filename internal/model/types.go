@@ -143,6 +143,16 @@ const (
 	SkillRDDDefectWorkflow   SkillID = "rdd-defect-workflow"
 	SkillSystemicIssueTriage SkillID = "systemic-issue-triage"
 	SkillGentleAIBench       SkillID = "gentle-ai-bench"
+	SkillQASupervisor        SkillID = "qa-supervisor"
+	SkillQAExplore           SkillID = "qa-explore"
+	SkillQASpec              SkillID = "qa-spec"
+	SkillQAApply             SkillID = "qa-apply"
+	SkillQAVerify            SkillID = "qa-verify"
+	SkillQADocs              SkillID = "qa-docs"
+	SkillQALocatorHunting    SkillID = "qa-locator-hunting"
+	SkillQADocReference      SkillID = "qa-doc-reference"
+	SkillQADocAccess         SkillID = "qa-doc-access"
+	SkillQAEvidence          SkillID = "qa-evidence"
 )
 
 type PersonaID string
