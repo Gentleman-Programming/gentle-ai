@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1435,5 +1436,194 @@ func TestRenderDoctorReportDoesNotRenderRemedyMetadata(t *testing.T) {
 	want := "gentle-ai doctor — system health check\n=======================================\n\n  [xx]  disk:space                     cleanup needed\n       Remedy: Free disk space\n\nSummary: 0 passed, 1 failed, 0 warnings\nStatus:  unhealthy\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("rendered report mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// --- Command Code tests ---
+
+func TestCommandCodeAliases(t *testing.T) {
+	for _, tt := range []struct {
+		goos string
+		want []string
+	}{
+		{goos: "windows", want: []string{"command-code", "cmdc"}},
+		{goos: "linux", want: []string{"command-code", "cmd"}},
+		{goos: "darwin", want: []string{"command-code", "cmd"}},
+	} {
+		got := commandCodeAliases(tt.goos)
+		if !slices.Equal(got, tt.want) {
+			t.Fatalf("commandCodeAliases(%q) = %v, want %v", tt.goos, got, tt.want)
+		}
+	}
+}
+
+func TestAgentToolBinaries_CommandCode(t *testing.T) {
+	bin, ok := agentToolBinaries["command-code"]
+	if !ok || bin != "command-code" {
+		t.Fatalf("agentToolBinaries[\"command-code\"] = %q, ok = %v; want \"command-code\", true", bin, ok)
+	}
+}
+
+func TestAgentConfigDir_CommandCode(t *testing.T) {
+	home := t.TempDir()
+	got := agentConfigDir(home, "command-code")
+	want := filepath.Join(home, ".commandcode")
+	if got != want {
+		t.Fatalf("agentConfigDir(%q, \"command-code\") = %q, want %q", home, got, want)
+	}
+}
+
+func TestCheckToolBinaries_CommandCode_Windows(t *testing.T) {
+	origLookPath := lookPathFn
+	origGOOS := doctorGOOS
+	defer func() {
+		lookPathFn = origLookPath
+		doctorGOOS = origGOOS
+	}()
+	doctorGOOS = "windows"
+
+	t.Run("resolves cmdc when command-code is missing", func(t *testing.T) {
+		lookPathFn = func(name string) (string, error) {
+			if name == "cmdc" {
+				return `C:\bin\cmdc.exe`, nil
+			}
+			return "", errors.New("not found")
+		}
+		got := checkOneTool("command-code", []string{`C:\bin`})
+		if got.Status != CheckStatusPass {
+			t.Fatalf("Status = %v, want CheckStatusPass", got.Status)
+		}
+		if !strings.Contains(got.Detail, `C:\bin\cmdc.exe`) {
+			t.Fatalf("Detail = %q, want it to contain resolved path", got.Detail)
+		}
+		if strings.Contains(got.Detail, "Windows-only matrix") {
+			t.Fatalf("Detail = %q, should NOT contain non-Windows informational note on Windows", got.Detail)
+		}
+	})
+
+	t.Run("never resolves bare cmd on windows", func(t *testing.T) {
+		lookPathFn = func(name string) (string, error) {
+			if name == "cmd" {
+				return `C:\Windows\System32\cmd.exe`, nil
+			}
+			return "", errors.New("not found")
+		}
+		got := checkOneTool("command-code", []string{`C:\Windows\System32`})
+		if got.Status != CheckStatusFail {
+			t.Fatalf("Status = %v, want CheckStatusFail (cmd.exe must never be probed as command-code on Windows)", got.Status)
+		}
+	})
+}
+
+func TestCheckToolBinaries_CommandCode_Unix(t *testing.T) {
+	origLookPath := lookPathFn
+	origGOOS := doctorGOOS
+	defer func() {
+		lookPathFn = origLookPath
+		doctorGOOS = origGOOS
+	}()
+	doctorGOOS = "linux"
+
+	t.Run("resolves cmd on unix when command-code is missing", func(t *testing.T) {
+		lookPathFn = func(name string) (string, error) {
+			if name == "cmd" {
+				return "/usr/local/bin/cmd", nil
+			}
+			return "", errors.New("not found")
+		}
+		got := checkOneTool("command-code", []string{"/usr/local/bin"})
+		if got.Status != CheckStatusPass {
+			t.Fatalf("Status = %v, want CheckStatusPass", got.Status)
+		}
+		if !strings.Contains(got.Detail, "/usr/local/bin/cmd") {
+			t.Fatalf("Detail = %q, want it to contain resolved path", got.Detail)
+		}
+		if !strings.Contains(got.Detail, "(Windows-only matrix, detect-don't-manage)") {
+			t.Fatalf("Detail = %q, want non-Windows informational note", got.Detail)
+		}
+	})
+
+	t.Run("resolves command-code directly on unix", func(t *testing.T) {
+		lookPathFn = func(name string) (string, error) {
+			if name == "command-code" {
+				return "/usr/local/bin/command-code", nil
+			}
+			return "", errors.New("not found")
+		}
+		got := checkOneTool("command-code", []string{"/usr/local/bin"})
+		if got.Status != CheckStatusPass {
+			t.Fatalf("Status = %v, want CheckStatusPass", got.Status)
+		}
+		if !strings.Contains(got.Detail, "(Windows-only matrix, detect-don't-manage)") {
+			t.Fatalf("Detail = %q, want non-Windows informational note", got.Detail)
+		}
+	})
+
+	t.Run("fails and includes informational detail when missing on unix", func(t *testing.T) {
+		lookPathFn = func(string) (string, error) {
+			return "", errors.New("not found")
+		}
+		got := checkOneTool("command-code", []string{"/usr/local/bin"})
+		if got.Status != CheckStatusFail {
+			t.Fatalf("Status = %v, want CheckStatusFail", got.Status)
+		}
+		if !strings.Contains(got.Detail, "(Windows-only matrix, detect-don't-manage)") {
+			t.Fatalf("Detail = %q, want non-Windows informational note", got.Detail)
+		}
+	})
+}
+
+func TestRunDoctor_SandboxHome_CommandCode(t *testing.T) {
+	origLookPath := lookPathFn
+	origGOOS := doctorGOOS
+	origHome := osUserHomeDirDoctor
+	origPathDirs := pathDirsFn
+	origAvailableBytes := availableBytesFn
+	origHttpGet := httpGetFn
+	defer func() {
+		lookPathFn = origLookPath
+		doctorGOOS = origGOOS
+		osUserHomeDirDoctor = origHome
+		pathDirsFn = origPathDirs
+		availableBytesFn = origAvailableBytes
+		httpGetFn = origHttpGet
+	}()
+
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdDir := filepath.Join(homeDir, ".commandcode")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stateJSON := `{"installed_agents":["command-code"]}`
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(stateJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	doctorGOOS = "linux"
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
+	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil }
+	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
+	lookPathFn = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	var buf bytes.Buffer
+	if err := RunDoctor(context.Background(), &buf); err != nil {
+		t.Fatalf("RunDoctor failed: %v", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "tool:command-code") {
+		t.Errorf("expected tool:command-code in doctor report; got:\n%s", output)
+	}
+	if !strings.Contains(output, "(Windows-only matrix, detect-don't-manage)") {
+		t.Errorf("expected non-Windows informational detail in doctor report; got:\n%s", output)
+	}
+	if !strings.Contains(output, "command-code") {
+		t.Errorf("expected command-code in state report; got:\n%s", output)
 	}
 }

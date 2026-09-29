@@ -4680,6 +4680,8 @@ func detectedAgentIDs(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentPi)
 		case string(model.AgentHermes):
 			selected = append(selected, model.AgentHermes)
+		case "command-code":
+			selected = append(selected, model.AgentID("command-code"))
 		}
 	}
 	return selected

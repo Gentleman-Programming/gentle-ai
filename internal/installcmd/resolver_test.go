@@ -420,6 +420,12 @@ func TestResolveAgentInstall(t *testing.T) {
 		},
 
 		{
+			name:    "command-code returns not supported error",
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			agent:   model.AgentID("command-code"),
+			wantErr: true,
+		},
+		{
 			name:    "unsupported agent returns error",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			agent:   "unsupported",

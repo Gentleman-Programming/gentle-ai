@@ -71,3 +71,17 @@ func TestNormalizeInstallFlagsAcceptsSupportedAgent(t *testing.T) {
 		t.Fatalf("Selection.Agents = %v, want [claude-code]", input.Selection.Agents)
 	}
 }
+
+// TestDefaultAgentsFromDetection_CommandCode proves defaultAgentsFromDetection
+// maps a detected command-code config directory to model.AgentID("command-code").
+func TestDefaultAgentsFromDetection_CommandCode(t *testing.T) {
+	detection := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+		},
+	}
+	agents := defaultAgentsFromDetection(detection)
+	if len(agents) != 1 || agents[0] != model.AgentID("command-code") {
+		t.Fatalf("defaultAgentsFromDetection() = %v, want [command-code]", agents)
+	}
+}

@@ -56,7 +56,8 @@
         "enum": [
           "claude-code", "opencode", "kilocode", "gemini-cli", "cursor",
           "vscode-copilot", "codex", "antigravity", "windsurf", "kimi",
-          "qwen-code", "kiro-ide", "openclaw", "pi", "trae-ide", "hermes", "conductor"
+          "qwen-code", "kiro-ide", "openclaw", "pi", "trae-ide", "hermes", "conductor",
+          "command-code"
         ]
       }
     },

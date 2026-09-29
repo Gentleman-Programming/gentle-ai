@@ -51,9 +51,9 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["antigravity", "claude-code", "codex", "conductor", "cursor", "gemini-cli", "hermes", "kilocode", "kimi", "kiro-ide", "openclaw", "opencode", "pi", "qwen-code", "trae-ide", "vscode-copilot", "windsurf"]
+        "enum": ["antigravity", "claude-code", "codex", "command-code", "conductor", "cursor", "gemini-cli", "hermes", "kilocode", "kimi", "kiro-ide", "openclaw", "opencode", "pi", "qwen-code", "trae-ide", "vscode-copilot", "windsurf"]
       },
-      "maxItems": 17
+      "maxItems": 18
     },
     "components": {
       "type": "array",
