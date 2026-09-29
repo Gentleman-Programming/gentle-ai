@@ -671,6 +671,18 @@ func TestPiCombinedWithOtherAgentKeepsGenericFlow(t *testing.T) {
 
 func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 	t.Setenv(cli.PiBackgroundSubagentsEnv, "")
+	// Pin the host: OpenCode detection and the SDK proposal read `opencode
+	// --version` and the user's config, so a runner without OpenCode would
+	// otherwise stop on the Review screen instead of installing.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersion })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgents
 	m.InstallFlowActive = true
