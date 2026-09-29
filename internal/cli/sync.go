@@ -96,6 +96,74 @@ type SyncResult struct {
 	BackgroundPolicyEnabled bool
 
 	PiBackground PiBackgroundResolution
+
+	// SkippedAgents lists selected agents this sync deliberately did not
+	// touch, each with the actionable reason. A non-empty list makes the sync
+	// partial: the returned error is a *PartialSyncError.
+	SkippedAgents []SyncSkippedAgent
+}
+
+// SyncSkippedAgent is one selected agent that a partial sync left untouched.
+type SyncSkippedAgent struct {
+	Agent  model.AgentID
+	Reason string
+}
+
+// PartialSyncError reports a sync that applied every other selected agent but
+// skipped some. The result returned with it is complete for the applied part.
+type PartialSyncError struct {
+	Skipped []SyncSkippedAgent
+}
+
+func (e *PartialSyncError) Error() string {
+	parts := make([]string, 0, len(e.Skipped))
+	for _, skipped := range e.Skipped {
+		parts = append(parts, skipped.Action())
+	}
+	return "partial sync: the other selected agents were synced; " + strings.Join(parts, "; ")
+}
+
+// Action is the operator-facing line for a skipped agent, reused by the CLI
+// error and the TUI manual actions.
+func (s SyncSkippedAgent) Action() string {
+	return fmt.Sprintf("%s was skipped: %s; then re-run `gentle-ai sync`", s.Agent, s.Reason)
+}
+
+// skipUndetectableOpenCode probes the OpenCode runtime once per sync, before
+// any plan is built. Every OpenCode sync step is either version-specific
+// (managed plugins, telemetry, SDK preflight) or shares OpenCode's config
+// transaction, so an unknown runtime removes OpenCode from the selection as a
+// whole and the other agents still sync. An OpenCode-only sync has nothing
+// else to apply and keeps the fail-closed refusal.
+func skipUndetectableOpenCode(selection *model.Selection) ([]SyncSkippedAgent, error) {
+	if !containsAgent(selection.Agents, model.AgentOpenCode) {
+		return nil, nil
+	}
+	_, err := openCodeRuntimeMajorForManagedAssets()
+	if err == nil {
+		return nil, nil
+	}
+	remaining := make([]model.AgentID, 0, len(selection.Agents))
+	for _, agent := range selection.Agents {
+		if agent != model.AgentOpenCode {
+			remaining = append(remaining, agent)
+		}
+	}
+	if len(remaining) == 0 {
+		return nil, err
+	}
+	selection.Agents = remaining
+	return []SyncSkippedAgent{{Agent: model.AgentOpenCode, Reason: err.Error()}}, nil
+}
+
+// finishPartialSync attaches skipped agents to a sync result and turns an
+// otherwise successful partial sync into a *PartialSyncError.
+func finishPartialSync(result SyncResult, err error, skipped []SyncSkippedAgent) (SyncResult, error) {
+	result.SkippedAgents = skipped
+	if err == nil && len(skipped) > 0 {
+		err = &PartialSyncError{Skipped: skipped}
+	}
+	return result, err
 }
 
 // ParseSyncFlags parses the CLI arguments for the sync subcommand.
@@ -1620,6 +1688,15 @@ func validatePersistedSyncState(persisted state.InstallState, readErr error) err
 // and a fully-built Selection (agents + components + options).
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
+	skipped, err := skipUndetectableOpenCode(&selection)
+	if err != nil {
+		return SyncResult{Agents: selection.Agents, Selection: selection}, err
+	}
+	result, err := runSyncWithSelectionAfterSkip(homeDir, selection)
+	return finishPartialSync(result, err, skipped)
+}
+
+func runSyncWithSelectionAfterSkip(homeDir string, selection model.Selection) (SyncResult, error) {
 	persistedState, persistedStateErr := state.Read(homeDir)
 	if persistedStateErr != nil && !os.IsNotExist(persistedStateErr) {
 		return SyncResult{Agents: selection.Agents, Selection: selection}, fmt.Errorf("read persisted installation state: %w", persistedStateErr)
@@ -1985,20 +2062,29 @@ func RunSync(args []string) (SyncResult, error) {
 		return result, nil
 	}
 
+	skipped, err := skipUndetectableOpenCode(&selection)
+	if err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
+	}
+	if len(skipped) > 0 {
+		agentIDs = selection.Agents
+		// A skipped OpenCode receives nothing, including a new background intent.
+		background.Persist = ""
+	}
 	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(agentIDs, model.AgentOpenCode))
 	if err != nil {
-		return SyncResult{Agents: agentIDs, Selection: selection, Background: background}, fmt.Errorf("prepare OpenCode background activation: %w", err)
+		return finishPartialSync(SyncResult{Agents: agentIDs, Selection: selection, Background: background}, fmt.Errorf("prepare OpenCode background activation: %w", err), skipped)
 	}
 	background.activationPlan = backgroundActivation
 	preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
 	result, err := runSyncWithSelection(homeDir, selection, background, piBackground)
 	if err != nil {
-		return result, err
+		return finishPartialSync(result, err, skipped)
 	}
 	result.DryRun = false
 	_ = telemetry.IncrementSyncs(homeDir)
 	TelemetryTrigger(homeDir)
-	return result, nil
+	return finishPartialSync(result, nil, skipped)
 }
 
 // restoreOpenCodeModelAssignmentsFromState reads current assignments from the
@@ -2143,6 +2229,7 @@ func RenderSyncReport(result SyncResult) string {
 				fmt.Fprintln(&b, "No managed files changed; preserved native agents were not updated.")
 			}
 		}
+		renderSyncSkippedAgents(&b, result.SkippedAgents)
 		backgroundReport()
 		renderSyncManualActions(&b, result.ManualActions)
 		return strings.TrimRight(b.String(), "\n")
@@ -2167,6 +2254,7 @@ func RenderSyncReport(result SyncResult) string {
 
 	fmt.Fprintln(&b, "gentle-ai sync — managed sync executed")
 	fmt.Fprintf(&b, "Agents synced: %s\n", joinAgentIDs(result.Agents))
+	renderSyncSkippedAgents(&b, result.SkippedAgents)
 
 	compParts := make([]string, 0, len(result.Selection.Components))
 	for _, c := range result.Selection.Components {
@@ -2196,6 +2284,20 @@ func RenderSyncReport(result SyncResult) string {
 	renderSyncManualActions(&b, result.ManualActions)
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderSyncSkippedAgents(b *strings.Builder, skipped []SyncSkippedAgent) {
+	if len(skipped) == 0 {
+		return
+	}
+	names := make([]model.AgentID, 0, len(skipped))
+	for _, agent := range skipped {
+		names = append(names, agent.Agent)
+	}
+	fmt.Fprintf(b, "Agents skipped: %s\n", joinAgentIDs(names))
+	for _, agent := range skipped {
+		fmt.Fprintf(b, "- %s\n", agent.Action())
+	}
 }
 
 func renderSyncManualActions(b *strings.Builder, actions []string) {

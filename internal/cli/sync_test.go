@@ -34,6 +34,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
 )
 
@@ -6726,4 +6727,143 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
+}
+
+// partialSyncTestHome isolates a sync home that persists Claude Code and
+// OpenCode, and counts OpenCode runtime probes answered by version.
+func partialSyncTestHome(t *testing.T, version string, versionErr error) (string, *int) {
+	t.Helper()
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"claude-code", "opencode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentClaudeTheme, model.ComponentOpenCodeGentleLogo},
+		Persona:             "neutral",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restoreHome, restoreBackupHome, restoreVersion := osUserHomeDir, backup.UserHomeDirFn, opencodeactivation.VersionRunnerOverride
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	probes := 0
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		probes++
+		return opencodeactivation.CommandOutput{Stdout: []byte(version)}, versionErr
+	}
+	t.Cleanup(func() {
+		osUserHomeDir, backup.UserHomeDirFn, opencodeactivation.VersionRunnerOverride = restoreHome, restoreBackupHome, restoreVersion
+	})
+	return home, &probes
+}
+
+func TestSyncSkipsOpenCodeWhenRuntimeDetectionFails(t *testing.T) {
+	for name, run := range map[string]func(home string) (SyncResult, error){
+		"cli": func(string) (SyncResult, error) { return RunSync([]string{"--agents", "claude-code,opencode"}) },
+		"tui selection": func(home string) (SyncResult, error) {
+			return RunSyncWithSelection(home, BuildSyncSelection(SyncFlags{}, []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, probes := partialSyncTestHome(t, "", os.ErrNotExist)
+			result, err := run(home)
+			var partial *PartialSyncError
+			if !errors.As(err, &partial) {
+				t.Fatalf("sync error = %v, want *PartialSyncError", err)
+			}
+			for _, want := range []string{"OpenCode", "opencode --version", "deselect OpenCode", "gentle-ai sync"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("partial sync error missing %q: %s", want, err)
+				}
+			}
+			if *probes != 1 {
+				t.Errorf("OpenCode runtime probes = %d, want exactly one per sync", *probes)
+			}
+			if !reflect.DeepEqual(result.Agents, []model.AgentID{model.AgentClaudeCode}) {
+				t.Errorf("synced agents = %v, want only claude-code", result.Agents)
+			}
+			if len(result.SkippedAgents) != 1 || result.SkippedAgents[0].Agent != model.AgentOpenCode || !strings.Contains(result.SkippedAgents[0].Reason, "opencode --version") {
+				t.Errorf("skipped agents = %#v, want OpenCode with the actionable reason", result.SkippedAgents)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); err != nil {
+				t.Errorf("Claude Code was not synced: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(home, ".config", "opencode")); !os.IsNotExist(err) {
+				t.Errorf("OpenCode config was written although its runtime is unknown: %v", err)
+			}
+			report := RenderSyncReport(result)
+			for _, want := range []string{"Agents synced: claude-code", "Agents skipped:", "opencode", "opencode --version"} {
+				if !strings.Contains(report, want) {
+					t.Errorf("sync report missing %q:\n%s", want, report)
+				}
+			}
+		})
+	}
+}
+
+func TestSyncOnlyOpenCodeStillFailsWhenRuntimeDetectionFails(t *testing.T) {
+	home, probes := partialSyncTestHome(t, "", os.ErrNotExist)
+	_, err := RunSync([]string{"--agents", "opencode"})
+	if err == nil {
+		t.Fatal("OpenCode-only sync succeeded with an unknown runtime")
+	}
+	var partial *PartialSyncError
+	if errors.As(err, &partial) {
+		t.Fatalf("OpenCode-only sync reported a partial sync: %v", err)
+	}
+	for _, want := range []string{"opencode --version", "deselect OpenCode"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("OpenCode-only refusal missing %q: %s", want, err)
+		}
+	}
+	if *probes != 1 {
+		t.Errorf("OpenCode runtime probes = %d, want one", *probes)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".config", "opencode")); !os.IsNotExist(err) {
+		t.Errorf("OpenCode config was written although its runtime is unknown: %v", err)
+	}
+}
+
+func TestSyncWithDetectedOpenCodeRuntimeIsNotPartial(t *testing.T) {
+	home, _ := partialSyncTestHome(t, "1.18.30", nil)
+	result, err := RunSync([]string{"--agents", "claude-code,opencode"})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+	if len(result.SkippedAgents) != 0 || !reflect.DeepEqual(result.Agents, []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}) {
+		t.Fatalf("agents = %v skipped = %#v, want both synced", result.Agents, result.SkippedAgents)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "plugins", "telemetry-runtime.ts")); err != nil {
+		t.Fatalf("OpenCode telemetry was not written: %v", err)
+	}
+	if strings.Contains(RenderSyncReport(result), "Agents skipped:") {
+		t.Fatal("successful sync reported skipped agents")
+	}
+}
+
+func TestInstallStillFailsClosedWhenOpenCodeRuntimeDetectionFails(t *testing.T) {
+	home := installTestHome(t)
+	restoreVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = restoreVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{}, os.ErrNotExist
+	}
+	_, err := RunInstall([]string{"--agent", "claude-code,opencode", "--component", "persona"}, system.DetectionResult{})
+	if err == nil {
+		t.Fatal("install succeeded with an unknown OpenCode runtime")
+	}
+	var partial *PartialSyncError
+	if errors.As(err, &partial) || !strings.Contains(err.Error(), "opencode --version") {
+		t.Fatalf("install error = %v, want the fail-closed actionable refusal", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".config", "opencode", "plugins", "telemetry-runtime.ts")); !os.IsNotExist(err) {
+		t.Fatalf("install wrote OpenCode telemetry with an unknown runtime: %v", err)
+	}
 }
