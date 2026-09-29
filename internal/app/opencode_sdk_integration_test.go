@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,9 +12,13 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/tui"
 )
@@ -163,6 +168,144 @@ func TestTUIOpenCodeSDKConsentProvisioningIntegration(t *testing.T) {
 			assertSDKBridgeMissing(t, filepath.Join(config, "opencode.json"))
 			assertSDKBridgeMissing(t, filepath.Join(config, ".gentle-ai-telemetry-runtime.json"))
 		})
+	}
+}
+
+// The fake manager emits only a version manifest. Successful application and
+// persistence here do not prove that a real SDK package is usable by OpenCode.
+func TestTUIOpenCodeSDKConsentFullApplyIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test executes an isolated fake npm subprocess")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("fake npm fixture requires a POSIX shell")
+	}
+	home, config, log := isolateSDKBridgeTest(t, t.TempDir(), "2.0.4")
+	// Remove only the deliberate negative-test ownership conflict, before consent.
+	if err := os.Remove(filepath.Join(config, "plugins", "telemetry-runtime.ts")); err != nil {
+		t.Fatal(err)
+	}
+	oldHome, oldVersion := appUserHomeDir, opencode.VersionRunnerOverride
+	t.Cleanup(func() {
+		appUserHomeDir = oldHome
+		opencode.VersionRunnerOverride = oldVersion
+	})
+	appUserHomeDir = func() (string, error) { return home, nil }
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+
+	m := tui.NewModel(system.DetectionResult{}, "test")
+	m.Selection = model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	m.DependencyPlan.Agents = m.Selection.Agents
+	m.BackgroundIntent = model.OpenCodeBackgroundOff
+	m.PiBackgroundIntent = model.PiBackgroundOff
+	m.InstallReviewModeChoiceSet = false
+	m.ExecuteSDKFn = tuiExecuteWithSDK
+	// Fail closed if this flow unexpectedly schedules native review-mode work.
+	reviewCalls := 0
+	m.ReviewModeStatusFn = func(context.Context, string) (reviewtransaction.RDDModeStatus, error) {
+		reviewCalls++
+		return reviewtransaction.RDDModeStatus{}, fmt.Errorf("unexpected native review status call")
+	}
+	m.ReviewModeSetGlobalFn = func(context.Context, string, bool) (reviewtransaction.RDDModeStatus, error) {
+		reviewCalls++
+		return reviewtransaction.RDDModeStatus{}, fmt.Errorf("unexpected native review mode mutation")
+	}
+	m.Screen, m.Cursor = tui.ScreenReview, 0
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(tui.Model)
+	if cmd != nil || m.Screen != tui.ScreenOpenCodeSDKConfirm || m.Cursor != 1 {
+		t.Fatalf("Review Enter: screen=%v cursor=%d command=%v err=%v", m.Screen, m.Cursor, cmd != nil, m.Err)
+	}
+	for _, text := range []string{"@opencode/plugin@2.0.4", "npm", config, "No / Back", "rollback"} {
+		if !strings.Contains(m.View(), text) {
+			t.Fatalf("SDK confirmation missing %q: %s", text, m.View())
+		}
+	}
+	assertSDKBridgeMissing(t, log)
+	assertSDKBridgeMissing(t, filepath.Join(config, "node_modules"))
+	assertSDKBridgeMissing(t, state.Path(home))
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(tui.Model)
+	if cmd != nil || m.Cursor != 0 {
+		t.Fatal("Up did not select affirmative SDK confirmation")
+	}
+	assertSDKBridgeMissing(t, log)
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(tui.Model)
+	if m.Screen != tui.ScreenInstalling || cmd == nil {
+		t.Fatalf("affirmative did not schedule installation: screen=%v", m.Screen)
+	}
+	m = drainSDKBridgeCommands(t, m, cmd)
+	if m.Execution.Err != nil || !m.Execution.Prepare.Success || !m.Execution.Apply.Success {
+		t.Fatalf("full installation failed: %+v", m.Execution)
+	}
+	for name, stage := range map[string]pipeline.StageResult{"Prepare": m.Execution.Prepare, "Apply": m.Execution.Apply} {
+		if len(stage.Steps) == 0 {
+			t.Fatalf("%s did not execute any steps", name)
+		}
+		for _, step := range stage.Steps {
+			if step.Status != pipeline.StepStatusSucceeded || step.Err != nil {
+				t.Fatalf("%s step did not succeed: %+v", name, step)
+			}
+		}
+	}
+	if len(m.Execution.Prepare.Steps) != 4 {
+		t.Fatalf("unexpected Prepare steps: %+v", m.Execution.Prepare.Steps)
+	}
+	read := func(path string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	physicalConfig, err := filepath.EvalSymlinks(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNPM := strings.Join([]string{physicalConfig, "install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + physicalConfig, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4", ""}, "\n")
+	if got := string(read(log)); got != wantNPM {
+		t.Fatalf("expected exactly one pinned SDK install with isolated arguments: got %q, want %q", got, wantNPM)
+	}
+	if got := string(read(filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json"))); got != "{\"version\":\"2.0.4\"}\n" {
+		t.Fatalf("unexpected fake SDK manifest: %s", got)
+	}
+	for _, name := range []string{"model-variants.ts", "skill-registry.ts", "opencode-review-transport.ts", "telemetry-runtime.ts"} {
+		if got := string(read(filepath.Join(config, "plugins", name))); got != assets.MustRead("opencode/plugins-v2/"+name) {
+			t.Errorf("managed asset %s differs from embedded V2 bytes", name)
+		}
+	}
+	read(filepath.Join(config, ".gentle-ai-telemetry-runtime.json"))
+	if err := telemetryruntime.CheckManaged(config); err != nil {
+		t.Fatalf("telemetry ownership is invalid: %v", err)
+	}
+	var settings struct {
+		DefaultAgent string `json:"default_agent"`
+		Agent        map[string]struct {
+			Prompt string `json:"prompt"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal(read(filepath.Join(config, "opencode.json")), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.DefaultAgent != "gentle-orchestrator" || !strings.Contains(settings.Agent["gentle-orchestrator"].Prompt, "gentle-ai:agent-routing") {
+		t.Fatalf("missing generated default agent or routing: %+v", settings)
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(persisted.InstalledAgents, ",") != "opencode" || !persisted.SelectionConfigured || !persisted.CommunityToolsConfigured || len(persisted.Components) != 0 || len(persisted.CommunityTools) != 0 || len(persisted.Skills) != 0 || persisted.Preset != m.Selection.Preset || persisted.SDDMode != m.Selection.SDDMode {
+		t.Fatalf("installed selection was not persisted: %+v", persisted)
+	}
+	if reviewCalls != 0 || persisted.RDDMode != "" || persisted.RDDModeRecordedAt != nil || m.InstallReviewModePersisting || m.InstallReviewModePersistErr != nil {
+		t.Fatalf("unexpected native review-mode work: calls=%d state=%+v", reviewCalls, persisted)
+	}
+	if !strings.Contains(strings.Join(m.Progress.Logs, "\n"), "pipeline completed successfully") {
+		t.Fatalf("terminal success not surfaced to TUI: %v", m.Progress.Logs)
 	}
 }
 
