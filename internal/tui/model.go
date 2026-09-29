@@ -1550,7 +1550,12 @@ func (m Model) View() string {
 	case ScreenReview:
 		out := screens.RenderReview(m.Review, m.Cursor, m.installReviewModeSummary())
 		if m.Err != nil {
-			out += "\n\nOpenCode SDK: " + m.Err.Error()
+			label := "Error: "
+			var sdkErr openCodeSDKError
+			if errors.As(m.Err, &sdkErr) {
+				label = "OpenCode SDK: "
+			}
+			out += "\n\n" + label + m.Err.Error()
 		}
 		return out
 	case ScreenOpenCodeBackground:
@@ -2856,13 +2861,20 @@ func (m Model) continueToPiBackgroundOrInstall() (tea.Model, tea.Cmd) {
 	return m.continueToSDKOrInstall()
 }
 
+// openCodeSDKError marks errors produced by the OpenCode SDK proposal so the
+// Review screen labels only those, not unrelated background-resolution errors.
+type openCodeSDKError struct{ err error }
+
+func (e openCodeSDKError) Error() string { return e.err.Error() }
+func (e openCodeSDKError) Unwrap() error { return e.err }
+
 func (m Model) continueToSDKOrInstall() (tea.Model, tea.Cmd) {
 	m.sdkConsent = nil
 	m.sdkProposal = nil
 	if slices.Contains(m.DependencyPlan.Agents, model.AgentOpenCode) {
 		proposal, err := cli.OpenCodeSDKInstallProposal(homeDir())
 		if err != nil {
-			m.Err = err
+			m.Err = openCodeSDKError{err: err}
 			m.setScreen(ScreenReview)
 			return m, nil
 		}

@@ -104,6 +104,55 @@ func TestOpenCodeV2SDKConfirmationSeparateAndDefaultsBack(t *testing.T) {
 	}
 }
 
+func TestReviewErrorLabelsOnlySDKOriginatedErrors(t *testing.T) {
+	t.Run("background resolution error is not labeled as SDK", func(t *testing.T) {
+		t.Setenv(cli.OpenCodeBackgroundSubagentsEnv, "sideways")
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+		m.DependencyPlan.Agents = m.Selection.Agents
+		m.Screen = ScreenReview
+		m.Cursor = 0
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		got := updated.(Model)
+		if got.Screen != ScreenReview || got.Err == nil {
+			t.Fatalf("invalid background preference did not stay on Review: screen=%v err=%v", got.Screen, got.Err)
+		}
+		view := got.View()
+		if strings.Contains(view, "OpenCode SDK:") {
+			t.Fatalf("background resolution error was labeled as an SDK error:\n%s", view)
+		}
+		if !strings.Contains(view, "sideways") {
+			t.Fatalf("background resolution error is not visible on Review:\n%s", view)
+		}
+	})
+	t.Run("SDK proposal error keeps the SDK label", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		oldVersion := opencode.VersionRunnerOverride
+		t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersion })
+		opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+			return opencode.CommandOutput{Stdout: []byte("2.0.18")}, nil
+		}
+		config := filepath.Join(home, "xdg", "opencode")
+		if err := os.MkdirAll(config, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+		m.DependencyPlan.Agents = m.Selection.Agents
+		m.Screen = ScreenReview
+		updated, _ := m.continueToSDKOrInstall()
+		view := updated.(Model).View()
+		if !strings.Contains(view, "OpenCode SDK: automatic OpenCode SDK install refused") {
+			t.Fatalf("SDK proposal error lost its label:\n%s", view)
+		}
+	})
+}
+
 func TestSyncDetailedPreservedActionsReachCompletion(t *testing.T) {
 	path := "/home/example/.cursor/agents/review-risk.md"
 	m := NewModel(system.DetectionResult{}, "dev")
