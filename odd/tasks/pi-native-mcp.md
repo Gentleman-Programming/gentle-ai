@@ -63,7 +63,7 @@ Strategy: `ask-on-risk`. Forecast: ~300–500 authored changed lines. Actual: 66
 
 - Branch created from `main` (af24bfd94).
 - Scope change: version floor removed (user implements it elsewhere).
-- Engram mirror: PENDING (save failed: multiple active runtime sessions).
+- Engram mirror: synced (topic `odd/pi-native-mcp/tasks`).
 - T1–T3 done on `feat/pi-native-mcp`.
 - Parent spot check: `go test ./internal/agents/pi/... ./internal/components/communitytool/... ./internal/components/engram/...` ok.
 - Native review (base af24bfd94..993b887ab, risk medium, consent granted): lineage `review-632f855a6f546e85`, one lens (review-reliability), approved and acknowledged (authority burned).
