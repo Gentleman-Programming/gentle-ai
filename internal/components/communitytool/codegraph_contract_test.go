@@ -68,7 +68,7 @@ func TestExcludedAgentsNeverEnterCodeGraphSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []model.AgentID{model.AgentKilocode, model.AgentVSCodeCopilot, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentOpenClaw, model.AgentTrae} {
+	for _, id := range []model.AgentID{model.AgentKilocode, model.AgentVSCodeCopilot, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentOpenClaw, model.AgentTrae, model.AgentCommandCode} {
 		t.Run(string(id), func(t *testing.T) {
 			home := t.TempDir()
 			adapter, ok := reg.Get(id)
