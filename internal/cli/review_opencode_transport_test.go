@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
@@ -1354,8 +1355,8 @@ func TestOpenCodeTransportRefusalFrameIsEmittedOnlyUnderTheV2Declaration(t *test
 		t.Fatalf("V1 relay wrote a refusal frame: %q", v1.String())
 	}
 
-	// Until V2 capability is admitted, the declared relay refuses at the gate
-	// and names that bounded cause.
+	// The TestMain runtime fake is V1, so the V2 declaration disagrees with the
+	// detected runtime: the declared relay refuses at the gate and names it.
 	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
 	var v2 bytes.Buffer
 	transportErr := runReviewOpenCodeTransport(nil, bytes.NewReader(start), &v2)
@@ -1386,4 +1387,66 @@ func TestOpenCodeV2PluginRefusalAllowListMatchesGo(t *testing.T) {
 			t.Fatalf("V2 plugin allow-list lacks Go refusal reason %q", reason)
 		}
 	}
+}
+
+// openCodeV2RuntimeForTest declares the managed V2 relay contract and reports a
+// V2 runtime, the only V2 combination the capability gate admits.
+func openCodeV2RuntimeForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
+	old := runtimeopencode.VersionRunnerOverride
+	t.Cleanup(func() { runtimeopencode.VersionRunnerOverride = old })
+	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
+		return runtimeopencode.CommandOutput{Stdout: []byte("opencode v2.0.19")}, nil
+	}
+}
+
+// With V2 admitted, the declared relay materializes, captures, and closes a
+// bound lens Task, and names agent mismatch in its bounded refusal frame.
+func TestOpenCodeV2RelayAdmitsBoundLensAndNamesAgentMismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
+	reviewEnabledHome(t)
+	openCodeV2RuntimeForTest(t)
+	repo, _, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	start := openCodeLensTransportStart(t, repo, record, lens)
+
+	mismatch := start
+	mismatch.Agent = "review-refuter"
+	encoded, err := json.Marshal(mismatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	_, before, err := discoverCompactFacadeReview(t.Context(), repo, record.State.LineageID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused bytes.Buffer
+	if err := runReviewOpenCodeTransport(nil, bytes.NewReader(encoded), &refused); err == nil {
+		t.Fatal("V2 relay admitted a lens Task under the refuter agent")
+	}
+	want := `{"schema":"` + openCodeReviewTransportSchema + `","operation":"refused","error":"agent_mismatch"}` + "\n"
+	if refused.String() != want {
+		t.Fatalf("V2 refusal output = %q, want %q", refused.String(), want)
+	}
+	assertOpenCodeRelayAuthorityUnchanged(t, repo, record.State.LineageID, store, before)
+
+	start.Agent = lens
+	relay := startOpenCodeTransportRelay(t, repo, start)
+	raw := string(admittedReviewerPayloadForTest(t, repo, record, lens, 0))
+	completed, err := relay.complete(openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &raw,
+	})
+	if err != nil || completed.Output == nil {
+		t.Fatalf("V2 lens completion = %#v, %v", completed, err)
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("V2 lens closure = %#v", terminal)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 }

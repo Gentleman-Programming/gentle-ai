@@ -1,5 +1,5 @@
 // gentle-ai:managed opencode-review-transport/v2
-// Staged wire adapter. Native capability remains unavailable pending runtime proof.
+// Thin wire adapter: Go owns binding, materialization, admission, and capture.
 import { Plugin } from "@opencode/plugin"
 import { spawn } from "node:child_process"
 const RELAY_CONTRACT = "gentle-ai.opencode-relay/v2-staged"

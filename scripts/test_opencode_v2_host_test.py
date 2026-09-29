@@ -936,5 +936,23 @@ class ReviewModeArgumentTests(unittest.TestCase):
                 with self.subTest(extra=extra), patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
                     host.parse_args(base + extra)
 
+    def test_capability_gate_label_is_review_only_and_defaults_to_stubbed(self):
+        with tempfile.TemporaryDirectory() as root:
+            scenario, shim, project = Path(root) / "s.json", Path(root) / "gentle-ai", Path(root) / "host"
+            scenario.write_text("{}")
+            shim.write_text("#!/bin/sh\n")
+            project.mkdir()
+            base = ["host", "deps", "--host-version", "2.x", "--temp-root", root]
+            review = ["--review-scenario", str(scenario), "--gentle-ai", str(shim), "--host-project", str(project),
+                      "--evidence", str(Path(root) / "e.json")]
+            self.assertEqual(host.parse_args(base + review).capability_gate, "stubbed")
+            self.assertEqual(host.parse_args(base + review + ["--capability-gate", "real"]).capability_gate, "real")
+            self.assertIn("gate itself not proven", host.review_scope("stubbed"))
+            self.assertIn("capability gate real", host.review_scope("real"))
+            self.assertNotIn("not proven", host.review_scope("real"))
+            for extra in (review + ["--capability-gate", "open"], ["--capability-gate", "real"]):
+                with self.subTest(extra=extra), patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
+                    host.parse_args(base + extra)
+
 if __name__ == "__main__":
     unittest.main()

@@ -162,6 +162,8 @@ def parse_args(argv=None):
     parser.add_argument("--gentle-ai", metavar="SHIM", help="review mode: executable placed on the host PATH as gentle-ai")
     parser.add_argument("--host-project", metavar="DIR", help="review mode: registered sibling worktree used as host cwd")
     parser.add_argument("--evidence", metavar="FILE", help="review mode: JSON evidence output path")
+    parser.add_argument("--capability-gate", choices=("stubbed", "real"),
+                        help="review mode: whether the relay stand-in stubs the capability gate (default) or keeps it real")
     for name in ("root", "config", "workspace"):
         parser.add_argument("--installed-" + name)
     parser.add_argument("--installed-sdk-missing", action="store_true",
@@ -188,7 +190,7 @@ def parse_args(argv=None):
             parser.error("installed paths must match the existing Go fixture layout")
     elif any((args.installed_root, args.installed_config, args.installed_workspace, args.installed_sdk_missing)):
         parser.error("installed paths require --installed-activation-only")
-    review = (args.gentle_ai, args.host_project, args.evidence)
+    review = (args.gentle_ai, args.host_project, args.evidence, args.capability_gate)
     if args.review_scenario:
         for name in ("review_scenario", "gentle_ai", "host_project"):
             value = getattr(args, name)
@@ -199,8 +201,9 @@ def parse_args(argv=None):
         if not args.evidence or not evidence.is_absolute() or not evidence.parent.is_dir():
             parser.error("--evidence must be an absolute path in an existing directory")
         args.evidence = evidence
+        args.capability_gate = args.capability_gate or "stubbed"
     elif any(review):
-        parser.error("--gentle-ai, --host-project, and --evidence require --review-scenario")
+        parser.error("--gentle-ai, --host-project, --evidence, and --capability-gate require --review-scenario")
     return args
 
 
@@ -396,6 +399,14 @@ def installed_activation(args):
     print("NOT PROVEN: reviewer/refuter/validator; native admission/receipt/capability")
 
 
+def review_scope(gate):
+    """Honest scope line: the relay stand-in either stubs the gate or keeps it real."""
+    base = "SCOPE: real OpenCode host + managed V2 review plugin + Go relay/admission; model replayed by loopback; "
+    if gate == "real":
+        return base + "capability gate real: plugin V2 relay declaration and real host version detection"
+    return base + "capability gate stubbed in the test binary; gate itself not proven"
+
+
 def review_scenario(args):
     """Real host, real managed review plugin, real Go relay; only the model is replayed."""
     from opencode_v2_loopback import ReviewScript, local_provider, prepare_review_fixture, run_review_scenario
@@ -444,8 +455,7 @@ def review_scenario(args):
     failed = [step for step in steps if step["problems"]]
     for step in steps:
         print(("FAIL: " if step["problems"] else "PASS: ") + step["name"] + ": " + "; ".join(step["problems"] or [step.get("expect", "")]))
-    print("SCOPE: real OpenCode host + managed V2 review plugin + Go relay/admission; model replayed by loopback; "
-          "capability gate stubbed in the test binary; gate itself not proven")
+    print(review_scope(args.capability_gate))
     if failed:
         raise RuntimeError(f"{len(failed)} review step(s) violated expectations; evidence: {args.evidence}")
 

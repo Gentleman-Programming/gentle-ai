@@ -25,12 +25,32 @@ import (
 // loopback provider (scripts/opencode_v2_loopback.py) replays child replies
 // that this test computed in Go before the host launched.
 //
-// SCOPE LABEL: capability gate stubbed in the test binary; gate itself not
-// proven. The relay runs as this test binary's CLI stand-in (TestMain in
-// protocol_probe_test.go), which unsets the plugin's relay-contract
-// declaration and reports a V1 runtime, so the production V2 refusal is
-// bypassed. This is not native RDD proof, a receipt, or capability admission.
-const openCodeV2HostScopeLabel = "capability gate stubbed in the test binary; gate itself not proven"
+// SCOPE LABELS. The relay runs as this test binary's CLI stand-in (TestMain in
+// protocol_probe_test.go). In the stubbed variant the stand-in unsets the
+// plugin's relay-contract declaration and reports a V1 runtime, so the gate is
+// stubbed open and not proven. In the real-gate variant the stand-in keeps the
+// plugin's declaration and the production version runner, and the shim puts
+// the real V2 host binary on PATH as `opencode`, so the production gate
+// decides. Neither variant is native RDD proof or a receipt.
+const (
+	openCodeV2HostScopeLabel         = "capability gate stubbed in the test binary; gate itself not proven"
+	openCodeV2HostRealGateScopeLabel = "capability gate real: plugin V2 relay declaration and real host version detection"
+)
+
+// openCodeV2StandInRealGateEnvironment asks the relay stand-in to keep the
+// production capability gate instead of stubbing it.
+const openCodeV2StandInRealGateEnvironment = "GENTLE_AI_TEST_STANDIN_REAL_CAPABILITY_GATE"
+
+// openCodeV2Gate selects how the relay stand-in decides capability.
+type openCodeV2Gate int
+
+const (
+	openCodeV2GateStubbed openCodeV2Gate = iota
+	openCodeV2GateReal
+	// openCodeV2GateRealWithoutRuntime keeps the real gate but leaves the V2
+	// host binary off the relay PATH: the negative control for detection.
+	openCodeV2GateRealWithoutRuntime
+)
 
 type openCodeV2HostInputs struct {
 	host, python, sdk, harness string
@@ -126,8 +146,9 @@ func openCodeV2HostE2EInputs(t *testing.T) openCodeV2HostInputs {
 
 // openCodeV2HostShim puts this test binary on the host PATH as gentle-ai. The
 // plugin spawns `gentle-ai review opencode-transport`; the stand-in routes it
-// to the real RunReview with the review-enabled HOME of this test.
-func openCodeV2HostShim(t *testing.T) string {
+// to the real RunReview with the review-enabled HOME of this test. For the real
+// gate, the relay PATH also resolves `opencode` to the real V2 host binary.
+func openCodeV2HostShim(t *testing.T, in openCodeV2HostInputs, gate openCodeV2Gate) string {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -138,9 +159,20 @@ func openCodeV2HostShim(t *testing.T) string {
 		t.Fatal(err)
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	path, gateEnvironment := filepath.Dir(git)+":/usr/bin:/bin", ""
+	if gate != openCodeV2GateStubbed {
+		gateEnvironment = " " + openCodeV2StandInRealGateEnvironment + "=1"
+	}
+	if gate == openCodeV2GateReal {
+		runtimeDir := t.TempDir()
+		if err := os.Symlink(in.host, filepath.Join(runtimeDir, "opencode")); err != nil {
+			t.Fatal(err)
+		}
+		path = runtimeDir + ":" + path
+	}
 	shim := filepath.Join(t.TempDir(), "gentle-ai")
 	script := "#!/bin/sh\nexec /usr/bin/env HOME=" + quote(os.Getenv("HOME")) +
-		" GENTLE_AI_TEST_CLI_STANDIN=1 DO_NOT_TRACK=1 PATH=" + quote(filepath.Dir(git)+":/usr/bin:/bin") +
+		" GENTLE_AI_TEST_CLI_STANDIN=1 DO_NOT_TRACK=1" + gateEnvironment + " PATH=" + quote(path) +
 		" " + quote(executable) + " \"$@\"\n"
 	if err := os.WriteFile(shim, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -180,6 +212,11 @@ func openCodeV2StatusProviderTask(t *testing.T, repo, lineage string) ReviewProv
 
 func runOpenCodeV2HostScenario(t *testing.T, in openCodeV2HostInputs, repo, host, authorityDir string, steps []openCodeV2HostStep) openCodeV2HostEvidence {
 	t.Helper()
+	return runOpenCodeV2HostScenarioWithGate(t, in, repo, host, authorityDir, openCodeV2GateStubbed, steps)
+}
+
+func runOpenCodeV2HostScenarioWithGate(t *testing.T, in openCodeV2HostInputs, repo, host, authorityDir string, gate openCodeV2Gate, steps []openCodeV2HostStep) openCodeV2HostEvidence {
+	t.Helper()
 	directory := t.TempDir()
 	scenario, evidencePath := filepath.Join(directory, "scenario.json"), filepath.Join(directory, "evidence.json")
 	writeReviewCLIJSON(t, scenario, map[string]any{"authority_dir": authorityDir, "steps": steps})
@@ -187,9 +224,14 @@ func runOpenCodeV2HostScenario(t *testing.T, in openCodeV2HostInputs, repo, host
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	// -E -s instead of -I: the harness imports its sibling loopback module.
+	label, gateArgument := openCodeV2HostScopeLabel, "stubbed"
+	if gate != openCodeV2GateStubbed {
+		label, gateArgument = openCodeV2HostRealGateScopeLabel, "real"
+	}
 	cmd := exec.CommandContext(ctx, in.python, "-E", "-s", "-B", in.harness, in.host, in.sdk,
 		"--host-version", "2.x", "--temp-root", directory, "--review-scenario", scenario,
-		"--gentle-ai", openCodeV2HostShim(t), "--host-project", host, "--evidence", evidencePath)
+		"--gentle-ai", openCodeV2HostShim(t, in, gate), "--host-project", host, "--evidence", evidencePath,
+		"--capability-gate", gateArgument)
 	cmd.Dir = directory
 	cmd.Env = []string{"HOME=" + os.Getenv("HOME"), "TMPDIR=" + directory, "PATH=/usr/bin:/bin"}
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
@@ -198,7 +240,7 @@ func runOpenCodeV2HostScenario(t *testing.T, in openCodeV2HostInputs, repo, host
 	t.Logf("harness output:\n%s", output)
 	var evidence openCodeV2HostEvidence
 	if raw, err := os.ReadFile(evidencePath); err == nil {
-		t.Logf("evidence (%s):\n%s", openCodeV2HostScopeLabel, raw)
+		t.Logf("evidence (%s):\n%s", label, raw)
 		if err := json.Unmarshal(raw, &evidence); err != nil {
 			t.Fatal(err)
 		}
@@ -206,8 +248,8 @@ func runOpenCodeV2HostScenario(t *testing.T, in openCodeV2HostInputs, repo, host
 	if runErr != nil {
 		t.Fatalf("real OpenCode V2 review scenario failed: %v", runErr)
 	}
-	if !strings.Contains(string(output), openCodeV2HostScopeLabel) {
-		t.Fatalf("harness output lacks the honest scope label %q", openCodeV2HostScopeLabel)
+	if !strings.Contains(string(output), label) {
+		t.Fatalf("harness output lacks the honest scope label %q", label)
 	}
 	if !strings.HasPrefix(evidence.HostVersion, "2.") || len(evidence.Steps) != len(steps) {
 		t.Fatalf("evidence = %#v, want one V2 entry per step", evidence)
@@ -401,4 +443,84 @@ func TestOpenCodeV2RealHostRefuterTaskUnderLensAgentIsRefused(t *testing.T) {
 	if err != nil || !recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) {
 		t.Fatalf("refuter was not admitted under its own agent after the agent-mismatch refusals (state=%q err=%v)", current.State.State, err)
 	}
+}
+
+// T4c: the production capability gate decides on a real V2 host. The relay
+// keeps the managed plugin's V2 relay declaration and detects the real host
+// binary's version, and each role is admitted only under its own agent, with
+// the bounded refusal reason visible to the parent.
+func TestOpenCodeV2RealHostUnstubbedGateAdmitsRolesUnderTheirAgents(t *testing.T) {
+	in := openCodeV2HostE2EInputs(t)
+	t.Run("lens", func(t *testing.T) {
+		reviewEnabledHome(t)
+		repo, started, store, record := newArtifactReview(t, false)
+		host := openCodeV2RegisteredHost(t, repo)
+		task := openCodeV2StatusProviderTask(t, repo, started.LineageID)
+		payload := string(admittedReviewerPayloadForTest(t, repo, record, task.Agent, 0))
+		negative := func(name, agent, prompt, child, reason string, childRequests *int) openCodeV2HostStep {
+			return openCodeV2HostStep{Name: name, Agent: agent, Prompt: prompt, Child: child, Expect: "refused", Reason: reason, ChildRequests: childRequests}
+		}
+		steps := []openCodeV2HostStep{
+			negative("lens-task-under-refuter-agent", "review-refuter", task.Prompt, payload, "agent_mismatch", openCodeV2Count(0)),
+			negative("stale-revision", task.Agent, openCodeV2MutatedLensPrompt(t, task.Prompt, "revision"), payload, "binding_mismatch", openCodeV2Count(0)),
+			negative("background-true", task.Agent, task.Prompt, payload, "dispatch_refused", openCodeV2Count(0)),
+			negative("truncated-json", task.Agent, task.Prompt, payload[:len(payload)/2], "output_refused", nil),
+			negative("child-provider-http-error", task.Agent, task.Prompt, "", "provider_failed", nil),
+			openCodeV2Admitted("lens-admitted", task.Agent, task.Prompt, payload, `"operation":"review/capture-result"`, `"state":"approved"`),
+			negative("replay-captured-task", task.Agent, task.Prompt, payload, "", openCodeV2Count(0)),
+		}
+		steps[2].Background = true
+		steps[4].ChildHTTPError = true
+		evidence := runOpenCodeV2HostScenarioWithGate(t, in, repo, host, store.Dir, openCodeV2GateReal, steps)
+		if admitted := evidence.Steps[5]; admitted.Name != "lens-admitted" || admitted.ChildRequests != 1 || len(admitted.Materialized) != 1 || !admitted.Materialized[0] {
+			t.Fatalf("real-gate lens admission evidence = %#v", admitted)
+		}
+		assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	})
+	t.Run("refuter", func(t *testing.T) {
+		reviewEnabledHome(t)
+		repo, _, store, task, payload := openCodeV2RefuterReady(t)
+		host := openCodeV2RegisteredHost(t, repo)
+		runOpenCodeV2HostScenarioWithGate(t, in, repo, host, store.Dir, openCodeV2GateReal, []openCodeV2HostStep{
+			{Name: "refuter-task-under-lens-agent", Agent: "review-risk", Prompt: task.Prompt, Child: payload, Expect: "refused", Reason: "agent_mismatch", ChildRequests: openCodeV2Count(0)},
+			openCodeV2Admitted("refuter-admitted", task.Agent, task.Prompt, payload,
+				`"operation":"`+reviewCaptureRefuterCaptureOperation+`"`, `"state":"correction_required"`),
+		})
+		current, err := store.Load()
+		if err != nil || !recordHasAdmittedRole(current.State, reviewtransaction.CompactRoleRefuter) || current.State.State != reviewtransaction.StateCorrectionRequired {
+			t.Fatalf("real-gate refuter was not admitted: state=%q err=%v", current.State.State, err)
+		}
+	})
+	t.Run("validator", func(t *testing.T) {
+		reviewEnabledHome(t)
+		repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		task := openCodeV2StatusProviderTask(t, repo, lineage)
+		host := openCodeV2RegisteredHost(t, repo)
+		payload := string(providerTargetedValidationPayload(t, request))
+		runOpenCodeV2HostScenarioWithGate(t, in, repo, host, store.Dir, openCodeV2GateReal, []openCodeV2HostStep{
+			{Name: "validator-task-under-refuter-agent", Agent: "review-refuter", Prompt: task.Prompt, Child: payload, Expect: "refused", Reason: "agent_mismatch", ChildRequests: openCodeV2Count(0)},
+			{Name: "validator-empty-output", Agent: task.Agent, Prompt: task.Prompt, Expect: "refused", Reason: "output_refused"},
+			openCodeV2Admitted("validator-admitted", task.Agent, task.Prompt, payload, `"operation":"review/capture-validation"`, `"state":"approved"`),
+		})
+		assertApprovedCompactAuthorityBurned(t, store, lineage)
+	})
+}
+
+// Negative control for the real gate: with the V2 declaration kept but no
+// `opencode` on the relay PATH, version detection fails and the production
+// gate refuses a correctly bound lens Task before any child request.
+func TestOpenCodeV2RealHostUnstubbedGateRefusesWithoutDetectedRuntime(t *testing.T) {
+	in := openCodeV2HostE2EInputs(t)
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, false)
+	host := openCodeV2RegisteredHost(t, repo)
+	task := openCodeV2StatusProviderTask(t, repo, started.LineageID)
+	payload := string(admittedReviewerPayloadForTest(t, repo, record, task.Agent, 0))
+	runOpenCodeV2HostScenarioWithGate(t, in, repo, host, store.Dir, openCodeV2GateRealWithoutRuntime, []openCodeV2HostStep{
+		{Name: "gate-refuses-undetected-runtime", Agent: task.Agent, Prompt: task.Prompt, Child: payload, Expect: "refused", Reason: "capability_unavailable", ChildRequests: openCodeV2Count(0)},
+	})
 }

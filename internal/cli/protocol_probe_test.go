@@ -67,7 +67,10 @@ func TestMain(m *testing.M) {
 	testenv.Isolate()
 	// The default fake is V1; an inherited host declaration must not override
 	// it, including in stand-in subprocesses. V2 tests set their own declaration.
-	if err := os.Unsetenv("GENTLE_AI_OPENCODE_RELAY_CONTRACT"); err != nil {
+	// The un-stubbed real-host E2E keeps both for its relay stand-in (below).
+	inheritedRelayDeclaration, relayDeclared := os.LookupEnv(openCodeRelayContractEnvironment)
+	realVersionRunner := runtimeopencode.VersionRunnerOverride
+	if err := os.Unsetenv(openCodeRelayContractEnvironment); err != nil {
 		panic(err)
 	}
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
@@ -102,12 +105,21 @@ func TestMain(m *testing.M) {
 			_, err = RunSync(args[1:])
 		case len(args) == 2 && args[0] == "review" && args[1] == "opencode-transport":
 			// The real OpenCode V2 host E2E (review_opencode_v2_host_e2e_test.go)
-			// reaches the real Go relay through this stand-in. TEST-ONLY STUB: the
-			// managed plugin declares GENTLE_AI_OPENCODE_RELAY_CONTRACT when it
-			// spawns the relay, which production treats as a refusal, and the host
-			// runtime is V2. Both were neutralized above (the declaration is unset
-			// and the version runner reports V1), so the immutable-transport
-			// capability gate is stubbed open here; the gate itself is not proven.
+			// reaches the real Go relay through this stand-in. By default it is a
+			// TEST-ONLY STUB: the declaration the managed plugin sets is unset and
+			// the version runner reports V1 (both above), so the capability gate
+			// is stubbed open as V1 and the gate itself is not proven. With
+			// GENTLE_AI_TEST_STANDIN_REAL_CAPABILITY_GATE=1 the stand-in restores
+			// the plugin's inherited declaration and the production version
+			// runner, so the real gate decides against the real V2 host binary.
+			if os.Getenv(openCodeV2StandInRealGateEnvironment) == "1" {
+				if relayDeclared {
+					if err := os.Setenv(openCodeRelayContractEnvironment, inheritedRelayDeclaration); err != nil {
+						panic(err)
+					}
+				}
+				runtimeopencode.VersionRunnerOverride = realVersionRunner
+			}
 			err = RunReview(args[1:], os.Stdout)
 		default:
 			fmt.Fprintf(os.Stderr, "stand-in: unsupported CLI arguments %q\n", args)
