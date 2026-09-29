@@ -162,3 +162,34 @@ func TestOpenCodeSDKFailureClassNamesStartExitSignalAndDeadline(t *testing.T) {
 		})
 	}
 }
+
+func TestV2SDKPreflightRuntimeDetectionFailureIsActionable(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{}, os.ErrNotExist
+	}
+	for name, run := range map[string]func() error{
+		"install and sync preflight": func() error { return (openCodePluginDependencyPreflightStep{homeDir: home}).Run() },
+		"TUI proposal": func() error {
+			_, err := OpenCodeSDKInstallProposal(home)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := run()
+			if err == nil {
+				t.Fatal("unknown OpenCode runtime passed the managed-asset preflight")
+			}
+			msg := err.Error()
+			for _, want := range []string{"OpenCode runtime version unavailable or unsupported", "opencode --version", "deselect OpenCode", "retry"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("detection failure missing %q: %s", want, msg)
+				}
+			}
+		})
+	}
+}

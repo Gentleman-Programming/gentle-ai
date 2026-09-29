@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,20 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
 )
+
+// openCodeRuntimeMajorForManagedAssets fails closed when the runtime is
+// unknown: every plan that includes OpenCode writes version-specific managed
+// plugins and telemetry, so V1 and V2 assets must never be guessed.
+func openCodeRuntimeMajorForManagedAssets() (opencodeactivation.RuntimeMajor, error) {
+	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	if err != nil {
+		return major, fmt.Errorf("%w; Gentle AI could not choose V1 or V2 managed OpenCode plugins and telemetry; make sure `opencode --version` succeeds in this shell (install, update, or add OpenCode to PATH), or deselect OpenCode, then retry", err)
+	}
+	return major, nil
+}
 
 // openCodeSDKIsolatedPathDirs is the only PATH the credential-isolated npm
 // process receives: the resolved npm location plus standard system locations.

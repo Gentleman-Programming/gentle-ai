@@ -989,7 +989,7 @@ var openCodeSDKInstallTimeout = 2 * time.Minute
 // OpenCodeSDKInstallProposal returns nil when no SDK operation is needed.
 // A conflicting or unavailable package manager is never guessed.
 func OpenCodeSDKInstallProposal(homeDir string) (*OpenCodeSDKConsent, error) {
-	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	major, err := openCodeRuntimeMajorForManagedAssets()
 	if err != nil {
 		return nil, err
 	}
@@ -1172,7 +1172,7 @@ func openCodeSDKInstalled(config, dependency string) bool {
 func (s openCodePluginDependencyPreflightStep) ID() string { return s.id }
 
 func (s openCodePluginDependencyPreflightStep) Run() error {
-	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	major, err := openCodeRuntimeMajorForManagedAssets()
 	if err != nil {
 		return err
 	}
