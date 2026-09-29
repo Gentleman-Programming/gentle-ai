@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -91,4 +92,42 @@ func TestTUISyncReportsSkippedOpenCode(t *testing.T) {
 			t.Fatalf("tuiSync() error = %v, want *cli.PartialSyncError", err)
 		}
 	})
+}
+
+// TestTUIPartialSyncKeepsOpenCodeInPersistedSelection pins that the TUI seams,
+// including the model-assignment write that runs after a partial sync, keep
+// OpenCode in the persisted selection so the next plain sync reselects it.
+func TestTUIPartialSyncKeepsOpenCodeInPersistedSelection(t *testing.T) {
+	for name, overrides := range map[string]*model.SyncOverrides{
+		"plain sync": nil,
+		"model assignment override": {
+			TargetAgents:           []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode},
+			ClaudeModelAssignments: map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelHaiku},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := undetectableOpenCodeHome(t)
+			_, actions, err := tuiSyncDetailed(home)(overrides)
+			if err != nil {
+				t.Fatalf("tuiSyncDetailed() error = %v", err)
+			}
+			if !strings.Contains(strings.Join(actions, "\n"), "opencode was skipped") {
+				t.Fatalf("manual actions = %q, want the OpenCode skip", actions)
+			}
+
+			persisted, err := state.Read(home)
+			if err != nil {
+				t.Fatalf("read persisted state after partial sync: %v", err)
+			}
+			if !reflect.DeepEqual(persisted.InstalledAgents, []string{"claude-code", "opencode"}) || !persisted.SelectionConfigured {
+				t.Errorf("persisted agents = %v configured=%v, want claude-code and opencode still selected", persisted.InstalledAgents, persisted.SelectionConfigured)
+			}
+			if overrides != nil && persisted.ClaudeModelAssignments["sdd-apply"] != "haiku" {
+				t.Errorf("persisted Claude assignments = %v, want the override written", persisted.ClaudeModelAssignments)
+			}
+			if got := syncAgentIDs(home, nil); !reflect.DeepEqual(got, []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}) {
+				t.Errorf("next plain TUI sync would resolve agents %v, want claude-code and opencode", got)
+			}
+		})
+	}
 }

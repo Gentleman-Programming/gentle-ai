@@ -6867,3 +6867,57 @@ func TestInstallStillFailsClosedWhenOpenCodeRuntimeDetectionFails(t *testing.T) 
 		t.Fatalf("install wrote OpenCode telemetry with an unknown runtime: %v", err)
 	}
 }
+
+// TestPartialSyncKeepsOpenCodeInPersistedSelection pins that skipping OpenCode
+// only narrows one run: the persisted selection still lists it, so the next
+// plain `gentle-ai sync` reselects OpenCode and applies it once detection works.
+func TestPartialSyncKeepsOpenCodeInPersistedSelection(t *testing.T) {
+	for name, run := range map[string]func(home string) (SyncResult, error){
+		"cli explicit agents": func(string) (SyncResult, error) { return RunSync([]string{"--agents", "claude-code,opencode"}) },
+		"cli plain":           func(string) (SyncResult, error) { return RunSync(nil) },
+		"tui selection": func(home string) (SyncResult, error) {
+			return RunSyncWithSelection(home, BuildSyncSelection(SyncFlags{}, []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, _ := partialSyncTestHome(t, "", os.ErrNotExist)
+			result, err := run(home)
+			var partial *PartialSyncError
+			if !errors.As(err, &partial) {
+				t.Fatalf("sync error = %v, want *PartialSyncError", err)
+			}
+			if !reflect.DeepEqual(result.Agents, []model.AgentID{model.AgentClaudeCode}) {
+				t.Fatalf("synced agents = %v, want only claude-code", result.Agents)
+			}
+
+			persisted, err := state.Read(home)
+			if err != nil {
+				t.Fatalf("read persisted state after partial sync: %v", err)
+			}
+			if persisted.LastSyncedAt == nil {
+				t.Error("partial sync did not persist its state, want the managed-asset write to have run")
+			}
+			if !reflect.DeepEqual(persisted.InstalledAgents, []string{"claude-code", "opencode"}) || !persisted.SelectionConfigured {
+				t.Errorf("persisted agents = %v configured=%v, want claude-code and opencode still selected", persisted.InstalledAgents, persisted.SelectionConfigured)
+			}
+			if got := DiscoverAgents(home); !reflect.DeepEqual(got, []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}) {
+				t.Errorf("next plain sync would resolve agents %v, want claude-code and opencode", got)
+			}
+
+			// Once `opencode --version` works, a plain sync applies OpenCode again.
+			opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+				return opencodeactivation.CommandOutput{Stdout: []byte("1.18.30")}, nil
+			}
+			next, err := RunSync(nil)
+			if err != nil {
+				t.Fatalf("plain sync after detection recovered: %v", err)
+			}
+			if len(next.SkippedAgents) != 0 || !reflect.DeepEqual(next.Agents, []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}) {
+				t.Errorf("plain sync agents = %v skipped = %#v, want both synced", next.Agents, next.SkippedAgents)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "plugins", "telemetry-runtime.ts")); err != nil {
+				t.Errorf("recovered plain sync did not apply OpenCode: %v", err)
+			}
+		})
+	}
+}
