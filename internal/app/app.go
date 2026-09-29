@@ -123,6 +123,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "telemetry":
 			return cli.RunTelemetry(args[1:], stdout)
+		case "engram":
+			return cli.RunEngram(args[1:], stdout)
 		case "review":
 			// The kill switch must stay reachable even when review authority
 			// itself is disabled, so it is dispatched ahead of the facade.

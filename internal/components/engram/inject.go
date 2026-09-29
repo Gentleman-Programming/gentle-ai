@@ -241,6 +241,23 @@ func antigravityEngramHooksJSON() []byte {
 					}) + "'",
 				},
 			},
+			"PreToolUse": []any{
+				map[string]any{
+					"matcher": "mem_save|mem_session_summary|mem_capture_passive",
+					"hooks": []any{
+						map[string]any{
+							"type":    "command",
+							"command": "gentle-ai engram hook-antigravity --event PreToolUse",
+						},
+					},
+				},
+			},
+			"Stop": []any{
+				map[string]any{
+					"type":    "command",
+					"command": "gentle-ai engram hook-antigravity --event Stop",
+				},
+			},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
