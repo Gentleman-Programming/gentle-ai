@@ -747,6 +747,86 @@ func TestOpenCodeReviewTransportRefusesUnavailableAuthorityAtStartOrCompletion(t
 	}
 }
 
+func TestOpenCodeTaskHostOutputPreservesOpaqueReviewerSyntax(t *testing.T) {
+	// Host decoding does not admit reviewer JSON. Each role's raw output must
+	// reach the shared provider parser unchanged, including invalid syntax.
+	for _, role := range []struct{ name, payload string }{
+		{name: "lens", payload: "{\"findings\":[]}"},
+		{name: "refuter", payload: "{\"results\":[]}"},
+		{name: "validator", payload: "{\"verdict\":\"pass\"}"},
+	} {
+		t.Run(role.name, func(t *testing.T) {
+			for _, test := range []struct{ name, raw string }{
+				{name: "valid JSON", raw: " \r\n\t" + role.payload + "  \n"},
+				{name: "fenced JSON", raw: "```json\n" + role.payload + "\n```\n"},
+				{name: "malformed JSON", raw: " \n{\"message\":\"café 🧪\",\"result\":[\t"},
+				{name: "multiple objects", raw: role.payload + "\n" + role.payload},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					for _, wrapped := range []bool{false, true} {
+						t.Run(fmt.Sprintf("wrapped=%t", wrapped), func(t *testing.T) {
+							raw := test.raw
+							if wrapped {
+								raw = "<task id=\"opaque\" state=\"completed\">\n<task_result>\n" + raw + "\n</task_result>\n</task>"
+							}
+							got, err := decodeOpenCodeTaskHostOutput([]byte(raw))
+							if err != nil || !bytes.Equal(got, []byte(test.raw)) {
+								t.Fatalf("decoded = %q, %v; want byte-exact %q", got, err, test.raw)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestOpenCodeTransportCompletionRejectsUnavailableHostOutput(t *testing.T) {
+	// These refusals precede authority lookup, so no host, review lineage, or
+	// advertised V2 capability is needed to exercise the native boundary.
+	for _, role := range []reviewProviderRole{"", reviewerprovider.RoleRefuter, reviewerprovider.RoleTargetedValidator} {
+		name := string(role)
+		if name == "" {
+			name = "lens"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, test := range []struct {
+				name, failure, code string
+				output              *string
+			}{
+				{name: "missing output", code: "opencode_task_output_empty"},
+				{name: "empty raw forwarded by V2", output: stringPointer(""), code: "opencode_task_output_empty"},
+				{name: "whitespace raw forwarded by V2", output: stringPointer(" \r\n\t"), code: "opencode_task_output_empty"},
+				{name: "unavailable V2 child", failure: "opencode_task_host_output_unavailable", code: "opencode_task_transport_failed"},
+				{name: "transport error wins over payload", output: stringPointer(`{"findings":[]}`), failure: "host failed", code: "opencode_task_transport_failed"},
+				{name: "incomplete legacy task", output: stringPointer("<task id=\"opaque\" state=\"running\">\n<task_result>\n{}\n</task_result>\n</task>"), code: "opencode_task_not_completed"},
+				{name: "failed legacy task", output: stringPointer("<task id=\"opaque\" state=\"error\">\n<task_error>\nfailed\n</task_error>\n</task>"), code: "opencode_task_error"},
+				{name: "truncated legacy completion", output: stringPointer("<task id=\"opaque\" state=\"completed\">\n<task_result>\n{"), code: "opencode_task_output_truncated"},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					session := openCodeTransportSession{}
+					session.binding.Role = role
+					result, err := openCodeTransportComplete(t.Context(), session, openCodeTransportEnvelope{
+						Schema: openCodeReviewTransportSchema, Operation: "complete", Output: test.output, Error: test.failure,
+					})
+					if err == nil || !strings.Contains(err.Error(), test.code) {
+						t.Fatalf("completion error = %v, want %s", err, test.code)
+					}
+					if test.failure == "" {
+						var outputErr *openCodeTaskOutputError
+						if !errors.As(err, &outputErr) || outputErr.Code != test.code {
+							t.Fatalf("completion error = %v, want typed %s", err, test.code)
+						}
+					}
+					if result.Output != nil || result.Operation != "" {
+						t.Fatalf("failed completion returned a result: %#v", result)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestOpenCodeTaskHostOutputPreservesPayloadBytesAndFailsClosed(t *testing.T) {
 	payload := "  {\n\t\"findings\": []\n}  "
 	tests := []struct {

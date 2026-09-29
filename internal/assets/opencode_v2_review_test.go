@@ -20,6 +20,65 @@ const reject=async(fn)=>{let failed=false;try{await fn()}catch{failed=true}if(!f
 const call=(id='call')=>({tool:'subagent',sessionID:'root',id,input:{agent:'review-risk',prompt:'opaque binding'}});
 const completed=c=>({...c,status:'completed',result:{output:{sessionID:'child',status:'completed',output:'RAW BYTES'},content:'NEVER PARSE WRAPPER'}});
 const a=await make(),b=await make();const c=call();await a.hooks['execute.before'](c);await b.hooks['execute.before'](c);if(children.length!==1||c.input.prompt!=='GO PROMPT')throw Error('duplicate/process materialization');const result=completed(c);await a.hooks['execute.after'](result);await b.hooks['execute.after'](result);if(children[0].frames[1].output!=='RAW BYTES'||result.result.output.output!=='GO RESULT'||!children[0].killed)throw Error('opaque completion');
+// Payload syntax is Go-owned: all reviewer roles use the same opaque wire.
+const agents=['review-risk','review-resilience','review-readability','review-reliability','review-refuter','review-validator'];
+const fence=String.fromCharCode(96).repeat(3);
+const payloads=[
+  ['valid JSON',' \r\n{\n\t"message": "café 🧪", "findings": []\n}  \n'],
+  ['fenced JSON',fence+'json\n{"findings":[]}\n'+fence+'\n'],
+  ['malformed JSON',' \n{"findings": [\t'],
+  ['multiple objects','{"findings":[]}\n{"verdict":"pass"}'],
+];
+const parse=JSON.parse;
+let payloadParseAttempts=0;
+JSON.parse=(text,...args)=>{if(payloads.some(([,raw])=>raw===text))payloadParseAttempts++;return parse(text,...args)};
+try {
+  for(const agent of agents)for(const [name,raw] of payloads){
+    const c=call(agent+':'+name);c.input.agent=agent;
+    const originalPrompt=c.input.prompt;
+    const count=children.length;
+    await a.hooks['execute.before'](c);
+    const child=children.at(-1);
+    if(children.length!==count+1||child.frames[0].prompt!==originalPrompt||c.input.prompt!=='GO PROMPT')throw Error(agent+': prompt forwarding');
+    const result=completed(c);result.result.output.output=raw;
+    await a.hooks['execute.after'](result);
+    const frame=child.frames[1];
+    if(child.frames.length!==2||frame.schema!=='gentle-ai.provider-transport/v1'||frame.operation!=='complete'||frame.nonce!=='opaque'||'error' in frame)throw Error(agent+': completion framing');
+    if(typeof frame.output!=='string'||!Buffer.from(frame.output).equals(Buffer.from(raw)))throw Error(agent+': changed '+name);
+    if(result.result.output.output!=='GO RESULT'||result.result.content!=='GO RESULT'||!child.killed)throw Error(agent+': native result substitution');
+  }
+  if(payloadParseAttempts!==0)throw Error('adapter attempted reviewer JSON parsing');
+}finally{JSON.parse=parse}
+
+// This mock only models a native transport refusal; Go tests prove the actual
+// empty-output decoder contract. Empty strings must reach Go, not TS admission.
+const unavailable=[
+  ['failed hook',r=>{r.status='error';r.error={message:'host failure'}}],
+  ['running child',r=>{r.result.output.status='running'}],
+  ['failed child',r=>{r.result.output.status='error'}],
+  ['missing child status',r=>{delete r.result.output.status}],
+  ['missing child session',r=>{delete r.result.output.sessionID}],
+  ['empty child session',r=>{r.result.output.sessionID=''}],
+  ['missing raw output',r=>{delete r.result.output.output}],
+  ['non-string raw output',r=>{r.result.output.output={findings:[]}}],
+  ['empty raw output',r=>{r.result.output.output=''},''],
+  ['whitespace raw output',r=>{r.result.output.output=' \r\n\t'},' \r\n\t'],
+];
+for(const agent of agents)for(const [name,mutate,raw] of unavailable){
+  const c=call(agent+':'+name);c.input.agent=agent;
+  await a.hooks['execute.before'](c);
+  const child=children.at(-1);
+  child.stdin.end=line=>{child.frames.push(JSON.parse(line));queueMicrotask(()=>child.emit('close',1))};
+  const result=completed(c);mutate(result);
+  await reject(()=>a.hooks['execute.after'](result));
+  const frame=child.frames[1];
+  if(child.frames.length!==2||frame.operation!=='complete'||frame.nonce!=='opaque'||!child.killed)throw Error(agent+': refusal lifecycle '+name);
+  if(raw!==undefined){
+    if(frame.output!==raw||'error' in frame)throw Error(agent+': empty bytes must reach Go');
+  }else if('output' in frame||frame.error!=='opencode_task_host_output_unavailable')throw Error(agent+': unavailable output forwarded '+name);
+  if(result.status==='completed'&&(result.result.output.status!=='unavailable'||result.result.content!=='opencode_review_transport_relay_refused'))throw Error(agent+': advisory escaped '+name);
+  if(result.status==='error'&&result.error.message!=='host failure')throw Error('host failure was replaced');
+}
 await reject(()=>a.hooks['execute.after'](completed(c)));
 const failed=call('orphan');await a.hooks['execute.before'](failed);await b.hooks['execute.before'](failed);const orphan=completed(failed);await a.cleanup();await reject(()=>b.hooks['execute.after'](orphan));if(JSON.stringify(orphan.result).includes('RAW BYTES'))throw Error('orphan advisory escaped');
 // Recreate the owner after disposal for subsequent location and error cases.
