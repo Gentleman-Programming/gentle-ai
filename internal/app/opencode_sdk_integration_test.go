@@ -382,22 +382,39 @@ func TestTUIOpenCodeSDKConsentRealNPMOfflineIntegration(t *testing.T) {
 	writeSDKBridgeFile(t, filepath.Join(root, "bin", "npm"), script, 0700)
 	runSDKFullApplyIntegration(t, home, config, log, true)
 	if activate {
-		// Python's 45s deadline and bounded group cleanup complete before this
-		// fallback. SIGINT enters its finally blocks; WaitDelay allows reaping.
-		ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, python, "-I", "-B", launcher, host, filepath.Join(config, "node_modules"),
-			"--host-version", "2.x", "--temp-root", root, "--installed-activation-only",
-			"--installed-root", root, "--installed-config", config, "--installed-workspace", filepath.Join(root, "workspace"))
-		cmd.Dir = filepath.Join(root, "workspace")
-		cmd.Env = []string{"HOME=" + home, "TMPDIR=" + filepath.Join(root, "tmp"), "PATH=/usr/bin:/bin"}
-		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-		cmd.WaitDelay = 15 * time.Second
-		output, err := cmd.CombinedOutput()
-		if err != nil || !strings.Contains(string(output), "PASS: installed activation:") {
-			t.Fatalf("installed activation failed: %v\n%s", err, output)
+		activation := func(want []string, extra ...string) {
+			// Python's 45s deadline and bounded group cleanup complete before this
+			// fallback. SIGINT enters its finally blocks; WaitDelay allows reaping.
+			ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+			defer cancel()
+			arguments := append([]string{"-I", "-B", launcher, host, filepath.Join(config, "node_modules"),
+				"--host-version", "2.x", "--temp-root", root, "--installed-activation-only",
+				"--installed-root", root, "--installed-config", config, "--installed-workspace", filepath.Join(root, "workspace")}, extra...)
+			cmd := exec.CommandContext(ctx, python, arguments...)
+			cmd.Dir = filepath.Join(root, "workspace")
+			cmd.Env = []string{"HOME=" + home, "TMPDIR=" + filepath.Join(root, "tmp"), "PATH=/usr/bin:/bin"}
+			cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+			cmd.WaitDelay = 15 * time.Second
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("installed activation %v failed: %v\n%s", extra, err, output)
+			}
+			for _, marker := range want {
+				if !strings.Contains(string(output), marker) {
+					t.Fatalf("installed activation %v lacks %q:\n%s", extra, marker, output)
+				}
+			}
+			t.Logf("%s", output)
 		}
-		t.Logf("%s", output)
+		// Initial launch plus a relaunch against the same installed root.
+		activation([]string{"PASS: installed activation:", "PASS: installed restart:"})
+		// Negative control: hide the installed SDK outside every Node resolution
+		// ancestor of the fixture configuration, then relaunch unchanged plugins.
+		sdk := filepath.Join(config, "node_modules", "@opencode", "plugin")
+		if err := os.Rename(sdk, filepath.Join(root, "hidden-opencode-plugin-sdk")); err != nil {
+			t.Fatal(err)
+		}
+		activation([]string{"PASS: missing SDK refused:", "Cannot find package '@opencode/plugin'"}, "--installed-sdk-missing")
 	}
 }
 

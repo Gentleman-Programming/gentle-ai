@@ -319,12 +319,15 @@ class InstalledActivationTests(unittest.TestCase):
                 launch.return_value.returncode = 0
                 host.main(args)
                 self.assertIn('host opencode v2.0.19', output.getvalue())
-                self.assertEqual(len(paths), 2)
-                self.assertEqual(stop.call_count, 2)
+                self.assertIn('PASS: installed restart:', output.getvalue())
+                # Initial launch and restart each read the spec and one inventory.
+                self.assertEqual(len(paths), 4)
+                self.assertEqual(stop.call_count, 3)
                 commands = [call.args[0] for call in launch.call_args_list]
                 self.assertTrue(all(command[0] == 'sandbox' for command in commands))
                 self.assertEqual(commands[0][-1], '--version')
                 self.assertEqual(commands[1][-4:], ['serve', '--stdio', '--port', '0'])
+                self.assertEqual(commands[2], commands[1])
                 env = launch.call_args.kwargs['env']
                 self.assertEqual(env['OPENCODE_CONFIG_DIR'], str(config))
                 self.assertEqual(env['HOME'], str(root / 'home'))
@@ -512,6 +515,190 @@ class InstalledActivationTests(unittest.TestCase):
                     with self.assertRaises((SystemExit, ValueError, RuntimeError)):
                         host.main(args)
                     launch.assert_not_called()
+
+
+class InstalledRestartAndMissingSDKTests(unittest.TestCase):
+    fixture = InstalledActivationTests.fixture
+
+    def source(self, root, name):
+        return str(Path(root).resolve() / 'config/opencode/plugins' / (name.removeprefix('gentle-ai.') + '.ts'))
+
+    def run_main(self, args, request, extra_patches=()):
+        with patch.object(host, 'network_prefix', return_value=['sandbox']), \
+             patch.object(host.subprocess, 'Popen') as launch, patch.object(host, 'stop') as stop, \
+             patch.object(host, 'read_address', return_value='http://127.0.0.1:1234'), \
+             patch.object(host, 'fixture_request', return_value=request), patch.object(host.os, 'killpg'), \
+             patch('sys.stdout', new_callable=io.StringIO) as output:
+            launch.return_value.communicate.return_value = ('opencode v2.0.19', '')
+            launch.return_value.returncode = 0
+            launch.return_value.poll.return_value = -15
+            try:
+                host.main(args)
+            finally:
+                self.launches, self.stops, self.output = launch.call_count, stop.call_count, output.getvalue()
+
+    def inventory(self, root, status='active', ids=True, error='Plugin failed to load'):
+        state = {'status': status}
+        if status == 'failed':
+            state.update({'error': error, 'ref': 'err_' + status})
+        return {'location': {'directory': str(Path(root).resolve() / 'workspace')}, 'data': [
+            {**({'id': name} if ids else {}), 'state': dict(state, ref='err_' + name[-4:]) if status == 'failed' else state,
+             'source': {'type': 'local', 'path': self.source(root, name)}} for name in sorted(host.PLUGIN_IDS)]}
+
+    def counting_request(self, replies):
+        calls = {'inventory': 0}
+        def request(path):
+            if path == '/openapi.json':
+                return {'paths': {'/api/plugin': {'get': {'operationId': 'plugin.list'}}}}
+            calls['inventory'] += 1
+            return replies(calls['inventory'])
+        return request
+
+    def test_restart_relaunches_same_root_and_requires_active_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory)
+            request = self.counting_request(lambda n: self.inventory(directory, 'active' if n == 1 else 'failed'))
+            with self.assertRaisesRegex(RuntimeError, 'activation failed'):
+                self.run_main(args, request)
+            # Version probe, initial host, restarted host: all reaped.
+            self.assertEqual((self.launches, self.stops), (3, 3))
+            self.assertNotIn('PASS', self.output)
+
+    def test_restart_detects_installed_input_change_between_launches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory)
+            plugin = Path(self.source(directory, 'gentle-ai.skill-registry'))
+            def replies(n):
+                if n == 2:
+                    plugin.write_text('replaced during restart')
+                return self.inventory(directory)
+            with self.assertRaisesRegex(RuntimeError, 'hashes changed during restart'):
+                self.run_main(args, self.counting_request(replies))
+            self.assertEqual(self.stops, 3)
+
+    def test_restart_refuses_to_relaunch_over_live_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory)
+            request = self.counting_request(lambda n: self.inventory(directory))
+            with patch.object(host, 'network_prefix', return_value=['sandbox']), \
+                 patch.object(host.subprocess, 'Popen') as launch, patch.object(host, 'stop'), \
+                 patch.object(host, 'read_address', return_value='http://127.0.0.1:1234'), \
+                 patch.object(host, 'fixture_request', return_value=request), patch.object(host.os, 'killpg'):
+                launch.return_value.communicate.return_value = ('opencode v2.0.19', '')
+                launch.return_value.returncode = 0
+                launch.return_value.poll.return_value = None
+                with self.assertRaisesRegex(RuntimeError, 'still running after initial'):
+                    host.main(args)
+                self.assertEqual(launch.call_count, 2)
+
+    def missing_fixture(self, directory):
+        args = self.fixture(directory)
+        sdk = Path(directory).resolve() / 'config/opencode/node_modules/@opencode/plugin'
+        for path in sorted(sdk.rglob('*'), reverse=True):
+            path.unlink()
+        sdk.rmdir()
+        return args + ['--installed-sdk-missing']
+
+    def write_log(self, directory, cause):
+        log = Path(directory).resolve() / 'data/opencode/log/host.log'
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(''.join(f'level=WARN message="failed to load plugin" ref=err_{name[-4:]} cause="{cause}"\n'
+                               for name in host.PLUGIN_IDS))
+
+    def test_missing_sdk_reports_logged_resolution_cause_without_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.missing_fixture(directory)
+            self.write_log(directory, "Die(ResolveMessage: Cannot find package '@opencode/plugin' imported from x)")
+            request = self.counting_request(lambda n: self.inventory(directory, 'failed', ids=False))
+            self.run_main(args, request)
+            self.assertIn('PASS: missing SDK refused:', self.output)
+            self.assertEqual(self.output.count("Cannot find package '@opencode/plugin'"), 4)
+            self.assertEqual((self.launches, self.stops), (2, 2))
+
+    def test_missing_sdk_rejects_unexpected_or_unlogged_cause(self):
+        for cause in ('SyntaxError: unexpected token', None):
+            with self.subTest(cause=cause), tempfile.TemporaryDirectory() as directory:
+                args = self.missing_fixture(directory)
+                if cause:
+                    self.write_log(directory, cause)
+                request = self.counting_request(lambda n: self.inventory(directory, 'failed', ids=False))
+                with self.assertRaisesRegex(RuntimeError, 'unexpected or unlogged reason'):
+                    self.run_main(args, request)
+                self.assertNotIn('PASS', self.output)
+
+    def test_missing_sdk_active_plugin_is_an_unsafe_finding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.missing_fixture(directory)
+            request = self.counting_request(lambda n: self.inventory(directory))
+            with self.assertRaisesRegex(RuntimeError, 'active without the installed SDK'):
+                self.run_main(args, request)
+            self.assertEqual(self.stops, 2)
+
+    def test_missing_sdk_mode_refuses_present_sdk_before_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory) + ['--installed-sdk-missing']
+            with patch.object(host, 'network_prefix', return_value=['sandbox']), \
+                 patch.object(host.subprocess, 'Popen') as launch:
+                with self.assertRaisesRegex(ValueError, 'SDK to be absent'):
+                    host.main(args)
+                launch.assert_not_called()
+
+    def test_missing_sdk_flag_requires_installed_mode(self):
+        with tempfile.TemporaryDirectory() as directory, patch('sys.stderr', new_callable=io.StringIO):
+            with self.assertRaises(SystemExit):
+                host.parse_args(['host', 'deps', '--host-version', '2.x', '--temp-root', directory,
+                                 '--installed-sdk-missing'])
+
+
+class MissingSDKRefusalPollTests(unittest.TestCase):
+    expected = {'/fixture/one.ts': 'gentle-ai.one', '/fixture/two.ts': 'gentle-ai.two'}
+
+    def poll(self, replies):
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+        iterator = iter(replies)
+        return host.wait_for_missing_sdk_refusal(lambda: next(iterator), self.expected, timeout=2,
+                                                 clock=lambda: now[0], sleep=sleep)
+
+    @staticmethod
+    def entry(path, status, error='Plugin failed to load', **extra):
+        state = {'status': status, **({'error': error, 'ref': 'err_' + path[-6:-3]} if status == 'failed' else {})}
+        return {'source': {'type': 'local', 'path': path}, 'state': state, **extra}
+
+    def test_idless_failures_are_matched_by_installed_source(self):
+        cold = {'data': [self.entry('/fixture/one.ts', 'failed')]}
+        done = {'data': [self.entry(path, 'failed') for path in self.expected] +
+                [{'id': 'builtin', 'source': {'type': 'builtin'}, 'state': {'status': 'active'}},
+                 self.entry('/other/plugin.ts', 'failed')]}
+        failed = self.poll([cold, done])
+        self.assertEqual(set(failed), set(self.expected.values()))
+        self.assertEqual(failed['gentle-ai.one']['ref'], 'err_one')
+
+    def test_active_managed_plugin_is_never_a_refusal(self):
+        for item in (self.entry('/fixture/two.ts', 'active'), {'id': 'gentle-ai.two', 'state': {'status': 'active'}}):
+            with self.subTest(item=item), self.assertRaisesRegex(RuntimeError, 'active without the installed SDK'):
+                self.poll([{'data': [self.entry('/fixture/one.ts', 'failed'), item]}])
+
+    def test_failure_without_reason_or_duplicate_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'without a reported reason'):
+            self.poll([{'data': [self.entry(path, 'failed', error='') for path in self.expected]}])
+        with self.assertRaisesRegex(RuntimeError, 'duplicate'):
+            self.poll([{'data': [self.entry('/fixture/one.ts', 'failed')] * 2}])
+
+    def test_absent_refusal_is_bounded(self):
+        with self.assertRaisesRegex(TimeoutError, 'not observable'):
+            self.poll([{'data': []}] * 10)
+
+    def test_failure_causes_extract_bounded_cause_for_each_ref(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('data', 'state', 'cache', 'tmp'):
+                (root / name).mkdir()
+            (root / 'state/log.txt').write_text('ref=err_a cause="Cannot find package x"\nref=err_b other\n')
+            (root / 'cache/huge.log').write_text('ref=err_c cause="too large"' + ' ' * 64)
+            causes = host.failure_causes(root, ['err_a', 'err_b', 'err_c', 'err_d'], limit=64)
+            self.assertEqual(causes, {'err_a': 'cause="Cannot find package x"', 'err_b': 'ref=err_b other'})
 
 
 class CleanupTests(unittest.TestCase):

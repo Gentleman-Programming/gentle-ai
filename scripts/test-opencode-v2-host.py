@@ -25,6 +25,7 @@ PLUGIN_IDS = {"gentle-ai." + name for name in (
     "opencode-review-transport",
 )}
 DECLARATION = "gentle-ai.opencode-relay/v2-staged"
+MISSING_SDK_CAUSE = "Cannot find package '@opencode/plugin'"
 
 
 def wait_for_plugins(fetch, expected, timeout=15, clock=time.monotonic, sleep=time.sleep):
@@ -41,6 +42,50 @@ def wait_for_plugins(fetch, expected, timeout=15, clock=time.monotonic, sleep=ti
             return response
         sleep(0.25)
     raise TimeoutError("plugin activation did not complete within bounded polling: " + json.dumps(response))
+
+
+def wait_for_missing_sdk_refusal(fetch, expected, timeout=15, clock=time.monotonic, sleep=time.sleep):
+    """Require every managed plugin to fail observably, never to activate, without its SDK.
+
+    A module that cannot import cannot declare its ID, so the host reports the
+    failure without an ID; *expected* maps each installed source path to its ID.
+    """
+    deadline = clock() + timeout
+    while clock() < deadline:
+        response = fetch()
+        managed = [item for item in response["data"] if item.get("id") in expected.values()
+                   or (item.get("source") or {}).get("path") in expected]
+        if any(item["state"]["status"] == "active" for item in managed):
+            raise RuntimeError("managed plugin active without the installed SDK: " + json.dumps(managed))
+        failed = {}
+        for item in managed:
+            path = (item.get("source") or {}).get("path")
+            if item["state"]["status"] == "failed" and path in expected:
+                if expected[path] in failed:
+                    raise RuntimeError("duplicate managed plugin failure: " + json.dumps(managed))
+                failed[expected[path]] = item["state"]
+        if set(failed) == set(expected.values()):
+            if not all(state.get("error") for state in failed.values()):
+                raise RuntimeError("managed plugin failed without a reported reason: " + json.dumps(managed))
+            return failed
+        sleep(0.25)
+    # Built-in entries are omitted so a bounded message still shows every local plugin.
+    local = [item for item in response["data"] if (item.get("source") or {}).get("type") != "builtin"]
+    raise TimeoutError("missing-SDK refusal was not observable within bounded polling; non-builtin entries: " + json.dumps(local))
+
+
+def failure_causes(root, refs, limit=1 << 20):
+    """Find bounded host log lines naming each opaque failure reference."""
+    causes = {}
+    for directory in ("data", "state", "cache", "tmp"):
+        for path in sorted((root / directory).rglob("*")):
+            if not path.is_file() or path.is_symlink() or path.stat().st_size > limit:
+                continue
+            for line in path.read_bytes().decode("utf-8", "replace").splitlines():
+                for ref in refs:
+                    if ref not in causes and ref in line:
+                        causes[ref] = line[line.find("cause="):].strip()[:300] if "cause=" in line else line.strip()[:300]
+    return causes
 
 
 def stop(process):
@@ -114,6 +159,8 @@ def parse_args(argv=None):
     modes.add_argument("--installed-activation-only", action="store_true")
     for name in ("root", "config", "workspace"):
         parser.add_argument("--installed-" + name)
+    parser.add_argument("--installed-sdk-missing", action="store_true",
+                        help="negative control: the installed SDK was removed after Apply")
     args = parser.parse_args(argv)
     if args.host_version != "2.x" and not re.fullmatch(r"2\.[0-9]+\.[0-9]+", args.host_version):
         parser.error("--host-version must be 2.x or an exact V2 release, such as 2.0.18")
@@ -134,7 +181,7 @@ def parse_args(argv=None):
                 or args.installed_workspace != args.installed_root / "workspace"
                 or args.dependencies != args.installed_config / "node_modules"):
             parser.error("installed paths must match the existing Go fixture layout")
-    elif any((args.installed_root, args.installed_config, args.installed_workspace)):
+    elif any((args.installed_root, args.installed_config, args.installed_workspace, args.installed_sdk_missing)):
         parser.error("installed paths require --installed-activation-only")
     return args
 
@@ -171,7 +218,7 @@ def read_address(process, timeout=20):
     raise TimeoutError("host lease readiness unavailable")
 
 
-def installed_hashes(config):
+def installed_hashes(config, require_sdk=True):
     """Snapshot all installed entries, including root and empty directories."""
     hashes = {}
     paths = [config]
@@ -194,8 +241,12 @@ def installed_hashes(config):
         else:
             raise ValueError("installed inputs must be regular files or directories: " + str(path))
         hashes[str(path.relative_to(config))] = (stat.S_IFMT(mode), stat.S_IMODE(mode), digest)
-    required = {"opencode.json", "node_modules/@opencode/plugin/package.json"} | {
-        "plugins/" + name.removeprefix("gentle-ai.") + ".ts" for name in PLUGIN_IDS}
+    required = {"opencode.json"} | {"plugins/" + name.removeprefix("gentle-ai.") + ".ts" for name in PLUGIN_IDS}
+    if require_sdk:
+        required.add("node_modules/@opencode/plugin/package.json")
+    elif any(name == "node_modules/@opencode/plugin" or name.startswith("node_modules/@opencode/plugin/")
+             for name in hashes):
+        raise ValueError("missing-SDK control requires the installed SDK to be absent")
     if not required.issubset(hashes) or any(hashes[name][0] != stat.S_IFREG for name in required):
         raise ValueError("installed settings, SDK, and four plugins are required")
     return hashes
@@ -243,10 +294,12 @@ def installed_activation(args):
     root, config, workspace = args.installed_root, args.installed_config, args.installed_workspace
     # Deny writes outside this fixture, including binary auto-update locations.
     prefix = network_prefix(root)  # Mandatory even for the version probe.
-    before = installed_hashes(config)
-    package = json.loads((args.dependencies / "@opencode/plugin/package.json").read_text())
-    if package["version"] != "2.0.4":
-        raise ValueError("installed activation requires SDK 2.0.4")
+    missing = args.installed_sdk_missing
+    before = installed_hashes(config, require_sdk=not missing)
+    if not missing:
+        package = json.loads((args.dependencies / "@opencode/plugin/package.json").read_text())
+        if package["version"] != "2.0.4":
+            raise ValueError("installed activation requires SDK 2.0.4")
     env = {key: str(root / name) for key, name in {
         "HOME": "home", "XDG_CONFIG_HOME": "config", "XDG_DATA_HOME": "data",
         "XDG_STATE_HOME": "state", "XDG_CACHE_HOME": "cache", "XDG_RUNTIME_DIR": "run",
@@ -259,41 +312,69 @@ def installed_activation(args):
         raise TimeoutError("installed activation cancelled or deadline exceeded")
     handlers = {sig: signal.signal(sig, cancelled) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)}
     signal.alarm(45)
+    phase = "version"
     try:
         with installed_process(prefix + [str(args.binary), "--version"], workspace, env) as process:
             stdout, _ = process.communicate(timeout=10)
             if process.returncode != 0:
                 raise RuntimeError("installed host version probe failed")
             host_version = validate_host_version(stdout, args.host_version)
-        with installed_process(prefix + [str(args.binary), "serve", "--stdio", "--port", "0"], workspace, env) as process:
-            address = read_address(process)
-            authorization = "Basic " + base64.b64encode(("opencode:" + env["OPENCODE_PASSWORD"]).encode()).decode()
-            route = "/api/plugin?" + urllib.parse.urlencode({"location[directory]": str(workspace)})
-            request = fixture_request(address, authorization, allowed_gets={"/openapi.json", route})
-            spec = request("/openapi.json")
-            if spec["paths"].get("/api/plugin", {}).get("get", {}).get("operationId") != "plugin.list":
-                raise RuntimeError("host does not expose the expected GET plugin route")
-            def inventory():
-                response = request(route)
-                if response["location"]["directory"] != str(workspace):
-                    raise RuntimeError("plugin inventory returned a different location")
-                for item in response["data"]:
-                    if item.get("id") in PLUGIN_IDS:
-                        source = item.get("source")
-                        expected = config / "plugins" / (item["id"].removeprefix("gentle-ai.") + ".ts")
-                        # Plugin.Source documents local provenance as {type: "local", path: string}.
-                        if (not isinstance(source, dict) or source.get("type") != "local"
-                                or source.get("path") != str(expected.resolve(strict=True))):
-                            raise RuntimeError("managed plugin source differs from installed input")
-                return response
-            wait_for_plugins(inventory, PLUGIN_IDS)
+        # A restart relaunches the same installed root; the SDK-less control runs once.
+        refusals = None
+        for cycle in ("initial",) if missing else ("initial", "restart"):
+            phase = cycle
+            with installed_process(prefix + [str(args.binary), "serve", "--stdio", "--port", "0"], workspace, env) as process:
+                address = read_address(process)
+                authorization = "Basic " + base64.b64encode(("opencode:" + env["OPENCODE_PASSWORD"]).encode()).decode()
+                route = "/api/plugin?" + urllib.parse.urlencode({"location[directory]": str(workspace)})
+                request = fixture_request(address, authorization, allowed_gets={"/openapi.json", route})
+                spec = request("/openapi.json")
+                if spec["paths"].get("/api/plugin", {}).get("get", {}).get("operationId") != "plugin.list":
+                    raise RuntimeError("host does not expose the expected GET plugin route")
+                def inventory():
+                    response = request(route)
+                    if response["location"]["directory"] != str(workspace):
+                        raise RuntimeError("plugin inventory returned a different location")
+                    for item in response["data"]:
+                        if item.get("id") in PLUGIN_IDS:
+                            source = item.get("source")
+                            expected = config / "plugins" / (item["id"].removeprefix("gentle-ai.") + ".ts")
+                            # Plugin.Source documents local provenance as {type: "local", path: string}.
+                            if (not isinstance(source, dict) or source.get("type") != "local"
+                                    or source.get("path") != str(expected.resolve(strict=True))):
+                                raise RuntimeError("managed plugin source differs from installed input")
+                    return response
+                if missing:
+                    sources = {str((config / "plugins" / (name.removeprefix("gentle-ai.") + ".ts")).resolve(strict=True)): name
+                               for name in PLUGIN_IDS}
+                    refusals = wait_for_missing_sdk_refusal(inventory, sources)
+                else:
+                    wait_for_plugins(inventory, PLUGIN_IDS)
+            # installed_process reaps the whole group; never relaunch over a live host.
+            if process.poll() is None:
+                raise RuntimeError("host still running after " + cycle + " activation")
+            if installed_hashes(config, require_sdk=not missing) != before:
+                raise RuntimeError("installed input hashes changed during " + cycle + " activation")
     finally:
         signal.alarm(0)
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
-        if installed_hashes(config) != before:
-            raise RuntimeError("installed input hashes changed during activation")
-    print(f"PASS: installed activation: host opencode v{host_version}; four managed plugins active; installed settings/SDK/assets hashes unchanged")
+        if installed_hashes(config, require_sdk=not missing) != before:
+            raise RuntimeError("installed input hashes changed during " + phase + " activation")
+    if missing:
+        # The API reports only an opaque ref; its log cause must name the SDK.
+        causes = failure_causes(root, [state["ref"] for state in refusals.values() if state.get("ref")])
+        reasons = []
+        for name, state in sorted(refusals.items()):
+            cause = causes.get(state.get("ref"), "")
+            if MISSING_SDK_CAUSE not in cause:
+                raise RuntimeError(f"{name} failed for an unexpected or unlogged reason: {json.dumps(state)}; {cause!r}")
+            reasons.append(f"REASON: {name}: {state['error']} ({state['ref']}); log {cause}")
+        print(f"PASS: missing SDK refused: host opencode v{host_version}; four managed plugins failed, none active; installed settings/assets hashes unchanged")
+        print("\n".join(reasons))
+    else:
+        print(f"PASS: installed activation: host opencode v{host_version}; four managed plugins active; installed settings/SDK/assets hashes unchanged")
+        print(f"PASS: installed restart: host opencode v{host_version}; same installed root relaunched; four managed plugins active again; installed settings/SDK/assets hashes unchanged")
     print("NOT PROVEN: reviewer/refuter/validator; native admission/receipt/capability")
 
 
