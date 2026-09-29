@@ -191,7 +191,6 @@ func defaultStat(path string) statResult {
 	if err != nil {
 		return statResult{err: err}
 	}
-
 	return statResult{isDir: info.IsDir()}
 }
 
