@@ -4681,7 +4681,9 @@ func detectedAgentIDs(detection system.DetectionResult) []model.AgentID {
 		case string(model.AgentHermes):
 			selected = append(selected, model.AgentHermes)
 		case "command-code":
-			selected = append(selected, model.AgentID("command-code"))
+			// command-code is detect-only and managed externally; install is
+			// unsupported by design (matching adapter InstallCommand AgentNotInstallableError).
+			// Exclude from TUI preselect defaults.
 		}
 	}
 	return selected

@@ -3872,7 +3872,6 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 		{"vscode-copilot", model.AgentVSCodeCopilot},
 		{"codex", model.AgentCodex},
 		{"hermes", model.AgentHermes},
-		{"command-code", model.AgentID("command-code")},
 	}
 
 	for _, tt := range tests {
@@ -3897,6 +3896,49 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 					len(selected), tt.configAgent, selected)
 			}
 		})
+	}
+}
+
+// TestPreselectedAgents_ExcludesCommandCode proves preselectedAgents does not
+// include command-code in TUI install/manage defaults because command-code is
+// detect-only and managed externally (install is unsupported by design).
+func TestPreselectedAgents_ExcludesCommandCode(t *testing.T) {
+	// Case 1: command-code detected alongside an installable agent.
+	detection := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+			{Agent: "claude-code", Exists: true},
+		},
+	}
+	selected := preselectedAgents(detection, state.InstallState{})
+	for _, a := range selected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("preselectedAgents() unexpectedly included command-code: %v", selected)
+		}
+	}
+	if len(selected) != 1 || selected[0] != model.AgentClaudeCode {
+		t.Fatalf("preselectedAgents() = %v, want [claude-code]", selected)
+	}
+
+	// Case 2: only command-code detected; fallback to catalog defaults must also not include command-code.
+	detectionSolo := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+		},
+	}
+	soloSelected := preselectedAgents(detectionSolo, state.InstallState{})
+	for _, a := range soloSelected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("preselectedAgents() with solo command-code unexpectedly included command-code: %v", soloSelected)
+		}
+	}
+
+	// Case 3: detectedAgentIDs directly excludes command-code.
+	detected := detectedAgentIDs(detection)
+	for _, a := range detected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("detectedAgentIDs() unexpectedly included command-code: %v", detected)
+		}
 	}
 }
 
