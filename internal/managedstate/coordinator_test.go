@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/filecoord"
@@ -729,5 +730,81 @@ func TestPlanDriftBetweenRunsIsStale(t *testing.T) {
 	_, err := Run(context.Background(), home, drifted, Faults{})
 	if !errors.Is(err, ErrStaleManifest) {
 		t.Fatalf("expected ErrStaleManifest on plan drift, got %v", err)
+	}
+}
+
+// ---- resume alignment: journal identity wins over plan order ---------------
+
+func twoPlan(home string) Plan {
+	p := onePlan(home)
+	second := p.Resources[0]
+	second.ID = "persona/output-style/neutral"
+	second.Target = filepath.Join(home, "claude", "neutral.md")
+	second.Desired = []byte("# Neutral output style\nmanaged desired content\n")
+	p.Resources = append(p.Resources, second)
+	return p
+}
+
+func TestResumeWithReorderedPlanAlignsByID(t *testing.T) {
+	home := t.TempDir()
+	plan := twoPlan(home)
+
+	crash := Faults{BeforeTargetWrite: func(string) error { return ErrInjected }}
+	if _, err := Run(context.Background(), home, plan, crash); !errors.Is(err, ErrInjected) {
+		t.Fatalf("expected crash, got %v", err)
+	}
+
+	reversed := Plan{Producer: plan.Producer, Resources: []PlannedResource{plan.Resources[1], plan.Resources[0]}}
+	res, err := Run(context.Background(), home, reversed, Faults{})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if res.Phase != PhaseCompleted || res.Status != "" {
+		t.Fatalf("resume result: %+v", res)
+	}
+	for _, r := range plan.Resources {
+		if got := mustReadFile(t, r.Target); string(got) != string(r.Desired) {
+			t.Fatalf("resource %s must receive ITS desired bytes, got %q", r.ID, got)
+		}
+	}
+	m, err := state.ReadManifest(home)
+	if err != nil || len(m.Resources) != 2 {
+		t.Fatalf("manifest must commit both resources: %+v err=%v", m.Resources, err)
+	}
+}
+
+func TestResumeWithMissingResourceIDFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	plan := twoPlan(home)
+	crash := Faults{BeforeTargetWrite: func(string) error { return ErrInjected }}
+	if _, err := Run(context.Background(), home, plan, crash); !errors.Is(err, ErrInjected) {
+		t.Fatalf("expected crash, got %v", err)
+	}
+
+	shrunk := Plan{Producer: plan.Producer, Resources: plan.Resources[:1]}
+	_, err := Run(context.Background(), home, shrunk, Faults{})
+	if err == nil || !strings.Contains(err.Error(), "absent from the plan") {
+		t.Fatalf("missing journal resource must fail closed, got %v", err)
+	}
+	for _, r := range plan.Resources {
+		if _, err := os.Stat(r.Target); !os.IsNotExist(err) {
+			t.Fatalf("zero target writes on alignment failure: %s exists", r.Target)
+		}
+	}
+}
+
+func TestResumeWithChangedTargetFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	plan := onePlan(home)
+	crash := Faults{BeforeTargetWrite: func(string) error { return ErrInjected }}
+	if _, err := Run(context.Background(), home, plan, crash); !errors.Is(err, ErrInjected) {
+		t.Fatalf("expected crash, got %v", err)
+	}
+
+	moved := plan
+	moved.Resources[0].Target = filepath.Join(home, "claude", "elsewhere.md")
+	_, err := Run(context.Background(), home, moved, Faults{})
+	if err == nil || !strings.Contains(err.Error(), "target changed") {
+		t.Fatalf("target drift must fail closed, got %v", err)
 	}
 }

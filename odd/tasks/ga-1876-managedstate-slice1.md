@@ -83,3 +83,19 @@ against the restart decision table line by line.
   ... FAIL [build failed]" (journal_test.go + coordinator_test.go committed
   first; 13 test functions covering matrix T1,T3,T4,T5,T6a,T6b,T7,T8a-c,
   contention, state.json, bookkeeping-only, stale-CAS).
+
+## Post-PR review activity (2026-09-30)
+
+- CodeRabbit (PR #5124): priority Low, effort 4, one final-review-risk finding:
+  resumed plans indexed positionally could misalign journal vs plan resources.
+  FIXED in-commit before any wiring: alignPlanToJournal matches by ID,
+  fails closed on missing ID or changed target; 3 regression tests
+  (reordered plan converges per-resource, missing ID zero-writes, target
+  drift zero-writes). 27 tests -race green, full suite exit=0.
+- Native review lineage review-817e2399d13b3bea (medium, review-reliability):
+  reviewer slot declared unachievable, relay transport bound exceeded
+  (966146ms vs 966123ms derived bound, 77038-byte prompt). Recovery
+  documented: raise GENTLE_PI_REVIEW_RELAY_PI_TIMEOUT_MS (floor+perMiB
+  derivation, ceiling 7200000) in the relay host env, withdraw the slot,
+  re-capture. Withdraw deferred until the bound can actually change;
+  provider state is durable.

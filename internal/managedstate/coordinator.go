@@ -376,6 +376,14 @@ func (c *runner) beginAndBlock(j *Journal, status Status) error {
 }
 
 func resumeRun(ctx context.Context, homeDir string, plan Plan, j *Journal, faults Faults) (*Result, error) {
+	// A resumed transaction is identified by its journal: the plan must name
+	// the same resources by ID and target, whatever their order. Positional
+	// alignment could write one resource's desired bytes into another's
+	// target before verification caught it, so mismatch fails closed.
+	plan, err := alignPlanToJournal(plan, j)
+	if err != nil {
+		return nil, err
+	}
 	current, _, err := readManifestGated(homeDir)
 	if err != nil {
 		return nil, err
@@ -481,6 +489,29 @@ func (c *runner) snapshot(j *Journal) error {
 		r.Snapshot = name
 	}
 	return nil
+}
+
+// alignPlanToJournal rebuilds the plan in journal order, matching resources
+// by ID. A journal resource without a plan counterpart, or a plan resource
+// pointing at a different target, is a fail-closed mismatch: the durable
+// journal owns the identity of what is being resumed.
+func alignPlanToJournal(plan Plan, j *Journal) (Plan, error) {
+	byID := make(map[string]PlannedResource, len(plan.Resources))
+	for _, r := range plan.Resources {
+		byID[r.ID] = r
+	}
+	aligned := Plan{Producer: plan.Producer, Resources: make([]PlannedResource, len(j.Resources))}
+	for i, jr := range j.Resources {
+		pr, ok := byID[jr.ID]
+		if !ok {
+			return Plan{}, fmt.Errorf("managedstate: resumed transaction names resource %q absent from the plan", jr.ID)
+		}
+		if pr.Target != jr.Target {
+			return Plan{}, fmt.Errorf("managedstate: resumed resource %q target changed from %q to %q", jr.ID, jr.Target, pr.Target)
+		}
+		aligned.Resources[i] = pr
+	}
+	return aligned, nil
 }
 
 // execute drives applying -> verified -> manifest_committed -> completed.
