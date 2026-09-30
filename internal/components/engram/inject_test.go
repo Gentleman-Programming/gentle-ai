@@ -2639,7 +2639,7 @@ func TestInjectCodexPreservesLegacyProfilesWithInstalledCLI(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := InjectWithOptions(home, codexAdapter(), InjectOptions{CodexCarrilModelAssignments: map[string]string{"sdd-strong": "gpt-6-astra"}})
+	result, err := InjectWithOptions(home, codexAdapter(), InjectOptions{CodexCarrilModelAssignments: map[string]string{"sdd-strong": "gpt-6.1-astra"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4004,7 +4004,7 @@ func TestInjectCodexOrchestratorAssignmentWritesTopLevelModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	if !strings.Contains(text, `model = "gpt-6-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
+	if !strings.Contains(text, `model = "gpt-6.1-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
 		t.Fatalf("top-level orchestrator assignment missing:\n%s", text)
 	}
 }
@@ -4038,7 +4038,7 @@ experimental_compact_prompt_file = "nested-compact.md"
 		t.Fatal(err)
 	}
 	text := string(content)
-	if !strings.Contains(text, `model = "gpt-6-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
+	if !strings.Contains(text, `model = "gpt-6.1-sol"`) || !strings.Contains(text, `model_reasoning_effort = "medium"`) {
 		t.Fatalf("top-level orchestrator assignment missing:\n%s", text)
 	}
 	if !strings.Contains(text, `[[profiles]] # user settings

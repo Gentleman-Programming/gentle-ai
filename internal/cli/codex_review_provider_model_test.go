@@ -13,9 +13,9 @@ func TestCodexReviewAdapterDispatchesSavedRoles(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	roles := []struct{ role, lens, key, id string }{
-		{reviewProviderRoleLens, "review-risk", "rdd-risk", "gpt-6-astra"},
-		{reviewProviderRoleLens, "review-readability", "rdd-readability", "gpt-6-sol"},
-		{reviewProviderRoleLens, "review-reliability", "rdd-reliability", "gpt-6-luna"},
+		{reviewProviderRoleLens, "review-risk", "rdd-risk", "gpt-6.1-astra"},
+		{reviewProviderRoleLens, "review-readability", "rdd-readability", "gpt-6.1-sol"},
+		{reviewProviderRoleLens, "review-reliability", "rdd-reliability", "gpt-6.1-luna"},
 		{reviewProviderRoleLens, "review-resilience", "rdd-resilience", "gpt-5.5"},
 		{reviewProviderRoleRefuter, "", "rdd-refuter", "gpt-5.4"},
 		{reviewProviderRoleTargetedValidator, "", "rdd-validator", "gpt-5.4-mini"},
@@ -43,7 +43,7 @@ func TestCodexReviewAdapterInvalidOrMissingUsesDefault(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	for _, id := range []string{"", "--danger", "model with spaces", "model\n--config"} {
-		if err := state.Write(home, state.InstallState{CodexPhaseModelAssignments: map[string]string{"rdd-risk": id, "risk": "gpt-6-sol", "refuter": "gpt-6-astra"}}); err != nil {
+		if err := state.Write(home, state.InstallState{CodexPhaseModelAssignments: map[string]string{"rdd-risk": id, "risk": "gpt-6.1-sol", "refuter": "gpt-6.1-astra"}}); err != nil {
 			t.Fatal(err)
 		}
 		adapter, err := reviewProviderAdapter(reviewProviderRoleLens, model.AgentCodex, "review-risk")

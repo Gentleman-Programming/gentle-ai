@@ -6278,9 +6278,9 @@ func TestRunSync_RestoresCodexEffortAssignments(t *testing.T) {
 
 	content := readTextFile(t, filepath.Join(home, ".codex", "AGENTS.md"))
 	for _, row := range []string{
-		"| `odd-explorer` | `gpt-6-luna` | `low` |",
-		"| `odd-worker` | `gpt-6-luna` | `xhigh` |",
-		"| `odd-verify` | `gpt-6-sol` | `high` |",
+		"| `odd-explorer` | `gpt-6.1-luna` | `low` |",
+		"| `odd-worker` | `gpt-6.1-luna` | `xhigh` |",
+		"| `odd-verify` | `gpt-6.1-sol` | `high` |",
 	} {
 		if !strings.Contains(content, row) {
 			t.Errorf("persisted ODD effort missing %q", row)
