@@ -925,26 +925,44 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectPiProvisioningWritesOnlyMCPConfigOnFreshHome(t *testing.T) {
+func TestInjectPiProvisioningWritesNothingOnFreshHome(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("Inject() = (changed %v, files %v), want no writes (Pi Engram is native-only, not MCP)", result.Changed, result.Files)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".pi", "agent", "settings.json"),
+		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+		filepath.Join(home, ".pi", "agent", "mcp.json"),
+		filepath.Join(home, ".pi", "agent", "mcp-adapter.json"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stat %q err = %v, want IsNotExist", path, err)
+		}
+	}
+}
+
+func TestInjectPiProvisioningMigratesMCPAdapterServersWithoutEngram(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp-adapter.json"), `{"mcpServers":{"context7":{"command":"npx"}}}`)
 
 	result, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
 	if !result.Changed || len(result.Files) != 1 || result.Files[0] != mcpPath {
-		t.Fatalf("Inject() = (changed %v, files %v), want only %q written (Pi's built-in MCP reads mcp.json)", result.Changed, result.Files, mcpPath)
+		t.Fatalf("Inject() = (changed %v, files %v), want only %q written", result.Changed, result.Files, mcpPath)
 	}
-	assertNestedString(t, readJSONFile(t, mcpPath), "node", "mcpServers", "engram", "command")
-	for _, path := range []string{
-		filepath.Join(home, ".pi", "agent", "settings.json"),
-		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
-		filepath.Join(home, ".pi", "agent", "mcp-adapter.json"),
-	} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("stat %q err = %v, want IsNotExist", path, err)
-		}
+	config := readJSONFile(t, mcpPath)
+	assertNestedString(t, config, "npx", "mcpServers", "context7", "command")
+	if servers, _ := config["mcpServers"].(map[string]any); servers["engram"] != nil {
+		t.Fatalf("mcp.json servers = %#v, want no engram server (Pi Engram is native-only)", servers)
 	}
 }
 

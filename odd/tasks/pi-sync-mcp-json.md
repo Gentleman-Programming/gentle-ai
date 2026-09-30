@@ -12,8 +12,9 @@ Post-sync verification expects `<Pi agent dir>/mcp.json` (`internal/cli/run.go`,
 
 ## Scope
 
-- On Pi Engram provisioning (install and sync): when `mcp-adapter.json` exists, merge its `mcpServers` entries into `mcp.json` (create if absent); existing `mcp.json` entries win; never delete `mcp-adapter.json`.
-- When neither file provides an Engram entry, ensure `mcp.json` gets one compatible with what `pi-engram init` writes.
+- On Pi Engram provisioning (install and sync): when `mcp-adapter.json` exists, merge its `mcpServers` entries into `mcp.json` (create only when there is a server to migrate); existing `mcp.json` entries win; never delete `mcp-adapter.json`.
+- Never add an `engram` server to Pi `mcp.json`, and never remove a user-owned one (T2: Pi Engram is native-only).
+- Post-sync verification must not require Pi `mcp.json` for the Engram component (T2).
 - Tests for each case plus idempotency.
 
 ## Constraints
@@ -24,13 +25,14 @@ Post-sync verification expects `<Pi agent dir>/mcp.json` (`internal/cli/run.go`,
 
 ## Tasks
 
-- [x] T1 — Migrate `mcp-adapter.json` servers and ensure Engram entry in `mcp.json` during Pi provisioning (+ tests). Route: delegated (preparation + 2+ non-trivial files).
+- [x] T1 — Migrate `mcp-adapter.json` servers and ensure Engram entry in `mcp.json` during Pi provisioning (+ tests). Route: delegated (preparation + 2+ non-trivial files). **Partially superseded by T2:** the migration stays; the Engram-entry injection was removed.
+- [x] T2 — Pi Engram is native-only: drop the Engram MCP entry injection, create `mcp.json` only to hold migrated servers, and fix #5103 at the verification layer (+ tests, docs). Route: delegated (2+ non-trivial files).
 
 ## Acceptance criteria
 
-- Host with only `mcp-adapter.json`: after sync, `mcp.json` exists with its servers; verification passes.
+- Host with only `mcp-adapter.json`: after sync, `mcp.json` exists with its servers and no Gentle AI-added `engram` server; verification passes.
 - Host with both: servers only in `mcp-adapter.json` are added; `mcp.json` values unchanged.
-- Host with neither: `mcp.json` has an Engram entry.
+- Host with neither: no `mcp.json` is created; verification passes.
 - Second run reports no change.
 
 ## Checks
@@ -50,3 +52,10 @@ Post-sync verification expects `<Pi agent dir>/mcp.json` (`internal/cli/run.go`,
   - Risk tier: medium (ordinary behavior change covered by focused tests; writes a user config file only when entries are missing).
 - Native review (base c4de51f2a, risk high, consent granted): lineage `review-437d9b60008c2978`, 4 lenses, approved and acknowledged (authority burned). Advisory (non-blocking): R4 malformed `mcp-adapter.json` hard-fails sync; R3 partial write not reported in returned paths; R1 `mcp.json` file mode; R3 launcher drift vs gentle-engram unguarded; R2 readability nits.
 - Follow-up (gentle-engram): `pi-engram init` 0.1.16 still adds `npm:pi-mcp-adapter` to Pi `settings.json`.
+- T2 (direction change, user-approved). Why: gentle-engram 0.1.17 (engram main 9dad41b, #1476) makes Pi Engram native-only — `pi-engram init` no longer registers Engram MCP and warns when `mcp.json` has `mcpServers.engram` ("Pi native-only agent writes are not guaranteed while this MCP path remains"). Gentle AI adding that entry (T1) would trigger the warning, and `gentle-engram@latest` is what install runs.
+  - `internal/agents/pi/adapter.go`: removed `piEngramMCPLauncher`, `piEngramMCPServer`, `piEngramMCPServerName`; `ensurePiMCPConfigFile` → `migratePiMCPAdapterServers`, which returns before reading `mcp.json` when `mcp-adapter.json` has no servers, so `mcp.json` is created only for a migration and a malformed or non-object `mcp.json` errors only when servers must be written into it. `piEngramMCPConfigFile` → `piMCPConfigFile`.
+  - `internal/cli/run.go` `verificationComponentPaths`: excludes the Pi `mcp.json` from Engram verification (same pattern as the Codex SDD-profile exclusion). `componentPathsWithWorkspaceScoped` is unchanged, so backups still cover a migration write (pinned by `TestPiEngramMCPConfigIsBackedUpButNotVerified`).
+  - Doctor finding (not changed, outside scope): `checkEngramReachable` (`internal/cli/doctor.go`) reads `mcpServers.engram` from Pi `mcp.json` via `engram.ReadPersistedStdioCommands`; a Pi-only native host yields WARN "no persisted MCP configuration found" with a "run gentle-ai sync" remedy that cannot clear it. Not a failure; follow-up candidate.
+  - RED: `go test ./internal/agents/pi/ ./internal/components/engram/` failed (5 pi tests, 2 inject tests: an engram server/`mcp.json` was written with nothing to migrate); `go test ./internal/cli/ -run TestRunSyncPiEngram` failed (both hosts). After the adapter change alone, `TestRunSyncPiEngramWithoutMCPConfigPassesVerification` still failed with the #5103 error (`verify:sync:file:.../.pi/agent/mcp.json ... no such file or directory`), proving the verification fix is needed.
+  - GREEN: same tests pass after the adapter and `verificationComponentPaths` changes.
+  - Risk tier: medium (removes a write; verification narrowed for one agent/file, backups unchanged).

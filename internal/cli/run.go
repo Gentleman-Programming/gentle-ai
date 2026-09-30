@@ -3767,29 +3767,35 @@ func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 	return paths
 }
 
-// verificationComponentPaths excludes retired Codex SDD profiles from active
-// health checks. The shared component path inventory retains them for snapshots
-// and rollback of legacy user-owned files.
+// verificationComponentPaths excludes retired Codex SDD profiles and Pi's
+// mcp.json from active health checks. Pi Engram is native-only (gentle-engram),
+// so Engram provisioning writes mcp.json only to migrate mcp-adapter.json
+// servers and its absence is healthy (#5103). The shared component path
+// inventory retains both for snapshots and rollback of user-owned files.
 func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
 	if component != model.ComponentEngram {
 		return paths
 	}
-	retired := make(map[string]bool)
+	excluded := make(map[string]bool)
 	for _, adapter := range adapters {
-		if adapter.Agent() != model.AgentCodex {
-			continue
-		}
 		targetDir := componentPathDirScoped(homeDir, workspaceDir, scope, adapter, component)
-		if config := adapter.MCPConfigPath(targetDir, "engram"); config != "" {
-			for _, profile := range codexagent.SddProfilePaths(filepath.Dir(config)) {
-				retired[profile] = true
+		switch adapter.Agent() {
+		case model.AgentCodex:
+			if config := adapter.MCPConfigPath(targetDir, "engram"); config != "" {
+				for _, profile := range codexagent.SddProfilePaths(filepath.Dir(config)) {
+					excluded[profile] = true
+				}
+			}
+		case model.AgentPi:
+			if config := adapter.MCPConfigPath(targetDir, "engram"); config != "" {
+				excluded[config] = true
 			}
 		}
 	}
 	active := make([]string, 0, len(paths))
 	for _, path := range paths {
-		if !retired[path] {
+		if !excluded[path] {
 			active = append(active, path)
 		}
 	}
