@@ -648,7 +648,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				Persona:    model.PersonaNeutral,
 			}
 			background := OpenCodeBackgroundResolution{Intent: tt.intent, Effective: tt.intent, Persist: tt.intent}
-result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{}, false)
+			result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{}, false)
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
 			}
@@ -732,7 +732,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 		Persona:    model.PersonaNeutral,
 	}
 	background := OpenCodeBackgroundResolution{Intent: model.OpenCodeBackgroundOn, Effective: model.OpenCodeBackgroundOn, Persist: model.OpenCodeBackgroundOn}
-if _, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{}, false); err != nil {
+	if _, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, background, PiBackgroundResolution{}, false); err != nil {
 		t.Fatalf("initial sync error = %v", err)
 	}
 	persisted, err := state.Read(home)

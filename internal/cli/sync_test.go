@@ -221,7 +221,7 @@ func TestSyncOpenCodeTelemetryReconcilesMissingWithoutSDD(t *testing.T) {
 			t.Fatal("unchanged runtime reported as changed")
 		}
 	}
-rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+	rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestSyncOpenCodeGuidanceRejectsSymlinkBeforeAssignmentStep(t *testing.T) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+	rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1611,7 +1611,7 @@ func TestSyncPersonaOnlyRollbackRestoresOpenCodeSettingsAfterGentlemanCleanup(t 
 	if !containsPath(targets, settingsPath) {
 		t.Fatalf("sync backup targets omit OpenCode settings mutated by Gentleman cleanup: %v", targets)
 	}
-syncRT, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+	syncRT, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatalf("newSyncRuntimeWithScope() error = %v", err)
 	}
@@ -2221,7 +2221,7 @@ func TestSyncSkillBackupRollsBackOpenClawGlobalSkills(t *testing.T) {
 	writeStale(t, globalSkill)
 	writeStale(t, globalReference)
 
-runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+	runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4987,7 +4987,7 @@ func TestSyncCodexGentlemanConvergesWithHooksJSON(t *testing.T) {
 		t.Fatal("default sync selected legacy SDD")
 	}
 	run := func() (int, []string) {
-rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+		rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 		if err != nil {
 			t.Fatalf("newSyncRuntimeWithScope() error = %v", err)
 		}

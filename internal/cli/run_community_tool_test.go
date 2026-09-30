@@ -798,7 +798,7 @@ func TestSyncPlanIncludesPiCodeGraphReconciliationAfterComponentsWhenSelected(t 
 	runtime, err := newSyncRuntimeWithScope(home, model.Selection{
 		Agents:         []model.AgentID{model.AgentPi},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-}, ScopeGlobal)
+	}, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
