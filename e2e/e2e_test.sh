@@ -677,10 +677,11 @@ test_cc_skills_full() {
 
         # #3554: skills alone no longer pulls sdd. Full preset's skill catalog
         # is 17 foundation (7 original + 10 qa-orchestrator-v3) + judgment-day
-        # = 18 files; the 11 sdd-* phase skills come only from the SDD
-        # component (not selected here).
+        # = 18 files, plus the standalone smartops-ui skill = 19; the 11
+        # sdd-* phase skills come only from the SDD component (not selected
+        # here).
         # #4669: the six contributor workflow skills are selectable, never default.
-        assert_file_count "$skills_dir" "SKILL.md" 18 "Full preset (skills alone): 18 skill files"
+        assert_file_count "$skills_dir" "SKILL.md" 19 "Full preset (skills alone): 19 skill files"
         assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
 
         # Verify foundation skills exist
@@ -702,6 +703,9 @@ test_cc_skills_full() {
         assert_file_exists "$skills_dir/qa-doc-access/SKILL.md" "qa-doc-access SKILL.md"
         assert_file_exists "$skills_dir/qa-evidence/SKILL.md" "qa-evidence SKILL.md"
 
+        # Verify the standalone smartops-ui skill exists
+        assert_file_exists "$skills_dir/smartops-ui/SKILL.md" "smartops-ui SKILL.md"
+
         # Real content check
         assert_file_size_min "$skills_dir/go-testing/SKILL.md" 200 "go-testing skill has real content"
         assert_file_size_min "$skills_dir/skill-creator/SKILL.md" 200 "skill-creator skill has real content"
@@ -722,10 +726,11 @@ test_cc_skills_ecosystem() {
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
         # #3554: skills alone no longer pulls sdd. 17 foundation (7 original +
-        # 10 qa-orchestrator-v3) + judgment-day = 18 files; the 11 sdd-* phase
-        # skills need the SDD component too.
+        # 10 qa-orchestrator-v3) + judgment-day = 18 files, plus the
+        # standalone smartops-ui skill = 19; the 11 sdd-* phase skills need
+        # the SDD component too.
         # #4669: contributor workflow skills are not part of this preset.
-        assert_file_count "$skills_dir" "SKILL.md" 18 "Ecosystem preset (skills alone): 18 skill files"
+        assert_file_count "$skills_dir" "SKILL.md" 19 "Ecosystem preset (skills alone): 19 skill files"
         # SDD skills NOT present (skills has no hard dependency on sdd)
         assert_file_not_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         # Foundation skills present
@@ -734,6 +739,8 @@ test_cc_skills_ecosystem() {
         # qa-orchestrator-v3 skills present
         assert_file_exists "$skills_dir/qa-supervisor/SKILL.md" "qa-supervisor present"
         assert_file_exists "$skills_dir/qa-docs/SKILL.md" "qa-docs present"
+        # standalone smartops-ui skill present
+        assert_file_exists "$skills_dir/smartops-ui/SKILL.md" "smartops-ui present"
         assert_file_not_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr NOT in ecosystem default"
         assert_file_not_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation NOT in ecosystem default"
         # Stack-specific skills NOT present
@@ -968,18 +975,20 @@ test_oc_skills_full() {
     cleanup_test_env
 
     # #3554: skills alone no longer pulls sdd. 17 foundation (7 original + 10
-    # qa-orchestrator-v3) + judgment-day = 18.
+    # qa-orchestrator-v3) + judgment-day = 18, plus the standalone
+    # smartops-ui skill = 19.
     # #4669: the six contributor workflow skills are selectable, never default.
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 18 "Full preset (skills alone): 18 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 19 "Full preset (skills alone): 19 skill files"
         assert_file_not_exists "$skill_dir/sdd-init/SKILL.md" "sdd-init NOT installed by skills alone"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_exists "$skill_dir/qa-supervisor/SKILL.md" "qa-supervisor skill"
         assert_file_exists "$skill_dir/qa-docs/SKILL.md" "qa-docs skill"
         assert_file_exists "$skill_dir/qa-evidence/SKILL.md" "qa-evidence skill"
+        assert_file_exists "$skill_dir/smartops-ui/SKILL.md" "smartops-ui skill"
         assert_file_not_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr NOT installed by default"
         assert_file_not_exists "$skill_dir/issue-creation/SKILL.md" "issue-creation NOT installed by default"
         assert_file_size_min "$skill_dir/go-testing/SKILL.md" 200 "go-testing skill has real content"

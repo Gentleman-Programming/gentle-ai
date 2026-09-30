@@ -30,7 +30,8 @@
       "qa-locator-hunting",
       "qa-doc-reference",
       "qa-doc-access",
-      "qa-evidence"
+      "qa-evidence",
+      "smartops-ui"
     ]
   },
   {
@@ -64,7 +65,8 @@
       "qa-locator-hunting",
       "qa-doc-reference",
       "qa-doc-access",
-      "qa-evidence"
+      "qa-evidence",
+      "smartops-ui"
     ]
   },
   {
