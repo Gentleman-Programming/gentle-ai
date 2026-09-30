@@ -28,7 +28,7 @@ import (
 // as a scope-changed recovery while the validation request admitted it, so the
 // envelope bound its context to a validation it then did not offer. The
 // over-budget contraction is the one shape that legitimately routes to
-// recovery, and it must get that collect rather than the same refusal.
+// recovery, and it must get native RECOVER rather than the same refusal.
 func TestCommittedCorrectionStatusAfterCommitAnswersTheTransitionItBinds(t *testing.T) {
 	for _, testCase := range []struct {
 		name          string
@@ -178,7 +178,7 @@ func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransacti
 	if contraction {
 		// Dropping a reviewed path entirely contracts the genesis scope, and
 		// the deleted lines exceed the two-line budget: native routes this
-		// lineage to recovery, so STATUS must answer with that collect
+		// lineage to recovery, so STATUS must answer with native RECOVER
 		// instead of binding a validation it does not offer.
 		runReviewCLIGit(t, repo, "rm", "-q", "helper.go")
 	}
@@ -189,8 +189,15 @@ func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransacti
 	if contraction {
 		if committed.Action != reviewtransaction.TargetStatusActionRecover || committed.ValidationRequest != nil || committed.RepositoryContext == nil ||
 			committed.RepositoryContext.TargetIdentity != reviewAuthorityTargetIdentity(committed) ||
-			transition == nil || transition.Kind != reviewNextTransitionCollect || !strings.HasPrefix(transition.ReasonCode, "recovery_") {
-			t.Fatalf("bound STATUS after the over-budget contraction = action=%q validation=%#v context=%#v transition=%#v, want the recovery collect bound to the authority target", committed.Action, committed.ValidationRequest, committed.RepositoryContext, transition)
+			transition == nil || transition.Kind != reviewNextTransitionExecute || transition.Execute == nil || transition.Execute.Operation != "review.recover" ||
+			transition.Execute.Binding.LineageID != lineage || transition.Execute.Binding.TargetIdentity != committed.TargetIdentity {
+			t.Fatalf("bound STATUS after the over-budget contraction = action=%q validation=%#v context=%#v transition=%#v, want native recovery with the selected target and unchanged authority context", committed.Action, committed.ValidationRequest, committed.RepositoryContext, transition)
+		}
+		var recovered ReviewRecoverResult
+		decodeStrictReviewJSON(t, executeSelectorTransition(t, repo, committed), &recovered)
+		after, err := store.Load()
+		if err != nil || after.Revision != committed.Authority.Revision || recovered.TargetIdentity != committed.TargetIdentity || recovered.LineageID != selectorTransitionArguments(t, committed)["successor-lineage"] {
+			t.Fatalf("printed contraction recovery lost its binding or changed predecessor: %#v, %v", recovered, err)
 		}
 		return
 	}
