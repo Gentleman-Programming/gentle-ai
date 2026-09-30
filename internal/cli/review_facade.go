@@ -1253,6 +1253,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							CorrectionBudget:       record.State.CorrectionBudget,
 							CorrectionBudgetPolicy: record.State.CorrectionBudgetPolicy,
 						}
+						if selector.SelectorFreeAccountingOnlyRecovery && record.State.FrozenPolicyContent == nil {
+							return reviewRecoveryStatusRefusal("accounting-only recovery has no frozen policy content")
+						}
 						if result.Authority != nil {
 							result.Authority.CapturePhaseRevision = record.State.CapturePhaseRevision
 						}
@@ -1445,7 +1448,22 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, CorrectionContextBudgetExceeded: correctionContextBudgetExceeded, CorrectionReleaseEligibility: correctionReleaseEligibility, UnachievableLensAttempts: unachievableLensAttempts}
 			var transition ReviewNextTransition
+			input.RecoveryInputsProvided = reviewFlagWasProvided(flags, "recovery-authorization") || reviewFlagWasProvided(flags, "recovery-actor") || reviewFlagWasProvided(flags, "recovery-reason")
 			transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
+			// Resolve only a natively legal, representable recovery. Collection
+			// and stop routes for missing target selectors keep their precedence.
+			if native.Action == reviewtransaction.TargetStatusActionRecover &&
+				(transition.ReasonCode == "recovery_authorization_required" || transition.Execute != nil && transition.Execute.Operation == "review.recover") {
+				binding := ReviewTransitionBinding{LineageID: native.LineageID, Revision: native.Revision, TargetIdentity: result.TargetIdentity}
+				if input.RecoveryInputsProvided && !input.recoveryAuthorized(binding) {
+					return reviewRecoveryStatusRefusal("explicit recovery authorization requires the complete exact successor, actor, reason, and authorization binding")
+				}
+				input.Successor, err = reviewStatusRecoverySuccessor(ctx, root, binding, input.Successor)
+				if err != nil {
+					return err
+				}
+				transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
+			}
 			result.NextTransition = &transition
 			providerTargetedValidation := (transition.ReasonCode == "targeted_validation_required" || transition.ReasonCode == reviewInconclusiveTargetedValidationReason) &&
 				transition.Collect != nil && len(transition.Collect.Inputs) == 1 && transition.Collect.Inputs[0].ProviderTask != nil
@@ -1575,6 +1593,53 @@ func reviewFreshStatusPreflight(snapshot reviewtransaction.Snapshot) (reviewtran
 func reviewStartEmptyCandidateScope(snapshot reviewtransaction.Snapshot) bool {
 	return len(snapshot.Paths) == 0 &&
 		(snapshot.Kind == reviewtransaction.TargetCurrentChanges || snapshot.Kind == reviewtransaction.TargetBaseDiff)
+}
+
+// reviewStatusRecoverySuccessor selects one exact name, never an available
+// suffix. The core's compact discovery scope diagnoses ownership; only it decides retry equality
+// and commits the edge under its lock. A conflict is not permission to fork.
+func reviewStatusRecoverySuccessor(ctx context.Context, root string, binding ReviewTransitionBinding, requested string) (string, error) {
+	successor := strings.TrimSpace(requested)
+	if successor == "" {
+		var err error
+		successor, err = reviewAtomicStartLineage(ctx, root, binding.TargetIdentity)
+		if err != nil {
+			return "", err
+		}
+	}
+	if !validReviewIntegrationLineage(successor) || successor == binding.LineageID {
+		return "", reviewRecoveryStatusRefusal("recovery successor must be a distinct canonical lineage")
+	}
+	stores, err := reviewtransaction.DiscoverCompactStores(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	for _, store := range stores {
+		record, loadErr := store.LoadContext(ctx)
+		if loadErr != nil {
+			// Match scanCompactAuthority: unreadable content on an unrelated
+			// branch is absent, but inability to observe authority propagates.
+			if reviewtransaction.IsCompactAuthorityOperationalFailure(loadErr) {
+				return "", loadErr
+			}
+			continue
+		}
+		if record.State.Recovery != nil && record.State.Recovery.PredecessorLineageID == binding.LineageID {
+			return "", reviewRecoveryStatusRefusal(fmt.Sprintf("recovery predecessor already has successor %s", record.State.LineageID))
+		}
+	}
+	occupied, err := reviewtransaction.ExactReviewLineageOccupied(ctx, root, successor)
+	if err != nil {
+		return "", err
+	}
+	if occupied {
+		return "", reviewRecoveryStatusRefusal(fmt.Sprintf("recovery successor %s is occupied", successor))
+	}
+	return successor, nil
+}
+
+func reviewRecoveryStatusRefusal(detail string) error {
+	return reviewPreflightError(fmt.Errorf("%s; inspect the existing authority with the requested repository as the working directory; re-run: gentle-ai review inspect-authority", detail))
 }
 
 func RunReviewRecover(args []string, stdout io.Writer) error {

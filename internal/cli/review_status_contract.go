@@ -272,7 +272,7 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenInputsUnavailable
 	case reviewtransaction.TargetStatusActionRecover:
 		allowed.Action, allowed.Disposition = "review.recover", status.ActionDisposition
-		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "disposition", "reason", "actor", "maintainer_authorization"}
+		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "disposition"}
 		allowed.ReasonCode = reviewActionEligibleRecovery
 		if status.ActionDisposition == reviewtransaction.RecoveryEscalated {
 			allowed.ReasonCode = reviewActionEligibleEscalatedRecovery
@@ -1746,7 +1746,11 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
 			return errors.New("review recover transition selectors are invalid")
 		}
-		required := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}
+		required := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition"}
+		_, hasAuthorization := arguments["maintainer-authorization"]
+		if hasAuthorization {
+			required = append(required, "reason", "actor", "maintainer-authorization")
+		}
 		requiredPresent := true
 		for _, name := range required {
 			if _, present := arguments[name]; !present {
@@ -1778,7 +1782,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		untrackedScope, hasUntrackedScope := arguments["untracked-scope"]
 		inventory, hasInventory := arguments["expected-untracked-inventory"]
 		hasIntended := distinctSelectors["intended-untracked"]
-		if arguments["maintainer-authorization"] != wantAuthorization ||
+		if hasAuthorization && (strings.TrimSpace(arguments["reason"]) == "" || strings.TrimSpace(arguments["actor"]) == "" || arguments["maintainer-authorization"] != wantAuthorization) ||
 			hasBase && !validReviewTransitionSelector(base) ||
 			hasCommitted && (!hasBase || committed != "true") ||
 			hasProjection && projection != string(reviewtransaction.ProjectionWorkspace) &&

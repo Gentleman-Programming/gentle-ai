@@ -65,6 +65,30 @@ A reviewing START carries `next_transition.execute(review.status)` — the provi
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
 
+#### Native recovery for an explicitly selected lineage
+
+When native STATUS selects legal, representable recovery, its returned
+`review.recover` invocation carries four core arguments: predecessor lineage,
+exact predecessor revision, successor lineage, and disposition. Replay every
+returned target selector unchanged, including declared untracked scope and its
+inventory digest. Native RECOVER derives actor, reason, and the exact audit
+binding; consumers must not manufacture an external authorization collection.
+This does not supply missing runtime consent or authorize delivery.
+
+STATUS preserves an explicit `--recovery-successor-lineage`; otherwise it derives
+one name from the existing worktree-and-target identity. It never searches for
+an available suffix. An occupied name, the predecessor's own name, or an already
+recorded successor fails closed with a read-only `review inspect-authority`
+diagnostic. Run that diagnostic with the requested repository as process cwd;
+do not invent a new successor to bypass the conflict.
+
+Explicit compatibility remains available through the complete successor,
+`--recovery-actor`, `--recovery-reason`, and `--recovery-authorization` binding.
+STATUS renders the existing seven-argument RECOVER form only for an exact binding.
+Explicit empty/wrong authorization or a partial tuple refuses without mutation;
+it never falls back to self-derivation. Core recovery legality remains unchanged,
+including failed-criteria and accounting-only evidence checks.
+
 ### 4. Approved authority awaits acknowledgement, then burns
 
 Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. A successful final capture or zero-lens START first records `approved` with one exact acknowledgement transition. The terminal closure and approved authority remain replayable until that acknowledgement succeeds.
