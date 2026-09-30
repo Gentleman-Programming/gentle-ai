@@ -725,11 +725,24 @@ func (c *runner) commit(j *Journal, current state.Manifest, proposed state.Manif
 		// finish with bookkeeping only; the manifest is never rewritten.
 	case digest == j.ProposedManifestDigest:
 		// The canonical digest ignores observed metadata, so our identity can
-		// sit above stale observed fields. verify() proved the targets exact:
-		// republish the verified generation once to settle the metadata a
-		// later no-op depends on, then continue as bookkeeping.
-		if err := c.publish(j, proposed); err != nil {
-			return nil, err
+		// sit above stale observed fields. Settling the metadata claims the
+		// targets hold the verified bytes RIGHT NOW, so re-prove every target
+		// exact desired first; drift under our own identity is a typed refusal,
+		// never a false settlement.
+		if !observedSettled(onDisk, c.plan) {
+			for i := range j.Resources {
+				r := &j.Resources[i]
+				cur, err := observe(r.Target)
+				if err != nil {
+					return nil, err
+				}
+				if !cur.matches(r.Desired) {
+					return nil, fmt.Errorf("%w: target %q drifted before observed settlement", ErrStaleManifest, r.ID)
+				}
+			}
+			if err := c.publish(j, proposed); err != nil {
+				return nil, err
+			}
 		}
 	case j.LastPhase == PhaseManifestCommitted:
 		// Decision-table stale branch: a committed journal whose on-disk

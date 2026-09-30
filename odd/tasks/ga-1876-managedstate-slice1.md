@@ -108,3 +108,11 @@ against the restart decision table line by line.
   canonical identity gets ONE corrective republish of the verified
   generation. 30 tests -race green, full suite exit=0. Commit 54fe62f1
   plus the settlement fix.
+
+- CodeRabbit fourth final-review-risk (confirmed real, fixed): the
+  corrective observed-settlement republish could publish settled metadata
+  for a target that drifted after commit (the manifest_committed resume
+  path skips run-level verification). Settlement now re-proves every
+  target exact desired; drift under our own identity is a typed
+  ErrStaleManifest refusal with zero writes. 31 tests -race green, full
+  suite exit=0.

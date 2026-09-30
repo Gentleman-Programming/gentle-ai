@@ -918,3 +918,49 @@ func TestStaleObservedUnderOurDigestIsSettledOnResume(t *testing.T) {
 		t.Fatalf("later runs must settle into a no-op: %+v err=%v", again, err)
 	}
 }
+
+// ---- corrective settlement refuses targets that drifted under our identity --
+
+func TestCorrectiveSettlementRefusesDriftedTargets(t *testing.T) {
+	home := t.TempDir()
+	plan := onePlan(home)
+	target := planTarget(plan)
+
+	// Land a completed-in-manifest transaction, then crash the journal at
+	// manifest_committed so the resume path skips run-level verification.
+	crash := Faults{AfterJournal: func(p Phase) error {
+		if p == PhaseManifestCommitted {
+			return ErrInjected
+		}
+		return nil
+	}}
+	if _, err := Run(context.Background(), home, plan, crash); !errors.Is(err, ErrInjected) {
+		t.Fatalf("expected crash, got %v", err)
+	}
+
+	// Externally stale the observed metadata (canonical digest unchanged)
+	// and let the target drift to foreign bytes.
+	m, err := state.ReadManifest(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Resources[0].Observed = ""
+	if err := state.WriteManifestAtomic(home, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, foreignBytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifestBefore := mustReadFile(t, state.ManifestPath(home))
+
+	_, err = Run(context.Background(), home, plan, Faults{})
+	if !errors.Is(err, ErrStaleManifest) {
+		t.Fatalf("drifted target must refuse settlement, got %v", err)
+	}
+	if string(mustReadFile(t, state.ManifestPath(home))) != string(manifestBefore) {
+		t.Fatalf("refusal must not rewrite the manifest")
+	}
+	if string(mustReadFile(t, target)) != string(foreignBytes()) {
+		t.Fatalf("refusal must not touch the drifted target")
+	}
+}
