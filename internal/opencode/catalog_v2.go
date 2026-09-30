@@ -3,7 +3,9 @@ package opencode
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"sync/atomic"
@@ -121,6 +123,71 @@ func runAPICommand(ctx context.Context, command Command) (io.Reader, error) {
 		return nil, &CatalogError{Kind: CatalogErrorOutputTooLarge}
 	}
 	return bytes.NewReader(content), nil
+}
+
+// apiColdStartRetryDelay is the bounded wait before the single empty-catalog
+// retry. A freshly activated V2 service exits 0 with an empty data array
+// until its background boot completes (observed on V2.0.16 cold start), so
+// one short, bounded retry covers that window without looping.
+const apiColdStartRetryDelay = 1500 * time.Millisecond
+
+// apiModelRoute is the V2 local API route returning the location-scoped
+// model catalog. The brackets are pre-escaped (%5B/%5D) as the V2 CLI
+// expects; the project directory is appended URL-escaped by the caller.
+const apiModelRoute = "/api/model?location%5Bdirectory%5D="
+
+// discoverAPICatalog runs the V2 api discovery attempt through the injected
+// runner and parses the JSON envelope. On a clean exit with zero providers it
+// retries exactly once after apiColdStartRetryDelay, honoring ctx; a failed
+// retry never discards the first attempt's (empty) result, because that
+// result was already legitimate. Classification mirrors the V1 pipeline: the
+// child's exit status wins over parse classification, while a genuine
+// overflow keeps its own category.
+func discoverAPICatalog(ctx context.Context, projectDir string, runner CommandRunner) (map[string]Provider, error) {
+	run := func() (map[string]Provider, error) {
+		r, err := runner(ctx, Command{
+			Path: "opencode",
+			Args: []string{"api", "get", apiModelRoute + url.QueryEscape(projectDir)},
+			Dir:  projectDir,
+		})
+		if err != nil {
+			return nil, catalogCommandError(ctx, err)
+		}
+		if closer, ok := r.(io.Closer); ok {
+			defer closer.Close()
+		}
+		providers, parseErr := parseV2ModelAPI(r)
+		if parseErr != nil {
+			var catalogErr *CatalogError
+			if errors.As(parseErr, &catalogErr) && catalogErr.Kind == CatalogErrorOutputTooLarge {
+				return nil, catalogErr
+			}
+			return nil, catalogCommandErrorWithRunnerWait(ctx, r, parseErr)
+		}
+		if waiter, ok := r.(waitErrorReader); ok {
+			if waitErr := waiter.WaitError(); waitErr != nil {
+				return nil, catalogCommandError(ctx, waitErr)
+			}
+		}
+		return providers, nil
+	}
+
+	providers, err := run()
+	if err != nil || len(providers) > 0 {
+		return providers, err
+	}
+	select {
+	case <-ctx.Done():
+		// Out of budget: accept the empty catalog instead of racing the
+		// deadline with a retry that cannot finish.
+		return providers, nil
+	case <-time.After(apiColdStartRetryDelay):
+	}
+	retried, err := run()
+	if err != nil {
+		return providers, nil
+	}
+	return retried, nil
 }
 
 // discoverCatalogCommandRunner routes live discovery attempts: the V2 api

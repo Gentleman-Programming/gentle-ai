@@ -75,39 +75,71 @@ func TestDiscoverCatalogV2Models(t *testing.T) {
 	}
 }
 
-func TestParseV2ModelAPIUsesExplicitReasoningCapability(t *testing.T) {
+// TestParseV2ModelAPIReasoningFromCompatibility pins the real V2 schema:
+// reasoning intent lives in the optional compatibility.requireReasoning
+// field. The capabilities object has no reasoning field on real hosts, so a
+// payload carrying capabilities.reasoning must NOT set Reasoning.
+func TestParseV2ModelAPIReasoningFromCompatibility(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		capability string
-		want       bool
+		name    string
+		payload string
+		want    bool
 	}{
-		{name: "explicit reasoning", capability: `,"reasoning":true`, want: true},
-		{name: "explicit non-reasoning", capability: `,"reasoning":false`},
-		{name: "undisclosed reasoning", capability: ``},
+		{name: "compatibility requireReasoning true", payload: `{"data":[{"id":"model","modelID":"model","providerID":"openai","name":"Model","enabled":true,"capabilities":{"tools":true},"compatibility":{"requireReasoning":true},"variants":[]}]}`, want: true},
+		{name: "compatibility requireReasoning false", payload: `{"data":[{"id":"model","modelID":"model","providerID":"openai","name":"Model","enabled":true,"capabilities":{"tools":true},"compatibility":{"requireReasoning":false},"variants":[]}]}`},
+		{name: "compatibility absent", payload: `{"data":[{"id":"model","modelID":"model","providerID":"openai","name":"Model","enabled":true,"capabilities":{"tools":true},"variants":[]}]}`},
+		{name: "capabilities.reasoning must not be consulted", payload: `{"data":[{"id":"model","modelID":"model","providerID":"openai","name":"Model","enabled":true,"capabilities":{"tools":true,"reasoning":true},"variants":[]}]}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := `{"data":[{"id":"model","modelID":"model","providerID":"openai","name":"Model","enabled":true,"capabilities":{"tools":true` + tt.capability + `},"variants":[]}]}`
-			providers, err := parseV2ModelAPI(strings.NewReader(payload))
+			providers, err := parseV2ModelAPI(strings.NewReader(tt.payload))
 			if err != nil {
 				t.Fatal(err)
 			}
 			model := providers["openai"].Models["model"]
-			if model.Reasoning != tt.want || len(model.Variants) != 0 {
-				t.Fatalf("model = %+v, want reasoning=%t without variants", model, tt.want)
+			if model.Reasoning != tt.want {
+				t.Fatalf("model = %+v, want reasoning=%t", model, tt.want)
 			}
 		})
 	}
 }
 
-func TestDiscoverCatalogV2RejectsNonAPIOutput(t *testing.T) {
+// TestParseV2ModelAPISelectsUntieredBaseCost pins the base-price selection:
+// the first untiered cost entry is the base rate; tiered entries describe
+// context-window discounts. When every entry is tiered the first one is the
+// closest available base.
+func TestParseV2ModelAPISelectsUntieredBaseCost(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		cost    string
+		wantIn  float64
+		wantOut float64
+	}{
+		{name: "untiered first", cost: `[{"input":2,"output":10}]`, wantIn: 2, wantOut: 10},
+		{name: "tiered first, untiered second", cost: `[{"tier":{"type":"context","size":272000},"input":4,"output":15},{"input":2,"output":10}]`, wantIn: 2, wantOut: 10},
+		{name: "all tiered falls back to first", cost: `[{"tier":{"type":"context","size":272000},"input":4,"output":15}]`, wantIn: 4, wantOut: 15},
+		{name: "no cost entries", cost: `[]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := `{"data":[{"id":"model","modelID":"model","providerID":"openai","name":"Model","enabled":true,"capabilities":{"tools":true},"variants":[],"cost":` + tt.cost + `}]}`
+			providers, err := parseV2ModelAPI(strings.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cost := providers["openai"].Models["model"].Cost
+			if cost.Input != tt.wantIn || cost.Output != tt.wantOut {
+				t.Fatalf("cost = %+v, want {%v %v}", cost, tt.wantIn, tt.wantOut)
+			}
+		})
+	}
+}
+
+// TestParseV2ModelAPIRejectsNonAPIOutput pins the parser-level rejection of
+// non-API output: anything that is not the JSON envelope fails as
+// malformed_output (discovery-level failures fall back to the V1 stream).
+func TestParseV2ModelAPIRejectsNonAPIOutput(t *testing.T) {
 	for _, output := range []string{"Available models:\n- openai/gpt-5.5\n", "openai/\n", "openai/gpt-5.5\nplugin log\n"} {
 		t.Run(output, func(t *testing.T) {
-			_, err := DiscoverCatalogWithRunner(context.Background(), "project", func(_ context.Context, command Command) (io.Reader, error) {
-				if strings.Join(command.Args, " ") == "--version" {
-					return strings.NewReader("opencode v2.0.18\n"), nil
-				}
-				return strings.NewReader(output), nil
-			})
+			_, err := parseV2ModelAPI(strings.NewReader(output))
 			var catalogErr *CatalogError
 			if !errors.As(err, &catalogErr) || catalogErr.Kind != CatalogErrorMalformed {
 				t.Fatalf("error = %v, want malformed_output", err)
@@ -116,19 +148,17 @@ func TestDiscoverCatalogV2RejectsNonAPIOutput(t *testing.T) {
 	}
 }
 
-func TestDiscoverCatalogV2RejectsMissingToolCapability(t *testing.T) {
+// TestParseV2ModelAPIRejectsMissingToolCapability pins the parser-level
+// schema strictness: the explicit tools capability is required, so payloads
+// without it (or with a wrong shape) fail as unsupported_schema.
+func TestParseV2ModelAPIRejectsMissingToolCapability(t *testing.T) {
 	for _, payload := range []string{
 		`{"data":[{"id":"model","modelID":"model","providerID":"openai","enabled":true}]}`,
 		`{"data":[{"id":"model","modelID":"model","providerID":"openai","enabled":true,"capabilities":{}}]}`,
 		`{"data":[{"id":"model","modelID":"model","providerID":"openai","enabled":true,"capabilities":{"tools":"true"}}]}`,
 	} {
 		t.Run(payload, func(t *testing.T) {
-			_, err := DiscoverCatalogWithRunner(context.Background(), "project", func(_ context.Context, command Command) (io.Reader, error) {
-				if strings.Join(command.Args, " ") == "--version" {
-					return strings.NewReader("opencode v2.0.18\n"), nil
-				}
-				return strings.NewReader(payload), nil
-			})
+			_, err := parseV2ModelAPI(strings.NewReader(payload))
 			var catalogErr *CatalogError
 			if !errors.As(err, &catalogErr) || catalogErr.Kind != CatalogErrorUnsupportedSchema {
 				t.Fatalf("error = %v, want unsupported_schema", err)
