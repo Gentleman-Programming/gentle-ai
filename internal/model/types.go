@@ -153,6 +153,7 @@ const (
 	SkillQADocReference      SkillID = "qa-doc-reference"
 	SkillQADocAccess         SkillID = "qa-doc-access"
 	SkillQAEvidence          SkillID = "qa-evidence"
+	SkillSmartopsUI          SkillID = "smartops-ui"
 )
 
 type PersonaID string

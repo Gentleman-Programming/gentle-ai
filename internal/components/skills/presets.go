@@ -58,6 +58,7 @@ var selectableFoundationSkills = []model.SkillID{
 	model.SkillQADocReference,
 	model.SkillQADocAccess,
 	model.SkillQAEvidence,
+	model.SkillSmartopsUI,
 }
 
 // foundationSkills are the non-SDD product skills installed by the

@@ -761,6 +761,7 @@ func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model
 		if slices.Contains(selection.Components, model.ComponentSkills) {
 			targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
 			paths = append(paths, skills.QACommandPaths(adapter, targetDir, selectedSkillIDs(selection))...)
+			paths = append(paths, skills.SmartopsUICommandPaths(adapter, targetDir, selectedSkillIDs(selection))...)
 			skillDir := adapter.SkillsDir(targetDir)
 			if skillDir == "" {
 				continue
@@ -1161,6 +1162,12 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync QA commands for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(commandsRes.Changed), commandsRes.Files...)
+
+			smartopsRes, err := skills.InjectSmartopsUICommands(targetDir, adapter, skillIDs)
+			if err != nil {
+				return fmt.Errorf("sync smartops-ui commands for %q: %w", adapter.Agent(), err)
+			}
+			s.countChanged(boolToInt(smartopsRes.Changed), smartopsRes.Files...)
 		}
 		return nil
 
