@@ -37,6 +37,9 @@ var allAgents = []Agent{
 	// sets that expectation before the user confirms the install.
 	{ID: model.AgentConductor, Name: "Conductor", Tier: model.TierFull, ConfigPath: "~/.conductor",
 		ReviewNote: "Conductor workspaces inherit Claude Code configuration; Gentle AI writes no Conductor-specific files."},
+	// MiniMax Code ships three surfaces (Desktop, CLI/TUI, Web) that share one
+	// agent data directory, so a single adapter covers desktop and terminal use.
+	{ID: model.AgentMiniMaxCode, Name: "MiniMax Code", Tier: model.TierFull, ConfigPath: "~/.minimax"},
 }
 
 // mvpAgents are the original MVP agents (Claude Code, OpenCode).
