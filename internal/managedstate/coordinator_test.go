@@ -808,3 +808,67 @@ func TestResumeWithChangedTargetFailsClosed(t *testing.T) {
 		t.Fatalf("target drift must fail closed, got %v", err)
 	}
 }
+
+// ---- resume alignment: a grown plan fails closed, never silently omits -----
+
+func TestResumeWithExtraPlanResourceFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	plan := twoPlan(home)
+	crash := Faults{BeforeTargetWrite: func(string) error { return ErrInjected }}
+	if _, err := Run(context.Background(), home, plan, crash); !errors.Is(err, ErrInjected) {
+		t.Fatalf("expected crash, got %v", err)
+	}
+
+	grown := twoPlan(home)
+	extra := grown.Resources[0]
+	extra.ID = "persona/output-style/extra"
+	extra.Target = filepath.Join(home, "claude", "extra.md")
+	grown.Resources = append(grown.Resources, extra)
+
+	_, err := Run(context.Background(), home, grown, Faults{})
+	if err == nil || !strings.Contains(err.Error(), "absent from the resumed transaction") {
+		t.Fatalf("grown plan must fail closed instead of omitting the new resource, got %v", err)
+	}
+	if _, err := os.Stat(extra.Target); !os.IsNotExist(err) {
+		t.Fatalf("omitted resource must not be written behind the failure")
+	}
+}
+
+// ---- crash between manifest publish and journal commit still completes ------
+
+func TestCrashAfterPublishBeforeJournalCommitCompletes(t *testing.T) {
+	home := t.TempDir()
+	plan := onePlan(home)
+	target := planTarget(plan)
+	writeManagedManifest(t, home, target, digestHex(oldBytes()))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, oldBytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	crash := Faults{AfterManifestPublish: func() error { return ErrInjected }}
+	if _, err := Run(context.Background(), home, plan, crash); !errors.Is(err, ErrInjected) {
+		t.Fatalf("expected crash after publish, got %v", err)
+	}
+	published := mustReadFile(t, state.ManifestPath(home))
+	j, err := LoadActiveJournal(home)
+	if err != nil || j.LastPhase != PhaseVerified {
+		t.Fatalf("journal must sit at verified (write done, revision not): %+v err=%v", j, err)
+	}
+
+	res, err := Run(context.Background(), home, plan, Faults{})
+	if err != nil {
+		t.Fatalf("resume after publish-window crash: %v", err)
+	}
+	if res.Phase != PhaseCompleted || res.ManifestWrites != 0 || res.TargetWrites != 0 {
+		t.Fatalf("must complete as bookkeeping only: %+v", res)
+	}
+	if string(mustReadFile(t, state.ManifestPath(home))) != string(published) {
+		t.Fatalf("already-published manifest must not be rewritten")
+	}
+	if _, err := os.Stat(TransactionsDir(home)); !os.IsNotExist(err) {
+		t.Fatalf("completed transaction directory must be removed")
+	}
+}

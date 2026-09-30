@@ -500,6 +500,15 @@ func alignPlanToJournal(plan Plan, j *Journal) (Plan, error) {
 	for _, r := range plan.Resources {
 		byID[r.ID] = r
 	}
+	journalIDs := make(map[string]bool, len(j.Resources))
+	for _, jr := range j.Resources {
+		journalIDs[jr.ID] = true
+	}
+	for _, r := range plan.Resources {
+		if !journalIDs[r.ID] {
+			return Plan{}, fmt.Errorf("managedstate: plan names resource %q absent from the resumed transaction; complete this transaction, then run new resources as their own", r.ID)
+		}
+	}
 	aligned := Plan{Producer: plan.Producer, Resources: make([]PlannedResource, len(j.Resources))}
 	for i, jr := range j.Resources {
 		pr, ok := byID[jr.ID]
@@ -674,13 +683,17 @@ func (c *runner) commit(j *Journal, current state.Manifest, proposed state.Manif
 		digest = state.ComputeBundleDigest(onDisk)
 	}
 
-	if j.LastPhase == PhaseManifestCommitted {
-		// Decision table: a committed manifest matching our proposed
-		// generation finishes bookkeeping only; anything else is stale-CAS.
-		if digest != j.ProposedManifestDigest {
-			return nil, fmt.Errorf("%w: committed generation %q is not this transaction's", ErrStaleManifest, digest)
-		}
-	} else {
+	switch {
+	case digest == j.ProposedManifestDigest:
+		// The committed generation is exactly ours: either this transaction
+		// already persisted manifest_committed before a crash, or it wrote
+		// the manifest and crashed before the journal revision landed. Both
+		// finish with bookkeeping only; the manifest is never rewritten.
+	case j.LastPhase == PhaseManifestCommitted:
+		// Decision-table stale branch: a committed journal whose on-disk
+		// generation is not this transaction's is a typed stale-CAS.
+		return nil, fmt.Errorf("%w: committed generation %q is not this transaction's", ErrStaleManifest, digest)
+	default:
 		// CAS: the manifest generation this transaction started from must
 		// still be the committed one.
 		if digest != j.ExpectedManifestDigest {
@@ -706,6 +719,8 @@ func (c *runner) commit(j *Journal, current state.Manifest, proposed state.Manif
 		if err := c.faults.afterManifestPublish(); err != nil {
 			return nil, err
 		}
+	}
+	if j.LastPhase != PhaseManifestCommitted {
 		if err := c.persistPhase(j, PhaseManifestCommitted); err != nil {
 			return nil, err
 		}
