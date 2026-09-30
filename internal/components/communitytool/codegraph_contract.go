@@ -54,6 +54,10 @@ var codeGraphCompatibilityTable = map[model.AgentID]codeGraphCompatibility{
 	// it stays in the table so a future capability claim cannot silently
 	// bypass the exhaustive compatibility contract.
 	model.AgentConductor: excludedCompatibility(model.AgentConductor),
+	// MiniMax Code has no CodeGraph wiring in this scope. It stays in the
+	// table so a future capability claim cannot silently bypass the
+	// exhaustive compatibility contract.
+	model.AgentMiniMaxCode: excludedCompatibility(model.AgentMiniMaxCode),
 }
 
 func nativeCompatibility(id model.AgentID, target string) codeGraphCompatibility {
