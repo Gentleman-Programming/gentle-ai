@@ -59,3 +59,6 @@ Post-sync verification expects `<Pi agent dir>/mcp.json` (`internal/cli/run.go`,
   - RED: `go test ./internal/agents/pi/ ./internal/components/engram/` failed (5 pi tests, 2 inject tests: an engram server/`mcp.json` was written with nothing to migrate); `go test ./internal/cli/ -run TestRunSyncPiEngram` failed (both hosts). After the adapter change alone, `TestRunSyncPiEngramWithoutMCPConfigPassesVerification` still failed with the #5103 error (`verify:sync:file:.../.pi/agent/mcp.json ... no such file or directory`), proving the verification fix is needed.
   - GREEN: same tests pass after the adapter and `verificationComponentPaths` changes.
   - Risk tier: medium (removes a write; verification narrowed for one agent/file, backups unchanged).
+- T2 commit: `f5aafec8f`. Parent spot check: pi/engram packages and `go test ./internal/cli/ -run PiSync|PiEngram` ok.
+- Native review T2 (lineage `review-fb4706da61ee49ce`, medium, consent granted): reliability lens approved, acknowledged (authority burned). Advisory (non-blocking): R3 at adapter.go:468, adapter.go:530-533, run.go:3790-3793.
+- Follow-up: `checkEngramReachable` (internal/cli/doctor.go) warns on native-only Pi hosts with a remedy (`gentle-ai sync`) that cannot clear it.
