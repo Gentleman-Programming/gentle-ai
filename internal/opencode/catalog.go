@@ -54,8 +54,11 @@ type CatalogError struct{ Kind CatalogErrorKind }
 func (e *CatalogError) Error() string { return string(e.Kind) }
 
 // DiscoverCatalog reads OpenCode's effective provider catalog for projectDir.
+// Live discovery routes each attempt by command: the V2 api invocation uses
+// the file-backed runner (piped stdout truncates on real V2 hosts), while
+// the version probe and the V1 stream keep the pipe-based runner.
 func DiscoverCatalog(ctx context.Context, projectDir string) (map[string]Provider, error) {
-	return DiscoverCatalogWithRunner(ctx, projectDir, runCatalogCommand)
+	return DiscoverCatalogWithRunner(ctx, projectDir, discoverCatalogCommandRunner)
 }
 
 // waitErrorReader is the contract for stream readers that surface the child's
