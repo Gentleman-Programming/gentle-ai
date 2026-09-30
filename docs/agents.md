@@ -23,6 +23,7 @@ Gentle AI configures agents you already have; it does not install an AI agent fo
 | <a id="pi"></a>Pi | `pi` | Package-owned runtime through Gentle Shell; see [Pi](pi.md) |
 | <a id="hermes"></a>Hermes | `hermes` | Ephemeral `delegate_task` workers, skills and MCP |
 | <a id="conductor"></a>Conductor | `conductor` | Workspace orchestrator that inherits Claude Code configuration; detection and catalog only — no managed writes |
+| <a id="minimax-code"></a>MiniMax Code | `minimax-code` | File sub-agents, skills, system prompt and MCP across the Desktop, CLI/TUI and web surfaces |
 
 ## Agent guidance and ownership
 
@@ -39,6 +40,7 @@ Delegated work stays focused: the parent supplies task context and exact relevan
 - **OpenClaw:** reads the active workspace from its configuration and writes managed `AGENTS.md`/`SOUL.md` there. MCP entries remain in global OpenClaw configuration.
 - **Hermes:** detected from its configuration directory; installation of the client itself is manual. Existing top-level configuration is preserved when MCP entries are merged.
 - **Conductor:** detected from the `~/.conductor` directory; installation of the desktop app itself is manual. Conductor workspaces inherit Claude Code configuration, so Gentle AI makes no Conductor-specific writes: it does not install skills, MCP servers, or system prompt files for Conductor — configure those through Claude Code instead.
+- **MiniMax Code:** detected from the `~/.minimax` data directory, which the Desktop, CLI/TUI (`mcode`) and web surfaces share, so one adapter covers every surface. The `mcode` binary is a second, independent detection signal because the Desktop app does not place it on `PATH`; the CLI does. Installation of the client itself is manual. Managed writes stay inside that data directory: skills go to `~/.minimax/skills` (never the runtime-owned `.builtin-skills/`), the system prompt goes to the namespaced `~/.minimax/agents/gentle-ai/agent.md` (never `agents/.builtin/`), and MCP servers merge into `~/.minimax/mcp.json`, which uses the same `mcpServers` shape and the same transports as Claude Code. The agent id is `minimax-code` rather than `mavis` to stay distinct from the MiniMax *model* alias used by other adapters.
 - **Pi:** the installer provisions companion packages, but Gentle Shell owns runtime prompts, model assignments, persona, and delegation. See [Pi integration](pi.md).
 
 Model assignment is client-specific and applies to supported generic and review roles, not a formal development-phase matrix. Use the TUI **Configure Models** screen to inspect available roles, including Judgment Day review roles. Strict TDD is an independently configured ODD mode, not inferred from the presence of tests. Run `gentle-ai doctor` for read-only installation diagnostics and `gentle-ai sync --dry-run` to preview managed updates. Uninstall previews and backs up managed configuration; it must preserve unrelated user files. [Full CLI guidance](usage.md#cli-commands).
