@@ -1,5 +1,5 @@
 // gentle-ai:managed opencode-review-transport/v2
-// Staged wire adapter. Native capability remains unavailable pending runtime proof.
+// Thin wire adapter: Go owns binding, materialization, admission, and capture.
 import { Plugin } from "@opencode/plugin"
 import { spawn } from "node:child_process"
 const RELAY_CONTRACT = "gentle-ai.opencode-relay/v2-staged"
@@ -12,13 +12,44 @@ const TRANSPORT = {
   Prompt: "prompt",
   Complete: "complete",
   Result: "result",
+  Refused: "refused",
 } as const
+
+// Bounded refusal reasons. Go names one in its refused frame; the plugin only
+// forwards an exact member, so relay text, paths, or child bytes never reach
+// the parent. dispatch_refused is the plugin's own pre-relay refusal.
+const REFUSAL_REASON = {
+  CapabilityUnavailable: "capability_unavailable",
+  EnvelopeInvalid: "envelope_invalid",
+  AgentMismatch: "agent_mismatch",
+  BindingMismatch: "binding_mismatch",
+  StaleAuthority: "stale_authority",
+  OutputRefused: "output_refused",
+  ProviderFailed: "provider_failed",
+  RelayUnavailable: "relay_unavailable",
+  DispatchRefused: "dispatch_refused",
+} as const
+type RefusalReason = (typeof REFUSAL_REASON)[keyof typeof REFUSAL_REASON]
+const REFUSAL_REASONS: ReadonlySet<string> = new Set(Object.values(REFUSAL_REASON))
+
+class RelayRefusal extends Error {
+  readonly reason: RefusalReason
+  constructor(reason: RefusalReason) {
+    super("Go review relay refused the Task")
+    this.reason = reason
+  }
+}
+
+function refusalReason(cause: unknown): RefusalReason {
+  return cause instanceof RelayRefusal ? cause.reason : REFUSAL_REASON.RelayUnavailable
+}
 
 interface TransportFrame {
   schema: string
   operation: string
   nonce?: string
   prompt?: string
+  agent?: string
   output?: string
   error?: string
 }
@@ -41,7 +72,9 @@ function decodeTransportFrame(line: string): TransportFrame {
   return frame as TransportFrame
 }
 
-function startRelay(cwd: string, prompt: string): Relay {
+// The dispatched host agent travels with the prompt so Go can bind it to the
+// Task role; the prompt alone never selects the admitted role.
+function startRelay(cwd: string, prompt: string, agent: string): Relay {
   const child = spawn(TRANSPORT.Command, ["review", "opencode-transport"], { cwd, env: { ...process.env, [RELAY_CONTRACT_ENV]: RELAY_CONTRACT }, stdio: ["pipe", "pipe", "pipe"] })
   let buffered = ""
   let closed = false
@@ -79,6 +112,11 @@ function startRelay(cwd: string, prompt: string): Relay {
           resolveResult(frame.output)
           continue
         }
+        if (frame.operation === TRANSPORT.Refused) {
+          const reason = typeof frame.error === "string" && REFUSAL_REASONS.has(frame.error) ? frame.error as RefusalReason : REFUSAL_REASON.RelayUnavailable
+          fail(new RelayRefusal(reason))
+          continue
+        }
         throw new Error("invalid Go relay frame")
       } catch (cause) {
         fail(cause)
@@ -91,7 +129,7 @@ function startRelay(cwd: string, prompt: string): Relay {
   child.on("close", (code) => {
     if (!closed) fail(new Error(Buffer.concat(stderr).toString("utf8").trim() || `Go review relay exited before completion (${code ?? "signal"})`))
   })
-  child.stdin.write(JSON.stringify({ schema: TRANSPORT.Schema, operation: TRANSPORT.Start, prompt }) + "\n", (cause) => {
+  child.stdin.write(JSON.stringify({ schema: TRANSPORT.Schema, operation: TRANSPORT.Start, prompt, agent }) + "\n", (cause) => {
     if (cause) fail(cause)
   })
   return {
@@ -118,7 +156,8 @@ function registry(): Map<string, RelayRegistration> {
   return runtime[REGISTRY] ??= new Map()
 }
 const REFUSED = "opencode_review_transport_relay_refused"
-const refusal = () => Object.assign(new Error(REFUSED), { code: REFUSED })
+const refusalText = (reason: RefusalReason) => `${REFUSED} (reason: ${reason})`
+const refusal = (reason: RefusalReason) => Object.assign(new Error(refusalText(reason)), { code: REFUSED, reason })
 
 export default Plugin.define({
   id: "gentle-ai.opencode-review-transport",
@@ -126,7 +165,7 @@ export default Plugin.define({
     const owner = Symbol("review-relay")
     const relays = registry()
     const deferred = new Map<string, RelayRegistration>()
-    const refused = new Set<string>()
+    const refused = new Map<string, RefusalReason>()
     const registrations: Array<{ dispose(): Promise<void> }> = []
     const abort = new AbortController()
     const location = [ctx.location.directory, ctx.location.workspaceID ?? ""]
@@ -157,40 +196,46 @@ export default Plugin.define({
         const input = reviewInput(call)
         if (!input) return
         const key = keyFor(call, input.agent as string)
-        const refuse = () => { refused.add(key); input.prompt = REFUSED; throw refusal() }
-        if (disposed || typeof input.prompt !== "string" || input.prompt === "" || input.background === true || input.sessionID !== undefined) return refuse()
+        const refuse = (reason: RefusalReason) => { refused.set(key, reason); input.prompt = REFUSED; throw refusal(reason) }
+        if (disposed) return refuse(REFUSAL_REASON.RelayUnavailable)
+        if (typeof input.prompt !== "string" || input.prompt === "" || input.background === true || input.sessionID !== undefined) return refuse(REFUSAL_REASON.DispatchRefused)
         const existing = relays.get(key)
         if (existing) {
           if (existing.owner !== owner) deferred.set(key, existing)
           // Concurrent duplicate instances must also wait for Go's materialization.
-          try { input.prompt = (await existing.relay.prompt).prompt } catch { return refuse() }
+          try { input.prompt = (await existing.relay.prompt).prompt } catch (cause) { return refuse(refusalReason(cause)) }
           return
         }
         try {
-          const relay = startRelay(ctx.location.directory, input.prompt)
+          const relay = startRelay(ctx.location.directory, input.prompt, input.agent as string)
           relays.set(key, { owner, relay, completing: false })
           input.prompt = (await relay.prompt).prompt
-        } catch {
+        } catch (cause) {
           clearOwned(key)
-          return refuse()
+          return refuse(refusalReason(cause))
         }
       }))
       registrations.push(await ctx.tool.hook("execute.after", async call => {
         const input = reviewInput(call)
         if (!input) return
         const key = keyFor(call, input.agent as string)
-        const refuse = () => {
-          if (call.status === "completed") call.result = { output: { status: "unavailable", code: REFUSED }, content: REFUSED }
-          throw refusal()
+        const refuse = (reason: RefusalReason) => {
+          if (call.status === "completed") call.result = { output: { status: "unavailable", code: REFUSED, reason }, content: refusalText(reason) }
+          throw refusal(reason)
         }
-        if (disposed || refused.delete(key)) return refuse()
+        const earlier = refused.get(key)
+        if (earlier !== undefined) {
+          refused.delete(key)
+          return refuse(earlier)
+        }
+        if (disposed) return refuse(REFUSAL_REASON.RelayUnavailable)
         const deferredTo = deferred.get(key)
         if (deferredTo) {
           deferred.delete(key)
           if (relays.get(key) === deferredTo || deferredTo.completing) return
         }
         const registration = relays.get(key)
-        if (!registration || registration.owner !== owner || registration.completing) return refuse()
+        if (!registration || registration.owner !== owner || registration.completing) return refuse(REFUSAL_REASON.RelayUnavailable)
         registration.completing = true
         try {
           // Hook completion alone may acknowledge a running background child.
@@ -199,7 +244,7 @@ export default Plugin.define({
           const raw = child?.status === "completed" && typeof child.sessionID === "string" && child.sessionID !== "" && typeof child.output === "string" ? child.output : undefined
           const result = await registration.relay.complete(raw)
           if (call.status === "completed") call.result = { ...call.result, output: { ...child, output: result }, content: result }
-        } catch { return refuse() }
+        } catch (cause) { return refuse(refusalReason(cause)) }
         finally { clearOwned(key) }
       }))
       registrations.push(await ctx.shell.hook("create.before", invocation => {
@@ -212,7 +257,7 @@ export default Plugin.define({
             const sessionPrefix = JSON.stringify([prefix, event.data.sessionID]).slice(0, -1) + ","
             for (const key of relays.keys()) if (key.startsWith(sessionPrefix)) clearOwned(key)
             for (const key of deferred.keys()) if (key.startsWith(sessionPrefix)) deferred.delete(key)
-            for (const key of refused) if (key.startsWith(sessionPrefix)) refused.delete(key)
+            for (const key of refused.keys()) if (key.startsWith(sessionPrefix)) refused.delete(key)
           }
         } catch { /* Disposal also aborts the subscription. */ }
         finally { for (const [key, registration] of relays) if (registration.owner === owner) clearOwned(key) }

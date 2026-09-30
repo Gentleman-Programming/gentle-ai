@@ -896,9 +896,9 @@ func TestPartialUninstallPiReportsRetainedResourcesAndOptionalCleanup(t *testing
 	wantCommands := []string{
 		"pi remove npm:gentle-pi",
 		"pi remove npm:gentle-engram",
-		"pi remove npm:pi-mcp-adapter",
 		"pi remove npm:pi-web-access",
 		"pi remove npm:pi-btw",
+		"pi remove npm:pi-mcp-adapter",
 	}
 	if !slices.Equal(result.OptionalPiPackageCleanupCommands, wantCommands) {
 		t.Fatalf("OptionalPiPackageCleanupCommands = %v, want %v", result.OptionalPiPackageCleanupCommands, wantCommands)

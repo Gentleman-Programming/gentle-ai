@@ -20,6 +20,67 @@ const reject=async(fn)=>{let failed=false;try{await fn()}catch{failed=true}if(!f
 const call=(id='call')=>({tool:'subagent',sessionID:'root',id,input:{agent:'review-risk',prompt:'opaque binding'}});
 const completed=c=>({...c,status:'completed',result:{output:{sessionID:'child',status:'completed',output:'RAW BYTES'},content:'NEVER PARSE WRAPPER'}});
 const a=await make(),b=await make();const c=call();await a.hooks['execute.before'](c);await b.hooks['execute.before'](c);if(children.length!==1||c.input.prompt!=='GO PROMPT')throw Error('duplicate/process materialization');const result=completed(c);await a.hooks['execute.after'](result);await b.hooks['execute.after'](result);if(children[0].frames[1].output!=='RAW BYTES'||result.result.output.output!=='GO RESULT'||!children[0].killed)throw Error('opaque completion');
+// Payload syntax is Go-owned: all reviewer roles use the same opaque wire.
+const agents=['review-risk','review-resilience','review-readability','review-reliability','review-refuter','review-validator'];
+const fence=String.fromCharCode(96).repeat(3);
+const payloads=[
+  ['valid JSON',' \r\n{\n\t"message": "café 🧪", "findings": []\n}  \n'],
+  ['fenced JSON',fence+'json\n{"findings":[]}\n'+fence+'\n'],
+  ['malformed JSON',' \n{"findings": [\t'],
+  ['multiple objects','{"findings":[]}\n{"verdict":"pass"}'],
+];
+const parse=JSON.parse;
+let payloadParseAttempts=0;
+JSON.parse=(text,...args)=>{if(payloads.some(([,raw])=>raw===text))payloadParseAttempts++;return parse(text,...args)};
+try {
+  for(const agent of agents)for(const [name,raw] of payloads){
+    const c=call(agent+':'+name);c.input.agent=agent;
+    const originalPrompt=c.input.prompt;
+    const count=children.length;
+    await a.hooks['execute.before'](c);
+    const child=children.at(-1);
+    if(children.length!==count+1||child.frames[0].prompt!==originalPrompt||c.input.prompt!=='GO PROMPT')throw Error(agent+': prompt forwarding');
+    // Go binds the dispatched host agent to the Task role; the prompt alone never selects it.
+    if(child.frames[0].agent!==agent||Object.keys(child.frames[0]).sort().join()!=='agent,operation,prompt,schema')throw Error(agent+': start frame must name the dispatched agent');
+    const result=completed(c);result.result.output.output=raw;
+    await a.hooks['execute.after'](result);
+    const frame=child.frames[1];
+    if(child.frames.length!==2||frame.schema!=='gentle-ai.provider-transport/v1'||frame.operation!=='complete'||frame.nonce!=='opaque'||'error' in frame)throw Error(agent+': completion framing');
+    if(typeof frame.output!=='string'||!Buffer.from(frame.output).equals(Buffer.from(raw)))throw Error(agent+': changed '+name);
+    if(result.result.output.output!=='GO RESULT'||result.result.content!=='GO RESULT'||!child.killed)throw Error(agent+': native result substitution');
+  }
+  if(payloadParseAttempts!==0)throw Error('adapter attempted reviewer JSON parsing');
+}finally{JSON.parse=parse}
+
+// This mock only models a native transport refusal; Go tests prove the actual
+// empty-output decoder contract. Empty strings must reach Go, not TS admission.
+const unavailable=[
+  ['failed hook',r=>{r.status='error';r.error={message:'host failure'}}],
+  ['running child',r=>{r.result.output.status='running'}],
+  ['failed child',r=>{r.result.output.status='error'}],
+  ['missing child status',r=>{delete r.result.output.status}],
+  ['missing child session',r=>{delete r.result.output.sessionID}],
+  ['empty child session',r=>{r.result.output.sessionID=''}],
+  ['missing raw output',r=>{delete r.result.output.output}],
+  ['non-string raw output',r=>{r.result.output.output={findings:[]}}],
+  ['empty raw output',r=>{r.result.output.output=''},''],
+  ['whitespace raw output',r=>{r.result.output.output=' \r\n\t'},' \r\n\t'],
+];
+for(const agent of agents)for(const [name,mutate,raw] of unavailable){
+  const c=call(agent+':'+name);c.input.agent=agent;
+  await a.hooks['execute.before'](c);
+  const child=children.at(-1);
+  child.stdin.end=line=>{child.frames.push(JSON.parse(line));queueMicrotask(()=>child.emit('close',1))};
+  const result=completed(c);mutate(result);
+  await reject(()=>a.hooks['execute.after'](result));
+  const frame=child.frames[1];
+  if(child.frames.length!==2||frame.operation!=='complete'||frame.nonce!=='opaque'||!child.killed)throw Error(agent+': refusal lifecycle '+name);
+  if(raw!==undefined){
+    if(frame.output!==raw||'error' in frame)throw Error(agent+': empty bytes must reach Go');
+  }else if('output' in frame||frame.error!=='opencode_task_host_output_unavailable')throw Error(agent+': unavailable output forwarded '+name);
+  if(result.status==='completed'&&(result.result.output.status!=='unavailable'||result.result.output.reason!=='relay_unavailable'||result.result.content!=='opencode_review_transport_relay_refused (reason: relay_unavailable)'))throw Error(agent+': advisory escaped '+name);
+  if(result.status==='error'&&result.error.message!=='host failure')throw Error('host failure was replaced');
+}
 await reject(()=>a.hooks['execute.after'](completed(c)));
 const failed=call('orphan');await a.hooks['execute.before'](failed);await b.hooks['execute.before'](failed);const orphan=completed(failed);await a.cleanup();await reject(()=>b.hooks['execute.after'](orphan));if(JSON.stringify(orphan.result).includes('RAW BYTES'))throw Error('orphan advisory escaped');
 // Recreate the owner after disposal for subsequent location and error cases.
@@ -28,6 +89,21 @@ const normalSpawn=globalThis.__spawn;
 globalThis.__spawn=(...args)=>{const child=normalSpawn(...args);child.stdin.write=()=>queueMicrotask(()=>child.emit('error',Error('native unavailable')));return child};
 const denied=call('denied');await reject(()=>a.hooks['execute.before'](denied));if(!children.at(-1).killed||denied.input.prompt!=='opencode_review_transport_relay_refused')throw Error('start failure not contained');const deniedResult=completed(denied);await reject(()=>a.hooks['execute.after'](deniedResult));if(JSON.stringify(deniedResult).includes('RAW BYTES'))throw Error('failed start escaped');globalThis.__spawn=normalSpawn;
 
+// Go's refused frame names one bounded reason; only allow-listed codes reach the
+// parent, and any other relay text collapses to relay_unavailable.
+const refusedSpawn=(stage,reason)=>(...args)=>{const child=normalSpawn(...args);const refuse=()=>queueMicrotask(()=>{child.stdout.emit('data',Buffer.from(JSON.stringify({schema:'gentle-ai.provider-transport/v1',operation:'refused',error:reason})+'\n'));child.emit('close',1)});if(stage==='start')child.stdin.write=line=>{child.frames.push(JSON.parse(line));refuse()};else child.stdin.end=line=>{child.frames.push(JSON.parse(line));refuse()};return child};
+for(const [stage,reason,want] of [['start','agent_mismatch','agent_mismatch'],['start','stale_authority','stale_authority'],['start','/Users/someone/RAW CHILD TEXT','relay_unavailable'],['complete','output_refused','output_refused'],['complete','provider_failed','provider_failed'],['complete','RAW BYTES','relay_unavailable']]){
+  globalThis.__spawn=refusedSpawn(stage,reason);
+  const c=call(stage+':'+want);let thrown;
+  try{await a.hooks['execute.before'](c)}catch(error){thrown=error}
+  if(stage==='start'&&(!thrown||thrown.reason!==want||thrown.message!=='opencode_review_transport_relay_refused (reason: '+want+')'||c.input.prompt!=='opencode_review_transport_relay_refused'))throw Error(stage+': before refusal reason '+reason+' '+thrown?.message);
+  const result=completed(c);let after;
+  try{await a.hooks['execute.after'](result)}catch(error){after=error}
+  if(!after||after.reason!==want||result.result.output.reason!==want||result.result.output.code!=='opencode_review_transport_relay_refused'||result.result.content!=='opencode_review_transport_relay_refused (reason: '+want+')')throw Error(stage+': parent refusal reason '+reason+' '+JSON.stringify(result.result));
+  if(JSON.stringify(result.result).includes('RAW')||JSON.stringify(result.result).includes('/Users/'))throw Error('relay text escaped');
+}
+globalThis.__spawn=normalSpawn;
+for(const extra of [{background:true},{sessionID:'reuse'}]){const c=call('dispatch');Object.assign(c.input,extra);let thrown;try{await a.hooks['execute.before'](c)}catch(error){thrown=error}if(thrown?.reason!=='dispatch_refused')throw Error('dispatch refusal reason');const result=completed(c);await reject(()=>a.hooks['execute.after'](result));if(result.result.output.reason!=='dispatch_refused')throw Error('dispatch parent reason')}
 for(const extra of [{background:true},{sessionID:'reuse'}]){const c=call('unsafe');Object.assign(c.input,extra);const count=children.length;await reject(()=>a.hooks['execute.before'](c));if(children.length!==count)throw Error('unsafe dispatch spawned')}
 for(const status of ['running','error']){const c=call(status);await a.hooks['execute.before'](c);const result=completed(c);if(status==='error'){result.status='error';result.error={message:'failure'}}else result.result.output.status='running';await a.hooks['execute.after'](result);if(!children.at(-1).frames[1].error||children.at(-1).frames[1].output)throw Error('nonterminal forwarded as result')}
 const other=await make({directory:'/project',workspaceID:'two'});const x=call('isolation');await a.hooks['execute.before'](x);await other.hooks['execute.before'](call('isolation'));const first=children.at(-2),second=children.at(-1);await a.event({type:'session.deleted',location:{directory:'/wrong',workspaceID:'one'},data:{sessionID:'root'}});if(first.killed)throw Error('foreign deletion');await a.event({type:'session.deleted',location:{directory:'/project',workspaceID:'one'},data:{sessionID:'root'}});if(!first.killed||second.killed)throw Error('location/session cleanup');await other.cleanup();if(!second.killed)throw Error('dispose relay');await a.cleanup();await b.cleanup();if(a.disposed()!==3)throw Error('hook cleanup');

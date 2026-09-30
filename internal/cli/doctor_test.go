@@ -1437,3 +1437,49 @@ func TestRenderDoctorReportDoesNotRenderRemedyMetadata(t *testing.T) {
 		t.Fatalf("rendered report mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestCheckEngramReachable_PiOnlyNativeEngramPasses covers a Pi-only host:
+// Engram on Pi runs through gentle-engram's native tools, not an MCP server,
+// so a missing Engram MCP entry is expected and 'gentle-ai sync' cannot and
+// should not create one.
+func TestCheckEngramReachable_PiOnlyNativeEngramPasses(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	probes := 0
+	orig := engramProbeStdioFn
+	engramProbeStdioFn = func(context.Context, time.Duration, string, ...string) error {
+		probes++
+		return nil
+	}
+	t.Cleanup(func() { engramProbeStdioFn = orig })
+
+	got := checkEngramReachable(context.Background(), t.TempDir(), []string{"pi"})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("engram:reachable status = %q, detail = %q; want pass for Pi native Engram", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("engram:reachable remedy = %+v; want none for Pi native Engram", got.Remedy)
+	}
+	if !strings.Contains(got.Detail, "native") {
+		t.Fatalf("engram:reachable detail = %q; want it to explain Pi uses native Engram tools", got.Detail)
+	}
+	if probes != 0 {
+		t.Fatalf("stdio probe ran %d time(s); want 0 when no MCP configuration applies", probes)
+	}
+}
+
+// TestCheckEngramReachable_PiWithUnconfiguredMCPAgentWarns keeps the sync
+// warning when another installed agent still expects Engram MCP.
+func TestCheckEngramReachable_PiWithUnconfiguredMCPAgentWarns(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
+
+	got := checkEngramReachable(context.Background(), t.TempDir(), []string{"pi", "claude-code"})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("engram:reachable status = %q, detail = %q; want warn when a non-Pi agent lacks Engram MCP", got.Status, got.Detail)
+	}
+	if got.Remedy == nil {
+		t.Fatal("expected sync remedy when a non-Pi agent lacks Engram MCP")
+	}
+}

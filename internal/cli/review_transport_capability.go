@@ -13,6 +13,22 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
+// openCodeRelayContractEnvironment carries the managed V2 plugin's relay
+// declaration into its relay child and ordinary host shells.
+const openCodeRelayContractEnvironment = "GENTLE_AI_OPENCODE_RELAY_CONTRACT"
+
+// openCodeRelayContractV2 is the exact relay contract the managed OpenCode V2
+// review plugin declares. Together with a detected V2 runtime it admits the
+// same Go-owned provider-injected transport V1 uses (T4c: proven on a real
+// OpenCode 2.0.19 host with the gate un-stubbed).
+const openCodeRelayContractV2 = "gentle-ai.opencode-relay/v2-staged"
+
+// openCodeRelayDeclaresV2 reports whether this process was started under the
+// exact managed V2 relay declaration.
+func openCodeRelayDeclaresV2() bool {
+	return os.Getenv(openCodeRelayContractEnvironment) == openCodeRelayContractV2
+}
+
 const reviewImmutableTransportUnsupportedCode = "immutable_review_transport_unsupported"
 
 var reviewImmutableTransportUnsupportedReason = reviewPreflightReason{
@@ -68,15 +84,26 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentCodex:
 		policy.Eligible = true
 	case model.AgentOpenCode:
-		// A managed host declaration can only narrow capability, never enable it.
-		// This also refuses active V2 when PATH resolves a coexisting V1 binary.
-		if os.Getenv("GENTLE_AI_OPENCODE_RELAY_CONTRACT") != "" {
+		// The relay declaration and the detected runtime must agree: the V1
+		// plugin declares nothing and runs on V1; the managed V2 plugin declares
+		// exactly the V2 relay contract and runs on V2. Any other declaration
+		// refuses before the PATH probe, and a disagreeing pair refuses too, so
+		// a V2 host whose PATH resolves a coexisting V1 binary (or the reverse)
+		// never inherits the other runtime's capability. Neither the
+		// declaration nor version evidence alone can enable the transport.
+		declaration := os.Getenv(openCodeRelayContractEnvironment)
+		if declaration != "" && declaration != openCodeRelayContractV2 {
 			return policy
 		}
-		// V2 wire transport is staged, not organically certified. Version evidence
-		// only narrows the compiled capability; it cannot enable a new transport.
 		major, err := opencode.DetectRuntimeMajor(context.Background())
-		if err != nil || major != opencode.RuntimeV1 {
+		if err != nil {
+			return policy
+		}
+		want := opencode.RuntimeV1
+		if declaration == openCodeRelayContractV2 {
+			want = opencode.RuntimeV2
+		}
+		if major != want {
 			return policy
 		}
 		policy.Eligible = true
