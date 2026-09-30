@@ -872,3 +872,49 @@ func TestCrashAfterPublishBeforeJournalCommitCompletes(t *testing.T) {
 		t.Fatalf("completed transaction directory must be removed")
 	}
 }
+
+// ---- stale observed metadata under our canonical digest is settled ----------
+
+func TestStaleObservedUnderOurDigestIsSettledOnResume(t *testing.T) {
+	home := t.TempDir()
+	plan := onePlan(home)
+
+	// Crash in the publish window: the manifest is ours, the journal sits at
+	// verified.
+	crash := Faults{AfterManifestPublish: func() error { return ErrInjected }}
+	if _, err := Run(context.Background(), home, plan, crash); !errors.Is(err, ErrInjected) {
+		t.Fatalf("expected crash, got %v", err)
+	}
+
+	// An external rewrite leaves the canonical digest (which ignores
+	// observed) untouched while the observed metadata goes stale.
+	m, err := state.ReadManifest(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Resources[0].Observed = ""
+	if err := state.WriteManifestAtomic(home, m); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Run(context.Background(), home, plan, Faults{})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if res.Phase != PhaseCompleted || res.ManifestWrites != 1 {
+		t.Fatalf("stale observed under our identity must be settled by one corrective publish: %+v", res)
+	}
+	settled, err := state.ReadManifest(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Resources[0].Observed != settled.Resources[0].Desired {
+		t.Fatalf("observed must equal desired after settlement: %+v", settled.Resources[0])
+	}
+
+	// With the metadata settled, later runs finally no-op.
+	again, err := Run(context.Background(), home, plan, Faults{})
+	if err != nil || !again.NoOp {
+		t.Fatalf("later runs must settle into a no-op: %+v err=%v", again, err)
+	}
+}

@@ -670,6 +670,39 @@ func (c *runner) rollback(j *Journal) error {
 	return &terminalOutcome{status: StatusRolledBack}
 }
 
+// publish writes the proposed manifest exactly once with fault seams at
+// every boundary and verifies the readback digest.
+func (c *runner) publish(j *Journal, proposed state.Manifest) error {
+	if err := c.faults.beforeManifestPublish(); err != nil {
+		return err
+	}
+	if err := state.WriteManifestAtomic(c.homeDir, proposed); err != nil {
+		return err
+	}
+	c.manifestWrite++
+	readback, err := state.ReadManifest(c.homeDir)
+	if err != nil {
+		return err
+	}
+	if state.ComputeBundleDigest(readback) != j.ProposedManifestDigest {
+		return errManifestWriteVerify
+	}
+	return c.faults.afterManifestPublish()
+}
+
+// observedSettled reports whether every planned resource's committed entry
+// records observed == desired. ComputeBundleDigest deliberately ignores
+// observed, so identity equality alone cannot prove the metadata settled.
+func observedSettled(m state.Manifest, plan Plan) bool {
+	for _, r := range plan.Resources {
+		entry, ok := manifestEntry(m, r.ID)
+		if !ok || entry.Desired != digestBytes(r.Desired) || entry.Observed != digestBytes(r.Desired) {
+			return false
+		}
+	}
+	return true
+}
+
 // commit publishes the proposed manifest under compare-and-swap, or, when
 // this transaction already published it before a crash, finishes bookkeeping
 // only after proving the committed generation is exactly ours.
@@ -684,11 +717,20 @@ func (c *runner) commit(j *Journal, current state.Manifest, proposed state.Manif
 	}
 
 	switch {
-	case digest == j.ProposedManifestDigest:
-		// The committed generation is exactly ours: either this transaction
-		// already persisted manifest_committed before a crash, or it wrote
-		// the manifest and crashed before the journal revision landed. Both
+	case digest == j.ProposedManifestDigest && observedSettled(onDisk, c.plan):
+		// The committed generation is exactly ours and the per-resource
+		// observed metadata is settled: either this transaction already
+		// persisted manifest_committed before a crash, or it wrote the
+		// manifest and crashed before the journal revision landed. Both
 		// finish with bookkeeping only; the manifest is never rewritten.
+	case digest == j.ProposedManifestDigest:
+		// The canonical digest ignores observed metadata, so our identity can
+		// sit above stale observed fields. verify() proved the targets exact:
+		// republish the verified generation once to settle the metadata a
+		// later no-op depends on, then continue as bookkeeping.
+		if err := c.publish(j, proposed); err != nil {
+			return nil, err
+		}
 	case j.LastPhase == PhaseManifestCommitted:
 		// Decision-table stale branch: a committed journal whose on-disk
 		// generation is not this transaction's is a typed stale-CAS.
@@ -702,21 +744,7 @@ func (c *runner) commit(j *Journal, current state.Manifest, proposed state.Manif
 		if state.ComputeBundleDigest(proposed) != j.ProposedManifestDigest {
 			return nil, fmt.Errorf("%w: proposed digest drifted", ErrStaleManifest)
 		}
-		if err := c.faults.beforeManifestPublish(); err != nil {
-			return nil, err
-		}
-		if err := state.WriteManifestAtomic(c.homeDir, proposed); err != nil {
-			return nil, err
-		}
-		c.manifestWrite++
-		readback, err := state.ReadManifest(c.homeDir)
-		if err != nil {
-			return nil, err
-		}
-		if state.ComputeBundleDigest(readback) != j.ProposedManifestDigest {
-			return nil, errManifestWriteVerify
-		}
-		if err := c.faults.afterManifestPublish(); err != nil {
+		if err := c.publish(j, proposed); err != nil {
 			return nil, err
 		}
 	}

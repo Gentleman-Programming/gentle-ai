@@ -99,3 +99,12 @@ against the restart decision table line by line.
   derivation, ceiling 7200000) in the relay host env, withdraw the slot,
   re-capture. Withdraw deferred until the bound can actually change;
   provider state is durable.
+
+- CodeRabbit third final-review-risk (confirmed real, fixed):
+  ComputeBundleDigest deliberately ignores Observed, so the
+  digest==Proposed bookkeeping branch could complete above stale observed
+  metadata and later runs never settled into a no-op. commit now checks
+  observedSettled per plan resource; stale metadata under our own
+  canonical identity gets ONE corrective republish of the verified
+  generation. 30 tests -race green, full suite exit=0. Commit 54fe62f1
+  plus the settlement fix.
