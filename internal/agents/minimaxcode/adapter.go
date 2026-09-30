@@ -116,8 +116,14 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 	return filepath.Join(ConfigPath(homeDir), "skills")
 }
 
-func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(ConfigPath(homeDir), "config.yaml")
+// SettingsPath is the agent's own configuration file. Gentle AI never writes
+// managed keys into it: MCP goes to the dedicated mcp.json, the prompt to
+// agents/gentle-ai/agent.md, and skills to skills/. Returning "" tells the
+// installer and the uninstaller that there is no managed settings surface,
+// which also keeps the uninstall's JSON settings cleaner from being pointed at
+// a YAML file it cannot parse.
+func (a *Adapter) SettingsPath(_ string) string {
+	return ""
 }
 
 // --- Config strategies ---

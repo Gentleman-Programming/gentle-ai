@@ -165,9 +165,6 @@ func TestConfigPaths(t *testing.T) {
 	if got := a.GlobalConfigDir(home); got != root {
 		t.Errorf("GlobalConfigDir() = %q, want %q", got, root)
 	}
-	if got := a.SettingsPath(home); got != filepath.Join(root, "config.yaml") {
-		t.Errorf("SettingsPath() = %q, want config.yaml under the data dir", got)
-	}
 	if got := a.SkillsDir(home); got != filepath.Join(root, "skills") {
 		t.Errorf("SkillsDir() = %q, want skills under the data dir", got)
 	}
@@ -224,6 +221,20 @@ func TestSystemPromptStrategy(t *testing.T) {
 
 	if got := a.SystemPromptStrategy(); got != model.StrategyMarkdownSections {
 		t.Errorf("SystemPromptStrategy() = %v, want %v", got, model.StrategyMarkdownSections)
+	}
+}
+
+// TestSettingsPathIsEmptyBecauseConfigIsNotManagedJSON pins the reason the
+// adapter exposes no settings surface. config.yaml is YAML, and pointing the
+// uninstaller's JSON settings cleaner at it makes `uninstall` fail with an
+// unmarshal error instead of removing the agent. Returning "" opts the agent
+// out of that cleaner entirely; MCP, skills, and the prompt all have their own
+// dedicated paths.
+func TestSettingsPathIsEmptyBecauseConfigIsNotManagedJSON(t *testing.T) {
+	a := NewAdapter()
+
+	if got := a.SettingsPath(t.TempDir()); got != "" {
+		t.Errorf("SettingsPath() = %q, want empty so the JSON settings cleaner is not pointed at config.yaml", got)
 	}
 }
 
