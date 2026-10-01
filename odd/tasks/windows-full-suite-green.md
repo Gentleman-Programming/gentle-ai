@@ -27,9 +27,9 @@ without weakening the behavior the tests protect. Single PR (user decision).
   - `TestInjectAntigravityRejectsUnclassifiablePluginAssetBeforeWrites` (internal/components/engram, inject_test.go:437)
   - `TestProvisionEngramMCPRefusesMalformedMCPConfigWithoutClobbering`, `TestProvisionEngramMCPRefusesNonObjectMCPServersWhenMigrating` (internal/agents/pi, mcp_config_test.go:249)
   - `TestRunSyncWorkspaceScopeUpdatesOpenCodeManagedComponentsWithoutGlobalMutation` (internal/cli, sync_scope_test.go:393)
-- [ ] T2 PowerShell continuation quoting (cli-n-o shard)
+- [x] T2 PowerShell continuation quoting (cli-n-o shard)
   - `TestOpenCodeV2SDKWindowsPowerShellContinuation` (internal/cli, run_test.go:1295)
-- [ ] T3 V2 SDK npm timeouts and 30m shard timeout (cli-p-q-s-z shard)
+- [x] T3 V2 SDK npm timeouts and 30m shard timeout (cli-p-q-s-z shard)
   - `TestV2SDKProvision*`, `TestV2SDKFreshMissingConfigCreatedOnlyAfterConsent` ("npm timed out after 2m0s")
   - `TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors` (incompatible-focus/policy)
   - `panic: test timed out after 30m0s`
@@ -48,4 +48,6 @@ Strategy: `single-pr` (user). Forecast ~150–300 authored lines.
 
 ## Progress
 - T1 done (delegated gentle-ai-worker; risk tier medium, test-only). Root causes: %q-quoted paths in errors, Windows Perm() 0o666, native separators in verify IDs. Checks: Linux go test of 3 pkgs + TestRunSync ok, GOOS=windows go vet ok, gofmt clean; Windows GREEN pending CI (T4).
+- T1 native review approved+acknowledged (review-f9e8a510851a2696); commit 51db56cb.
+- T2/T3 done (delegated gentle-ai-worker; risk medium, one product line). T2: test compared PowerShell long path vs TempDir 8.3 short path -> os.SameFile. T3: extensionless sh npm stubs invisible to LookPath (PATHEXT) so real npm.cmd ran to 2m timeout -> skip stub-executing V2SDK tests on Windows; product bug: reviewRecoverCommand --cwd unquoted -> reviewTransitionShellWord (Linux RED->GREEN TestReviewRecoverCommandQuotesCwd). Checks: internal/cli full pkg ok (203.7s), GOOS=windows vet ok, gofmt clean; parent spot check ok.
 - Branch `fix/windows-full-suite-green` from `origin/main` `0d2a0719`.

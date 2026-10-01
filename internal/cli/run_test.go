@@ -703,6 +703,9 @@ func TestOpenCodeV2SDKRefusesAmbiguousLockfiles(t *testing.T) {
 }
 
 func TestV2SDKProvisionRequiresMatchingInvocationConsent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script npm stubs require a POSIX shell")
+	}
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -798,6 +801,9 @@ func TestV2SDKFreshOnlyProposalAndRecheck(t *testing.T) {
 }
 
 func TestV2SDKFreshMissingConfigCreatedOnlyAfterConsent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script npm stubs require a POSIX shell")
+	}
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -835,6 +841,9 @@ func TestV2SDKFreshMissingConfigCreatedOnlyAfterConsent(t *testing.T) {
 }
 
 func TestV2SDKProvisionRejectsChangedOwnershipAndUnmaterializedPackage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script npm stubs require a POSIX shell")
+	}
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -955,6 +964,9 @@ func TestV2SDKProvisionRefusesProjectManagerConfig(t *testing.T) {
 }
 
 func TestV2SDKProvisionTimesOutWithoutReflectingManagerOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script npm stubs require a POSIX shell")
+	}
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -987,6 +999,9 @@ func TestV2SDKProvisionTimesOutWithoutReflectingManagerOutput(t *testing.T) {
 }
 
 func TestV2SDKProvisionBoundsFailedManagerOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script npm stubs require a POSIX shell")
+	}
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -1015,6 +1030,9 @@ func TestV2SDKProvisionBoundsFailedManagerOutput(t *testing.T) {
 }
 
 func TestV2SDKProvisionRejectsChangedExecutableAndPhysicalConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script npm stubs require a POSIX shell")
+	}
 	for _, change := range []string{"executable", "executable in place", "config"} {
 		t.Run(change, func(t *testing.T) {
 			home := t.TempDir()
@@ -1072,6 +1090,9 @@ func TestV2SDKProvisionRejectsChangedExecutableAndPhysicalConfig(t *testing.T) {
 }
 
 func TestV2SDKProvisionUsesAnonymousIsolatedManagerEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script npm stubs require a POSIX shell")
+	}
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -1291,8 +1312,19 @@ func TestOpenCodeV2SDKWindowsPowerShellContinuation(t *testing.T) {
 		t.Fatalf("PowerShell continuation failed: %v: %s", err, output)
 	}
 	data, err := os.ReadFile(marker)
-	if err != nil || strings.TrimSpace(string(data)) != config+"|install --save --no-audit --no-fund @opencode/plugin@2.0.4" {
-		t.Fatalf("PowerShell did not run in target directory: %q, %v", data, err)
+	if err != nil {
+		t.Fatalf("PowerShell did not write the marker: %v", err)
+	}
+	// PowerShell reports the long path while t.TempDir() may use an 8.3 short
+	// name (C:\Users\RUNNER~1), so compare directory identity, not bytes.
+	dir, args, found := strings.Cut(strings.TrimSpace(string(data)), "|")
+	if !found || args != "install --save --no-audit --no-fund @opencode/plugin@2.0.4" {
+		t.Fatalf("PowerShell ran the wrong command: %q", data)
+	}
+	want, wantErr := os.Stat(config)
+	got, gotErr := os.Stat(dir)
+	if wantErr != nil || gotErr != nil || !os.SameFile(want, got) {
+		t.Fatalf("PowerShell did not run in target directory: %q, %v, %v", data, wantErr, gotErr)
 	}
 }
 
