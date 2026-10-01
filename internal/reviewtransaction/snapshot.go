@@ -252,10 +252,10 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 	// must never see "base_tree: None" or "candidate_tree: None" after a
 	// successful Build(). (issue start-candidate-context-failure)
 	if strings.TrimSpace(baseTree) == "" {
-		return Snapshot{}, fmt.Errorf("base tree empty after resolving target %s; review the repository state and rerun with a valid base_ref", target.Kind)
+		return Snapshot{}, fmt.Errorf("base tree empty after resolving target %s; review the repository state and rerun with a valid base_ref", target.Kind) // refusal:by-design world-action: the error message names the runnable continuation — rerun with a valid base_ref
 	}
 	if strings.TrimSpace(candidateTree) == "" {
-		return Snapshot{}, fmt.Errorf("candidate tree empty after building target %s; the working tree or staged index may be corrupted", target.Kind)
+		return Snapshot{}, fmt.Errorf("candidate tree empty after building target %s; the working tree or staged index may be corrupted", target.Kind) // refusal:by-design world-action: the error message names the runnable continuation — verify the working tree state
 	}
 
 	paths, err := builder.changedPaths(ctx, baseTree, candidateTree)

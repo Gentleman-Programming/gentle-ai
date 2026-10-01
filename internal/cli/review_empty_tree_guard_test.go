@@ -40,11 +40,11 @@ func TestStartRefusesEmptyBaseTree(t *testing.T) {
 	if failure.MutationOutcome != ReviewMutationNotStarted {
 		t.Fatalf("MutationOutcome = %q, want %q", failure.MutationOutcome, ReviewMutationNotStarted)
 	}
-	if !failure.RetrySafe {
-		t.Error("expected retry-safe failure")
+	if failure.RetrySafe {
+		t.Error("expected non-retry-safe failure — the user must correct the request (valid --base-ref or stage changes) before retrying")
 	}
-	if !failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
-		failure.NextAction != "correct_request" || failure.LineageID != lineage {
+	if failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+		failure.NextAction != "stop" || failure.LineageID != lineage {
 		t.Fatalf("empty-base-tree failure = %#v", failure)
 	}
 }
@@ -81,8 +81,8 @@ func TestStartRefusesEmptyCandidateTree(t *testing.T) {
 	if failure.MutationOutcome != ReviewMutationNotStarted {
 		t.Fatalf("MutationOutcome = %q, want %q", failure.MutationOutcome, ReviewMutationNotStarted)
 	}
-	if !failure.RetrySafe {
-		t.Error("expected retry-safe failure")
+	if failure.RetrySafe {
+		t.Error("expected non-retry-safe failure — the user must correct the request (valid --base-ref or stage changes) before retrying")
 	}
 }
 

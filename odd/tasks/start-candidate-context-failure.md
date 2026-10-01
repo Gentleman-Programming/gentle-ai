@@ -26,10 +26,13 @@
 
 - **Scope:** `internal/cli/review_facade.go`, `internal/cli/review_start_context_test.go`, `internal/cli/review_empty_tree_guard_test.go`, `internal/cli/review_start_empty_tree_guard_test.go`
 - **What:** The `renderReviewStartFrozenCandidateContext` block returns `reviewStartContextError` on failure. Added secondary empty-tree guards BEFORE `ValidateLiveSnapshot` and `runReviewFacadeCompactAtomicStart` so blank trees return `reviewStartContextError` before any authority is written.
-- **Tests:** `internal/cli/review_empty_tree_guard_test.go` — 3 tests covering empty base tree, empty candidate tree, and authority-not-created-on-empty-tree. `internal/cli/review_start_empty_tree_guard_test.go` — 4 tests covering review-start refusals and normal flow.
+- **Tests:** `internal/cli/review_empty_tree_guard_test.go` — 3 tests covering empty base tree, empty candidate tree, and authority-not-created-on-empty-tree. `internal/cli/review_start_empty_tree_guard_test.go` — 4 tests covering review-start refusals and normal flow. All 14 empty-tree guard tests pass.
 - **Verification:** All empty-tree guard tests pass. No authority is created when trees are empty.
-- **Implementation:** Added defensive checks in `runReviewFacadeStart` (after context rendering, before `ValidateLiveSnapshot`) that return `reviewStartContextError` when `BaseTree` or `CandidateTree` are empty strings. Guards are secondary to the `Build()` layer guard.
-- **CodeRabbit resolution:** Addresses PR 5144 threads: (1) empty-tree checks moved before `ValidateLiveSnapshot`, (2) test exercises empty git output via `gitCommandContext`
+- **Implementation:** Added defensive checks in `runReviewFacadeStart` at two points:
+  1. **Pre-assessment guard** (AFTER `reviewStartEmptyCandidateScope`, BEFORE `AssessSnapshotRisk`): Catches empty trees before `AssessSnapshotRisk → DiffStats → changedPaths → git diff-tree` executes. Uses caller-side `*lineage` since `request.Binding.LineageID` is not yet available.
+  2. **Pre-budget-refusal guard** (BEFORE `reviewLensContextCompactAtomicStartBudgetRefusal`): Catches empty trees before `reviewLensContextBudgetProbe → PrepareCandidateInspector → ValidateEvidence → changedPaths → git diff` executes. Uses `request.Binding.LineageID`.
+- **Key discovery:** `AssessSnapshotRisk` calls `DiffStats → changedPaths → git diff-tree`, which executes BEFORE the original guard placement. The pre-assessment guard moves the check to precede `AssessSnapshotRisk` entirely.
+- **CodeRabbit resolution:** Addresses PR 5144 threads: (1) empty-tree checks moved before `ValidateLiveSnapshot` and before `AssessSnapshotRisk`, (2) test exercises empty git output via `gitCommandContext`
 
 ### 3. rctx2 sub-codes — DONE
 

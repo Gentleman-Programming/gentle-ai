@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
@@ -70,7 +71,9 @@ func TestReviewStartRefusesWhenEmptyCandidateTree(t *testing.T) {
 		if err != nil {
 			return reviewtransaction.Snapshot{}, err
 		}
+		t.Logf("mock Build returned: BaseTree=%q CandidateTree=%q Identity=%s", snap.BaseTree, snap.CandidateTree, snap.Identity)
 		snap.CandidateTree = ""
+		t.Logf("mock tampered: CandidateTree=%q", snap.CandidateTree)
 		return snap, nil
 	}
 	t.Cleanup(func() { reviewFacadeBuildStartSnapshot = oldBuildFn })
@@ -83,6 +86,9 @@ func TestReviewStartRefusesWhenEmptyCandidateTree(t *testing.T) {
 		t.Fatal("expected failure when candidate_tree is empty, got nil")
 	}
 
+	// Debug: print raw output
+	t.Logf("raw output: %s", output.String())
+
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
 	if failure.Phase != "pre_native" {
 		t.Fatalf("phase = %q, want pre_native", failure.Phase)
@@ -94,6 +100,20 @@ func TestReviewStartRefusesWhenEmptyCandidateTree(t *testing.T) {
 	// the request before attempting again.
 	if failure.RetrySafe {
 		t.Error("unexpected retry-safe failure")
+	}
+	// Issue #5142: candidate-tree error must state the context is incomplete
+	// and provide recovery guidance (valid --base-ref or stage changes).
+	// The specific message is in the cause (mapped from reviewStartContextError.Cause),
+	// not the generic top-level message.
+	if failure.Message == "" {
+		t.Fatal("expected non-empty failure message")
+	}
+	causeText := failure.Cause
+	if !strings.Contains(causeText, "candidate context is incomplete") {
+		t.Errorf("failure cause should mention incomplete candidate context: %q", causeText)
+	}
+	if !strings.Contains(causeText, "stage") && !strings.Contains(causeText, "base-ref") {
+		t.Errorf("failure cause should include recovery guidance (stage changes or valid --base-ref): %q", causeText)
 	}
 }
 
