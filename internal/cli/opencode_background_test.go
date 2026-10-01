@@ -764,7 +764,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 			}
 			background := OpenCodeBackgroundResolution{Intent: tt.intent, Effective: tt.intent, Persist: tt.intent}
 			persisted, persistedErr := state.Read(home)
-			result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, persistedErr, background, PiBackgroundResolution{})
+			result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, persistedErr, background, PiBackgroundResolution{}, false)
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
 			}
@@ -820,7 +820,7 @@ func TestSyncReportsManagedLauncherChanges(t *testing.T) {
 		Persona:    model.PersonaNeutral,
 	}
 	persisted, persistedErr := state.Read(home)
-	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, persistedErr, background, PiBackgroundResolution{})
+	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, persistedErr, background, PiBackgroundResolution{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -868,7 +868,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 	}
 	background := OpenCodeBackgroundResolution{Intent: model.OpenCodeBackgroundOn, Effective: model.OpenCodeBackgroundOn, Persist: model.OpenCodeBackgroundOn}
 	initial, initialErr := state.Read(home)
-	if _, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, initial, initialErr, background, PiBackgroundResolution{}); err != nil {
+	if _, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, initial, initialErr, background, PiBackgroundResolution{}, false); err != nil {
 		t.Fatalf("initial sync error = %v", err)
 	}
 	persisted, err := state.Read(home)
@@ -879,7 +879,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 	if err := state.Write(home, persisted); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, nil, background, PiBackgroundResolution{})
+	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, nil, background, PiBackgroundResolution{}, false)
 	if err != nil {
 		t.Fatalf("no-op sync error = %v", err)
 	}

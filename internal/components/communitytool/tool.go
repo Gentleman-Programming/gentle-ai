@@ -117,6 +117,88 @@ func DefinitionFor(id model.CommunityToolID) (Definition, bool) {
 	return Definition{}, false
 }
 
+// UpgradeCodeGraphIfStale is the sync-side entry point that brings an
+// EXISTING CodeGraph CLI up to codeGraphUpstreamVersion. It deliberately
+// runs ONLY the package install command: the agent-wiring and
+// post-install validation that InstallWithHome runs would break legacy
+// fixtures and stale-but-wired setups the sync step was never asked to
+// reconcile. First installs remain `gentle-ai install`'s job.
+//
+// The probe and version comparison reuse the existing seams
+// (codeGraphInstalledVersion, codeGraphVersionLess,
+// codeGraphUpstreamVersion, codeGraphCLIUsable) so the sync path and the
+// install path make the same stale-vs-current decision from the same
+// inputs. No version comparison is duplicated here.
+//
+//   - forceCommunityTools true → delegate to the full InstallWithHome
+//     (force=true) path so --force-community-tools keeps its
+//     cross-cutting bypass through both entry points.
+//   - CLI absent or version unparseable → no-op Result, no runner calls.
+//   - CLI at or above codeGraphUpstreamVersion and !forceCommunityTools
+//     → no-op Result, no runner calls.
+//   - Stale CLI → run ONLY the package install command emitted by
+//     CodeGraphCommandsForDetectorAndTargets (NOT the `codegraph install`
+//     wiring step), and return the Result.
+func UpgradeCodeGraphIfStale(id model.CommunityToolID, workspaceDir, homeDir string, runner Runner, detector Detector, forceCommunityTools bool) (Result, error) {
+	if runner == nil {
+		return Result{}, fmt.Errorf("community tool runner is not configured")
+	}
+	def, ok := DefinitionFor(id)
+	if !ok {
+		return Result{}, fmt.Errorf("unknown community tool %q", id)
+	}
+	if def.ID != model.CommunityToolCodeGraph {
+		return Result{}, fmt.Errorf("community tool %q is not supported", id)
+	}
+	result := Result{Tool: id}
+	// The force flag bypasses every gate and delegates to the full install
+	// path, mirroring the cross-cutting bypass in InstallWithHome. Sync
+	// inherits the same --force-community-tools semantics: a forced sync
+	// re-runs the entire reconcile, including the agent wiring and
+	// validation that this entry deliberately skips.
+	if forceCommunityTools {
+		return InstallWithHome(id, workspaceDir, homeDir, runner, detector, true)
+	}
+	if detector == nil {
+		detector = DetectorFunc(exec.LookPath)
+	}
+	// Use the same CLI admission InstallWithHome uses: the detector path
+	// must resolve and pass codeGraphCLIUsable (which rejects the WSL
+	// Windows npm shim) before we shell out to probe the version. A
+	// missing or rejected CLI is a no-op so sync never triggers a fresh
+	// install as a side effect.
+	cliPath, err := detector.LookPath(def.CommandName)
+	if err != nil || strings.TrimSpace(cliPath) == "" || !codeGraphCLIUsable(cliPath) {
+		return result, nil
+	}
+	installedVersion, hasInstalledVersion := codeGraphInstalledVersion(cliPath)
+	if !hasInstalledVersion {
+		return result, nil
+	}
+	if !codeGraphVersionLess(installedVersion, codeGraphUpstreamVersion) {
+		return result, nil
+	}
+	// Stale CLI: run only the package install command. The agent-wiring
+	// step is skipped because legacy-migration fixtures and
+	// stale-but-wired setups fail InstallWithHome's validation, and the
+	// freshly-upgraded binary picks up wiring on the next `gentle-ai
+	// install` run. There is nothing under our managed paths that the
+	// package install could touch, so no snapshot/rollback is needed.
+	commands, err := CodeGraphCommandsForDetectorAndTargets(DetectorFunc(codeGraphPackageLookPath), nil)
+	if err != nil {
+		return result, err
+	}
+	if len(commands) == 0 {
+		return result, nil
+	}
+	installCommand := commands[0]
+	result.CommandsRun = append(result.CommandsRun, strings.Join(installCommand, " "))
+	if err := runner.Run(installCommand[0], installCommand[1:]...); err != nil {
+		return result, fmt.Errorf("run %q: %w", strings.Join(installCommand, " "), err)
+	}
+	return result, nil
+}
+
 // Install dispatches to InstallWithHome with the default home directory and
 // no force flag. It is the legacy entry point used by callers that have no
 // opt-in for the --force-community-tools gate; forceCommunityTools is always
