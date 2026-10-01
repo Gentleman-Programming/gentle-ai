@@ -1,5 +1,8 @@
 # Mental Model
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Gentle-AI is an ecosystem configurator for AI coding agents. It owns the installer, sync flows, adapters, and managed asset injection; it does not own the runtime behavior of external agents or Engram internals.

@@ -1,5 +1,8 @@
 # Release Checklist v0.1.0
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 ## Scope freeze
 
 - [ ] Confirm MVP scope remains macOS + Claude Code + OpenCode only.

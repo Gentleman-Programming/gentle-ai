@@ -1,5 +1,8 @@
 # Pi integration
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 ← [Back to README](../README.md)
 
 Gentle AI configures Pi support, but the separate Gentle Shell (`gentle-pi`) package owns Pi's runtime prompts, persona, model assignments, delegation, and ODD behavior. Installing or syncing Gentle AI alone does not establish behavior parity with that package. [ODD](usage.md#organic-driven-development-odd) is the development workflow.

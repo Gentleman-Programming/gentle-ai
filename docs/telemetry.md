@@ -1,5 +1,8 @@
 # Telemetry
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 Gentle AI sends a small amount of anonymous usage telemetry so the project
 knows how many installs stay alive and how the review pipeline gets used,
 without collecting anything about you, your code, your machine, or your

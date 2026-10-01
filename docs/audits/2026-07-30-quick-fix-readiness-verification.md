@@ -1,5 +1,8 @@
 # v1 Independent Verification Report: Quick-Fix Readiness Handoff
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 ## Outcome
 
 This **v1 independent verification** records findings without assigning a global verdict. It identifies two rows with a current, explicit maintainer-required design prerequisite that conflicts with the handoff's own admission rule. Many other classifications, scopes, and test oracles are plausible but insufficiently evidenced by the handoff itself.

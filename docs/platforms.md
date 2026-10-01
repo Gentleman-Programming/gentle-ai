@@ -1,5 +1,8 @@
 # Supported Platforms
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. The install commands track the latest release. For the latest release docs, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 ← [Back to README](../README.md)
 
 ---

@@ -1,5 +1,8 @@
 # GGA PowerShell Shim — Windows Support
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 ## What This Is
 
 When `gentle-ai` installs GGA on Windows, it now installs a `gga.ps1` wrapper

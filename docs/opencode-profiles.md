@@ -1,5 +1,8 @@
 # Native OpenCode background subagents
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 ← [Back to usage](usage.md)
 
 Gentle AI uses OpenCode's native subagents through its `task` permission. It does not install the legacy `background-agents.ts` plugin by default. Background execution is optional and independent of ODD model configuration.

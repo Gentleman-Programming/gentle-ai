@@ -1,5 +1,8 @@
 # Organic Implementation Trigger Rules
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 <- [Back to README](../README.md)
 
 Ask for the outcome. Gentle AI™ keeps already-understood work inline, delegates only

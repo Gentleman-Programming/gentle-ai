@@ -1,5 +1,8 @@
 # Testing Agents Deterministically
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 How Gentle AI™ proves that an agent did what it was asked — in CI, on every push, with no API keys and no token cost.
 
 ← [Back to README](../README.md)
@@ -42,7 +45,7 @@ The installer suite runs all platform checks on every trigger; only depth change
 
 ## Organic Runtime E2E
 
-One test — `TestRealAgentOrganicJourneys` in `e2e/organicruntime/organic_runtime_test.go` — exercises four journeys through the real binary.
+One test — `TestRealAgentOrganicJourneys` in `e2e/organicruntime/organic_runtime_test.go` — exercises two journeys through the real binary.
 
 ### What is real
 
@@ -66,10 +69,8 @@ Because the prompt is loaded from the shipped asset, changing that asset changes
 |---|---|
 | `direct inline implementation` | The `direct_inline` route stays inline and creates no SDD artifacts |
 | `delegated direct implementation` | The `delegated_direct` route delegates without entering an SDD lifecycle |
-| `direct route with common review actor` | A direct route may delegate the common review actor without changing its implementation route |
-| `managed start kill switch before advance` | The activation kill switch stops the flow before it advances |
 
-The first three are the routing invariants from the architecture plan. The fourth proves the brake works, which is what makes shipping a dormant-by-default capability safe.
+Both are routing invariants from the architecture plan.
 
 ---
 
@@ -248,7 +249,7 @@ In CI the `organic-runtime-e2e` job runs this across a matrix of `ubuntu-latest`
 
 ## What it proves, and what it does not
 
-**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no SDD artifacts when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set — on Linux and Windows. Review evidence never authorizes delivery or archive.
+**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no SDD artifacts when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set (`TestOrganicKillSwitchStopsAtTheDeliveryBoundary`, which the same CI job runs) — on Linux and Windows. Review evidence never authorizes delivery or archive.
 
 **Not proved.** That a live model, given the shipped prompt, produces the same tool calls the fixture scripts. That leap is non-deterministic by nature and does not belong in a merge gate; it is covered by real usage and by the cross-adapter asset parity fixtures.
 
@@ -271,5 +272,5 @@ The approach generalizes to any agent-driven system:
 ## References
 
 - [Docker E2E Testing](./docker-e2e-testing.md) — the installer suite
-- [Organic Recovery Architecture and Implementation Plan](./audits/2026-07-23-organic-recovery-implementation-plan.md) — the routes, verification axes, and acceptance criteria this suite exercises
+- [Organic Recovery Architecture and Implementation Plan](./audits/2026-07-23-organic-recovery-implementation-plan.md) — historical record of the routes and acceptance criteria this suite was designed around; superseded by later work
 - [Review Authority Threat Model](./review-authority-threat-model.md) — boundaries and assumptions of the trust kernel
