@@ -10,7 +10,7 @@
 
 **Why:** `repository_context_unavailable` does not differentiate between authority missing, git trust refusal, and revision stale. Community reporters (#2227, #2411, #2461) cannot distinguish the root causes.
 
-## Status: Task 1 done. Task 2 in progress. Task 3 & 4 done.
+## Status: All tasks done.
 
 ## Tasks
 
@@ -22,11 +22,14 @@
 - **Verification:** All `SnapshotBuilder` tests pass (44 tests, 44s). No regressions.
 - **Implementation:** Added defensive guard in `build()` (line ~300) that returns `fmt.Errorf("empty base tree resolved for %s target; review the repository state and rerun with a valid base_ref")` when `strings.TrimSpace(baseTree) == ""`, and similar for candidateTree
 
-### 2. review_facade.go — validate context before runReviewFacadeCompactAtomicStart
+### 2. review_facade.go — validate context before runReviewFacadeCompactAtomicStart — DONE
 
-- **Scope:** `internal/cli/review_facade.go`, `internal/cli/review_start_context_test.go`
-- **What:** The `renderReviewStartFrozenCandidateContext` block already returns `reviewStartContextError` on failure, but authority is created in `runReviewFacadeCompactAtomicStart` AFTER. Verify that if context fails, authority is never written.
-- **Tests:** `internal/cli/review_start_context_test.go` — add test verifying authority is not created when context fails
+- **Scope:** `internal/cli/review_facade.go`, `internal/cli/review_start_context_test.go`, `internal/cli/review_empty_tree_guard_test.go`, `internal/cli/review_start_empty_tree_guard_test.go`
+- **What:** The `renderReviewStartFrozenCandidateContext` block returns `reviewStartContextError` on failure. Added secondary empty-tree guards BEFORE `ValidateLiveSnapshot` and `runReviewFacadeCompactAtomicStart` so blank trees return `reviewStartContextError` before any authority is written.
+- **Tests:** `internal/cli/review_empty_tree_guard_test.go` — 3 tests covering empty base tree, empty candidate tree, and authority-not-created-on-empty-tree. `internal/cli/review_start_empty_tree_guard_test.go` — 4 tests covering review-start refusals and normal flow.
+- **Verification:** All empty-tree guard tests pass. No authority is created when trees are empty.
+- **Implementation:** Added defensive checks in `runReviewFacadeStart` (after context rendering, before `ValidateLiveSnapshot`) that return `reviewStartContextError` when `BaseTree` or `CandidateTree` are empty strings. Guards are secondary to the `Build()` layer guard.
+- **CodeRabbit resolution:** Addresses PR 5144 threads: (1) empty-tree checks moved before `ValidateLiveSnapshot`, (2) test exercises empty git output via `gitCommandContext`
 
 ### 3. rctx2 sub-codes — DONE
 
