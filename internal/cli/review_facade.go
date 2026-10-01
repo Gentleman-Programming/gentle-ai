@@ -2361,6 +2361,26 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			}
 			frozenContext = &contextResult
 		}
+		// Defensive guard: never create START authority with empty trees.
+		// The snapshot.Build() guard catches most empty-tree paths, but this
+		// secondary check at the authority-creation boundary ensures that no
+		// code path or future change can produce an authority with
+		// base_tree: None / candidate_tree: None. (issue start-candidate-context-failure)
+		// Move both checks before ValidateLiveSnapshot and other snapshot consumers
+		// so blank values return the field-specific reviewStartContextError before
+		// ValidateLiveSnapshot → ValidateEvidence → changedPaths → git diff-tree runs.
+		if strings.TrimSpace(snapshot.BaseTree) == "" {
+			return &reviewStartContextError{
+				LineageID: request.Binding.LineageID,
+				Cause:     fmt.Errorf("base_tree is empty after build for target %s; rerun with a valid base_ref", snapshot.Kind),
+			}
+		}
+		if strings.TrimSpace(snapshot.CandidateTree) == "" {
+			return &reviewStartContextError{
+				LineageID: request.Binding.LineageID,
+				Cause:     fmt.Errorf("candidate_tree is empty after build for target %s; the working tree or staged index may be corrupted", snapshot.Kind),
+			}
+		}
 		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, snapshot); err != nil {
 			return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 				fmt.Errorf("frozen review target changed before authority creation; refresh it with `gentle-ai review status --cwd <repo> --contract %s --next-transition`: %w", ReviewIntegrationContractV2, err))

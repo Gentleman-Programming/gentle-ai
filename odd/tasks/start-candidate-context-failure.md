@@ -10,7 +10,7 @@
 
 **Why:** `repository_context_unavailable` does not differentiate between authority missing, git trust refusal, and revision stale. Community reporters (#2227, #2411, #2461) cannot distinguish the root causes.
 
-## Status: Task 1 done. Task 2 in progress.
+## Status: Task 1 done. Task 2 in progress. Task 3 & 4 done.
 
 ## Tasks
 
@@ -28,17 +28,23 @@
 - **What:** The `renderReviewStartFrozenCandidateContext` block already returns `reviewStartContextError` on failure, but authority is created in `runReviewFacadeCompactAtomicStart` AFTER. Verify that if context fails, authority is never written.
 - **Tests:** `internal/cli/review_start_context_test.go` — add test verifying authority is not created when context fails
 
-### 3. rctx2 sub-codes
+### 3. rctx2 sub-codes — DONE
 
-- **Scope:** `internal/cli/review_incident.go`, `internal/reviewtransaction/repository_context.go`
-- **What:** Split `repository_context_unavailable` into:
-  - `authority_unavailable` — compact authority not found for the lineage
-  - `git_trust_refused` — `git rev-parse` fails due to trust setup
-  - `revision_stale` — revision hash not found in object store
-- **Tests:** `internal/cli/review_repository_context_test.go` — test for each new error code
+- **Scope:** `internal/cli/review_incident.go`, `internal/reviewtransaction/repository_locator.go`
+- **What:** Split `repository_context_unavailable` into three granular codes:
+  - `rctx2_binding_unusable` — structurally invalid or unverifiable rctx2 binding (malformed base64, invalid revision format)
+  - `rctx2_resolution_failed` — binding was valid when issued but the underlying repository has changed (authority record removed, repository relocated)
+  - `rctx2_identity_mismatch` — binding commits to a different repository than the one named by --cwd
+- **Tests:** `internal/cli/review_rctx2_error_codes_test.go` — 3 test functions covering malformed handle, absent authority, and invalid revision format
+- **Verification:** `TestRctx2GranularErrorCodes` (3 tests, 4s). `TestOpaqueRepositoryContextResolutionNamesDistinctCauses` updated. `TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture` updated. `TestOpaqueContextErrorsDoNotExposeProviderPaths` updated.
+- **Exported types:** `ErrInvalidReviewRepositoryContextV2`, `ReviewRepositoryContextV2ResolutionError`, `ReviewRepositoryContextIdentityError` from `repository_locator.go` to enable `errors.Is`/`errors.As` classification
+- **Commit:** `818f8cf` on branch `fix/rctx2-diagnosis-upgrade`
 
-### 4. rctx2 improved diagnostics
+### 4. rctx2 improved diagnostics — DONE
 
 - **Scope:** `internal/cli/review_incident.go`
-- **What:** `reviewOpaqueContextCause` must include specific remediation in the message per sub-code
-- **Tests:** `internal/cli/review_opaque_typed_cause_test.go` — test for full message with remediation
+- **What:** `reviewOpaqueContextCause` includes specific remediation in the message per sub-code
+  - `rctx2_binding_unusable`: "the rctx2 binding is structurally invalid" + action to correct and retry
+  - `rctx2_resolution_failed`: "the rctx2 binding was valid when issued but the underlying repository has changed" + action to start a fresh native review
+  - `rctx2_identity_mismatch`: "the rctx2 binding commits to a different repository" + action to correct and retry
+- **Tests:** Covered by `TestRctx2GranularErrorCodes` assertions on `"structurally invalid"`, `"binding was valid when issued"`, and `"start a fresh native review"`
