@@ -191,7 +191,7 @@ func TestInstallUsesPnpmWhenNpmIsUnavailable(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -218,7 +218,7 @@ func TestInstallWithHomeReportsPiChildClassifications(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestInstallWithHomeReportsWorkspaceChildAndOwnershipTarget(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestInstallWithHomeReportsEffectiveMCPAdapterSchema(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess(t *testin
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err == nil || !strings.Contains(err.Error(), "capability probe") {
 		t.Fatalf("InstallWithHome() error = %v, want failed effective MCP capability probe", err)
 	}
@@ -379,7 +379,7 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -715,7 +715,7 @@ func TestInstallRunsCommandsAndReturnsLazyProjectIndexManualAction(t *testing.T)
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
@@ -757,7 +757,7 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -953,7 +953,7 @@ func TestInstallUsesUnifiedAntigravityConfigWithoutMigratedMarker(t *testing.T) 
 		mustWrite(t, unifiedPath, fmt.Sprintf(`{"mcpServers":{"user":{"command":"other"},"codegraph":{"command":%q,"args":["serve","--mcp"]}}}`, absoluteCodeGraph))
 		mustWrite(t, filepath.Join(home, ".gemini", "settings.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -988,7 +988,7 @@ func TestInstallRepairsRelativeAntigravityCommand(t *testing.T) {
 		mustWrite(t, unifiedPath, `{"mcpServers":{"user":{"command":"other"},"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".gemini", "settings.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1017,7 +1017,7 @@ func TestInstallRecordsTargetedOpenCodeReconciliation(t *testing.T) {
 		mustWrite(t, settingsPath, `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`)
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1037,7 +1037,7 @@ func TestInstallRunsFullReconcileWhenAnotherAgentIsMissing(t *testing.T) {
 		mustWrite(t, settingsPath, `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`)
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1163,7 +1163,7 @@ func TestInstallFailsWhenPostInstallContractStillMissing(t *testing.T) {
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err == nil || !strings.Contains(err.Error(), "CLI available") {
 		t.Fatalf("InstallWithHome() error = %v, want missing CLI validation", err)
 	}
@@ -1196,7 +1196,7 @@ func TestInstallSkipsWhenCodeGraphAlreadyReconciled(t *testing.T) {
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "/bin/codegraph", nil
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1224,7 +1224,7 @@ func TestInstallRefreshesOldCodeGraphGuidanceMarker(t *testing.T) {
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "/bin/codegraph", nil
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1260,7 +1260,7 @@ func TestInstallRepairsMissingCLIWhenAgentMarkerExists(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1347,7 +1347,7 @@ func TestInstallRejectsWSLWindowsNPMShimAfterPackageInstall(t *testing.T) {
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return shim, nil
-	}))
+	}), false)
 	if err == nil || !strings.Contains(err.Error(), "did not leave a runnable codegraph CLI available") {
 		t.Fatalf("InstallWithHome() error = %v, want unavailable CodeGraph outcome after package install", err)
 	}
@@ -1387,7 +1387,7 @@ func TestInstallFailurePaths(t *testing.T) {
 		boom := errors.New("npm failed")
 		result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", t.TempDir(), RunnerFunc(func(string, ...string) error { return boom }), DetectorFunc(func(string) (string, error) {
 			return "", errors.New("not found")
-		}))
+		}), false)
 		if !errors.Is(err, boom) {
 			t.Fatalf("Install() error = %v, want wrapped runner error", err)
 		}
@@ -1417,7 +1417,7 @@ func TestInstallFailurePaths(t *testing.T) {
 				return "/bin/codegraph", nil
 			}
 			return "", errors.New("not found")
-		}))
+		}), false)
 		if !errors.Is(err, boom) {
 			t.Fatalf("Install() error = %v, want wrapped install error", err)
 		}
@@ -1485,7 +1485,7 @@ func TestInstallReinstallsWhenReconcileSatisfiedButCodeGraphIsOlderThanContract(
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "/bin/codegraph", nil
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1518,7 +1518,7 @@ func TestInstallKeepsReconcileSatisfiedNoOpWhenCodeGraphVersionMeetsContract(t *
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
 		return "/bin/codegraph", nil
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1541,7 +1541,7 @@ func TestInstallPreservesVersionGapAdvisoryAcrossUpgradeAttempt(t *testing.T) {
 		return errors.New("upstream install rejected the invocation")
 	}), DetectorFunc(func(string) (string, error) {
 		return "/bin/codegraph", nil
-	}))
+	}), false)
 	if err == nil {
 		t.Fatal("InstallWithHome() error = nil, want the runner failure surfaced")
 	}
@@ -1580,7 +1580,7 @@ func TestInstallFirstInstallPathUnchangedByVersionReconcile(t *testing.T) {
 			return "/bin/codegraph", nil
 		}
 		return "", errors.New("not found")
-	}))
+	}), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -1590,4 +1590,75 @@ func TestInstallFirstInstallPathUnchangedByVersionReconcile(t *testing.T) {
 	if !reflect.DeepEqual(commands, []string{"npm install -g @colbymchenry/codegraph@latest"}) {
 		t.Fatalf("commands = %#v, want the first-install package command unchanged by R1", commands)
 	}
+}
+
+// TestInstallForceReinstallBypassesReconcileShortCircuit pins the dual
+// behaviour of --force-community-tools end-to-end:
+//
+//   - force=false on a home where every detected agent is already wired
+//     and the installed CodeGraph meets codeGraphUpstreamVersion MUST
+//     short-circuit (zero runner invocations). The pre-installed wiring
+//     uses the canonical Claude MCP server shape in `~/.claude.json`,
+//     the CodeGraph server shape in `~/.cursor/mcp.json`, and the
+//     gentle-ai:codegraph-guidance marker in both SystemPromptFile
+//     paths (`~/.claude/CLAUDE.md`, `~/.cursor/rules/gentle-ai.mdc`).
+//     These match the JSON / markdown shapes the install path itself
+//     produces for the same agents.
+//   - force=true MUST bypass that short-circuit and re-run the install
+//     path even on a reconciled home, exercising the runner at least
+//     once.
+//
+// The wiring helper is file-local because no other test in this file
+// needs this state. installHomeWithTwoNativeTargets is left untouched
+// (its bare `{}` shape is reused by tests that exercise the long path
+// through the runner's own writes).
+func TestInstallForceReinstallBypassesReconcileShortCircuit(t *testing.T) {
+	stubCodeGraphVersion(t, codeGraphUpstreamVersion, true)
+
+	cases := []struct {
+		name            string
+		force           bool
+		wantRunnerCalls int
+	}{
+		{name: "force false short-circuits on reconciled home", force: false, wantRunnerCalls: 0},
+		{name: "force true bypasses the short-circuit", force: true, wantRunnerCalls: 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := installReconciledCodeGraphHome(t)
+			calls := 0
+			_, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
+				calls++
+				return nil
+			}), DetectorFunc(func(string) (string, error) {
+				return "/bin/codegraph", nil
+			}), tc.force)
+			if err != nil {
+				t.Fatalf("InstallWithHome() error = %v", err)
+			}
+			if calls < tc.wantRunnerCalls {
+				t.Fatalf("runner calls = %d, want ≥%d (force=%v): --force-community-tools must bypass the reconcile short-circuit when true and short-circuit when false", calls, tc.wantRunnerCalls, tc.force)
+			}
+		})
+	}
+}
+
+// installReconciledCodeGraphHome layers valid CodeGraph wiring on top of
+// installHomeWithTwoNativeTargets so the reconcile-satisfied short-circuit
+// has something to recognise. The JSON / markdown shapes mirror what the
+// install path itself writes for Claude and Cursor: canonical Claude MCP
+// server in `~/.claude.json`, codegraph server in `~/.cursor/mcp.json`,
+// and the gentle-ai:codegraph-guidance marker in both SystemPromptFile
+// paths (`~/.claude/CLAUDE.md`, `~/.cursor/rules/gentle-ai.mdc`). The
+// helper is file-local because no other test in this file needs this
+// state.
+func installReconciledCodeGraphHome(t *testing.T) string {
+	t.Helper()
+	home := installHomeWithTwoNativeTargets(t)
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+	mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "<!-- gentle-ai:codegraph-guidance -->\n")
+	mustWrite(t, filepath.Join(home, ".cursor", "rules", "gentle-ai.mdc"), "<!-- gentle-ai:codegraph-guidance -->\n")
+	return home
 }

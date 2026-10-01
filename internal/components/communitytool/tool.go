@@ -117,11 +117,21 @@ func DefinitionFor(id model.CommunityToolID) (Definition, bool) {
 	return Definition{}, false
 }
 
+// Install dispatches to InstallWithHome with the default home directory and
+// no force flag. It is the legacy entry point used by callers that have no
+// opt-in for the --force-community-tools gate; forceCommunityTools is always
+// false in this path. Callers that need to force the reconcile (CLI when the
+// user passed --force-community-tools) call InstallWithHome directly.
 func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
-	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
+	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath), false)
 }
 
-func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+// InstallWithHome is the version-aware installer. The explicit
+// forceCommunityTools flag bypasses the CodeGraphReconcileSatisfied() /
+// codeGraphCanRepairWithoutFullInstall short-circuit unconditionally so the
+// install path runs even when the installed CLI already meets
+// codeGraphUpstreamVersion; it is the consumer's opt-in, never auto-derived.
+func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector, forceCommunityTools bool) (Result, error) {
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
 	}
@@ -165,8 +175,10 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	// contract and reject them. Bypass the short-circuit in that one case so
 	// the upgrade command runs. A CLI whose version cannot be determined, or
 	// that is already at or above the contract, keeps today's no-reinstall
-	// behaviour.
-	if (before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before)) && !installedVersionIsStale {
+	// behaviour. The explicit --force-community-tools flag bypasses the gate
+	// unconditionally: it is the user's opt-in to re-run the install path even
+	// when the existing CLI is current and reconciled.
+	if (before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before)) && !installedVersionIsStale && !forceCommunityTools {
 		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
 			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
 		}

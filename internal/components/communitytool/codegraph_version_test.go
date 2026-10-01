@@ -86,7 +86,7 @@ func TestInstallDropsBlindTargetsWhenInstalledCodeGraphPredatesTheContract(t *te
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestInstallKeepsExplicitTargetsWhenInstalledCodeGraphMeetsTheContract(t *te
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -136,7 +136,7 @@ func TestInstallKeepsExplicitTargetsWhenVersionProbeCannotDetermineAVersion(t *t
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
@@ -161,7 +161,7 @@ func TestInstallProbesTheResolvedCLIPathNotABareName(t *testing.T) {
 		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
 		return nil
-	}), DetectorFunc(func(string) (string, error) { return "/opt/tools/codegraph", nil })); err != nil {
+	}), DetectorFunc(func(string) (string, error) { return "/opt/tools/codegraph", nil }), false); err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestInstallCarriesTheVersionGapNoteThroughTheRollbackPath(t *testing.T) {
 
 	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
 		return errors.New("upstream install rejected the invocation")
-	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), false)
 	if err == nil {
 		t.Fatal("InstallWithHome() error = nil, want the runner failure surfaced")
 	}
