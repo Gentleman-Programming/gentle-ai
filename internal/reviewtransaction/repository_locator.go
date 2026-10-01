@@ -250,9 +250,9 @@ func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle str
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
 	identity := lease.Identity()
-	if err := matchReviewRepositoryContextV2Handle(handle, identity, binding); err != nil {
-		return "", ReviewRepositoryContextBinding{}, err
-	}
+	// Authority validation FIRST: validate binding fields against authority.
+	// A valid binding that fails authority is binding_unusable (wrong revision/target).
+	// An invalid binding that can't load authority could be wrong repo or wrong binding.
 	store, err := CompactAuthoritativeStore(ctx, identity.RepositoryRoot, binding.LineageID)
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
@@ -263,6 +263,11 @@ func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle str
 	}
 	if err := validateReviewRepositoryContextRecord(ctx, identity.RepositoryRoot, binding, record); err != nil {
 		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
+	}
+	// Authority validation passed — binding fields match the authority.
+	// A handle mismatch now proves the live repo identity differs from the handle.
+	if err := matchReviewRepositoryContextV2Handle(handle, identity, binding); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
 	}
 	if err := lease.Validate(ctx); err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
@@ -316,6 +321,27 @@ func encodeReviewRepositoryContextV2Token(token reviewRepositoryContextV2Token) 
 	return reviewRepositoryContextV2HandlePrefix + identityHash(string(payload)), nil
 }
 
+// BuildReviewRepositoryContextV2Handle encodes a synthetic rctx2 handle from
+// the given repository identity and binding. It is intended for tests that
+// need to construct handles with non-standard repository identities (e.g.,
+// identity mismatch tests).
+func BuildReviewRepositoryContextV2Handle(identity RepositoryIdentity, binding ReviewRepositoryContextBinding) (string, error) {
+	if err := validateReviewRepositoryContextBinding(binding); err != nil {
+		return "", ErrInvalidReviewRepositoryContextV2
+	}
+	token := reviewRepositoryContextV2Token{
+		Schema:               reviewRepositoryContextV2Schema,
+		RepositoryRoot:       identity.RepositoryRoot,
+		GitCommonDir:         identity.GitCommonDir,
+		GitDir:               identity.GitDir,
+		RepositoryRef:        identity.RepositoryRef,
+		LineageID:            binding.LineageID,
+		TargetIdentity:       binding.TargetIdentity,
+		CapturePhaseRevision: binding.Revision,
+	}
+	return encodeReviewRepositoryContextV2Token(token)
+}
+
 // validReviewRepositoryContextV2Handle validates only the opaque transport
 // shape: the v2 prefix followed by a lowercase hex digest of fixed width.
 func validReviewRepositoryContextV2Handle(handle string) bool {
@@ -336,6 +362,10 @@ func validReviewRepositoryContextV2Handle(handle string) bool {
 // rather than from the token, so this is a real check: a handle that names a
 // different repository, lineage, target, or revision cannot be made to match by
 // pointing the resolver somewhere else.
+//
+// Returns ErrInvalidReviewRepositoryContextV2 when the handle format is invalid,
+// ReviewRepositoryContextIdentityError{cause: nil} when the handle digest
+// mismatch is due to the live repository identity differing from the handle.
 func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIdentity, binding ReviewRepositoryContextBinding) error {
 	if !validReviewRepositoryContextV2Handle(handle) {
 		return ErrInvalidReviewRepositoryContextV2
@@ -354,9 +384,38 @@ func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIden
 		return ErrInvalidReviewRepositoryContextV2
 	}
 	if subtle.ConstantTimeCompare([]byte(derived), []byte(handle)) != 1 {
-		return ErrInvalidReviewRepositoryContextV2
+		return &ReviewRepositoryContextIdentityError{cause: nil}
 	}
 	return nil
+}
+
+// matchHandleRepositoryIdentity checks whether the handle encodes the same
+// repository identity as the live identity, independent of any binding fields.
+// It derives a handle from the live identity with a zero-value binding and
+// compares. Returns true when the live repo identity matches what's encoded
+// in the handle, false otherwise.
+//
+// This is separate from matchReviewRepositoryContextV2Handle so callers can
+// distinguish "genuine repo identity mismatch" from "binding fields don't
+// match authority" when the resolver's identity check fails.
+func matchHandleRepositoryIdentity(handle string, identity RepositoryIdentity) bool {
+	if !validReviewRepositoryContextV2Handle(handle) {
+		return false
+	}
+	derived, err := encodeReviewRepositoryContextV2Token(reviewRepositoryContextV2Token{
+		Schema:               reviewRepositoryContextV2Schema,
+		RepositoryRoot:       identity.RepositoryRoot,
+		GitCommonDir:         identity.GitCommonDir,
+		GitDir:               identity.GitDir,
+		RepositoryRef:        identity.RepositoryRef,
+		LineageID:            "0000000000000000000000000000000000000000000000000000000000000000",
+		TargetIdentity:       "0000000000000000000000000000000000000000000000000000000000000000",
+		CapturePhaseRevision: "0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(derived), []byte(handle)) == 1
 }
 
 func canonicalReviewRepositoryContextV2Payload(token reviewRepositoryContextV2Token) ([]byte, error) {

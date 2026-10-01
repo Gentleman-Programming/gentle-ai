@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -92,6 +93,67 @@ func TestRctx2GranularErrorCodes(t *testing.T) {
 		msg := err.Error()
 		if !strings.Contains(msg, "rctx2_binding_unusable") {
 			t.Fatalf("expected rctx2_binding_unusable, got: %s", msg)
+		}
+	})
+
+	t.Run("rctx2_identity_mismatch — handle encodes different repo identity", func(t *testing.T) {
+		repoA := initReviewCLIRepo(t)
+		writeReviewStartCandidate(t, repoA, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
+		started := runNegotiatedReviewStart(t, repoA, "rctx2-identity")
+		if started.RepositoryContext == nil || len(started.SelectedLenses) != 1 {
+			t.Fatalf("START result = %#v", started)
+		}
+
+		// Create a second repository with a different identity.
+		repoB := canonicalReviewCLITempDir(t)
+		runReviewCLIGit(t, repoB, "init", "-q")
+		runReviewCLIGit(t, repoB, "config", "user.email", "test@example.com")
+		runReviewCLIGit(t, repoB, "config", "user.name", "Test")
+		runReviewCLIGit(t, repoB, "config", "core.autocrlf", "false")
+		if err := os.WriteFile(filepath.Join(repoB, "other.txt"), []byte("other\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runReviewCLIGit(t, repoB, "add", "other.txt")
+		runReviewCLIGit(t, repoB, "commit", "-qm", "other")
+
+		// Obtain repo B's live identity.
+		leaseB, err := reviewtransaction.OpenRepositoryIdentityLease(t.Context(), repoB)
+		if err != nil {
+			t.Fatalf("open repo B lease: %v", err)
+		}
+		identityB := leaseB.Identity()
+
+		// Create a synthetic handle that encodes repo B's identity but
+		// carries repo A's binding (lineage, target, revision). When used
+		// with --cwd repo A, the identity check will fail because the
+		// handle encodes repo B's identity, not repo A's.
+		//
+		// This exercises the identity mismatch path while keeping authority
+		// loading working (the --cwd repo A still has the authority record).
+		binding := reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID:      started.LineageID,
+			TargetIdentity: started.RepositoryContext.TargetIdentity,
+			Revision:       started.RepositoryContext.Revision,
+		}
+		syntheticHandle, err := reviewtransaction.BuildReviewRepositoryContextV2Handle(identityB, binding)
+		if err != nil {
+			t.Fatalf("build synthetic handle: %v", err)
+		}
+
+		args := []string{
+			"--cwd", repoA,
+			"--repository-context", syntheticHandle,
+			"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
+			"--expected-revision", started.RepositoryContext.Revision,
+			"--lens", started.SelectedLenses[0], "--order", "0", "--preflight",
+		}
+		err = RunReviewCaptureResult(args, io.Discard)
+		if err == nil {
+			t.Fatal("expected error for rctx2 identity mismatch")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "rctx2_identity_mismatch") {
+			t.Fatalf("expected rctx2_identity_mismatch, got: %s", msg)
 		}
 	})
 }

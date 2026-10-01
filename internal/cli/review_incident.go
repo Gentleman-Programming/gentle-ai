@@ -160,11 +160,13 @@ func reviewRepositoryContextResolutionFailure(err error) error {
 	if errors.Is(err, reviewtransaction.ErrCompactAuthorityFromNewerRelease) {
 		return reviewOpaqueContextCause(reviewAuthorityNewerReleaseCode, reviewAuthorityNewerReleaseAction, err)
 	}
-	// Structurally invalid binding — malformed digest, expired handle, missing
-	// fields. No manual repair is possible; the maintainer must restart from
-	// the exact native next_transition.
-	if errors.Is(err, reviewtransaction.ErrInvalidReviewRepositoryContextV2) {
-		return reviewOpaqueContextFailure(reviewRctx2UnusableCode, reviewRctx2UnusableAction)
+	// Identity mismatch — binding commits to a different repository than the
+	// one named by --cwd. Checked before ErrInvalidReviewRepositoryContextV2
+	// because the identity error wraps that sentinel; errors.Is would match
+	// first and swallow the more specific mismatch diagnosis.
+	var identityErr *reviewtransaction.ReviewRepositoryContextIdentityError
+	if errors.As(err, &identityErr) {
+		return reviewOpaqueContextCause(reviewRctx2IdentityMismatchCode, reviewRctx2IdentityMismatchAction, err)
 	}
 	// rctx2 resolution failed because the underlying worktree or repository
 	// identity changed after the binding was issued.
@@ -172,11 +174,11 @@ func reviewRepositoryContextResolutionFailure(err error) error {
 	if errors.As(err, &resolutionErr) {
 		return reviewOpaqueContextCause(reviewRctx2ResolutionFailureCode, reviewRctx2ResolutionFailureAction, err)
 	}
-	// Identity mismatch — binding commits to a different repository than the
-	// one named by --cwd.
-	var identityErr *reviewtransaction.ReviewRepositoryContextIdentityError
-	if errors.As(err, &identityErr) {
-		return reviewOpaqueContextCause(reviewRctx2IdentityMismatchCode, reviewRctx2IdentityMismatchAction, err)
+	// Structurally invalid binding — malformed digest, expired handle, missing
+	// fields. No manual repair is possible; the maintainer must restart from
+	// the exact native next_transition.
+	if errors.Is(err, reviewtransaction.ErrInvalidReviewRepositoryContextV2) {
+		return reviewOpaqueContextFailure(reviewRctx2UnusableCode, reviewRctx2UnusableAction)
 	}
 	return reviewOpaqueContextCause("repository_context_unavailable", "refresh the exact native next_transition before retrying", err)
 }
@@ -213,10 +215,10 @@ const (
 	// correct when issued but no longer matches the live worktree.
 	reviewRctx2ResolutionFailureCode = "rctx2_resolution_failed"
 	// reviewRctx2ResolutionFailureAction is the instruction for that code.
-	// The maintainer must start a fresh native review to get a binding that
-	// matches the current worktree identity.
-	reviewRctx2ResolutionFailureAction = "the rctx2 binding was valid when issued but the underlying repository has changed; " +
-		"start a fresh native review to obtain a binding that matches the current worktree identity"
+	// The binding was valid when issued, so the caller should repair the
+	// reported repository or authority error and retry.
+	reviewRctx2ResolutionFailureAction = "rctx2 resolution failed; the binding was valid when issued — repair the reported repository or authority error and retry the same binding; " +
+		"if the repository identity changed, start a fresh native review"
 
 	// reviewRctx2IdentityMismatchCode is the code when the rctx2 binding's
 	// repository identity does not match the caller-supplied repository root.
