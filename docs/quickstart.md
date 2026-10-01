@@ -51,12 +51,14 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
-# Stable channel (`@latest` after v4.0.0 is published)
-go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
+# Stable channel: the latest release (v3.7.0)
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.7.0
 ```
 
-This command uses the `/v4` module path. Go requires that suffix for major
-version 2 and above. Before v4.0.0 is published, `@latest` on this path cannot resolve.
+Go requires a major-version suffix (`/v3`, `/v4`) in the module path for major
+version 2 and above. Until v4.0.0 is published, do not use `/v4/...@latest` as
+the stable command: no v4 tag exists, so Go resolves `@latest` to a
+pseudo-version of unreleased `main` instead of failing.
 
 ## Version Policy
 
@@ -64,12 +66,15 @@ Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` 
 
 The latest published stable release before v4.0.0 is [`v3.7.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v3.7.0). After v4.0.0 is published, `@latest` on the `/v4` module path tracks that stable channel. Until then, use `@main` only to test unreleased development changes; do not assume an unpublished v4 tag resolves.
 
-### Install the stable channel (after v4.0.0 publication)
+### Install the stable channel
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.7.0
 gentle-ai version
 ```
+
+After v4.0.0 is published, the stable command becomes
+`go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest`.
 
 ### Install unreleased development changes
 

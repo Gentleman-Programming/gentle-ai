@@ -42,7 +42,7 @@ The installer suite runs all platform checks on every trigger; only depth change
 
 ## Organic Runtime E2E
 
-One test — `TestRealOpenCodeOrganicRuntimeJourneys` in `e2e/organicruntime/organic_runtime_test.go` — exercises four journeys through the real binary.
+One test — `TestRealAgentOrganicJourneys` in `e2e/organicruntime/organic_runtime_test.go` — exercises four journeys through the real binary.
 
 ### What is real
 
@@ -237,7 +237,7 @@ A test that costs money is a test somebody eventually turns off.
 # Prerequisites: node, npm, and OpenCode pinned to versions.OpenCode
 GENTLE_AI_REAL_AGENT_E2E=1 \
   go test -v ./e2e/organicruntime \
-  -run TestRealOpenCodeOrganicRuntimeJourneys -count=1 -timeout=15m
+  -run TestRealAgentOrganicJourneys -count=1 -timeout=15m
 ```
 
 Without `GENTLE_AI_REAL_AGENT_E2E=1` the test skips, so ordinary `go test ./...` runs stay fast. A version mismatch on the `opencode` executable fails rather than silently testing a different runtime.
