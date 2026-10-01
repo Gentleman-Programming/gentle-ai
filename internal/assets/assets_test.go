@@ -612,7 +612,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		t.Fatalf("ReadDir(opencode/agents) error = %v", err)
 	}
 	wantAgents := map[string]bool{
-		"gentle-ai-explore.md": true, "gentle-ai-verify.md": true, "gentle-ai-worker.md": true,
+		"gentle-ai-explore.md": true, "gentle-ai-security.md": true, "gentle-ai-verify.md": true, "gentle-ai-worker.md": true,
 		"jd-judge-a.md": true, "jd-judge-b.md": true, "jd-fix-agent.md": true,
 		"review-risk.md": true, "review-readability.md": true, "review-reliability.md": true, "review-resilience.md": true,
 	}
@@ -873,8 +873,8 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(claude/agents) error = %v", err)
 	}
-	if len(agentEntries) != 8 {
-		t.Fatalf("claude agents count = %d, want 8 retained review/Judgment Day agents", len(agentEntries))
+	if len(agentEntries) != 9 {
+		t.Fatalf("claude agents count = %d, want 9 retained review/Judgment Day agents", len(agentEntries))
 	}
 }
 
