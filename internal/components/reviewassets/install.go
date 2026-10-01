@@ -23,9 +23,10 @@ import (
 // development and ship only to runtimes in model.SupportsReceiptDrivenDevelopment.
 // Judgment Day and Kimi's main agent are not RDD and stay where they are.
 var NativeAgentManifest = map[model.AgentID][]string{
-	model.AgentClaudeCode: {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
-	model.AgentKiroIDE:    {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
-	model.AgentKimi:       {"gentleman.yaml"},
+	model.AgentClaudeCode: {"gentle-ai-security.md", "jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
+	model.AgentCursor:    {"gentle-ai-security.md"},
+	model.AgentKiroIDE:   {"gentle-ai-security.md", "jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentKimi:      {"gentle-ai-security.md", "gentle-ai-security.yaml", "gentleman.yaml"},
 }
 
 // RetiredNativeAgentManifest lists the review agents earlier releases installed
