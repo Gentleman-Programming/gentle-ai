@@ -1116,6 +1116,16 @@ func openCodeSDKPhysicalTarget(path string, directory bool) (string, os.FileInfo
 		// refusal:by-design operator-knowledge: package manager executable cannot be identified
 		return "", nil, fmt.Errorf("package manager is not a regular executable")
 	}
+	// On Windows os.Stat records only the path and reads the volume serial and
+	// file index on the first os.SameFile call. Left lazy, the identity approved
+	// at proposal time would be read from whatever occupies the path at launch,
+	// so a replaced executable or config directory would compare equal to
+	// itself. Comparing the result with itself loads and caches the identity
+	// now; on POSIX the device and inode are already captured and this holds.
+	if !os.SameFile(info, info) {
+		// refusal:by-design operator-knowledge: a target whose file identity cannot be read cannot be pinned for consent
+		return "", nil, fmt.Errorf("package manager target identity cannot be read")
+	}
 	return physical, info, nil
 }
 

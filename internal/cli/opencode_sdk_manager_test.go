@@ -35,35 +35,62 @@ func freshV2SDKConfig(t *testing.T) (string, string) {
 	return home, config
 }
 
-// installFakeNPM writes an npm stub at dir/npm and puts dir first on PATH.
-func installFakeNPM(t *testing.T, dir, script string) string {
+// Windows npm stub bodies shared by the SDK provisioning tests. The manager
+// runs in the credential-isolated environment, whose PATH has no System32, so
+// they use cmd.exe built-ins only. Each writes relative to its working
+// directory, which is the config directory the POSIX stubs reach via $PWD.
+const (
+	fakeNPMWindowsTouchInvoked = "@echo off\ntype nul > invoked\n"
+	fakeNPMWindowsTouchRan     = "@echo off\ntype nul > ran\n"
+	fakeNPMWindowsExitZero     = "@echo off\nexit 0\n"
+	fakeNPMWindowsMaterialize  = "@echo off\nmkdir node_modules\\@opencode\\plugin\n>node_modules\\@opencode\\plugin\\package.json echo {\"version\":\"2.0.4\"}\n"
+	// fakeNPMWindowsSecretThenHang spins until the manager deadline kills it.
+	// A child such as ping would outlive cmd.exe and keep the temporary
+	// working directory locked past the test's cleanup.
+	fakeNPMWindowsSecretThenHang = "@echo off\necho SECRET_TOKEN_DO_NOT_LOG\n:spin\ngoto spin\n"
+	fakeNPMWindowsSecretExit17   = "@echo off\necho SECRET_TOKEN_DO_NOT_LOG 1>&2\nexit 17\n"
+)
+
+// writeFakeNPM writes the npm stub that exec.LookPath resolves on this
+// platform. Windows ignores the extensionless POSIX script (PATHEXT), so
+// there the stub is an equivalent npm.cmd batch file with CRLF line endings.
+func writeFakeNPM(t *testing.T, dir, posix, windows string) string {
+	t.Helper()
+	name, script := "npm", posix
+	if runtime.GOOS == "windows" {
+		name, script = "npm.cmd", strings.ReplaceAll(windows, "\n", "\r\n")
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// installFakeNPM writes the platform's npm stub into dir and puts dir first on
+// PATH.
+func installFakeNPM(t *testing.T, dir, posix, windows string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "npm")
-	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
+	path := writeFakeNPM(t, dir, posix, windows)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return path
 }
 
 func TestV2SDKProvisionReportsManagerFailureClass(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script npm stubs require a POSIX shell")
-	}
 	for _, tc := range []struct {
-		name, script, want string
-		timeout            time.Duration
+		name, script, windows, want string
+		timeout                     time.Duration
 	}{
-		{name: "non-zero exit", script: "#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG' >&2\nexit 17\n", want: "exited with code 17"},
-		{name: "timeout", script: "#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG'; sleep 3\n", want: "timed out after", timeout: 30 * time.Millisecond},
-		{name: "verification", script: "#!/bin/sh\nexit 0\n", want: "verification failed"},
+		{name: "non-zero exit", script: "#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG' >&2\nexit 17\n", windows: fakeNPMWindowsSecretExit17, want: "exited with code 17"},
+		{name: "timeout", script: "#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG'; sleep 3\n", windows: fakeNPMWindowsSecretThenHang, want: "timed out after", timeout: 30 * time.Millisecond},
+		{name: "verification", script: "#!/bin/sh\nexit 0\n", windows: fakeNPMWindowsExitZero, want: "verification failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, config := freshV2SDKConfig(t)
-			npm := installFakeNPM(t, filepath.Join(t.TempDir(), "bin"), tc.script)
+			npm := installFakeNPM(t, filepath.Join(t.TempDir(), "bin"), tc.script, tc.windows)
 			if tc.timeout > 0 {
 				old := openCodeSDKInstallTimeout
 				openCodeSDKInstallTimeout = tc.timeout
@@ -89,23 +116,26 @@ func TestV2SDKProvisionReportsManagerFailureClass(t *testing.T) {
 }
 
 func TestV2SDKProposalRefusesVersionManagerShims(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script npm stubs require a POSIX shell")
-	}
 	for _, tc := range []struct {
 		name, dir, script, want string
+		// shebang marks cases detected from the script's #! line, which the
+		// product inspects only on POSIX.
+		shebang bool
 	}{
 		{name: "volta", dir: ".volta/bin", script: "#!/bin/sh\ntouch \"$PWD/invoked\"\n", want: "volta"},
 		{name: "asdf", dir: ".asdf/shims", script: "#!/bin/sh\ntouch \"$PWD/invoked\"\n", want: "asdf"},
 		{name: "mise", dir: ".local/share/mise/shims", script: "#!/bin/sh\ntouch \"$PWD/invoked\"\n", want: "mise"},
 		{name: "nodenv", dir: ".nodenv/shims", script: "#!/bin/sh\ntouch \"$PWD/invoked\"\n", want: "nodenv"},
-		{name: "shell script shim", dir: "tools/bin", script: "#!/usr/bin/env bash\nexec asdf exec \"npm\" \"$@\"\n", want: "asdf"},
-		{name: "missing interpreter", dir: "plain/bin", script: "#!/usr/bin/env gentle-ai-missing-interpreter\n", want: "interpreter"},
+		{name: "shell script shim", dir: "tools/bin", script: "#!/usr/bin/env bash\nexec asdf exec \"npm\" \"$@\"\n", want: "asdf", shebang: true},
+		{name: "missing interpreter", dir: "plain/bin", script: "#!/usr/bin/env gentle-ai-missing-interpreter\n", want: "interpreter", shebang: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.shebang && runtime.GOOS == "windows" {
+				t.Skip("shebang interpreter detection is POSIX-only")
+			}
 			home, config := freshV2SDKConfig(t)
 			root := t.TempDir()
-			installFakeNPM(t, filepath.Join(root, filepath.FromSlash(tc.dir)), tc.script)
+			installFakeNPM(t, filepath.Join(root, filepath.FromSlash(tc.dir)), tc.script, fakeNPMWindowsTouchInvoked)
 			proposal, err := OpenCodeSDKInstallProposal(home)
 			if err == nil || proposal != nil {
 				t.Fatalf("version-manager shim was offered for isolated install: proposal=%+v err=%v", proposal, err)
@@ -126,7 +156,7 @@ func TestV2SDKProposalRefusesVersionManagerShims(t *testing.T) {
 	}
 	t.Run("real nvm installation stays eligible", func(t *testing.T) {
 		home, _ := freshV2SDKConfig(t)
-		installFakeNPM(t, filepath.Join(t.TempDir(), ".nvm", "versions", "node", "v22.0.0", "bin"), "#!/bin/sh\nexit 0\n")
+		installFakeNPM(t, filepath.Join(t.TempDir(), ".nvm", "versions", "node", "v22.0.0", "bin"), "#!/bin/sh\nexit 0\n", fakeNPMWindowsExitZero)
 		if proposal, err := OpenCodeSDKInstallProposal(home); err != nil || proposal == nil {
 			t.Fatalf("nvm-managed npm was refused: proposal=%+v err=%v", proposal, err)
 		}
