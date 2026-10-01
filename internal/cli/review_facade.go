@@ -1976,7 +1976,7 @@ func reviewRecoverCommand(cwd, predecessor, expected, successor, disposition str
 	command := fmt.Sprintf("%s --predecessor-lineage %s --expected-predecessor-revision %s --successor-lineage %s --disposition %s",
 		reviewRunnableCommand("review.recover"), predecessor, expected, successor, disposition)
 	if cwd != "" {
-		command += " --cwd " + cwd
+		command += " --cwd " + reviewTransitionShellWord(cwd)
 	}
 	return command
 }
