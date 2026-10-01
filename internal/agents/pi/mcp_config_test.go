@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -214,7 +215,8 @@ func TestProvisionEngramMCPRefusesMalformedMCPConfigWithoutClobbering(t *testing
 			}
 
 			_, _, err := a.ProvisionEngramMCP(home)
-			if err == nil || !strings.Contains(err.Error(), tt.wantSubstr) || !strings.Contains(err.Error(), path) {
+			// The error quotes the path with %q, which escapes Windows backslashes.
+			if err == nil || !strings.Contains(err.Error(), tt.wantSubstr) || !strings.Contains(err.Error(), strconv.Quote(path)) {
 				t.Fatalf("ProvisionEngramMCP() error = %v, want error naming %q and containing %q", err, path, tt.wantSubstr)
 			}
 			body, readErr := os.ReadFile(path)
@@ -245,7 +247,7 @@ func TestProvisionEngramMCPRefusesNonObjectMCPServersWhenMigrating(t *testing.T)
 	writeTestFile(t, mcpPath, mcpBody)
 
 	_, _, err := a.ProvisionEngramMCP(home)
-	if err == nil || !strings.Contains(err.Error(), "mcpServers") || !strings.Contains(err.Error(), mcpPath) {
+	if err == nil || !strings.Contains(err.Error(), "mcpServers") || !strings.Contains(err.Error(), strconv.Quote(mcpPath)) {
 		t.Fatalf("ProvisionEngramMCP() error = %v, want error naming %q and mcpServers", err, mcpPath)
 	}
 	if body, readErr := os.ReadFile(mcpPath); readErr != nil || string(body) != mcpBody {
