@@ -641,6 +641,9 @@ func TestCompatibilityRefreshRollbackRemovesNewFilesAfterDuplicateBackup(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	plan := runtime.stagePlan()
 	plan.Apply = append(plan.Apply, failingCompatibilityStep{})
 	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)

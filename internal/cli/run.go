@@ -71,13 +71,17 @@ type InstallResult struct {
 }
 
 var (
-	osUserHomeDir                = os.UserHomeDir
-	osSetenv                     = os.Setenv
-	osStat                       = os.Stat
-	runCommand                   = executeCommand
-	cmdLookPath                  = exec.LookPath
-	streamCommandOutput          = true
-	goEnv                        = defaultGoEnv
+	osUserHomeDir       = os.UserHomeDir
+	osSetenv            = os.Setenv
+	osStat              = os.Stat
+	runCommand          = executeCommand
+	cmdLookPath         = exec.LookPath
+	streamCommandOutput = true
+	goEnv               = defaultGoEnv
+	// installCommunityTool keeps the legacy 3-arg signature to match the
+	// public communitytool.Install entry point (the TUI surface still calls
+	// that); installCommunityToolWithHome is the CLI-side hook that carries
+	// the force flag from --force-community-tools down into the installer.
 	installCommunityTool         = communitytool.Install
 	installCommunityToolWithHome = communitytool.InstallWithHome
 	injectInstallPersona         = defaultInjectInstallPersona
@@ -232,7 +236,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 				"will be written to each selected agent's global config directory and will affect ALL workspaces for those agents on this machine.\n"+
 				"To install only into the current workspace, rerun with --scope=workspace.\n\n")
 	}
-	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile)
+	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile, flags.ForceCommunityTools)
 	if err != nil {
 		return result, err
 	}
@@ -677,16 +681,17 @@ func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pi
 }
 
 type installRuntime struct {
-	homeDir      string
-	workspaceDir string
-	scope        InstallScope
-	selection    model.Selection
-	resolved     planner.ResolvedPlan
-	profile      system.PlatformProfile
-	channel      InstallChannel
-	backupRoot   string
-	state        *runtimeState
-	sdkConsent   *OpenCodeSDKConsent
+	homeDir             string
+	workspaceDir        string
+	scope               InstallScope
+	selection           model.Selection
+	resolved            planner.ResolvedPlan
+	profile             system.PlatformProfile
+	channel             InstallChannel
+	backupRoot          string
+	state               *runtimeState
+	sdkConsent          *OpenCodeSDKConsent
+	forceCommunityTools bool
 
 	background           OpenCodeBackgroundResolution
 	runtimeReady         bool
@@ -743,7 +748,7 @@ func (s *runtimeState) compatibilityChangedFiles() []string {
 	return s.compatibilityTransaction.ChangedFiles()
 }
 
-func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
+func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, forceCommunityTools bool) (*installRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
 	if err != nil {
@@ -758,15 +763,16 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 	workspaceDir, _ := os.Getwd()
 
 	return &installRuntime{
-		homeDir:      homeDir,
-		workspaceDir: workspaceDir,
-		scope:        scope,
-		selection:    selection,
-		resolved:     resolved,
-		profile:      profile,
-		channel:      channel,
-		backupRoot:   backupRoot,
-		state:        state,
+		homeDir:             homeDir,
+		workspaceDir:        workspaceDir,
+		scope:               scope,
+		selection:           selection,
+		resolved:            resolved,
+		profile:             profile,
+		channel:             channel,
+		backupRoot:          backupRoot,
+		state:               state,
+		forceCommunityTools: forceCommunityTools,
 	}, nil
 }
 
@@ -885,7 +891,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	// persona replaces whole prompt files for some agents, so CodeGraph guidance
 	// injected before it would be dropped and re-added by the first sync.
 	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state, forceCommunityTools: r.forceCommunityTools})
 	}
 
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
@@ -2355,19 +2361,23 @@ type componentApplyStep struct {
 }
 
 type communityToolInstallStep struct {
-	id           string
-	tool         model.CommunityToolID
-	workspaceDir string
-	homeDir      string
-	agents       []model.AgentID
-	state        *runtimeState
+	id                  string
+	tool                model.CommunityToolID
+	workspaceDir        string
+	homeDir             string
+	agents              []model.AgentID
+	state               *runtimeState
+	forceCommunityTools bool
 }
 
 func (s communityToolInstallStep) ID() string { return s.id }
 
 func (s communityToolInstallStep) Run() error {
-	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath))
+	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath), s.forceCommunityTools)
 	if err != nil {
+		if len(result.ManualActions) > 0 {
+			return fmt.Errorf("install community tool %q: %w\n%s", s.tool, err, strings.Join(result.ManualActions, "\n"))
+		}
 		return fmt.Errorf("install community tool %q: %w", s.tool, err)
 	}
 	if result.PiCodeGraph != nil && s.state != nil {
@@ -2878,7 +2888,9 @@ func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection mo
 }
 
 func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
-	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
+	// TUI is intentionally excluded from --force-community-tools by scope; the
+	// flag is CLI-only and the TUI always runs with forceCommunityTools=false.
+	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile, false)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}, nil
 	}
