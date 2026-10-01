@@ -1,5 +1,8 @@
 # Docker E2E Testing
 
+> [!NOTE]
+> **These docs track `main`.** They may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 End-to-end tests that validate the `gentle-ai` installer binary inside Docker containers running real Linux distributions.
 
 ## Architecture

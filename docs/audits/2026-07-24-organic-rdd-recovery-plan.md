@@ -1,5 +1,8 @@
 # Organic RDD Recovery Plan
 
+> [!WARNING]
+> **Historical record.** This document is a preserved snapshot kept for provenance; it is not current guidance. The reference docs track `main` — see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs) for the latest release.
+
 > **Decision:** Gentle AI remains an ecosystem configurator for existing coding
 > agents. Normal implementation stays inside the configured agent. Receipt-Driven
 > Development begins only after the agent has produced a candidate it considers

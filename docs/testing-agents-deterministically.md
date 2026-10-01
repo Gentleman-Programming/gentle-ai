@@ -1,5 +1,8 @@
 # Testing Agents Deterministically
 
+> [!NOTE]
+> **These docs track `main`.** They may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 How Gentle AI™ proves that an agent did what it was asked — in CI, on every push, with no API keys and no token cost.
 
 ← [Back to README](../README.md)
@@ -42,7 +45,7 @@ The installer suite runs all platform checks on every trigger; only depth change
 
 ## Organic Runtime E2E
 
-One test — `TestRealAgentOrganicJourneys` in `e2e/organicruntime/organic_runtime_test.go` — exercises four journeys through the real binary.
+One test — `TestRealAgentOrganicJourneys` in `e2e/organicruntime/organic_runtime_test.go` — exercises two journeys through the real binary.
 
 ### What is real
 
@@ -66,8 +69,6 @@ Because the prompt is loaded from the shipped asset, changing that asset changes
 |---|---|
 | `direct inline implementation` | The `direct_inline` route stays inline and creates no SDD artifacts |
 | `delegated direct implementation` | The `delegated_direct` route delegates without entering an SDD lifecycle |
-| `direct route with common review actor` | A direct route may delegate the common review actor without changing its implementation route |
-| `managed start kill switch before advance` | The activation kill switch stops the flow before it advances |
 
 The first three are the routing invariants from the architecture plan. The fourth proves the brake works, which is what makes shipping a dormant-by-default capability safe.
 
@@ -271,5 +272,5 @@ The approach generalizes to any agent-driven system:
 ## References
 
 - [Docker E2E Testing](./docker-e2e-testing.md) — the installer suite
-- [Organic Recovery Architecture and Implementation Plan](./audits/2026-07-23-organic-recovery-implementation-plan.md) — the routes, verification axes, and acceptance criteria this suite exercises
+- [Organic Recovery Architecture and Implementation Plan](./audits/2026-07-23-organic-recovery-implementation-plan.md) — historical record: the original routes, verification axes, and acceptance criteria behind this suite
 - [Review Authority Threat Model](./review-authority-threat-model.md) — boundaries and assumptions of the trust kernel

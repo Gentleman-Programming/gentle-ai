@@ -1,5 +1,8 @@
 # v1 Independent Verification Report: Quick-Fix Readiness Handoff
 
+> [!WARNING]
+> **Historical record.** This document is a preserved snapshot kept for provenance; it is not current guidance. The reference docs track `main` — see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs) for the latest release.
+
 ## Outcome
 
 This **v1 independent verification** records findings without assigning a global verdict. It identifies two rows with a current, explicit maintainer-required design prerequisite that conflicts with the handoff's own admission rule. Many other classifications, scopes, and test oracles are plausible but insufficiently evidenced by the handoff itself.

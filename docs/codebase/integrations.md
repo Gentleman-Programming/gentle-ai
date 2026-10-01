@@ -1,5 +1,8 @@
 # Integrations
 
+> [!NOTE]
+> **These docs track `main`.** They may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Gentle-AI integration code should stay thin: adapters describe where and how an agent accepts configuration; components decide what managed content to inject.

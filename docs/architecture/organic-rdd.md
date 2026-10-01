@@ -1,5 +1,8 @@
 # Organic RDD — atomic review architecture
 
+> [!NOTE]
+> **These docs track `main`.** They may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 ← [Back to README](../../README.md)
 
 Receipt-Driven Development (RDD) reviews a finished candidate without taking ownership of delivery. It is deliberately small: native code freezes one worktree candidate, coordinates bounded review, burns completed authority, and returns control to the human.

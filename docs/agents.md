@@ -1,5 +1,8 @@
 # Supported Agents
 
+> [!NOTE]
+> **These docs track `main`.** They may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 ← [Back to README](../README.md)
 
 Gentle AI configures agents you already have; it does not install an AI agent for you. ODD is the development workflow. Capabilities and delegation primitives depend on the client. [Usage](usage.md) covers installation and sync; [Pi](pi.md) explains the separately owned Pi integration.

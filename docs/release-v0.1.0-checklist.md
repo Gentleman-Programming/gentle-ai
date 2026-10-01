@@ -1,5 +1,8 @@
 # Release Checklist v0.1.0
 
+> [!WARNING]
+> **Historical record.** This document is a preserved snapshot kept for provenance; it is not current guidance. The reference docs track `main` — see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs) for the latest release.
+
 ## Scope freeze
 
 - [ ] Confirm MVP scope remains macOS + Claude Code + OpenCode only.

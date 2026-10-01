@@ -1,5 +1,8 @@
 # Why we kept missing these — a detection-gap audit
 
+> [!WARNING]
+> **Historical record.** This document is a preserved snapshot kept for provenance; it is not current guidance. The reference docs track `main` — see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs) for the latest release.
+
 > Written 2026-07-27, at the end of the organic RDD recovery effort (PR #1801), after a
 > day in which eight further defects surfaced on a branch that had already absorbed
 > hundreds of fixes, dozens of mechanical guards, a 48-journey friction benchmark, and

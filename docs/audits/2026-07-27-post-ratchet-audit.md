@@ -1,5 +1,8 @@
 # What the ratchet measured — the second detection-gap audit
 
+> [!WARNING]
+> **Historical record.** This document is a preserved snapshot kept for provenance; it is not current guidance. The reference docs track `main` — see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs) for the latest release.
+
 > Written 2026-07-27, twenty-six commits after
 > [the first detection-gap audit](2026-07-27-detection-gap-audit.md) (`2f5002ff`), on the
 > same branch and the same day. That audit named two root causes, ranked five fixes, and

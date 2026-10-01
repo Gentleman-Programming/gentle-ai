@@ -1,5 +1,8 @@
 # Guard population declarations
 
+> [!NOTE]
+> **These docs track `main`.** They may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 Guard population declarations make the accepted input set of selected production guards explicit at the check itself. The v2.2.1 contract covers ten evidenced guard families in `internal/cli`, `internal/reviewtransaction`, and `internal/sddstatus`.
 
 ## Review rule

@@ -1,5 +1,8 @@
 # Systemic Remediation Architecture for Gentle AI
 
+> [!WARNING]
+> **Historical record.** This document is a preserved snapshot kept for provenance; it is not current guidance. The reference docs track `main` — see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs) for the latest release.
+
 **Decision date:** 2026-07-23
 
 **Status:** Proposed for maintainer approval

@@ -1,5 +1,8 @@
 # Receipt-Driven Development System Audit
 
+> [!WARNING]
+> **Historical record.** This document is a preserved snapshot kept for provenance; it is not current guidance. The reference docs track `main` — see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs) for the latest release.
+
 **Audit date:** 2026-07-21  
 **Primary baseline:** `gentle-ai` `main` / `v2.1.11` at `51a5d9e20706b05718b1f2b7fcafda45bab21802`  
 **Integration baseline:** `gentle-pi` `origin/main` / `v1.2.0` at `4d5214b410d352712be20917e81f9ce5974d039a`  
