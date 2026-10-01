@@ -1,7 +1,7 @@
 # Consulting — AI adoption for development teams
 
 > [!NOTE]
-> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
 
 Gentle-AI is built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming): 15 years of enterprise architecture, a community of thousands of developers testing these tools daily, and a simple rule for AI-assisted work: **verifying beats generating**.
 

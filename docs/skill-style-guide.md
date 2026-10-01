@@ -1,7 +1,7 @@
 # LLM-first Skill Style Guide
 
 > [!NOTE]
-> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
 
 Use this guide when creating or refactoring skills in this repo. A skill is a **runtime instruction contract for an LLM**, not human-facing documentation: it tells the model when to activate, what rules are non-negotiable, how to decide, what to do, and what to return.
 
