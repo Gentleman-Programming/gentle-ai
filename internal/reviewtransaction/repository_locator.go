@@ -390,35 +390,6 @@ func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIden
 	return nil
 }
 
-// matchHandleRepositoryIdentity checks whether the handle encodes the same
-// repository identity as the live identity, independent of any binding fields.
-// It derives a handle from the live identity with a zero-value binding and
-// compares. Returns true when the live repo identity matches what's encoded
-// in the handle, false otherwise.
-//
-// This is separate from matchReviewRepositoryContextV2Handle so callers can
-// distinguish "genuine repo identity mismatch" from "binding fields don't
-// match authority" when the resolver's identity check fails.
-func matchHandleRepositoryIdentity(handle string, identity RepositoryIdentity) bool {
-	if !validReviewRepositoryContextV2Handle(handle) {
-		return false
-	}
-	derived, err := encodeReviewRepositoryContextV2Token(reviewRepositoryContextV2Token{
-		Schema:               reviewRepositoryContextV2Schema,
-		RepositoryRoot:       identity.RepositoryRoot,
-		GitCommonDir:         identity.GitCommonDir,
-		GitDir:               identity.GitDir,
-		RepositoryRef:        identity.RepositoryRef,
-		LineageID:            "0000000000000000000000000000000000000000000000000000000000000000",
-		TargetIdentity:       "0000000000000000000000000000000000000000000000000000000000000000",
-		CapturePhaseRevision: "0000000000000000000000000000000000000000000000000000000000000000",
-	})
-	if err != nil {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(derived), []byte(handle)) == 1
-}
-
 func canonicalReviewRepositoryContextV2Payload(token reviewRepositoryContextV2Token) ([]byte, error) {
 	if token.Schema != reviewRepositoryContextV2Schema || !validReviewRepositoryContextV2Path(token.RepositoryRoot) ||
 		!validReviewRepositoryContextV2Path(token.GitCommonDir) || !validReviewRepositoryContextV2Path(token.GitDir) ||
