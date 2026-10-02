@@ -94,12 +94,4 @@ var Tools = []ToolInfo{
 			return paths
 		},
 	},
-	{
-		Name:          "opencode-subagent-statusline",
-		Owner:         "Joaquinvesapa",
-		Repo:          "sub-agent-statusline",
-		VersionPrefix: "v",
-		InstallMethod: InstallOpenCodePlugin,
-		NpmPackage:    "opencode-subagent-statusline",
-	},
 }

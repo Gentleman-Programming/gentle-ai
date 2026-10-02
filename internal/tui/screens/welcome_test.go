@@ -7,15 +7,20 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
+func TestWelcomeOmitsExternalPluginActions(t *testing.T) {
+	for _, label := range []string{"OpenCode Community Plugins", "Uninstall OpenCode Plugin"} {
+		if containsOption(screens.WelcomeOptions(nil, true, false, 0, true), label) {
+			t.Errorf("retired action %q remains", label)
+		}
+	}
+}
+
 // ─── WelcomeOptions ──────────────────────────────────────────────────────────
 
 // TestWelcomeOptions_WithoutProfiles verifies that when showProfiles is false,
 // the "OpenCode SDD Profiles" option is NOT present.
 func TestWelcomeOptions_WithoutProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false, 0, true)
-	if !containsOption(opts, "OpenCode Community Plugins") {
-		t.Fatalf("expected dedicated OpenCode Community Plugins option; got: %v", opts)
-	}
 	for _, opt := range opts {
 		if strings.Contains(opt, "OpenCode SDD Profiles") {
 			t.Errorf("expected no 'OpenCode SDD Profiles' option when showProfiles=false; got: %v", opts)
@@ -27,7 +32,7 @@ func TestWelcomeOptions_WithoutProfiles(t *testing.T) {
 func TestWelcomeOptions_LegacyProfilesDoNotAddMenuEntry(t *testing.T) {
 	for _, count := range []int{0, 1, 2} {
 		opts := screens.WelcomeOptions(nil, true, true, count, true)
-		if len(opts) != 14 || !containsOption(opts, "Configure models") {
+		if len(opts) != 12 || !containsOption(opts, "Configure models") {
 			t.Fatalf("legacy count %d: unexpected menu: %v", count, opts)
 		}
 		for _, opt := range opts {
@@ -38,12 +43,12 @@ func TestWelcomeOptions_LegacyProfilesDoNotAddMenuEntry(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 14 options when showProfiles=false
+// TestWelcomeOptions_OptionCount_WithoutProfiles verifies 12 options when showProfiles=false
 // and hasEngines=true.
 func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false, 0, true)
 	// Includes the Receipt-Driven Development entry.
-	want := 14
+	want := 12
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=false, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
@@ -53,7 +58,7 @@ func TestWelcomeOptions_OptionCount_WithoutProfiles(t *testing.T) {
 func TestWelcomeOptions_OptionCount_WithProfiles(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 2, true)
 	// Includes the Receipt-Driven Development entry.
-	want := 14
+	want := 12
 	if len(opts) != want {
 		t.Errorf("WelcomeOptions(showProfiles=true, hasEngines=true) = %d options, want %d; opts: %v", len(opts), want, opts)
 	}
@@ -78,49 +83,8 @@ func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
 func TestWelcomeOptions_ProfilesInsertedBeforeManageBackups(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true, 1, true)
 
-	agentIdx := -1
-	pluginsIdx := -1
-	uninstallIdx := -1
-	manageBackupsIdx := -1
-	for i, opt := range opts {
-		if strings.HasPrefix(opt, "Create your own Agent") {
-			agentIdx = i
-		}
-		if opt == "OpenCode Community Plugins" {
-			pluginsIdx = i
-		}
-		if opt == "Uninstall OpenCode Plugin" {
-			uninstallIdx = i
-		}
-		if opt == "Manage backups" {
-			manageBackupsIdx = i
-		}
-	}
-
-	if agentIdx < 0 {
-		t.Fatal("option 'Create your own Agent' not found")
-	}
-	if pluginsIdx < 0 {
-		t.Fatal("option 'OpenCode Community Plugins' not found")
-	}
-	if uninstallIdx < 0 {
-		t.Fatal("option 'Uninstall OpenCode Plugin' not found")
-	}
-	if manageBackupsIdx < 0 {
-		t.Fatal("option 'Manage backups' not found")
-	}
-
-	if pluginsIdx != agentIdx+1 {
-		t.Errorf("plugins option at index %d, expected %d (right after 'Create your own Agent' at %d)",
-			pluginsIdx, agentIdx+1, agentIdx)
-	}
-	if uninstallIdx != pluginsIdx+1 {
-		t.Errorf("'Uninstall OpenCode Plugin' at index %d, expected %d (right after plugins at %d)",
-			uninstallIdx, pluginsIdx+1, pluginsIdx)
-	}
-	if manageBackupsIdx != uninstallIdx+1 {
-		t.Errorf("'Manage backups' at index %d, expected %d (right after uninstall at %d)",
-			manageBackupsIdx, uninstallIdx+1, uninstallIdx)
+	if opts[5] != "Create your own Agent" || opts[6] != "Manage backups" {
+		t.Fatalf("retained actions are not adjacent: %v", opts)
 	}
 }
 

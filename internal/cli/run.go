@@ -831,12 +831,6 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		}
 	}
 
-	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
-		for _, plugin := range r.selection.OpenCodePlugins {
-			apply = append(apply, openCodePluginInstallStep{id: "opencode-plugin:" + string(plugin), plugin: plugin, homeDir: r.homeDir})
-		}
-	}
-
 	for _, component := range r.resolved.OrderedComponents {
 		if component == model.ComponentSDD {
 			continue
@@ -2283,19 +2277,6 @@ func (s openCodeTelemetryStep) Run() error {
 	return err
 }
 
-type openCodePluginInstallStep struct {
-	id      string
-	plugin  model.OpenCodeCommunityPluginID
-	homeDir string
-}
-
-func (s openCodePluginInstallStep) ID() string { return s.id }
-
-func (s openCodePluginInstallStep) Run() error {
-	_, err := opencodeplugin.Install(s.homeDir, s.plugin)
-	return err
-}
-
 func (s agentInstallStep) ID() string {
 	return s.id
 }
@@ -3306,13 +3287,6 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
-	}
-	pluginPaths, err := opencodeplugin.InstallPaths(homeDir, selection.OpenCodePlugins)
-	if err != nil {
-		return nil, err
-	}
-	for _, path := range pluginPaths {
-		paths[path] = struct{}{}
 	}
 	if containsAgent(resolved.Agents, model.AgentOpenCode) {
 		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {
