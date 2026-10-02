@@ -23,8 +23,8 @@ Forecast: 100–250 additions / 900–1,600 deletions; mostly removal of obsolet
   - Commit: 73f2652cb65e36292d766839a4db0f17ce0faaad — refactor(opencode): retire external community plugin installation and TUI.
   - Rollback boundary: remove this work unit to restore external community offering without touching unrelated OpenCode infrastructure.
 
-- [ ] T2 Remove newly unreachable InstallPaths left by T1 and pass the deadcode ratchet.
-  - Status: verified; committing work unit.
+- [x] T2 Remove newly unreachable InstallPaths left by T1 and pass the deadcode ratchet.
+  - Status: done; functional checks and work-unit commit complete.
   - Route: delegated writer; preparation trigger and CI correction.
   - Scope: internal/components/opencodeplugin/plugin.go and its exact tests only; never weaken deadcode baseline.
   - RED: CI Unit Tests failed ./scripts/deadcode-ratchet.sh on InstallPaths (run 37001728573).
@@ -32,7 +32,8 @@ Forecast: 100–250 additions / 900–1,600 deletions; mostly removal of obsolet
   - Acceptance: remove obsolete selection-specific path helper without affecting InstallComponentPaths/logo/uninstall; no newly unreachable functions; applicable focused checks pass.
   - Implementation: removed InstallPaths and obsolete test assertion, 2 files +0/-32. Worker normalized and passed plugin/update and CLI/TUI tests plus diff check. Local ratchet unavailable with GOPROXY=off (tool lookup failure, not code finding); human authorized public proxy.golang.org/sum.golang.org reads without credentials. Independent verifier now running with per-command online environment; no baseline/config changes.
   - Verification: independent ratchet GREEN with no newly unreachable functions; 3 previously baselined entries gone/reachable, baseline unchanged. Offline plugin/update and CLI/TUI tests passed (CLI 190.846s); git diff --check passed. Named InstallComponentPaths was an inaccurate planning reference (no such symbol); actual logo component/uninstall code unchanged.
-  - Commit/review: commit this verified correction; final committed candidate native review and required CI pending.
+  - Commit: 23028fb91eee16783633df2a87a72afe8ad0d9a2 — fix(opencode): remove unreachable community plugin path helper.
+  - Review/delivery: final committed candidate native review and required CI pending; parent will not edit source after review.
   - Isolation: human authorized /home/gentleman/work/gentle-ai-worktrees/pr-5200-opencode-community-plugins; main checkout belongs to unrelated dirty fix/4994 branch and must remain untouched.
 
 ## Evidence and progress
