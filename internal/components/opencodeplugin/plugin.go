@@ -138,35 +138,6 @@ func DefinitionFor(id model.OpenCodeCommunityPluginID) (Definition, bool) {
 	return Definition{}, false
 }
 
-// InstallPaths returns every path a selected plugin installation can mutate.
-// The outer install snapshot uses this before apply so later failures restore
-// plugin registration and plugin-owned assets together.
-func InstallPaths(homeDir string, selected []model.OpenCodeCommunityPluginID) ([]string, error) {
-	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
-	tuiPath := filepath.Join(opencodeDir, "tui.json")
-	paths := make([]string, 0, len(selected)+1)
-	seen := map[string]struct{}{}
-	addPath := func(path string) {
-		if _, ok := seen[path]; ok {
-			return
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-
-	for _, id := range selected {
-		switch id {
-		case model.OpenCodePluginGentleLogo:
-			addPath(filepath.Join(opencodeDir, "tui-plugins", gentleLogoPluginFile))
-		default:
-			return nil, fmt.Errorf("OpenCode community plugin %q is not installable", id)
-		}
-		addPath(tuiPath)
-	}
-
-	return paths, nil
-}
-
 func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error) {
 	// Legacy lookup is uninstall-only: refuse before probing or mutating anything.
 	if id != model.OpenCodePluginGentleLogo {

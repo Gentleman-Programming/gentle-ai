@@ -57,9 +57,6 @@ func TestLegacyLookupRemainsUninstallOnly(t *testing.T) {
 			if !ok || legacy.PackageName != pkg {
 				t.Fatalf("legacy lookup = (%+v, %v)", legacy, ok)
 			}
-			if paths, err := InstallPaths(t.TempDir(), []model.OpenCodeCommunityPluginID{id}); err == nil || len(paths) != 0 {
-				t.Fatalf("retired install paths = %v, %v", paths, err)
-			}
 		})
 	}
 }
