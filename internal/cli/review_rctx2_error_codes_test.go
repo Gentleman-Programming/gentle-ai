@@ -17,6 +17,49 @@ import (
 func TestRctx2GranularErrorCodes(t *testing.T) {
 	reviewEnabledHome(t)
 
+	t.Run("rctx2_binding_unusable — malformed handle without authority", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		err := RunReviewCaptureResult([]string{
+			"--cwd", repo, "--repository-context", "rctx2_not-base64",
+			"--lineage", "rctx2-absent-malformed", "--target", "sha256:" + strings.Repeat("a", 64),
+			"--expected-revision", "sha256:" + strings.Repeat("b", 64),
+			"--lens", "correctness", "--order", "0", "--preflight",
+		}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "rctx2_binding_unusable") {
+			t.Fatalf("malformed handle without authority = %v; want rctx2_binding_unusable", err)
+		}
+	})
+
+	t.Run("rctx2_binding_unusable — older same-repository handle", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
+		started := runNegotiatedReviewStart(t, repo, "rctx2-older-binding")
+		older := reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity,
+			Revision: "sha256:" + strings.Repeat("f", 64),
+		}
+		handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, older)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = RunReviewCaptureResult([]string{
+			"--cwd", repo, "--repository-context", handle,
+			"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
+			"--expected-revision", started.RepositoryContext.Revision,
+			"--lens", started.SelectedLenses[0], "--order", "0", "--preflight",
+		}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "rctx2_binding_unusable") {
+			t.Fatalf("older same-repository handle = %v; want rctx2_binding_unusable", err)
+		}
+	})
+
+	t.Run("rctx2_identity_mismatch — independently typed cause", func(t *testing.T) {
+		err := reviewRepositoryContextResolutionFailure(&reviewtransaction.ReviewRepositoryContextIdentityError{})
+		if !strings.Contains(err.Error(), "rctx2_identity_mismatch") {
+			t.Fatalf("typed identity cause = %v; want rctx2_identity_mismatch", err)
+		}
+	})
+
 	t.Run("rctx2_binding_unusable — malformed handle", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
@@ -96,7 +139,7 @@ func TestRctx2GranularErrorCodes(t *testing.T) {
 		}
 	})
 
-	t.Run("rctx2_identity_mismatch — handle encodes different repo identity", func(t *testing.T) {
+	t.Run("rctx2_binding_unusable — unexplained digest mismatch", func(t *testing.T) {
 		repoA := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repoA, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
 		started := runNegotiatedReviewStart(t, repoA, "rctx2-identity")
@@ -123,13 +166,9 @@ func TestRctx2GranularErrorCodes(t *testing.T) {
 		}
 		identityB := leaseB.Identity()
 
-		// Create a synthetic handle that encodes repo B's identity but
-		// carries repo A's binding (lineage, target, revision). When used
-		// with --cwd repo A, the identity check will fail because the
-		// handle encodes repo B's identity, not repo A's.
-		//
-		// This exercises the identity mismatch path while keeping authority
-		// loading working (the --cwd repo A still has the authority record).
+		// The fixture knows this digest was made with repo B's identity, but
+		// the resolver sees only an opaque digest and cannot prove which
+		// preimage field differed. Authority in repo A remains valid.
 		binding := reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID:      started.LineageID,
 			TargetIdentity: started.RepositoryContext.TargetIdentity,
@@ -149,11 +188,11 @@ func TestRctx2GranularErrorCodes(t *testing.T) {
 		}
 		err = RunReviewCaptureResult(args, io.Discard)
 		if err == nil {
-			t.Fatal("expected error for rctx2 identity mismatch")
+			t.Fatal("expected refusal for mismatched rctx2 digest")
 		}
 		msg := err.Error()
-		if !strings.Contains(msg, "rctx2_identity_mismatch") {
-			t.Fatalf("expected rctx2_identity_mismatch, got: %s", msg)
+		if !strings.Contains(msg, "rctx2_binding_unusable") {
+			t.Fatalf("expected rctx2_binding_unusable for unexplained digest mismatch, got: %s", msg)
 		}
 	})
 }

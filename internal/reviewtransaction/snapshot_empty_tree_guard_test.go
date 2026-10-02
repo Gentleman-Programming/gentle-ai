@@ -2,6 +2,8 @@ package reviewtransaction
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -136,83 +138,53 @@ func TestSnapshotBuilderBuildBaseWorkspaceOverlayRejectsEmptyBase(t *testing.T) 
 	}
 }
 
-// TestBlankTreeGuardsExerciseEmptyGitOutput verifies that the review-start
-// facade returns the field-specific reviewStartContextError when git
-// commands succeed but return empty (whitespace-only) tree hashes.
-// Uses the gitCommandContext test seam so that git rev-parse exits 0
-// with empty output, exercising the guard at the authority-creation
-// boundary instead of exiting before Build itself.
+// TestBlankTreeGuardsExerciseEmptyGitOutput proves the SnapshotBuilder's
+// field-specific refusals when just one tree command succeeds with blank output.
 func TestBlankTreeGuardsExerciseEmptyGitOutput(t *testing.T) {
+	// Reuse the test executable for a portable, successful Git-output stand-in.
+	if len(os.Args) >= 3 && os.Args[len(os.Args)-2] == "--blank-tree-output" {
+		fmt.Print(os.Args[len(os.Args)-1])
+		os.Exit(0)
+	}
 	repo := initSnapshotRepo(t)
 	builder := SnapshotBuilder{Repo: repo}
-
-	t.Run("empty-base-tree-guard", func(t *testing.T) {
-		original := gitCommandContext
-		t.Cleanup(func() { gitCommandContext = original })
-
-		// Make git rev-parse --verify <ref>^{tree} succeed with empty output
-		// only for the base-tree resolution, so Build gets "" for baseTree.
-		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			// The runGit harness prepends --no-replace-objects -C <repo>.
-			// Look for rev-parse anywhere in the full args list.
-			if name == "git" {
-				for i, a := range args {
-					if a == "rev-parse" && i+1 < len(args) && args[i+1] == "--verify" {
-						// Succeed with empty stdout (true exits 0, produces no output).
-						cmd := exec.CommandContext(ctx, "echo")
-						cmd.Args = []string{"echo"} // no args = prints newline, but resolveTree trims
-						return cmd
+	// Use a concrete base tree so candidate injection cannot also hit the base.
+	baseTree, err := builder.resolveTree(t.Context(), "HEAD")
+	if err != nil || baseTree == "" {
+		t.Fatalf("resolve valid base: %q, %v", baseTree, err)
+	}
+	for _, field := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"base", []string{"rev-parse", "--verify", baseTree + "^{tree}"}, "base tree empty after resolving target base-diff; review the repository state and rerun with a valid base_ref"},
+		{"candidate", []string{"write-tree"}, "candidate tree empty after building target base-diff; the working tree or staged index may be corrupted"},
+	} {
+		for _, output := range []struct{ name, value string }{{"empty", ""}, {"whitespace", " \t\r\n"}} {
+			t.Run(field.name+"/"+output.name, func(t *testing.T) {
+				original := gitCommandContext
+				t.Cleanup(func() { gitCommandContext = original })
+				intercepted := 0
+				gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+					// runGit prepends --no-replace-objects -C <repo>.
+					if name == "git" && len(args) >= 3 && strings.Join(args[3:], "\x00") == strings.Join(field.args, "\x00") {
+						intercepted++
+						// runGit replaces Cmd.Env; pass helper control in argv.
+						return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBlankTreeGuardsExerciseEmptyGitOutput$", "--", "--blank-tree-output", output.value)
 					}
+					return original(ctx, name, args...)
 				}
-			}
-			return original(ctx, name, args...)
-		}
-
-		_, err := builder.Build(t.Context(), Target{
-			Kind:       TargetBaseDiff,
-			BaseRef:    "HEAD",
-			Projection: ProjectionWorkspace,
-		})
-		if err == nil {
-			t.Fatal("Build with empty base tree = nil error, want error")
-		}
-		errMsg := err.Error()
-		if !strings.Contains(errMsg, "base tree empty") && !strings.Contains(errMsg, "base_tree") {
-			t.Logf("error should mention empty base tree: %q", errMsg)
-		}
-	})
-
-	t.Run("empty-candidate-tree-guard", func(t *testing.T) {
-		original := gitCommandContext
-		t.Cleanup(func() { gitCommandContext = original })
-
-		// Make git rev-parse succeed for base tree but return whitespace
-		// for the candidate (head) tree, so Build gets "" for candidateTree.
-		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			// The runGit harness prepends --no-replace-objects -C <repo>.
-			if name == "git" {
-				for i, a := range args {
-					if a == "rev-parse" && i+1 < len(args) && args[i+1] == "--verify" {
-						// Check if this is the HEAD (candidate) tree
-						if strings.Contains(args[i+2], "HEAD") {
-							// Return whitespace for candidate; resolveTree trims to empty.
-							return exec.CommandContext(ctx, "echo", " ")
-						}
-					}
+				snapshot, err := builder.Build(t.Context(), Target{
+					Kind: TargetBaseDiff, BaseRef: baseTree, Projection: ProjectionWorkspace,
+				})
+				if intercepted != 1 || err == nil || err.Error() != field.want {
+					t.Fatalf("%s guard: intercepted %d, error %v; want %q", field.name, intercepted, err, field.want)
 				}
-			}
-			return original(ctx, name, args...)
+				if snapshot.BaseTree != "" || snapshot.CandidateTree != "" {
+					t.Fatalf("blank tree refusal returned partial snapshot: %#v", snapshot)
+				}
+			})
 		}
-
-		_, err := builder.Build(t.Context(), Target{
-			Kind:       TargetBaseDiff,
-			BaseRef:    "HEAD",
-			Projection: ProjectionWorkspace,
-		})
-		// This test may still succeed on the candidate path because
-		// buildHeadWithIntended is used instead of rev-parse for HEAD.
-		// The point is to verify we exercise the guard plumbing, not
-		// that every path is reachable via this seam.
-		_ = err
-	})
+	}
 }

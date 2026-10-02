@@ -300,6 +300,50 @@ func TestRctx2HandleRefusesTamperAndConfinementWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestRctx2MalformedHandlePrecedesAbsentAuthority(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	repo := initSnapshotRepo(t)
+	binding := ReviewRepositoryContextBinding{
+		LineageID: "rctx2-absent-authority", TargetIdentity: hash("a"), Revision: hash("b"),
+	}
+	root, resolved, err := ResolveReviewRepositoryContextBinding(t.Context(), repo, "rctx2_not-base64", binding)
+	if err != ErrInvalidReviewRepositoryContextV2 || root != "" || resolved != (ReviewRepositoryContextBinding{}) {
+		t.Fatalf("malformed handle without authority = %q, %#v, %T (%v); want invalid binding", root, resolved, err, err)
+	}
+}
+
+func TestRctx2OlderHandleWithCurrentBindingIsUnusable(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "rctx2-older-handle")
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	}
+	older := binding
+	older.Revision = hash("f")
+	handle, err := DeriveReviewRepositoryContextHandle(t.Context(), fixture.store.repo, older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(fixture.store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, resolved, err := ResolveReviewRepositoryContextBinding(t.Context(), fixture.store.repo, handle, binding)
+	var identityErr *ReviewRepositoryContextIdentityError
+	if !errors.Is(err, ErrInvalidReviewRepositoryContextV2) || errors.As(err, &identityErr) || root != "" || resolved != (ReviewRepositoryContextBinding{}) {
+		t.Fatalf("older same-repository handle with current binding = %q, %#v, %T (%v); want invalid binding, not identity mismatch", root, resolved, err, err)
+	}
+	after, err := os.ReadFile(fixture.store.StatePath())
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("refused older handle changed authority: %v", err)
+	}
+}
+
 func TestRctx2HandleRejectsMovedWorktree(t *testing.T) {
 	fixture := newCompactReviewerCaptureFixture(t, "rctx2-moved-worktree")
 	record, err := fixture.store.Load()

@@ -239,7 +239,7 @@ func deriveReviewRepositoryContextV2Token(ctx context.Context, repo string, bind
 // and confirms its frozen facts against the active compact authority. It is
 // intentionally read-only and normalizes every refusal to one path-free error.
 func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
-	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
+	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil || !validReviewRepositoryContextV2Handle(handle) {
 		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	lease, err := OpenRepositoryIdentityLease(ctx, repo)
@@ -264,8 +264,9 @@ func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle str
 	if err := validateReviewRepositoryContextRecord(ctx, identity.RepositoryRoot, binding, record); err != nil {
 		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
-	// Authority validation passed — binding fields match the authority.
-	// A handle mismatch now proves the live repo identity differs from the handle.
+	// Authority validation passed — the supplied binding is current. A digest
+	// mismatch still cannot identify which field of the handle's preimage
+	// differs: it may have been issued for an older binding in this same repo.
 	if err := matchReviewRepositoryContextV2Handle(handle, identity, binding); err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
 	}
@@ -363,9 +364,9 @@ func validReviewRepositoryContextV2Handle(handle string) bool {
 // different repository, lineage, target, or revision cannot be made to match by
 // pointing the resolver somewhere else.
 //
-// Returns ErrInvalidReviewRepositoryContextV2 when the handle format is invalid,
-// ReviewRepositoryContextIdentityError{cause: nil} when the handle digest
-// mismatch is due to the live repository identity differing from the handle.
+// Returns ErrInvalidReviewRepositoryContextV2 for malformed or mismatched
+// handles. The opaque digest alone cannot distinguish an identity change from
+// a different lineage, target, or revision; identity errors need separate proof.
 func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIdentity, binding ReviewRepositoryContextBinding) error {
 	if !validReviewRepositoryContextV2Handle(handle) {
 		return ErrInvalidReviewRepositoryContextV2
@@ -384,7 +385,7 @@ func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIden
 		return ErrInvalidReviewRepositoryContextV2
 	}
 	if subtle.ConstantTimeCompare([]byte(derived), []byte(handle)) != 1 {
-		return &ReviewRepositoryContextIdentityError{cause: nil}
+		return ErrInvalidReviewRepositoryContextV2
 	}
 	return nil
 }

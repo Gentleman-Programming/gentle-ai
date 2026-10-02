@@ -33,7 +33,7 @@ A test with those properties gets disabled within a month. The solution is to ke
 | Suite | Location | Platforms | What it proves |
 |---|---|---|---|
 | Installer E2E | `e2e/docker-test.sh` | Ubuntu, Arch, Fedora (Docker) | Installation, layout, idempotency, optional SDD |
-| Organic Runtime E2E | `e2e/organicruntime/` | Ubuntu, Windows (native runners) | A real agent driving the real CLI through the full work lifecycle |
+| Organic Runtime E2E | `e2e/organicruntime/` | Ubuntu, Windows (native runners) | Native CLI lifecycle tests plus two real-agent implementation journeys |
 
 The installer suite is documented separately in [Docker E2E Testing](./docker-e2e-testing.md). This document covers the Organic Runtime suite.
 
@@ -45,7 +45,7 @@ The installer suite runs all platform checks on every trigger; only depth change
 
 ## Organic Runtime E2E
 
-One test — `TestRealAgentOrganicJourneys` in `e2e/organicruntime/organic_runtime_test.go` — exercises two journeys through the real binary.
+`TestRealAgentOrganicJourneys` in `e2e/organicruntime/organic_runtime_test.go` exercises two journeys through the real binary. Each scripts implementation, `review start`, `review finalize`, and `review validate --gate pre-push`; it asserts a candidate commit, an unmanaged gate, and no SDD artifacts. Other tests in the package cover delivery and kill-switch behavior without proving those flows through this real-agent test.
 
 ### What is real
 
@@ -57,7 +57,7 @@ Everything except the model's reasoning:
 | OpenCode plugin | Yes | `@opencode-ai/plugin` installed with `npm install` at the pinned version |
 | Orchestrator prompt | Yes | Read from `internal/assets/opencode/sdd-orchestrator.md` — the same asset shipped to users |
 | `gentle-ai` binary | Yes | Compiled from the working tree, exposed as `GENTLE_AI_TEST_BINARY` |
-| Git repository | Yes | A real repository plus a bare remote; delivery ends in an `update-ref` CAS with exact tree and blob proof |
+| Git repository | Yes | A real repository plus a bare remote; the two agent journeys assert a candidate commit, not remote delivery |
 | Filesystem effects | Yes | Real files, real commits, isolated `$HOME` with `--pure` and per-test `XDG_*` directories |
 | Model reasoning | **No** | A local HTTP server returning a scripted sequence |
 
@@ -70,7 +70,7 @@ Because the prompt is loaded from the shipped asset, changing that asset changes
 | `direct inline implementation` | The `direct_inline` route stays inline and creates no SDD artifacts |
 | `delegated direct implementation` | The `delegated_direct` route delegates without entering an SDD lifecycle |
 
-Both are routing invariants from the architecture plan.
+These are the two entries in the real-agent test's scenario table. Common-review-actor routing and managed-start kill-switch scenarios are not entries in that table.
 
 ---
 
@@ -139,7 +139,7 @@ OpenCode starts normally, resolves `fixture/fixture` to loopback, and POSTs exac
 
 ### Step 5 — the fixture answers from a script
 
-There is no reasoning. There is a counter and a switch:
+There is no reasoning. The real-agent test supplies an ordered tool-call script. This illustrative lifecycle sequence is not the two journeys' exact script:
 
 ```go
 fixture.mainCalls++
@@ -153,7 +153,7 @@ case 5: writeTool(w, "advance",      "bash", organicAdvanceCommand(...))
 }
 ```
 
-The agent executes each step for real: real `bash`, the real binary, a real repository. Only the *choice* of step is scripted.
+The agent executes its supplied script for real: real `bash`, the real binary, a real repository. Only the *choice* of step is scripted.
 
 ### Step 6 — the fixture also inspects the request
 
@@ -177,6 +177,8 @@ A separate TLS server (`httptest.NewTLSServer`) stands in for the delivery desti
 ---
 
 ## End-to-end flow
+
+This is the broader native harness pattern. The two real-agent journeys stop at the review/gate assertions described above; they do not assert remote delivery.
 
 ```
 Go test
@@ -249,7 +251,7 @@ In CI the `organic-runtime-e2e` job runs this across a matrix of `ubuntu-latest`
 
 ## What it proves, and what it does not
 
-**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no SDD artifacts when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set (`TestOrganicKillSwitchStopsAtTheDeliveryBoundary`, which the same CI job runs) — on Linux and Windows. Review evidence never authorizes delivery or archive.
+**Proved by the two real-agent journeys.** Given scripted inline or delegated implementation, the real agent creates a candidate commit, runs the CLI review commands, reaches an unmanaged pre-push gate, and creates no SDD artifacts. Remote compare-and-swap and kill-switch assertions belong to other native harness tests, not this real-agent proof. Review evidence never authorizes delivery or archive.
 
 **Not proved.** That a live model, given the shipped prompt, produces the same tool calls the fixture scripts. That leap is non-deterministic by nature and does not belong in a merge gate; it is covered by real usage and by the cross-adapter asset parity fixtures.
 

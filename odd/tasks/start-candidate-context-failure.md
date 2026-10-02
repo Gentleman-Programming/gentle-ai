@@ -10,7 +10,9 @@
 
 **Why:** `repository_context_unavailable` does not differentiate between authority missing, git trust refusal, and revision stale. Community reporters (#2227, #2411, #2461) cannot distinguish the root causes.
 
-## Status: All tasks done.
+## Status: Follow-up corrections and verification in progress.
+
+PR #5144 maps to `fix/start-candidate-context-failure` in `/private/tmp/pi-pr1-start-candidate-context-failure`; PR #5145 maps to `fix/rctx2-diagnosis-upgrade` in the primary worktree. Historical task evidence below does not establish that both PRs are verified or that GitHub threads are resolved.
 
 ## Tasks
 
@@ -28,11 +30,14 @@
 - **What:** The `renderReviewStartFrozenCandidateContext` block returns `reviewStartContextError` on failure. Added secondary empty-tree guards BEFORE `ValidateLiveSnapshot` and `runReviewFacadeCompactAtomicStart` so blank trees return `reviewStartContextError` before any authority is written.
 - **Tests:** `internal/cli/review_empty_tree_guard_test.go` — 3 tests covering empty base tree, empty candidate tree, and authority-not-created-on-empty-tree. `internal/cli/review_start_empty_tree_guard_test.go` — 4 tests covering review-start refusals and normal flow. All 14 empty-tree guard tests pass.
 - **Verification:** All empty-tree guard tests pass. No authority is created when trees are empty.
-- **Implementation:** Added defensive checks in `runReviewFacadeStart` at two points:
-  1. **Pre-assessment guard** (AFTER `reviewStartEmptyCandidateScope`, BEFORE `AssessSnapshotRisk`): Catches empty trees before `AssessSnapshotRisk → DiffStats → changedPaths → git diff-tree` executes. Uses caller-side `*lineage` since `request.Binding.LineageID` is not yet available.
-  2. **Pre-budget-refusal guard** (BEFORE `reviewLensContextCompactAtomicStartBudgetRefusal`): Catches empty trees before `reviewLensContextBudgetProbe → PrepareCandidateInspector → ValidateEvidence → changedPaths → git diff` executes. Uses `request.Binding.LineageID`.
+- **Implementation:** One pair of pre-assessment guards AFTER `reviewStartEmptyCandidateScope`, BEFORE `AssessSnapshotRisk`. These checks precede risk assessment, live-snapshot validation, and budget probing. They use caller-side `*lineage` because `request.Binding.LineageID` is not yet available. Duplicate late guards were removed; there is no second pre-budget guard pair.
 - **Key discovery:** `AssessSnapshotRisk` calls `DiffStats → changedPaths → git diff-tree`, which executes BEFORE the original guard placement. The pre-assessment guard moves the check to precede `AssessSnapshotRisk` entirely.
-- **CodeRabbit resolution:** Addresses PR 5144 threads: (1) empty-tree checks moved before `ValidateLiveSnapshot` and before `AssessSnapshotRisk`, (2) test exercises empty git output via `gitCommandContext`
+- **Local follow-up:** Applied in the correct PR #5144 worktree after rebase: early typed guards, precise empty/whitespace output tests with valid base isolation, refusal annotations, and formatting. Worker observed CLI regression RED then GREEN; independent verification passed focused CLI/reviewtransaction tests, gofmtcheck, gofmt -l and git diff --check. No commit, push, or GitHub thread resolution performed.
+- **Native review:** Two correction candidates independently approved and acknowledged:
+  - #5144 `review-10a169bfb707faf2`, target `sha256:06eef1141bd684c32e4b7eb9368b0f494ec5997450d5685be5456259d4390a15`, 4 files, 177 diff lines.
+  - #5145 `review-58b3cddec8e876a3`, target `sha256:ceedc0eabffa0b209424b1a8b7fb7efb5785b73b720149ff794fb7eec8c92fd7`, 6 files, 265 diff lines.
+  Neither covers the accumulated branch or broad functional suites.
+- PR #5145 local follow-up implemented: handle-shape validation before authority load; digest mismatch classified as invalid binding instead of repository identity; blank-output tests with precise command isolation and nonnil error requirements; journey doc corrected to two entries. Worker observed RED before corrections, GREEN after. Independent verification passed all focused tests, diff --check, gofmt, gofmtcheck.
 
 ### 3. rctx2 sub-codes — DONE
 
