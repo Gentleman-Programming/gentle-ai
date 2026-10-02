@@ -873,8 +873,8 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(claude/agents) error = %v", err)
 	}
-	if len(agentEntries) != 9 {
-		t.Fatalf("claude agents count = %d, want 9 retained review/Judgment Day agents", len(agentEntries))
+	if len(agentEntries) != 8 {
+		t.Fatalf("claude agents count = %d, want 8 retained review/Judgment Day agents", len(agentEntries))
 	}
 }
 
