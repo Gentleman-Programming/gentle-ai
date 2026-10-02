@@ -167,8 +167,8 @@ func TestReviewLensContextRefusesUnboundInput(t *testing.T) {
 	}{
 		{name: "missing lens", argv: append([]string{"lens-context"}, lensContextArgv(args, "")[:len(lensContextArgv(args, ""))-2]...), want: "requires the exact provider-issued"},
 		{name: "missing context", argv: []string{"lens-context", "--lens", lens}, want: "requires the exact provider-issued"},
-		{name: "malformed context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "not-a-handle"), lens)...), want: "repository_context_"},
-		{name: "unknown context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), lens)...), want: "repository_context_"},
+		{name: "malformed context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "not-a-handle"), lens)...), want: "rctx2_"},
+		{name: "unknown context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), lens)...), want: "rctx2_"},
 		{name: "unselected lens", argv: append([]string{"lens-context"}, lensContextArgv(args, "review-nonexistent")...), want: "lens_context_lens_not_selected"},
 		{name: "positional", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "HEAD"), want: "requires the exact provider-issued"},
 		{name: "unknown flag", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "--order", "0"), want: "flag provided but not defined"},
