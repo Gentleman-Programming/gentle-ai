@@ -153,6 +153,12 @@ func TestInjectRoutingGenericModelVariantUpgrade(t *testing.T) {
 				if err := os.WriteFile(path, []byte(legacy), 0o640); err != nil {
 					t.Fatal(err)
 				}
+				// Compare against the observed mode: Windows reports 0o666 for any
+				// writable file, so the requested 0o640 is not portable.
+				before, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
 				options := RoutingOptions{OrchestratorCapability: hint}
 				first, err := InjectRoutingWithOptions(home, agent, options)
 				if err != nil {
@@ -174,7 +180,7 @@ func TestInjectRoutingGenericModelVariantUpgrade(t *testing.T) {
 					}
 				}
 				info, err := os.Stat(path)
-				if err != nil || info.Mode().Perm() != 0o640 {
+				if err != nil || info.Mode().Perm() != before.Mode().Perm() {
 					t.Fatal("upgrade changed file mode", err)
 				}
 				second, err := InjectRoutingWithOptions(home, agent, options)

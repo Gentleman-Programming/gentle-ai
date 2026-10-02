@@ -837,12 +837,6 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		}
 	}
 
-	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
-		for _, plugin := range r.selection.OpenCodePlugins {
-			apply = append(apply, openCodePluginInstallStep{id: "opencode-plugin:" + string(plugin), plugin: plugin, homeDir: r.homeDir})
-		}
-	}
-
 	for _, component := range r.resolved.OrderedComponents {
 		if component == model.ComponentSDD {
 			continue
@@ -955,7 +949,7 @@ func (s nativeReviewAgentStep) Run() error {
 }
 
 func nativeReviewPreservedAction(path string) string {
-	return fmt.Sprintf("Native review agent %s was preserved, not updated: its existing bytes are unknown or modified. To receive updates, manually compare it with the current Gentle AI agent template, merge changes into your copy, and remove or replace the file only after saving your changes. Gentle AI will not adopt or delete it automatically.", path)
+	return fmt.Sprintf("Native review agent %s was preserved, not updated: ownership cannot be verified (missing ledger entry or differing recorded hash). This does not mean you customized the file. Keeping it unchanged is valid. To opt into management, back up this file and verify the backup, remove only this warned file, then rerun your existing gentle-ai install or gentle-ai sync command with the same runtime, scope, and model choices. See docs/rollback.md for per-file recovery. Gentle AI will not adopt or delete it automatically.", path)
 }
 
 type managedOpenCodePluginsInstallStep struct {
@@ -1121,6 +1115,16 @@ func openCodeSDKPhysicalTarget(path string, directory bool) (string, os.FileInfo
 	if !directory && !info.Mode().IsRegular() {
 		// refusal:by-design operator-knowledge: package manager executable cannot be identified
 		return "", nil, fmt.Errorf("package manager is not a regular executable")
+	}
+	// On Windows os.Stat records only the path and reads the volume serial and
+	// file index on the first os.SameFile call. Left lazy, the identity approved
+	// at proposal time would be read from whatever occupies the path at launch,
+	// so a replaced executable or config directory would compare equal to
+	// itself. Comparing the result with itself loads and caches the identity
+	// now; on POSIX the device and inode are already captured and this holds.
+	if !os.SameFile(info, info) {
+		// refusal:by-design operator-knowledge: a target whose file identity cannot be read cannot be pinned for consent
+		return "", nil, fmt.Errorf("package manager target identity cannot be read")
 	}
 	return physical, info, nil
 }
@@ -2279,19 +2283,6 @@ func (s openCodeTelemetryStep) Run() error {
 	return err
 }
 
-type openCodePluginInstallStep struct {
-	id      string
-	plugin  model.OpenCodeCommunityPluginID
-	homeDir string
-}
-
-func (s openCodePluginInstallStep) ID() string { return s.id }
-
-func (s openCodePluginInstallStep) Run() error {
-	_, err := opencodeplugin.Install(s.homeDir, s.plugin)
-	return err
-}
-
 func (s agentInstallStep) ID() string {
 	return s.id
 }
@@ -3308,13 +3299,6 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
-	}
-	pluginPaths, err := opencodeplugin.InstallPaths(homeDir, selection.OpenCodePlugins)
-	if err != nil {
-		return nil, err
-	}
-	for _, path := range pluginPaths {
-		paths[path] = struct{}{}
 	}
 	if containsAgent(resolved.Agents, model.AgentOpenCode) {
 		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {

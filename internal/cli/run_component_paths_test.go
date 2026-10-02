@@ -251,12 +251,64 @@ func TestNativeReviewLedgerInstallBackupAndManualActions(t *testing.T) {
 	if err := step.Run(); err != nil {
 		t.Fatal(err)
 	}
-	if len(state.nativeReviewActions) != 1 || !strings.Contains(state.nativeReviewActions[0], path) || !strings.Contains(state.nativeReviewActions[0], "preserved") {
+	if len(state.nativeReviewActions) != 1 || state.nativeReviewActions[0] != nativeReviewPreservedAction(path) {
 		t.Fatalf("preserved-file actions = %v", state.nativeReviewActions)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "my review agent" {
 		t.Fatalf("user bytes = %q, error = %v", data, err)
+	}
+}
+
+func TestNativeReviewPreservedAction(t *testing.T) {
+	// Recovery examples must use supported parser syntax, with scope explicit.
+	for _, runtime := range []string{"claude-code", "kiro-ide", "kimi"} {
+		for _, scope := range []string{"global", "workspace"} {
+			t.Run(runtime+"/"+scope, func(t *testing.T) {
+				flags, err := ParseSyncFlags([]string{"--agent", runtime, "--scope", scope})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ids, err := asAgentIDs(flags.Agents)
+				if err != nil || len(ids) != 1 || string(ids[0]) != runtime {
+					t.Fatalf("recovery runtime = %v, %v", ids, err)
+				}
+				resolved, err := ResolveInstallScope(flags.Scope)
+				if err != nil || string(resolved) != scope {
+					t.Fatalf("recovery scope = %v, %v", resolved, err)
+				}
+			})
+		}
+	}
+	for _, path := range []string{
+		"/fixture/.kiro/agents/jd-judge-a.md",
+		"/fixture with spaces/.claude/agents/jd-judge-a.md",
+		`C:\fixture with spaces\agents\jd-judge-a.md`,
+	} {
+		t.Run(path, func(t *testing.T) {
+			got := nativeReviewPreservedAction(path)
+			for _, want := range []string{
+				"Native review agent " + path + " was preserved, not updated",
+				"ownership cannot be verified",
+				"missing ledger entry or differing recorded hash",
+				"does not mean you customized the file",
+				"Keeping it unchanged is valid",
+				"back up this file and verify the backup",
+				"remove only this warned file",
+				"rerun your existing gentle-ai install or gentle-ai sync command",
+				"same runtime, scope, and model choices",
+				"Gentle AI will not adopt or delete it automatically",
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("action missing %q: %s", want, got)
+				}
+			}
+			for _, unwanted := range []string{"unknown or modified", "merge changes into your copy"} {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("action contains misleading advice %q: %s", unwanted, got)
+				}
+			}
+		})
 	}
 }
 

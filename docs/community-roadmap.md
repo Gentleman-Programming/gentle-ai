@@ -1,7 +1,7 @@
 # Community Roadmap
 
 > [!NOTE]
-> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
 
 Where to find work that is ready to be picked up, and what "ready" means here.
 
