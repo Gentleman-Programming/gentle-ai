@@ -96,7 +96,11 @@ func TestInstalledNativeAgentParity(t *testing.T) {
 			if len(entries) != len(expected)+1 {
 				t.Fatalf("installed %d entries, want %d agents plus ledger", len(entries), len(expected)+1)
 			}
+			ledger := readOwnershipLedger(t, filepath.Join(adapter.SubAgentsDir(home), reviewassets.OwnershipLedgerFilename))
 			for name, want := range expected {
+				if ledger.Files[name] != want {
+					t.Errorf("%s ownership hash: got %s want %s", name, ledger.Files[name], want)
+				}
 				if strings.HasPrefix(name, "sdd-") {
 					t.Fatal("SDD asset in retained fixture")
 				}
