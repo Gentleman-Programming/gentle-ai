@@ -433,7 +433,9 @@ func TestInjectAntigravityRejectsUnclassifiablePluginAssetBeforeWrites(t *testin
 			if err == nil {
 				t.Fatalf("Inject(antigravity) succeeded; want a plugin asset classification error")
 			}
-			if !strings.Contains(err.Error(), hooksPath) || !strings.Contains(err.Error(), "plugin asset") {
+			// The error quotes the path with %q, which escapes Windows backslashes,
+			// so match the quoted form rather than the raw path.
+			if !strings.Contains(err.Error(), fmt.Sprintf("%q", hooksPath)) || !strings.Contains(err.Error(), "plugin asset") {
 				t.Fatalf("error = %v, want it to name the unclassifiable plugin asset %q", err, hooksPath)
 			}
 			// The rejection happens before any plugin write: every preexisting

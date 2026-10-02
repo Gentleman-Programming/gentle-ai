@@ -3454,7 +3454,7 @@ func TestNativeReviewSyncPreservesUnknownAndSnapshotsLedger(t *testing.T) {
 	if !containsPath(changed, ledger) || containsPath(changed, path) {
 		t.Fatalf("changed paths = %v", changed)
 	}
-	if len(state.nativeReviewActions) != 1 || !strings.Contains(RenderSyncReport(SyncResult{NoOp: true, Agents: selection.Agents, ManualActions: state.nativeReviewActions}), path) {
+	if len(state.nativeReviewActions) != 1 || !strings.Contains(RenderSyncReport(SyncResult{NoOp: true, Agents: selection.Agents, ManualActions: state.nativeReviewActions}), nativeReviewPreservedAction(path)) {
 		t.Fatalf("actions = %v", state.nativeReviewActions)
 	}
 	if err := restoreSyncFiles(before); err != nil {
@@ -3466,6 +3466,47 @@ func TestNativeReviewSyncPreservesUnknownAndSnapshotsLedger(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "custom bytes" {
 		t.Fatalf("user file after rollback = %q, %v", data, err)
+	}
+
+	// Opt in for only the warned fixture file by moving it outside the agent
+	// directory. Verify the saved bytes before exercising the documented command.
+	saved := filepath.Join(t.TempDir(), "saved-agent.md")
+	if err := os.Rename(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	if savedBytes, err := os.ReadFile(saved); err != nil || !bytes.Equal(savedBytes, data) {
+		t.Fatalf("saved backup = %q, %v", savedBytes, err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	originalHome, originalBackupHome := osUserHomeDir, backup.UserHomeDirFn
+	originalCommand, originalLookPath := runCommand, cmdLookPath
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() {
+		osUserHomeDir, backup.UserHomeDirFn = originalHome, originalBackupHome
+		runCommand, cmdLookPath = originalCommand, originalLookPath
+	})
+	for i := 0; i < 2; i++ {
+		result, err := RunSync([]string{"--agent", "kiro-ide", "--scope", "global"})
+		if err != nil {
+			t.Fatalf("recovery sync %d: %v", i, err)
+		}
+		if strings.Contains(RenderSyncReport(result), nativeReviewPreservedAction(path)) {
+			t.Fatalf("recovery sync %d still preserves warned file: %v", i, result.ManualActions)
+		}
+		generated, err := os.ReadFile(path)
+		if err != nil || len(generated) == 0 || bytes.Equal(generated, data) {
+			t.Fatalf("recovered agent = %q, %v", generated, err)
+		}
+		if _, err := os.Stat(ledger); err != nil {
+			t.Fatalf("recovered ledger: %v", err)
+		}
+	}
+	if savedBytes, err := os.ReadFile(saved); err != nil || !bytes.Equal(savedBytes, data) {
+		t.Fatalf("recovery changed backup = %q, %v", savedBytes, err)
 	}
 }
 
