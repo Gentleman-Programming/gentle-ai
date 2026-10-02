@@ -43,5 +43,20 @@ Strategy: ask-on-risk. Forecast: 100–180 authored changed lines, one coherent 
 - Native reliability review `review-e10d772b3201a069` approved; exact acknowledgement burned authority for frozen target `sha256:d55cf72a78205e6753117cebded08731f141553bdaede044c03a98f959d495e0`. This task progress update is passive bookkeeping after that reviewed snapshot.
 - Initial ASSESS was unassessable due undeclared untracked task file; exact inspect selection resolved scope, with independent verification retained.
 
+## Authorized PR delivery
+The user explicitly authorized GitHub delivery through the current gh session, adding `status:approved` to #4994, creating a `type:bug` PR, and merging after checks. The user selected `Closes #4994`; this closes the recovery issue while intentionally retaining the no-adoption policy.
+
+- [ ] T2: Revalidate the isolated PR candidate on main (in progress).
+  - Route: parent Git isolation plus independent verifier; no new behavior edits.
+  - Main base: `9dfe17d837dcd5c164c904164ae3888ff4f3ff54`; PR branch: `fix/4994-native-agent-recovery-main`.
+  - Source unit cherry-picked as `da452f6c`; initial tracking commit `71740216`. Original branch and OpenCode PR #5200 left untouched.
+  - Checks: focused CLI/ownership regressions, full Go suite, canonical gofmtcheck, diff check, exact isolated native review.
+- [ ] T3: Publish one focused PR and merge only after target-required CI (pending).
+  - Route: parent authorized gh/Git delivery; do not bypass required checks or merge unrelated OpenCode changes.
+  - Verified #4994 approval mutation/readback with target-host ADMIN actor.
+  - Required checks from active target rules: issue approval/reference, exactly one PR type label, Unit Tests, E2E Tests (ubuntu/arch/fedora).
+  - PR source slice: 168 authored changed lines before this delivery bookkeeping update; below 400, no exception or chain needed.
+  - Remote CI verifies E2E; local Docker E2E not yet executed.
+
 ## Next step
-Implementation complete locally. User decides whether to push/create a PR. No real installed agents were touched; automatic adoption remains forbidden.
+Verify isolated branch, review and publish the focused PR, then await required CI before merge. Record final delivery in Engram without modifying approved source solely to record external CI. No real installed agents were touched; automatic adoption remains forbidden.
