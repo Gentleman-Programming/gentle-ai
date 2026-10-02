@@ -15,16 +15,23 @@ import (
 
 // Captured by actual sdd.Inject in the disposable af4ce122 worktree, TestParityCapture.
 // Review agents ship only to receipt-driven development runtimes: Cursor
-// installs none, Kiro keeps Judgment Day, and Kimi keeps its main agent.
+// installs only the security agent, Kiro keeps Judgment Day and security, and Kimi keeps its main agent.
 var installedHashes = map[model.AgentID]map[string]string{
 	model.AgentClaudeCode: {
-		"jd-fix-agent.md": "a62bf9736226b81512cdedecbf5b6888714e6ae9dd6881b220504b859d35a218", "jd-judge-a.md": "76452ecee8bcf44b07a9ddc2d95b1adf0ada0c569f3d984d4858375528b6abf5", "jd-judge-b.md": "314dce8eda219f1336a824d5b8d2671fd982610107f52baaefa4ec6861b7fdf5", "review-readability.md": "3a15838d28ff2f02fca684e7036116917311f8bbe72c9d09b929015363d36737", "review-refuter.md": "fa58bacaa0af136963db25d25abe7fccad91a87f3454024f3d283339308976db", "review-reliability.md": "cd667908097d9d02d9c9ee0211b3040c4b4d507fbf2b21a78dd4bdf3d09e97ef", "review-resilience.md": "a4a186feb1b5e22b9edf09db9967416ddf3b41b613a268b7a9ee86f6cdc35986", "review-risk.md": "5c10ef801d1bddad5ee4f3e310b750b3dd5b98087c0f4ef1893f94c1d40c16b1",
+		"gentle-ai-security.md": "db28eb072419e7d0195ace8d3b4f336834b31ea7315af450107e406fc4ab2489",
+		"jd-fix-agent.md":       "a62bf9736226b81512cdedecbf5b6888714e6ae9dd6881b220504b859d35a218", "jd-judge-a.md": "76452ecee8bcf44b07a9ddc2d95b1adf0ada0c569f3d984d4858375528b6abf5", "jd-judge-b.md": "314dce8eda219f1336a824d5b8d2671fd982610107f52baaefa4ec6861b7fdf5", "review-readability.md": "3a15838d28ff2f02fca684e7036116917311f8bbe72c9d09b929015363d36737", "review-refuter.md": "fa58bacaa0af136963db25d25abe7fccad91a87f3454024f3d283339308976db", "review-reliability.md": "cd667908097d9d02d9c9ee0211b3040c4b4d507fbf2b21a78dd4bdf3d09e97ef", "review-resilience.md": "a4a186feb1b5e22b9edf09db9967416ddf3b41b613a268b7a9ee86f6cdc35986", "review-risk.md": "5c10ef801d1bddad5ee4f3e310b750b3dd5b98087c0f4ef1893f94c1d40c16b1",
+	},
+	model.AgentCursor: {
+		"gentle-ai-security.md": "bf62c48e38646680f5e6e0e763aca9bcdb2d1a3b5976a91f4220023596f4f240",
 	},
 	model.AgentKimi: {
-		"gentleman.yaml": "4fd319f06d3381954556e7828c96bfc0901c428c1f00bacc407d1f63342349b1",
+		"gentle-ai-security.md":   "bf62c48e38646680f5e6e0e763aca9bcdb2d1a3b5976a91f4220023596f4f240",
+		"gentle-ai-security.yaml": "a2d71241f26c8e30dce8bb58260dad9f533c1a177051cbe1d8cfe179c8aee40b",
+		"gentleman.yaml":          "4fd319f06d3381954556e7828c96bfc0901c428c1f00bacc407d1f63342349b1",
 	},
 	model.AgentKiroIDE: {
-		"jd-fix-agent.md": "f60d26fa25e810c7c6d4526005b886aaca65d82337a51430206b22b605a3a265", "jd-judge-a.md": "ff22d142450a24db2beaf4f0e75f18ea5ec676721489523b99fe4c714aa9c4d0", "jd-judge-b.md": "7dc4cba47c0bad685485c4fdb2b67816edda30b7c8b3f6db426614b7b4357dc1",
+		"gentle-ai-security.md": "182948e57658a3ede17b2fb9c732fde2b0f2b75dad8396511a6dea3fed9b27cd",
+		"jd-fix-agent.md":       "f60d26fa25e810c7c6d4526005b886aaca65d82337a51430206b22b605a3a265", "jd-judge-a.md": "ff22d142450a24db2beaf4f0e75f18ea5ec676721489523b99fe4c714aa9c4d0", "jd-judge-b.md": "7dc4cba47c0bad685485c4fdb2b67816edda30b7c8b3f6db426614b7b4357dc1",
 	},
 }
 
@@ -89,7 +96,11 @@ func TestInstalledNativeAgentParity(t *testing.T) {
 			if len(entries) != len(expected)+1 {
 				t.Fatalf("installed %d entries, want %d agents plus ledger", len(entries), len(expected)+1)
 			}
+			ledger := readOwnershipLedger(t, filepath.Join(adapter.SubAgentsDir(home), reviewassets.OwnershipLedgerFilename))
 			for name, want := range expected {
+				if ledger.Files[name] != want {
+					t.Errorf("%s ownership hash: got %s want %s", name, ledger.Files[name], want)
+				}
 				if strings.HasPrefix(name, "sdd-") {
 					t.Fatal("SDD asset in retained fixture")
 				}
@@ -112,7 +123,7 @@ func TestInstalledNativeAgentParity(t *testing.T) {
 		})
 		count += len(expected)
 	}
-	if count != 12 {
-		t.Fatalf("fixture has %d paths, want 12", count)
+	if count != 17 {
+		t.Fatalf("fixture has %d paths, want 17", count)
 	}
 }
