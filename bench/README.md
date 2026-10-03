@@ -245,6 +245,74 @@ in `excluded_journeys`, never silently dropped, and the per-journey breakdown
 still shows every journey with `unsup -> n` where the older binary could not
 run it.
 
+## The results file: schema v2, identity envelope, evidence digest
+
+Every results file `run` and `analyze` writes carries
+`"schema": "gentle-ai-bench.results/v2"`. The read path (`compare`) **fails
+closed** on any other schema, naming the file and the schema it found: a v1
+file predates provenance, so its population and classifier rules cannot be
+vouched for, and silently accepting it would let a comparison read a provenance
+boundary as a measurement. Regenerate v1 files with this version of the tool.
+
+### The identity envelope
+
+The `identity` object answers who measured, what, against which target, on
+which runtime, and how — so two files can be checked for comparability before
+their numbers are compared:
+
+| Section | Fields | Meaning |
+|---|---|---|
+| `benchmark` | `source_revision`, `binary_sha256`, `go_version`, `classifier_version` | The harness that produced the file. `source_revision` is the bench repository's HEAD, empty for a local non-git run; `binary_sha256` is the digest of the bench executable itself, empty for a throwaway `go run` / `go test` temp build. |
+| `corpus` | `manifest_sha256`, `journey_ids` | `manifest_sha256` digests the **full registered corpus** (sorted newline-joined journey IDs), independent of `--only`; `journey_ids` is the sorted selection this run actually resolved, and reads `[]` — never absent — when a selector matched nothing. |
+| `target` | `version`, `binary_sha256`, `vcs_revision`, `vcs_modified` | The binary under test, pinned by content digest, its own `--version` output, and its VCS stamp when it was built inside a git repository. Observed mode leaves the section empty: it measures a session, not a build. |
+| `runtime` | `goos`, `goarch`, `git_version` | The platform and the git the run inherited. |
+| `invocation` | `mode`, `manifest_name`, `only` | What the operator asked for. `manifest_name` is the `release-corpus` sentinel for now; a named release manifest lands in a later slice. |
+
+### Path-free projection
+
+A results file must not leak the machine it was produced on. Every recorded
+string that can carry a path — the target binary, command argv, block
+messages, failure reasons, unsupported steps, notes — is projected onto a
+closed token vocabulary at record time:
+
+| Token | Stands for |
+|---|---|
+| `<RUN_ROOT>` | the journey's temp sandbox root |
+| `<REPOSITORY>` | the sandbox's throwaway git checkout |
+| `<HOME>` | the sandbox's throwaway HOME |
+| `<TARGET_BINARY>` | the resolved path of the binary under test |
+
+Replacement is longest-specific-first: the repository and home are replaced
+before the run root that contains them, so a reader can still follow the flow
+without learning where the sandbox lived. Validation is fail-closed: a file
+whose recorded strings still contain a sandbox path, the target path, or the
+user home prefix is refused, never written. Observed mode can only project the
+user home — a recorded session has no sandbox — and says so by leaving the
+target section empty.
+
+### The evidence digest
+
+Every written file ends with `evidence_digest`, computed as
+`sha256:<hex>` over the **exact canonical bytes of the file with the
+`evidence_digest` field itself cleared**. The field is printed last so it
+lives outside the digested content. Two runs of the same corpus against the
+same target — even in different temp sandboxes — produce byte-identical files
+and therefore equal digests; that equality is the receipt that two
+measurements are comparable, and any differing byte between two files must be
+explainable by the target, the corpus, or the invocation, never by where the
+run happened to live.
+
+### Classifier version
+
+`benchmark.classifier_version` records which classifier rule set measured the
+file (`classify-v1` today). **Any change to the classifier's behaviour —
+patterns, declaration checks, rule order, verdicts — must bump
+`ClassifierVersion` in `classify.go` in the same commit.** A results file is
+only comparable against another one measured under the same rules; without the
+bump, two files classified under different rules would carry identical
+provenance and a comparison would read a classifier change as a change in the
+binary under test.
+
 ## What this deliberately does NOT measure
 
 - **Wall-clock time.** Excluded by design. Review duration is dominated by the

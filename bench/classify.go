@@ -53,6 +53,17 @@ const (
 	NotABlock          = ""
 )
 
+// ClassifierVersion identifies the classifier rule set a run was measured
+// with, recorded in every results file's identity envelope
+// (benchmark.classifier_version). A results file is only comparable against
+// another one measured under the same rules: any change to Classify's
+// behaviour — patterns, declaration checks, rule order, verdicts — MUST bump
+// this constant in the same commit, or two files classified under different
+// rules would carry identical provenance and a comparison would read a
+// classifier change as a change in the binary under test. The README states
+// this rule next to the schema documentation.
+const ClassifierVersion = "classify-v1"
+
 // The three shapes a by-design refusal can take. This vocabulary is CLOSED:
 // anything outside it is a corpus error that fails the run, never a shape the
 // benchmark quietly accepts as free text. Each one answers the same question —
