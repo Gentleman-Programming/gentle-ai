@@ -1810,6 +1810,11 @@ func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 		"mem_judge",
 		"optional mem_review",
 		"if mem_review is unavailable",
+		"PreToolUse",
+		"call_mcp_tool|mcp_engram_.*|mem_save|mem_session_summary|mem_capture_passive",
+		"gentle-ai engram hook-antigravity --event PreToolUse",
+		"Stop",
+		"gentle-ai engram hook-antigravity --event Stop",
 	} {
 		if !strings.Contains(hooksText, want) {
 			t.Fatalf("Antigravity Engram hook missing %q; got:\n%s", want, hooksText)
