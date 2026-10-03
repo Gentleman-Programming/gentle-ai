@@ -569,7 +569,23 @@ func escalatedRecoveryProjectionFixture(t *testing.T, lineage string) (string, r
 	if err := state.CompleteReview(compactReviewInputFromView(view)); err != nil {
 		t.Fatal(err)
 	}
+	// #1380: an unresolved completion pauses at decision_required; the fixture
+	// resolves the pause through the production decide stop so the predecessor
+	// is the persisted escalated authority the recovery rules require.
+	if state.State != reviewtransaction.StateDecisionRequired {
+		t.Fatalf("fixture state = %q, want decision_required before the human decision", state.State)
+	}
 	if _, err := store.Replace(record.Revision, "review/complete-review", state); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reviewtransaction.DecideCompactStore(context.Background(), repo, reviewtransaction.CompactDecisionRequest{
+		LineageID: lineage, ExpectedRevision: paused.Revision,
+		Decision: reviewtransaction.CompactDecisionStop, Actor: "maintainer", Reason: "stop the review here",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	predecessor, _ := store.Load()

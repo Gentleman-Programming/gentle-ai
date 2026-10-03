@@ -113,6 +113,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// pending a human's review), not an unreachable/unmodeled state.
 		ToolFault: reviewStopToolFault(false),
 	},
+	"review_decision_required": {
+		Terminal:      false,
+		Justification: "caller-continuable: the paused decision_required authority resolves through `gentle-ai review decide --decision continue|stop`, a concrete flag-driven command a caller with --cwd access runs; the docs row names that command and does not open with \"Terminal\" (#1380)",
+	},
 	"recovery_scope_unchanged": {
 		Terminal:      false,
 		Justification: "caller-continuable: change the candidate so its target identity differs from the current authority's, then retry the same selector-scoped review.recover — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",

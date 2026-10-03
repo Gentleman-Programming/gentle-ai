@@ -99,6 +99,7 @@ type TargetStatusResult struct {
 	Projection                         TargetProjectionStatus     `json:"projection"`
 	CandidateLineageIDs                []string                   `json:"candidate_lineage_ids"`
 	Escalation                         *CompactEscalationEvidence `json:"escalation,omitempty"`
+	DecisionQuestion                   *CompactDecisionQuestion   `json:"decision_question,omitempty"`
 	Decision                           TargetStatusDecision       `json:"-"`
 	authorityTargetKind                TargetKind
 	authorityProjection                Projection
@@ -750,6 +751,9 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		if state.State == StateEscalated {
 			result.Escalation = state.EscalationEvidence()
 		}
+		if state.State == StateDecisionRequired {
+			result.DecisionQuestion = state.DecisionQuestion(record.Revision)
+		}
 		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots && candidate.frozenReviewingDrifted {
 			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 			return result
@@ -885,6 +889,10 @@ func targetStatusAction(state State) (TargetStatusAction, Replayability, Recover
 		return TargetStatusActionRecover, ReplayabilityManualActionRequired, RecoveryInvalidated
 	case StateEscalated:
 		return TargetStatusActionMaintainer, ReplayabilityManualActionRequired, ""
+	case StateDecisionRequired:
+		// #1380: mapped explicitly — the pause is active-family, and its exit
+		// is the human decide invocation, never an automated transition.
+		return TargetStatusActionStop, ReplayabilityManualActionRequired, ""
 	default:
 		return TargetStatusActionStop, ReplayabilityManualActionRequired, ""
 	}

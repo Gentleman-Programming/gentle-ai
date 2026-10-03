@@ -178,6 +178,18 @@ type CompactState struct {
 	// that helper existed can still carry stale entries; parseCompactRecord
 	// drops them on load (with a diagnostic note) instead of refusing.
 	UnachievableLensAttempts []CompactUnachievableLensAttempt `json:"unachievable_lens_attempts,omitempty"`
+	// Decision is the frozen pause question written by the
+	// review/complete-review transition that entered decision_required. It is
+	// retained through a decide-stop so the escalated record keeps its
+	// provenance, and cleared by a decide-continue whose question is answered.
+	Decision *CompactDecisionEvidence `json:"decision,omitempty"`
+	// DecisionEpoch counts the journaled decisions of this lineage. It has its
+	// own Validate invariant and never advances the capture phase bindings:
+	// a decision must not rewrite the Pn/Cn phase identity other captures bind.
+	DecisionEpoch int `json:"decision_epoch,omitempty"`
+	// DecisionHistory is the append-only decision journal: the engine-authored
+	// pause entry first, then one human entry per review decide.
+	DecisionHistory []CompactDecisionEntry `json:"decision_history,omitempty"`
 	// ApprovedAckToken is the one bounded opaque 256-bit acknowledgement token.
 	// It is present only on an active approved authority and is cleared by burn.
 	ApprovedAckToken string `json:"approved_ack_token,omitempty"`
@@ -909,6 +921,15 @@ func validateCompactPostLifecycleState(state CompactState) error {
 	if state.State == StateApproved && state.ApprovedAckToken != "" && !validCompactAcknowledgementToken(state.ApprovedAckToken) {
 		return errors.New("approved compact acknowledgement token is malformed") // refusal:by-design world-action: only the exact opaque token returned by the provider can acknowledge this authority
 	}
+	if state.Decision != nil && state.State != StateDecisionRequired && state.State != StateEscalated {
+		return errors.New("compact decision block requires decision_required or escalated provenance") // refusal:by-design world-action: an answered question on a live review authority requires code or storage repair
+	}
+	if state.State == StateDecisionRequired && (state.Decision == nil || state.DecisionEpoch < 1 || len(state.DecisionHistory) == 0) {
+		return errors.New("decision-required compact state must carry its decision block, epoch, and journal") // refusal:by-design world-action: a pause without its frozen question cannot be decided truthfully
+	}
+	if err := validateCompactDecisionHistory(state.DecisionEpoch, state.DecisionHistory); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1502,6 +1523,14 @@ func validateCompactReviewLifecycle(state CompactState, view CompactReviewView) 
 		if err := completeReview(); err != nil {
 			return err
 		}
+	case StateDecisionRequired:
+		if err := completeReview(); err != nil {
+			return err
+		}
+		if state.Decision == nil {
+			// refusal:by-design world-action: a pause always writes its frozen question; its absence requires authority inspection, not an operator command
+			return errors.New("decision-required compact state is incomplete")
+		}
 	default:
 		return fmt.Errorf("invalid compact review state %q", state.State)
 	}
@@ -1784,7 +1813,16 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	}
 	state.FixFindingIDs = append([]string{}, view.FixFindingIDs...)
 	if compactReviewViewHasUnresolvedFindings(view) {
-		setCompactStateExit(state, StateEscalated)
+		// #1380: unresolved evidence pauses for a human decision instead of
+		// escalating on the engine's own authority. The question is frozen at
+		// this transition, and the pause entry is journaled by the engine with
+		// the authoring operation as its actor.
+		setCompactStateExit(state, StateDecisionRequired)
+		state.Decision = deriveCompactDecisionEvidence(view)
+		state.DecisionEpoch++
+		state.DecisionHistory = append(state.DecisionHistory, CompactDecisionEntry{
+			Decision: CompactDecisionPause, Actor: CompactDecisionSystemActor, Reason: CompactDecisionReasonEvidenceInconclusive,
+		})
 	} else if len(state.FixFindingIDs) > 0 {
 		setCompactStateExit(state, StateCorrectionRequired)
 		if err := state.advanceCapturePhase(); err != nil {
