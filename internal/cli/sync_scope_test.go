@@ -378,11 +378,13 @@ func TestRunSyncWorkspaceScopeUpdatesOpenCodeManagedComponentsWithoutGlobalMutat
 		t.Errorf("workspace sync did not materialize workspace OpenCode settings: %v", err)
 	}
 	var settingsVerified, skillsVerified bool
+	// Check IDs embed native paths, so match the skills segment with the OS separator.
+	skillsSegment := filepath.FromSlash("/skills/")
 	for _, check := range result.Verify.Checks {
 		if check.ID == "verify:sync:file:"+workspaceSettings {
 			settingsVerified = true
 		}
-		if strings.Contains(check.ID, "/skills/") && strings.Contains(check.ID, workspace) && check.Status == verify.CheckStatusPassed {
+		if strings.Contains(check.ID, skillsSegment) && strings.Contains(check.ID, workspace) && check.Status == verify.CheckStatusPassed {
 			skillsVerified = true
 		}
 	}

@@ -799,11 +799,12 @@ func retainedPiResources(homeDir, workspaceDir string) []string {
 	return retained
 }
 
-// optionalPiPackageCleanupCommands mirrors the Pi adapter's canonical package
-// sources. Each command remains separate because Pi 0.85.1 supports
-// `pi remove <source>`, not a bulk remove form.
+// optionalPiPackageCleanupCommands mirrors the Pi adapter's uninstall package
+// sources: the managed packages plus the retired pi-mcp-adapter that older
+// releases installed. Each command remains separate because Pi 0.85.1
+// supports `pi remove <source>`, not a bulk remove form.
 func optionalPiPackageCleanupCommands() []string {
-	sources := pi.ManagedPackageSources()
+	sources := pi.UninstallPackageSources()
 	commands := make([]string, 0, len(sources))
 	for _, source := range sources {
 		commands = append(commands, "pi remove "+source)

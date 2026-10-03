@@ -65,8 +65,8 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 | Action | Inline | Delegate |
 |--------|--------|----------|
-| Read to decide/verify (1-3 files) | Yes | No |
-| Read to explore/understand (4+ files) | No | Yes |
+| Decide/verify within the inline evidence budget | Yes, one bounded batch | No |
+| Larger evidence, sequential exploration, or long-session mapping | No | Yes, one read-only explorer |
 | Read as preparation for writing | No | Yes, together with the write |
 | Write atomic (one file, mechanical, already understood) | Yes | No |
 | Write with analysis (multiple files, new logic) | No | Yes |
@@ -75,7 +75,7 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 Anti-patterns that always inflate context without need:
 
-- Reading 4+ files to understand the codebase inline -> delegate a narrow exploration.
+- Gathering evidence beyond the inline batch budget -> delegate one read-only explorer.
 - Writing a feature across multiple files inline -> delegate a writer.
 - Running tests/builds/installers inline -> delegate verification when tooling permits.
 - Reading files as preparation for edits, then editing -> delegate the whole thing together.
@@ -84,8 +84,10 @@ Anti-patterns that always inflate context without need:
 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-1. **Bounded read rule**: read 1–3 files inline to decide or verify.
-2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
+1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
+2. **Mapping rule**: larger evidence, more than approximately 5 sequential lookups, or long-session mapping require one read-only explorer. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries. Delegate full suites and builds; return concise observed results, including failures.
+   - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
 3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
 4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route.

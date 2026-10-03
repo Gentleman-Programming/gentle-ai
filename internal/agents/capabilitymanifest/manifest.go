@@ -80,19 +80,32 @@ type ImplementationRoutingFacts struct {
 }
 
 type DirectInlineFacts struct {
-	MinUnderstandingFiles                    uint8 `json:"minUnderstandingFiles"`
-	MaxUnderstandingFiles                    uint8 `json:"maxUnderstandingFiles"`
-	MaxMechanicalWriteFiles                  uint8 `json:"maxMechanicalWriteFiles"`
-	MechanicalWriteMustBeAlreadyUnderstood   bool  `json:"mechanicalWriteMustBeAlreadyUnderstood"`
-	MechanicalWriteMustNotRequireResearch    bool  `json:"mechanicalWriteMustNotRequireResearch"`
-	MechanicalWriteMustNotHaveOpenDesignWork bool  `json:"mechanicalWriteMustNotHaveOpenDesignWork"`
+	// Deprecated: file counts no longer route exploration. Canonical values are
+	// zero and omitted from JSON; nonzero legacy facts fail validation.
+	MinUnderstandingFiles                    uint8  `json:"minUnderstandingFiles,omitempty"`
+	MaxUnderstandingFiles                    uint8  `json:"maxUnderstandingFiles,omitempty"`
+	MaxEvidenceBatches                       uint8  `json:"maxEvidenceBatches"`
+	MaxEvidenceCalls                         uint8  `json:"maxEvidenceCalls"`
+	ApproxEvidenceTokens                     uint32 `json:"approxEvidenceTokens"`
+	EvidenceMustUseBoundedRanges             bool   `json:"evidenceMustUseBoundedRanges"`
+	MaxMechanicalWriteFiles                  uint8  `json:"maxMechanicalWriteFiles"`
+	MechanicalWriteMustBeAlreadyUnderstood   bool   `json:"mechanicalWriteMustBeAlreadyUnderstood"`
+	MechanicalWriteMustNotRequireResearch    bool   `json:"mechanicalWriteMustNotRequireResearch"`
+	MechanicalWriteMustNotHaveOpenDesignWork bool   `json:"mechanicalWriteMustNotHaveOpenDesignWork"`
 }
 
 type DelegatedDirectFacts struct {
-	MappingMinUnderstandingFiles  uint8 `json:"mappingMinUnderstandingFiles"`
-	WriterMinNonTrivialFiles      uint8 `json:"writerMinNonTrivialFiles"`
-	DelegateWhenReadPreparesWrite bool  `json:"delegateWhenReadPreparesWrite"`
-	DelegateWhenBroadResearch     bool  `json:"delegateWhenBroadResearch"`
+	// Deprecated: retained for source compatibility only; canonical zero.
+	MappingMinUnderstandingFiles   uint8  `json:"mappingMinUnderstandingFiles,omitempty"`
+	ApproxSequentialLookupLimit    uint8  `json:"approxSequentialLookupLimit"`
+	DelegateWhenLongSessionMapping bool   `json:"delegateWhenLongSessionMapping"`
+	ApproxHandoffTokens            uint32 `json:"approxHandoffTokens"`
+	MaxParentSpotChecks            uint8  `json:"maxParentSpotChecks"`
+	ApproxParentContextTokens      uint32 `json:"approxParentContextTokens"`
+	ContextBackstopIsAdvisory      bool   `json:"contextBackstopIsAdvisory"`
+	WriterMinNonTrivialFiles       uint8  `json:"writerMinNonTrivialFiles"`
+	DelegateWhenReadPreparesWrite  bool   `json:"delegateWhenReadPreparesWrite"`
+	DelegateWhenBroadResearch      bool   `json:"delegateWhenBroadResearch"`
 }
 
 type SDDProposalFacts struct {
@@ -201,18 +214,25 @@ func MustForAgent(agent model.AgentID) AgentCapabilityManifest {
 func CanonicalImplementationRouting() ImplementationRoutingFacts {
 	return ImplementationRoutingFacts{
 		DirectInline: DirectInlineFacts{
-			MinUnderstandingFiles:                    1,
-			MaxUnderstandingFiles:                    3,
+			MaxEvidenceBatches:                       1,
+			MaxEvidenceCalls:                         3,
+			ApproxEvidenceTokens:                     10000,
+			EvidenceMustUseBoundedRanges:             true,
 			MaxMechanicalWriteFiles:                  1,
 			MechanicalWriteMustBeAlreadyUnderstood:   true,
 			MechanicalWriteMustNotRequireResearch:    true,
 			MechanicalWriteMustNotHaveOpenDesignWork: true,
 		},
 		DelegatedDirect: DelegatedDirectFacts{
-			MappingMinUnderstandingFiles:  4,
-			WriterMinNonTrivialFiles:      2,
-			DelegateWhenReadPreparesWrite: true,
-			DelegateWhenBroadResearch:     true,
+			ApproxSequentialLookupLimit:    5,
+			DelegateWhenLongSessionMapping: true,
+			ApproxHandoffTokens:            2000,
+			MaxParentSpotChecks:            1,
+			ApproxParentContextTokens:      150000,
+			ContextBackstopIsAdvisory:      true,
+			WriterMinNonTrivialFiles:       2,
+			DelegateWhenReadPreparesWrite:  true,
+			DelegateWhenBroadResearch:      true,
 		},
 		SDD: SDDProposalFacts{
 			ProposeWhenSubstantialOrAmbiguous:     true,

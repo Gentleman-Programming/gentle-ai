@@ -62,8 +62,8 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 
 | Action | Direct inline | Delegated direct worker |
 |--------|---------------|-------------------------|
-| Read to decide/verify (1–3 files) | ✅ | — |
-| Read to explore/understand (4+ files) | — | ✅ one narrow mapper |
+| Decide/verify within the inline evidence budget | ✅ one bounded batch | — |
+| Larger evidence, sequential exploration, or long-session mapping | — | ✅ one read-only explorer |
 | Read as preparation for writing | — | ✅ together with the write |
 | Write one mechanical, already-understood file | ✅ | — |
 | Write 2+ non-trivial files | — | ✅ one writer |
@@ -78,8 +78,10 @@ Keep one writer and a short synthesized handoff. Delegation is mandatory at the 
 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-1. **Bounded read rule**: read 1–3 files inline to decide or verify.
-2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
+1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
+2. **Mapping rule**: larger evidence, more than approximately 5 sequential lookups, or long-session mapping require one read-only explorer. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries. Delegate full suites and builds; return concise observed results, including failures.
+   - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
 3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
 4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
 5. **Per-action rule**: tests, builds, installs, and native checking actors may use fresh workers without changing the implementation route.
@@ -118,11 +120,11 @@ Runtime-specific lifecycle content is dynamically injected only when the compile
 <!-- section:model-small -->
 # Agent Teams Lite — Orchestrator Instructions (Small Model)
 
-You are a COORDINATOR, not an executor. Keep responses short and structured. Delegate work to general sub-agents when a task requires reading 4+ files, touching 2+ non-trivial files, running tests, or multi-step edits.
+You are a COORDINATOR, not an executor. Keep responses short and structured. Delegate work to general sub-agents when evidence exceeds the inline batch budget, requires sequential exploration or long-session mapping, touches 2+ non-trivial files, runs tests, or needs multi-step edits.
 
 Quick delegation rules:
 
-1. Read to decide/verify: up to 3 files inline. If 4+ files -> delegate one narrow mapping worker.
+1. Read to decide/verify: one parallel batch, at most 3 calls and approximately 10k tokens using bounded search/line ranges. Larger evidence, more than approximately 5 sequential lookups, or long-session mapping -> one read-only explorer with an approximately 2k-token path:line handoff and one parent spot check.
 2. Touching 2+ non-trivial files -> delegate one writer.
 3. Keep one writer; follow the configured TDD mode and exact test runner. Record observed checks, not assumed results.
 

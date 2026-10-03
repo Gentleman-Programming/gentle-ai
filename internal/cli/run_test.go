@@ -715,14 +715,12 @@ func TestV2SDKProvisionRequiresMatchingInvocationConsent(t *testing.T) {
 	if err := os.MkdirAll(config, 0755); err != nil {
 		t.Fatal(err)
 	}
-	bin := t.TempDir()
 	marker := filepath.Join(config, "invoked")
-	command := filepath.Join(bin, "npm")
 	stub := "#!/bin/sh\nprintf '%s' \"$PWD|$*\" > \"$PWD/invoked\"\nmkdir -p node_modules/@opencode/plugin\nprintf '{\"version\":\"2.0.4\"}' > node_modules/@opencode/plugin/package.json\n"
-	if err := os.WriteFile(command, []byte(stub), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// %* is the raw argument tail; delayed expansion prints it and the
+	// separator without cmd.exe re-parsing any metacharacter they contain.
+	windowsStub := "@echo off\nset \"ARGS=%*\"\nset \"SEP=|\"\nsetlocal EnableDelayedExpansion\n>invoked echo !CD!!SEP!!ARGS!\nendlocal\n" + strings.TrimPrefix(fakeNPMWindowsMaterialize, "@echo off\n")
+	installFakeNPM(t, t.TempDir(), stub, windowsStub)
 	proposal, err := OpenCodeSDKInstallProposal(home)
 	if err != nil || proposal == nil || proposal.Manager != "npm" || proposal.Dependency != "@opencode/plugin@2.0.4" || proposal.ConfigDir != config {
 		t.Fatalf("proposal = %+v, %v", proposal, err)
@@ -752,7 +750,13 @@ func TestV2SDKProvisionRequiresMatchingInvocationConsent(t *testing.T) {
 	if pathErr != nil {
 		t.Fatal(pathErr)
 	}
-	if err != nil || string(got) != physicalConfig+"|install --save --no-audit --no-fund --ignore-scripts --workspaces=false --prefix="+physicalConfig+" --registry=https://registry.npmjs.org @opencode/plugin@2.0.4" {
+	// echo terminates the Windows record with CRLF, and %CD% keeps the 8.3
+	// short form of the temporary directory that $PWD resolves on POSIX.
+	cwd, args, _ := strings.Cut(strings.TrimRight(string(got), "\r\n"), "|")
+	if physicalCwd, evalErr := filepath.EvalSymlinks(cwd); evalErr == nil {
+		cwd = physicalCwd
+	}
+	if err != nil || cwd != physicalConfig || args != "install --save --no-audit --no-fund --ignore-scripts --workspaces=false --prefix="+physicalConfig+" --registry=https://registry.npmjs.org @opencode/plugin@2.0.4" {
 		t.Fatalf("manager operation = %q, %v", got, err)
 	}
 }
@@ -807,12 +811,8 @@ func TestV2SDKFreshMissingConfigCreatedOnlyAfterConsent(t *testing.T) {
 		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.18")}, nil
 	}
 	config := opencode.NewAdapter().GlobalConfigDir(home)
-	bin := t.TempDir()
 	stub := "#!/bin/sh\nmkdir -p node_modules/@opencode/plugin\nprintf '{\"version\":\"2.0.4\"}' > node_modules/@opencode/plugin/package.json\n"
-	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(stub), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installFakeNPM(t, t.TempDir(), stub, fakeNPMWindowsMaterialize)
 	proposal, err := OpenCodeSDKInstallProposal(home)
 	if err != nil || proposal == nil {
 		t.Fatalf("proposal = %+v, %v", proposal, err)
@@ -848,12 +848,8 @@ func TestV2SDKProvisionRejectsChangedOwnershipAndUnmaterializedPackage(t *testin
 		t.Fatal(err)
 	}
 	manifest := filepath.Join(config, "package.json")
-	bin := t.TempDir()
 	marker := filepath.Join(config, "invoked")
-	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\ntouch \"$PWD/invoked\"\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installFakeNPM(t, t.TempDir(), "#!/bin/sh\ntouch \"$PWD/invoked\"\n", fakeNPMWindowsTouchInvoked)
 	proposal, err := OpenCodeSDKInstallProposal(home)
 	if err != nil || proposal == nil {
 		t.Fatalf("proposal = %+v, %v", proposal, err)
@@ -967,11 +963,7 @@ func TestV2SDKProvisionTimesOutWithoutReflectingManagerOutput(t *testing.T) {
 	if err := os.MkdirAll(config, 0755); err != nil {
 		t.Fatal(err)
 	}
-	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG'; sleep 3\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installFakeNPM(t, t.TempDir(), "#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG'; sleep 3\n", fakeNPMWindowsSecretThenHang)
 	oldTimeout := openCodeSDKInstallTimeout
 	openCodeSDKInstallTimeout = 30 * time.Millisecond
 	t.Cleanup(func() { openCodeSDKInstallTimeout = oldTimeout })
@@ -999,11 +991,9 @@ func TestV2SDKProvisionBoundsFailedManagerOutput(t *testing.T) {
 	if err := os.MkdirAll(config, 0755); err != nil {
 		t.Fatal(err)
 	}
-	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG' >&2\nhead -c 1048576 /dev/zero\nexit 17\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// 1024 lines of 1023 characters plus CRLF stand in for the 1 MiB flood.
+	windowsStub := "@echo off\necho SECRET_TOKEN_DO_NOT_LOG 1>&2\nfor /L %%i in (1,1,1024) do echo " + strings.Repeat("0", 1023) + "\nexit 17\n"
+	installFakeNPM(t, t.TempDir(), "#!/bin/sh\nprintf 'SECRET_TOKEN_DO_NOT_LOG' >&2\nhead -c 1048576 /dev/zero\nexit 17\n", windowsStub)
 	proposal, err := OpenCodeSDKInstallProposal(home)
 	if err != nil || proposal == nil {
 		t.Fatalf("proposal = %+v, %v", proposal, err)
@@ -1030,11 +1020,7 @@ func TestV2SDKProvisionRejectsChangedExecutableAndPhysicalConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			bin := t.TempDir()
-			binary := filepath.Join(bin, "npm")
-			if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n"), 0755); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			binary := installFakeNPM(t, bin, "#!/bin/sh\ntouch \"$PWD/ran\"\n", fakeNPMWindowsTouchRan)
 			proposal, err := OpenCodeSDKInstallProposal(home)
 			if err != nil || proposal == nil {
 				t.Fatalf("proposal = %+v, %v", proposal, err)
@@ -1046,13 +1032,9 @@ func TestV2SDKProvisionRejectsChangedExecutableAndPhysicalConfig(t *testing.T) {
 				if err := os.Rename(binary, filepath.Join(t.TempDir(), "npm-approved")); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n"), 0755); err != nil {
-					t.Fatal(err)
-				}
+				writeFakeNPM(t, bin, "#!/bin/sh\ntouch \"$PWD/ran\"\n", fakeNPMWindowsTouchRan)
 			case "executable in place":
-				if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch \"$PWD/ran\"\n# changed\n"), 0755); err != nil {
-					t.Fatal(err)
-				}
+				writeFakeNPM(t, bin, "#!/bin/sh\ntouch \"$PWD/ran\"\n# changed\n", fakeNPMWindowsTouchRan+"rem changed\n")
 			case "config":
 				if err := os.Rename(config, config+"-old"); err != nil {
 					t.Fatal(err)
@@ -1087,12 +1069,9 @@ func TestV2SDKProvisionUsesAnonymousIsolatedManagerEnvironment(t *testing.T) {
 	if err := os.MkdirAll(config, 0755); err != nil {
 		t.Fatal(err)
 	}
-	bin := t.TempDir()
 	script := "#!/bin/sh\nprintenv > \"$PWD/probe-env\"\nprintf '%s' \"$*\" > \"$PWD/probe-args\"\nmkdir -p node_modules/@opencode/plugin\nprintf '{\"version\":\"2.0.4\"}' > node_modules/@opencode/plugin/package.json\n"
-	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	windowsScript := "@echo off\nset > probe-env\nset \"ARGS=%*\"\nsetlocal EnableDelayedExpansion\n>probe-args echo !ARGS!\nendlocal\n" + strings.TrimPrefix(fakeNPMWindowsMaterialize, "@echo off\n")
+	installFakeNPM(t, t.TempDir(), script, windowsScript)
 	proposal, err := OpenCodeSDKInstallProposal(home)
 	if err != nil || proposal == nil {
 		t.Fatalf("proposal = %+v, %v", proposal, err)
@@ -1291,8 +1270,19 @@ func TestOpenCodeV2SDKWindowsPowerShellContinuation(t *testing.T) {
 		t.Fatalf("PowerShell continuation failed: %v: %s", err, output)
 	}
 	data, err := os.ReadFile(marker)
-	if err != nil || strings.TrimSpace(string(data)) != config+"|install --save --no-audit --no-fund @opencode/plugin@2.0.4" {
-		t.Fatalf("PowerShell did not run in target directory: %q, %v", data, err)
+	if err != nil {
+		t.Fatalf("PowerShell did not write the marker: %v", err)
+	}
+	// PowerShell reports the long path while t.TempDir() may use an 8.3 short
+	// name (C:\Users\RUNNER~1), so compare directory identity, not bytes.
+	dir, args, found := strings.Cut(strings.TrimSpace(string(data)), "|")
+	if !found || args != "install --save --no-audit --no-fund @opencode/plugin@2.0.4" {
+		t.Fatalf("PowerShell ran the wrong command: %q", data)
+	}
+	want, wantErr := os.Stat(config)
+	got, gotErr := os.Stat(dir)
+	if wantErr != nil || gotErr != nil || !os.SameFile(want, got) {
+		t.Fatalf("PowerShell did not run in target directory: %q, %v, %v", data, wantErr, gotErr)
 	}
 }
 

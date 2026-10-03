@@ -51,14 +51,15 @@ func RenderRouting(agent model.AgentID) (string, error) {
 
 	_, _ = fmt.Fprintf(
 		&output,
-		"- **Direct inline:** decide or verify from %d–%d files inline. Keep one mechanical, already-understood file change inline only when it needs no research and has no unresolved design decision.\n",
-		routing.DirectInline.MinUnderstandingFiles,
-		routing.DirectInline.MaxUnderstandingFiles,
+		"- **Direct inline:** decide or verify with one parallel batch (%d maximum), at most %d calls and approximately %dk tokens of evidence. Use bounded search/line ranges, not whole large files. Keep one mechanical, already-understood file change inline only when it needs no research and has no unresolved design decision.\n",
+		routing.DirectInline.MaxEvidenceBatches,
+		routing.DirectInline.MaxEvidenceCalls,
+		routing.DirectInline.ApproxEvidenceTokens/1000,
 	)
 	_, _ = fmt.Fprintf(
 		&output,
-		"- **Delegated direct:** delegate one narrow exploration when understanding needs %d+ files; delegate one writer for %d+ non-trivial files. Reading that prepares a write and broad research also delegate.\n",
-		routing.DelegatedDirect.MappingMinUnderstandingFiles,
+		"- **Delegated direct:** larger evidence, more than approximately %d sequential lookups, or long-session mapping require one read-only explorer; delegate one writer for %d+ non-trivial files. Reading that prepares a write and broad research also delegate.\n",
+		routing.DelegatedDirect.ApproxSequentialLookupLimit,
 		routing.DelegatedDirect.WriterMinNonTrivialFiles,
 	)
 	output.WriteString("- File count, changed lines, size, or perceived risk alone never forces a heavier route.\n")
@@ -74,10 +75,11 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	// framing instead of being buried pages away from it.
 	output.WriteString("\n### Mandatory Delegation Triggers\n\n")
 	output.WriteString("These triggers are mandatory, not advisory. When one fires, stop and delegate through the runtime's subagent mechanism before continuing; executing past a fired trigger inline is a routing defect even if the work succeeds. Delegation keeps the parent context thin enough to orchestrate; it does not slow the work down.\n\n")
-	_, _ = fmt.Fprintf(&output, "- **Mapping trigger:** when understanding the work requires %d or more files, delegate one narrow exploration or mapping task before deciding or writing anything.\n", routing.DelegatedDirect.MappingMinUnderstandingFiles)
+	_, _ = fmt.Fprintf(&output, "- **Mapping trigger:** when evidence exceeds the inline batch budget, needs more than approximately %d sequential lookups, or involves long-session mapping, delegate one read-only explorer before deciding or writing anything. Return a handoff of at most approximately %dk tokens with path:line evidence; use one parent spot check (%d maximum). Do not reread the entire mapped evidence.\n", routing.DelegatedDirect.ApproxSequentialLookupLimit, routing.DelegatedDirect.ApproxHandoffTokens/1000, routing.DelegatedDirect.MaxParentSpotChecks)
 	_, _ = fmt.Fprintf(&output, "- **Writer trigger:** when implementation touches %d or more non-trivial files, delegate one bounded writer instead of editing them inline. A mechanical second-file edit does not fire this trigger solely because an earlier file was touched; count non-trivial files in the current work.\n", routing.DelegatedDirect.WriterMinNonTrivialFiles)
 	output.WriteString("- **Preparation trigger:** reading that prepares a write, and broad research or context compression, delegate together with or ahead of the write instead of filling the parent context.\n")
-	output.WriteString("- **Long-session backstop:** after about 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits without any delegation, pause and delegate the next bounded unit of work.\n")
+	output.WriteString("- **Output budget:** keep parent bash output bounded to counts, --stat, tail, or summaries. Delegate full suites and builds and return concise observed results, including failures.\n")
+	_, _ = fmt.Fprintf(&output, "- **Long-session backstop:** at approximately %dk parent-context tokens, pause and delegate the next bounded unit. This is advisory context guidance, not mechanically observed or enforced; do not claim runtime telemetry or enforcement.\n", routing.DelegatedDirect.ApproxParentContextTokens/1000)
 	output.WriteString("- **Route declaration:** for substantial work, record the chosen route per task (inline or delegated) and the trigger evidence in the feature document, so skipped delegation is observable instead of silent.\n")
 	output.WriteString("- These triggers only choose between direct inline and delegated direct inside the organic flow.\n")
 

@@ -384,8 +384,8 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 		content := MustRead(path)
 		for _, required := range []string{
 			"Mandatory Delegation Triggers",
-			"Bounded read rule", "read 1–3 files inline",
-			"4-file rule", "understanding requires 4+ files",
+			"Evidence budget rule", "one parallel batch",
+			"Mapping rule", "one read-only explorer",
 			"Write rule", "2+ non-trivial files",
 			"Context rule", "reading that prepares a write", "broad research",
 			"Mandatory Delegation Triggers", "delegated direct",

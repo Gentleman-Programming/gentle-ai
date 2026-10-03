@@ -51,20 +51,21 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
-# Stable channel (`@latest` after v4.0.0 is published)
-go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
+# Stable channel: the latest release (v4.0.0)
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0
 ```
 
-This command uses the `/v4` module path. Go requires that suffix for major
-version 2 and above. Before v4.0.0 is published, `@latest` on this path cannot resolve.
+Go requires a major-version suffix (`/v4`) in the module path for major
+version 2 and above. Installing the old `/v3` module path stays on the v3 line
+and never reaches v4.
 
 ## Version Policy
 
 Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` made it the supported stable path. Those are historical milestones. The negotiated public review contract was published in `v2.1.6`.
 
-The latest published stable release before v4.0.0 is [`v3.7.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v3.7.0). After v4.0.0 is published, `@latest` on the `/v4` module path tracks that stable channel. Until then, use `@main` only to test unreleased development changes; do not assume an unpublished v4 tag resolves.
+The latest published stable release is [`v4.0.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v4.0.0). `@latest` on the `/v4` module path tracks the stable channel. Use `@main` only to test unreleased development changes.
 
-### Install the stable channel (after v4.0.0 publication)
+### Install the stable channel
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
@@ -149,7 +150,7 @@ When checks pass, installer reports:
 
 If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram™ MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
 
-For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, and `pi-mcp-adapter`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `pi-web-access` and `pi-btw`.
+For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi` and `gentle-engram`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `pi-web-access` and `pi-btw`. Pi's built-in MCP support (Pi >= 0.99.0) runs the Engram and CodeGraph MCP servers from `mcp.json`. Gentle AI removes a previously installed `pi-mcp-adapter`, because an extension that registers `/mcp` replaces Pi's built-in MCP support.
 
 ## Start working with ODD
 
