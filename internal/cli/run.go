@@ -3250,6 +3250,14 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 				paths[filepath.Join(pluginsDir, name)] = struct{}{}
 			}
 		}
+		if scope == ScopeGlobal && adapter.Agent() == model.AgentID("command-code") {
+			if path := adapter.SettingsPath(homeDir); path != "" {
+				paths[path] = struct{}{}
+			}
+		}
+	}
+	if scope == ScopeGlobal && containsAgent(resolved.Agents, model.AgentID("command-code")) {
+		paths[filepath.Join(homeDir, ".commandcode", "settings.json")] = struct{}{}
 	}
 	adapterSkillPaths, err := adapterSkillBackupTargets(homeDir, workspaceDir, scope, selection, adapters)
 	if err != nil {
