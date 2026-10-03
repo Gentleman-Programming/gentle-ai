@@ -69,7 +69,7 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Bash for state (`git`, `gh`) | ✅ | — |
 | Tests, builds, installs, or native review actions | allowed as a bounded action | ✅ fresh per-action worker without changing route |
 
-Route read-only mapping to the installed `gentle-ai-explore` agent, implementation or command execution to the installed `gentle-ai-worker` agent, and read-only technical verification to the installed `gentle-ai-verify` agent.
+Route read-only mapping to the installed `gentle-ai-explore` agent, implementation or command execution to the installed `gentle-ai-worker` agent, read-only technical verification to the installed `gentle-ai-verify` agent, and security analysis or Sec-TDD work to the installed `gentle-ai-security` agent.
 
 Keep one writer and a short synthesized handoff. Delegation is mandatory at the mapping, write, preparation, and broad-research boundaries.
 
