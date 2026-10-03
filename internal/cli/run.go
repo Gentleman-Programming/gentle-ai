@@ -3135,8 +3135,8 @@ func envHasKey(env []string, key string) bool {
 
 func executeCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Env = commandEnv(name, args, os.Environ())
-	system.EnsureCommandDir(cmd)
+	cmd.Env = system.SanitizeCommandEnvironment(commandEnv(name, args, os.Environ()), nil, nil)
+	system.ConfigureCommandProcess(cmd, name, args)
 
 	if streamCommandOutput {
 		cmd.Stdout = os.Stdout
