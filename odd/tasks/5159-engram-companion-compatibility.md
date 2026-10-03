@@ -64,8 +64,8 @@ Out of scope (tracked separately):
 ## Tasks
 
 - [x] **T0** Investigate current code and establish the design with the user
-- [ ] **T1** Verify model: `NoRollback` on `Check`, propagated to `CheckResult`, aggregated as `RollbackRequired`
-- [ ] **T2** Engram capability probe: runtime resolution, probe hygiene, per-agent requirement model
+- [x] **T1** Verify model: `NoRollback` on `Check`, propagated to `CheckResult`, aggregated as `RollbackRequired`
+- [x] **T2** Engram capability probe: runtime resolution, probe hygiene, per-agent requirement model
 - [ ] **T3** Wire the gate into install and sync, with retained-state persistence and the upgrade offer
 - [ ] **T4** Documentation alongside the user-visible change
 
@@ -94,6 +94,19 @@ Delegated direct. The change spans more than two non-trivial files across four p
 
 Design settled with the user. Investigation complete: two read-only explorations of the upstream engram clone (cross-confirmed against GitHub search and against local source with CodeGraph) and one independent adversarial verification of the plan.
 
+### Known environmental failure
+
+`TestRunSyncMigratesLegacyManagedPiCodeGraphSelection` (`internal/cli/sync_test.go:2080`) fails on this machine. Proven pre-existing by stashing WU1 and reproducing it at base commit `72e0cccb`, so it is not caused by this feature. It still fails with `codegraph` removed from `PATH` and with an isolated `HOME`, so neither is the cause. Baseline for `internal/cli`: exactly this one failure. WU3 must introduce no new failures in that package.
+
+### Work unit log
+
+| WU | Commit | Authored lines | Risk tier | RDD outcome | Verification |
+|----|--------|----------------|-----------|-------------|--------------|
+| WU1 | `e96e90f2` | 362 (incl. feature doc) | medium | not due, `under_budget` | `go build ./...` ok; `internal/verify` 30 tests ok; `internal/cli` unchanged apart from the known failure |
+| WU2 | pending | 1018 | pending | pending | `go build ./...` ok; `go vet ./internal/components/engram/...` ok; `internal/components/engram` ok; `internal/verify` ok |
+
+Reviewed boundary: `main`. Next assessment base stays `main` until a review is acknowledged.
+
 ### Deviations from the original plan
 
 The investigation overturned one approved decision and corrected two faulty premises. Recorded here so the reasoning survives.
@@ -101,6 +114,13 @@ The investigation overturned one approved decision and corrected two faulty prem
 - **Rejected: uniform all-agent gate.** Originally recommended gating every agent on `instance-id`. Source evidence refuted it; only agents managing a local `engram serve` require the capability. A uniform gate would have blocked working setups. Corrected to a per-agent model.
 - **Corrected: `engramHealthChecks` does not reach sync.** It is called only from `runPostApplyVerification` (`internal/cli/run.go:2780`). `runPostSyncVerification` (`internal/cli/sync.go:2149-2205`) has its own file-only check set, so sync needs explicit wiring.
 - **Corrected: `NoRollback` on `Check` alone is inert.** `RunChecks` copies only ID and description (`internal/verify/checks.go:32`), so policy must reach `CheckResult` too. Aggregation is rollback if ANY failed hard check has `NoRollback == false`, so a mixed failure still reverts.
+
+### Deviations found in review
+
+- **WU2 shipped a 27-symbol exported surface** where roughly five concepts existed, using aliases rather than distinct capabilities, plus a dead constant. Returned for cleanup; collapsed to 13 exported symbols with a single decision entry point.
+- **`IsMissingBinary` over-matched.** It tested `errors.Is(err, os.ErrNotExist)` via a helper returning `os.ErrNotExist`, so any error wrapping it classified as a missing binary. Because a missing binary deliberately does not block while an incompatible core does, that misclassification would have silently disabled the gate. Now matches only `*MissingBinaryError`, with a negative test asserting `os.ErrNotExist` does not match.
+- **The decision was not centralized.** `ENGRAM_URL` awareness existed as a helper nothing called, and nothing enforced that an empty agent selection means not-required rather than passed. Both are acceptance criteria, and a caller had to remember three separate facts. Replaced by one entry point returning five explicit outcomes.
+- **Probe timeout was conditional.** The bounded timeout applied only when the caller's context had no deadline, so a long-lived context produced an unbounded probe and a hung core could stall the pipeline. Now always clamped to the earlier of the caller's deadline and the probe bound.
 
 ### Work units
 
