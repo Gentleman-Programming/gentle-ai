@@ -322,6 +322,9 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 	model.AgentCodex: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
+	model.AgentCommandCode: {
+		Skills: true, SystemPrompt: true, MCP: true,
+	},
 	model.AgentCursor: {
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
