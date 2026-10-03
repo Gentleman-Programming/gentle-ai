@@ -543,6 +543,44 @@ func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *test
 	}
 }
 
+func TestSanitizeKnownModelEfforts_PreservesFastAndAvailableEffortLevels(t *testing.T) {
+	tests := []struct {
+		name       string
+		assignment model.ModelAssignment
+		sddModels  map[string][]opencode.Model
+		wantEffort string
+	}{
+		{
+			name:       "fast preserved even when not in model variants",
+			assignment: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5", Effort: "fast"},
+			sddModels:  map[string][]opencode.Model{"openai": {{ID: "gpt-5", Variants: []string{"low", "medium", "high"}}}},
+			wantEffort: "fast",
+		},
+		{
+			name:       "fast preserved on non-reasoning model",
+			assignment: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5-mini", Effort: "fast"},
+			sddModels:  map[string][]opencode.Model{"openai": {{ID: "gpt-5-mini", Reasoning: false}}},
+			wantEffort: "fast",
+		},
+		{
+			name:       "extended effort preserved when in model EffortLevels",
+			assignment: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5.6-sol", Effort: "max"},
+			sddModels:  map[string][]opencode.Model{"openai": {{ID: "gpt-5.6-sol", Variants: []string{"low", "medium", "high", "max", "ultra"}}}},
+			wantEffort: "max",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assignments := map[string]model.ModelAssignment{"sdd-apply": tt.assignment}
+			got := sanitizeKnownModelEfforts(assignments, tt.sddModels)
+			if got["sdd-apply"].Effort != tt.wantEffort {
+				t.Fatalf("Effort = %q, want %q", got["sdd-apply"].Effort, tt.wantEffort)
+			}
+		})
+	}
+}
+
 func TestModelPickerNavigationSkipsReviewSeparator(t *testing.T) {
 	rows := screens.ModelPickerRows()
 	separator := -1

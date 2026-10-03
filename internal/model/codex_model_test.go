@@ -18,10 +18,11 @@ func TestCodexEffortValid(t *testing.T) {
 		{"medium", model.CodexEffortMedium, true},
 		{"high", model.CodexEffortHigh, true},
 		{"xhigh", model.CodexEffortXHigh, true},
+		{"max", model.CodexEffortMax, true},
+		{"ultra", model.CodexEffortUltra, true},
 		{"empty", model.CodexEffort(""), false},
 		{"junk", model.CodexEffort("junk"), false},
 		{"uppercase", model.CodexEffort("HIGH"), false},
-		{"max deferred", model.CodexEffort("max"), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

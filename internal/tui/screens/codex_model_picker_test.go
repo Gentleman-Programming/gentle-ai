@@ -130,12 +130,12 @@ func TestCodexCustomModelSelect_UsesStateCatalog(t *testing.T) {
 }
 
 func TestCodexModelPickerOptionCount_EffortMode(t *testing.T) {
-	// Effort-select mode: 4 effort levels
+	// Effort-select mode: 6 effort levels
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModeEffortSelect
 	count := screens.CodexModelPickerOptionCount(state)
-	if count != 4 {
-		t.Errorf("CodexModelPickerOptionCount(effort-select) = %d, want 4", count)
+	if count != 6 {
+		t.Errorf("CodexModelPickerOptionCount(effort-select) = %d, want 6", count)
 	}
 }
 
@@ -373,7 +373,7 @@ func TestCodexCustomEffortSelect_RendersOptions(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModeEffortSelect
 	out := screens.RenderCodexModelPicker(state, 0)
-	for _, effort := range []string{"low", "medium", "high", "xhigh"} {
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max", "ultra"} {
 		if !strings.Contains(out, effort) {
 			t.Errorf("effort select must show %q; output:\n%s", effort, out)
 		}

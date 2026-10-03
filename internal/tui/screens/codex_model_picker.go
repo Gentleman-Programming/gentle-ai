@@ -381,6 +381,8 @@ var codexEffortOptions = []model.CodexEffort{
 	model.CodexEffortMedium,
 	model.CodexEffortHigh,
 	model.CodexEffortXHigh,
+	model.CodexEffortMax,
+	model.CodexEffortUltra,
 }
 
 func handleCustomEffortSelectNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {

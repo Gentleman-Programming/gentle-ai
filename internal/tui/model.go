@@ -188,6 +188,9 @@ func sanitizeKnownModelEffort(assignment model.ModelAssignment, sddModels map[st
 		if available.ID != assignment.ModelID {
 			continue
 		}
+		if assignment.Effort == "fast" {
+			return assignment
+		}
 		levels := available.EffortLevels()
 		if len(levels) == 0 {
 			if available.Reasoning {
