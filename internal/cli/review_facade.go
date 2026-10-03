@@ -2236,7 +2236,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	snapshot, err := reviewFacadeBuildStartSnapshot(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, target)
 	if err != nil {
-		return fmt.Errorf("build facade review target: %w", err)
+		// Map Build failures (including snapshot.go empty-tree guards) to the
+		// typed pre-authority refusal so the handler reports
+		// MutationOutcome: review MutationNotStarted instead of an untyped
+		// `unknown` (issue start-candidate-context-failure).
+		return &reviewStartContextError{Cause: err}
 	}
 	if negotiated && snapshot.Identity != *targetIdentity {
 		return reviewNegotiatedStaleTargetRefusal(*targetIdentity, strings.TrimSpace(*targetEvidence), snapshot, consentMode, root)

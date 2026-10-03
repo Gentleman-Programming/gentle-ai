@@ -107,8 +107,8 @@ The following checks run automatically on this PR:
 ## ✅ Contributor Checklist
 
 - [ ] PR is linked to an issue with `status:approved`
-- [ ] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied `size:exception` with rationale documented
-- [ ] I have added the appropriate `type:*` label to this PR
+- [ ] PR stays within 400 changed lines, or canonical `size:exception` authority (current direct human instruction for the exact target/action, verified actor `MAINTAIN`/`ADMIN`, human choice and documented rationale) and observed readback are recorded
+- [ ] Target-host read-back confirms exactly one appropriate `type:*` label; any mutation followed the canonical issue-creation contract and reviewed CONTRIBUTING.md catalog (existing types preserved; conflicts deferred to the human)
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
