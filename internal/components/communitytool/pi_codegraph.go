@@ -882,6 +882,12 @@ func restoreMissingPiChildren(children map[string]piCodeGraphOwnedFile, journal 
 	}
 	slices.Sort(paths)
 	for _, path := range paths {
+		// Skip children whose paths fall outside the journal's allowed roots.
+		// This happens when the manifest records workspace-scoped children from
+		// a previous reconcile whose workspace is not active in this run.
+		if !piCodeGraphPathWithinRoots(path, journal.roots) {
+			continue
+		}
 		owned := children[path]
 		if _, err := os.Stat(path); err == nil {
 			continue
