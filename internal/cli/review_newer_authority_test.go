@@ -28,8 +28,8 @@ func TestNewerAuthorityIsNotReportedAsARefreshableContextFailure(t *testing.T) {
 	if strings.Contains(message, "refresh the exact native next_transition") {
 		t.Fatalf("refusal still tells the caller to refresh a transition that cannot help: %q", message)
 	}
-	if strings.Contains(message, "repository_context_unavailable") {
-		t.Fatalf("refusal reuses the generic code, so this cause stays indistinguishable from a stale context: %q", message)
+	if strings.Contains(message, "rctx2_") {
+		t.Fatalf("refusal still carries an rctx2 code: %q", message)
 	}
 	if !strings.Contains(message, reviewAuthorityNewerReleaseCode) {
 		t.Fatalf("refusal does not carry its own typed code: %q", message)

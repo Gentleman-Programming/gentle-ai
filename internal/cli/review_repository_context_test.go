@@ -68,7 +68,7 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 		replaceReviewArgument(t, bindingArgs, "--expected-revision", "sha256:"+strings.Repeat("0", 64)),
 	} {
 		if err := RunReviewCaptureResult(append(args, "--preflight"), io.Discard); err == nil ||
-			!strings.Contains(err.Error(), "repository_context_") || strings.Contains(err.Error(), repo) {
+			!strings.Contains(err.Error(), "repository_context_") && !strings.Contains(err.Error(), "rctx2_binding_unusable") || strings.Contains(err.Error(), repo) {
 			t.Fatalf("invalid rctx2 preflight error = %v", err)
 		}
 		afterRefusal, err := os.ReadFile(store.StatePath())
@@ -130,7 +130,8 @@ func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
 				"--lens", started.SelectedLenses[0], "--order", "0", "--preflight",
 			}, io.Discard)
 			if err == nil || strings.Contains(err.Error(), repo) || strings.Contains(err.Error(), home) ||
-				!strings.Contains(err.Error(), "repository_context_") || !strings.Contains(err.Error(), "refresh") {
+				(!strings.Contains(err.Error(), "repository_context_") && !strings.Contains(err.Error(), "rctx2_")) ||
+				!strings.Contains(err.Error(), "refresh") && !strings.Contains(err.Error(), "fresh native review") {
 				t.Fatalf("opaque context error = %q", err)
 			}
 		})

@@ -90,7 +90,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 				t.Fatal("preflight succeeded despite an unresolvable repository context")
 			}
 			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_unavailable", tt.want, repo)
+			assertOpaqueFailureNamesCause(t, message, "rctx2_resolution_failed", tt.want, repo)
 			messages[tt.name] = message
 		})
 	}

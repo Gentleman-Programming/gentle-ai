@@ -123,21 +123,21 @@ type reviewRepositoryContextV2Token struct {
 	CapturePhaseRevision string `json:"capture_phase_revision"`
 }
 
-var errInvalidReviewRepositoryContextV2 = errors.New("invalid rctx2 repository context") // refusal:by-design operator-knowledge: callers must refresh the provider-issued repository context instead of attempting to repair an untrusted token
+var ErrInvalidReviewRepositoryContextV2 = errors.New("invalid rctx2 repository context") // refusal:by-design operator-knowledge: callers must refresh the provider-issued repository context instead of attempting to repair an untrusted token
 
-type reviewRepositoryContextV2ResolutionError struct{ cause error }
+type ReviewRepositoryContextV2ResolutionError struct{ cause error }
 
-func (err *reviewRepositoryContextV2ResolutionError) Error() string {
-	return errInvalidReviewRepositoryContextV2.Error()
+func (err *ReviewRepositoryContextV2ResolutionError) Error() string {
+	return ErrInvalidReviewRepositoryContextV2.Error()
 }
 
-func (err *reviewRepositoryContextV2ResolutionError) Unwrap() error { return err.cause }
+func (err *ReviewRepositoryContextV2ResolutionError) Unwrap() error { return err.cause }
 
 func invalidReviewRepositoryContextV2Resolution(cause error) error {
 	if cause == nil {
-		return errInvalidReviewRepositoryContextV2
+		return ErrInvalidReviewRepositoryContextV2
 	}
-	return &reviewRepositoryContextV2ResolutionError{cause: cause}
+	return &ReviewRepositoryContextV2ResolutionError{cause: cause}
 }
 
 // OpenRepositoryIdentityLease resolves and captures one exact Git worktree
@@ -212,11 +212,11 @@ func DeriveReviewRepositoryContextHandle(ctx context.Context, repo string, bindi
 // record; its resolver repeats the same check before returning any identity.
 func deriveReviewRepositoryContextV2Token(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) (string, error) {
 	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
-		return "", errInvalidReviewRepositoryContextV2
+		return "", ErrInvalidReviewRepositoryContextV2
 	}
 	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil || lease.Validate(ctx) != nil {
-		return "", errInvalidReviewRepositoryContextV2
+		return "", ErrInvalidReviewRepositoryContextV2
 	}
 	identity := lease.Identity()
 	// Derivation is pure so START can use the same canonical token while it
@@ -239,8 +239,8 @@ func deriveReviewRepositoryContextV2Token(ctx context.Context, repo string, bind
 // and confirms its frozen facts against the active compact authority. It is
 // intentionally read-only and normalizes every refusal to one path-free error.
 func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
-	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil || !validReviewRepositoryContextV2Handle(handle) {
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
@@ -250,9 +250,9 @@ func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle str
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
 	identity := lease.Identity()
-	if err := matchReviewRepositoryContextV2Handle(handle, identity, binding); err != nil {
-		return "", ReviewRepositoryContextBinding{}, err
-	}
+	// Authority validation FIRST: validate binding fields against authority.
+	// A valid binding that fails authority is binding_unusable (wrong revision/target).
+	// An invalid binding that can't load authority could be wrong repo or wrong binding.
 	store, err := CompactAuthoritativeStore(ctx, identity.RepositoryRoot, binding.LineageID)
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
@@ -262,7 +262,13 @@ func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle str
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
 	if err := validateReviewRepositoryContextRecord(ctx, identity.RepositoryRoot, binding, record); err != nil {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
+	}
+	// Authority validation passed — the supplied binding is current. A digest
+	// mismatch still cannot identify which field of the handle's preimage
+	// differs: it may have been issued for an older binding in this same repo.
+	if err := matchReviewRepositoryContextV2Handle(handle, identity, binding); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
 	}
 	if err := lease.Validate(ctx); err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
@@ -277,7 +283,7 @@ func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle str
 // a locator-backed request sidecar.
 func resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
 	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
@@ -300,7 +306,7 @@ func resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx context.Con
 	}
 	if record.State.LineageID != binding.LineageID || record.State.CapturePhaseRevision != binding.Revision ||
 		record.State.State != StateCorrectionRequired || record.State.ProposedCorrectionLines == nil || record.State.CorrectionAttemptConsumed() {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	if err := lease.Validate(ctx); err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
@@ -311,9 +317,30 @@ func resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx context.Con
 func encodeReviewRepositoryContextV2Token(token reviewRepositoryContextV2Token) (string, error) {
 	payload, err := canonicalReviewRepositoryContextV2Payload(token)
 	if err != nil {
-		return "", errInvalidReviewRepositoryContextV2
+		return "", ErrInvalidReviewRepositoryContextV2
 	}
 	return reviewRepositoryContextV2HandlePrefix + identityHash(string(payload)), nil
+}
+
+// BuildReviewRepositoryContextV2Handle encodes a synthetic rctx2 handle from
+// the given repository identity and binding. It is intended for tests that
+// need to construct handles with non-standard repository identities (e.g.,
+// identity mismatch tests).
+func BuildReviewRepositoryContextV2Handle(identity RepositoryIdentity, binding ReviewRepositoryContextBinding) (string, error) {
+	if err := validateReviewRepositoryContextBinding(binding); err != nil {
+		return "", ErrInvalidReviewRepositoryContextV2
+	}
+	token := reviewRepositoryContextV2Token{
+		Schema:               reviewRepositoryContextV2Schema,
+		RepositoryRoot:       identity.RepositoryRoot,
+		GitCommonDir:         identity.GitCommonDir,
+		GitDir:               identity.GitDir,
+		RepositoryRef:        identity.RepositoryRef,
+		LineageID:            binding.LineageID,
+		TargetIdentity:       binding.TargetIdentity,
+		CapturePhaseRevision: binding.Revision,
+	}
+	return encodeReviewRepositoryContextV2Token(token)
 }
 
 // validReviewRepositoryContextV2Handle validates only the opaque transport
@@ -336,9 +363,13 @@ func validReviewRepositoryContextV2Handle(handle string) bool {
 // rather than from the token, so this is a real check: a handle that names a
 // different repository, lineage, target, or revision cannot be made to match by
 // pointing the resolver somewhere else.
+//
+// Returns ErrInvalidReviewRepositoryContextV2 for malformed or mismatched
+// handles. The opaque digest alone cannot distinguish an identity change from
+// a different lineage, target, or revision; identity errors need separate proof.
 func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIdentity, binding ReviewRepositoryContextBinding) error {
 	if !validReviewRepositoryContextV2Handle(handle) {
-		return errInvalidReviewRepositoryContextV2
+		return ErrInvalidReviewRepositoryContextV2
 	}
 	derived, err := encodeReviewRepositoryContextV2Token(reviewRepositoryContextV2Token{
 		Schema:               reviewRepositoryContextV2Schema,
@@ -351,10 +382,10 @@ func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIden
 		CapturePhaseRevision: binding.Revision,
 	})
 	if err != nil {
-		return errInvalidReviewRepositoryContextV2
+		return ErrInvalidReviewRepositoryContextV2
 	}
 	if subtle.ConstantTimeCompare([]byte(derived), []byte(handle)) != 1 {
-		return errInvalidReviewRepositoryContextV2
+		return ErrInvalidReviewRepositoryContextV2
 	}
 	return nil
 }
@@ -365,17 +396,17 @@ func canonicalReviewRepositoryContextV2Payload(token reviewRepositoryContextV2To
 		!validSHA256(token.RepositoryRef) || validateReviewRepositoryContextBinding(ReviewRepositoryContextBinding{
 		LineageID: token.LineageID, TargetIdentity: token.TargetIdentity, Revision: token.CapturePhaseRevision,
 	}) != nil {
-		return nil, errInvalidReviewRepositoryContextV2
+		return nil, ErrInvalidReviewRepositoryContextV2
 	}
 	identity := reviewRepositoryIdentityRecord{
 		RepositoryRoot: token.RepositoryRoot, GitCommonDir: token.GitCommonDir, GitDir: token.GitDir,
 	}
 	if token.RepositoryRef != reviewRepositoryIdentityHash(identity) {
-		return nil, errInvalidReviewRepositoryContextV2
+		return nil, ErrInvalidReviewRepositoryContextV2
 	}
 	payload, err := json.Marshal(token)
 	if err != nil || len(payload) > reviewRepositoryContextV2MaxDecodedBytes {
-		return nil, errInvalidReviewRepositoryContextV2
+		return nil, ErrInvalidReviewRepositoryContextV2
 	}
 	return payload, nil
 }
@@ -434,11 +465,11 @@ func ResolveReviewRepositoryContextBinding(ctx context.Context, repo, handle str
 // caller-authored target path participates in this discovery.
 func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
 	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil || !validReviewRepositoryContextV2Handle(handle) {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	hostLease, err := OpenRepositoryIdentityLease(ctx, host)
 	if err != nil || hostLease.Validate(ctx) != nil {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	hostIdentity := hostLease.Identity()
 	worktrees, err := linkedWorktreeDirectories(ctx, hostIdentity.RepositoryRoot)
@@ -454,7 +485,7 @@ func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, ha
 	for _, worktree := range worktrees {
 		lease, err := OpenRepositoryIdentityLease(ctx, worktree)
 		if err != nil || lease.Validate(ctx) != nil {
-			return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+			return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 		}
 		identity := lease.Identity()
 		if identity.GitCommonDir != hostIdentity.GitCommonDir {
@@ -476,14 +507,14 @@ func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, ha
 		}
 	}
 	if err := hostLease.Validate(ctx); err != nil || len(matches) != 1 {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	return matches[0].root, matches[0].binding, nil
 }
 
 func resolveReviewRepositoryContext(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
 	if !strings.HasPrefix(handle, reviewRepositoryContextV2HandlePrefix) {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	return resolveReviewRepositoryContextV2Token(ctx, repo, handle, binding)
 }
@@ -494,7 +525,7 @@ func resolveReviewRepositoryContext(ctx context.Context, repo, handle string, bi
 // authority or authorize mutation.
 func ResolveHistoricalReviewRepositoryContextBinding(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
 	if !validReviewRepositoryContextHandle(handle) {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, ErrInvalidReviewRepositoryContextV2
 	}
 	return resolveOpaqueReviewRepositoryContext(ctx, handle)
 }
@@ -523,15 +554,15 @@ func resolveTargetedValidationReviewRepositoryContext(ctx context.Context, repo,
 	}
 	store, err := CompactAuthoritativeStore(ctx, root, binding.LineageID)
 	if err != nil {
-		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, ErrInvalidReviewRepositoryContextV2
 	}
 	record, err := store.LoadContext(ctx)
 	if err != nil {
-		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, ErrInvalidReviewRepositoryContextV2
 	}
 	request, err := BuildTargetedValidationRequest(ctx, root, record.State, binding.Revision)
 	if err != nil || request.CorrectionTargetIdentity != binding.TargetIdentity {
-		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, ErrInvalidReviewRepositoryContextV2
 	}
 	return root, binding, reviewTargetedValidationContext{
 		RequestHash: request.RequestHash, CorrectionCandidateTree: request.CorrectionCandidateTree,
@@ -594,7 +625,7 @@ func resolveOpaqueReviewRepositoryContextRecord(ctx context.Context, handle stri
 		// no review action can repair (Git declining the repository outright,
 		// for example for ownership reasons) from a genuine identity change
 		// once the cause has been flattened into prose.
-		return "", empty, &reviewRepositoryContextIdentityError{cause: err}
+		return "", empty, &ReviewRepositoryContextIdentityError{cause: err}
 	}
 	if !sameLocatorDirectory(stored.RepositoryRoot, live.RepositoryRoot) ||
 		!sameLocatorDirectory(stored.GitCommonDir, live.GitCommonDir) ||
@@ -608,14 +639,14 @@ func resolveOpaqueReviewRepositoryContextRecord(ctx context.Context, handle stri
 // provider-issued context could not be re-identified. Its message is exactly
 // the historical flattened one, so the public failure surface is unchanged,
 // while Unwrap keeps the real cause reachable through errors.As.
-type reviewRepositoryContextIdentityError struct{ cause error }
+type ReviewRepositoryContextIdentityError struct{ cause error }
 
-func (err *reviewRepositoryContextIdentityError) Error() string {
+func (err *ReviewRepositoryContextIdentityError) Error() string {
 	// refusal:by-design world-action: same claim as the errors.New twin above -- the bound Git worktree was replaced outside this product and only restoring or re-creating that exact repository resolves it.
 	return "review repository context identity changed"
 }
 
-func (err *reviewRepositoryContextIdentityError) Unwrap() error { return err.cause }
+func (err *ReviewRepositoryContextIdentityError) Unwrap() error { return err.cause }
 
 func validateReviewRepositoryContextRecord(ctx context.Context, repo string, binding ReviewRepositoryContextBinding, record CompactRecord) error {
 	if record.State.LineageID != binding.LineageID {

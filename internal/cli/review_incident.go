@@ -149,20 +149,36 @@ func resolveOpaqueReviewRepositoryRoot(ctx context.Context, repo, handle string,
 
 // reviewRepositoryContextResolutionFailure classifies why an opaque repository
 // context could not be resolved. A Git ownership refusal gets its own code and
-// its own carry-outable instruction; everything else keeps the historical
-// generic code, so an unrelated failure is never mislabelled as a trust
-// problem.
+// its own carry-outable instruction; structurally invalid rctx2 bindings get
+// rctx2_binding_unusable, a resolution failure against a changed worktree gets
+// rctx2_resolution_failed, and an identity mismatch gets its own code. A newer
+// authority and everything else keep their existing codes.
 func reviewRepositoryContextResolutionFailure(err error) error {
 	if reviewGitOwnershipRefusal(err) {
 		return reviewOpaqueContextFailure(reviewGitTrustRefusalCode, reviewGitTrustRefusalAction)
 	}
-	// Authority written by a newer release is not a stale context, and the
-	// generic instruction is actively wrong for it: refreshing a transition
-	// cannot make this binary parse those bytes. #2461's reporter followed
-	// that instruction across four reoffered reviewer slots and got an
-	// identical failure every time.
 	if errors.Is(err, reviewtransaction.ErrCompactAuthorityFromNewerRelease) {
 		return reviewOpaqueContextCause(reviewAuthorityNewerReleaseCode, reviewAuthorityNewerReleaseAction, err)
+	}
+	// Identity mismatch — binding commits to a different repository than the
+	// one named by --cwd. Checked before ErrInvalidReviewRepositoryContextV2
+	// because the identity error wraps that sentinel; errors.Is would match
+	// first and swallow the more specific mismatch diagnosis.
+	var identityErr *reviewtransaction.ReviewRepositoryContextIdentityError
+	if errors.As(err, &identityErr) {
+		return reviewOpaqueContextCause(reviewRctx2IdentityMismatchCode, reviewRctx2IdentityMismatchAction, err)
+	}
+	// rctx2 resolution failed because the underlying worktree or repository
+	// identity changed after the binding was issued.
+	var resolutionErr *reviewtransaction.ReviewRepositoryContextV2ResolutionError
+	if errors.As(err, &resolutionErr) {
+		return reviewOpaqueContextCause(reviewRctx2ResolutionFailureCode, reviewRctx2ResolutionFailureAction, err)
+	}
+	// Structurally invalid binding — malformed digest, expired handle, missing
+	// fields. No manual repair is possible; the maintainer must restart from
+	// the exact native next_transition.
+	if errors.Is(err, reviewtransaction.ErrInvalidReviewRepositoryContextV2) {
+		return reviewOpaqueContextFailure(reviewRctx2UnusableCode, reviewRctx2UnusableAction)
 	}
 	return reviewOpaqueContextCause("repository_context_unavailable", "refresh the exact native next_transition before retrying", err)
 }
@@ -180,6 +196,38 @@ const (
 	// installed the newer build but an older one answers first.
 	reviewAuthorityNewerReleaseAction = "upgrade this gentle-ai, or invoke the newer build directly; " +
 		"an editor plugin resolves gentle-ai from PATH, so run `which -a gentle-ai` and make the newer build the one it finds first"
+
+	// reviewRctx2UnusableCode is the code when the opaque rctx2 binding is
+	// structurally invalid (missing fields, malformed digest, expired handle).
+	// The only resolution is a fresh native next_transition — no manual
+	// repair is possible because the provider owns the token lifecycle.
+	reviewRctx2UnusableCode = "rctx2_binding_unusable"
+	// reviewRctx2UnusableAction is the instruction for that code. The
+	// binding is a provider-issued digest that commits to schema, lineage,
+	// target identity, and repository identity; a malformed one proves the
+	// host did not forward the exact transition the reviewer expects.
+	reviewRctx2UnusableAction = "the provider-issued rctx2 binding is structurally invalid or has expired; " +
+		"restart from the exact native next_transition that produced it — manual repair of the binding is impossible because the provider owns the token lifecycle"
+
+	// reviewRctx2ResolutionFailureCode is the code when the rctx2 binding is
+	// structurally valid but the underlying repository has changed (different
+	// identity, moved directory, or repository destroyed). The binding was
+	// correct when issued but no longer matches the live worktree.
+	reviewRctx2ResolutionFailureCode = "rctx2_resolution_failed"
+	// reviewRctx2ResolutionFailureAction is the instruction for that code.
+	// The binding was valid when issued, so the caller should repair the
+	// reported repository or authority error and retry.
+	reviewRctx2ResolutionFailureAction = "rctx2 resolution failed; the binding was valid when issued — repair the reported repository or authority error and retry the same binding; " +
+		"if the repository identity changed, start a fresh native review"
+
+	// reviewRctx2IdentityMismatchCode is the code when the rctx2 binding's
+	// repository identity does not match the caller-supplied repository root.
+	// This typically happens when the caller points to a different worktree
+	// or cloned copy than the one the provider issued the binding for.
+	reviewRctx2IdentityMismatchCode = "rctx2_identity_mismatch"
+	// reviewRctx2IdentityMismatchAction is the instruction for that code.
+	reviewRctx2IdentityMismatchAction = "the rctx2 binding commits to a different repository identity than the one named by --cwd; " +
+		"use the --cwd that matches the provider's worktree, or start a fresh native review"
 )
 
 // reviewGitOwnershipRefusal reports whether err was caused by Git refusing a
