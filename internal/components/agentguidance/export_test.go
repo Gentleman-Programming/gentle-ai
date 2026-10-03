@@ -32,5 +32,5 @@ func SetReviewContractSource(source ReviewContractSource) {
 // It renders with the package-level review contract source; production callers
 // use RenderOrchestratorWithSource or RoutingOptions.ReviewContract instead.
 func RenderOrchestrator(agent model.AgentID) (string, error) {
-	return RenderOrchestratorWithSource(agent, nil)
+	return RenderOrchestratorWithSource(agent, nil, "")
 }

@@ -1,5 +1,8 @@
 # Reference Map
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 This appendix maps main docs and source files to responsibilities. Use it to make claims traceable during review.

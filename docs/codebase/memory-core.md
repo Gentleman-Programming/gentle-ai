@@ -1,5 +1,8 @@
 # Memory Core
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v3.7.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v3.7.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Gentle-AI wires Engram into agents; Engram owns the memory store. This page explains the boundary so maintainers do not confuse installer code with memory database code.

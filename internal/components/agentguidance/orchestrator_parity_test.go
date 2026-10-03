@@ -63,6 +63,49 @@ var gentleShellOnlyContent = []string{
 	"Pi Runtime Overlays",
 }
 
+// Exercises the real installation carrier for every non-Pi runtime, then
+// syncs it again. Pi routing is covered by the renderer; its orchestrator is
+// owned by Gentle Shell and must not be copied here.
+func TestInstalledEvidenceBudgetGuidance(t *testing.T) {
+	for _, agent := range orchestratorRuntimes(t) {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			first, err := InjectRoutingWithOptions(root, agent, RoutingOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt := deliveredGuidance(t, first.Files[0])
+			for _, want := range []string{
+				"one parallel batch", "at most 3 calls", "approximately 10k tokens",
+				"bounded search/line ranges", "not whole large files",
+				"more than approximately 5 sequential lookups", "long-session mapping",
+				"one read-only explorer", "at most approximately 2k tokens", "path:line",
+				"one parent spot check", "Do not reread the entire mapped evidence",
+				"counts, --stat, tail, or summaries", "Delegate full suites and builds",
+				"approximately 150k", "not mechanically observed or enforced",
+				"2+ non-trivial files", "reading that prepares a write", "broad research",
+				"one mechanical, already-understood file", "no research", "unresolved design",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("installed guidance missing %q", want)
+				}
+			}
+			for _, stale := range []string{"1–3 files", "1-3 files", "4+ files", "4-file rule", "20 tool calls", "5 exploratory reads", "2 non-mechanical edits"} {
+				if strings.Contains(prompt, stale) {
+					t.Errorf("installed guidance retains %q", stale)
+				}
+			}
+			second, err := InjectRoutingWithOptions(root, agent, RoutingOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := deliveredGuidance(t, second.Files[0]); got != prompt {
+				t.Error("identical sync changed guidance")
+			}
+		})
+	}
+}
+
 func TestInstalledOrchestratorHasGentleShellParity(t *testing.T) {
 	t.Parallel()
 

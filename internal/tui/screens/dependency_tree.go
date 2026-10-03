@@ -97,7 +97,6 @@ func piInstallCommands() []string {
 	return []string{
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
 		"npm exec --yes --package gentle-engram@latest -- pi-engram init",
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",

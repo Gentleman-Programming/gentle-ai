@@ -146,9 +146,47 @@ func orchestratorAsset(agent model.AgentID) string {
 	}
 }
 
+// selectGenericOrchestrator selects instruction text, never an execution model.
+// Validate both shipped sections before replacing either so malformed assets
+// fail closed rather than silently losing common surrounding content.
+func selectGenericOrchestrator(content, capability string) (string, error) {
+	selected := "capable"
+	if capability == "small" {
+		selected = "small"
+	}
+	type section struct {
+		start, end int
+		body, name string
+	}
+	var sections []section
+	for _, name := range []string{"capable", "small"} {
+		open := "<!-- section:model-" + name + " -->"
+		close := "<!-- /section:model-" + name + " -->"
+		start, end := strings.Index(content, open), strings.Index(content, close)
+		if strings.Count(content, open) != 1 || strings.Count(content, close) != 1 || end < start+len(open) {
+			return "", fmt.Errorf("invalid generic orchestrator model-%s section", name)
+		}
+		sections = append(sections, section{start, end + len(close), content[start+len(open) : end], name})
+	}
+	if sections[0].end > sections[1].start {
+		return "", fmt.Errorf("generic orchestrator model sections overlap or are out of order")
+	}
+	for i := len(sections) - 1; i >= 0; i-- {
+		s := sections[i]
+		body := ""
+		if s.name == selected {
+			body = s.body
+		}
+		content = content[:s.start] + body + content[s.end:]
+	}
+	return content, nil
+}
+
 // RenderOrchestratorWithSource is RenderOrchestrator with an explicit review
 // contract source, which takes precedence over the package-level fallback.
-func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSource) (string, error) {
+// capability selects the generic instruction variant: "small" selects the
+// small-model text and any other value, including empty, selects capable.
+func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSource, capability string) (string, error) {
 	if agent == model.AgentPi {
 		return "", fmt.Errorf("render orchestrator for %q: the Pi prompt is owned by Gentle Shell", agent)
 	}
@@ -157,6 +195,13 @@ func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSour
 	content, err := assets.Read(path)
 	if err != nil {
 		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
+	}
+
+	if path == "generic/orchestrator.md" {
+		content, err = selectGenericOrchestrator(content, capability)
+		if err != nil {
+			return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
+		}
 	}
 
 	rdd := model.SupportsReceiptDrivenDevelopment(agent)
