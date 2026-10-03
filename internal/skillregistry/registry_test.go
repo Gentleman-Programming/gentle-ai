@@ -1,6 +1,8 @@
 package skillregistry
 
 import (
+	"crypto/sha1"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -851,5 +853,383 @@ func assertRegistrySkills(
 		if !selected[skill.Path] && strings.Contains(registry, "`"+skill.Path+"`") {
 			t.Fatalf("registry includes lower-precedence skill %q:\n%s", skill.Path, registry)
 		}
+	}
+}
+
+func validCuratedRegistryContent() string {
+	return `# Skill Registry — curated-project
+
+Last updated: 2026-03-30
+
+## Contract
+Curated contract.
+
+## Skills
+
+| Skill | Trigger / description | Scope | Path |
+| --- | --- | --- | --- |
+| ` + "`custom-one`" + ` | Custom one trigger | project | ` + "`skills/custom-one/SKILL.md`" + ` |
+| ` + "`custom-two`" + ` | Custom two trigger | project | ` + "`skills/custom-two/SKILL.md`" + ` |
+
+## Loading protocol
+1. Read path.
+`
+}
+
+func loadRegistry(loadPath, cwd string, force bool) (Result, error) {
+	prep, err := PrepareLoadRegistry(loadPath, cwd)
+	if err != nil {
+		return Result{}, err
+	}
+	return prep.Commit(force)
+}
+
+func TestHasRegistryMarkers(t *testing.T) {
+	valid := validCuratedRegistryContent()
+	if !hasRegistryMarkers(valid) {
+		t.Fatalf("hasRegistryMarkers(valid) = false, want true")
+	}
+
+	missingTitle := strings.Replace(valid, "# Skill Registry", "# Other Title", 1)
+	if hasRegistryMarkers(missingTitle) {
+		t.Fatalf("hasRegistryMarkers(missingTitle) = true, want false")
+	}
+
+	missingSkills := strings.Replace(valid, "## Skills", "## All Skills", 1)
+	if hasRegistryMarkers(missingSkills) {
+		t.Fatalf("hasRegistryMarkers(missingSkills) = true, want false")
+	}
+
+	missingHeader := strings.Replace(valid, "| Skill | Trigger / description | Scope | Path |", "| Name | Trigger | Scope | Path |", 1)
+	if hasRegistryMarkers(missingHeader) {
+		t.Fatalf("hasRegistryMarkers(missingHeader) = true, want false")
+	}
+
+	missingSep := strings.Replace(valid, "| --- | --- | --- | --- |", "| === | === | === | === |", 1)
+	if hasRegistryMarkers(missingSep) {
+		t.Fatalf("hasRegistryMarkers(missingSep) = true, want false")
+	}
+}
+
+func TestPrepareLoadRegistryValidation(t *testing.T) {
+	cwd := t.TempDir()
+
+	// Empty load path
+	if _, err := PrepareLoadRegistry("", cwd); err == nil {
+		t.Fatal("PrepareLoadRegistry with empty path should return error")
+	}
+
+	// Missing file
+	if _, err := PrepareLoadRegistry(filepath.Join(cwd, "nonexistent.md"), cwd); err == nil {
+		t.Fatal("PrepareLoadRegistry with missing file should return error")
+	}
+
+	// Invalid content
+	invalidFile := filepath.Join(cwd, "invalid.md")
+	if err := os.WriteFile(invalidFile, []byte("Just some markdown without markers"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareLoadRegistry(invalidFile, cwd); err == nil {
+		t.Fatal("PrepareLoadRegistry with invalid markdown should return error")
+	}
+}
+
+func TestPrepareLoadRegistryAndCommit(t *testing.T) {
+	cwd := t.TempDir()
+	curatedFile := filepath.Join(cwd, "curated-registry.md")
+	content := validCuratedRegistryContent()
+	if err := os.WriteFile(curatedFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prep, err := PrepareLoadRegistry(curatedFile, cwd)
+	if err != nil {
+		t.Fatalf("PrepareLoadRegistry failed: %v", err)
+	}
+	if prep.SkillCount != 2 {
+		t.Fatalf("prep.SkillCount = %d, want 2", prep.SkillCount)
+	}
+	if !strings.HasPrefix(prep.Fingerprint, "loaded:") {
+		t.Fatalf("prep.Fingerprint = %q, want prefix 'loaded:'", prep.Fingerprint)
+	}
+
+	result, err := prep.Commit(false)
+	if err != nil {
+		t.Fatalf("prep.Commit() failed: %v", err)
+	}
+	if !result.Regenerated || result.Reason != "loaded" || result.SkillCount != 2 {
+		t.Fatalf("unexpected Commit result: %#v", result)
+	}
+
+	regBytes, err := os.ReadFile(filepath.Join(cwd, RegistryRelPath))
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	if string(regBytes) != content {
+		t.Fatalf("registry content mismatch:\ngot:\n%s\nwant:\n%s", string(regBytes), content)
+	}
+
+	cacheFp := readCachedFingerprint(filepath.Join(cwd, CacheRelPath))
+	if cacheFp != prep.Fingerprint {
+		t.Fatalf("cache fingerprint = %q, want %q", cacheFp, prep.Fingerprint)
+	}
+
+	// Commit again without force hits cache
+	second, err := prep.Commit(false)
+	if err != nil {
+		t.Fatalf("second Commit() failed: %v", err)
+	}
+	if second.Regenerated || second.Reason != "cache-hit" {
+		t.Fatalf("second Commit result = %#v, want cache-hit", second)
+	}
+
+	// Commit again with force
+	forced, err := prep.Commit(true)
+	if err != nil {
+		t.Fatalf("forced Commit() failed: %v", err)
+	}
+	if !forced.Regenerated || forced.Reason != "forced" {
+		t.Fatalf("forced Commit result = %#v, want forced", forced)
+	}
+}
+
+func TestRegeneratePreservesLoadedCuratedRegistryAndDetectsDrift(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	curatedFile := filepath.Join(cwd, "curated-registry.md")
+	content := validCuratedRegistryContent()
+	if err := os.WriteFile(curatedFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loadRes, err := loadRegistry(curatedFile, cwd, false)
+	if err != nil {
+		t.Fatalf("loadRegistry failed: %v", err)
+	}
+	if !loadRes.Regenerated || loadRes.Reason != "loaded" {
+		t.Fatalf("loadRes = %#v", loadRes)
+	}
+
+	// Write a new skill in project to see if non-forced Regenerate preserves curated
+	writeSkill(t, filepath.Join(cwd, "skills", "brand-new", "SKILL.md"), `---
+name: brand-new
+description: A new skill
+---
+`)
+
+	regen, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("Regenerate failed: %v", err)
+	}
+	if regen.Regenerated || regen.Reason != "manually-loaded" {
+		t.Fatalf("Regenerate should preserve manually-loaded registry, got: %#v", regen)
+	}
+	currentBytes, err := os.ReadFile(filepath.Join(cwd, RegistryRelPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(currentBytes) != content {
+		t.Fatalf("curated registry was overwritten: %s", string(currentBytes))
+	}
+
+	// Simulate drift by editing the registry file
+	driftedContent := content + "\n<!-- manual drift -->\n"
+	if err := os.WriteFile(filepath.Join(cwd, RegistryRelPath), []byte(driftedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	driftRegen, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("Regenerate on drifted registry failed: %v", err)
+	}
+	if !driftRegen.Regenerated || driftRegen.Reason != "loaded-drifted" {
+		t.Fatalf("driftRegen = %#v, want Regenerated=true Reason=loaded-drifted", driftRegen)
+	}
+}
+
+func TestRegenerateMigratesLegacySha1Fingerprint(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	content := validCuratedRegistryContent()
+
+	if err := os.MkdirAll(filepath.Join(cwd, ".atl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	regPath := filepath.Join(cwd, RegistryRelPath)
+	if err := os.WriteFile(regPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Legacy sha1 hash
+	legacyFp := fmt.Sprintf("loaded:%x", sha1.Sum([]byte(content)))
+	cachePath := filepath.Join(cwd, CacheRelPath)
+	legacyCache := fmt.Sprintf("{\n  \"fingerprint\": %q\n}\n", legacyFp)
+	if err := os.WriteFile(cachePath, []byte(legacyCache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("Regenerate failed: %v", err)
+	}
+	if res.Regenerated || res.Reason != "manually-loaded" {
+		t.Fatalf("res = %#v, want Regenerated=false Reason=manually-loaded", res)
+	}
+
+	// Verify cache was migrated to sha256
+	migratedFp := readCachedFingerprint(cachePath)
+	if migratedFp == legacyFp {
+		t.Fatalf("cache was not migrated from legacy sha1: %q", migratedFp)
+	}
+	if !strings.HasPrefix(migratedFp, "loaded:") || len(migratedFp) != len("loaded:")+64 {
+		t.Fatalf("migrated fingerprint is not loaded:<sha256>: %q", migratedFp)
+	}
+}
+
+func TestCommitRegistryPairRollbackOnCacheWriteFailure(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, ".atl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	regPath := filepath.Join(cwd, RegistryRelPath)
+	cachePath := filepath.Join(cwd, CacheRelPath)
+
+	// Case 1: registry does NOT exist prior to write
+	// Make cachePath a directory so writing file to cachePath will fail
+	if err := os.Mkdir(cachePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := commitRegistryPair(regPath, []byte("registry data"), cachePath, []byte("cache data"))
+	if err == nil {
+		t.Fatal("commitRegistryPair should have failed when cachePath is a directory")
+	}
+	if fileExists(regPath) {
+		t.Fatal("registry file should have been rolled back (deleted) on failure")
+	}
+
+	// Clean up directory if still present
+	_ = os.RemoveAll(cachePath)
+
+	// Case 2: registry DID exist prior to write
+	originalReg := []byte("original registry")
+	if err := os.WriteFile(regPath, originalReg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recreate directory at cachePath to induce failure again
+	if err := os.Mkdir(cachePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err = commitRegistryPair(regPath, []byte("new registry data"), cachePath, []byte("cache data"))
+	if err == nil {
+		t.Fatal("commitRegistryPair should have failed")
+	}
+	restored, readErr := os.ReadFile(regPath)
+	if readErr != nil {
+		t.Fatalf("read restored registry: %v", readErr)
+	}
+	if string(restored) != string(originalReg) {
+		t.Fatalf("registry should have been rolled back to original: got %q, want %q", string(restored), string(originalReg))
+	}
+
+	// Case 3: registry was read-only prior to write (0444)
+	if err := os.Chmod(regPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	err = commitRegistryPair(regPath, []byte("new registry data"), cachePath, []byte("cache data"))
+	if err == nil {
+		t.Fatal("commitRegistryPair should have failed")
+	}
+	restored, readErr = os.ReadFile(regPath)
+	if readErr != nil {
+		t.Fatalf("read restored registry: %v", readErr)
+	}
+	if string(restored) != string(originalReg) {
+		t.Fatalf("read-only registry should have been rolled back to original: got %q, want %q", string(restored), string(originalReg))
+	}
+}
+
+func TestPreparedLoadCommitRestoresCuratedBytesOnDrift(t *testing.T) {
+	cwd := t.TempDir()
+	curatedFile := filepath.Join(cwd, "curated-registry.md")
+	content := validCuratedRegistryContent()
+	if err := os.WriteFile(curatedFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prep, err := PrepareLoadRegistry(curatedFile, cwd)
+	if err != nil {
+		t.Fatalf("PrepareLoadRegistry failed: %v", err)
+	}
+
+	// First commit: writes curated bytes
+	first, err := prep.Commit(false)
+	if err != nil {
+		t.Fatalf("first prep.Commit() failed: %v", err)
+	}
+	if !first.Regenerated || first.Reason != "loaded" {
+		t.Fatalf("first result = %#v, want Regenerated=true Reason=loaded", first)
+	}
+
+	// Second commit without drift: reports cache-hit
+	second, err := prep.Commit(false)
+	if err != nil {
+		t.Fatalf("second prep.Commit() failed: %v", err)
+	}
+	if second.Regenerated || second.Reason != "cache-hit" {
+		t.Fatalf("second result = %#v, want Regenerated=false Reason=cache-hit", second)
+	}
+
+	// Drift the destination registry by manually modifying it
+	driftedBytes := []byte(content + "\n<!-- drifted manual edit -->\n")
+	if err := os.WriteFile(prep.RegistryPath, driftedBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Commit again without force: destination drift must be detected,
+	// avoiding false cache-hit and restoring curated bytes
+	driftCommit, err := prep.Commit(false)
+	if err != nil {
+		t.Fatalf("drift Commit(false) failed: %v", err)
+	}
+	if !driftCommit.Regenerated || driftCommit.Reason != "loaded" {
+		t.Fatalf("drift result = %#v, want Regenerated=true Reason=loaded", driftCommit)
+	}
+
+	restoredBytes, err := os.ReadFile(prep.RegistryPath)
+	if err != nil {
+		t.Fatalf("read restored registry: %v", err)
+	}
+	if string(restoredBytes) != content {
+		t.Fatalf("registry bytes not restored: got %q, want %q", string(restoredBytes), content)
+	}
+}
+
+func TestEnsureATLIgnoredNotCalledOnInvalidLoad(t *testing.T) {
+	cwd := t.TempDir()
+	gitignorePath := filepath.Join(cwd, ".gitignore")
+
+	// Missing file: PrepareLoadRegistry returns error
+	_, err := PrepareLoadRegistry(filepath.Join(cwd, "nonexistent.md"), cwd)
+	if err == nil {
+		t.Fatal("PrepareLoadRegistry with nonexistent file should fail")
+	}
+	if fileExists(gitignorePath) {
+		t.Fatal(".gitignore should not exist when load validation fails on missing file")
+	}
+
+	// Invalid format: missing required markers
+	invalidFile := filepath.Join(cwd, "invalid.md")
+	if err := os.WriteFile(invalidFile, []byte("Just plain text without markers"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = PrepareLoadRegistry(invalidFile, cwd)
+	if err == nil {
+		t.Fatal("PrepareLoadRegistry with invalid markdown should fail")
+	}
+	if fileExists(gitignorePath) {
+		t.Fatal(".gitignore should not exist when load validation fails on invalid content")
 	}
 }

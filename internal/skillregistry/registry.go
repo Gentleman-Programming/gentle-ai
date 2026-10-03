@@ -2,8 +2,10 @@ package skillregistry
 
 import (
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,12 +37,14 @@ var (
 	frontmatterLine = regexp.MustCompile(`^(\w+):\s*(.*)$`)
 )
 
+// SkillEntry describes a discovered skill with its name, location, and description.
 type SkillEntry struct {
 	Name        string
 	Path        string
 	Description string
 }
 
+// Result reports the outcome of a skill registry generation or load operation.
 type Result struct {
 	Regenerated bool
 	SkillCount  int
@@ -83,6 +87,7 @@ func UserSkillDirs(home string) []string {
 	}
 }
 
+// ProjectSkillDirs returns the standard project-level directories searched for skills.
 func ProjectSkillDirs(cwd string) []string {
 	return []string{
 		// Generic project skills first: repo-local intent beats user/global skills.
@@ -108,6 +113,8 @@ func ProjectSkillDirs(cwd string) []string {
 	}
 }
 
+// Regenerate scans project and user skill directories, regenerates the registry
+// markdown if the fingerprint changed (or if forced), and writes the cache file.
 func Regenerate(cwd, home string, force bool) (Result, error) {
 	cwd = filepath.Clean(cwd)
 	home = filepath.Clean(home)
@@ -122,7 +129,33 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 	cachePath := filepath.Join(cwd, CacheRelPath)
 	fp := Fingerprint(files)
 	cached := readCachedFingerprint(cachePath)
-	if !force && cached == fp && fileExists(registryPath) {
+
+	wasLoadedDrifted := false
+	if strings.HasPrefix(cached, "loaded:") {
+		registryBytes, readErr := os.ReadFile(registryPath)
+		if readErr == nil {
+			sha256Sum := fmt.Sprintf("loaded:%x", sha256.Sum256(registryBytes))
+			sha1Sum := fmt.Sprintf("loaded:%x", sha1.Sum(registryBytes))
+			if !force && (cached == sha256Sum || cached == sha1Sum) {
+				// Migrate legacy sha1 fingerprint to sha256 if needed
+				if cached == sha1Sum && cached != sha256Sum {
+					cacheBytes, err := json.MarshalIndent(cacheFile{Fingerprint: sha256Sum}, "", "  ")
+					if err == nil {
+						cacheBytes = append(cacheBytes, '\n')
+						_, _ = filemerge.WriteFileAtomic(cachePath, cacheBytes, 0o644)
+					}
+				}
+				return Result{
+					Regenerated: false,
+					SkillCount:  countRegistrySkills(string(registryBytes)),
+					Reason:      "manually-loaded",
+					Registry:    registryPath,
+					Cache:       cachePath,
+				}, nil
+			}
+		}
+		wasLoadedDrifted = true
+	} else if !force && cached == fp && fileExists(registryPath) {
 		return Result{Regenerated: false, Reason: "cache-hit", Registry: registryPath, Cache: cachePath}, nil
 	}
 
@@ -151,19 +184,19 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 		return Result{}, fmt.Errorf("create .atl directory: %w", err)
 	}
 	md := RenderRegistry(cwd, sources, entries)
-	if _, err := filemerge.WriteFileAtomic(registryPath, []byte(md), 0o644); err != nil {
-		return Result{}, fmt.Errorf("write registry: %w", err)
-	}
 	cacheBytes, err := json.MarshalIndent(cacheFile{Fingerprint: fp}, "", "  ")
 	if err != nil {
 		return Result{}, err
 	}
 	cacheBytes = append(cacheBytes, '\n')
-	if _, err := filemerge.WriteFileAtomic(cachePath, cacheBytes, 0o644); err != nil {
-		return Result{}, fmt.Errorf("write registry cache: %w", err)
+	if err := commitRegistryPair(registryPath, []byte(md), cachePath, cacheBytes); err != nil {
+		return Result{}, err
 	}
 
 	reason := "fingerprint-changed"
+	if wasLoadedDrifted {
+		reason = "loaded-drifted"
+	}
 	if force {
 		reason = "forced"
 	}
@@ -190,6 +223,7 @@ func List(cwd, home string) []SkillEntry {
 	return dedupeBySkillName(entries, cwd)
 }
 
+// EnsureATLIgnored appends the .atl/ entry to .gitignore in cwd if not already present.
 func EnsureATLIgnored(cwd string) error {
 	gitignorePath := filepath.Join(cwd, ".gitignore")
 	existingBytes, err := os.ReadFile(gitignorePath)
@@ -219,6 +253,7 @@ func EnsureATLIgnored(cwd string) error {
 	return nil
 }
 
+// Fingerprint computes a deterministic hash of all skill file paths, timestamps, sizes, and contents.
 func Fingerprint(files []string) string {
 	lines := make([]string, 0, len(files)+1)
 	lines = append(lines, fmt.Sprintf("schema:%d", RegistrySchema))
@@ -241,6 +276,7 @@ func Fingerprint(files []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// LoadSkill reads a SKILL.md file and extracts its name and description frontmatter.
 func LoadSkill(file string) (SkillEntry, bool) {
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -256,6 +292,7 @@ func LoadSkill(file string) (SkillEntry, bool) {
 	return SkillEntry{Name: name, Path: file, Description: desc}, true
 }
 
+// RenderRegistry formats the skill registry markdown document containing scanned sources and skill tables.
 func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 	projectName := filepath.Base(cwd)
 	var lines []string
@@ -449,4 +486,207 @@ func fileExists(path string) bool {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// hasRegistryMarkers reports whether content contains the mandatory markdown
+// headers and table structure of a valid skill registry.
+func hasRegistryMarkers(content string) bool {
+	return strings.Contains(content, "# Skill Registry") &&
+		strings.Contains(content, "## Skills") &&
+		strings.Contains(content, "| Skill | Trigger / description | Scope | Path |") &&
+		strings.Contains(content, "| --- | --- | --- | --- |")
+}
+
+// countRegistrySkills counts the skill rows in the registry's markdown table.
+func countRegistrySkills(content string) int {
+	idx := strings.Index(content, "## Skills")
+	if idx == -1 {
+		return 0
+	}
+	sub := content[idx:]
+	headerIdx := strings.Index(sub, "| Skill | Trigger / description | Scope | Path |")
+	if headerIdx == -1 {
+		return 0
+	}
+	tableSub := sub[headerIdx:]
+	lines := strings.Split(tableSub, "\n")
+	count := 0
+	inTable := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "| ---") {
+			inTable = true
+			continue
+		}
+		if inTable {
+			if !strings.HasPrefix(trimmed, "|") {
+				if count > 0 || trimmed != "" {
+					break
+				}
+				continue
+			}
+			count++
+		}
+	}
+	return count
+}
+
+// commitRegistryPair writes the registry markdown and its cache metadata file
+// atomically, rolling back any partial changes if either write fails.
+func commitRegistryPair(registryPath string, registryBytes []byte, cachePath string, cacheBytes []byte) error {
+	var prevRegistry, prevCache []byte
+	regExisted := false
+	cacheExisted := false
+
+	if data, err := os.ReadFile(registryPath); err == nil {
+		prevRegistry = data
+		regExisted = true
+	}
+	if data, err := os.ReadFile(cachePath); err == nil {
+		prevCache = data
+		cacheExisted = true
+	}
+
+	if _, err := filemerge.WriteFileAtomic(registryPath, registryBytes, 0o644); err != nil {
+		return fmt.Errorf("write registry: %w", err)
+	}
+
+	cacheResult, cacheErr := filemerge.WriteFileAtomic(cachePath, cacheBytes, 0o644)
+	if cacheErr != nil {
+		writeErr := fmt.Errorf("write registry cache: %w", cacheErr)
+		var regRollbackErr error
+		if regExisted {
+			if _, err := filemerge.WriteFileAtomic(registryPath, prevRegistry, 0o644); err != nil {
+				regRollbackErr = fmt.Errorf("rollback registry: %w", err)
+			}
+		} else {
+			if err := os.Remove(registryPath); err != nil && !os.IsNotExist(err) {
+				regRollbackErr = fmt.Errorf("rollback registry remove: %w", err)
+			}
+		}
+
+		var cacheRollbackErr error
+		if cacheResult.Changed {
+			if cacheExisted {
+				if _, err := filemerge.WriteFileAtomic(cachePath, prevCache, 0o644); err != nil {
+					cacheRollbackErr = fmt.Errorf("rollback registry cache: %w", err)
+				}
+			} else {
+				if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
+					cacheRollbackErr = fmt.Errorf("rollback registry cache remove: %w", err)
+				}
+			}
+		}
+
+		return errors.Join(writeErr, regRollbackErr, cacheRollbackErr)
+	}
+
+	return nil
+}
+
+// PreparedLoad represents a validated curated skill registry ready to be
+// committed to the project's .atl directory.
+type PreparedLoad struct {
+	LoadPath     string
+	Cwd          string
+	RegistryPath string
+	CachePath    string
+	Content      []byte
+	Fingerprint  string
+	SkillCount   int
+}
+
+// PrepareLoadRegistry validates and parses a curated skill registry file without
+// modifying the project filesystem, gitignore, or registry cache. It returns a
+// PreparedLoad that callers can inspect and subsequently commit.
+func PrepareLoadRegistry(loadPath, cwd string) (PreparedLoad, error) {
+	if strings.TrimSpace(loadPath) == "" {
+		return PreparedLoad{}, fmt.Errorf("load path cannot be empty")
+	}
+	if strings.TrimSpace(cwd) == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return PreparedLoad{}, fmt.Errorf("resolve cwd: %w", err)
+		}
+	}
+	cwd = filepath.Clean(cwd)
+
+	cleanLoadPath := filepath.Clean(loadPath)
+	data, err := os.ReadFile(cleanLoadPath)
+	if err != nil && !filepath.IsAbs(cleanLoadPath) {
+		if dataCwd, errCwd := os.ReadFile(filepath.Join(cwd, cleanLoadPath)); errCwd == nil {
+			data = dataCwd
+			err = nil
+			cleanLoadPath = filepath.Join(cwd, cleanLoadPath)
+		}
+	}
+	if err != nil {
+		return PreparedLoad{}, fmt.Errorf("read curated registry %q: %w", loadPath, err)
+	}
+
+	contentStr := string(data)
+	if !hasRegistryMarkers(contentStr) {
+		return PreparedLoad{}, fmt.Errorf("invalid skill registry format: %s missing required table or section markers", loadPath)
+	}
+
+	sum := sha256.Sum256(data)
+	fp := fmt.Sprintf("loaded:%x", sum)
+	count := countRegistrySkills(contentStr)
+
+	return PreparedLoad{
+		LoadPath:     cleanLoadPath,
+		Cwd:          cwd,
+		RegistryPath: filepath.Join(cwd, RegistryRelPath),
+		CachePath:    filepath.Join(cwd, CacheRelPath),
+		Content:      data,
+		Fingerprint:  fp,
+		SkillCount:   count,
+	}, nil
+}
+
+// Commit writes the prepared registry and its cache metadata to the project's
+// .atl directory. When force is false and the destination matches curated content
+// with a valid cache fingerprint, it reports a cache-hit without rewriting.
+// If the destination has drifted or force is true, it restores the curated bytes.
+func (p PreparedLoad) Commit(force bool) (Result, error) {
+	if err := os.MkdirAll(filepath.Dir(p.RegistryPath), 0o755); err != nil {
+		return Result{}, fmt.Errorf("create .atl directory: %w", err)
+	}
+
+	cached := readCachedFingerprint(p.CachePath)
+	if !force && cached == p.Fingerprint {
+		current, readErr := os.ReadFile(p.RegistryPath)
+		if readErr == nil && string(current) == string(p.Content) {
+			return Result{
+				Regenerated: false,
+				SkillCount:  p.SkillCount,
+				Reason:      "cache-hit",
+				Registry:    p.RegistryPath,
+				Cache:       p.CachePath,
+			}, nil
+		}
+	}
+
+	cacheBytes, err := json.MarshalIndent(cacheFile{Fingerprint: p.Fingerprint}, "", "  ")
+	if err != nil {
+		return Result{}, err
+	}
+	cacheBytes = append(cacheBytes, '\n')
+
+	if err := commitRegistryPair(p.RegistryPath, p.Content, p.CachePath, cacheBytes); err != nil {
+		return Result{}, err
+	}
+
+	reason := "loaded"
+	if force {
+		reason = "forced"
+	}
+	return Result{
+		Regenerated: true,
+		SkillCount:  p.SkillCount,
+		Reason:      reason,
+		Registry:    p.RegistryPath,
+		Cache:       p.CachePath,
+	}, nil
 }

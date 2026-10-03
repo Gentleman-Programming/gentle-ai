@@ -140,6 +140,31 @@ gentle-ai skill-registry list          # name<TAB>scope<TAB>path
 gentle-ai skill-registry list --json   # machine-readable, includes descriptions
 ```
 
+## Loading a Curated Skill Registry
+
+When a repository maintains a hand-crafted or pre-curated `.atl/skill-registry.md` (such as custom trigger descriptions, curated subsets, or fixed paths), automatic sweeps could accidentally overwrite it.
+
+You can load and freeze a curated registry using either:
+
+```bash
+gentle-ai skill-registry load /path/to/curated-registry.md
+# or
+gentle-ai skill-registry refresh --load /path/to/curated-registry.md
+```
+
+### Fingerprinting and Drift Protection
+
+- **Freeze**: Loading fingerprints the file content as `loaded:<sha256>`.
+- **Preservation**: Routine refreshes (such as background startup hooks) verify the existing registry against the loaded fingerprint. When matching, refresh preserves the curated registry with reason `manually-loaded`.
+- **Drift detection**: If the loaded registry file is edited or modified, subsequent refreshes detect the drift and regenerate the index with reason `loaded-drifted`.
+- **Forced overwrite**: To intentionally overwrite a loaded registry with a fresh scan, pass `--force` to `skill-registry refresh`.
+
+### Fail-Closed Safety
+
+Both `load` and `refresh --load` enforce fail-closed validation:
+- An empty path (`--load ""` or `load ""`) or missing argument fails immediately with an error and **never** falls through to regeneration or touches `.atl/skill-registry.md`.
+- Target files must satisfy the registry markdown contract (containing `# Skill Registry`, `## Skills`, and the standard table columns). Invalid formats are rejected before any filesystem modification.
+
 ## Quick Check
 
 ```bash
