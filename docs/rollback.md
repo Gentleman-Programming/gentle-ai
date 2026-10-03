@@ -91,6 +91,16 @@ For workspace installations, use `--scope workspace` instead, from the original 
 
 Afterward, confirm the file was regenerated and the warning for that path is gone on the next sync. A retired agent filename may no longer be generated; removing it does not bring back a retired template. Compare any customized backup with the new file before selectively reapplying changes. **Do not blindly overwrite the regenerated file with the backup**: modified bytes will again be preserved rather than updated. Keep the verified backup until recovery is confirmed.
 
+## Command Code rollback and uninstall
+
+When rolling back or uninstalling Command Code (`command-code`), gentle-ai manages its dedicated configuration directory under `~/.commandcode`:
+
+- **Snapshot scope**: Pre-install, pre-sync, and pre-upgrade snapshots capture all managed targets under `~/.commandcode`: `AGENTS.md`, `skills/`, `settings.json`, and `mcp.json`.
+- **`settings.json` hook pruning**: Startup refresh hooks (`SessionStart` and `Stop`) installed for `skill-registry refresh` are pruned without touching user-defined hooks, matchers, or surrounding settings keys. If `settings.json` contains no other settings after pruning, the emptied file is removed.
+- **`mcp.json` pruning vs. snapshot restore**: Snapshot restore recovers the selected snapshot (which may reinstate managed entries), whereas uninstall pruning removes managed MCP server entries (`context7`, `engram`) under `mcpServers` while preserving custom user servers. If `mcp.json` becomes an empty JSON object after pruning managed servers, the file is deleted.
+- **`AGENTS.md` section removal**: Managed marker sections (`<!-- gentle-ai:persona -->` and `<!-- gentle-ai:engram-protocol -->`) are removed while user-authored guidelines, instructions, and trailing notes are preserved verbatim.
+- **Skills cleanup**: Managed skill directories under `~/.commandcode/skills/` are removed, while any user-authored skills in that directory are preserved.
+
 ## What rollback does NOT cover
 
 - Packages installed via `brew install`, `apt-get install`, or `pacman -S` are not uninstalled during rollback. The snapshot system handles configuration files only.

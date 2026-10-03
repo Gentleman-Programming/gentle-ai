@@ -35,7 +35,7 @@ func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
 // supported adapter (including the catalog-only Conductor, which simply never
 // gets written), so a silently shrinking catalog must fail here instead of
 // quietly reducing coverage of the table-driven tests below.
-const supportedAgentCount = 17
+const supportedAgentCount = 18
 
 // retiredRemoteControlPlaneVocabulary is the wire and ceremony vocabulary the
 // organic routing projection must never carry. Rendering any of these would
