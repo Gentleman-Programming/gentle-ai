@@ -47,15 +47,16 @@ import (
 
 // SyncFlags holds parsed CLI flags for the sync command.
 type SyncFlags struct {
-	Agents             []string
-	Skills             []string
-	SDDMode            string
-	SDDProfileStrategy string
-	StrictTDD          bool
-	IncludePermissions bool
-	IncludeTheme       bool
-	Scope              string
-	DryRun             bool
+	Agents              []string
+	Skills              []string
+	SDDMode             string
+	SDDProfileStrategy  string
+	StrictTDD           bool
+	IncludePermissions  bool
+	IncludeTheme        bool
+	Scope               string
+	DryRun              bool
+	ForceCommunityTools bool
 
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
@@ -190,6 +191,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.StringVar(&opts.Scope, "scope", "", "sync scope: global (default) or workspace — env: GENTLE_AI_INSTALL_SCOPE")
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
 	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
+	fs.BoolVar(&opts.ForceCommunityTools, "force-community-tools", false, "re-run the community-tool install step even when CodeGraph is already installed and meets the contract")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 
 	if err := fs.Parse(args); err != nil {
@@ -252,6 +254,7 @@ FLAGS
   --pi-background-subagents=auto|on|off
                                      Project the resolved Pi background-subagent policy for gentle-pi; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS
                                      auto inherits managed on/off and never enables by itself; only managed policy files are ever overwritten
+  --force-community-tools            Re-run the community-tool reconcile step (sync and install paths) even when the CodeGraph CLI is already installed and meets the contract; bypasses the short-circuit and re-runs the upgrade path
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
 `)
@@ -461,9 +464,17 @@ type syncRuntime struct {
 	backgroundPolicy     bool
 	backgroundActivation *opencodeactivation.ActivationPlan
 	runtimeReady         bool
+	forceCommunityTools  bool
 
 	piBackgroundProjection *piBackgroundProjectionPlan
 }
+
+// communityToolUpgradeFn is the sync-side seam into communitytool so tests
+// can verify the upgrade contract without shelling out to npm/@latest.
+// Production binds it to communitytool.UpgradeCodeGraphIfStale, which
+// runs ONLY the package install on a stale CLI and skips the full
+// InstallWithHome validation path that legacy fixtures would fail.
+var communityToolUpgradeFn = communitytool.UpgradeCodeGraphIfStale
 
 // newSyncRuntimeWithScope builds the sync runtime for the requested scope.
 // ScopeWorkspace never touches the global backup store: the rollback snapshot
@@ -650,6 +661,16 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	if r.scope == ScopeGlobal && r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+		// The version-aware reconcile runs FIRST so the freshly-upgraded
+		// CLI is the one whose MCP wiring and instructions the guidance /
+		// Pi reconciliation steps downstream inspect and write. Naming is
+		// kept consistent with the existing "sync:community-tool:*" prefix.
+		apply = append(apply, communityToolSyncReconcileStep{
+			id:           "sync:community-tool:codegraph-reconcile",
+			workspaceDir: r.workspaceDir,
+			homeDir:      r.homeDir,
+			force:        r.forceCommunityTools,
+		})
 		apply = append(apply, &codeGraphGuidanceSyncStep{
 			id:                 "sync:community-tool:codegraph-guidance",
 			homeDir:            r.homeDir,
@@ -1217,6 +1238,43 @@ type codeGraphGuidanceSyncStep struct {
 type piCodeGraphSyncStep struct {
 	id, homeDir, workspaceDir string
 	changedFiles              *[]string
+}
+
+// communityToolSyncReconcileStep is the sync-side step that brings the
+// CodeGraph CLI up to codeGraphUpstreamVersion. It reuses the communitytool
+// entry point rather than duplicating the version-aware routing, so the
+// install and sync paths share a single probe and a single stale-vs-current
+// decision. The flag is passed straight through: force=false honours the
+// version-aware short-circuit; force=true bypasses it unconditionally.
+type communityToolSyncReconcileStep struct {
+	id           string
+	workspaceDir string
+	homeDir      string
+	force        bool
+}
+
+func (s communityToolSyncReconcileStep) ID() string { return s.id }
+
+func (s communityToolSyncReconcileStep) Run() error {
+	// Sync upgrades an EXISTING CodeGraph installation (issue #984). When no
+	// CLI is on PATH this step is a no-op: first installs belong to `gentle-ai
+	// install`, and legacy-migration flows must not trigger a package install
+	// as a side effect of syncing.
+	if _, err := cmdLookPath("codegraph"); err != nil {
+		return nil
+	}
+	_, err := communityToolUpgradeFn(
+		model.CommunityToolCodeGraph,
+		s.workspaceDir,
+		s.homeDir,
+		communitytool.RunnerFunc(runCommand),
+		communitytool.DetectorFunc(cmdLookPath),
+		s.force,
+	)
+	if err != nil {
+		return fmt.Errorf("sync community tool %q: %w", model.CommunityToolCodeGraph, err)
+	}
+	return nil
 }
 
 // openCodePluginRefreshSyncStep refreshes already-installed managed
@@ -1913,10 +1971,12 @@ func validatePersistedSyncState(persisted state.InstallState, readErr error) err
 	return nil
 }
 
-// RunSyncWithSelection is the programmatic entry point for sync.
-// It skips flag parsing and agent discovery — the caller provides the homeDir
-// and a fully-built Selection (agents + components + options).
-// This is the function the TUI calls directly to avoid CLI flag parsing.
+// RunSyncWithSelection is the programmatic entry point for sync. force=false
+// is the documented programmatic contract: callers that need the force flag
+// must thread it through RunSync (which carries parsed SyncFlags) or call
+// runSyncWithSelection directly. It skips flag parsing and agent discovery
+// — the caller provides the homeDir and a fully-built Selection. This is
+// the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
 	return RunSyncWithSelectionScope(homeDir, selection, ScopeGlobal)
 }
@@ -1960,13 +2020,13 @@ func runSyncWithSelectionScopeAfterSkip(homeDir string, selection model.Selectio
 	if scope == ScopeGlobal {
 		preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(selection.Agents, model.AgentPi))
 	}
-	return runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground)
+	return runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground, false)
 }
 
 var syncStagePlan = func(runtime *syncRuntime) pipeline.StagePlan { return runtime.stagePlan() }
 var compareChangedSyncFiles = changedSyncFiles
 
-func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
+func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution, forceCommunityTools bool) (SyncResult, error) {
 	agentIDs := selection.Agents
 	// The read error is captured, not discarded: the persona alias migration
 	// below must not rewrite state it could not read. Managed-asset provenance
@@ -2022,6 +2082,13 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	}
 	defer rt.state.cleanupCompatibilityTransaction()
 	defer rt.state.cleanupRollbackSnapshot()
+	// --force-community-tools must reach the runtime for every caller of this
+	// shared function, not only the dry-run branch. The dry-run path constructs
+	// its own runtime via newSyncRuntimeWithScope and assigns the flag inline
+	// because it never enters this function (its plan is built and returned
+	// directly), so the local assignment below is the single authoritative
+	// plumbing point for the normal sync path.
+	rt.forceCommunityTools = forceCommunityTools
 	rt.backgroundActivation = background.activationPlan
 	if rt.backgroundActivation != nil {
 		rt.runtimeReady = rt.backgroundActivation.Capability().Ready()
@@ -2305,6 +2372,7 @@ func RunSync(args []string) (SyncResult, error) {
 		}
 		defer rt.state.cleanupCompatibilityTransaction()
 		defer rt.state.cleanupRollbackSnapshot()
+		rt.forceCommunityTools = flags.ForceCommunityTools
 		if scope == ScopeGlobal {
 			backgroundActivation, activationErr := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(agentIDs, model.AgentOpenCode))
 			if activationErr != nil {
@@ -2345,7 +2413,7 @@ func RunSync(args []string) (SyncResult, error) {
 		background.activationPlan = backgroundActivation
 		preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
 	}
-	result, err := runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground)
+	result, err := runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground, flags.ForceCommunityTools)
 	if err != nil {
 		return finishPartialSync(result, err, skipped)
 	}

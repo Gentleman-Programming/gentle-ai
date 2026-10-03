@@ -144,7 +144,7 @@ func TestCodeGraphInstallThenSyncConverges(t *testing.T) {
 			home := convergenceTestHome(t)
 			previous := installCommunityToolWithHome
 			t.Cleanup(func() { installCommunityToolWithHome = previous })
-			installCommunityToolWithHome = func(id model.CommunityToolID, _, homeDir string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+			installCommunityToolWithHome = func(id model.CommunityToolID, _, homeDir string, _ communitytool.Runner, _ communitytool.Detector, _ bool) (communitytool.Result, error) {
 				_, err := communitytool.InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id})
 				return communitytool.Result{Tool: id}, err
 			}

@@ -117,11 +117,103 @@ func DefinitionFor(id model.CommunityToolID) (Definition, bool) {
 	return Definition{}, false
 }
 
-func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
-	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
+// UpgradeCodeGraphIfStale is the sync-side entry point that brings an
+// EXISTING CodeGraph CLI up to codeGraphUpstreamVersion. It deliberately
+// runs ONLY the package install command: the agent-wiring and
+// post-install validation that InstallWithHome runs would break legacy
+// fixtures and stale-but-wired setups the sync step was never asked to
+// reconcile. First installs remain `gentle-ai install`'s job.
+//
+// The probe and version comparison reuse the existing seams
+// (codeGraphInstalledVersion, codeGraphVersionLess,
+// codeGraphUpstreamVersion, codeGraphCLIUsable) so the sync path and the
+// install path make the same stale-vs-current decision from the same
+// inputs. No version comparison is duplicated here.
+//
+//   - forceCommunityTools true → delegate to the full InstallWithHome
+//     (force=true) path so --force-community-tools keeps its
+//     cross-cutting bypass through both entry points.
+//   - CLI absent or version unparseable → no-op Result, no runner calls.
+//   - CLI at or above codeGraphUpstreamVersion and !forceCommunityTools
+//     → no-op Result, no runner calls.
+//   - Stale CLI → run ONLY the package install command emitted by
+//     CodeGraphCommandsForDetectorAndTargets (NOT the `codegraph install`
+//     wiring step), and return the Result.
+func UpgradeCodeGraphIfStale(id model.CommunityToolID, workspaceDir, homeDir string, runner Runner, detector Detector, forceCommunityTools bool) (Result, error) {
+	if runner == nil {
+		return Result{}, fmt.Errorf("community tool runner is not configured")
+	}
+	def, ok := DefinitionFor(id)
+	if !ok {
+		return Result{}, fmt.Errorf("unknown community tool %q", id)
+	}
+	if def.ID != model.CommunityToolCodeGraph {
+		return Result{}, fmt.Errorf("community tool %q is not supported", id)
+	}
+	result := Result{Tool: id}
+	// The force flag bypasses every gate and delegates to the full install
+	// path, mirroring the cross-cutting bypass in InstallWithHome. Sync
+	// inherits the same --force-community-tools semantics: a forced sync
+	// re-runs the entire reconcile, including the agent wiring and
+	// validation that this entry deliberately skips.
+	if forceCommunityTools {
+		return InstallWithHome(id, workspaceDir, homeDir, runner, detector, true)
+	}
+	if detector == nil {
+		detector = DetectorFunc(exec.LookPath)
+	}
+	// Use the same CLI admission InstallWithHome uses: the detector path
+	// must resolve and pass codeGraphCLIUsable (which rejects the WSL
+	// Windows npm shim) before we shell out to probe the version. A
+	// missing or rejected CLI is a no-op so sync never triggers a fresh
+	// install as a side effect.
+	cliPath, err := detector.LookPath(def.CommandName)
+	if err != nil || strings.TrimSpace(cliPath) == "" || !codeGraphCLIUsable(cliPath) {
+		return result, nil
+	}
+	installedVersion, hasInstalledVersion := codeGraphInstalledVersion(cliPath)
+	if !hasInstalledVersion {
+		return result, nil
+	}
+	if !codeGraphVersionLess(installedVersion, codeGraphUpstreamVersion) {
+		return result, nil
+	}
+	// Stale CLI: run only the package install command. The agent-wiring
+	// step is skipped because legacy-migration fixtures and
+	// stale-but-wired setups fail InstallWithHome's validation, and the
+	// freshly-upgraded binary picks up wiring on the next `gentle-ai
+	// install` run. There is nothing under our managed paths that the
+	// package install could touch, so no snapshot/rollback is needed.
+	commands, err := CodeGraphCommandsForDetectorAndTargets(DetectorFunc(codeGraphPackageLookPath), nil)
+	if err != nil {
+		return result, err
+	}
+	if len(commands) == 0 {
+		return result, nil
+	}
+	installCommand := commands[0]
+	result.CommandsRun = append(result.CommandsRun, strings.Join(installCommand, " "))
+	if err := runner.Run(installCommand[0], installCommand[1:]...); err != nil {
+		return result, fmt.Errorf("run %q: %w", strings.Join(installCommand, " "), err)
+	}
+	return result, nil
 }
 
-func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+// Install dispatches to InstallWithHome with the default home directory and
+// no force flag. It is the legacy entry point used by callers that have no
+// opt-in for the --force-community-tools gate; forceCommunityTools is always
+// false in this path. Callers that need to force the reconcile (CLI when the
+// user passed --force-community-tools) call InstallWithHome directly.
+func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
+	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath), false)
+}
+
+// InstallWithHome is the version-aware installer. The explicit
+// forceCommunityTools flag bypasses the CodeGraphReconcileSatisfied() /
+// codeGraphCanRepairWithoutFullInstall short-circuit unconditionally so the
+// install path runs even when the installed CLI already meets
+// codeGraphUpstreamVersion; it is the consumer's opt-in, never auto-derived.
+func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector, forceCommunityTools bool) (Result, error) {
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
 	}
@@ -136,6 +228,19 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	result := Result{Tool: id}
 	before := DetectStatus(id, homeDir, detector)
 	result.StatusBefore = &before
+	// Probe the installed CodeGraph version once. A single shared result feeds
+	// both the short-circuit gate (does the existing CLI need an upgrade to
+	// meet codeGraphUpstreamVersion?) and the drop-targets advisory (should
+	// we tell the user the detected version is older than the contract and
+	// avoid sending target ids the older binary would reject?). Probing once
+	// keeps `codeGraphInstalledVersion` cheap and preserves the existing
+	// invariant that a CLI whose version cannot be determined takes today's
+	// short-circuit, not a forced reinstall.
+	installedVersion, hasInstalledVersion := "", false
+	if before.CLI == AvailabilityAvailable && strings.TrimSpace(before.CLIPath) != "" {
+		installedVersion, hasInstalledVersion = codeGraphInstalledVersion(before.CLIPath)
+	}
+	installedVersionIsStale := hasInstalledVersion && codeGraphVersionLess(installedVersion, codeGraphUpstreamVersion)
 	snapshots, err := snapshotCodeGraphPaths(CodeGraphManagedPaths(homeDir))
 	if err != nil {
 		return result, err
@@ -146,7 +251,16 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		}
 		return result, cause
 	}
-	if before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before) {
+	// An older CodeGraph CLI is a hidden staleness: status holds "reconciled"
+	// because every detected agent is wired, but the installed binary predates
+	// codeGraphUpstreamVersion and would receive targets written against the
+	// contract and reject them. Bypass the short-circuit in that one case so
+	// the upgrade command runs. A CLI whose version cannot be determined, or
+	// that is already at or above the contract, keeps today's no-reinstall
+	// behaviour. The explicit --force-community-tools flag bypasses the gate
+	// unconditionally: it is the user's opt-in to re-run the install path even
+	// when the existing CLI is current and reconciled.
+	if (before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before)) && !installedVersionIsStale && !forceCommunityTools {
 		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
 			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
 		}
@@ -189,14 +303,12 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	// of ours it understands. A CLI that is not installed yet is exempt: the
 	// install command below fetches @latest, which meets the contract.
 	droppedBlindTargets := false
-	if before.CLI == AvailabilityAvailable && len(targets) > 0 {
-		if installed, ok := codeGraphInstalledVersion(before.CLIPath); ok && codeGraphVersionLess(installed, codeGraphUpstreamVersion) {
-			targets = nil
-			droppedBlindTargets = true
-			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
-				"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
-				installed, codeGraphUpstreamVersion))
-		}
+	if before.CLI == AvailabilityAvailable && len(targets) > 0 && installedVersionIsStale {
+		targets = nil
+		droppedBlindTargets = true
+		result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+			"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
+			installedVersion, codeGraphUpstreamVersion))
 	}
 	commands := make([][]string, 0, 2)
 	switch {
@@ -205,13 +317,28 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	case droppedBlindTargets:
 		commands = append(commands, []string{"codegraph", "install", "--yes"})
 	}
-	if before.CLI != AvailabilityAvailable {
+	// Re-install path: when no CLI is present the upgrade starts with the
+	// package install; the same applies when the existing CLI is provably
+	// older than the contract — the short-circuit skipped us, but the binary
+	// still needs to be replaced with @latest before any `codegraph install`
+	// it forwards makes sense. A stale CLI therefore routes through the same
+	// CodeGraphCommandsForDetectorAndTargets helper that a missing CLI does,
+	// re-using its package-manager resolution (npm → pnpm) and target-keep
+	// behaviour. Today only `before.CLI == AvailabilityMissing` enters this
+	// branch; R1 makes the stale but available case also enter.
+	if before.CLI != AvailabilityAvailable || installedVersionIsStale {
 		var err error
 		commands, err = CodeGraphCommandsForDetectorAndTargets(DetectorFunc(codeGraphPackageLookPath), targets)
 		if err != nil {
 			return result, err
 		}
-		if len(targets) == 0 {
+		if before.CLI == AvailabilityAvailable && installedVersionIsStale {
+			// Stale-but-available: keep both package install AND
+			// `codegraph install` so the freshly-upgraded CLI re-resolves
+			// its agents. Truncating to the package install (the missing-CLI
+			// behaviour) would leave us upgraded but unwired.
+			_ = targets
+		} else if len(targets) == 0 {
 			commands = commands[:1]
 		}
 	}

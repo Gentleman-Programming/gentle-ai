@@ -8,15 +8,16 @@ import (
 )
 
 type InstallFlags struct {
-	Agents     []string
-	Components []string
-	Skills     []string
-	Persona    string
-	Preset     string
-	SDDMode    string
-	Scope      string
-	Channel    string
-	DryRun     bool
+	Agents              []string
+	Components          []string
+	Skills              []string
+	Persona             string
+	Preset              string
+	SDDMode             string
+	Scope               string
+	Channel             string
+	DryRun              bool
+	ForceCommunityTools bool
 
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
@@ -45,6 +46,7 @@ FLAGS
   --pi-background-subagents=auto|on|off
                                      Project the resolved Pi background-subagent policy for gentle-pi; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS
                                      auto inherits managed on/off and never enables by itself; only managed policy files are ever overwritten
+  --force-community-tools            Re-run the community-tool install step even when the CodeGraph CLI is already installed and meets the contract; bypasses the short-circuit and re-runs the upgrade path
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
 `)
@@ -67,6 +69,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.StringVar(&opts.Channel, "channel", "", installChannelHelp)
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
 	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
+	fs.BoolVar(&opts.ForceCommunityTools, "force-community-tools", false, "re-run the community-tool install step even when CodeGraph is already installed and meets the contract")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 
 	if err := fs.Parse(args); err != nil {
