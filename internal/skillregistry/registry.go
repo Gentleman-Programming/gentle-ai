@@ -80,6 +80,7 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".openclaw", "skills"),
 		filepath.Join(home, ".hermes", "skills"),
 		filepath.Join(home, ".trae", "skills"),
+		filepath.Join(home, ".commandcode", "skills"),
 	}
 }
 

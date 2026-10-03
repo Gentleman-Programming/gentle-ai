@@ -182,6 +182,8 @@ func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model
 	return model.ComponentsForPreset(preset, persona)
 }
 
+var catalogAllAgents = catalog.AllAgents
+
 func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentID {
 	agents := []model.AgentID{}
 	for _, state := range detection.Configs {
@@ -222,6 +224,10 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 			agents = append(agents, model.AgentTrae)
 		case string(model.AgentHermes):
 			agents = append(agents, model.AgentHermes)
+		case "command-code":
+			// command-code is detect-only and managed externally; install is
+			// unsupported by design (matching adapter InstallCommand AgentNotInstallableError).
+			// Exclude from install defaults.
 		}
 	}
 
@@ -229,9 +235,15 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 		return agents
 	}
 
-	catalogAgents := catalog.AllAgents()
+	catalogAgents := catalogAllAgents()
 	agents = make([]model.AgentID, 0, len(catalogAgents))
 	for _, agent := range catalogAgents {
+		if agent.ID == model.AgentID("command-code") {
+			// command-code is detect-only and managed externally; install is
+			// unsupported by design (matching adapter InstallCommand AgentNotInstallableError).
+			// Exclude from install defaults.
+			continue
+		}
 		agents = append(agents, agent.ID)
 	}
 

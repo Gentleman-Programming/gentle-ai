@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
@@ -2983,7 +2984,7 @@ func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
 // makeDetectionWithAgents builds a DetectionResult with the specified agents
 // marked as Exists=true. All other agents are absent.
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes"}
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes", "command-code"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -3723,6 +3724,70 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 					len(selected), tt.configAgent, selected)
 			}
 		})
+	}
+}
+
+// TestPreselectedAgents_ExcludesCommandCode proves preselectedAgents does not
+// include command-code in TUI install/manage defaults because command-code is
+// detect-only and managed externally (install is unsupported by design).
+func TestPreselectedAgents_ExcludesCommandCode(t *testing.T) {
+	// Case 1: command-code detected alongside an installable agent.
+	detection := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+			{Agent: "claude-code", Exists: true},
+		},
+	}
+	selected := preselectedAgents(detection, state.InstallState{})
+	for _, a := range selected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("preselectedAgents() unexpectedly included command-code: %v", selected)
+		}
+	}
+	if len(selected) != 1 || selected[0] != model.AgentClaudeCode {
+		t.Fatalf("preselectedAgents() = %v, want [claude-code]", selected)
+	}
+
+	// Case 2: only command-code detected; fallback to catalog defaults must also not include command-code
+	// even when the catalog contains command-code (simulating Slice 1 addition).
+	origCatalog := catalogAllAgents
+	defer func() { catalogAllAgents = origCatalog }()
+	catalogAllAgents = func() []catalog.Agent {
+		return append(catalog.AllAgents(), catalog.Agent{ID: model.AgentID("command-code"), Name: "Command Code"})
+	}
+
+	detectionSolo := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+		},
+	}
+	soloSelected := preselectedAgents(detectionSolo, state.InstallState{})
+	if len(soloSelected) == 0 {
+		t.Fatal("preselectedAgents() with solo command-code returned empty selection")
+	}
+	for _, a := range soloSelected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("preselectedAgents() with solo command-code unexpectedly included command-code: %v", soloSelected)
+		}
+	}
+
+	// Case 3: direct agentsToManage fallback with empty detection.
+	fallbackSelected := agentsToManage(state.InstallState{}, nil)
+	if len(fallbackSelected) == 0 {
+		t.Fatal("agentsToManage() fallback returned empty selection")
+	}
+	for _, a := range fallbackSelected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("agentsToManage() fallback unexpectedly included command-code: %v", fallbackSelected)
+		}
+	}
+
+	// Case 4: detectedAgentIDs directly excludes command-code.
+	detected := detectedAgentIDs(detection)
+	for _, a := range detected {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("detectedAgentIDs() unexpectedly included command-code: %v", detected)
+		}
 	}
 }
 
