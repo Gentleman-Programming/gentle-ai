@@ -355,6 +355,10 @@ func validateReviewStartRiskReasons(reasons []reviewtransaction.RiskReason) erro
 			if reason.Signal != reviewtransaction.SignalShellProcess || reason.Path == "" || reason.OldMode != "" || reason.NewMode != "" {
 				return fmt.Errorf("invalid shell/process risk reason %#v", reason)
 			}
+		case reviewtransaction.RiskReasonDangerousSink:
+			if reason.Signal != reviewtransaction.SignalDangerousSink || reason.Path == "" || reason.OldMode != "" || reason.NewMode != "" {
+				return fmt.Errorf("invalid dangerous-sink risk reason %#v", reason) // refusal:by-design world-action: provider-built START published a malformed classifier reason and requires a code fix
+			}
 		case reviewtransaction.RiskReasonExecutableMode:
 			if reason.Signal != reviewtransaction.SignalPermissions || reason.Path == "" || reason.OldMode == "" || reason.NewMode == "" || reason.OldMode == reason.NewMode {
 				return fmt.Errorf("invalid executable-mode risk reason %#v", reason)

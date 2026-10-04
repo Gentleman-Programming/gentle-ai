@@ -711,10 +711,15 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 	return canonicalRiskReasons(reasons), nil
 }
 
+// isTestRiskPath reports whether the file itself is a test: its name follows a
+// test naming convention, or it sits under a directory that only holds tests or
+// fixtures. Production packages also use test/ and spec/ directories, so those
+// names alone are not evidence.
 func isTestRiskPath(logicalPath string) bool {
-	for _, segment := range strings.Split(asciiLower(logicalPath), "/") {
+	segments := strings.Split(asciiLower(logicalPath), "/")
+	for _, segment := range segments[:len(segments)-1] {
 		switch segment {
-		case "test", "tests", "__tests__", "testdata", "spec":
+		case "__tests__", "testdata":
 			return true
 		}
 	}

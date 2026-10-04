@@ -158,6 +158,8 @@ func reviewConsentSpanishEvidenceSubject(reason reviewtransaction.RiskReason) st
 		return "scripts de shell"
 	case reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonProcessScanLimit:
 		return "código que inicia otros procesos"
+	case reviewtransaction.RiskReasonDangerousSink:
+		return "un patrón de código peligroso"
 	case reviewtransaction.RiskReasonExecutableMode:
 		return "un cambio de permiso ejecutable"
 	case reviewtransaction.RiskReasonExecutableChange:

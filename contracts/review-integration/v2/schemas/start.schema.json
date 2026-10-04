@@ -104,11 +104,11 @@
       "properties": {
         "code": {
           "enum": [
-            "configuration_change", "empty_content", "executable_change", "executable_mode", "hot_path", "large_change",
+            "configuration_change", "dangerous_sink", "empty_content", "executable_change", "executable_mode", "hot_path", "large_change",
             "non_executable_only", "process_boundary", "process_scan_limit", "service_token", "shell_source"
           ]
         },
-        "signal": {"enum": ["auth", "update", "security", "payments", "permissions", "shell_process"]},
+        "signal": {"enum": ["auth", "update", "security", "payments", "permissions", "shell_process", "dangerous_sink"]},
         "path": {"type": "string", "minLength": 1},
         "old_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
         "new_mode": {"type": "string", "pattern": "^[0-7]{6}$"}

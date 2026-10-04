@@ -205,9 +205,11 @@ func TestPathTokensInTestFilesAreNotHighRisk(t *testing.T) {
 		"internal/auth/token_test.go",
 		"internal/security/check_test.go",
 		"src/webhook.test.ts",
-		"tests/payments/charge.py",
+		"tests/payments/test_charge.py",
 		"internal/identity/service_token_test.go",
 		"spec/auth/login.spec.ts",
+		"src/payments/__tests__/charge.ts",
+		"internal/auth/testdata/session.json",
 	} {
 		t.Run(logicalPath, func(t *testing.T) {
 			t.Parallel()
@@ -223,6 +225,58 @@ func TestPathTokensInTestFilesAreNotHighRisk(t *testing.T) {
 		}
 		if level, err := ClassifyRisk(RiskInput{Stats: stats}); err != nil || level != RiskHigh {
 			t.Fatalf("ClassifyRisk() = %q, %v; want %q", level, err, RiskHigh)
+		}
+	})
+}
+
+// TestProductionFilesUnderTestDirectoriesStayHigh is S15: a spec/ or test/
+// directory does not make its files tests, so production code there keeps the
+// evidence its path token names.
+func TestProductionFilesUnderTestDirectoriesStayHigh(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		path string
+		want RiskReason
+	}{
+		{path: "internal/payments/spec/charge.go", want: RiskReason{Code: RiskReasonHotPath, Signal: SignalPayments, Path: "internal/payments/spec/charge.go"}},
+		{path: "api/spec/service_token.go", want: RiskReason{Code: RiskReasonServiceToken, Signal: SignalAuth, Path: "api/spec/service_token.go"}},
+		{path: "internal/auth/test/session.go", want: RiskReason{Code: RiskReasonHotPath, Signal: SignalAuth, Path: "internal/auth/test/session.go"}},
+		{path: "tests/payments/charge.py", want: RiskReason{Code: RiskReasonHotPath, Signal: SignalPayments, Path: "tests/payments/charge.py"}},
+		{path: "spec/security/policy.ts", want: RiskReason{Code: RiskReasonHotPath, Signal: SignalSecurity, Path: "spec/security/policy.ts"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+			if isTestRiskPath(tt.path) {
+				t.Fatalf("isTestRiskPath(%q) = true, want false", tt.path)
+			}
+			stats := []DiffStat{{Path: tt.path, Additions: 1}}
+			if got := deriveSnapshotRiskReasons(stats, nil); !reflect.DeepEqual(got, []RiskReason{tt.want}) {
+				t.Fatalf("deriveSnapshotRiskReasons() = %#v, want %#v", got, []RiskReason{tt.want})
+			}
+			if level, err := ClassifyRisk(RiskInput{Stats: stats, Signals: []RiskSignal{tt.want.Signal}}); err != nil || level != RiskHigh {
+				t.Fatalf("ClassifyRisk() = %q, %v; want %q", level, err, RiskHigh)
+			}
+		})
+	}
+}
+
+// TestProcessScanCoversProductionFilesUnderTestDirectories is S15 for the
+// content scan: a spawn in production code under spec/ is still a process
+// boundary, while the same spawn in a real test file is not scanned.
+func TestProcessScanCoversProductionFilesUnderTestDirectories(t *testing.T) {
+	const spawn = "import subprocess\nsubprocess.run(argv)\n"
+	t.Run("production file under spec", func(t *testing.T) {
+		assessment := assessUntrackedCandidate(t, candidateFile{path: "internal/runner/spec/run.py", content: spawn})
+		want := []RiskReason{{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: "internal/runner/spec/run.py"}}
+		if assessment.Level != RiskHigh || !reflect.DeepEqual(assessment.Reasons, want) {
+			t.Fatalf("AssessSnapshotRisk() = %#v, want high with %#v", assessment, want)
+		}
+	})
+	t.Run("real test file", func(t *testing.T) {
+		assessment := assessUntrackedCandidate(t, candidateFile{path: "internal/runner/test_run.py", content: spawn})
+		if assessment.Level != RiskMedium {
+			t.Fatalf("AssessSnapshotRisk() = %#v, want medium", assessment)
 		}
 	})
 }

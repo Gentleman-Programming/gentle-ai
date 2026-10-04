@@ -36,7 +36,10 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
-		"schemas/start-v2.schema.json":             "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
+		//
+		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
+		// code and signal the classifier already publishes. Deliberate, not drift.
+		"schemas/start-v2.schema.json":             "0700f431d02128d6c3cbcb2763877a78981960918dc77fc82b8bcc8d8c1403b2",
 		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
 		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
 		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
@@ -136,7 +139,10 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// allowed property, but the native-git transport no longer needs to
 		// inline it since artifact_subject.changed_path_manifest_sha256 already
 		// commits to it. Deliberate, not drift.
-		"schemas/start.schema.json":     "27954ad34319719a68f90768c90f39254d94c62cf7f8ea90525ec4e2dbafd182",
+		//
+		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
+		// code and signal the classifier already publishes. Deliberate, not drift.
+		"schemas/start.schema.json":     "52094d27516b0a6268662ff51aabb9fa2aaa9b694590c8f91c46c3b6fe474ada",
 		"schemas/status-v5.schema.json": "8f6d05bd4ed64abc765bd7ce9ae8bed0470448cd260fc0a94dc5929b88f42a18",
 	}
 	for name, expected := range want {
@@ -161,7 +167,9 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
 		"fixtures/start-v4.fixture.json":          "639a6e78b40cb5e000ec15265fd444c243e28594035c7d376c378142162bfb02",
 		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
-		"schemas/start-v4.schema.json":            "770c6a7e40a62a945d1134cba933cfd811f4c5e6ab407a36a26ba56508bc00e4",
+		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
+		// code and signal the classifier already publishes. Deliberate, not drift.
+		"schemas/start-v4.schema.json": "a04584d36ceb006f1a9d161acea923bf85d73c134730de6c69cdd594e7d5bb17",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
