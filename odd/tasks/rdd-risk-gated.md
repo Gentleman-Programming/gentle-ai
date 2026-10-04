@@ -1,6 +1,6 @@
-# rdd-risk-gated: narrow the deterministic high-risk classifier
+# rdd-risk-gated: make native review (RDD) proportionate and useful, applying what the verify work proved
 
-Branch `feat/rdd-risk-gated` at origin/main `7af7eef8`. Evidence: re-derivation of 307 stored-high local review lineages (Engram `rdd/history-mining`).
+Branch `feat/rdd-risk-gated`, rebased onto origin/main `aa943657` (2026-10-04). Evidence: re-derivation of 307 stored-high local review lineages (Engram `rdd/history-mining`).
 Delivery: work-unit commits on the feature branch; push/PR are the user's decision.
 
 ## Specs
@@ -14,9 +14,22 @@ Delivery: work-unit commits on the feature branch; push/PR are the user's decisi
 - S7 Unchanged high signals stay high: real spawn on an added non-comment line, dangerous sink, executable-mode flip, `.github/workflows/*`, non-test shell scripts, service token, process scan limit, and `auth`/`security`/`webhook`/`payments` on non-test paths.
 - S8 Medium and passive behavior and the lens selection per tier are otherwise unchanged.
 
+- S9 Measure before changing (R1): run the native review lenses (and refuter/validator where possible) on saved blind-pack diffs with known defects and clean controls; record recall and false positives per lens as the baseline, then re-measure after each change on the same diffs.
+- S10 Lenses judge against the request (R2): each lens receives the verbatim request/feature specs and reports unmet requirements and unrequested scope, not only code smells.
+- S11 Refuter probes (R3): the refuter may run one isolated reproducing probe in a scratch copy created with mktemp under the system temp dir (never inside the workspace, no network, no installs) to confirm or drop a finding.
+- S12 Severity like verify: a severe finding must be change-caused (reproduced against the baseline) and reachable with realistic input; baseline behavior not asked to change and out-of-domain values are advisories; silently ignoring an explicit option with success, and unrequested changes to existing command output, are severe.
+- S13 Reuse verify evidence (R4): when an independent verify already ran on the same candidate, lenses receive its per-spec verdicts and probes and focus on design, security, and maintainability instead of re-checking.
+- S14 Proportionate scope (R5): review per work-unit commit (small ranges that fit the lens budget); `review start` honors the agent `escalate` input like assess does; gentle-shell forwards `escalate` to START.
+- S15 Classifier follow-ups: production directories named spec/test are not treated as tests by the path rule unless the file itself is a test file; the `dangerous_sink` reason is accepted by negotiated START.
 ## Tasks
 
 - [x] T1 S1-S8 narrow ClassifyRisk with tests (route: delegated writer, trigger: high-risk guard change in risk.go + tests; verification: independent gentle-ai-verify mutm8tdj-11-1cj6 PASS WITH ADVISORIES, W1 fixed by authorized second correction, parent spot check of focused tests ok) — commit: 8bf14263
+- [ ] T2 S15 classifier follow-ups (spec/test segments; dangerous_sink in START) — commit: pending
+- [ ] T3 S9 R1 baseline: lens recall and false positives on the blind packs (known-defect and clean diffs), local and read-only — commit: n/a (measurement)
+- [ ] T4 S12 + S10 lens/refuter instructions: severity rules and request grounding; re-measure on the same diffs — commit: pending
+- [ ] T5 S11 refuter isolated probe — commit: pending
+- [ ] T6 S13 reuse verify evidence — commit: pending
+- [ ] T7 S14 per-unit review ranges and escalate in START (+ gentle-shell forwarding, separate PR there) — commit: pending
 
 ## Log
 
@@ -27,3 +40,6 @@ Delivery: work-unit commits on the feature branch; push/PR are the user's decisi
 - L5 Correction: large authority changes reuse the existing hot_path/auth reason per authority file instead of a new code, because negotiated START (internal/cli/review_start_contract.go:335) and consent wording only accept existing codes; pre-existing gap: dangerous_sink is also rejected by START (follow-up).
 - L6 User authorized a second correction (W1 from independent verify mutm8tdj-11-1cj6): prefix-only comment skipping let real spawns drop to medium (Go `*cmd = *exec.Command`, `/* x */ exec.Command`, C `#define ... popen`, TS `#private` fields); comment skipping is now language-aware. Follow-ups not in scope: A1 `spec`/`test` path segments treated as tests by isTestRiskPath; dangerous_sink START gap.
 - L7 Committed 8bf14263. Risk tier high (deterministic review guard). Checks observed: writer go test ./internal/reviewtransaction/..., go vet, go build ./..., go test ./internal/cli/... ./e2e/organicruntime/..., gofmt; independent verify re-ran them plus START-validator and 21 consistency probes; parent re-ran focused tests (ok). Follow-ups: A1 isTestRiskPath treats spec/test segments as tests; dangerous_sink rejected by negotiated START; multi-line block comment bodies without leading * are not skipped (fails toward high).
+- L8 2026-10-04 user (verbatim): > ¿Sabés que estás ahora yendo a tocar lo de Gentle AI? Yo creo que también tendrías que hacer los cambios sobre RDD con todo lo que aprendimos del verify que habíamos hablado, ¿te acordás?
+- L9 2026-10-04 user (verbatim), choosing two separate gentle-ai PRs (parity of instructions; RDD runtime): > Dale vamos con dos
+- L10 2026-10-04 Rebased onto origin/main aa943657 cleanly; go test ./internal/reviewtransaction/... ok. Evidence carried from gentle-shell #1731: verify v2 went from 0/9 to 8/9 known defects with spec-derived probes and executed checks; severity rules needed three iterations (concrete rules are stable, abstract ones drift); the RDD refuter refuted 5 of ~550 severe findings; size, not signals, predicts lens yield.
