@@ -1658,6 +1658,11 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			return errors.New("initial compact snapshot is not repository-derived")
 		}
 		risk, lines, err := builder.ClassifySnapshotRisk(ctx, next.InitialSnapshot)
+		// A frozen agent escalation raised the classifier's tier to high and
+		// never lowers one, so high is the only tier it can carry.
+		if next.AgentEscalation != nil {
+			risk = RiskHigh
+		}
 		if err != nil || risk != next.RiskLevel || lines != next.OriginalChangedLines {
 			return errors.New("compact risk inputs do not match repository evidence")
 		}

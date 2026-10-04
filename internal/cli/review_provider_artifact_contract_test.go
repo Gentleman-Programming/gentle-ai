@@ -39,7 +39,10 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		//
 		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
 		// code and signal the classifier already publishes. Deliberate, not drift.
-		"schemas/start-v2.schema.json":             "0700f431d02128d6c3cbcb2763877a78981960918dc77fc82b8bcc8d8c1403b2",
+		//
+		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
+		// code and signal START publishes for --escalate-item. Deliberate, not drift.
+		"schemas/start-v2.schema.json":             "efde388bc82be38c947bfab8de5c94b27f0a1cbb9983a16239abef9ac3342a36",
 		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
 		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
 		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
@@ -142,7 +145,10 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		//
 		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
 		// code and signal the classifier already publishes. Deliberate, not drift.
-		"schemas/start.schema.json":     "52094d27516b0a6268662ff51aabb9fa2aaa9b694590c8f91c46c3b6fe474ada",
+		//
+		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
+		// code and signal START publishes for --escalate-item. Deliberate, not drift.
+		"schemas/start.schema.json":     "05271848b0619c73f4a9a66b5a1ad1d04d2bf975c9c91ffcd63749981a56c300",
 		"schemas/status-v5.schema.json": "8f6d05bd4ed64abc765bd7ce9ae8bed0470448cd260fc0a94dc5929b88f42a18",
 	}
 	for name, expected := range want {
@@ -169,7 +175,10 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
 		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
 		// code and signal the classifier already publishes. Deliberate, not drift.
-		"schemas/start-v4.schema.json": "a04584d36ceb006f1a9d161acea923bf85d73c134730de6c69cdd594e7d5bb17",
+		//
+		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
+		// code and signal START publishes for --escalate-item. Deliberate, not drift.
+		"schemas/start-v4.schema.json": "bc3f8fb33a74b764a63c272ace4db6fa6136a7eeef1d1f036ca5ac66f7e4f071",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

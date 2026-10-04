@@ -160,6 +160,8 @@ func reviewConsentSpanishEvidenceSubject(reason reviewtransaction.RiskReason) st
 		return "código que inicia otros procesos"
 	case reviewtransaction.RiskReasonDangerousSink:
 		return "un patrón de código peligroso"
+	case reviewtransaction.RiskReasonAgentEscalation:
+		return "el agente que hizo este cambio lo marcó como de alto riesgo"
 	case reviewtransaction.RiskReasonExecutableMode:
 		return "un cambio de permiso ejecutable"
 	case reviewtransaction.RiskReasonExecutableChange:

@@ -1800,6 +1800,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// A recovered successor keeps the agent escalation its predecessor froze,
+	// so re-assessing the repository never drops it below high.
+	assessment = escalateReviewStartAssessment(assessment, predecessorRecord.State.AgentEscalation)
 	risk, changedLines := assessment.Level, assessment.ChangedLines
 	// Prepare the frozen review shape for possible evidence reuse, not its
 	// eligibility. The core still proves every accounting-only predicate.
@@ -1852,6 +1855,11 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	// recovery never drops or replaces the request a lineage judges against.
 	if prior.FrozenRequestContext != nil {
 		if err := state.FreezeRequestContext(*prior.FrozenRequestContext); err != nil {
+			return err
+		}
+	}
+	if prior.AgentEscalation != nil {
+		if err := state.FreezeAgentEscalation(*prior.AgentEscalation); err != nil {
 			return err
 		}
 	}
@@ -2138,6 +2146,8 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
 	requestContextSource := flags.String("request-context", "", "optional file with the verbatim request or feature specs this candidate was built for, plus an optional `## Verify` section with per-spec verdicts and probes; frozen with the review and shown to every lens")
+	escalateItem := flags.String("escalate-item", "", "raise the risk to high by citing one high-risk item (1-6), exactly like review assess; never lowers a tier and is frozen with the review")
+	escalateReason := flags.String("escalate-reason", "", "one-line reason for --escalate-item")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "candidate projection: workspace or staged; staged base-diff records post-commit delivery provenance")
@@ -2196,6 +2206,10 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return reviewPreflightError(err)
 	}
 	requestContext, err := reviewRequestContextContent(*requestContextSource)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
+	escalation, err := parseReviewStartEscalation(args, *escalateItem, *escalateReason)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
@@ -2283,6 +2297,9 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return fmt.Errorf("classify facade review target: %w", err)
 	}
+	// The agent escalation raises the tier before lenses, consent, and the
+	// frozen binding are derived, exactly as review assess reports it.
+	assessment = escalateReviewStartAssessment(assessment, escalation)
 	changedLines := assessment.ChangedLines
 	lenses, err := facadeSelectedLenses(assessment, *focus)
 	if err != nil {
@@ -2323,7 +2340,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, formatReviewTargetEvidence(snapshot), selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
 					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope)+
-					reviewRequestContextFollowUpArgument(strings.TrimSpace(*requestContextSource)), *contract, *runtimeAgent, consentLocale)
+					reviewRequestContextFollowUpArgument(strings.TrimSpace(*requestContextSource))+reviewEscalationFollowUpArguments(escalation), *contract, *runtimeAgent, consentLocale)
 			if questionErr != nil {
 				return questionErr
 			}
@@ -2363,6 +2380,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 				return reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
 			}
 			request.Binding.RequestContextHash = request.State.RequestContextHash
+		}
+		if escalation != nil {
+			if err := request.State.FreezeAgentEscalation(*escalation); err != nil {
+				return reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
+			}
+			frozen := *escalation
+			request.Binding.AgentEscalation = &frozen
 		}
 		// #1854: threaded through so the exact atomic START commit below can
 		// also report a requested trace's committed-but-degraded outcome,
@@ -2475,6 +2499,12 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 	if counts["request-context"] > 1 {
 		return errors.New("review start repeats --request-context") // refusal:by-design operator-knowledge: only the caller knows which single request file the candidate was built for
 	}
+	if counts["escalate-item"] > 1 {
+		return errors.New("review start repeats --escalate-item") // refusal:by-design operator-knowledge: only the caller knows which single high-risk item it cites
+	}
+	if counts["escalate-reason"] > 1 {
+		return errors.New("review start repeats --escalate-reason") // refusal:by-design operator-knowledge: only the caller knows its one-line escalation reason
+	}
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
 	case reviewConsentModeNone, reviewConsentModeRelay, reviewConsentModeGranted, reviewConsentModeDeclined:
 	default:
@@ -2568,7 +2598,7 @@ func reviewStartBindingFlagCounts(args []string) map[string]int {
 			continue
 		}
 		switch name {
-		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale", "request-context":
+		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale", "request-context", "escalate-item", "escalate-reason":
 			counts[name]++
 		}
 		if kind != reviewIntegrationBoolFlag && !hasValue {

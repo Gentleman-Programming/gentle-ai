@@ -69,6 +69,17 @@ The file may end with an optional verify section opened by a line `## Verify`. P
 
 The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`). Binaries released before this flag reject those fields when they read that authority.
 
+#### Agent escalation (`--escalate-item <1-6> --escalate-reason <text>`)
+
+START accepts the same escalation pair as `review assess`, with the same validation: both flags or neither, an item from 1 to 6 of the shared high-risk list, and a non-empty reason of at most 500 bytes (UTF-8) on one line. Each flag may appear only once.
+
+- The escalation raises `passive` or `medium` to `high`, so START selects the canonical 4R lenses. It never lowers a tier.
+- `risk_reasons` gains an `agent_escalation` reason (signal `agent_escalation`, no path). Consent names it as "the agent that made this change flagged it as high risk" ("el agente que hizo este cambio lo marcó como de alto riesgo").
+- START freezes the escalation with the authority (`agent_escalation` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on the same lineage with a different escalation, or without it, is an `atomic_start_conflict`.
+- Recovery successors inherit the frozen escalation and stay `high`. A relayed consent answer repeats both flags.
+
+Without the flags, START and the persisted authority are unchanged. The `next_transition` of `review assess` is a `review status` preflight, not a START, so it does not carry the escalation: pass the same pair to START yourself.
+
 ### 3. Bound calls drive the transaction
 
 A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:

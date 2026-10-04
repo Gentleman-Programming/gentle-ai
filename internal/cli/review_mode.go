@@ -975,6 +975,8 @@ func reviewConsentEvidenceSubject(reason reviewtransaction.RiskReason) string {
 		return "code that starts other processes"
 	case reviewtransaction.RiskReasonDangerousSink:
 		return "a dangerous code pattern"
+	case reviewtransaction.RiskReasonAgentEscalation:
+		return "the agent that made this change flagged it as high risk"
 	case reviewtransaction.RiskReasonExecutableMode:
 		return "an executable permission change"
 	case reviewtransaction.RiskReasonExecutableChange:

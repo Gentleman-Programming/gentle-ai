@@ -92,6 +92,56 @@ func TestFreezeRequestContextBindsHashContentAndCapturePhase(t *testing.T) {
 	}
 }
 
+// TestFreezeAgentEscalationBindsCapturePhaseAndRequiresHigh is S14's frozen
+// input: an agent escalation is frozen once, only on a high authority, and
+// the capture phase moves with it so every artifact subject commits to it.
+func TestFreezeAgentEscalationBindsCapturePhaseAndRequiresHigh(t *testing.T) {
+	escalation := CompactAgentEscalation{Item: 2, Reason: "rewrites how service tokens are parsed"}
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	medium := newCompactFixtureStateForTarget(t, repo, "agent-escalation-freeze", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	state := medium
+	if err := medium.FreezeAgentEscalation(escalation); err == nil {
+		t.Fatal("an escalation froze on a medium authority")
+	}
+	state.RiskLevel, state.SelectedLenses = RiskHigh, append([]string(nil), supportedLenses...)
+	before, err := deriveCompactCapturePhaseRevision(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.FreezeAgentEscalation(escalation); err != nil {
+		t.Fatal(err)
+	}
+	if state.AgentEscalation == nil || *state.AgentEscalation != escalation {
+		t.Fatalf("frozen escalation = %#v", state.AgentEscalation)
+	}
+	if state.CapturePhaseRevision == "" || state.CapturePhaseRevision == before {
+		t.Fatalf("capture phase did not move with the escalation: %s", state.CapturePhaseRevision)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatalf("state with frozen escalation: %v", err)
+	}
+	if err := state.FreezeAgentEscalation(escalation); err == nil {
+		t.Fatal("a frozen escalation was replaced")
+	}
+	for name, tampered := range map[string]CompactAgentEscalation{
+		"item out of range": {Item: 7, Reason: escalation.Reason},
+		"blank reason":      {Item: 2, Reason: " "},
+		"reason too long":   {Item: 2, Reason: strings.Repeat("x", AgentEscalationReasonMax+1)},
+	} {
+		copy := state
+		copy.AgentEscalation = &tampered
+		if err := copy.Validate(); err == nil {
+			t.Fatalf("escalation with %s validated", name)
+		}
+	}
+	lowered := state
+	lowered.RiskLevel, lowered.SelectedLenses = RiskMedium, []string{LensReliability}
+	if err := lowered.Validate(); err == nil {
+		t.Fatal("an escalated authority below high validated")
+	}
+}
+
 func deref(value *string) string {
 	if value == nil {
 		return "<nil>"

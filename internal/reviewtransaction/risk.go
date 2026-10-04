@@ -55,6 +55,9 @@ const (
 	SignalPermissions   RiskSignal = "permissions"
 	SignalShellProcess  RiskSignal = "shell_process"
 	SignalDangerousSink RiskSignal = "dangerous_sink"
+	// SignalAgentEscalation is never derived from the snapshot: it marks the
+	// agent that made the change raising its review to high (S14).
+	SignalAgentEscalation RiskSignal = "agent_escalation"
 )
 
 type DiffStat struct {
@@ -91,6 +94,10 @@ const (
 	// it is a separate code because the two state different facts. Reporting an
 	// empty file as an executable change describes content that is not there.
 	RiskReasonEmptyContent RiskReasonCode = "empty_content"
+	// RiskReasonAgentEscalation reports an agent escalation frozen at START
+	// (CompactAgentEscalation), not snapshot evidence; the classifier never
+	// emits it.
+	RiskReasonAgentEscalation RiskReasonCode = "agent_escalation"
 )
 
 // RiskReason records only evidence derivable from the immutable snapshot.

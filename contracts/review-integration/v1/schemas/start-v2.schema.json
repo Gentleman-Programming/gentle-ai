@@ -193,6 +193,7 @@
       "properties": {
         "code": {
           "enum": [
+            "agent_escalation",
             "configuration_change",
             "dangerous_sink",
             "empty_content",
@@ -207,7 +208,7 @@
             "shell_source"
           ]
         },
-        "signal": {"enum": ["auth", "update", "security", "payments", "permissions", "shell_process", "dangerous_sink"]},
+        "signal": {"enum": ["auth", "update", "security", "payments", "permissions", "shell_process", "dangerous_sink", "agent_escalation"]},
         "path": {"type": "string", "minLength": 1},
         "old_mode": {"type": "string", "pattern": "^[0-7]{6}$"},
         "new_mode": {"type": "string", "pattern": "^[0-7]{6}$"}

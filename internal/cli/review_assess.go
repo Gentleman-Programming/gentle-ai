@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -205,40 +204,27 @@ var reviewAssessHighRiskItems = map[int]string{
 	6: "no test would catch a regression",
 }
 
-const (
-	reviewAssessEscalationReasonCode = "agent_escalation"
-	reviewAssessEscalationReasonMax  = 500
-)
-
-type reviewAssessEscalation struct {
-	item   int
-	reason string
-}
+const reviewAssessEscalationReasonCode = "agent_escalation"
 
 // parseReviewAssessEscalation validates the optional --escalate-item and
-// --escalate-reason pair. Both or neither must be present.
-func parseReviewAssessEscalation(args []string, item, reason string) (*reviewAssessEscalation, error) {
-	itemGiven := reviewFlagProvided(args, "--escalate-item") || strings.TrimSpace(item) != ""
-	reasonGiven := reviewFlagProvided(args, "--escalate-reason") || reason != ""
-	if !itemGiven && !reasonGiven {
-		return nil, nil
-	}
-	if !itemGiven || !reasonGiven {
+// --escalate-reason pair with the same rules START applies
+// (reviewEscalationFromFlags). Both or neither must be present.
+func parseReviewAssessEscalation(args []string, item, reason string) (*reviewtransaction.CompactAgentEscalation, error) {
+	escalation, fault := reviewEscalationFromFlags(args, item, reason)
+	switch fault {
+	case reviewEscalationUnpaired:
 		return nil, errors.New("review assess --escalate-item and --escalate-reason must be passed together; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>`")
-	}
-	number, err := strconv.Atoi(strings.TrimSpace(item))
-	if _, known := reviewAssessHighRiskItems[number]; err != nil || !known {
+	case reviewEscalationBadItem:
 		return nil, fmt.Errorf("review assess --escalate-item %q must be an integer from 1 to 6 naming a high-risk item; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>`", item)
+	case reviewEscalationBadReason:
+		return nil, fmt.Errorf("review assess --escalate-reason must be non-empty and at most %d characters; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>` with a one-line reason", reviewtransaction.AgentEscalationReasonMax)
 	}
-	if strings.TrimSpace(reason) == "" || len(reason) > reviewAssessEscalationReasonMax {
-		return nil, fmt.Errorf("review assess --escalate-reason must be non-empty and at most %d characters; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>` with a one-line reason", reviewAssessEscalationReasonMax)
-	}
-	return &reviewAssessEscalation{item: number, reason: reason}, nil
+	return escalation, nil
 }
 
 // escalateReviewAssessRisk raises passive or medium to high for an agent
 // escalation and records why; it never lowers a tier.
-func escalateReviewAssessRisk(publicRisk string, reasons []ReviewAssessmentReason, escalation *reviewAssessEscalation) (string, []ReviewAssessmentReason) {
+func escalateReviewAssessRisk(publicRisk string, reasons []ReviewAssessmentReason, escalation *reviewtransaction.CompactAgentEscalation) (string, []ReviewAssessmentReason) {
 	if escalation == nil {
 		return publicRisk, reasons
 	}
@@ -247,7 +233,7 @@ func escalateReviewAssessRisk(publicRisk string, reasons []ReviewAssessmentReaso
 	}
 	return publicRisk, append(reasons, ReviewAssessmentReason{
 		Code:   reviewAssessEscalationReasonCode,
-		Detail: fmt.Sprintf("item %d (%s): %s", escalation.item, reviewAssessHighRiskItems[escalation.item], escalation.reason),
+		Detail: fmt.Sprintf("item %d (%s): %s", escalation.Item, reviewAssessHighRiskItems[escalation.Item], escalation.Reason),
 	})
 }
 
