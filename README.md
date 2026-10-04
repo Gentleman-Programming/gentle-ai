@@ -224,7 +224,7 @@ gentle-ai doctor   # verify — read-only, changes nothing
 
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
-> **Beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
+> **Beta channel and per-distro prerequisites: [Quickstart →](docs/quickstart.md) · Signature verification: [Release signing →](docs/release-signing.md#user-verification)**
 
 <div align="right"><a href="#top">Back to top</a></div>
 

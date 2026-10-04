@@ -33,9 +33,9 @@
 
 ### All platforms
 
-- Git 2.38+.
+- Git.
 - Go 1.25.10+ (for building from source).
-- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: if a selected agent isn't detected, `gentle-ai install` refuses and prints the exact `npm install -g` (or equivalent) command for you to run yourself. Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
+- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: selected agents other than Pi are configured even when their runtime isn't detected, so install those yourself. For Pi, `gentle-ai install` refuses to install the Pi packages until `pi` is on `PATH`. Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
 
 ### Windows
@@ -115,15 +115,17 @@ The managed install scripts select the latest version for their chosen channel a
 ## Run
 
 ```bash
-go run ./cmd/gentle-ai install --dry-run
+gentle-ai install --dry-run
 ```
 
 Use `--dry-run` first to validate selections and execution plan without applying changes. The dry-run output includes a `Platform decision` line showing the detected OS, distro, package manager, and support status.
 
+From a source clone, run `go run ./cmd/gentle-ai install` (with or without `--dry-run`) instead.
+
 ## First real install
 
 ```bash
-go run ./cmd/gentle-ai install
+gentle-ai install
 ```
 
 The installer detects your platform automatically — no flags needed to select macOS vs Linux. Install commands are resolved through the appropriate package manager (brew, apt, pacman, or dnf) based on detection.
@@ -144,9 +146,9 @@ gentle-ai sync --agent claude-code --agent opencode
 
 ## Verification outcome
 
-When checks pass, installer reports:
+When checks pass, the installer prints a ready message that names the agent commands you installed, for example:
 
-`You're ready. Run 'claude' or 'opencode' and start building.`
+``You're ready. Run `claude` or `opencode` and start building.``
 
 If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram™ MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
 
