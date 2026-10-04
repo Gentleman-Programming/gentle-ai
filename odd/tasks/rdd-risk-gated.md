@@ -25,7 +25,7 @@ Delivery: work-unit commits on the feature branch; push/PR are the user's decisi
 
 - [x] T1 S1-S8 narrow ClassifyRisk with tests (route: delegated writer, trigger: high-risk guard change in risk.go + tests; verification: independent gentle-ai-verify mutm8tdj-11-1cj6 PASS WITH ADVISORIES, W1 fixed by authorized second correction, parent spot check of focused tests ok) — commit: 8bf14263
 - [ ] T2 S15 classifier follow-ups (spec/test segments; dangerous_sink in START) — commit: pending
-- [ ] T3 S9 R1 baseline: lens recall and false positives on the blind packs (known-defect and clean diffs), local and read-only — commit: n/a (measurement)
+- [x] T3 S9 R1 baseline: lens recall and false positives on the blind packs (known-defect and clean diffs), local and read-only — commit: n/a (measurement)
 - [ ] T4 S12 + S10 lens/refuter instructions: severity rules and request grounding; re-measure on the same diffs — commit: pending
 - [ ] T5 S11 refuter isolated probe — commit: pending
 - [ ] T6 S13 reuse verify evidence — commit: pending
@@ -43,3 +43,4 @@ Delivery: work-unit commits on the feature branch; push/PR are the user's decisi
 - L8 2026-10-04 user (verbatim): > ¿Sabés que estás ahora yendo a tocar lo de Gentle AI? Yo creo que también tendrías que hacer los cambios sobre RDD con todo lo que aprendimos del verify que habíamos hablado, ¿te acordás?
 - L9 2026-10-04 user (verbatim), choosing two separate gentle-ai PRs (parity of instructions; RDD runtime): > Dale vamos con dos
 - L10 2026-10-04 Rebased onto origin/main aa943657 cleanly; go test ./internal/reviewtransaction/... ok. Evidence carried from gentle-shell #1731: verify v2 went from 0/9 to 8/9 known defects with spec-derived probes and executed checks; severity rules needed three iterations (concrete rules are stable, abstract ones drift); the RDD refuter refuted 5 of ~550 severe findings; size, not signals, predicts lens yield.
+- L11 2026-10-04 T3 baseline (writer muu9n8qr-2i-e0il, harness untracked in a detached worktree, Sol via Pi, thinking low, no tools, 2 runs per lens, real admission): blind pack of 10 diffs (9 known defects, 5 clean controls). All 10 cases are naturally medium (1 lens). RDD recall 2/9 (both only WARNING: invalid split import groups, --category drops --amount); 4-lens union = reliability lens alone (2/9) at 4x the cost; 0 BLOCKER/CRITICAL, so the refuter never ran; 0 severe false positives. Verify v2 on the same pack: 8/9. Missed: tsc errors, refund part ignored by budget, missing "Line" prefix (2), Line N renumbering, budget set --year silently accepted (2): request conformance, exact output text, and checks that need execution. Cost USD 2.25 of the USD 10 cap. Scores: <bench>/rdd-t3/scores.md.
