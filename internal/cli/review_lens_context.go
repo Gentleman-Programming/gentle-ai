@@ -126,7 +126,15 @@ const (
 		"immutable candidate evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained sequence of smaller reviewable commits, each under the budget, " +
 		"then refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
 		" and execute the returned transition for the reduced scope"
-	reviewLensContextEmptyPatchAction = "one content-changing path produced no patch bytes at all, which no legitimate candidate does; " +
+	// reviewLensContextStartRequestBudgetAction replaces the split remedy when
+	// the candidate alone fits and only the frozen request overflows.
+	reviewLensContextStartRequestBudgetAction = "no review authority was created, so nothing has to be abandoned or repaired; " +
+		"the candidate alone fits the budget and the --request-context file is the oversized part, and it is never truncated, " +
+		"so shorten the request file or omit --request-context, then run this same review start again"
+	// reviewLensContextStartRequestShareAction is appended to the split remedy
+	// when the request is part of an oversize the candidate also exceeds.
+	reviewLensContextStartRequestShareAction = "; the --request-context file counts against the same budget, so also shorten it or omit the flag"
+	reviewLensContextEmptyPatchAction        = "one content-changing path produced no patch bytes at all, which no legitimate candidate does; " +
 		"refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
 		" and run this operation again, and if the same path keeps producing no patch treat it as a native inspection defect and stop retrying"
 	reviewLensContextDeadlineAction = "refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
@@ -407,21 +415,46 @@ func reviewLensContextCompactAtomicStartBudgetRefusal(
 	if outcome != reviewLensContextOverBudget {
 		return nil
 	}
-	return reviewPreflightRefusal(reviewLensContextStartBudgetReason,
-		&reviewLensContextError{Code: "lens_context_budget_exceeded", Action: reviewLensContextStartBudgetAction})
+	reason, action := reviewLensContextStartBudgetReason, reviewLensContextStartBudgetAction
+	// A frozen request is charged against the same budget, so the remedy
+	// depends on whether the candidate alone fits: probing it without the
+	// request tells a request that must shrink from a candidate that must split.
+	if state.FrozenRequestContext != nil {
+		alone := state
+		alone.FrozenRequestContext = nil
+		if aloneOutcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, alone, revision); aloneOutcome == reviewLensContextRepresentable {
+			reason, action = reviewLensContextStartRequestBudgetReason, reviewLensContextStartRequestBudgetAction
+		} else {
+			action += reviewLensContextStartRequestShareAction
+		}
+	}
+	return reviewPreflightRefusal(reason, &reviewLensContextError{Code: "lens_context_budget_exceeded", Action: action})
 }
 
 // reviewLensContextStartBudgetReason classifies START's budget refusal. The
 // default "correct the request you sent" shape would be an actively wrong
-// instruction here: no flag, projection, or lineage makes an over-budget
-// candidate representable, and raising the bound would only move the cliff.
-// The contract message stays inside the published 240-character bound and says
-// the two things a caller acts on -- that nothing was created, and that the
-// change has to be reviewed as smaller candidates. The exact runnable
-// continuation travels with the cause.
+// instruction here: no projection or lineage makes an over-budget candidate
+// representable, and raising the bound would only move the cliff. The one
+// flag that can is --request-context, when its file is part of the oversize;
+// that case is reviewLensContextStartRequestBudgetReason, or an extra remedy
+// sentence when the candidate alone also exceeds the budget. The contract
+// message stays inside the published 240-character bound and says the two
+// things a caller acts on -- that nothing was created, and that the change has
+// to be reviewed as smaller candidates. The exact runnable continuation
+// travels with the cause.
 var reviewLensContextStartBudgetReason = reviewPreflightReason{
 	Code:       "lens_context_budget_exceeded",
 	Message:    "The candidate's complete reviewer evidence exceeds the native context budget, so no review authority was created; review this change as smaller candidates that each fit under it.",
+	NextAction: "stop",
+}
+
+// reviewLensContextStartRequestBudgetReason is START's budget refusal when the
+// candidate alone fits and the frozen request is what overflows: splitting the
+// candidate cannot help, so the message names the request instead.
+var reviewLensContextStartRequestBudgetReason = reviewPreflightReason{
+	Code: "lens_context_budget_exceeded",
+	// refusal:by-design operator-knowledge: only the caller can shorten the request file it supplied
+	Message:    "The candidate fits the native context budget, but with the --request-context file it does not, so no review authority was created; shorten the request file or omit --request-context.",
 	NextAction: "stop",
 }
 

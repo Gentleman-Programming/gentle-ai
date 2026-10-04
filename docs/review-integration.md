@@ -67,7 +67,11 @@ Pass `--request-context <file>` to make the lenses judge the candidate against t
 
 The file may end with an optional verify section opened by a line `## Verify`. Put the per-spec verdicts and probes from an independent verify of the same candidate there. When it is present, lenses treat the specs it reports as passing as already checked, and focus on design, security, and maintainability.
 
-The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`). Binaries released before this flag reject those fields when they read that authority.
+The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`).
+
+If the candidate alone fits the lens context budget and the request is what overflows, START's `lens_context_budget_exceeded` refusal names `--request-context` and says to shorten the file or omit the flag. When the candidate also overflows, the refusal asks for smaller candidates and adds that the request counts against the same budget.
+
+Older binaries and the new fields: a binary released before `--request-context` (or before the START escalate flags below) cannot decode authority that carries `request_context_hash`, `frozen_request_context`, or `agent_escalation`. Its `review status` reports that lineage with `applicability: corrupted` and action `repair_authority`, and its `review repair` does not support that repair, so the older binary can neither continue nor repair the lineage. Continue it with a binary that includes these fields. Authority started without them keeps its bytes and stays readable by older binaries.
 
 #### Agent escalation (`--escalate-item <1-6> --escalate-reason <text>`)
 
@@ -78,7 +82,7 @@ START accepts the same escalation pair as `review assess`, with the same validat
 - START freezes the escalation with the authority (`agent_escalation` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on the same lineage with a different escalation, or without it, is an `atomic_start_conflict`.
 - Recovery successors inherit the frozen escalation and stay `high`. A relayed consent answer repeats both flags.
 
-Without the flags, START and the persisted authority are unchanged. The `next_transition` of `review assess` is a `review status` preflight, not a START, so it does not carry the escalation: pass the same pair to START yourself.
+Without the flags, START and the persisted authority are unchanged. Authority that carries an escalation is not readable by older binaries; see the request-context compatibility note above. The `next_transition` of `review assess` is a `review status` preflight, not a START, so it does not carry the escalation: pass the same pair to START yourself.
 
 ### 3. Bound calls drive the transaction
 

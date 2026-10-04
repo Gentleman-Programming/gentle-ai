@@ -180,6 +180,34 @@ func TestReviewStartCountsRequestContextAgainstLensBudget(t *testing.T) {
 	}
 }
 
+// TestReviewStartBudgetRefusalNamesOversizedRequestContext is A1: when the
+// candidate alone fits and the request is what overflows, the refusal names
+// --request-context and says to shorten or omit it instead of asking for a
+// split that cannot help.
+func TestReviewStartBudgetRefusalNamesOversizedRequestContext(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
+	request := writeRequestContextFile(t, strings.Repeat("S1 requirement line\n", reviewLensContextByteBudget/20+1))
+
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", "request-context-remedy", "--request-context", request,
+	}), &output)
+	if err == nil {
+		t.Fatal("over-budget request context START succeeded")
+	}
+	refusal := err.Error() + output.String()
+	for _, required := range []string{"--request-context", "shorten", "omit"} {
+		if !strings.Contains(refusal, required) {
+			t.Fatalf("budget refusal omits %q:\n%s", required, refusal)
+		}
+	}
+	if strings.Contains(refusal, "split") || strings.Contains(refusal, "smaller candidates") {
+		t.Fatalf("budget refusal asks to split a candidate that fits alone:\n%s", refusal)
+	}
+}
+
 // TestReviewWithoutRequestContextIsUnchanged is the PRESERVE contract: no
 // flag means no frozen fields, no section, and no request paragraph.
 func TestReviewWithoutRequestContextIsUnchanged(t *testing.T) {
