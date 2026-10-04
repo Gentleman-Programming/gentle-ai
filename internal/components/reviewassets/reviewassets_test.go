@@ -66,3 +66,29 @@ func TestInspectionCommandsIndependent(t *testing.T) {
 		t.Fatal("inspection command slices share storage")
 	}
 }
+
+func TestRenderedLensAssetsCarrySeverityRules(t *testing.T) {
+	for _, path := range []string{"claude/agents/review-risk.md", "kiro/agents/review-resilience.md"} {
+		t.Run(path, func(t *testing.T) {
+			got, ok := RenderReviewerAsset(path, assets.MustRead(path))
+			if !ok {
+				t.Fatal("lens asset did not render")
+			}
+			_, severity, found := strings.Cut(got, "## Severity\n")
+			if !found {
+				t.Fatal("rendered lens has no severity section")
+			}
+			severity, _, _ = strings.Cut(severity, "\n## ")
+			for _, required := range []string{
+				"must be caused by this change", "does not already happen at the baseline", "reachable with realistic input",
+				"was not asked to change", "out-of-domain values", "at most WARNING",
+				"ignoring an explicit option or argument while reporting success",
+				"unrequested changes to existing command output or messages",
+			} {
+				if !strings.Contains(severity, required) {
+					t.Errorf("severity section omits %q", required)
+				}
+			}
+		})
+	}
+}

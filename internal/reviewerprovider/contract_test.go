@@ -1,6 +1,7 @@
 package reviewerprovider
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,31 @@ func TestTargetedValidatorContractDoesNotPromiseOmittedGeneratedContent(t *testi
 	} {
 		if !strings.Contains(contract.PromptInstruction, required) {
 			t.Fatalf("targeted validator briefing omits the generated-path route: missing %q", required)
+		}
+	}
+}
+
+// severityRulePhrases are the concrete S12 rules every reviewer surface must
+// carry. Concrete rules stay stable across models; abstract ones drift.
+var severityRulePhrases = []string{
+	"must be caused by this change",
+	"does not already happen at the baseline",
+	"reachable with realistic input",
+	"was not asked to change",
+	"out-of-domain values",
+	"at most WARNING",
+	"ignoring an explicit option or argument while reporting success",
+	"unrequested changes to existing command output or messages",
+}
+
+func TestRefuterPromptAppliesSeverityRules(t *testing.T) {
+	contract, err := ContractFor(RoleRefuter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range append(slices.Clone(severityRulePhrases), "Refute a BLOCKER or CRITICAL claim that fails these conditions") {
+		if !strings.Contains(contract.PromptInstruction, required) {
+			t.Fatalf("refuter prompt omits severity rule %q:\n%s", required, contract.PromptInstruction)
 		}
 	}
 }

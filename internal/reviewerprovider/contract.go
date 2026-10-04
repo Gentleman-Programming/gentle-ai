@@ -107,6 +107,15 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 	"Always emit follow_ups; use [] when none exist. " +
 	"Native Go alone decides correction accounting, receipts, and delivery gates."
 
+// SeverityRules is the one severity discipline every reviewer surface renders:
+// the provider lens-context instruction, the installed reviewer bodies, and the
+// refuter prompt. It lives here because all three surfaces already import this
+// package. The rules are concrete on purpose: abstract severity guidance drifts
+// between models and runs, while these conditions can be checked per finding.
+const SeverityRules = "Severity rules. A BLOCKER or CRITICAL finding must be caused by this change -- the behavior does not already happen at the baseline -- and must be reachable with realistic input. " +
+	"Behavior that already existed at the baseline and was not asked to change, and failures that need out-of-domain values, are at most WARNING. " +
+	"Silently ignoring an explicit option or argument while reporting success, and unrequested changes to existing command output or messages, are severe: report them as BLOCKER or CRITICAL."
+
 // Contract is the sole role authority for schema serving, capability reporting,
 // storage routing, prompt instruction, and raw-output limits.
 type Contract struct {
@@ -131,7 +140,8 @@ var contracts = []Contract{
 		ID: string(RoleRefuter), Role: RoleRefuter, RequestSchemaID: "gentle-ai.review-provider-refuter-request/v1",
 		ResultSchemaID: "https://gentle-ai.dev/schema/review/refuter/v1", ResultSchema: []byte(RefuterResultSchema), StorageSlot: "transaction-refuter-batch",
 		RequiredCapabilities: []string{TransportCapability}, ResultLimit: 4 << 20,
-		PromptInstruction: "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Return exactly one corroborated, refuted, or inconclusive outcome for every supplied claim. Add no findings, modify nothing, and return exactly one JSON object with no prose. Native Go alone applies the result to RDD authority.",
+		PromptInstruction: "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Return exactly one corroborated, refuted, or inconclusive outcome for every supplied claim. Add no findings, modify nothing, and return exactly one JSON object with no prose. Native Go alone applies the result to RDD authority.\n\n" +
+			SeverityRules + " Refute a BLOCKER or CRITICAL claim that fails these conditions: it is not caused by this change, it is not reachable with realistic input, or these rules cap it at WARNING.",
 	},
 	{
 		ID: string(RoleTargetedValidator), Role: RoleTargetedValidator, RequestSchemaID: "gentle-ai.review-targeted-validation-request/v1",

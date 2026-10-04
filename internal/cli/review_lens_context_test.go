@@ -903,6 +903,28 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 	}
 }
 
+// TestReviewLensContextInstructionAppliesSeverityRules pins S12: a lens with no
+// installed agent body learns the same severity discipline from the block.
+func TestReviewLensContextInstructionAppliesSeverityRules(t *testing.T) {
+	reviewEnabledHome(t)
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	block := lensContextBlock(t, args, args[slices.Index(args, "--lens")+1])
+	instruction, found := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
+	if !found {
+		t.Fatalf("block carries no reviewer instruction:\n%s", block)
+	}
+	for _, required := range []string{
+		"must be caused by this change", "does not already happen at the baseline", "reachable with realistic input",
+		"was not asked to change", "out-of-domain values", "at most WARNING",
+		"ignoring an explicit option or argument while reporting success",
+		"unrequested changes to existing command output or messages",
+	} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("instruction omits severity rule %q:\n%s", required, instruction)
+		}
+	}
+}
+
 func lensContextSection(block, header string) (string, bool) {
 	_, after, found := strings.Cut(block, "\n"+header+"\n")
 	if !found {
