@@ -595,8 +595,8 @@ func readPiJSONObject(path string) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 
-	var object map[string]any
-	if err := json.Unmarshal(base, &object); err != nil {
+	object, err := filemerge.DecodeStrictJSONObject(base)
+	if err != nil {
 		return nil, fmt.Errorf("unmarshal pi json file %q: %w", path, err)
 	}
 	if object == nil {
