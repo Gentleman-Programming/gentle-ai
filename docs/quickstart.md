@@ -128,7 +128,7 @@ From a source clone, run `go run ./cmd/gentle-ai install` (with or without `--dr
 gentle-ai install
 ```
 
-The installer detects your platform automatically — no flags needed to select macOS vs Linux. Install commands are resolved through the appropriate package manager (brew, apt, pacman, or dnf) based on detection.
+The installer detects your platform automatically — no flags needed to select macOS vs Linux. On Linux, it uses the first supported package manager it finds on `PATH`; see [Supported Platforms](platforms.md) for the full list and detection order.
 
 After completion, verify that agent configs and selected components were installed to their expected paths.
 
@@ -178,4 +178,4 @@ Optional wrapper tools for extra defense:
 If you run the installer on an unsupported OS or Linux distro, it exits immediately with an error:
 
 - `unsupported operating system: only macOS, Linux, and Windows are supported (detected <os>)`
-- `unsupported linux distro: Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family (detected <distro>)`
+- `unsupported linux distro: no package manager found on PATH (detected distro <distro>).` The full error lists the package managers it searched, in order, and a command to check which ones your machine has.
