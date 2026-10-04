@@ -117,21 +117,32 @@ var npmBasedAgents = map[model.AgentID]struct{}{
 }
 
 // ValidateAgentInstallPreflight validates agent-specific prerequisites that must
-// exist before running installation commands.
-func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.AgentID) error {
+// exist before running installation commands. Optional caller-owned companion
+// checks run after existing prerequisites.
+func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.AgentID, checks ...func() error) error {
 	if _, ok := npmBasedAgents[agent]; ok {
 		if err := validateNpmInstallPreflight(profile); err != nil {
 			return err
 		}
 	}
+	var err error
 	switch agent {
 	case model.AgentKimi:
-		return validateKimiInstallPreflight(profile)
+		err = validateKimiInstallPreflight(profile)
 	case model.AgentPi:
-		return validatePiInstallPreflight()
-	default:
-		return nil
+		err = validatePiInstallPreflight()
 	}
+	if err != nil {
+		return err
+	}
+	for _, check := range checks {
+		if check != nil {
+			if err := check(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func validatePiInstallPreflight() error {

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	isatty "github.com/mattn/go-isatty"
+
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	codexagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
@@ -279,13 +281,17 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if backgroundActivation != nil {
 		result.Background.Activation = backgroundActivation.Report()
 	}
+	addEngramUpgradeOffer(&result.Verify)
+	var verificationErr error
 	if !result.Verify.Ready {
-		verificationErr := fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
-		rollback := orchestrator.Rollback(result.Execution)
-		if rollback.Err != nil {
-			verificationErr = errors.Join(verificationErr, rollback.Err)
+		verificationErr = fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
+		if result.Verify.RollbackRequired || result.Verify.Failed == 0 {
+			rollback := orchestrator.Rollback(result.Execution)
+			if rollback.Err != nil {
+				verificationErr = errors.Join(verificationErr, rollback.Err)
+			}
+			return result, verificationErr
 		}
-		return result, verificationErr
 	}
 
 	// Persist the user's agent selection and model assignments so that future
@@ -336,7 +342,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 
 	TelemetryTrigger(homeDir)
-	return result, nil
+	return result, verificationErr
 }
 
 func rollbackPostApplyError(orchestrator *pipeline.Orchestrator, execution pipeline.ExecutionResult, cause error) error {
@@ -2302,7 +2308,7 @@ func (s agentInstallStep) Run() error {
 		return fmt.Errorf("detect agent %q: %w", s.agent, err)
 	}
 
-	if err := installcmd.ValidateAgentInstallPreflight(s.profile, s.agent); err != nil {
+	if err := installcmd.ValidateAgentInstallPreflight(s.profile, s.agent, func() error { return validateEngramPreflight(context.Background(), []model.AgentID{s.agent}) }); err != nil {
 		return fmt.Errorf("preflight for agent %q: %w", s.agent, err)
 	}
 
@@ -3853,6 +3859,7 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 
 	if hasComponent(input.Resolved.OrderedComponents, model.ComponentEngram) {
 		checks = append(checks, engramHealthChecks(input.State, input.Resolved.Agents)...)
+		checks = append(checks, engramCompatibilityChecks(context.Background(), input.Resolved.Agents)...)
 	}
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
 	checks = append(checks, openCodeConfigChecks(input.HomeDir, input.WorkspaceDir, input.Resolved.Agents)...)
@@ -4059,7 +4066,7 @@ func (s checkDependenciesStep) Run() error {
 			}
 		}
 
-		if err := installcmd.ValidateAgentInstallPreflight(s.profile, agent); err != nil {
+		if err := installcmd.ValidateAgentInstallPreflight(s.profile, agent, func() error { return validateEngramPreflight(context.Background(), []model.AgentID{agent}) }); err != nil {
 			return fmt.Errorf("preflight for agent %q: %w", agent, err)
 		}
 	}
@@ -4171,4 +4178,57 @@ func codexOrchestratorFromState(a *state.CodexOrchestratorAssignmentState) *mode
 		return nil
 	}
 	return &model.CodexOrchestratorAssignment{Model: a.Model, Effort: model.CodexEffort(a.Effort)}
+}
+
+const engramCapabilityCheckID = "engram-instance-identity"
+const engramIncompatibleCheckID = "engram-instance-identity-incompatible"
+
+var judgeEngramCompatibility = engram.JudgeInstanceIdentityCapability
+var engramUpgradeOfferTTY = func() bool {
+	in, out := os.Stdin.Fd(), os.Stdout.Fd()
+	return (isatty.IsTerminal(in) || isatty.IsCygwinTerminal(in)) && (isatty.IsTerminal(out) || isatty.IsCygwinTerminal(out))
+}
+
+func engramCompatibilityChecks(ctx context.Context, agentIDs []model.AgentID) []verify.Check {
+	judgment := judgeEngramCompatibility(ctx, agentIDs, "")
+	check := verify.Check{ID: engramCapabilityCheckID, Description: "Engram core instance-identity capability", NoRollback: true}
+	switch judgment.Outcome {
+	case engram.OutcomeExternalServer, engram.OutcomeNotRequired, engram.OutcomeMissingBinary:
+		return []verify.Check{check}
+	case engram.OutcomeCompatible:
+		check.Run = func(context.Context) error { return nil }
+	default:
+		probeErr := judgment.Err
+		if probeErr == nil {
+			probeErr = fmt.Errorf("engram capability judgment was inconclusive (%s); run 'gentle-ai doctor' for diagnostics, then retry the original command", judgment.Outcome)
+		}
+		if judgment.Outcome == engram.OutcomeIncompatible && engram.IsIncompatibleCore(probeErr) {
+			check.ID = engramIncompatibleCheckID
+		}
+		check.Run = func(context.Context) error { return probeErr }
+	}
+	return []verify.Check{check}
+}
+
+func validateEngramPreflight(ctx context.Context, agentIDs []model.AgentID) error {
+	for _, check := range engramCompatibilityChecks(ctx, agentIDs) {
+		if check.Run != nil {
+			if err := check.Run(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func addEngramUpgradeOffer(report *verify.Report) {
+	if !engramUpgradeOfferTTY() {
+		return
+	}
+	for _, check := range report.Checks {
+		if check.ID == engramIncompatibleCheckID && check.Status == verify.CheckStatusFailed {
+			report.FinalNote += "\n\nAn Engram core upgrade is available. Run '" + engram.EngramUpgradeRecoveryCommand + "' explicitly when ready. Gentle AI will not run it automatically."
+			return
+		}
+	}
 }

@@ -1,6 +1,7 @@
 package installcmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -915,6 +916,61 @@ func TestUVInstallHint(t *testing.T) {
 			got := uvInstallHint(profile)
 			if got != tt.want {
 				t.Fatalf("uvInstallHint(%q) = %q, want %q", tt.pm, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateAgentInstallPreflightAdditionalChecks(t *testing.T) {
+	sentinel := errors.New("companion capability unavailable")
+	cases := []struct {
+		name                 string
+		noChecks, missingNpm bool
+		nilCheck, fail       bool
+		calls                int
+	}{
+		{name: "legacy_call", noChecks: true},
+		{name: "successful_check", calls: 1},
+		{name: "nil_check_ignored", nilCheck: true, calls: 1},
+		{name: "check_error_preserved", fail: true, calls: 1},
+		{name: "prerequisites_first", missingNpm: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			original := cmdLookPath
+			cmdLookPath = func(name string) (string, error) {
+				if tc.missingNpm && name == "npm" {
+					return "", errors.New("missing npm")
+				}
+				return name, nil
+			}
+			t.Cleanup(func() { cmdLookPath = original })
+			called := 0
+			checks := []func() error{func() error {
+				called++
+				if tc.fail {
+					return sentinel
+				}
+				return nil
+			}}
+			if tc.noChecks {
+				checks = nil
+			}
+			if tc.nilCheck {
+				checks = append([]func() error{nil}, checks...)
+			}
+			err := ValidateAgentInstallPreflight(system.PlatformProfile{}, model.AgentPi, checks...)
+			if called != tc.calls {
+				t.Errorf("checks=%d, want %d", called, tc.calls)
+			}
+			if tc.fail && !errors.Is(err, sentinel) {
+				t.Errorf("error=%v, want companion cause", err)
+			}
+			if tc.missingNpm && (err == nil || !strings.Contains(err.Error(), "npm")) {
+				t.Errorf("missing npm not reported: %v", err)
+			}
+			if !tc.fail && !tc.missingNpm && err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
