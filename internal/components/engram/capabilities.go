@@ -98,7 +98,7 @@ const EngramUpgradeRecoveryCommand = "gentle-ai upgrade engram"
 
 // Capability identifiers and requirement descriptions.
 const (
-	CapabilityInstanceID                = "instance-id"
+	CapabilityInstanceID               = "instance-id"
 	DefaultInstanceIdentityRequirement = "Pi and OpenCode require engram core with instance-identity capability (minimum v2.0.0-rc.11)"
 )
 
@@ -214,6 +214,72 @@ func IsIncompatibleCore(err error) bool {
 	return errors.As(err, &incompatErr)
 }
 
+// probeCommandError carries the stderr from a failed capability probe so the
+// verdict can rest on evidence rather than on the command having failed.
+type probeCommandError struct {
+	cause  error
+	stderr string
+}
+
+func (e *probeCommandError) Error() string {
+	if e.stderr != "" {
+		return fmt.Sprintf("engram instance-id failed: %v (stderr: %s)", e.cause, e.stderr)
+	}
+	return fmt.Sprintf("engram instance-id failed: %v", e.cause)
+}
+
+func (e *probeCommandError) Unwrap() error { return e.cause }
+
+// ProbeInconclusiveError records that the capability probe could not run or did
+// not complete, so the core's capability was never established either way. Its
+// message deliberately never advises upgrading the core, because no upgrade
+// repairs a canceled context or a failed temporary directory.
+type ProbeInconclusiveError struct {
+	Runtime string
+	Reason  string
+	Cause   error
+}
+
+func (e *ProbeInconclusiveError) Error() string {
+	msg := fmt.Sprintf("engram capability probe for %s was inconclusive: %s", e.Runtime, e.Reason)
+	if e.Cause != nil {
+		msg += fmt.Sprintf(" (%v)", e.Cause)
+	}
+	return msg
+}
+
+func (e *ProbeInconclusiveError) Unwrap() error { return e.Cause }
+
+// IsProbeInconclusive reports whether err means the probe could not complete.
+func IsProbeInconclusive(err error) bool {
+	if err == nil {
+		return false
+	}
+	var inconclusive *ProbeInconclusiveError
+	return errors.As(err, &inconclusive)
+}
+
+// isProvenIncompatible reports whether err is evidence that the core lacks the
+// instance-identity capability. The only such proof is a non-zero exit whose
+// stderr names the subcommand as unknown. A canceled context, a failed
+// temporary directory, or an exit carrying no such evidence proves nothing, so
+// it must never be reported as an incompatible core.
+func isProvenIncompatible(err error) bool {
+	if err == nil {
+		return false
+	}
+	var cmdErr *probeCommandError
+	if !errors.As(err, &cmdErr) {
+		return false
+	}
+	var exited interface{ ExitCode() int }
+	if !errors.As(cmdErr.cause, &exited) || exited.ExitCode() == 0 {
+		return false
+	}
+	stderr := strings.ToLower(cmdErr.stderr)
+	return strings.Contains(stderr, "unknown command") && strings.Contains(stderr, "instance-id")
+}
+
 var instanceIDProbeTimeout = 5 * time.Second
 
 // probeInstanceIDCommand executes `<command> instance-id` with the given environment and context.
@@ -225,11 +291,33 @@ var probeInstanceIDCommand = func(ctx context.Context, command string, env []str
 	cmd := execCommandContext(ctx, command, "instance-id")
 	cmd.Stdin = nil
 	cmd.Env = env
+	// Bound pipe draining even if process-tree cleanup itself fails.
+	cmd.WaitDelay = time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.Bytes(), stderr.Bytes(), err
+	terminateTree, err := startProbeProcessTree(cmd)
+	if err != nil {
+		return stdout.Bytes(), stderr.Bytes(), err
+	}
+	terminated := false
+	defer func() {
+		if !terminated {
+			// Best-effort cleanup preserves the primary probe result after normal exit.
+			_ = terminateTree()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return stdout.Bytes(), stderr.Bytes(), err
+	case <-ctx.Done():
+		terminated = true
+		cleanupErr := terminateTree()
+		<-done
+		return stdout.Bytes(), stderr.Bytes(), errors.Join(ctx.Err(), cleanupErr)
+	}
 }
 
 // ProbeInstanceID executes the instance-identity capability probe on the given command.
@@ -244,7 +332,11 @@ func ProbeInstanceID(ctx context.Context, command string) (string, error) {
 
 	tempDir, err := os.MkdirTemp("", "engram-probe-*")
 	if err != nil {
-		return "", fmt.Errorf("create temporary data dir for probe: %w", err)
+		return "", &ProbeInconclusiveError{
+			Runtime: command,
+			Reason:  fmt.Sprintf("could not create a temporary probe data directory: %v", err),
+			Cause:   err,
+		}
 	}
 	defer func() {
 		_ = os.RemoveAll(tempDir)
@@ -268,17 +360,24 @@ func ProbeInstanceID(ctx context.Context, command string) (string, error) {
 	defer cancel()
 
 	stdoutBytes, stderrBytes, cmdErr := probeInstanceIDCommand(probeCtx, command, childEnv)
-	if cmdErr != nil {
-		stderrStr := strings.TrimSpace(string(stderrBytes))
-		if stderrStr != "" {
-			return "", fmt.Errorf("engram instance-id failed: %w (stderr: %s)", cmdErr, stderrStr)
+	if probeCtx.Err() != nil {
+		return "", &ProbeInconclusiveError{
+			Runtime: command,
+			Reason:  probeCtx.Err().Error(),
+			Cause:   probeCtx.Err(),
 		}
-		return "", fmt.Errorf("engram instance-id failed: %w", cmdErr)
+	}
+	if cmdErr != nil {
+		return "", &probeCommandError{
+			cause:  cmdErr,
+			stderr: strings.TrimSpace(string(stderrBytes)),
+		}
 	}
 
 	// Validate stdout: must be a single non-empty line.
 	rawOut := string(stdoutBytes)
-	trimmedRight := strings.TrimRight(rawOut, "\r\n")
+	trimmedRight := strings.TrimSuffix(rawOut, "\n")
+	trimmedRight = strings.TrimSuffix(trimmedRight, "\r")
 	if trimmedRight == "" {
 		return "", fmt.Errorf("engram instance-id returned empty output")
 	}
@@ -298,8 +397,7 @@ func ProbeInstanceID(ctx context.Context, command string) (string, error) {
 //
 // If the binary is not found on PATH or via ENGRAM_BIN, it returns a MissingBinaryError.
 // If the binary is found and passes the probe, it returns nil.
-// If the binary is found but fails the probe, it returns an *IncompatibleCoreError
-// naming the runtime, version, capability, requirement, and recovery command in order.
+// Only a proven unsupported subcommand yields IncompatibleCoreError; other probe failures yield ProbeInconclusiveError.
 func CheckInstanceIdentityCapability(ctx context.Context, command string) error {
 	var resolvedPath string
 	var err error
@@ -320,8 +418,16 @@ func CheckInstanceIdentityCapability(ctx context.Context, command string) error 
 	if probeErr == nil {
 		return nil
 	}
-
-	version, _ := VerifyVersionCommand(resolvedPath)
+	if !isProvenIncompatible(probeErr) {
+		if IsProbeInconclusive(probeErr) {
+			return probeErr
+		}
+		return &ProbeInconclusiveError{Runtime: resolvedPath, Reason: probeErr.Error(), Cause: probeErr}
+	}
+	var version string
+	if ctx.Err() == nil {
+		version, _ = VerifyVersionCommand(resolvedPath)
+	}
 	return newIncompatibleCoreError(resolvedPath, version, probeErr)
 }
 
@@ -332,9 +438,12 @@ type InstanceIdentityOutcome string
 const (
 	OutcomeExternalServer InstanceIdentityOutcome = "external-server"
 	OutcomeNotRequired    InstanceIdentityOutcome = "not-required"
-	OutcomeMissingBinary   InstanceIdentityOutcome = "missing-binary"
-	OutcomeCompatible      InstanceIdentityOutcome = "compatible"
-	OutcomeIncompatible    InstanceIdentityOutcome = "incompatible"
+	OutcomeMissingBinary  InstanceIdentityOutcome = "missing-binary"
+	OutcomeCompatible     InstanceIdentityOutcome = "compatible"
+	OutcomeIncompatible   InstanceIdentityOutcome = "incompatible"
+	// OutcomeProbeInconclusive means the probe could not run or did not finish,
+	// so the core's capability was neither confirmed nor refuted.
+	OutcomeProbeInconclusive InstanceIdentityOutcome = "probe-inconclusive"
 )
 
 // InstanceIdentityJudgment is the unified result of evaluating engram compatibility
@@ -353,7 +462,8 @@ type InstanceIdentityJudgment struct {
 //  2. No selected agent requires instance identity: requirement skipped (OutcomeNotRequired).
 //  3. Binary missing: cannot locate executable (OutcomeMissingBinary, with MissingBinaryError payload).
 //  4. Core compatible: probe succeeded (OutcomeCompatible).
-//  5. Core incompatible: probe failed (OutcomeIncompatible, with IncompatibleCoreError payload).
+//  5. Core incompatible: probe failed with proven unsupported subcommand (OutcomeIncompatible, with IncompatibleCoreError payload).
+//  6. Probe inconclusive: probe failed or could not run without proving incompatibility (OutcomeProbeInconclusive, with ProbeInconclusiveError payload).
 func JudgeInstanceIdentityCapability(ctx context.Context, agents []model.AgentID, command string) InstanceIdentityJudgment {
 	if ExternalServerConfigured() {
 		return InstanceIdentityJudgment{
@@ -386,12 +496,18 @@ func JudgeInstanceIdentityCapability(ctx context.Context, agents []model.AgentID
 
 	_, probeErr := ProbeInstanceID(ctx, resolvedPath)
 	if probeErr != nil {
-		version, _ := VerifyVersionCommand(resolvedPath)
-		return InstanceIdentityJudgment{
-			Outcome: OutcomeIncompatible,
-			Runtime: resolvedPath,
-			Err:     newIncompatibleCoreError(resolvedPath, version, probeErr),
+		if !isProvenIncompatible(probeErr) {
+			inconclusiveErr := probeErr
+			if !IsProbeInconclusive(probeErr) {
+				inconclusiveErr = &ProbeInconclusiveError{Runtime: resolvedPath, Reason: probeErr.Error(), Cause: probeErr}
+			}
+			return InstanceIdentityJudgment{Outcome: OutcomeProbeInconclusive, Runtime: resolvedPath, Err: inconclusiveErr}
 		}
+		var version string
+		if ctx.Err() == nil {
+			version, _ = VerifyVersionCommand(resolvedPath)
+		}
+		return InstanceIdentityJudgment{Outcome: OutcomeIncompatible, Runtime: resolvedPath, Err: newIncompatibleCoreError(resolvedPath, version, probeErr)}
 	}
 
 	return InstanceIdentityJudgment{

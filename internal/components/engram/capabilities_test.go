@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -434,7 +435,7 @@ func TestCheckInstanceIdentityCapability_DistinctConditions(t *testing.T) {
 			return "/usr/bin/engram", nil
 		})
 		SetVersionForTest(t, "1.20.0")
-		setInstanceIDProbeForTest(t, "", "unknown command: instance-id\n", errors.New("exit status 1"))
+		setInstanceIDProbeForTest(t, "", "Error: unknown command instance-id", capabilityClassificationExitError{})
 
 		err := CheckInstanceIdentityCapability(ctx, "")
 		if err == nil {
@@ -564,7 +565,7 @@ func TestJudgeInstanceIdentityCapability_AllFiveOutcomes(t *testing.T) {
 			return "/usr/bin/engram", nil
 		})
 		SetVersionForTest(t, "1.18.0")
-		setInstanceIDProbeForTest(t, "", "unknown command: instance-id\n", errors.New("exit status 1"))
+		setInstanceIDProbeForTest(t, "", "Error: unknown command instance-id", capabilityClassificationExitError{})
 
 		judgment := JudgeInstanceIdentityCapability(ctx, []model.AgentID{model.AgentPi}, "")
 		if judgment.Outcome != OutcomeIncompatible {
@@ -580,4 +581,199 @@ func TestJudgeInstanceIdentityCapability_AllFiveOutcomes(t *testing.T) {
 			t.Errorf("incompatible error payload missing upgrade command: %v", judgment.Err)
 		}
 	})
+}
+
+type capabilityClassificationExitError struct{}
+
+func (capabilityClassificationExitError) Error() string { return "exit status 1" }
+func (capabilityClassificationExitError) ExitCode() int { return 1 }
+
+func TestInstanceIdentityCapabilityClassification(t *testing.T) {
+	cases := []struct {
+		name         string
+		stderr       string
+		probeErr     error
+		canceled     bool
+		badTemp      bool
+		incompatible bool
+	}{
+		{name: "unsupported_command_case_insensitive", stderr: "Error: UNKNOWN COMMAND INSTANCE-ID", probeErr: capabilityClassificationExitError{}, incompatible: true},
+		{name: "unrelated_child_failure", stderr: "storage lock failed", probeErr: capabilityClassificationExitError{}},
+		{name: "launch_failure_is_not_child_exit", stderr: "unknown command instance-id", probeErr: errors.New("could not start process")},
+		{name: "canceled_context", stderr: "unknown command instance-id", probeErr: capabilityClassificationExitError{}, canceled: true},
+		{name: "temporary_directory_failure", badTemp: true},
+		{name: "empty_success_output"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			runtime := filepath.Join(root, "engram")
+			t.Setenv("ENGRAM_URL", "")
+			originalLookPath := lookPath
+			originalExec := execCommandContext
+			versionCalls := 0
+			lookPath = func(string) (string, error) { return runtime, nil }
+			execCommandContext = func(ctx context.Context, command string, args ...string) *exec.Cmd {
+				versionCalls++
+				return exec.CommandContext(ctx, filepath.Join(root, "missing-version-runtime"), args...)
+			}
+			t.Cleanup(func() { lookPath = originalLookPath; execCommandContext = originalExec })
+			probeCalls := 0
+			setInstanceIDProbeRunnerForTest(t, func(context.Context, string, []string) ([]byte, []byte, error) {
+				probeCalls++
+				return nil, []byte(tc.stderr), tc.probeErr
+			})
+			if tc.badTemp {
+				missing := filepath.Join(root, "missing-temp-directory")
+				t.Setenv("TMPDIR", missing)
+				t.Setenv("TMP", missing)
+				t.Setenv("TEMP", missing)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			checkErr := CheckInstanceIdentityCapability(ctx, "test-engram")
+			judgment := JudgeInstanceIdentityCapability(ctx, []model.AgentID{"pi"}, "test-engram")
+			for name, err := range map[string]error{"check": checkErr, "judge": judgment.Err} {
+				if err == nil {
+					t.Fatalf("%s returned no error", name)
+				}
+				if IsIncompatibleCore(err) != tc.incompatible {
+					t.Errorf("%s incompatible=%v, want %v: %v", name, IsIncompatibleCore(err), tc.incompatible, err)
+				}
+				if IsProbeInconclusive(err) == tc.incompatible {
+					t.Errorf("%s wrong inconclusive classification: %v", name, err)
+				}
+				if !tc.incompatible && strings.Contains(strings.ToLower(err.Error()), "upgrade") {
+					t.Errorf("%s advises upgrading for an inconclusive probe: %v", name, err)
+				}
+				if tc.canceled && !errors.Is(err, context.Canceled) {
+					t.Errorf("%s lost cancellation cause: %v", name, err)
+				}
+			}
+			wantOutcome := OutcomeProbeInconclusive
+			wantVersionCalls := 0
+			if tc.incompatible {
+				wantOutcome = OutcomeIncompatible
+				wantVersionCalls = 2
+			}
+			if judgment.Outcome != wantOutcome {
+				t.Errorf("outcome=%s, want %s", judgment.Outcome, wantOutcome)
+			}
+			if versionCalls != wantVersionCalls {
+				t.Errorf("version calls=%d, want %d", versionCalls, wantVersionCalls)
+			}
+			if tc.badTemp && probeCalls != 0 {
+				t.Errorf("probe ran %d times after temp-directory failure", probeCalls)
+			}
+		})
+	}
+}
+
+func TestInstanceIDProbeProcessHelper(t *testing.T) {
+	switch os.Getenv("GENTLE_INSTANCE_ID_PROBE_HELPER") {
+	case "descendant":
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "parent":
+		child := exec.Command(os.Args[0], "-test.run=^TestInstanceIDProbeProcessHelper$")
+		child.Env = append(os.Environ(), "GENTLE_INSTANCE_ID_PROBE_HELPER=descendant")
+		child.Stdout = os.Stdout
+		child.Stderr = os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(os.Getenv("GENTLE_INSTANCE_ID_PROBE_PID_FILE"), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+			os.Exit(2)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+}
+
+func TestInstanceIDProbeRunnerTerminatesDescendant(t *testing.T) {
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "descendant.pid")
+	originalExec := execCommandContext
+	execCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestInstanceIDProbeProcessHelper$")
+	}
+	t.Cleanup(func() { execCommandContext = originalExec })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := append(os.Environ(), "GENTLE_INSTANCE_ID_PROBE_HELPER=parent", "GENTLE_INSTANCE_ID_PROBE_PID_FILE="+pidFile)
+	done := make(chan error, 1)
+	go func() { _, _, err := probeInstanceIDCommand(ctx, "test-helper", env); done <- err }()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	readyTimeout := time.NewTimer(5 * time.Second)
+	defer readyTimeout.Stop()
+	descendantPID := 0
+	for descendantPID == 0 {
+		if data, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
+				descendantPID = pid
+				break
+			}
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("probe exited before descendant was ready: %v", err)
+		case <-readyTimeout.C:
+			t.Fatal("descendant PID was not published")
+		case <-ticker.C:
+		}
+	}
+	descendant, err := os.FindProcess(descendantPID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = descendant.Kill(); _ = descendant.Release() })
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("probe error=%v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		// Release the inherited pipes before failing, so RED leaves no child behind.
+		_ = descendant.Kill()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("probe remained blocked after descendant cleanup")
+		}
+		t.Fatal("probe remained blocked by descendant pipes after cancellation")
+	}
+	assertTestProcessExited(t, descendantPID)
+}
+
+func TestProbeInstanceIDStrictSingleLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, stdout string
+		valid        bool
+	}{
+		{name: "no_terminator", stdout: "identity-token", valid: true},
+		{name: "lf", stdout: "identity-token\n", valid: true},
+		{name: "crlf", stdout: "identity-token\r\n", valid: true},
+		{name: "extra_lf", stdout: "identity-token\n\n"},
+		{name: "extra_crlf", stdout: "identity-token\r\n\r\n"},
+		{name: "multiple_lines", stdout: "identity-token\nsecond-token\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setInstanceIDProbeForTest(t, tc.stdout, "", nil)
+			token, err := ProbeInstanceID(context.Background(), "test-core")
+			if tc.valid {
+				if err != nil || token != "identity-token" {
+					t.Fatalf("token=%q err=%v", token, err)
+				}
+			} else if err == nil {
+				t.Fatalf("accepted extra output: %q", tc.stdout)
+			}
+		})
+	}
 }
