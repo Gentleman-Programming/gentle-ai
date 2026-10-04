@@ -191,3 +191,33 @@ If you're working outside a git repo, engram falls back to the directory name.
 ## Full Documentation
 
 For the complete source, configuration options, and contribution guide: [github.com/Gentleman-Programming/engram](https://github.com/Gentleman-Programming/engram)
+
+## Managed companion compatibility
+
+CLI install and sync check the effective local Engram core's `instance-id` capability before reporting a managed memory integration as ready. Executable presence and a version string alone are not compatibility proof.
+
+| Selected agent | Local instance-identity gate |
+| --- | --- |
+| Pi and OpenCode | Required for their locally managed memory integration |
+| Claude Code and Codex | Not required by this gate; their companions can warn without disabling memory |
+| Gemini CLI, Cursor and Windsurf | Not required; no local identity probe |
+
+`ENGRAM_BIN` selects the executable to check. When `ENGRAM_URL` configures an external server, local core compatibility is skipped; this check does not contact or validate that remote server. A missing binary is also skipped rather than misreported as an incompatible core.
+
+### If the core is incompatible
+
+The diagnostic names the effective runtime, reported version, missing capability and recovery command. Run an upgrade explicitly, then retry the original install or sync:
+
+```sh
+gentle-ai upgrade engram
+```
+
+If `ENGRAM_BIN` selects a custom runtime, update that runtime or select a compatible one before retrying. Gentle AI does not silently change that override or automatically run an upgrade. Additional upgrade guidance is shown only when both stdin and stdout are terminals; scripted runs do not wait for upgrade consent.
+
+### Retained work is not readiness
+
+An incompatible or inconclusive core check fails verification without reverting correctly applied managed files. Install and sync persist the retained selections and managed-asset provenance, return a verification error, and keep `Verify.Ready` false. Readiness is a verification result, not a new field in `state.json`.
+
+An unrelated hard failure, including a missing managed file alongside a core compatibility failure, still requires rollback. The compatibility probe neither upgrades the core nor changes the existing memory store: it disables update checks and uses a temporary data directory.
+
+Cancellation, temporary-directory failures, launch errors and unrelated child errors are inconclusive, not evidence that an upgrade will help. Only a non-zero child exit whose stderr contains both `unknown command` and `instance-id` proves incompatibility. Successful output must contain one non-empty line, with at most one trailing line terminator.

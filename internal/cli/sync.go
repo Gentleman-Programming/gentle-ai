@@ -2083,13 +2083,17 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		result.Background.Activation = background.activationPlan.Report()
 	}
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, rt.runtimeReady, agentIDs)
+	addEngramUpgradeOffer(&result.Verify)
+	var verificationErr error
 	if !result.Verify.Ready {
-		verificationErr := fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
-		rollback := orchestrator.Rollback(result.Execution)
-		if rollback.Err != nil {
-			verificationErr = errors.Join(verificationErr, rollback.Err)
+		verificationErr = fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
+		if result.Verify.RollbackRequired || result.Verify.Failed == 0 {
+			rollback := orchestrator.Rollback(result.Execution)
+			if rollback.Err != nil {
+				verificationErr = errors.Join(verificationErr, rollback.Err)
+			}
+			return result, verificationErr
 		}
-		return result, verificationErr
 	}
 	writer, err := deriveManagedAssetWriter()
 	if err != nil {
@@ -2109,7 +2113,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		}
 	}
 
-	return result, nil
+	return result, verificationErr
 }
 
 func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent) error {
@@ -2732,6 +2736,10 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 				},
 			})
 		}
+	}
+
+	if selection.HasComponent(model.ComponentEngram) {
+		checks = append(checks, engramCompatibilityChecks(context.Background(), selection.Agents)...)
 	}
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))

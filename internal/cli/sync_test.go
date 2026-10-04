@@ -6962,3 +6962,115 @@ func TestPartialSyncKeepsOpenCodeInPersistedSelection(t *testing.T) {
 		})
 	}
 }
+func TestRunSyncRetainsEngramCompatibilityFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		inconclusive, mixed bool
+	}{
+		{name: "incompatible"}, {name: "inconclusive", inconclusive: true}, {name: "mixed_managed_file_failure", mixed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			originalHome, originalCommand, originalLookPath := osUserHomeDir, runCommand, cmdLookPath
+			originalJudge, originalTTY := judgeEngramCompatibility, engramUpgradeOfferTTY
+			t.Cleanup(func() {
+				osUserHomeDir = originalHome
+				runCommand = originalCommand
+				cmdLookPath = originalLookPath
+				judgeEngramCompatibility = originalJudge
+				engramUpgradeOfferTTY = originalTTY
+			})
+			osUserHomeDir = func() (string, error) { return home, nil }
+			runCommand = func(string, ...string) error { return nil }
+			cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+			engramUpgradeOfferTTY = func() bool { return false }
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentEngram}, Persona: "gentleman"}
+			before := state.InstallState{InstalledAgents: []string{"opencode"}, SelectionConfigured: true, Components: []model.ComponentID{model.ComponentEngram}, ManagedAssetDigest: "before-sync", Persona: "gentleman"}
+			if err := state.Write(home, before); err != nil {
+				t.Fatal(err)
+			}
+			adapter, err := agents.NewAdapter(model.AgentOpenCode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, []agents.Adapter{adapter}, model.ComponentEngram)
+			if len(paths) == 0 {
+				t.Fatal("fixture has no Engram managed paths")
+			}
+			originalFiles := map[string][]byte{}
+			for _, path := range paths {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				data := []byte("{\"user_marker\":\"keep\"}\n")
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				originalFiles[path] = data
+			}
+			memoryFile := filepath.Join(home, ".engram", "engram.db")
+			if err := os.MkdirAll(filepath.Dir(memoryFile), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(memoryFile, []byte("preserve-memory-store"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			judgeEngramCompatibility = func(context.Context, []model.AgentID, string) engram.InstanceIdentityJudgment {
+				calls++
+				if tc.mixed {
+					for _, path := range paths {
+						if err := os.Remove(path); err != nil {
+							t.Errorf("drop managed file after apply: %v", err)
+						}
+					}
+				}
+				if tc.inconclusive {
+					return engram.InstanceIdentityJudgment{Outcome: engram.OutcomeProbeInconclusive, Err: &engram.ProbeInconclusiveError{Runtime: "test-core", Reason: "temporary failure"}}
+				}
+				return engram.InstanceIdentityJudgment{Outcome: engram.OutcomeIncompatible, Err: &engram.IncompatibleCoreError{Runtime: "test-core", Version: "1.20.0", Capability: engram.CapabilityInstanceID, Requirement: engram.DefaultInstanceIdentityRequirement, RecoveryCommand: engram.EngramUpgradeRecoveryCommand}}
+			}
+			result, err := RunSyncWithSelection(home, selection)
+			if err == nil || result.Verify.Ready {
+				t.Errorf("incompatible integration presented ready: err=%v report=%+v", err, result.Verify)
+			}
+			if calls == 0 {
+				t.Error("sync capability gate did not run")
+			}
+			if result.Verify.RollbackRequired != tc.mixed {
+				t.Errorf("rollback=%v, want %v", result.Verify.RollbackRequired, tc.mixed)
+			}
+			got, readErr := state.Read(home)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tc.mixed {
+				if got.ManagedAssetDigest != "before-sync" {
+					t.Errorf("mixed failure published new provenance: %+v", got)
+				}
+				for path, want := range originalFiles {
+					data, err := os.ReadFile(path)
+					if err != nil || string(data) != string(want) {
+						t.Errorf("rollback did not restore %s: %q %v", path, data, err)
+					}
+				}
+			} else {
+				if got.ManagedAssetDigest == "" || got.ManagedAssetDigest == "before-sync" || len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != "opencode" {
+					t.Errorf("retained sync state not persisted: %+v", got)
+				}
+				for _, path := range paths {
+					if _, err := os.Stat(path); err != nil {
+						t.Errorf("valid sync file reverted: %s: %v", path, err)
+					}
+				}
+				if tc.inconclusive && strings.Contains(err.Error(), engram.EngramUpgradeRecoveryCommand) {
+					t.Errorf("inconclusive sync advises upgrade: %v", err)
+				}
+			}
+			data, memoryErr := os.ReadFile(memoryFile)
+			if memoryErr != nil || string(data) != "preserve-memory-store" {
+				t.Errorf("memory store changed: %q %v", data, memoryErr)
+			}
+		})
+	}
+}

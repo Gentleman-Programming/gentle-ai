@@ -66,8 +66,8 @@ Out of scope (tracked separately):
 - [x] **T0** Investigate current code and establish the design with the user
 - [x] **T1** Verify model: `NoRollback` on `Check`, propagated to `CheckResult`, aggregated as `RollbackRequired`
 - [x] **T2** Engram capability probe: runtime resolution, probe hygiene, per-agent requirement model
-- [ ] **T3** Wire the gate into install and sync, with retained-state persistence and the upgrade offer
-- [ ] **T4** Documentation alongside the user-visible change
+- [x] **T3** Wire the gate into install and sync, with retained-state persistence and the upgrade offer
+- [x] **T4** Documentation alongside the user-visible change
 
 ## Acceptance criteria
 
@@ -92,7 +92,7 @@ Delegated direct. The change spans more than two non-trivial files across four p
 
 ## Progress
 
-Design settled with the user. Investigation complete: two read-only explorations of the upstream engram clone (cross-confirmed against GitHub search and against local source with CodeGraph) and one independent adversarial verification of the plan.
+Implementation is complete in the worktree through T4. WU1 and WU2 remain the only committed units; probe hardening, CLI install/sync integration, recovery dispatch proof and documentation are uncommitted. Final whole-candidate verification and native review of the new changes are pending. Nothing has been published.
 
 ### Known environmental failure
 
@@ -100,12 +100,18 @@ Design settled with the user. Investigation complete: two read-only explorations
 
 ### Work unit log
 
-| WU | Commit | Authored lines | Risk tier | RDD outcome | Verification |
-|----|--------|----------------|-----------|-------------|--------------|
-| WU1 | `e96e90f2` | 362 (incl. feature doc) | medium | not due, `under_budget` | `go build ./...` ok; `internal/verify` 30 tests ok; `internal/cli` unchanged apart from the known failure |
-| WU2 | pending | 1018 | pending | pending | `go build ./...` ok; `go vet ./internal/components/engram/...` ok; `internal/components/engram` ok; `internal/verify` ok |
+| Unit | Commit/state | Authored changed lines | Verification/review status |
+| --- | --- | --- | --- |
+| WU1 (T1) | e96e90f2 | 370 | Committed; included in the acknowledged WU1+WU2 review. |
+| WU2 (T2) | cb5af52e | 1042 | Committed; included in the acknowledged WU1+WU2 review; explicit size exception selected. |
+| Probe hardening | Uncommitted | 360 | Classification/process-tree/output regression tests observed RED then GREEN; Linux race/vet pass; Windows compile-only. |
+| T3 shared bridge | Uncommitted | 233 | Optional preflight callbacks, skipped outcomes, NoRollback and TTY-only advice tested. |
+| T3 install | Uncommitted | 149 | Real retained-state/memory-store and mixed-rollback tests pass; full CLI has only known base failure. |
+| T3 sync | Uncommitted | 134 | Real retained-state/provenance and exact-byte mixed rollback tests pass; same known base failure. |
+| Recovery dispatch | Uncommitted | 37 | Real RunArgs routing characterized with isolated updater/executor stubs. |
+| T4 docs | Uncommitted | 62 | Structural readback; final candidate checking pending. |
 
-Reviewed boundary: `main`. Next assessment base stays `main` until a review is acknowledged.
+WU1+WU2 were reviewed against main and acknowledged (revision c2333eb9, lineage review-979bbd7c7a610c54). That authority is burned and does not approve the new worktree changes. The new candidate must be assessed and checked through the native current-worktree flow after final normalization.
 
 ### Deviations from the original plan
 
@@ -122,6 +128,10 @@ The investigation overturned one approved decision and corrected two faulty prem
 - **The decision was not centralized.** `ENGRAM_URL` awareness existed as a helper nothing called, and nothing enforced that an empty agent selection means not-required rather than passed. Both are acceptance criteria, and a caller had to remember three separate facts. Replaced by one entry point returning five explicit outcomes.
 - **Probe timeout was conditional.** The bounded timeout applied only when the caller's context had no deadline, so a long-lived context produced an unbounded probe and a hung core could stall the pipeline. Now always clamped to the earlier of the caller's deadline and the probe bound.
 
+### Probe hardening and T3 completion
+
+Bug 1 fixed: only nonzero ExitCode + both case-insensitive stderr markers proves unsupported instance-id. Inconclusive temp/cancel/launch/unrelated/output errors give no upgrade advice. Bug 2 fixed: existing process tree helper + asynchronous Wait/cleanup + one-second WaitDelay; actual helper descendant-pipe RED observed, GREEN/race Linux passes, Windows COMPILE-ONLY. Strict output RED caught extra blank lines; GREEN. The capability judgment model distinguishes six real outcomes (OutcomeExternalServer, OutcomeNotRequired, OutcomeMissingBinary, OutcomeCompatible, OutcomeIncompatible, OutcomeProbeInconclusive) from the unknown-outcome defensive test. Canonical command dispatch executes real RunArgs with update/executor stubs; characterization initially passed, no fabricated RED. Install/sync real tests prove retained files, selections/provenance, Verify.Ready=false, memory sentinel untouched; mixed missing files roll back and preserve old state. No Ready JSON field (InstallState stores selections/provenance, readiness remains report). Full CLI still fails ONLY base TestRunSyncMigratesLegacyManagedPiCodeGraphSelection; all other tests pass. Full Engram/app tests and focused race/vet pass. The first whole-candidate verification caught a new refusal-ratchet violation in the unknown-outcome fallback; a message-only correction now names 'gentle-ai doctor' for diagnostics and retry of the original command, with a RED/GREEN regression and the production ratchet passing. Whole-candidate checks must be repeated on the corrected bytes. Final full build/test/assessment/new-candidate review remain pending and must NOT be marked approved/green.
+
 ### Work units
 
 - **WU1 (T1)**: verify model. Purely additive, no change to existing check behavior.
@@ -130,6 +140,10 @@ The investigation overturned one approved decision and corrected two faulty prem
 
 WU1 and WU2 land safely on their own; WU3 is the behavioral commit.
 
+### Delivery strategy
+
+Stacked PRs toward main; existing WU2-only size exception; keep code/tests/docs with behavior, <=400 for later slices; no new commits/PRs/publication/rewrite yet. Do not silently grant a size exception for the cumulative dirty diff.
+
 ## Next step
 
-T1 with tests first: `NoRollback` zero-value safety, policy propagation into `CheckResult`, and mixed-failure rollback.
+Run final whole-candidate build/tests, record the known baseline failure without claiming a globally green suite, and assess/review only the new normalized worktree changes. Preserve the burned WU1+WU2 outcome. Commit and publication decisions remain with the user.
