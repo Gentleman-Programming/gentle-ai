@@ -828,8 +828,11 @@ func dedupeSortedStrings(items []string) []string {
 	return slices.Compact(cloned)
 }
 
+// settingsTargets returns the JSON settings files generic cleaners may rewrite.
+// Only the native path is classified: OpenCode's effective path is caller
+// selected and kept as-is.
 func settingsTargets(homeDir string, adapter agents.Adapter) []string {
-	path := adapter.SettingsPath(homeDir)
+	path := agents.JSONSettingsPath(homeDir, adapter)
 	if path == "" {
 		return nil
 	}

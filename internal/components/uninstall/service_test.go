@@ -2208,3 +2208,69 @@ func TestUninstallSkillsRemovesLegacySharedMarkerAfterUpgrade(t *testing.T) {
 		})
 	}
 }
+
+// TestPartialUninstallLeavesNonJSONNativeSettingsUntouched covers #1828: Kimi
+// (TOML) and Hermes (YAML) native settings must never reach the generic JSON
+// cleaner, while managed persona text and Kimi's separate JSON MCP file are
+// still cleaned.
+func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
+	tests := []struct {
+		name     string
+		agent    model.AgentID
+		settings string
+		content  string
+		prompt   string
+		mcp      string
+	}{
+		{name: "kimi legacy", agent: model.AgentKimi, settings: ".kimi/config.toml", content: "default_model = \"k2\"\n[models.k2]\nprovider = \"moonshot\"\n", prompt: ".kimi/KIMI.md", mcp: ".kimi/mcp.json"},
+		{name: "kimi current", agent: model.AgentKimi, settings: ".kimi-code/config.toml", content: "default_model = \"k2\"\n", prompt: ".kimi-code/AGENTS.md", mcp: ".kimi-code/mcp.json"},
+		{name: "hermes", agent: model.AgentHermes, settings: ".hermes/config.yaml", content: "providers:\n  - name: hermes\n", prompt: ".hermes/SOUL.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settings)
+			promptPath := filepath.Join(home, tt.prompt)
+			writeBatchFile(t, settingsPath, tt.content)
+			if err := os.Chmod(settingsPath, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeBatchFile(t, promptPath, "My own rules.\n\n<!-- gentle-ai:persona -->\nmanaged\n<!-- /gentle-ai:persona -->\n")
+			if tt.mcp != "" {
+				writeBatchFile(t, filepath.Join(home, tt.mcp), `{"mcpServers":{"engram":{"command":"engram"},"context7":{"url":"x"},"mine":{"command":"mine"}}}`)
+			}
+			if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(tt.agent), "claude-code"}}); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+
+			result, err := svc.PartialUninstall([]model.AgentID{tt.agent}, nil)
+			if err != nil {
+				t.Fatalf("PartialUninstall() error = %v, want native %s left to its owner", err, filepath.Base(settingsPath))
+			}
+			if !slices.Equal(result.AgentsRemovedFromState, []model.AgentID{tt.agent}) || len(result.FailedAgents) != 0 {
+				t.Fatalf("removed = %v, failed = %v, want only %s removed", result.AgentsRemovedFromState, result.FailedAgents, tt.agent)
+			}
+			if got := string(mustReadServiceFile(t, settingsPath)); got != tt.content {
+				t.Fatalf("native settings = %q, want bytes preserved %q", got, tt.content)
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			}
+			prompt := string(mustReadServiceFile(t, promptPath))
+			if strings.Contains(prompt, "gentle-ai:persona") || !strings.Contains(prompt, "My own rules.") {
+				t.Fatalf("prompt = %q, want managed persona removed and user text kept", prompt)
+			}
+			if tt.mcp != "" {
+				servers, _ := readJSONFileForTest(t, filepath.Join(home, tt.mcp))["mcpServers"].(map[string]any)
+				if _, ok := servers["engram"]; ok || servers["mine"] == nil || servers["context7"] != nil {
+					t.Fatalf("mcpServers = %v, want owned servers removed and custom server kept", servers)
+				}
+			}
+		})
+	}
+}
