@@ -21,7 +21,7 @@
 | Linux (Gentoo) | emerge | Supported (install prerequisites manually) |
 | Windows 10/11 | `go install` (Go toolchain) | Supported (binary distribution held) |
 
-On Linux, support depends on which package manager is on `PATH`, not on the distribution name, so derivatives (Linux Mint, Pop!_OS, Manjaro, Rocky Linux, etc.) work too. Gentle AI checks `brew`, `apt`, `dnf`, `rpm-ostree`, `pacman`, `apk`, `zypper`, `nix`, `emerge` in that order and uses the first one it finds (see [Precedence](#fedora-silverblue-rpm-ostree-notes) for `rpm-ostree`). "Install prerequisites manually" means that when Git, curl, or Node.js is missing, `gentle-ai install` prints a download link instead of a package-manager command (npm comes with Node.js).
+On Linux, support depends on which package manager is on `PATH`, not on the distribution name, so derivatives (Linux Mint, Pop!_OS, Manjaro, Rocky Linux, etc.) work too. Gentle AI checks `brew`, `apt`, `dnf`, `rpm-ostree`, `pacman`, `apk`, `zypper`, `nix`, `emerge` in that order and uses the first one it finds (see [Precedence](#fedora-silverblue-rpm-ostree-notes) for `rpm-ostree`). "Install prerequisites manually" means that when Git, curl, or Node.js is missing, `gentle-ai install` prints a download link instead of a package-manager command. For a missing npm, it asks you to install Node.js first on every platform.
 
 Release archives are currently produced for macOS and Linux only. Windows source compatibility remains supported, but official Windows executable/archive assets and Scoop publication are temporarily unavailable pending the [Authenticode restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
