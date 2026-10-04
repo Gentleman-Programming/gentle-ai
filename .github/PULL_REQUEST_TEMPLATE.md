@@ -128,5 +128,5 @@ The following checks run automatically on this PR:
 For production Go changes in `internal/cli` or `internal/reviewtransaction`:
 
 - [ ] Identify any qualifying security, integrity, admission, repair, or governance guard and challenge its legitimate input population against real-world evidence.
-- [ ] Confirm its `guard:population` direction and claim are adjacent and accurate, and that `.guard-population-baseline.txt` changed only when the guard contract intentionally changed.
-- [ ] Do not treat a passing declaration/registry check as proof that no qualifying guard was omitted or that the population claim is semantically complete.
+- [ ] Confirm its `guard:population` direction and claim are adjacent and accurate, and name the behavior tests that exercise the claimed population.
+- [ ] Do not treat a passing declaration check as proof that no qualifying guard was omitted or that the population claim is semantically complete.

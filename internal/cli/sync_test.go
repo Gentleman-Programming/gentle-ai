@@ -5292,6 +5292,172 @@ func TestRunSyncWithSelectionPiRejectsInvalidPersistedPersonaWithoutMutation(t *
 	}
 }
 
+// Ambiguous persisted state must stop sync before the global Pi persona or
+// the state file is rewritten (#1677).
+func TestRunSyncWithSelectionPiRejectsAmbiguousPersistedStateWithoutMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stateJSON string
+	}{
+		{name: "null document", stateJSON: "null"},
+		{name: "case variant empty persona", stateJSON: `{"installed_agents":["pi"],"Persona":""}`},
+		{name: "duplicate unknown then neutral", stateJSON: `{"installed_agents":["pi"],"persona":"unknown","persona":"neutral"}`},
+		{name: "duplicate neutral then unknown", stateJSON: `{"installed_agents":["pi"],"persona":"neutral","persona":"unknown"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			t.Chdir(t.TempDir())
+			piPath := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+			originalPi := "{\n  \"mode\": \"gentleman\"\n}\n"
+			mustWriteFile(t, piPath, []byte(originalPi))
+			mustWriteFile(t, state.Path(home), []byte(tc.stateJSON))
+
+			result, err := RunSyncWithSelection(home, model.Selection{
+				Agents:     []model.AgentID{model.AgentPi},
+				Components: []model.ComponentID{model.ComponentPersona},
+			})
+			if err == nil || !strings.Contains(err.Error(), "read persisted installation state") {
+				t.Fatalf("RunSyncWithSelection() error = %v, want persisted state read error", err)
+			}
+			if result.Selection.Persona != "" {
+				t.Fatalf("Selection.Persona = %q, want unchanged empty persona", result.Selection.Persona)
+			}
+			if got := readTextFile(t, piPath); got != originalPi {
+				t.Fatalf("global Pi persona config mutated after rejected sync: got %q, want %q", got, originalPi)
+			}
+			if got := readTextFile(t, state.Path(home)); got != tc.stateJSON {
+				t.Fatalf("state file mutated after rejected sync: got %q, want %q", got, tc.stateJSON)
+			}
+		})
+	}
+}
+
+// An explicit programmatic persona must be validated before the alias
+// migration or any persona/state write; whitespace is not an omission (#1677).
+func TestRunSyncWithSelectionScopePiRejectsInvalidExplicitPersonaWithoutMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name, persona, stateJSON, wantErr string
+		scope                             InstallScope
+	}{
+		{name: "unknown", persona: "unknown", stateJSON: `{"installed_agents":["pi"],"persona":"gentleman"}`, wantErr: `unsupported persona "unknown"`, scope: ScopeGlobal},
+		{name: "whitespace", persona: " \t ", stateJSON: `{"installed_agents":["pi"],"persona":"gentleman"}`, wantErr: "whitespace-only persona", scope: ScopeGlobal},
+		{name: "unknown with persisted alias", persona: "unknown", stateJSON: `{"installed_agents":["pi"],"persona":"gentleman-neutral-artifacts"}`, wantErr: `unsupported persona "unknown"`, scope: ScopeGlobal},
+		{name: "unknown workspace", persona: "unknown", stateJSON: `{"installed_agents":["pi"],"persona":"gentleman"}`, wantErr: `unsupported persona "unknown"`, scope: ScopeWorkspace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			originalPi := "{\n  \"mode\": \"gentleman\"\n}\n"
+			piPaths := []string{filepath.Join(home, ".pi", "gentle-ai", "persona.json"), filepath.Join(workspace, ".pi", "gentle-ai", "persona.json")}
+			for _, path := range piPaths {
+				mustWriteFile(t, path, []byte(originalPi))
+			}
+			mustWriteFile(t, state.Path(home), []byte(tc.stateJSON))
+
+			_, err := RunSyncWithSelectionScope(home, model.Selection{
+				Agents:     []model.AgentID{model.AgentPi},
+				Components: []model.ComponentID{model.ComponentPersona},
+				Persona:    model.PersonaID(tc.persona),
+			}, tc.scope)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("RunSyncWithSelectionScope() error = %v, want %q", err, tc.wantErr)
+			}
+			for _, path := range piPaths {
+				if got := readTextFile(t, path); got != originalPi {
+					t.Fatalf("Pi persona config %s mutated after rejected sync: got %q", path, got)
+				}
+			}
+			if got := readTextFile(t, state.Path(home)); got != tc.stateJSON {
+				t.Fatalf("state file mutated after rejected sync: got %q, want %q", got, tc.stateJSON)
+			}
+		})
+	}
+}
+
+func TestRunSyncWithSelectionPiNormalizesValidExplicitPersona(t *testing.T) {
+	for _, tc := range []struct{ persona, want string }{
+		{persona: "neutral", want: "neutral"},
+		{persona: "gentleman", want: "gentleman"},
+		{persona: "gentleman-neutral-artifacts", want: "neutral"},
+	} {
+		t.Run(tc.persona, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			t.Chdir(t.TempDir())
+			mustWriteFile(t, state.Path(home), []byte(`{"installed_agents":["pi"],"persona":"custom"}`))
+
+			result, err := RunSyncWithSelection(home, model.Selection{
+				Agents:     []model.AgentID{model.AgentPi},
+				Components: []model.ComponentID{model.ComponentPersona},
+				Persona:    model.PersonaID(tc.persona),
+			})
+			if err != nil {
+				t.Fatalf("RunSyncWithSelection() error = %v", err)
+			}
+			if got := string(result.Selection.Persona); got != tc.want {
+				t.Fatalf("Selection.Persona = %q, want %q", got, tc.want)
+			}
+			piPath := filepath.Join(home, ".pi", "gentle-ai", "persona.json")
+			if got, want := readTextFile(t, piPath), "{\n  \"mode\": \""+tc.want+"\"\n}\n"; got != want {
+				t.Fatalf("global Pi persona config = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// The inner sync must resolve persona from the caller's preflight snapshot,
+// not a second read; the alias migration keeps its own locked re-read (#1677).
+func TestRunSyncWithSelectionScopeUsesCapturedPersistedState(t *testing.T) {
+	for _, tc := range []struct {
+		name, captured, later string
+		want                  model.PersonaID
+		scope                 InstallScope
+	}{
+		{name: "global", captured: `{"persona":"gentleman"}`, later: `{"persona":"custom"}`, want: model.PersonaGentleman, scope: ScopeGlobal},
+		{name: "workspace", captured: `{"persona":"gentleman"}`, later: `{"persona":"custom"}`, want: model.PersonaGentleman, scope: ScopeWorkspace},
+		{name: "alias migration keeps latest persona", captured: `{"persona":"gentleman-neutral-artifacts"}`, later: `{"persona":"custom"}`, want: model.PersonaNeutral, scope: ScopeGlobal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Chdir(t.TempDir())
+			mustWriteFile(t, state.Path(home), []byte(tc.captured))
+			captured, capturedErr := state.Read(home)
+			mustWriteFile(t, state.Path(home), []byte(tc.later))
+
+			result, err := runSyncWithSelectionScope(home, model.Selection{}, tc.scope, captured, capturedErr, OpenCodeBackgroundResolution{}, PiBackgroundResolution{})
+			if err != nil {
+				t.Fatalf("runSyncWithSelectionScope() error = %v", err)
+			}
+			if result.Selection.Persona != tc.want {
+				t.Fatalf("Selection.Persona = %q, want captured %q", result.Selection.Persona, tc.want)
+			}
+			if got := readTextFile(t, state.Path(home)); got != tc.later {
+				t.Fatalf("state file = %q, want latest %q untouched", got, tc.later)
+			}
+		})
+	}
+}
+
+func TestRunSyncWithSelectionScopeKeepsCapturedReadError(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(t.TempDir())
+	mustWriteFile(t, state.Path(home), []byte(`{"persona":`))
+	captured, capturedErr := state.Read(home)
+	later := `{"persona":"neutral"}`
+	mustWriteFile(t, state.Path(home), []byte(later))
+
+	_, err := runSyncWithSelectionScope(home, model.Selection{}, ScopeGlobal, captured, capturedErr, OpenCodeBackgroundResolution{}, PiBackgroundResolution{})
+	if err == nil || !strings.Contains(err.Error(), "read persisted installation state") {
+		t.Fatalf("runSyncWithSelectionScope() error = %v, want captured read error", err)
+	}
+	if got := readTextFile(t, state.Path(home)); got != later {
+		t.Fatalf("state file = %q, want %q untouched", got, later)
+	}
+}
+
 func TestRunSyncPiRejectsUnsupportedPersistedPersonaBeforeMutation(t *testing.T) {
 	home := t.TempDir()
 	setSyncTestHome(t, home)
