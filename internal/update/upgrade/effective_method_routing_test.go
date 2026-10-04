@@ -207,6 +207,9 @@ func TestGentleAIUpgradeWindowsPreservesResolvedAppDataDestination(t *testing.T)
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "scoop" && len(args) == 2 && args[0] == "config" && args[1] == "root_path" {
+			return mockCmd("echo", "'root_path' is not set")
+		}
 		if name == "go" && len(args) == 2 && args[0] == "env" {
 			switch args[1] {
 			case "GOBIN":
@@ -422,6 +425,9 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 	origExec := execCommand
 	t.Cleanup(func() { execCommand = origExec })
 	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "scoop" && len(args) == 2 && args[0] == "config" && args[1] == "root_path" {
+			return mockCmd("echo", "'root_path' is not set")
+		}
 		t.Fatalf("Windows refusal executed %s %v", name, args)
 		return nil
 	}
