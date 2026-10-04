@@ -77,7 +77,9 @@ func TestClassifyRiskUsesDeterministicFirstMatch(t *testing.T) {
 	}
 }
 
-func TestNativeReviewAuthorityPathsEmitCanonicalAuthHotPath(t *testing.T) {
+// TestNativeReviewAuthorityPathsAreRecognizedButNotHotPaths pins the exact
+// authority file set while proving a small touch is no longer 4R by name.
+func TestNativeReviewAuthorityPathsAreRecognizedButNotHotPaths(t *testing.T) {
 	tests := []struct {
 		path      string
 		authority bool
@@ -95,23 +97,15 @@ func TestNativeReviewAuthorityPathsEmitCanonicalAuthHotPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			signals := hotPathRiskSignals(tt.path)
-			if got := len(signals) == 1 && signals[0] == SignalAuth; got != tt.authority {
-				t.Fatalf("hotPathRiskSignals(%q) = %v, authority = %t", tt.path, signals, tt.authority)
+			if got := isNativeReviewAuthorityPath(tt.path); got != tt.authority {
+				t.Fatalf("isNativeReviewAuthorityPath(%q) = %t, want %t", tt.path, got, tt.authority)
 			}
-			if tt.authority {
-				want := []RiskReason{{Code: RiskReasonHotPath, Signal: SignalAuth, Path: tt.path}}
-				if got := deriveSnapshotRiskReasons([]DiffStat{{Path: tt.path, Additions: 1}}, nil); !reflect.DeepEqual(got, want) {
-					t.Fatalf("deriveSnapshotRiskReasons(%q) = %#v, want %#v", tt.path, got, want)
-				}
-			}
-			want := RiskMedium
-			if tt.authority {
-				want = RiskHigh
+			if signals := hotPathRiskSignals(tt.path); len(signals) != 0 {
+				t.Fatalf("hotPathRiskSignals(%q) = %v, want none", tt.path, signals)
 			}
 			got, err := ClassifyRisk(RiskInput{Stats: []DiffStat{{Path: tt.path, Additions: 1}}})
-			if err != nil || got != want {
-				t.Fatalf("ClassifyRisk(%q) = %q, %v; want %q", tt.path, got, err, want)
+			if err != nil || got != RiskMedium {
+				t.Fatalf("ClassifyRisk(%q) = %q, %v; want %q", tt.path, got, err, RiskMedium)
 			}
 		})
 	}
@@ -831,7 +825,7 @@ func TestTierTwoRequiresGenuineEvidence(t *testing.T) {
 		input RiskInput
 	}{
 		{name: "one authorization line", input: RiskInput{Stats: []DiffStat{{Path: "internal/auth/token.go", Additions: 1}}}},
-		{name: "review authority source", input: RiskInput{Stats: []DiffStat{{Path: "internal/reviewtransaction/gate.go", Additions: 1}}}},
+		{name: "large review authority change", input: RiskInput{Stats: []DiffStat{{Path: "internal/reviewtransaction/gate.go", Additions: LargeChangeLines}}}},
 		{name: "auth signal", input: RiskInput{Signals: []RiskSignal{SignalAuth}}},
 		{name: "security signal", input: RiskInput{Signals: []RiskSignal{SignalSecurity}}},
 		{name: "payments signal", input: RiskInput{Signals: []RiskSignal{SignalPayments}}},
@@ -897,9 +891,9 @@ func TestTierIsClassifiedByContentNotExtension(t *testing.T) {
 			want:  RiskMedium,
 		},
 		{
-			name:  "dependency manifest proving a spawn construct",
+			name:  "dependency manifest mentioning a spawn only in a comment",
 			files: []candidateFile{{path: "requirements.txt", content: "# installed via subprocess.run(pip)\nrequests==2.31.0\n"}},
-			want:  RiskHigh,
+			want:  RiskMedium,
 		},
 		{
 			name:  "CMake list proving a spawn construct",

@@ -326,13 +326,13 @@ func TestAssessSnapshotRiskProcessBoundaryNegativesAndDocumentedConservatism(t *
 			want:    RiskLow,
 		},
 		{
-			// Documented conservative contract: pattern presence triggers the
-			// signal even inside comments or strings. False positives only
-			// widen review; false negatives would skip the mandated 4R set.
-			name:    "comment-only mention still triggers the conservative signal",
+			// A comment-only added line describes a spawn instead of running
+			// it, the same rule the dangerous-sink scan applies. Pattern
+			// presence inside strings or after code still triggers the signal.
+			name:    "comment-only mention stays medium",
 			path:    "tools/notes.py",
 			content: "# This module will wrap subprocess.run in a follow-up.\nVALUE = 1\n",
-			want:    RiskHigh,
+			want:    RiskMedium,
 		},
 	}
 	for _, tt := range tests {

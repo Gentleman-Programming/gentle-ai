@@ -14,9 +14,11 @@ import (
 	"unicode/utf8"
 )
 
-// LargeChangeLines is a review-composition boundary, not a tier input. Volume
-// deliberately no longer selects a review tier: a five-line authorization edit
-// outranks a five-thousand-line mechanical rename, so only evidence escalates.
+// LargeChangeLines is a review-composition boundary, not a general tier input.
+// Volume deliberately no longer selects a review tier: a five-line
+// authorization edit outranks a five-thousand-line mechanical rename, so only
+// evidence escalates. The single exception is the RDD authority files, whose
+// own changed lines reaching this boundary select focused 4R by size.
 const LargeChangeLines = 400
 const MaxCorrectionChangedLines = 200
 
@@ -42,7 +44,9 @@ const (
 type RiskSignal string
 
 const (
-	SignalAuth          RiskSignal = "auth"
+	SignalAuth RiskSignal = "auth"
+	// SignalUpdate is no longer derived from the update path token. It stays
+	// declared so frozen authorities and their published reasons still read back.
 	SignalUpdate        RiskSignal = "update"
 	SignalSecurity      RiskSignal = "security"
 	SignalPayments      RiskSignal = "payments"
@@ -618,11 +622,12 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 			}
 			treePaths = append(treePaths, blob.path)
 		}
-		if len(treePaths) == 0 {
+		// Both trees still count toward the scan budget above, but an
+		// interpreter directive is whole-file evidence only in the candidate:
+		// a shebang that exists solely on the base side no longer executes.
+		if tree != snapshot.CandidateTree || len(treePaths) == 0 {
 			continue
 		}
-		// Interpreter directives remain whole-file evidence, including on the
-		// base side, so removal of a script does not hide its process boundary.
 		fixedArgs := []string{
 			"grep", "-I", "-l", "-z", "-i", "-E",
 			`^#!`, tree, "--",
@@ -692,7 +697,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 				inHunk = true
 			case inHunk && len(line) > 0 && line[0] == '+':
 				added := line[1:]
-				if !processSeen && processSpawnLine.Match(added) {
+				if !processSeen && !isCommentOnlySourceLine(currentPath, string(added)) && processSpawnLine.Match(added) {
 					reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: currentPath})
 					processSeen = true
 				}
@@ -750,9 +755,10 @@ func deriveSemanticRiskSignals(stats []DiffStat) []RiskSignal {
 // name suggested.
 func deriveSnapshotRiskReasons(stats []DiffStat, activeContent map[string]struct{}) []RiskReason {
 	candidates := make([]RiskReason, 0, len(stats)+1)
+	largeAuthorityChange := isLargeAuthorityChange(stats)
 	for _, stat := range stats {
 		if isSemanticRiskEligible(stat) {
-			if isServiceTokenReviewPath(stat.Path) {
+			if isServiceTokenReviewPath(stat.Path) && !isTestRiskPath(stat.Path) {
 				candidates = append(candidates, RiskReason{Code: RiskReasonServiceToken, Signal: SignalAuth, Path: stat.Path})
 			}
 			if isShellReviewPath(stat.Path) {
@@ -769,6 +775,11 @@ func deriveSnapshotRiskReasons(stats []DiffStat, activeContent map[string]struct
 			for _, signal := range hotPathRiskSignals(stat.Path) {
 				candidates = append(candidates, RiskReason{Code: RiskReasonHotPath, Signal: signal, Path: stat.Path})
 			}
+		}
+		// A large authority change reuses the hot-path/auth reason consumers
+		// already accept, so negotiated START and consent need no new code.
+		if largeAuthorityChange && isCountedAuthorityStat(stat) {
+			candidates = append(candidates, RiskReason{Code: RiskReasonHotPath, Signal: SignalAuth, Path: stat.Path})
 		}
 	}
 	if len(candidates) == 0 {
@@ -1431,22 +1442,22 @@ func touchesHotPath(stats []DiffStat) bool {
 			return true
 		}
 	}
-	return false
+	return isLargeAuthorityChange(stats)
 }
 
+// hotPathRiskSignals names the sensitive areas a path token points at. Test
+// files only exercise those areas, so a token there is not evidence.
 func hotPathRiskSignals(logicalPath string) []RiskSignal {
-	signals := make([]RiskSignal, 0, 4)
-	if isNativeReviewAuthorityPath(logicalPath) {
-		signals = append(signals, SignalAuth)
+	if isTestRiskPath(logicalPath) {
+		return nil
 	}
+	signals := make([]RiskSignal, 0, 4)
 	for _, token := range strings.FieldsFunc(strings.ToLower(logicalPath), func(r rune) bool {
 		return r == '/' || r == '\\' || r == '.' || r == '-' || r == '_'
 	}) {
 		switch token {
 		case "auth":
 			signals = append(signals, SignalAuth)
-		case "update":
-			signals = append(signals, SignalUpdate)
 		case "security":
 			signals = append(signals, SignalSecurity)
 		case "webhook":
@@ -1458,6 +1469,22 @@ func hotPathRiskSignals(logicalPath string) []RiskSignal {
 		}
 	}
 	return canonicalRiskSignals(signals)
+}
+
+// isLargeAuthorityChange counts only the authored lines changed inside the RDD
+// authority files, with the same exclusions CountChangedLines applies.
+func isLargeAuthorityChange(stats []DiffStat) bool {
+	lines := 0
+	for _, stat := range stats {
+		if isCountedAuthorityStat(stat) {
+			lines += stat.Additions + stat.Deletions
+		}
+	}
+	return lines >= LargeChangeLines
+}
+
+func isCountedAuthorityStat(stat DiffStat) bool {
+	return isNativeReviewAuthorityPath(stat.Path) && !stat.Binary && !stat.ModeOnly
 }
 
 func isNativeReviewAuthorityPath(logicalPath string) bool {
