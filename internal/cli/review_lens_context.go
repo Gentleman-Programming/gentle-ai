@@ -93,6 +93,11 @@ type reviewLensContextBinding struct {
 	Revision          string `json:"revision"`
 	RepositoryContext string `json:"repository_context"`
 	SubjectHash       string `json:"subject_hash"`
+	// requestContext is the verbatim request START froze for this authority,
+	// or "" without one. It is never serialized into the binding line: the
+	// SubjectHash already commits to it through the capture phase revision,
+	// and it travels here only so every block for this slot renders it.
+	requestContext string
 }
 
 // reviewLensContextError is a typed, path-free refusal. Code is the first token
@@ -310,6 +315,7 @@ func reviewLensContextBudgetProbe(
 		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
 			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+			requestContext: reviewFrozenRequestContext(state),
 		}, subject, frozen, state.RuntimeAgent)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
@@ -490,6 +496,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 		Binding: reviewLensContextBinding{
 			Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
 			Revision: binding.Revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+			requestContext: reviewFrozenRequestContext(state),
 		},
 		Subject: subject, Frozen: frozen, Inspector: inspector, RuntimeAgent: state.RuntimeAgent,
 	}, nil
@@ -670,6 +677,13 @@ func reviewLensContextBlock(
 	if err := consume(reviewLensContextInstruction, reviewLensContextInstruction+"_END", []byte(instruction)); err != nil {
 		return nil, err
 	}
+	// The frozen request is part of the reviewer's prompt, so it is charged
+	// against the same budget and refused, never truncated, when it cannot fit.
+	if binding.requestContext != "" {
+		if err := consume(reviewLensContextRequestContext, reviewLensContextRequestContext+"_END", []byte(binding.requestContext)); err != nil {
+			return nil, err
+		}
+	}
 	if err := consume(reviewLensContextResultSchema, reviewLensContextResultSchema+"_END", []byte(reviewtransaction.ReviewerResultSchema)); err != nil {
 		return nil, err
 	}
@@ -745,7 +759,7 @@ Scope. The %s sections below are the complete and only view of this candidate: a
 
 Causality. Report only what this candidate caused. Give every BLOCKER or CRITICAL finding an evidence_class and a causal_disposition, and mark what the base already contained as pre-existing or base-only rather than as a blocker.
 
-%s
+%s%s
 
 Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s -- this is the %s section's own subject_hash field above, and only that field; never echo a target or target_identity value carried elsewhere in this context, even though it is also a sha256: string. When you inspected the complete candidate, set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. When you could not inspect the candidate, set inspection.status to "unavailable", leave inspection.paths empty, and set inspection.reason to a non-empty explanation -- inspection.status and inspection.reason are the typed signal admission reads for this decision; evidence prose is not a substitute for them. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
 
@@ -753,7 +767,7 @@ Citations. Every finding location, and every path cited inside an evidence strin
 
 Honesty. If you could not inspect the candidate, set inspection.status to "unavailable" with a non-empty inspection.reason explaining why, and do not return a clean result: an access failure is not a completed inspection. Describing the failure only in evidence while leaving inspection.status as "completed" is a false completion: admission refuses it when the prose reports an inaccessible candidate, and otherwise cannot recover from it.`,
 		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader, reviewerprovider.SeverityRules,
-		reviewLensContextResultSchema, binding.SubjectHash, reviewLensContextBindingHeader), nil
+		reviewRequestContextInstruction(binding.requestContext), reviewLensContextResultSchema, binding.SubjectHash, reviewLensContextBindingHeader), nil
 }
 
 // reviewLensContextWriteLine writes one header plus its canonical one-line

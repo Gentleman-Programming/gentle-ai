@@ -1848,6 +1848,13 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// A recovered successor reviews the same request its predecessor froze;
+	// recovery never drops or replaces the request a lineage judges against.
+	if prior.FrozenRequestContext != nil {
+		if err := state.FreezeRequestContext(*prior.FrozenRequestContext); err != nil {
+			return err
+		}
+	}
 	// Self-derived recovery (organic-dx Duty 2): for one of the deterministic
 	// recovery shapes already proven legal, derive actor (from repository
 	// Git identity), reason (a closed machine-generated constant naming the
@@ -2130,6 +2137,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	targetEvidence := flags.String("target-evidence", "", "self-describing negotiated candidate evidence (v1:kind:projection:base_tree:candidate_tree:paths_digest) bound to --target, so a stale refusal names the truthful cause (#4494)")
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
+	requestContextSource := flags.String("request-context", "", "optional file with the verbatim request or feature specs this candidate was built for, plus an optional `## Verify` section with per-spec verdicts and probes; frozen with the review and shown to every lens")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "candidate projection: workspace or staged; staged base-diff records post-commit delivery provenance")
@@ -2185,6 +2193,10 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		}
 	}
 	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale, strings.TrimSpace(*targetEvidence)); err != nil {
+		return reviewPreflightError(err)
+	}
+	requestContext, err := reviewRequestContextContent(*requestContextSource)
+	if err != nil {
 		return reviewPreflightError(err)
 	}
 	consentMode := reviewStartConsentMode(strings.TrimSpace(*consent))
@@ -2310,7 +2322,8 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, formatReviewTargetEvidence(snapshot), selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
-					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope), *contract, *runtimeAgent, consentLocale)
+					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope)+
+					reviewRequestContextFollowUpArgument(strings.TrimSpace(*requestContextSource)), *contract, *runtimeAgent, consentLocale)
 			if questionErr != nil {
 				return questionErr
 			}
@@ -2342,6 +2355,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, startRuntime)
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
+		}
+		// The request is frozen before the budget probe below, so a request
+		// that cannot fit beside the evidence is refused before authority.
+		if requestContext != "" {
+			if err := request.State.FreezeRequestContext(requestContext); err != nil {
+				return reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
+			}
+			request.Binding.RequestContextHash = request.State.RequestContextHash
 		}
 		// #1854: threaded through so the exact atomic START commit below can
 		// also report a requested trace's committed-but-degraded outcome,
@@ -2449,6 +2470,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 }
 func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent, locale, targetEvidence string) error {
 	counts := reviewStartBindingFlagCounts(args)
+	// Both routes freeze the request, so a second file would silently replace
+	// the first on either one.
+	if counts["request-context"] > 1 {
+		return errors.New("review start repeats --request-context") // refusal:by-design operator-knowledge: only the caller knows which single request file the candidate was built for
+	}
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
 	case reviewConsentModeNone, reviewConsentModeRelay, reviewConsentModeGranted, reviewConsentModeDeclined:
 	default:
@@ -2542,7 +2568,7 @@ func reviewStartBindingFlagCounts(args []string) map[string]int {
 			continue
 		}
 		switch name {
-		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale":
+		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale", "request-context":
 			counts[name]++
 		}
 		if kind != reviewIntegrationBoolFlag && !hasValue {

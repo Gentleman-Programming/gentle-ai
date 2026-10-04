@@ -120,7 +120,14 @@ type CompactState struct {
 	// PolicyHash. A non-nil empty string intentionally represents an empty policy;
 	// nil remains readable historical authority and fails closed only when a
 	// targeted validator needs this semantic context.
-	FrozenPolicyContent    *string   `json:"frozen_policy_content,omitempty"`
+	FrozenPolicyContent *string `json:"frozen_policy_content,omitempty"`
+	// RequestContextHash and FrozenRequestContext are the verbatim request
+	// (feature specs, optional verify evidence) START read from
+	// --request-context. They are frozen together like the policy, bound into
+	// the capture phase revision, and absent when no request was supplied, so
+	// authority started without one keeps its historical bytes.
+	RequestContextHash     string    `json:"request_context_hash,omitempty"`
+	FrozenRequestContext   *string   `json:"frozen_request_context,omitempty"`
 	RiskLevel              RiskLevel `json:"risk_level"`
 	SelectedLenses         []string  `json:"selected_lenses"`
 	OriginalChangedLines   int       `json:"original_changed_lines"`
@@ -294,6 +301,7 @@ type CompactAtomicStartBinding struct {
 	TargetIdentity         string    `json:"target_identity"`
 	Selector               Target    `json:"selector"`
 	PolicyHash             string    `json:"policy_hash"`
+	RequestContextHash     string    `json:"request_context_hash,omitempty"`
 	Tier                   RiskLevel `json:"tier"`
 	SelectedLenses         []string  `json:"selected_lenses"`
 	OriginalChangedLines   int       `json:"original_changed_lines"`
@@ -316,6 +324,9 @@ func (binding CompactAtomicStartBinding) Validate() error {
 	}
 	if !validSHA256(binding.PolicyHash) {
 		return errors.New("compact atomic START requires a canonical policy hash") // refusal:by-design world-action: a malformed provider-built policy binding must be rebuilt before it can create authority
+	}
+	if binding.RequestContextHash != "" && !validSHA256(binding.RequestContextHash) {
+		return errors.New("compact atomic START request context hash must be canonical") // refusal:by-design world-action: a malformed provider-built request binding must be rebuilt before it can create authority
 	}
 	selector, err := canonicalCompactAtomicStartSelector(binding.Selector)
 	if err != nil {
@@ -393,6 +404,8 @@ func (binding CompactAtomicStartBinding) mismatchState(state CompactState) strin
 		return "selector"
 	case binding.PolicyHash != state.PolicyHash:
 		return "policy_hash"
+	case binding.RequestContextHash != state.RequestContextHash:
+		return "request_context_hash"
 	case binding.Tier != state.RiskLevel:
 		return "tier"
 	case !equalStrings(binding.SelectedLenses, state.SelectedLenses):
@@ -434,6 +447,8 @@ func compactAtomicStartMismatch(existing, requested CompactAtomicStartBinding) s
 		return "selector"
 	case existing.PolicyHash != requested.PolicyHash:
 		return "policy_hash"
+	case existing.RequestContextHash != requested.RequestContextHash:
+		return "request_context_hash"
 	case existing.Tier != requested.Tier:
 		return "tier"
 	case !equalStrings(existing.SelectedLenses, requested.SelectedLenses):
@@ -489,6 +504,7 @@ func deriveCompactCapturePhaseRevision(state CompactState) (string, error) {
 		CandidateTree    string    `json:"candidate_tree"`
 		PathsDigest      string    `json:"paths_digest"`
 		PolicyHash       string    `json:"policy_hash"`
+		RequestContext   string    `json:"request_context_hash,omitempty"`
 		RiskLevel        RiskLevel `json:"risk_level"`
 		SelectedLenses   []string  `json:"selected_lenses"`
 		GenesisPaths     []string  `json:"genesis_paths"`
@@ -510,6 +526,7 @@ func deriveCompactCapturePhaseRevision(state CompactState) (string, error) {
 		CandidateTree:    state.InitialSnapshot.CandidateTree,
 		PathsDigest:      state.InitialSnapshot.PathsDigest,
 		PolicyHash:       state.PolicyHash,
+		RequestContext:   state.RequestContextHash,
 		RiskLevel:        state.RiskLevel,
 		SelectedLenses:   append([]string(nil), state.SelectedLenses...),
 		GenesisPaths:     append([]string(nil), state.GenesisPaths...),
@@ -832,6 +849,10 @@ func (state CompactState) Validate() error {
 	}
 	if state.FrozenPolicyContent != nil && compactPolicyContentHash(*state.FrozenPolicyContent) != state.PolicyHash {
 		return errors.New("compact frozen policy content does not match policy_hash") // refusal:by-design world-action: frozen policy content and its immutable hash disagree, so safe repair requires replacing the authority
+	}
+	if (state.RequestContextHash == "") != (state.FrozenRequestContext == nil) ||
+		state.FrozenRequestContext != nil && compactPolicyContentHash(*state.FrozenRequestContext) != state.RequestContextHash {
+		return errors.New("compact frozen request context does not match request_context_hash") // refusal:by-design world-action: frozen request content and its immutable hash disagree, so safe repair requires replacing the authority
 	}
 	selected, err := validateSelectedLenses(ModeOrdinaryBounded, state.RiskLevel, state.SelectedLenses)
 	if err != nil || !equalStrings(selected, state.SelectedLenses) {
@@ -2013,6 +2034,27 @@ func (state CompactState) FrozenPolicyForTargetedValidation() (string, error) {
 		return "", &CompactFrozenPolicyIntegrityError{LineageID: state.LineageID, PolicyHash: state.PolicyHash}
 	}
 	return *state.FrozenPolicyContent, nil
+}
+
+// FreezeRequestContext binds the verbatim request START read to a pristine
+// state before it persists, and re-derives the capture phase revision so every
+// artifact subject issued for this authority commits to that request. It is
+// a one-time freeze: an authority never changes the request it judges against.
+func (state *CompactState) FreezeRequestContext(content string) error {
+	if state.RequestContextHash != "" || state.FrozenRequestContext != nil {
+		return errors.New("compact request context is already frozen") // refusal:by-design world-action: a provider-built START froze the request twice and requires a code fix
+	}
+	if content == "" {
+		return errors.New("compact request context must not be empty") // refusal:by-design world-action: callers freeze only a non-empty request; an empty one is a provider code defect
+	}
+	frozen := content
+	state.RequestContextHash, state.FrozenRequestContext = compactPolicyContentHash(content), &frozen
+	phase, err := deriveCompactCapturePhaseRevision(*state)
+	if err != nil {
+		return err
+	}
+	state.CapturePhaseRevision = phase
+	return nil
 }
 
 func compactPolicyContentHash(content string) string {
