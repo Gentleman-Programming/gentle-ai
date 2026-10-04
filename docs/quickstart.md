@@ -61,8 +61,6 @@ and never reaches v4.
 
 ## Version Policy
 
-Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` made it the supported stable path. Those are historical milestones. The negotiated public review contract was published in `v2.1.6`.
-
 The latest published stable release is [`v4.0.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v4.0.0). `@latest` on the `/v4` module path tracks the stable channel. Use `@main` only to test unreleased development changes.
 
 ### Install the stable channel
@@ -82,11 +80,11 @@ go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
 gentle-ai version
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
 gentle-ai version
 ```
 
-To update a beta installation later, preserve the beta channel:
+`go install` ignores `GENTLE_AI_CHANNEL`; `gentle-ai` reads it on later runs, where `beta` tracks `main` instead of the latest release. Tools that Homebrew manages keep updating through Homebrew. To update a beta installation later, preserve the beta channel:
 
 ```bash
 # macOS / Linux
