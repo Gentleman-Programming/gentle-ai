@@ -35,7 +35,7 @@
 
 - Git.
 - Go 1.25.10+ (for building from source).
-- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with an install hint if either is missing (the Node.js hints for the distros above are listed there; npm's hint asks you to install Node.js first) — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: selected agents other than Pi are configured even when their runtime isn't detected, so install those yourself. For Pi, `gentle-ai install` refuses to install the Pi packages until `pi` is on `PATH`. Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
+- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with an install hint if either is missing (the Node.js hints for the distros above are listed there; npm's hint asks you to install Node.js first) — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: most selected agents are configured even when their runtime isn't detected, so install those yourself. Pi and OpenCode are the exceptions: `gentle-ai install` stops until `pi` is on `PATH` (for Pi) or `opencode --version` succeeds (for OpenCode). Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
 
 ### Windows
