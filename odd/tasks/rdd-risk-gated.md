@@ -16,7 +16,7 @@ Delivery: work-unit commits on the feature branch; push/PR are the user's decisi
 
 ## Tasks
 
-- [x] T1 S1-S8 narrow ClassifyRisk with tests (route: delegated writer, trigger: high-risk guard change in risk.go + tests; verification: independent gentle-ai-verify) — commit: pending
+- [x] T1 S1-S8 narrow ClassifyRisk with tests (route: delegated writer, trigger: high-risk guard change in risk.go + tests; verification: independent gentle-ai-verify mutm8tdj-11-1cj6 PASS WITH ADVISORIES, W1 fixed by authorized second correction, parent spot check of focused tests ok) — commit: 8bf14263
 
 ## Log
 
@@ -26,3 +26,4 @@ Delivery: work-unit commits on the feature branch; push/PR are the user's decisi
 - L4 T1 writer: S3 publishes the new reason code `large_authority_change` (signal `auth`). `validateReviewStartRiskReasons` in `internal/cli/review_start_contract.go` is a closed code enum (it already rejects `dangerous_sink`) and the consent wording in `internal/cli/review_mode.go` / `review_consent_contract.go` has no phrase for it, so negotiated START needs a follow-up outside T1's edit surface.
 - L5 Correction: large authority changes reuse the existing hot_path/auth reason per authority file instead of a new code, because negotiated START (internal/cli/review_start_contract.go:335) and consent wording only accept existing codes; pre-existing gap: dangerous_sink is also rejected by START (follow-up).
 - L6 User authorized a second correction (W1 from independent verify mutm8tdj-11-1cj6): prefix-only comment skipping let real spawns drop to medium (Go `*cmd = *exec.Command`, `/* x */ exec.Command`, C `#define ... popen`, TS `#private` fields); comment skipping is now language-aware. Follow-ups not in scope: A1 `spec`/`test` path segments treated as tests by isTestRiskPath; dangerous_sink START gap.
+- L7 Committed 8bf14263. Risk tier high (deterministic review guard). Checks observed: writer go test ./internal/reviewtransaction/..., go vet, go build ./..., go test ./internal/cli/... ./e2e/organicruntime/..., gofmt; independent verify re-ran them plus START-validator and 21 consistency probes; parent re-ran focused tests (ok). Follow-ups: A1 isTestRiskPath treats spec/test segments as tests; dangerous_sink rejected by negotiated START; multi-line block comment bodies without leading * are not skipped (fails toward high).
