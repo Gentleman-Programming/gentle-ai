@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
@@ -209,5 +214,34 @@ func TestCheckDependenciesStepKimiNotBlockedByNpmPreflight(t *testing.T) {
 	// its absent npm nor its absent uv block the pipeline here anymore.
 	if err := step.Run(); err != nil {
 		t.Fatalf("checkDependenciesStep.Run() unexpected error = %v", err)
+	}
+}
+
+func TestPiCompanionPreflightRejectsOldCore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	for _, name := range []string{"pi", "npm"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '1.0.0\\n'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	originalJudge, originalCommand := judgeEngramCompatibility, runCommand
+	t.Cleanup(func() { judgeEngramCompatibility = originalJudge; runCommand = originalCommand })
+	calls, commands := 0, 0
+	judgeEngramCompatibility = func(_ context.Context, ids []model.AgentID, _ string) engram.InstanceIdentityJudgment {
+		calls++
+		if len(ids) != 1 || ids[0] != model.AgentPi {
+			t.Errorf("wrong preflight agents: %v", ids)
+		}
+		return engram.InstanceIdentityJudgment{Outcome: engram.OutcomeIncompatible, Err: &engram.IncompatibleCoreError{Runtime: "test-core", Capability: engram.CapabilityInstanceID, RecoveryCommand: engram.EngramUpgradeRecoveryCommand}}
+	}
+	runCommand = func(string, ...string) error { commands++; return nil }
+	err := (agentInstallStep{agent: model.AgentPi, homeDir: home, profile: system.PlatformProfile{OS: "linux"}}).Run()
+	if !engram.IsIncompatibleCore(err) || calls != 1 || commands != 0 {
+		t.Fatalf("preflight err=%v calls=%d commands=%d", err, calls, commands)
 	}
 }

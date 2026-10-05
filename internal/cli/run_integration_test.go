@@ -13,15 +13,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
 )
 
 // missingBinaryLookPath simulates all installable binaries (engram, gga) as
@@ -2892,5 +2895,198 @@ func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 	_, err = RunInstall(args, system.DetectionResult{})
 	if err == nil {
 		t.Fatalf("RunInstall() with unwriteable workspace target expected error, got nil")
+	}
+}
+
+func TestEngramCompatibilityChecks(t *testing.T) {
+	incompatible := &engram.IncompatibleCoreError{Runtime: "test-core", Version: "old", Capability: engram.CapabilityInstanceID, Requirement: engram.DefaultInstanceIdentityRequirement, RecoveryCommand: engram.EngramUpgradeRecoveryCommand}
+	inconclusive := &engram.ProbeInconclusiveError{Runtime: "test-core", Reason: "temporary failure", Cause: errors.New("probe unavailable")}
+	cases := []struct {
+		name            string
+		outcome         engram.InstanceIdentityOutcome
+		err             error
+		skipped, failed bool
+	}{
+		{name: "compatible", outcome: engram.OutcomeCompatible},
+		{name: "external", outcome: engram.OutcomeExternalServer, skipped: true},
+		{name: "not_required", outcome: engram.OutcomeNotRequired, skipped: true},
+		{name: "missing_binary", outcome: engram.OutcomeMissingBinary, skipped: true},
+		{name: "incompatible", outcome: engram.OutcomeIncompatible, err: incompatible, failed: true},
+		{name: "inconclusive", outcome: engram.OutcomeProbeInconclusive, err: inconclusive, failed: true},
+		{name: "unknown_outcome", outcome: engram.InstanceIdentityOutcome("unknown"), failed: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			original := judgeEngramCompatibility
+			judgeEngramCompatibility = func(context.Context, []model.AgentID, string) engram.InstanceIdentityJudgment {
+				return engram.InstanceIdentityJudgment{Outcome: tc.outcome, Err: tc.err}
+			}
+			t.Cleanup(func() { judgeEngramCompatibility = original })
+			checks := engramCompatibilityChecks(context.Background(), []model.AgentID{model.AgentPi})
+			if len(checks) != 1 {
+				t.Fatalf("checks=%d, want 1", len(checks))
+			}
+			if !checks[0].NoRollback || checks[0].Soft {
+				t.Fatal("capability check must be hard and retain valid writes")
+			}
+			report := verify.BuildReport(verify.RunChecks(context.Background(), checks))
+			if (report.Skipped == 1) != tc.skipped || (report.Failed == 1) != tc.failed || report.Ready == tc.failed || report.RollbackRequired {
+				t.Fatalf("unexpected report: %+v", report)
+			}
+			preflightErr := validateEngramPreflight(context.Background(), []model.AgentID{model.AgentPi})
+			if (preflightErr != nil) != tc.failed {
+				t.Errorf("preflight error=%v, failed=%v", preflightErr, tc.failed)
+			}
+			if tc.failed {
+				checks = append(checks, verify.Check{ID: "managed-file", Run: func(context.Context) error { return errors.New("missing managed file") }})
+				mixed := verify.BuildReport(verify.RunChecks(context.Background(), checks))
+				if !mixed.RollbackRequired {
+					t.Fatal("mixed ordinary failure must roll back")
+				}
+			}
+		})
+	}
+}
+
+func TestEngramUpgradeOfferIsTTYOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		tty, incompatible bool
+		want              bool
+	}{
+		{name: "non_tty", incompatible: true}, {name: "tty_incompatible", tty: true, incompatible: true, want: true}, {name: "tty_inconclusive", tty: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := engramUpgradeOfferTTY
+			engramUpgradeOfferTTY = func() bool { return tc.tty }
+			t.Cleanup(func() { engramUpgradeOfferTTY = original })
+			id := engramCapabilityCheckID
+			if tc.incompatible {
+				id = engramIncompatibleCheckID
+			}
+			report := verify.BuildReport([]verify.CheckResult{{ID: id, Status: verify.CheckStatusFailed, NoRollback: true}})
+			addEngramUpgradeOffer(&report)
+			if strings.Contains(report.FinalNote, engram.EngramUpgradeRecoveryCommand) != tc.want {
+				t.Fatalf("unexpected offer: %q", report.FinalNote)
+			}
+			if report.Ready || report.RollbackRequired {
+				t.Fatal("offer changed verification policy")
+			}
+		})
+	}
+}
+
+func TestRunInstallRetainsEngramCompatibilityFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		inconclusive, mixed bool
+	}{
+		{name: "incompatible"}, {name: "inconclusive", inconclusive: true}, {name: "mixed_managed_file_failure", mixed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			originalHome, originalCommand, originalLookPath := osUserHomeDir, runCommand, cmdLookPath
+			originalDownload, originalJudge, originalTTY := engramDownloadFn, judgeEngramCompatibility, engramUpgradeOfferTTY
+			t.Cleanup(func() {
+				osUserHomeDir = originalHome
+				runCommand = originalCommand
+				cmdLookPath = originalLookPath
+				engramDownloadFn = originalDownload
+				judgeEngramCompatibility = originalJudge
+				engramUpgradeOfferTTY = originalTTY
+			})
+			osUserHomeDir = func() (string, error) { return home, nil }
+			cmdLookPath = missingBinaryLookPath
+			recorder := &commandRecorder{}
+			runCommand = recorder.record
+			engramDownloadFn = func(system.PlatformProfile) (string, error) { return filepath.Join(home, "fake-engram"), nil }
+			engramUpgradeOfferTTY = func() bool { return false }
+			adapter, adapterErr := agents.NewAdapter(model.AgentOpenCode)
+			if adapterErr != nil {
+				t.Fatal(adapterErr)
+			}
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentEngram}}
+			paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, []agents.Adapter{adapter}, model.ComponentEngram)
+			if len(paths) == 0 {
+				t.Fatal("fixture has no Engram managed paths")
+			}
+			calls := 0
+			judgeEngramCompatibility = func(context.Context, []model.AgentID, string) engram.InstanceIdentityJudgment {
+				calls++
+				if tc.mixed {
+					for _, path := range paths {
+						if err := os.Remove(path); err != nil {
+							t.Errorf("drop managed file after apply: %v", err)
+						}
+					}
+				}
+				if tc.inconclusive {
+					return engram.InstanceIdentityJudgment{Outcome: engram.OutcomeProbeInconclusive, Err: &engram.ProbeInconclusiveError{Runtime: "test-core", Reason: "temporary failure"}}
+				}
+				return engram.InstanceIdentityJudgment{Outcome: engram.OutcomeIncompatible, Err: &engram.IncompatibleCoreError{Runtime: "test-core", Version: "1.20.0", Capability: engram.CapabilityInstanceID, Requirement: engram.DefaultInstanceIdentityRequirement, RecoveryCommand: engram.EngramUpgradeRecoveryCommand}}
+			}
+			components := "engram"
+			memoryFile := filepath.Join(home, ".engram", "engram.db")
+			if err := os.MkdirAll(filepath.Dir(memoryFile), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(memoryFile, []byte("preserve-memory-store"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := RunInstall([]string{"--agent", "opencode", "--component", components}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
+			if err == nil || result.Verify.Ready {
+				t.Errorf("incompatible integration presented ready: err=%v report=%+v", err, result.Verify)
+			}
+			if calls == 0 {
+				t.Error("post-apply capability gate did not run")
+			}
+			if result.Verify.RollbackRequired != tc.mixed {
+				t.Errorf("rollback=%v, want %v", result.Verify.RollbackRequired, tc.mixed)
+			}
+			got, readErr := state.Read(home)
+			if tc.mixed {
+				if !os.IsNotExist(readErr) {
+					t.Errorf("mixed failure published install state: %+v %v", got, readErr)
+				}
+			} else {
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != "opencode" || !got.SelectionConfigured || got.ManagedAssetDigest == "" {
+					t.Errorf("retained state missing selections/provenance: %+v", got)
+				}
+				for _, path := range paths {
+					if _, statErr := os.Stat(path); statErr != nil {
+						t.Errorf("valid managed file reverted: %s: %v", path, statErr)
+					}
+				}
+				if tc.inconclusive && strings.Contains(err.Error(), engram.EngramUpgradeRecoveryCommand) {
+					t.Errorf("inconclusive error advises upgrade: %v", err)
+				}
+			}
+			data, memoryErr := os.ReadFile(memoryFile)
+			if memoryErr != nil || string(data) != "preserve-memory-store" {
+				t.Errorf("memory store changed: %q %v", data, memoryErr)
+			}
+		})
+	}
+}
+
+func TestEngramUnknownOutcomeNamesDiagnostics(t *testing.T) {
+	original := judgeEngramCompatibility
+	judgeEngramCompatibility = func(context.Context, []model.AgentID, string) engram.InstanceIdentityJudgment {
+		return engram.InstanceIdentityJudgment{Outcome: engram.InstanceIdentityOutcome("unknown")}
+	}
+	t.Cleanup(func() { judgeEngramCompatibility = original })
+	checks := engramCompatibilityChecks(context.Background(), []model.AgentID{model.AgentPi})
+	if len(checks) != 1 || checks[0].Run == nil {
+		t.Fatal("unknown outcome did not fail closed")
+	}
+	err := checks[0].Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "gentle-ai doctor") {
+		t.Fatalf("missing diagnostic continuation: %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "upgrade") {
+		t.Fatalf("unproven capability recommends an upgrade: %v", err)
 	}
 }
