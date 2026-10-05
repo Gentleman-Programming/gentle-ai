@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -99,5 +101,126 @@ func TestReviewProviderRolePromptKeepsTheOutputLimitDistinct(t *testing.T) {
 	_, err = reviewProviderRolePrompt(contract, runtimeBudgetRolePromptRequest(strings.Repeat("a", contract.ResultLimit)), runtime)
 	if !errors.As(err, &refusal) || refusal.Code != "lens_context_budget_exceeded" {
 		t.Fatalf("prompt over both bounds = %v, want the tighter runtime input ceiling", err)
+	}
+}
+
+// TestReviewProviderRefuterPromptIsRuntimeConditional pins the S11 refuter
+// instruction: the Codex prompt offers one isolated reproducing probe, every
+// other runtime is told by name that the probe is unavailable, and the
+// targeted-validator prompt gains neither paragraph.
+func TestReviewProviderRefuterPromptIsRuntimeConditional(t *testing.T) {
+	refuter, err := reviewProviderRoleContractFor(reviewProviderRoleRefuter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := reviewProviderRoleContractFor(reviewProviderRoleTargetedValidator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, runtime := range []model.AgentID{model.AgentCodex, model.AgentClaudeCode, model.AgentPi, model.AgentOpenCode} {
+		prompt, err := reviewProviderRolePrompt(refuter, runtimeBudgetRolePromptRequest(""), string(runtime))
+		if err != nil {
+			t.Fatal(err)
+		}
+		probeOffered := strings.Contains(string(prompt), "one reproducing command")
+		if probeOffered != (runtime == model.AgentCodex) {
+			t.Fatalf("%s refuter prompt offers a probe = %t:\n%s", runtime, probeOffered, prompt)
+		}
+		if note := reviewerprovider.RefuterProbeUnavailableNote(runtime); runtime != model.AgentCodex && !strings.Contains(string(prompt), note) {
+			t.Fatalf("%s refuter prompt omits %q:\n%s", runtime, note, prompt)
+		}
+		validatorPrompt, err := reviewProviderRolePrompt(validator, reviewProviderTargetedValidatorRequest{}, string(runtime))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(validatorPrompt), "one reproducing command") || strings.Contains(string(validatorPrompt), "probe unavailable on") {
+			t.Fatalf("%s targeted-validator prompt gained the refuter probe paragraph:\n%s", runtime, validatorPrompt)
+		}
+	}
+}
+
+// TestReviewProviderRefuterAdmissionNotesProbeUnavailable pins the explicit
+// no-probe note: on every runtime whose adapter cannot isolate a probe, each
+// admitted refuter result carries "probe unavailable on <runtime>" in its
+// existing proof_refs, written by Go so it never depends on the model. A Codex
+// result, whose refuter could probe, is admitted untouched.
+func TestReviewProviderRefuterAdmissionNotesProbeUnavailable(t *testing.T) {
+	request := runtimeBudgetRolePromptRequest("")
+	request.RequestHash = "sha256:" + strings.Repeat("a", 64)
+	request.Claims = []reviewtransaction.RefuterClaim{{FindingID: "R3-001", SnapshotIdentity: request.SnapshotIdentity, Proof: "tracked.txt:1 lens proof", Claim: "candidate failure"}}
+	raw := []byte(`{"refuter_request_hash":"` + request.RequestHash + `","results":[{"finding_id":"R3-001","outcome":"refuted","proof_refs":["tracked.txt:1 baseline already fails"]}]}`)
+	for _, runtime := range []model.AgentID{model.AgentClaudeCode, model.AgentPi, model.AgentOpenCode, model.AgentCodex} {
+		request.Runtime = string(runtime)
+		result, err := reviewProviderAdmitRefuterRaw(request, raw)
+		if err != nil {
+			t.Fatalf("%s admission: %v", runtime, err)
+		}
+		want := []string{"tracked.txt:1 baseline already fails"}
+		if runtime != model.AgentCodex {
+			want = append(want, "probe unavailable on "+string(runtime))
+		}
+		if got := result.Results[0].ProofRefs; strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("%s admitted proof_refs = %q, want %q", runtime, got, want)
+		}
+		if outcome := result.Results[0].Outcome; outcome != reviewtransaction.OutcomeRefuted {
+			t.Fatalf("%s outcome = %q, want the provider's refuted outcome unchanged", runtime, outcome)
+		}
+	}
+	// A refuter that already wrote the note does not get it twice.
+	request.Runtime = string(model.AgentPi)
+	noted := []byte(`{"refuter_request_hash":"` + request.RequestHash + `","results":[{"finding_id":"R3-001","outcome":"corroborated","proof_refs":["tracked.txt:1 read","probe unavailable on pi"]}]}`)
+	result, err := reviewProviderAdmitRefuterRaw(request, noted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Results[0].ProofRefs; len(got) != 2 {
+		t.Fatalf("noted proof_refs = %q, want the note once", got)
+	}
+}
+
+// TestReviewProviderCodexRefuterInvocationMaterializesTheCandidateTree pins
+// the Go half of the S11 probe: a Codex refuter invocation carries a probe
+// workspace that writes the frozen candidate tree, not the live workspace, and
+// no other runtime's invocation carries one.
+func TestReviewProviderCodexRefuterInvocationMaterializesTheCandidateTree(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, _ := piRefuterReview(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("drifted after start\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := record.State
+	state.RuntimeAgent = string(model.AgentCodex)
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, state, state.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := request.Invocation.ProbeWorkspace()
+	if workspace == nil {
+		t.Fatal("Codex refuter invocation carries no probe workspace")
+	}
+	dir := t.TempDir()
+	if err := workspace(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "tracked.txt")); err != nil || string(got) != "candidate\n" {
+		t.Fatalf("probe copy tracked.txt = %q, %v; want the frozen candidate", got, err)
+	}
+	if !strings.Contains(string(request.Invocation.Prompt()), "one reproducing command") {
+		t.Fatal("Codex refuter prompt does not offer the probe its invocation carries")
+	}
+
+	for _, runtime := range []model.AgentID{model.AgentClaudeCode, model.AgentPi, model.AgentOpenCode} {
+		state.RuntimeAgent = string(runtime)
+		other, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, state, state.CapturePhaseRevision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other.Invocation.ProbeWorkspace() != nil {
+			t.Fatalf("%s refuter invocation carries a probe workspace", runtime)
+		}
+		if other.RequestHash != request.RequestHash {
+			t.Fatalf("%s request hash %q differs from Codex %q: the runtime paragraph must not rebind the batch", runtime, other.RequestHash, request.RequestHash)
+		}
 	}
 }

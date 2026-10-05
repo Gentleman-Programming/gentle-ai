@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestRuntimeBudgetLeavesContractResultLimitsUnchanged pins the output side of
@@ -97,5 +99,40 @@ func TestRefuterPromptAppliesSeverityRules(t *testing.T) {
 		if !strings.Contains(contract.PromptInstruction, required) {
 			t.Fatalf("refuter prompt omits severity rule %q:\n%s", required, contract.PromptInstruction)
 		}
+	}
+}
+
+// TestRefuterProbeInstructionIsRuntimeConditional pins S11: only a runtime
+// whose adapter isolates a probe (Codex: a fresh scratch copy under the system
+// temp dir, workspace-write confined to it, no network) is told it may run one
+// reproducing command; every other runtime is told the probe is unavailable,
+// by name, so no refuter ever believes a command ran when none could.
+func TestRefuterProbeInstructionIsRuntimeConditional(t *testing.T) {
+	codex := RefuterProbeInstruction("codex")
+	for _, required := range []string{
+		"one reproducing command", "scratch copy", "No network", "no installs",
+		"cite the exact command and its observed output",
+	} {
+		if !strings.Contains(codex, required) {
+			t.Fatalf("Codex refuter probe paragraph omits %q:\n%s", required, codex)
+		}
+	}
+	if !RefuterProbeIsolated("codex") {
+		t.Fatal("Codex must isolate the refuter probe")
+	}
+	for _, runtime := range []string{"claude-code", "pi", "opencode", ""} {
+		if RefuterProbeIsolated(model.AgentID(runtime)) {
+			t.Fatalf("runtime %q must stay no-probe", runtime)
+		}
+		instruction := RefuterProbeInstruction(model.AgentID(runtime))
+		if strings.Contains(instruction, "one reproducing command") {
+			t.Fatalf("no-probe runtime %q was offered a probe:\n%s", runtime, instruction)
+		}
+		if note := RefuterProbeUnavailableNote(model.AgentID(runtime)); !strings.Contains(instruction, note) || !strings.HasPrefix(note, "probe unavailable on ") {
+			t.Fatalf("no-probe runtime %q instruction = %q, want the note %q", runtime, instruction, note)
+		}
+	}
+	if note := RefuterProbeUnavailableNote("pi"); note != "probe unavailable on pi" {
+		t.Fatalf("pi note = %q", note)
 	}
 }

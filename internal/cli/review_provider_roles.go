@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -107,7 +108,11 @@ type reviewProviderRefuterRequest struct {
 	SnapshotIdentity string                           `json:"snapshot_identity"`
 	Claims           []reviewtransaction.RefuterClaim `json:"claims"`
 	Evidence         []reviewProviderEvidence         `json:"evidence"`
-	Invocation       reviewerprovider.Invocation      `json:"-"`
+	// Runtime is the identity START froze this authority to. It selects the
+	// refuter's probe paragraph and admission note (S11) and, like the
+	// invocation, never enters the request bytes or the request hash.
+	Runtime    string                      `json:"-"`
+	Invocation reviewerprovider.Invocation `json:"-"`
 }
 
 // compactProviderRoleResult is the transaction-owned durable shape after Go
@@ -156,7 +161,7 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 	request := reviewProviderRefuterRequest{
 		Schema: contract.RequestSchemaID, LineageID: state.LineageID, AuthorityVersion: revision,
 		TargetIdentity: state.InitialSnapshot.Identity, SnapshotIdentity: state.InitialSnapshot.Identity,
-		Claims: claims, Evidence: evidence,
+		Claims: claims, Evidence: evidence, Runtime: state.RuntimeAgent,
 	}
 	request.RequestHash = facadeValueHash("provider-refuter-request", struct {
 		Schema, LineageID, AuthorityVersion, TargetIdentity, SnapshotIdentity string
@@ -168,6 +173,15 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 		return reviewProviderRefuterRequest{}, err
 	}
 	request.Invocation = reviewerprovider.NewInvocation(prompt)
+	if reviewerprovider.RefuterProbeIsolated(model.AgentID(state.RuntimeAgent)) {
+		// S11: the adapter materializes this frozen candidate tree into a fresh
+		// scratch copy only when it actually runs the refuter, and removes it on
+		// return; admission and hashing never touch it.
+		tree := state.InitialSnapshot.CandidateTree
+		request.Invocation = request.Invocation.WithProbeWorkspace(func(ctx context.Context, dir string) error {
+			return reviewtransaction.MaterializeRefuterProbeTree(ctx, repo, tree, dir)
+		})
+	}
 	return request, nil
 }
 
@@ -401,6 +415,11 @@ func reviewProviderRolePrompt(contract reviewProviderRoleContract, request any, 
 		return nil, err
 	}
 	instruction := contract.PromptInstruction
+	if _, ok := request.(reviewProviderRefuterRequest); ok {
+		// S11: only a runtime whose adapter isolates a probe is offered one;
+		// every other runtime is told by name that none is available.
+		instruction += "\n\n" + reviewerprovider.RefuterProbeInstruction(model.AgentID(runtime))
+	}
 	if targeted, ok := request.(reviewProviderTargetedValidatorRequest); ok {
 		// JSON necessarily escapes policy line breaks. Materialize the same
 		// request-bound bytes before the machine-readable input so the validator
@@ -462,6 +481,12 @@ func reviewProviderAdmitRefuterRaw(request reviewProviderRefuterRequest, raw []b
 		}
 		if err := reviewProviderConcreteStrings(outcome.ProofRefs, "provider refuter proof_refs"); err != nil {
 			return facadeRefuterResult{}, err
+		}
+		if !reviewerprovider.RefuterProbeIsolated(model.AgentID(request.Runtime)) {
+			// S11: Go, not the model, records that no probe could run here.
+			if note := reviewerprovider.RefuterProbeUnavailableNote(model.AgentID(request.Runtime)); !slices.Contains(outcome.ProofRefs, note) {
+				outcome.ProofRefs = append(outcome.ProofRefs, note)
+			}
 		}
 	}
 	sort.Slice(result.Results, func(left, right int) bool { return result.Results[left].FindingID < result.Results[right].FindingID })

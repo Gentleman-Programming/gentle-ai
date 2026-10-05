@@ -152,11 +152,27 @@ The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go deri
 
 Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
 
-Reviewers inspect only provider-bound immutable trees. They never inspect the live worktree, index, `HEAD`, or another revision, and candidate bytes must not move through `/tmp`, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`.
+Reviewers inspect only provider-bound immutable trees. They never inspect the live worktree, index, `HEAD`, or another revision, and candidate bytes must not move through `/tmp`, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. The one exception is the Codex refuter probe below: Go itself writes the frozen candidate tree into a fresh scratch copy it creates and removes.
 
 ### Non-lens provider roles: refuter and targeted validator
 
 `gentle-ai review capture-refuter` and `gentle-ai review capture-validation` bind the transaction-wide refuter batch and the correction-bound targeted validator the same way `review capture-result` binds a lens — `--lineage`, `--target`, `--expected-revision` (plus `--request-hash` for the validator) — and exactly one of three modes. A compiled runtime (Claude Code, Codex, OpenCode) passes `--agent` and `--execute`: Go materializes the role request, runs its own in-process adapter, and admits the raw result; no submission descriptor exists for this form, and `--materialize`/`--input` refuse typed for it. Pi is host-relay, so `--execute` refuses typed for it: Go never spawns a process for a pi role. STATUS instead renders the pi collect input as `--materialize=true` plus a `submission` descriptor, exactly like the lens `capture-result` path — `gentle-pi` materializes the read-only prompt, runs the model itself, and submits the raw result through `--input=<path|->`, whose `{{value}}` slot repeats every binding token (including `--agent`) and drops only the `--materialize` selector. Go admits that submission through the same raw admitters the compiled `--execute` path uses, with the same binding; no adapter runs and no retry is granted, so an unadmittable submission leaves the slot open for STATUS to reoffer, exactly like a malformed in-process capture.
+
+#### Refuter probe
+
+The refuter may confirm or drop a severe claim with one isolated reproducing command, but only where the adapter can isolate it:
+
+| Runtime | Probe | Why |
+|---|---|---|
+| Codex | Yes | Go creates a fresh `mktemp -d` scratch directory under the system temp dir (never inside the workspace), writes the frozen candidate tree into it from Git objects, and runs Codex there with `--sandbox workspace-write`, `sandbox_workspace_write.network_access=false`, and the temp-dir writable roots excluded. |
+| Claude Code | No | Enabling tools gives no network isolation. |
+| Pi | No | The reviewer runs in process without tools. |
+| OpenCode | No | The bash default is unknown. |
+
+- The refuter prompt carries the runtime's paragraph: Codex may run one reproducing command per claim in the scratch copy, with no network and no installs, and must cite the command and its observed output in `proof_refs`. Every other runtime is told to run no command.
+- On a no-probe runtime Go appends `probe unavailable on <runtime>` to each admitted result's `proof_refs`, so the receipt states that no command ran. Result and receipt shapes do not change, and the request hash does not depend on the runtime paragraph.
+- The scratch directory is removed when the refuter returns, also on error and timeout, including read-only output a probe leaves behind. The probe is bounded by the existing capture timeout.
+- Which findings reach the refuter is unchanged: only severe inferential findings with candidate causality. A severe deterministic finding is corroborated without a refuter, because compact admission (`internal/reviewtransaction/compact.go`) accepts refuter outcomes for inferential findings only.
 
 The role submission descriptor is a negotiated status contract change, so the negotiated status schema for this lifecycle is `gentle-ai.review-integration.status/v9` (v5 forbade a `submission` field on role inputs). Go no longer owns a pi adapter or the `~/.pi/gentle-ai/models.json` model-routing lookup it used to read before spawning a role process for pi; `gentle-pi`'s own host relay owns that routing now, the same way it already owns routing for the lens path.
 

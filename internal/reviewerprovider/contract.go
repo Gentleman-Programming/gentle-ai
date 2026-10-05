@@ -3,6 +3,8 @@ package reviewerprovider
 import (
 	"fmt"
 	"slices"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // Role is a compiled provider-contract role. Hosts receive only an opaque
@@ -115,6 +117,40 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 const SeverityRules = "Severity rules. A BLOCKER or CRITICAL finding must be caused by this change -- the behavior does not already happen at the baseline -- and must be reachable with realistic input. " +
 	"Behavior that already existed at the baseline and was not asked to change, and failures that need out-of-domain values, are at most WARNING. " +
 	"Silently ignoring an explicit option or argument while reporting success, and unrequested changes to existing command output or messages, are severe: report them as BLOCKER or CRITICAL."
+
+// RefuterProbeIsolated reports whether the runtime's compiled adapter can run
+// the S11 refuter probe in isolation: a fresh copy of the candidate tree under
+// the system temp dir, writes confined to it, and no network. Only Codex's
+// workspace-write sandbox gives all three. Claude has no network isolation once
+// tools are enabled, Pi reviews in process without tools, and OpenCode's bash
+// default is unknown, so they stay no-probe.
+func RefuterProbeIsolated(agent model.AgentID) bool {
+	return agent == model.AgentCodex
+}
+
+// RefuterProbeUnavailableNote is the proof_refs entry Go adds to every refuter
+// result admitted from a runtime that could not probe, so the receipt states
+// that no command ran instead of leaving the reader to guess.
+func RefuterProbeUnavailableNote(agent model.AgentID) string {
+	name := string(agent)
+	if name == "" {
+		name = "an unspecified runtime"
+	}
+	return "probe unavailable on " + name
+}
+
+// RefuterProbeInstruction is the runtime-conditional paragraph appended to the
+// refuter prompt. It offers the probe only where RefuterProbeIsolated holds.
+func RefuterProbeInstruction(agent model.AgentID) string {
+	if RefuterProbeIsolated(agent) {
+		return "Probe. You run in a scratch copy of the frozen candidate tree, created under the system temp dir and removed after you return; it is not the user's workspace. " +
+			"You may run one reproducing command per claim in that scratch copy to confirm or drop the claim. " +
+			"No network and no installs: use only tools and dependencies already present, and write only inside the scratch copy. " +
+			"For every claim you probe, cite the exact command and its observed output in proof_refs; if the command cannot run, say so there and decide from the supplied evidence."
+	}
+	return "Probe unavailable. This runtime cannot isolate a reproducing command, so run no command and decide every claim from the supplied evidence. " +
+		"Go records \"" + RefuterProbeUnavailableNote(agent) + "\" in the proof_refs of every result."
+}
 
 // Contract is the sole role authority for schema serving, capability reporting,
 // storage routing, prompt instruction, and raw-output limits.

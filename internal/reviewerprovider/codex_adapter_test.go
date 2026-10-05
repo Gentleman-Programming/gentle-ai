@@ -17,6 +17,8 @@ import (
 const codexAdapterHelperEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_CODEX_HELPER"
 const codexAdapterPromptPathEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_CODEX_PROMPT_PATH"
 const codexAdapterArgumentsPathEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_CODEX_ARGUMENTS_PATH"
+const codexAdapterWorkdirPathEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_CODEX_WORKDIR_PATH"
+const codexAdapterFailEnvironment = "GENTLE_AI_REVIEWER_PROVIDER_CODEX_FAIL"
 
 func TestCodexAdapterReturnsNoBytesWhenUnavailable(t *testing.T) {
 	adapter := &CodexAdapter{LookPath: func(string) (string, error) { return "", errors.New("not found") }}
@@ -209,6 +211,20 @@ func TestCodexAdapterHelperProcess(t *testing.T) {
 	if err := os.WriteFile(os.Getenv(codexAdapterArgumentsPathEnvironment), []byte(strings.Join(os.Args[1:], "\n")), 0o600); err != nil {
 		os.Exit(1)
 	}
+	if path := os.Getenv(codexAdapterWorkdirPathEnvironment); path != "" {
+		// Act like a probe that leaves read-only output behind (a Go module
+		// cache does): cleanup must still remove the whole scratch.
+		workdir, err := os.Getwd()
+		if err != nil || os.WriteFile(path, []byte(workdir), 0o600) != nil ||
+			os.MkdirAll(filepath.Join(workdir, "probe-cache", "locked"), 0o755) != nil ||
+			os.WriteFile(filepath.Join(workdir, "probe-cache", "locked", "entry"), []byte("cached"), 0o444) != nil ||
+			os.Chmod(filepath.Join(workdir, "probe-cache", "locked"), 0o555) != nil {
+			os.Exit(1)
+		}
+	}
+	if os.Getenv(codexAdapterFailEnvironment) == "1" {
+		os.Exit(3)
+	}
 	for index, argument := range os.Args {
 		if argument == "--output-last-message" && index+1 < len(os.Args) {
 			if err := os.WriteFile(os.Args[index+1], []byte("raw\x00reviewer\xffoutput"), 0o600); err != nil {
@@ -218,4 +234,152 @@ func TestCodexAdapterHelperProcess(t *testing.T) {
 		}
 	}
 	os.Exit(1)
+}
+
+func codexProbeAdapterForTest(t *testing.T, commandArguments *[]string) *CodexAdapter {
+	t.Helper()
+	return &CodexAdapter{
+		LookPath: func(string) (string, error) { return "codex", nil },
+		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
+			*commandArguments = append([]string(nil), arguments...)
+			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+		},
+	}
+}
+
+// TestCodexAdapterRunsRefuterProbeInIsolatedScratchWithoutNetwork pins S11 for
+// the one runtime that can isolate a probe: Go materializes the candidate tree
+// into a fresh directory under the system temp dir (never the workspace), and
+// Codex runs there with workspace-write confined to that directory, network
+// access disabled explicitly, and the temp-dir writable roots excluded.
+func TestCodexAdapterRunsRefuterProbeInIsolatedScratchWithoutNetwork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process uses POSIX permissions")
+	}
+	workdirPath := filepath.Join(t.TempDir(), "workdir")
+	t.Setenv(codexAdapterHelperEnvironment, "1")
+	t.Setenv(codexAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+	t.Setenv(codexAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
+	t.Setenv(codexAdapterWorkdirPathEnvironment, workdirPath)
+	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "")
+
+	var commandArguments []string
+	var materialized string
+	invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+		materialized = dir
+		return os.WriteFile(filepath.Join(dir, "candidate.go"), []byte("package candidate\n"), 0o644)
+	})
+	raw, err := codexProbeAdapterForTest(t, &commandArguments).Review(context.Background(), invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte("raw\x00reviewer\xffoutput"); !bytes.Equal(raw, want) {
+		t.Fatalf("Review() = %q, want untouched raw bytes %q", raw, want)
+	}
+	if materialized == "" {
+		t.Fatal("probe workspace was never materialized")
+	}
+	if relative, err := filepath.Rel(os.TempDir(), materialized); err != nil || strings.HasPrefix(relative, "..") {
+		t.Fatalf("probe scratch %q is not under the system temp dir %q", materialized, os.TempDir())
+	}
+	if workspace, err := os.Getwd(); err == nil {
+		if relative, err := filepath.Rel(workspace, materialized); err == nil && !strings.HasPrefix(relative, "..") {
+			t.Fatalf("probe scratch %q is inside the workspace %q", materialized, workspace)
+		}
+	}
+	if workdir, err := os.ReadFile(workdirPath); err != nil || string(workdir) != materialized {
+		t.Fatalf("Codex ran in %q, %v; want the materialized candidate %q", workdir, err, materialized)
+	}
+	wantArguments := []string{
+		"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "workspace-write", "-C", materialized,
+		"--output-last-message", commandArguments[8],
+		"--config", "sandbox_workspace_write.network_access=false",
+		"--config", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+		"--config", "sandbox_workspace_write.exclude_slash_tmp=true",
+	}
+	if !slices.Equal(commandArguments, wantArguments) {
+		t.Fatalf("probe Codex arguments = %q, want %q", commandArguments, wantArguments)
+	}
+	if relative, err := filepath.Rel(materialized, commandArguments[8]); err == nil && !strings.HasPrefix(relative, "..") {
+		t.Fatalf("final-message path %q is writable by the probe inside %q", commandArguments[8], materialized)
+	}
+	if _, err := os.Stat(filepath.Dir(materialized)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("probe scratch %q survived the refuter: %v", filepath.Dir(materialized), err)
+	}
+}
+
+// TestCodexAdapterRemovesProbeScratchOnError pins S11 cleanup: the scratch
+// copy is removed after the refuter returns on every path, including a
+// materialization failure, a failing or timed-out Codex process, and probe
+// output left read-only inside the copy.
+func TestCodexAdapterRemovesProbeScratchOnError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process uses POSIX permissions")
+	}
+	t.Setenv(codexAdapterHelperEnvironment, "1")
+	t.Setenv(codexAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+	t.Setenv(codexAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
+	t.Setenv(codexAdapterWorkdirPathEnvironment, filepath.Join(t.TempDir(), "workdir"))
+	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "")
+
+	t.Run("materialization fails", func(t *testing.T) {
+		var materialized string
+		adapter := &CodexAdapter{
+			LookPath: func(string) (string, error) { return "codex", nil },
+			commandContext: func(context.Context, string, ...string) *exec.Cmd {
+				t.Fatal("Codex invoked after the probe workspace failed to materialize")
+				return nil
+			},
+		}
+		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+			materialized = dir
+			if err := os.MkdirAll(filepath.Join(dir, "partial"), 0o755); err != nil {
+				return err
+			}
+			return errors.New("tree unavailable")
+		})
+		raw, err := adapter.Review(context.Background(), invocation)
+		if err == nil || !strings.Contains(err.Error(), "tree unavailable") || raw != nil {
+			t.Fatalf("Review() = %q, %v; want the materialization error and no bytes", raw, err)
+		}
+		if _, statErr := os.Stat(filepath.Dir(materialized)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("probe scratch survived a materialization failure: %v", statErr)
+		}
+	})
+
+	t.Run("codex fails after leaving read-only output", func(t *testing.T) {
+		t.Setenv(codexAdapterFailEnvironment, "1")
+		var commandArguments []string
+		var materialized string
+		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+			materialized = dir
+			return nil
+		})
+		raw, err := codexProbeAdapterForTest(t, &commandArguments).Review(context.Background(), invocation)
+		if err == nil || raw != nil {
+			t.Fatalf("Review() = %q, %v; want a transport error and no bytes", raw, err)
+		}
+		if _, statErr := os.Stat(filepath.Dir(materialized)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("probe scratch survived a failing refuter: %v", statErr)
+		}
+	})
+
+	t.Run("context already expired", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var commandArguments []string
+		var materialized string
+		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+			materialized = dir
+			return nil
+		})
+		if _, err := codexProbeAdapterForTest(t, &commandArguments).Review(ctx, invocation); err == nil {
+			t.Fatal("Review() with an expired context succeeded")
+		}
+		if materialized != "" {
+			if _, statErr := os.Stat(filepath.Dir(materialized)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("probe scratch survived a timed-out refuter: %v", statErr)
+			}
+		}
+	})
 }
