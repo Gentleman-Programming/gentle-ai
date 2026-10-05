@@ -49,6 +49,7 @@ func TestSelectorlessStatusDoesNotRestartEscalatedCandidate(t *testing.T) {
 	if err := RunReviewCaptureResult(args, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
+	corroborateRefuterClaimsForTest(t, repo, lineage)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)

@@ -121,21 +121,21 @@ func TestSelectorlessStatusPreservesIntendedUntrackedBindingBeforeCorrectionPlan
 		t.Fatalf("started lenses = %v, want exactly one selected lens", started.SelectedLenses)
 	}
 
-	var closureOutput bytes.Buffer
 	captureCLIReviewerResultWithFindings(t, repo, started, 0, []facadeFinding{{
 		Location: "candidate.go:1", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
 		ProofRefs:     []string{"exact changed hunk", "reproduced candidate failure"},
 		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
-	}}, &closureOutput)
+	}}, &bytes.Buffer{})
 
-	var closure reviewLastEventClosureResult
-	decodeStrictReviewJSON(t, closureOutput.Bytes(), &closure)
-	if closure.Schema != reviewLastEventClosureSchema || closure.Operation != "review/capture-result" ||
+	// The severe finding reaches the refuter (L20); its capture publishes the
+	// correction_required closure.
+	closure := corroborateRefuterClaimsForTest(t, repo, lineage)
+	if closure.Schema != reviewLastEventClosureSchema || closure.Operation != reviewCaptureRefuterCaptureOperation ||
 		closure.LineageID != lineage || closure.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("selectorless final capture closure = %#v, want correction_required closure", closure)
 	}
 	if closure.StatusContinuation == nil {
-		t.Fatalf("selectorless final capture closure lacks status_continuation: %s", closureOutput.String())
+		t.Fatalf("selectorless final capture closure lacks status_continuation: %#v", closure)
 	}
 	continuation := closure.StatusContinuation
 	if continuation.Operation != "review.status" {

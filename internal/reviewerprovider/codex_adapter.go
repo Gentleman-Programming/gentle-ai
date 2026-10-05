@@ -36,8 +36,9 @@ func NewCodexAdapter() *CodexAdapter {
 // through stdin so command arguments never carry provider material. When the
 // invocation offers a probe workspace (the S11 refuter), Codex instead runs in
 // a candidate copy inside that temporary directory with workspace-write
-// confined to it and no network; the whole directory is removed on return,
-// including on error and timeout.
+// confined to it and no network; a temp dir that resolves inside the reviewed
+// source root is refused before anything is created. The whole directory is
+// removed on return, including on error and timeout.
 func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) ([]byte, error) {
 	lookPath := adapter.LookPath
 	if lookPath == nil {
@@ -48,7 +49,14 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 		return nil, fmt.Errorf("codex reviewer transport unavailable: %w", err)
 	}
 
-	scratch, err := os.MkdirTemp("", "gentle-ai-codex-reviewer-*")
+	probe := invocation.ProbeWorkspace()
+	scratchParent := ""
+	if probe != nil {
+		if scratchParent, err = probeScratchParent(invocation.ProbeSourceRoot()); err != nil {
+			return nil, fmt.Errorf("codex reviewer transport unavailable: %w", err)
+		}
+	}
+	scratch, err := os.MkdirTemp(scratchParent, "gentle-ai-codex-reviewer-*")
 	if err != nil {
 		return nil, fmt.Errorf("codex reviewer transport unavailable: create scratch directory: %w", err)
 	}
@@ -56,7 +64,6 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 
 	outputPath := filepath.Join(scratch, "result")
 	workdir := scratch
-	probe := invocation.ProbeWorkspace()
 	if probe != nil {
 		workdir = filepath.Join(scratch, "candidate")
 		if err := os.Mkdir(workdir, 0o700); err != nil {

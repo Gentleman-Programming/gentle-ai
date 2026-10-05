@@ -2114,7 +2114,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		t.Fatalf("correction journey needs one consolidated review with a budget: %#v", started)
 	}
 
-	stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+	_, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
 		Lens: started.SelectedLenses[0],
 		Findings: []organicFinding{{
 			Location:          path + ":5",
@@ -2129,11 +2129,14 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture candidate-caused result: %v\n%s", err, stderr)
 	}
+	// The severe finding reaches the refuter (L20); its corroborating capture
+	// is the event that opens the bounded correction.
+	stdout := harness.corroborateRefuter(lineage)
 	var required organicFinalizeResult
 	if err := json.Unmarshal([]byte(stdout), &required); err != nil {
 		t.Fatalf("decode correction-required capture: %v\n%s", err, stdout)
 	}
-	if required.Operation != "review/capture-result" || required.State != organicStateCorrectionRequired {
+	if required.Operation != "review.capture-refuter" || required.State != organicStateCorrectionRequired {
 		t.Fatalf("candidate-caused blocker did not require a correction: %#v", required)
 	}
 
@@ -2203,7 +2206,7 @@ func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
 					t.Fatalf("capture admission selected lenses = %v, want [review-reliability]", started.SelectedLenses)
 				}
 
-				stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+				_, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
 					Lens: started.SelectedLenses[0],
 					Findings: []organicFinding{{
 						ID:                test.id,
@@ -2219,6 +2222,9 @@ func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
 				if err != nil {
 					t.Fatalf("capture canonicalized candidate-causal finding: %v\nstderr:\n%s", err, stderr)
 				}
+				// The refuter batch names the canonical finding ID, so it
+				// closes only when admission and canonicalization agree (L20).
+				stdout := harness.corroborateRefuter(lineage)
 				var terminal struct {
 					Operation string `json:"operation"`
 					State     string `json:"state"`
@@ -2226,7 +2232,7 @@ func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
 				if err := json.Unmarshal([]byte(stdout), &terminal); err != nil {
 					t.Fatalf("decode terminal capture: %v\n%s", err, stdout)
 				}
-				if terminal.Operation != "review/capture-result" || terminal.State != organicStateCorrectionRequired {
+				if terminal.Operation != "review.capture-refuter" || terminal.State != organicStateCorrectionRequired {
 					t.Fatalf("capture terminal = %#v, want correction_required", terminal)
 				}
 			})
@@ -2360,7 +2366,7 @@ func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
 		if len(started.SelectedLenses) != 1 {
 			t.Fatalf("quarantine fixture selected lenses = %v, want one", started.SelectedLenses)
 		}
-		stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+		_, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
 			Lens: started.SelectedLenses[0],
 			Findings: []organicFinding{{
 				Location:          path + ":5",
@@ -2375,6 +2381,9 @@ func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
 		if err != nil {
 			t.Fatalf("capture correction-required result: %v\nstderr:\n%s", err, stderr)
 		}
+		// The severe finding reaches the refuter (L20); its capture opens the
+		// correction this journey quarantines.
+		stdout := harness.corroborateRefuter(lineage)
 		var required struct {
 			Operation string `json:"operation"`
 			State     string `json:"state"`
@@ -2382,7 +2391,7 @@ func TestOrganicRuntimeCurrentReviewHardening(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &required); err != nil {
 			t.Fatalf("decode correction-required capture: %v\n%s", err, stdout)
 		}
-		if required.Operation != "review/capture-result" || required.State != organicStateCorrectionRequired {
+		if required.Operation != "review.capture-refuter" || required.State != organicStateCorrectionRequired {
 			t.Fatalf("quarantine capture = %#v, want correction_required", required)
 		}
 
@@ -3269,6 +3278,60 @@ func (harness *organicHarness) captureReviewerResult(lineage string, started org
 	result.Inspection = &organicInspection{Status: "completed", Paths: paths}
 	input := harness.writeJSON(fmt.Sprintf("reviewer-%d.json", order), result)
 	return harness.gentleAllowFailure(append(binding, "--input", input)...)
+}
+
+// corroborateRefuter submits the one refuter batch a severe candidate-caused
+// finding requires once every lens is captured (L20: deterministic findings
+// reach the refuter too). It follows only public routes: the provider STATUS
+// issues the refuter binding, `capture-refuter --materialize` prints the exact
+// request, and the host relay submits a batch corroborating every issued
+// claim. It returns the raw terminal closure the refuter capture prints.
+func (harness *organicHarness) corroborateRefuter(lineage string) string {
+	harness.t.Helper()
+	status := organicProviderStatus(harness.t, harness, lineage, "codex")
+	if status.NextTransition == nil || status.NextTransition.ReasonCode != "provider_refuter_required" ||
+		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		harness.t.Fatalf("refuter STATUS = %#v, want one provider_refuter_required input", status.NextTransition)
+	}
+	binding := []string{"review", "capture-refuter", "--cwd", harness.repo.worktree, "--agent", "pi"}
+	arguments := map[string]string{}
+	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
+		arguments[argument.Name] = argument.Value
+	}
+	for _, name := range []string{"repository-context", "lineage", "target", "expected-revision"} {
+		if arguments[name] == "" {
+			harness.t.Fatalf("refuter binding lacks %q: %#v", name, status.NextTransition)
+		}
+		binding = append(binding, "--"+name, arguments[name])
+	}
+	prompt := harness.gentle(append(binding, "--materialize")...)
+	_, input, found := bytes.Cut(prompt, []byte("\n\nInput:\n"))
+	if found {
+		input, _, found = bytes.Cut(input, []byte("\n\nOutput schema:\n"))
+	}
+	var request struct {
+		RequestHash string `json:"request_hash"`
+		Claims      []struct {
+			FindingID string `json:"finding_id"`
+		} `json:"claims"`
+	}
+	if !found || json.Unmarshal(input, &request) != nil || request.RequestHash == "" || len(request.Claims) == 0 {
+		harness.t.Fatalf("materialized refuter request carries no claims:\n%s", prompt)
+	}
+	type outcome struct {
+		FindingID string   `json:"finding_id"`
+		Outcome   string   `json:"outcome"`
+		ProofRefs []string `json:"proof_refs"`
+	}
+	results := make([]outcome, 0, len(request.Claims))
+	for _, claim := range request.Claims {
+		results = append(results, outcome{FindingID: claim.FindingID, Outcome: "corroborated", ProofRefs: []string{"independent reproduction of " + claim.FindingID}})
+	}
+	result := harness.writeJSON("refuter.json", struct {
+		RequestHash string    `json:"refuter_request_hash"`
+		Results     []outcome `json:"results"`
+	}{request.RequestHash, results})
+	return string(harness.gentle(append(binding, "--input", result)...))
 }
 
 // captureReviewerResultOrFail is captureReviewerResult for the callers that

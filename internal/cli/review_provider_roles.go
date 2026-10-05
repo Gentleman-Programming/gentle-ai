@@ -15,7 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
-var errReviewProviderRefuterNotRequired = errors.New("provider refuter request has no inferential findings; continue through the remaining capture route") // refusal:by-design operator-knowledge: the native closure branch consumes this sentinel and derives the remaining capture transition; no caller-selected command exists
+var errReviewProviderRefuterNotRequired = errors.New("provider refuter request has no severe candidate-caused findings; continue through the remaining capture route") // refusal:by-design operator-knowledge: the native closure branch consumes this sentinel and derives the remaining capture transition; no caller-selected command exists
 
 // errReviewProviderRefuterResultNotCaptured and its targeted-validator twin
 // are typed absence, not damage: last-event closure distinguishes an
@@ -178,7 +178,7 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 		// scratch copy only when it actually runs the refuter, and removes it on
 		// return; admission and hashing never touch it.
 		tree := state.InitialSnapshot.CandidateTree
-		request.Invocation = request.Invocation.WithProbeWorkspace(func(ctx context.Context, dir string) error {
+		request.Invocation = request.Invocation.WithProbeWorkspace(repo, func(ctx context.Context, dir string) error {
 			return reviewtransaction.MaterializeRefuterProbeTree(ctx, repo, tree, dir)
 		})
 	}
@@ -194,7 +194,9 @@ func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.Compac
 	}
 	claims := make([]reviewtransaction.RefuterClaim, 0)
 	for _, classification := range input.Classifications {
-		if classification.Class != reviewtransaction.EvidenceInferential {
+		// Deterministic findings reach the refuter too (S11, L20): a lens's
+		// reproduction can still be a false positive the refuter drops.
+		if classification.Class != reviewtransaction.EvidenceInferential && classification.Class != reviewtransaction.EvidenceDeterministic {
 			continue
 		}
 		switch classification.Causality {
@@ -214,7 +216,7 @@ func reviewProviderCanonicalRefuterClaims(snapshot string, claims []reviewtransa
 	for index, claim := range claims {
 		claim.FindingID, claim.Proof = strings.TrimSpace(claim.FindingID), strings.TrimSpace(claim.Proof)
 		if claim.FindingID == "" || claim.SnapshotIdentity != snapshot || !reviewProviderConcreteEvidence(claim.Proof) {
-			return nil, errors.New("provider refuter request has an invalid inferential claim") // refusal:by-design world-action: malformed provider-owned inferential claims require a code fix before a refuter can run
+			return nil, errors.New("provider refuter request has an invalid claim") // refusal:by-design world-action: malformed provider-owned refuter claims require a code fix before a refuter can run
 		}
 		if _, exists := seen[claim.FindingID]; exists {
 			return nil, fmt.Errorf("provider refuter request repeats finding %q", claim.FindingID) // refusal:by-design world-action: duplicate claims violate the one-result-per-finding provider contract
@@ -461,7 +463,7 @@ func reviewProviderAdmitRefuterRaw(request reviewProviderRefuterRequest, raw []b
 		expected[claim.FindingID] = struct{}{}
 	}
 	if len(result.Results) != len(expected) {
-		return facadeRefuterResult{}, errors.New("provider refuter result must cover every inferential finding exactly once") // refusal:by-design operator-knowledge: return one result for every provider-issued inferential finding
+		return facadeRefuterResult{}, errors.New("provider refuter result must cover every issued claim exactly once") // refusal:by-design operator-knowledge: return one result for every provider-issued claim
 	}
 	seen := make(map[string]struct{}, len(result.Results))
 	for index := range result.Results {

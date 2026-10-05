@@ -176,7 +176,7 @@ var contracts = []Contract{
 		ID: string(RoleRefuter), Role: RoleRefuter, RequestSchemaID: "gentle-ai.review-provider-refuter-request/v1",
 		ResultSchemaID: "https://gentle-ai.dev/schema/review/refuter/v1", ResultSchema: []byte(RefuterResultSchema), StorageSlot: "transaction-refuter-batch",
 		RequiredCapabilities: []string{TransportCapability}, ResultLimit: 4 << 20,
-		PromptInstruction: "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Return exactly one corroborated, refuted, or inconclusive outcome for every supplied claim. Add no findings, modify nothing, and return exactly one JSON object with no prose. Native Go alone applies the result to RDD authority.\n\n" +
+		PromptInstruction: "You are the detached read-only refuter for exactly ONE transaction-wide batch of deterministic and inferential severe claims. Return exactly one corroborated, refuted, or inconclusive outcome for every supplied claim. Add no findings, modify nothing, and return exactly one JSON object with no prose. Native Go alone applies the result to RDD authority.\n\n" +
 			SeverityRules + " Refute a BLOCKER or CRITICAL claim that fails these conditions: it is not caused by this change, it is not reachable with realistic input, or these rules cap it at WARNING.",
 	},
 	{

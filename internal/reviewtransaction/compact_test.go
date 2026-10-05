@@ -148,3 +148,130 @@ func deref(value *string) string {
 	}
 	return *value
 }
+
+func compactSevereFindingForTest(id string, class EvidenceClass) Finding {
+	return Finding{
+		ID: id, Lens: LensReliability, Location: "tracked.txt:1", Severity: "CRITICAL",
+		Claim: "observable failure " + id, ProofRefs: []string{"defect reproduced " + id},
+		EvidenceClass: class, CausalDisposition: CausalIntroduced,
+	}
+}
+
+// completeAndReloadCompactReviewForTest persists CompleteReview through the
+// store, so successor validation and a fresh load re-derive the same view.
+func completeAndReloadCompactReviewForTest(t *testing.T, findings []Finding, refuter []EvidenceResult) (CompactState, CompactReviewView) {
+	t.Helper()
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state, store := startReviewingCompactAuthority(t, repo, newCompactTestState(t, repo, "deterministic-refuter"))
+	classifications := make([]FindingEvidence, 0, len(findings))
+	for _, finding := range findings {
+		if isSevereSeverity(finding.Severity) {
+			classifications = append(classifications, FindingEvidence{FindingID: finding.ID, Class: finding.EvidenceClass, Causality: finding.CausalDisposition, Proof: "defect reproduced"})
+		}
+	}
+	completed, record := captureAndCompleteCompactReview(t, store, state, CompactReviewInput{
+		LensResults:     []LensResult{{Lens: LensReliability, Findings: findings, Evidence: []string{"reviewed exact candidate"}}},
+		Classifications: classifications, RefuterOutcomes: refuter,
+	})
+	if _, err := store.Replace(record.Revision, "review/complete-review", completed); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := reloaded.State.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reloaded.State, view
+}
+
+// TestCompactReviewAppliesRefuterVerdictToDeterministicSevereFindings pins
+// L20/S11: a severe deterministic finding the refuter answered is decided by
+// that verdict exactly like an inferential one -- refuted drops it to an
+// advisory, corroborated and inconclusive route it to the bounded correction.
+func TestCompactReviewAppliesRefuterVerdictToDeterministicSevereFindings(t *testing.T) {
+	for _, tt := range []struct {
+		outcome   EvidenceOutcome
+		wantState State
+		wantFix   bool
+	}{
+		{outcome: OutcomeRefuted, wantState: StateValidating},
+		{outcome: OutcomeCorroborated, wantState: StateCorrectionRequired, wantFix: true},
+		{outcome: OutcomeInconclusive, wantState: StateCorrectionRequired, wantFix: true},
+	} {
+		t.Run(string(tt.outcome), func(t *testing.T) {
+			finding := compactSevereFindingForTest("R3-001", EvidenceDeterministic)
+			state, view := completeAndReloadCompactReviewForTest(t, []Finding{finding}, []EvidenceResult{{FindingID: finding.ID, Outcome: tt.outcome, Proof: "probe: go test ./... -> baseline already fails"}})
+			if state.State != tt.wantState || view.Outcomes[finding.ID] != tt.outcome || (len(view.FixFindingIDs) == 1) != tt.wantFix {
+				t.Fatalf("deterministic finding with %s refuter verdict = state %q, outcome %q, fixes %v", tt.outcome, state.State, view.Outcomes[finding.ID], view.FixFindingIDs)
+			}
+			if len(view.RefuterOutcomes) != 1 || view.RefuterOutcomes[0].FindingID != finding.ID {
+				t.Fatalf("refuter outcomes = %#v, want the one admitted verdict", view.RefuterOutcomes)
+			}
+		})
+	}
+}
+
+// TestCompactReviewKeepsDeterministicFindingsWithoutRefuterCorroborated is the
+// compatibility PRESERVE: an authority admitted before deterministic findings
+// reached the refuter -- no refuter at all, or a batch that answered only the
+// inferential findings -- still loads, replays, and closes with every
+// deterministic severe finding corroborated and correction-bound.
+func TestCompactReviewKeepsDeterministicFindingsWithoutRefuterCorroborated(t *testing.T) {
+	deterministic := compactSevereFindingForTest("R3-001", EvidenceDeterministic)
+	inferential := compactSevereFindingForTest("R3-002", EvidenceInferential)
+	for _, tt := range []struct {
+		name     string
+		findings []Finding
+		refuter  []EvidenceResult
+		wantFix  []string
+	}{
+		{name: "no refuter", findings: []Finding{deterministic}, wantFix: []string{"R3-001"}},
+		{name: "inferential-only batch", findings: []Finding{deterministic, inferential},
+			refuter: []EvidenceResult{{FindingID: inferential.ID, Outcome: OutcomeRefuted, Proof: "baseline already fails"}}, wantFix: []string{"R3-001"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state, view := completeAndReloadCompactReviewForTest(t, tt.findings, tt.refuter)
+			if state.State != StateCorrectionRequired || view.Outcomes[deterministic.ID] != OutcomeCorroborated || strings.Join(view.FixFindingIDs, ",") != strings.Join(tt.wantFix, ",") {
+				t.Fatalf("historical deterministic route = state %q, outcomes %#v, fixes %v", state.State, view.Outcomes, view.FixFindingIDs)
+			}
+		})
+	}
+}
+
+// TestCompactRefuterNeverAnswersNonSevereOrInsufficientFindings is the
+// routing PRESERVE: a refuter result naming a non-severe finding or a severe
+// finding with insufficient evidence never becomes review semantics. The
+// capture merge does not derive the view (the CLI admission only accepts
+// issued claims), so the refusal is observed where authority is read: the
+// record no longer loads.
+func TestCompactRefuterNeverAnswersNonSevereOrInsufficientFindings(t *testing.T) {
+	warning := compactSevereFindingForTest("R3-001", "")
+	warning.Severity, warning.EvidenceClass, warning.CausalDisposition = "WARNING", "", ""
+	insufficient := compactSevereFindingForTest("R3-002", EvidenceInsufficient)
+	for _, finding := range []Finding{warning, insufficient} {
+		t.Run(finding.Severity+"/"+string(finding.EvidenceClass), func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+			state, store := startReviewingCompactAuthority(t, repo, newCompactTestState(t, repo, "refuter-scope"))
+			captureCompactLens(t, store, state, 0, finding)
+			record := requireCompactRoleCount(t, store, 1)
+			payload, err := json.Marshal(compactAdmittedRefuterValue{Results: []EvidenceResult{{FindingID: finding.ID, Outcome: OutcomeRefuted, Proof: "not reproduced"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CaptureAdmittedRefuterResult(t.Context(), CompactAdmittedRefuterResultRequest{
+				ExpectedRevision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity,
+				RequestHash: hash("f"), Payload: payload,
+			}); err != nil {
+				return
+			}
+			if _, err := store.Load(); err == nil || !strings.Contains(err.Error(), "refuter result does not match") {
+				t.Fatalf("authority with a refuter result for a %s %s finding loaded: %v", finding.Severity, finding.EvidenceClass, err)
+			}
+		})
+	}
+}

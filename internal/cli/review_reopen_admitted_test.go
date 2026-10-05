@@ -27,6 +27,7 @@ func TestLastRecapturedLensDrivesTheCurrentCorrectionPlan(t *testing.T) {
 		var output bytes.Buffer
 		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &output)
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 
 	current, err := store.Load()
 	if err != nil || current.State.State != reviewtransaction.StateCorrectionRequired {

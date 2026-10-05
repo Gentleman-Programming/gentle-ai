@@ -1282,7 +1282,10 @@ func (state CompactState) CompactReviewView() (CompactReviewView, error) {
 		case causality == CausalPreExisting || causality == CausalBaseOnly:
 			view.Outcomes[finding.ID] = OutcomeInfo
 			view.FollowUps = append(view.FollowUps, causalFollowUp(finding, proof))
-		case finding.EvidenceClass == EvidenceDeterministic:
+		case finding.EvidenceClass == EvidenceDeterministic && refuterByID[finding.ID].FindingID == "":
+			// A deterministic finding the refuter did not answer stays
+			// corroborated: authority admitted before deterministic findings
+			// reached the refuter (S11, L20) replays and closes unchanged.
 			view.Outcomes[finding.ID] = OutcomeCorroborated
 			view.FixFindingIDs = append(view.FixFindingIDs, finding.ID)
 		default:
@@ -1306,8 +1309,8 @@ func (state CompactState) CompactReviewView() (CompactReviewView, error) {
 		}
 	}
 	for id := range refuterByID {
-		if _, found := view.Classifications[id]; !found || view.Classifications[id].Class != EvidenceInferential {
-			return CompactReviewView{}, invalidCompactReviewView("refuter result does not match an inferential finding")
+		if class := view.Classifications[id].Class; class != EvidenceInferential && class != EvidenceDeterministic {
+			return CompactReviewView{}, invalidCompactReviewView("refuter result does not match a severe deterministic or inferential finding")
 		}
 	}
 	sort.Strings(view.FixFindingIDs)

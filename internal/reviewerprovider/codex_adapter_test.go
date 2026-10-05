@@ -265,7 +265,7 @@ func TestCodexAdapterRunsRefuterProbeInIsolatedScratchWithoutNetwork(t *testing.
 
 	var commandArguments []string
 	var materialized string
-	invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+	invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(t.TempDir(), func(_ context.Context, dir string) error {
 		materialized = dir
 		return os.WriteFile(filepath.Join(dir, "candidate.go"), []byte("package candidate\n"), 0o644)
 	})
@@ -279,8 +279,12 @@ func TestCodexAdapterRunsRefuterProbeInIsolatedScratchWithoutNetwork(t *testing.
 	if materialized == "" {
 		t.Fatal("probe workspace was never materialized")
 	}
-	if relative, err := filepath.Rel(os.TempDir(), materialized); err != nil || strings.HasPrefix(relative, "..") {
-		t.Fatalf("probe scratch %q is not under the system temp dir %q", materialized, os.TempDir())
+	systemTemp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relative, err := filepath.Rel(systemTemp, materialized); err != nil || strings.HasPrefix(relative, "..") {
+		t.Fatalf("probe scratch %q is not under the system temp dir %q", materialized, systemTemp)
 	}
 	if workspace, err := os.Getwd(); err == nil {
 		if relative, err := filepath.Rel(workspace, materialized); err == nil && !strings.HasPrefix(relative, "..") {
@@ -331,7 +335,7 @@ func TestCodexAdapterRemovesProbeScratchOnError(t *testing.T) {
 				return nil
 			},
 		}
-		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(t.TempDir(), func(_ context.Context, dir string) error {
 			materialized = dir
 			if err := os.MkdirAll(filepath.Join(dir, "partial"), 0o755); err != nil {
 				return err
@@ -351,7 +355,7 @@ func TestCodexAdapterRemovesProbeScratchOnError(t *testing.T) {
 		t.Setenv(codexAdapterFailEnvironment, "1")
 		var commandArguments []string
 		var materialized string
-		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(t.TempDir(), func(_ context.Context, dir string) error {
 			materialized = dir
 			return nil
 		})
@@ -369,7 +373,7 @@ func TestCodexAdapterRemovesProbeScratchOnError(t *testing.T) {
 		cancel()
 		var commandArguments []string
 		var materialized string
-		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(func(_ context.Context, dir string) error {
+		invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(t.TempDir(), func(_ context.Context, dir string) error {
 			materialized = dir
 			return nil
 		})
@@ -382,4 +386,135 @@ func TestCodexAdapterRemovesProbeScratchOnError(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestCodexAdapterRefusesProbeScratchInsideTheSourceWorkspace pins S11
+// confinement: os.MkdirTemp honors TMPDIR, so a temp dir that resolves inside
+// the reviewed workspace -- directly, as the workspace itself, through a
+// symlink alias, or with the workspace named through an alias -- is refused
+// before any scratch is created, the candidate is materialized, or Codex runs.
+// A probe without a source root is refused the same way.
+func TestCodexAdapterRefusesProbeScratchInsideTheSourceWorkspace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink aliases need POSIX permissions")
+	}
+	for _, tt := range []struct {
+		name  string
+		setup func(t *testing.T, source, outside string) (root, tmpdir string)
+		want  string
+	}{
+		{name: "TMPDIR inside the workspace", setup: func(t *testing.T, source, _ string) (string, string) {
+			return source, mkdirForTest(t, filepath.Join(source, "tmp"))
+		}, want: "inside the reviewed workspace"},
+		{name: "TMPDIR is the workspace", setup: func(_ *testing.T, source, _ string) (string, string) {
+			return source, source
+		}, want: "inside the reviewed workspace"},
+		{name: "TMPDIR is a symlink alias into the workspace", setup: func(t *testing.T, source, outside string) (string, string) {
+			return source, symlinkForTest(t, mkdirForTest(t, filepath.Join(source, "tmp")), filepath.Join(outside, "tmp-alias"))
+		}, want: "inside the reviewed workspace"},
+		{name: "workspace named through a symlink alias", setup: func(t *testing.T, source, outside string) (string, string) {
+			return symlinkForTest(t, source, filepath.Join(outside, "repo-alias")), mkdirForTest(t, filepath.Join(source, "tmp"))
+		}, want: "inside the reviewed workspace"},
+		{name: "probe without a source root", setup: func(_ *testing.T, _, outside string) (string, string) {
+			return "", outside
+		}, want: "no source workspace root"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source, outside := t.TempDir(), t.TempDir()
+			root, tmpdir := tt.setup(t, source, outside)
+			before := dirEntriesForTest(t, tmpdir)
+			t.Setenv("TMPDIR", tmpdir)
+			adapter := &CodexAdapter{
+				LookPath: func(string) (string, error) { return "codex", nil },
+				commandContext: func(context.Context, string, ...string) *exec.Cmd {
+					t.Fatal("Codex invoked although the probe scratch is not confined")
+					return nil
+				},
+			}
+			materialized := false
+			invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(root, func(context.Context, string) error {
+				materialized = true
+				return nil
+			})
+			raw, err := adapter.Review(context.Background(), invocation)
+			if err == nil || !strings.Contains(err.Error(), tt.want) || raw != nil {
+				t.Fatalf("Review() = %q, %v; want a refusal naming %q", raw, err, tt.want)
+			}
+			if materialized {
+				t.Fatal("candidate materialized although the probe scratch is not confined")
+			}
+			if after := dirEntriesForTest(t, tmpdir); !slices.Equal(before, after) {
+				t.Fatalf("temp dir entries %v -> %v; want no scratch created", before, after)
+			}
+		})
+	}
+}
+
+// TestCodexAdapterProbeConfinementComparesCanonicalPathsNotPrefixes is the
+// PRESERVE half: a temp dir outside the workspace still probes, including one
+// whose path merely shares the workspace's string prefix, and an invocation
+// without a probe is never checked.
+func TestCodexAdapterProbeConfinementComparesCanonicalPathsNotPrefixes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper process uses POSIX permissions")
+	}
+	parent := t.TempDir()
+	source := mkdirForTest(t, filepath.Join(parent, "repo"))
+	sibling := mkdirForTest(t, filepath.Join(parent, "repo-tmp"))
+	t.Setenv(codexAdapterHelperEnvironment, "1")
+	t.Setenv(codexAdapterPromptPathEnvironment, filepath.Join(t.TempDir(), "prompt"))
+	t.Setenv(codexAdapterArgumentsPathEnvironment, filepath.Join(t.TempDir(), "arguments"))
+	t.Setenv(codexAdapterWorkdirPathEnvironment, filepath.Join(t.TempDir(), "workdir"))
+	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "")
+	t.Setenv("TMPDIR", sibling)
+
+	var commandArguments []string
+	var materialized string
+	invocation := NewInvocation([]byte("refuter prompt")).WithProbeWorkspace(source, func(_ context.Context, dir string) error {
+		materialized = dir
+		return nil
+	})
+	if _, err := codexProbeAdapterForTest(t, &commandArguments).Review(context.Background(), invocation); err != nil {
+		t.Fatalf("probe with a prefix-sharing sibling temp dir: %v", err)
+	}
+	if relative, err := filepath.Rel(sibling, materialized); err != nil || strings.HasPrefix(relative, "..") {
+		t.Fatalf("probe scratch %q is not under the sibling temp dir %q", materialized, sibling)
+	}
+
+	t.Setenv("TMPDIR", mkdirForTest(t, filepath.Join(source, "tmp")))
+	if _, err := codexProbeAdapterForTest(t, &commandArguments).Review(context.Background(), NewInvocation([]byte("lens prompt"))); err != nil {
+		t.Fatalf("read-only reviewer without a probe was checked for confinement: %v", err)
+	}
+	if !slices.Contains(commandArguments, "read-only") {
+		t.Fatalf("reviewer without a probe ran %q, want the read-only sandbox", commandArguments)
+	}
+}
+
+func mkdirForTest(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func symlinkForTest(t *testing.T, target, link string) string {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	return link
+}
+
+func dirEntriesForTest(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }

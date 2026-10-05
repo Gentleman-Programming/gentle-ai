@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -199,6 +201,9 @@ func TestReviewProviderCodexRefuterInvocationMaterializesTheCandidateTree(t *tes
 	if workspace == nil {
 		t.Fatal("Codex refuter invocation carries no probe workspace")
 	}
+	if got := request.Invocation.ProbeSourceRoot(); got != repo {
+		t.Fatalf("Codex refuter probe source root = %q, want the reviewed repository %q", got, repo)
+	}
 	dir := t.TempDir()
 	if err := workspace(t.Context(), dir); err != nil {
 		t.Fatal(err)
@@ -216,11 +221,118 @@ func TestReviewProviderCodexRefuterInvocationMaterializesTheCandidateTree(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
-		if other.Invocation.ProbeWorkspace() != nil {
+		if other.Invocation.ProbeWorkspace() != nil || other.Invocation.ProbeSourceRoot() != "" {
 			t.Fatalf("%s refuter invocation carries a probe workspace", runtime)
 		}
 		if other.RequestHash != request.RequestHash {
 			t.Fatalf("%s request hash %q differs from Codex %q: the runtime paragraph must not rebind the batch", runtime, other.RequestHash, request.RequestHash)
 		}
+	}
+}
+
+// TestReviewProviderRefuterClaimsIncludeDeterministicSevereFindings pins L20:
+// the refuter batch carries every severe candidate-caused finding, deterministic
+// or inferential, so a deterministic false positive can be dropped. Non-severe
+// findings never carry a classification and never reach the batch; severe
+// findings that are pre-existing, base-only, unknown, or insufficient stay out
+// too (PRESERVE).
+func TestReviewProviderRefuterClaimsIncludeDeterministicSevereFindings(t *testing.T) {
+	snapshot := "sha256:" + strings.Repeat("1", 64)
+	finding := func(id string) reviewtransaction.Finding {
+		return reviewtransaction.Finding{ID: id, Claim: "claim " + id}
+	}
+	classification := func(id string, class reviewtransaction.EvidenceClass, causality reviewtransaction.CausalDisposition) reviewtransaction.FindingEvidence {
+		return reviewtransaction.FindingEvidence{FindingID: id, Severity: "CRITICAL", Class: class, Causality: causality, Proof: "proof " + id}
+	}
+	input := reviewtransaction.CompactReviewInput{
+		LensResults: []reviewtransaction.LensResult{{Findings: []reviewtransaction.Finding{
+			finding("D-introduced"), finding("I-worsened"), finding("D-pre-existing"), finding("D-unknown"), finding("X-insufficient"), finding("W-warning"),
+		}}},
+		Classifications: []reviewtransaction.FindingEvidence{
+			classification("D-introduced", reviewtransaction.EvidenceDeterministic, reviewtransaction.CausalIntroduced),
+			classification("I-worsened", reviewtransaction.EvidenceInferential, reviewtransaction.CausalWorsened),
+			classification("D-pre-existing", reviewtransaction.EvidenceDeterministic, reviewtransaction.CausalPreExisting),
+			classification("D-unknown", reviewtransaction.EvidenceDeterministic, reviewtransaction.CausalUnknown),
+			classification("X-insufficient", reviewtransaction.EvidenceInsufficient, reviewtransaction.CausalIntroduced),
+		},
+	}
+	claims, err := reviewProviderRefuterClaims(snapshot, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, claim := range claims {
+		ids = append(ids, claim.FindingID)
+		if claim.Claim != "claim "+claim.FindingID || claim.Proof != "proof "+claim.FindingID || claim.SnapshotIdentity != snapshot {
+			t.Fatalf("claim %#v does not carry its finding's assertion and proof", claim)
+		}
+	}
+	if got := strings.Join(ids, ","); got != "D-introduced,I-worsened" {
+		t.Fatalf("refuter claims = %s, want the two severe candidate-caused findings", got)
+	}
+
+	input.Classifications = input.Classifications[2:]
+	if _, err := reviewProviderRefuterClaims(snapshot, input); !errors.Is(err, errReviewProviderRefuterNotRequired) {
+		t.Fatalf("batch without severe candidate-caused findings = %v, want the not-required sentinel", err)
+	}
+}
+
+// TestReviewCaptureRefuterDropsADeterministicSevereFinding drives L20 end to
+// end through the Pi host relay: a severe deterministic finding now requires
+// the refuter batch, and a refuted verdict drops it to a refuted advisory on
+// an approved review instead of opening a correction.
+func TestReviewCaptureRefuterDropsADeterministicSevereFinding(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, started, store, record := newArtifactReview(t, false)
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"tracked.txt:1 candidate-specific proof"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateReviewing {
+		t.Fatalf("deterministic severe finding closed the review as %q before the refuter ran", record.State.State)
+	}
+	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Claims) != 1 || request.Claims[0].FindingID != "R3-001" {
+		t.Fatalf("refuter claims = %#v, want the deterministic finding", request.Claims)
+	}
+	raw, err := json.Marshal(facadeRefuterResult{RequestHash: request.RequestHash, Results: []facadeRefuterOutcome{{
+		FindingID: "R3-001", Outcome: reviewtransaction.OutcomeRefuted, ProofRefs: []string{"tracked.txt:1 the baseline already prints candidate"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	var output bytes.Buffer
+	if err := RunReview(append(append([]string{"capture-refuter"}, piRefuterBinding(repo, record, handle)...), "--agent", "pi", "--input", writeReviewCLIRawInput(t, raw)), &output); err != nil {
+		t.Fatalf("capture refuter: %v\n%s", err, output.String())
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("refuted deterministic finding closed as %q, want approved", terminal.State)
+	}
+	if terminal.AdvisoryFindings == nil || len(terminal.AdvisoryFindings.Findings) != 1 ||
+		terminal.AdvisoryFindings.Findings[0].Disposition != reviewtransaction.AdvisoryRefuted {
+		t.Fatalf("advisory findings = %#v, want the one refuted finding", terminal.AdvisoryFindings)
 	}
 }

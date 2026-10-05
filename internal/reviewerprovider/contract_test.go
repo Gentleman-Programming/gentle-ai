@@ -95,7 +95,7 @@ func TestRefuterPromptAppliesSeverityRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range append(slices.Clone(severityRulePhrases), "Refute a BLOCKER or CRITICAL claim that fails these conditions") {
+	for _, required := range append(slices.Clone(severityRulePhrases), "Refute a BLOCKER or CRITICAL claim that fails these conditions", "deterministic and inferential") {
 		if !strings.Contains(contract.PromptInstruction, required) {
 			t.Fatalf("refuter prompt omits severity rule %q:\n%s", required, contract.PromptInstruction)
 		}

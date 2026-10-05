@@ -258,25 +258,18 @@ func TestLastReviewerCaptureOpensBoundedCorrectionForSevereFinding(t *testing.T)
 	for order := 0; order < len(started.SelectedLenses)-1; order++ {
 		captureCleanCLIReviewerResult(t, repo, started, order, &bytes.Buffer{})
 	}
-	var correctionOutput bytes.Buffer
 	captureCLIReviewerResultWithFindings(t, repo, started, len(started.SelectedLenses)-1, []facadeFinding{{
 		ID: "R3-001", Location: "internal/auth/session.go:4", Severity: "CRITICAL",
 		Claim:         "the candidate introduces an observable authentication failure",
 		ProofRefs:     []string{"the changed line deterministically causes the reproduced failure"},
 		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
-	}}, &correctionOutput)
+	}}, &bytes.Buffer{})
 
-	var correction struct {
-		Operation       string                  `json:"operation"`
-		State           reviewtransaction.State `json:"state"`
-		Action          string                  `json:"action"`
-		ReviewerResults json.RawMessage         `json:"reviewer_results"`
-	}
-	if err := json.Unmarshal(correctionOutput.Bytes(), &correction); err != nil {
-		t.Fatal(err)
-	}
-	if correction.Operation != "review/capture-result" || correction.State != reviewtransaction.StateCorrectionRequired ||
-		len(correction.ReviewerResults) != 0 || !strings.Contains(correction.Action, "bounded correction") {
+	// The deterministic severe finding reaches the refuter (L20); its
+	// corroborating capture is the event that opens the bounded correction.
+	correction := corroborateRefuterClaimsForTest(t, repo, started.LineageID)
+	if correction.Operation != reviewCaptureRefuterCaptureOperation || correction.State != reviewtransaction.StateCorrectionRequired ||
+		correction.ReviewerResults != nil || !strings.Contains(correction.Action, "bounded correction") {
 		t.Fatalf("last capture correction result = %#v", correction)
 	}
 	record, err := store.Load()
@@ -358,6 +351,7 @@ func providerCorrectionReadyWithoutVerificationEvidence(t *testing.T, startArgs 
 	if err := RunReviewCaptureResult(args, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -686,6 +680,7 @@ func correctionRequiredForPlanCapture(t *testing.T) (string, ReviewFacadeStartRe
 		ProofRefs:     []string{"the changed line deterministically causes the reproduced failure"},
 		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, &bytes.Buffer{})
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
