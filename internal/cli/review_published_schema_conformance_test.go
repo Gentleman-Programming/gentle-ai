@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
@@ -58,6 +59,48 @@ func validatePublishedReviewSchema(t *testing.T, schema *jsonschema.Schema, payl
 	}
 	if err := schema.Validate(document); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Issue #5255: a negotiated contract-v1 START mints an rctx2_ repository
+// context handle, so the published v1 START schema must accept it whole while
+// still admitting the historical rctx1_ handles older readers persisted.
+func TestNegotiatedV1StartConformsToPublishedV1StartSchema(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
+
+	var output bytes.Buffer
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "published-v1-start",
+	}), &output); err != nil {
+		t.Fatal(err)
+	}
+	result := decodeNegotiatedReviewStart(t, output.Bytes())
+	if result.Schema != ReviewIntegrationStartSchemaV2 || result.RepositoryContext == nil ||
+		!strings.HasPrefix(result.RepositoryContext.Handle, "rctx2_") {
+		t.Fatalf("negotiated v1 START = %s, want start/v2 with an rctx2_ handle", output.String())
+	}
+
+	schema := compileWholePublishedReviewSchema(t, "v1", "start-v2.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+
+	for _, tt := range []struct {
+		name   string
+		handle string
+		valid  bool
+	}{
+		{name: "historical rctx1 handle", handle: "rctx1_" + strings.Repeat("a", 64), valid: true},
+		{name: "unknown rctx3 handle", handle: "rctx3_" + strings.Repeat("a", 64)},
+		{name: "short rctx2 handle", handle: "rctx2_" + strings.Repeat("a", 63)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			document := decodeJSONObjectCopy(t, output.Bytes())
+			document["repository_context"].(map[string]any)["handle"] = tt.handle
+			if err := schema.Validate(document); (err == nil) != tt.valid {
+				t.Fatalf("published v1 START schema validation of %q = %v, want valid=%t", tt.handle, err, tt.valid)
+			}
+		})
 	}
 }
 
