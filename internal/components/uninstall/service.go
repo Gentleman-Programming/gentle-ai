@@ -1743,17 +1743,8 @@ func removeOwnedOpenCodeLauncher(path string) operation {
 		path:   path,
 		agents: []model.AgentID{model.AgentOpenCode},
 		apply: func(path string) (bool, bool, error) {
-			data, err := os.ReadFile(path)
-			if os.IsNotExist(err) {
-				return false, false, nil
-			}
-			if err != nil {
-				return false, false, err
-			}
-			if !bytes.Contains(data, []byte(opencodeactivation.OwnershipMarker)) {
-				return false, false, nil
-			}
-			if err := os.Remove(path); err != nil {
+			result, err := opencodeactivation.RemoveManagedLauncher(path)
+			if err != nil || !result.Removed() {
 				return false, false, err
 			}
 			return true, true, nil

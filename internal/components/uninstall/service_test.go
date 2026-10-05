@@ -385,7 +385,7 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 		}
 		content := []byte("user launcher")
 		if index == 0 {
-			content = []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\n")
+			content = ownedOpenCodeLauncher(path)
 		}
 		if err := os.WriteFile(path, content, 0o755); err != nil {
 			t.Fatal(err)
@@ -408,6 +408,85 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 	}
 	if !slices.Contains(result.RemovedFiles, ownedPath) {
 		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, ownedPath)
+	}
+}
+
+// Issue #3451: a launcher that only mentions the ownership marker belongs to
+// the user and survives uninstall.
+func TestUninstallPreservesLauncherWithIncidentalMarker(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	content := []byte("user launcher mentions " + opencodeactivation.OwnershipMarker)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(content) {
+		t.Fatalf("user launcher after uninstall = %q, %v; want preserved", got, err)
+	}
+}
+
+// Issue #3451: uninstall never follows or removes a symlink at the launcher
+// path, even when its target holds managed launcher bytes.
+func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges not guaranteed on Windows")
+	}
+	homeDir := t.TempDir()
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	target := filepath.Join(t.TempDir(), "launcher-target")
+	targetContent := ownedOpenCodeLauncher(path)
+	if err := os.WriteFile(target, targetContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(path); err != nil || got != target {
+		t.Fatalf("launcher symlink after uninstall = %q, %v; want preserved", got, err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != string(targetContent) {
+		t.Fatalf("launcher target after uninstall = %q, %v; want preserved", data, err)
+	}
+}
+
+// ownedOpenCodeLauncher returns the exact bytes Gentle AI generates for the
+// launcher at path, targeting a fixed historical OpenCode location.
+func ownedOpenCodeLauncher(path string) []byte {
+	switch filepath.Ext(path) {
+	case ".cmd":
+		return []byte("@echo off\r\nrem " + opencodeactivation.OwnershipMarker + "\r\nsetlocal\r\nif not defined OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS set \"OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\"\r\n\"C:\\old\\opencode.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n")
+	case ".ps1":
+		return []byte("# " + opencodeactivation.OwnershipMarker + "\r\n$ErrorActionPreference = 'Stop'\r\nif (-not (Test-Path Env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS)) { $env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = 'true' }\r\n& 'C:\\old\\opencode.exe' @args\r\nexit $LASTEXITCODE\r\n")
+	default:
+		return []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n")
 	}
 }
 

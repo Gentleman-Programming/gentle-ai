@@ -740,7 +740,7 @@ func buildAppCandidateBinary(t *testing.T) string {
 	return binary
 }
 
-func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.T) {
+func TestTuiInstallOnThenSyncRefreshesCanonicalAndRefusesTamperedOpenCodeActivation(t *testing.T) {
 	home := t.TempDir()
 	previousUserHomeDir := appUserHomeDir
 	appUserHomeDir = func() (string, error) { return home, nil }
@@ -764,9 +764,23 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	if !strings.Contains(string(before), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS") {
 		t.Fatalf("TUI install launcher missing background environment: %s", before)
 	}
-	stale := strings.Replace(string(before), "=true", "=stale", 1)
-	if err := os.WriteFile(launcher, []byte(stale), 0o755); err != nil {
-		t.Fatalf("WriteFile(stale launcher): %v", err)
+	// Issue #3451: a generated launcher for an older OpenCode target is still
+	// managed and refreshed in place. The old target must stay runnable because
+	// sync probes the runtime through the launcher already on process PATH.
+	resolvedBinDir, err := filepath.EvalSymlinks(binDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(OpenCode bin): %v", err)
+	}
+	oldBinDir, err := filepath.EvalSymlinks(writeFakeOpenCodeRuntime(t))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(old OpenCode bin): %v", err)
+	}
+	if !strings.Contains(string(before), resolvedBinDir) {
+		t.Fatalf("TUI install launcher does not target %q: %s", resolvedBinDir, before)
+	}
+	staleTarget := strings.ReplaceAll(string(before), resolvedBinDir, oldBinDir)
+	if err := os.WriteFile(launcher, []byte(staleTarget), 0o755); err != nil {
+		t.Fatalf("WriteFile(stale-target launcher): %v", err)
 	}
 
 	changed, err := tuiSync(home)(nil)
@@ -779,6 +793,19 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	}
 	if string(after) != string(before) || !slices.Contains(changed, launcher) {
 		t.Fatalf("TUI sync launcher/changed files = %q/%v, want refreshed launcher and changed path", after, changed)
+	}
+
+	// A hand-edited launcher is no longer the generated one: sync refuses it
+	// and leaves the user's bytes in place.
+	tampered := strings.Replace(string(before), "=true", "=stale", 1)
+	if err := os.WriteFile(launcher, []byte(tampered), 0o755); err != nil {
+		t.Fatalf("WriteFile(tampered launcher): %v", err)
+	}
+	if _, err := tuiSync(home)(nil); err == nil || !strings.Contains(err.Error(), "user-owned OpenCode launcher collision") {
+		t.Fatalf("TUI sync error = %v, want user-owned launcher refusal", err)
+	}
+	if preserved, err := os.ReadFile(launcher); err != nil || string(preserved) != tampered {
+		t.Fatalf("tampered launcher after refused sync = %q, %v; want preserved", preserved, err)
 	}
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	settings, err := os.ReadFile(settingsPath)

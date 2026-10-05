@@ -324,9 +324,26 @@ func (o ActivationOptions) normalized() ActivationOptions {
 		}
 	}
 	if o.RemoveFile == nil {
-		o.RemoveFile = os.Remove
+		o.RemoveFile = removeManagedLauncherFile
 	}
 	return o
+}
+
+// removeManagedLauncherFile is the default launcher removal: it deletes only
+// the canonical launcher it validated, never a concurrent replacement.
+func removeManagedLauncherFile(path string) error {
+	result, err := RemoveManagedLauncher(path)
+	if err != nil {
+		return err
+	}
+	switch result.Status {
+	case ManagedLauncherRemovalRemoved:
+		return nil
+	case ManagedLauncherRemovalAbsent:
+		return &os.PathError{Op: "remove", Path: path, Err: os.ErrNotExist}
+	default:
+		return fmt.Errorf("refusing to remove OpenCode launcher %q: %s", path, result.Status)
+	}
 }
 
 // BinDir returns the Gentle-owned launcher directory.
@@ -637,6 +654,9 @@ func (p *ActivationPlan) Apply() error {
 			if before.exists && bytes.Equal(before.data, desired) && (p.goos == "windows" || before.mode.Perm() == 0o755) {
 				continue
 			}
+			if err := requireSnapshot(path, before); err != nil {
+				return p.failAndRollback(fmt.Errorf("revalidate managed OpenCode launcher %q before write: %w", path, err))
+			}
 			p.changed = append(p.changed, path)
 			if err := p.options.WriteFile(path, desired, 0o755); err != nil {
 				return p.failAndRollback(fmt.Errorf("write managed OpenCode launcher %q: %w", path, err))
@@ -661,10 +681,17 @@ func (p *ActivationPlan) Apply() error {
 		if !snapshot.exists || !snapshot.owned {
 			continue
 		}
-		p.changed = append(p.changed, path)
-		if err := p.options.RemoveFile(path); err != nil && !os.IsNotExist(err) {
+		if err := requireSnapshot(path, snapshot); err != nil {
+			return p.failAndRollback(fmt.Errorf("revalidate managed OpenCode launcher %q before removal: %w", path, err))
+		}
+		if err := p.options.RemoveFile(path); err != nil {
+			if os.IsNotExist(err) {
+				// Removed concurrently: not this plan's change, so rollback must not recreate it.
+				continue
+			}
 			return p.failAndRollback(fmt.Errorf("remove managed OpenCode launcher %q: %w", path, err))
 		}
+		p.changed = append(p.changed, path)
 	}
 	p.applied = true
 	return nil
@@ -687,6 +714,14 @@ func (p *ActivationPlan) Rollback() error {
 	for i := len(p.changed) - 1; i >= 0; i-- {
 		path := p.changed[i]
 		snapshot := p.before[path]
+		restore, err := p.rollbackNeeded(path)
+		if err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback preserve changed OpenCode launcher %q: %w", path, err))
+			continue
+		}
+		if !restore {
+			continue
+		}
 		if !snapshot.exists {
 			if err := p.options.RemoveFile(path); err != nil && !os.IsNotExist(err) {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback remove managed OpenCode launcher %q: %w", path, err))
@@ -710,6 +745,49 @@ func (p *ActivationPlan) Rollback() error {
 	return rollbackErr
 }
 
+// rollbackNeeded reports whether path still holds this plan's mutation. A
+// path that still matches its prepared snapshot was never changed, and any
+// other state belongs to a concurrent writer and is preserved.
+func (p *ActivationPlan) rollbackNeeded(path string) (bool, error) {
+	current, err := readLauncherSnapshot(path)
+	if err != nil {
+		return false, err
+	}
+	if sameSnapshot(current, p.before[path]) {
+		return false, nil
+	}
+	applied := launcherSnapshot{exists: true, data: p.desired[path], mode: 0o755}
+	if p.action == activationActionOff {
+		applied = launcherSnapshot{}
+	}
+	if current.exists && p.goos == "windows" {
+		applied.mode = current.mode
+	}
+	if !sameSnapshot(current, applied) {
+		return false, errors.New("path changed after this plan's mutation")
+	}
+	return true, nil
+}
+
+// requireSnapshot fails unless path still holds exactly the prepared state.
+func requireSnapshot(path string, expected launcherSnapshot) error {
+	current, err := readLauncherSnapshot(path)
+	if err != nil {
+		return err
+	}
+	if !sameSnapshot(current, expected) {
+		return errors.New("path changed after preparation")
+	}
+	return nil
+}
+
+func sameSnapshot(a, b launcherSnapshot) bool {
+	if !a.exists || !b.exists {
+		return a.exists == b.exists
+	}
+	return a.mode == b.mode && bytes.Equal(a.data, b.data)
+}
+
 func readLauncherSnapshot(path string) (launcherSnapshot, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -725,7 +803,59 @@ func readLauncherSnapshot(path string) (launcherSnapshot, error) {
 	if err != nil {
 		return launcherSnapshot{}, fmt.Errorf("read managed OpenCode launcher %q: %w", path, err)
 	}
-	return launcherSnapshot{exists: true, data: data, mode: info.Mode().Perm(), owned: bytes.Contains(data, []byte(OwnershipMarker))}, nil
+	return launcherSnapshot{exists: true, data: data, mode: info.Mode().Perm(), owned: IsManagedLauncher(path, data)}, nil
+}
+
+// IsManagedLauncher reports whether data is exactly the launcher Gentle AI
+// generates for path's launcher name, for any target. A file that merely
+// contains the ownership marker, or a generated launcher with extra or missing
+// bytes, belongs to the user.
+func IsManagedLauncher(path string, data []byte) bool {
+	text := string(data)
+	switch strings.ToLower(filepath.Base(path)) {
+	case POSIXLauncherPathPlaceholder:
+		prefix, suffix, _ := strings.Cut(posixLauncher("\x00"), "'\x00'")
+		target, ok := canonicalTarget(text, prefix, suffix, "'", `'\''`)
+		return ok && text == posixLauncher(target)
+	case WindowsCMDPathPlaceholder:
+		target, ok := canonicalCMDTarget(text)
+		return ok && text == windowsCMDLauncher(target)
+	case WindowsPS1PathPlaceholder:
+		prefix, suffix, _ := strings.Cut(windowsPS1Launcher("\x00"), "'\x00'")
+		target, ok := canonicalTarget(text, prefix, suffix, "'", "''")
+		return ok && text == windowsPS1Launcher(target)
+	default:
+		return false
+	}
+}
+
+// canonicalTarget extracts the quoted target between a generated prefix and
+// suffix, undoing the generator's quote escaping.
+func canonicalTarget(text, prefix, suffix, quote, escapedQuote string) (string, bool) {
+	if !strings.HasPrefix(text, prefix) || !strings.HasSuffix(text, suffix) || len(text) < len(prefix)+len(suffix) {
+		return "", false
+	}
+	raw := text[len(prefix) : len(text)-len(suffix)]
+	if len(raw) < 2*len(quote) || !strings.HasPrefix(raw, quote) || !strings.HasSuffix(raw, quote) {
+		return "", false
+	}
+	return strings.ReplaceAll(raw[len(quote):len(raw)-len(quote)], escapedQuote, quote), true
+}
+
+// canonicalCMDTarget extracts the target from either generated CMD form: a
+// direct invocation or a PowerShell -File invocation for .ps1 targets.
+func canonicalCMDTarget(text string) (string, bool) {
+	for _, target := range []string{"\x00", "\x00.ps1"} {
+		prefix, suffix, _ := strings.Cut(windowsCMDLauncher(target), target)
+		if !strings.HasPrefix(text, prefix) || !strings.HasSuffix(text, suffix) || len(text) < len(prefix)+len(suffix) {
+			continue
+		}
+		candidate := strings.ReplaceAll(text[len(prefix):len(text)-len(suffix)], `""`, `"`)
+		if windowsCMDLauncher(candidate) == text {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func launcherContent(goos, target string) map[string]string {
