@@ -1,10 +1,12 @@
 package opencode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
@@ -161,17 +163,17 @@ func TestActivationReadyWhenManagedDirIsPrependedAfterRcShadow(t *testing.T) {
 	}
 }
 
-// Without PATH persistence the activation is pending with the manual export
-// line in ActivationReason rather than in restart guidance.
-func TestActivationPendingWhenLoginProfileCannotPersistPath(t *testing.T) {
+// An unsupported login shell cannot be modeled, so the activation is unknown
+// with the manual export line in ActivationReason.
+func TestActivationUnknownWhenLoginShellCannotPersistPath(t *testing.T) {
 	fixture := newReadinessFixture(t, "/usr/bin/fish")
 	plan, err := Activate(fixture.home, fixture.options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	report := plan.Report()
-	if report.Status != ActivationStatusPending || report.Effective {
-		t.Fatalf("report = %#v, want pending", report)
+	if report.Status != ActivationStatusUnknown || report.Effective {
+		t.Fatalf("report = %#v, want unknown", report)
 	}
 	if !strings.Contains(report.ActivationReason, "not supported") || !strings.Contains(report.ActivationReason, ProfileExportLine(BinDir(fixture.home))) {
 		t.Fatalf("activation reason = %q, want shell refusal and manual export line", report.ActivationReason)
@@ -326,8 +328,9 @@ func TestWindowsResolveTargetFollowsPATHEXTOrder(t *testing.T) {
 	}
 }
 
-// The startup model replays only what it can expand statically and ignores
-// everything else instead of guessing.
+// The startup model replays only what it can expand statically. A construct
+// that may change PATH but cannot be modeled, read after the managed block,
+// makes the outcome unknown instead of ready.
 func TestLoginShellModelReplaysOnlyStaticPathEdits(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
@@ -335,15 +338,38 @@ func TestLoginShellModelReplaysOnlyStaticPathEdits(t *testing.T) {
 		shell string
 		file  string
 		rc    string
-		want  ActivationStatus
+		// extra files relative to home, written before activation.
+		extra  map[string]string
+		want   ActivationStatus
+		reason string
 	}{
 		{name: "commented installer line", shell: "/bin/zsh", file: ".zshrc", rc: "# export PATH=%s:$PATH\n", want: ActivationStatusReady},
 		{name: "trailing comment does not hide edit", shell: "/bin/zsh", file: ".zshrc", rc: "export PATH=%s:$PATH # opencode\n", want: ActivationStatusShadowed},
 		{name: "append keeps launcher first", shell: "/bin/zsh", file: ".zshrc", rc: "export PATH=\"$PATH:%s\"\n", want: ActivationStatusReady},
 		{name: "variable defined earlier", shell: "/bin/zsh", file: ".zshrc", rc: "OPENCODE_HOME=%s\nexport PATH=\"$OPENCODE_HOME:$PATH\"\n", want: ActivationStatusShadowed},
-		{name: "command substitution is ignored", shell: "/bin/zsh", file: ".zshrc", rc: "export PATH=\"$(opencode-prefix):$PATH\"\n", want: ActivationStatusReady},
-		{name: "unquoted substitution with blanks", shell: "/bin/zsh", file: ".zshrc", rc: "export PATH=$(brew --prefix | head -1)/bin:$PATH; PATH=%s:$PATH\n", want: ActivationStatusShadowed},
+		{name: "command substitution in PATH value", shell: "/bin/zsh", file: ".zshrc", rc: "export PATH=\"$(opencode-prefix):$PATH\"\n", want: ActivationStatusUnknown, reason: "command substitution"},
+		{name: "backticks in PATH value", shell: "/bin/zsh", file: ".zshrc", rc: "export PATH=\"`opencode-prefix`:$PATH\"\n", want: ActivationStatusUnknown, reason: "command substitution"},
+		{name: "unquoted substitution with blanks", shell: "/bin/zsh", file: ".zshrc", rc: "export PATH=$(brew --prefix | head -1)/bin:$PATH; PATH=%s:$PATH\n", want: ActivationStatusUnknown, reason: "command substitution"},
+		{name: "eval brew shellenv", shell: "/bin/zsh", file: ".zshrc", rc: "eval \"$(/opt/homebrew/bin/brew shellenv)\"\n", want: ActivationStatusUnknown, reason: "eval"},
+		{name: "eval before the managed block", shell: "/bin/zsh", file: ".zshenv", rc: "eval \"$(/opt/homebrew/bin/brew shellenv)\"\n", want: ActivationStatusReady},
+		{name: "mise activate", shell: "/bin/bash", file: ".bashrc", rc: "eval \"$(mise activate bash)\"\n", want: ActivationStatusUnknown, reason: "eval"},
+		{name: "pnpm case block", shell: "/bin/zsh", file: ".zshrc", rc: "export PNPM_HOME=\"%s\"\ncase \":$PATH:\" in\n  *\":$PNPM_HOME:\"*) ;;\n  *) export PATH=\"$PNPM_HOME:$PATH\" ;;\nesac\n", want: ActivationStatusUnknown, reason: "case"},
+		{name: "nvm source with backslash-dot", shell: "/bin/zsh", file: ".zshrc", rc: "export NVM_DIR=\"$HOME/.nvm\"\n[ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\"\n",
+			extra: map[string]string{".nvm/nvm.sh": "nvm_use() {\n  export PATH=\"$NVM_DIR/versions/node/v20/bin:$PATH\"\n}\nnvm_use\n"}, want: ActivationStatusUnknown, reason: "function"},
+		{name: "backslash-dot source is followed", shell: "/bin/zsh", file: ".zshrc", rc: "\\. \"$HOME/.opencode-path.sh\"\n",
+			extra: map[string]string{".opencode-path.sh": "export PATH=%s:$PATH\n"}, want: ActivationStatusShadowed},
+		{name: "one-line function body", shell: "/bin/zsh", file: ".zshrc", rc: "use_opencode() { export PATH=%s:$PATH; }\n", want: ActivationStatusUnknown, reason: "function"},
+		{name: "loop body", shell: "/bin/zsh", file: ".zshrc", rc: "for d in %s; do PATH=$d:$PATH; done\n", want: ActivationStatusUnknown, reason: "loop"},
+		{name: "unexpandable source target", shell: "/bin/zsh", file: ".zshrc", rc: "source \"$(brew --prefix)/share/env.sh\"\n", want: ActivationStatusUnknown, reason: "source"},
+		{name: "relative source target", shell: "/bin/zsh", file: ".zshrc", rc: ". ./env.sh\n", want: ActivationStatusUnknown, reason: "source"},
+		{name: "missing source target is a no-op", shell: "/bin/zsh", file: ".zshrc", rc: "[ -f \"$HOME/.cargo/env\" ] && . \"$HOME/.cargo/env\"\n", want: ActivationStatusReady},
+		{name: "stock Ubuntu bashrc", shell: "/bin/bash", file: ".bashrc", rc: "case $- in\n    *i*) ;;\n      *) return;;\nesac\n[ -x /usr/bin/lesspipe ] && eval \"$(SHELL=/bin/sh lesspipe)\"\nif [ -x /usr/bin/dircolors ]; then\n    test -r ~/.dircolors && eval \"$(dircolors -b ~/.dircolors)\" || eval \"$(dircolors -b)\"\nfi\nif [ -f ~/.bash_aliases ]; then\n    . ~/.bash_aliases\nfi\nif ! shopt -oq posix; then\n  if [ -f \"$HOME/completion.bash\" ]; then\n    . \"$HOME/completion.bash\"\n  fi\nfi\n",
+			extra: map[string]string{
+				".bash_aliases":   "alias ll='ls -alF'\n",
+				"completion.bash": "have()\n{\n    PATH=$PATH:/usr/sbin:/sbin type $1 &>/dev/null\n}\n_modules()\n{\n    local PATH=\"$PATH:/sbin:/usr/sbin\"\n    eval \"$(compgen -c)\"\n    COMPREPLY=($(compgen -W \"$(PATH=\"$PATH:/sbin\" lsmod)\" -- \"$cur\"))\n}\n",
+			}, want: ActivationStatusReady},
 		{name: "one-line conditional", shell: "/bin/zsh", file: ".zshrc", rc: "if [ -d %s ]; then PATH=%s:$PATH; fi\n", want: ActivationStatusShadowed},
+		{name: "else branch", shell: "/bin/zsh", file: ".zshrc", rc: "if [ -d /nonexistent ]; then\n  :\nelse\n  PATH=%s:$PATH\nfi\n", want: ActivationStatusUnknown, reason: "else"},
 		{name: "assignment scoped to a command", shell: "/bin/zsh", file: ".zshrc", rc: "PATH=%s:$PATH opencode --version\n", want: ActivationStatusReady},
 		{name: "zlogin runs last", shell: "/bin/zsh", file: ".zlogin", rc: "path=(%s $path)\n", want: ActivationStatusShadowed},
 		{name: "macOS bash does not read unsourced bashrc", os: "darwin", shell: "/bin/bash", file: ".bashrc", rc: "export PATH=%s:$PATH\n", want: ActivationStatusReady},
@@ -353,14 +379,117 @@ func TestLoginShellModelReplaysOnlyStaticPathEdits(t *testing.T) {
 			if tt.os != "" {
 				fixture.options.OS = tt.os
 			}
-			rc := strings.ReplaceAll(tt.rc, "%s", filepath.Dir(fixture.target))
-			writeStartupFile(t, filepath.Join(fixture.home, tt.file), rc)
+			shadowDir := filepath.Dir(fixture.target)
+			for name, content := range tt.extra {
+				path := filepath.Join(fixture.home, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeStartupFile(t, path, strings.ReplaceAll(content, "%s", shadowDir))
+			}
+			rcPath := filepath.Join(fixture.home, tt.file)
+			writeStartupFile(t, rcPath, strings.ReplaceAll(tt.rc, "%s", shadowDir))
 			plan, err := Activate(fixture.home, fixture.options)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if report := plan.Report(); report.Status != tt.want {
+			report := plan.Report()
+			if report.Status != tt.want || report.Effective != (tt.want == ActivationStatusReady) {
 				t.Fatalf("report = %#v, want %q", report, tt.want)
+			}
+			if tt.want == ActivationStatusUnknown {
+				for _, want := range []string{"cannot verify PATH order", tt.reason} {
+					if !strings.Contains(report.ActivationReason, want) {
+						t.Fatalf("activation reason = %q, want %q", report.ActivationReason, want)
+					}
+				}
+				if !strings.Contains(report.ActivationReason, fixture.home) {
+					t.Fatalf("activation reason = %q, want the startup file named", report.ActivationReason)
+				}
+			}
+		})
+	}
+}
+
+// Following sources must never block on or exhaust hostile content: only
+// bounded regular files are read, and anything else is unverifiable.
+func TestLoginShellModelBoundsHostileSources(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup func(t *testing.T, home string) string
+	}{
+		{name: "fifo", setup: func(t *testing.T, home string) string {
+			fifo := filepath.Join(home, "env.fifo")
+			if err := mkfifo(fifo); err != nil {
+				t.Skipf("mkfifo unavailable: %v", err)
+			}
+			return ". " + fifo + "\n"
+		}},
+		{name: "dev stdin", setup: func(*testing.T, string) string { return ". /dev/stdin\n" }},
+		{name: "dev zero", setup: func(*testing.T, string) string { return "source /dev/zero\n" }},
+		{name: "oversized file", setup: func(t *testing.T, home string) string {
+			big := filepath.Join(home, "big.sh")
+			writeStartupFile(t, big, strings.Repeat("# padding\n", 2<<20/10))
+			return ". " + big + "\n"
+		}},
+		{name: "fan-out", setup: func(t *testing.T, home string) string {
+			leaf := filepath.Join(home, "leaf.sh")
+			writeStartupFile(t, leaf, "# leaf\n")
+			return strings.Repeat(". "+leaf+"\n", 500)
+		}},
+		{name: "deep nesting", setup: func(t *testing.T, home string) string {
+			next := ""
+			for i := 20; i >= 0; i-- {
+				path := filepath.Join(home, fmt.Sprintf("nest%d.sh", i))
+				content := "# end\n"
+				if next != "" {
+					content = ". " + next + "\n"
+				}
+				writeStartupFile(t, path, content)
+				next = path
+			}
+			return ". " + next + "\n"
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newReadinessFixture(t, "/bin/zsh")
+			writeStartupFile(t, filepath.Join(fixture.home, ".zshrc"), tt.setup(t, fixture.home))
+			done := make(chan ActivationReport, 1)
+			go func() {
+				plan, err := Activate(fixture.home, fixture.options)
+				if err != nil {
+					t.Error(err)
+					done <- ActivationReport{}
+					return
+				}
+				done <- plan.Report()
+			}()
+			select {
+			case report := <-done:
+				if report.Status != ActivationStatusUnknown || !strings.Contains(report.ActivationReason, "cannot verify PATH order") {
+					t.Fatalf("report = %#v, want unknown", report)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("startup model blocked on hostile source")
+			}
+		})
+	}
+}
+
+// Shells whose startup cannot be modeled report unknown: the current PATH
+// says nothing about new shells.
+func TestUnmodelableShellReportsUnknown(t *testing.T) {
+	for _, shell := range []string{"/usr/bin/fish", ""} {
+		t.Run("shell="+shell, func(t *testing.T) {
+			fixture := newReadinessFixture(t, shell)
+			fixture.options.Path = BinDir(fixture.home) + ":" + filepath.Dir(fixture.target)
+			plan, err := Activate(fixture.home, fixture.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := plan.Report()
+			if report.Status != ActivationStatusUnknown || report.Effective || !strings.Contains(report.ActivationReason, ProfileExportLine(BinDir(fixture.home))) {
+				t.Fatalf("report = %#v, want unknown with manual export line", report)
 			}
 		})
 	}

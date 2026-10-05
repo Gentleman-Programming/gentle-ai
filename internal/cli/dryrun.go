@@ -34,7 +34,7 @@ func RenderDryRun(result InstallResult) string {
 	}
 	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) && result.Background.Activation.Action != "" {
 		if result.Background.Effective == model.OpenCodeBackgroundOn {
-			_, _ = fmt.Fprintf(b, "OpenCode background runtime ready: %t\n", result.BackgroundPolicyEnabled)
+			_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundRuntime(result.Background, result.BackgroundPolicyEnabled))
 		}
 		_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundActivation(result.Background))
 	}

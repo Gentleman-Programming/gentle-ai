@@ -175,9 +175,11 @@ func TestActivationRefusesUnsafeLoginProfilesWithManualGuidance(t *testing.T) {
 		// directory on PATH: activation is effective even though Gentle AI
 		// will not rewrite them.
 		wantReady bool
+		// wantUnknown marks shells whose startup files cannot be modeled.
+		wantUnknown bool
 	}{
-		{name: "unsupported shell", shell: "/usr/bin/fish", reason: "not supported"},
-		{name: "unknown shell", shell: "", reason: "SHELL is not set"},
+		{name: "unsupported shell", shell: "/usr/bin/fish", reason: "not supported", wantUnknown: true},
+		{name: "unknown shell", shell: "", reason: "SHELL is not set", wantUnknown: true},
 		{name: "symlinked profile", shell: "/bin/zsh", reason: "symlink", setup: func(t *testing.T, home string) (string, string) {
 			target := filepath.Join(t.TempDir(), "dotfiles-zprofile")
 			if err := os.WriteFile(target, []byte("export DOTFILES=1\n"), 0o644); err != nil {
@@ -235,7 +237,7 @@ func TestActivationRefusesUnsafeLoginProfilesWithManualGuidance(t *testing.T) {
 				if report.Status != ActivationStatusReady || !strings.Contains(report.ActivationReason, path) {
 					t.Fatalf("activation report = %#v, want ready naming %s", report, path)
 				}
-			} else if report.Status != ActivationStatusPending || !strings.Contains(report.ActivationReason, "PATH persistence is pending") || !strings.Contains(report.ActivationReason, tt.reason) || !strings.Contains(report.ActivationReason, ProfileExportLine(BinDir(home))) {
+			} else if wantStatus := map[bool]ActivationStatus{false: ActivationStatusPending, true: ActivationStatusUnknown}[tt.wantUnknown]; report.Status != wantStatus || !strings.Contains(report.ActivationReason, "PATH persistence is pending") || !strings.Contains(report.ActivationReason, tt.reason) || !strings.Contains(report.ActivationReason, ProfileExportLine(BinDir(home))) {
 				t.Fatalf("activation report = %#v, want pending reason %q and manual export line", report, tt.reason)
 			}
 			if _, err := os.Stat(POSIXLauncherPath(home)); err != nil {

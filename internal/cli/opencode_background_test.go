@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
@@ -382,6 +383,33 @@ func TestRenderOpenCodeBackgroundActivationUsesEffectiveStatus(t *testing.T) {
 				t.Fatalf("render = %q, must not contain %q", got, tt.notWant)
 			}
 		})
+	}
+}
+
+// A shadowed or pending activation is not a ready runtime even when the
+// policy is enabled for a capable OpenCode version.
+func TestDryRunAndSyncReportsDoNotClaimReadyRuntimeWhenShadowed(t *testing.T) {
+	background := OpenCodeBackgroundResolution{
+		Intent:    model.OpenCodeBackgroundOn,
+		Effective: model.OpenCodeBackgroundOn,
+		Activation: opencodeactivation.ActivationReport{
+			Capability:       opencodeactivation.CapabilityResolution{Status: opencodeactivation.CapabilityReady},
+			Action:           "on",
+			Applied:          true,
+			Status:           opencodeactivation.ActivationStatusShadowed,
+			ActivationReason: "new login shells resolve opencode to /x/opencode",
+		},
+	}
+	reports := map[string]string{
+		"dry-run": RenderDryRun(InstallResult{Resolved: planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, Background: background, BackgroundPolicyEnabled: true}),
+		"sync":    RenderSyncReport(SyncResult{Agents: []model.AgentID{model.AgentOpenCode}, Background: background, BackgroundPolicyEnabled: true}),
+	}
+	for name, report := range reports {
+		for _, want := range []string{"runtime ready: false", "policy enabled: true", "activation status: shadowed"} {
+			if !strings.Contains(report, want) {
+				t.Fatalf("%s report = %q, want %q", name, report, want)
+			}
+		}
 	}
 }
 

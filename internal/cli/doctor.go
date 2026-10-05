@@ -143,6 +143,15 @@ func checkOpenCodeProfile(homeDir string, pathDirs []string) CheckResult {
 	switch resolution.Status {
 	case opencode.ActivationStatusReady:
 		return CheckResult{Name: id, Status: CheckStatusPass, Detail: resolution.Reason}
+	case opencode.ActivationStatusUnknown:
+		// Informational: the launcher may well be effective; Gentle AI cannot
+		// prove it statically.
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "Gentle AI could not verify that new login shells run the managed OpenCode launcher: " + resolution.Reason,
+			Remedy: doctor.NewRemedy(doctor.RemedyEditShellPath, "In a new login shell, run `command -v opencode`; it should print "+opencode.POSIXLauncherPath(homeDir)+". If it does not, add "+opencode.ProfileExportLine(binDir)+" as the last PATH change in your shell startup files, then start a new login shell"),
+		}
 	case opencode.ActivationStatusShadowed:
 		remedy := "In " + resolution.Source + ", remove the line that adds " + filepath.Dir(resolution.Resolved) + " to PATH, or add " + opencode.ProfileExportLine(binDir) + " after it; then start a new login shell"
 		if !filepath.IsAbs(resolution.Source) {
@@ -219,7 +228,16 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		}
 	}
 
-	copies := doctorToolCopies(tool, pathDirs)
+	copies, shadow := doctorLauncherChain(doctorToolCopies(tool, pathDirs))
+	if shadow != nil {
+		binDir := filepath.Dir(shadow.launcher)
+		return CheckResult{
+			Name:   doctor.ToolCheckID(tool),
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("%s resolved to %s; %s precedes the Gentle AI managed launcher %s on PATH, so bare %s bypasses the launcher that delegates to it (copies in PATH order: %s)", tool, resolved, shadow.target, shadow.launcher, tool, strings.Join(copies, ", ")),
+			Remedy: doctor.NewRemedy(doctor.RemedyReorderPath, "Move "+binDir+" ahead of "+filepath.Dir(shadow.target)+" in PATH, then open a new terminal; keep both files, since the launcher delegates to "+shadow.target+". On Windows, machine PATH entries come before user PATH entries, so reorder or remove the machine entry."),
+		}
+	}
 	if len(copies) > 1 {
 		// The duplicate branch is exactly where ambiguity about which build
 		// is running is guaranteed, so this is the branch that most needs
@@ -314,7 +332,6 @@ func resolveDoctorTool(tool string) (string, string, error) {
 func doctorToolCopies(tool string, pathDirs []string) []string {
 	seenCopies := make(map[string]struct{}, len(pathDirs))
 	copies := make([]string, 0, len(pathDirs))
-	var launcherTargets []string
 	for _, dir := range pathDirs {
 		if p := toolInDir(dir, tool); p != "" {
 			resolved, err := filepath.EvalSymlinks(p)
@@ -326,30 +343,48 @@ func doctorToolCopies(tool string, pathDirs []string) []string {
 			}
 			seenCopies[resolved] = struct{}{}
 			copies = append(copies, p)
-			if target, ok := doctorManagedLauncherTarget(p); ok {
-				launcherTargets = append(launcherTargets, target)
+		}
+	}
+	return copies
+}
+
+// doctorLauncherShadow is a managed launcher bypassed by the executable it
+// delegates to, because that executable comes first on PATH.
+type doctorLauncherShadow struct {
+	launcher string
+	target   string
+}
+
+// doctorLauncherChain folds each managed launcher with the executable it
+// delegates to. A launcher followed by its target is one installation, so the
+// target is dropped (#5238); a target that precedes its launcher bypasses it
+// and is reported as a shadow instead.
+func doctorLauncherChain(copies []string) ([]string, *doctorLauncherShadow) {
+	var shadow *doctorLauncherShadow
+	drop := make(map[int]bool)
+	for i, p := range copies {
+		target, ok := doctorManagedLauncherTarget(p)
+		if !ok {
+			continue
+		}
+		for j, candidate := range copies {
+			if j == i || !doctorSameFile(candidate, target) {
+				continue
+			}
+			if j > i {
+				drop[j] = true
+			} else if shadow == nil {
+				shadow = &doctorLauncherShadow{launcher: p, target: candidate}
 			}
 		}
 	}
-	if len(launcherTargets) == 0 {
-		return copies
-	}
-	// A managed launcher and the executable it delegates to form one
-	// installation; removing either would break OpenCode (#5238).
-	chained := copies[:0]
-	for _, p := range copies {
-		target := false
-		for _, launcherTarget := range launcherTargets {
-			if doctorSameFile(p, launcherTarget) {
-				target = true
-				break
-			}
-		}
-		if !target {
-			chained = append(chained, p)
+	kept := make([]string, 0, len(copies))
+	for i, p := range copies {
+		if !drop[i] {
+			kept = append(kept, p)
 		}
 	}
-	return chained
+	return kept, shadow
 }
 
 // doctorManagedLauncherTarget returns the delegation target when path is the

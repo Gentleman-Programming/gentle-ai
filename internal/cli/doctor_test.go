@@ -1338,6 +1338,32 @@ func TestCheckOneToolTreatsManagedLauncherAndTargetAsOneInstallation(t *testing.
 		}
 	})
 
+	// A target that precedes its launcher on PATH bypasses the launcher: that is
+	// shadowing, not one installation (e.g. a Windows machine PATH entry from
+	// choco or winget ahead of the user PATH).
+	t.Run("posix target before launcher is shadowing", func(t *testing.T) {
+		doctorGOOS = "linux"
+		executableExtsFn = func() []string { return []string{""} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		real := activateDoctorLauncher(t, home, "linux", "")
+		lookPathFn = func(string) (string, error) { return real, nil }
+		got := checkOneTool("opencode", []string{filepath.Dir(real), opencode.BinDir(home)})
+		assertLauncherShadowed(t, got, real, opencode.POSIXLauncherPath(home), opencode.BinDir(home))
+	})
+
+	t.Run("windows target before launcher is shadowing", func(t *testing.T) {
+		doctorGOOS = "windows"
+		executableExtsFn = func() []string { return []string{".exe", ".cmd"} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		pnpm := filepath.Join(home, ".opencode", "bin")
+		real := activateDoctorLauncher(t, home, "windows", filepath.Join(pnpm, "opencode.CMD"))
+		lookPathFn = func(string) (string, error) { return real, nil }
+		got := checkOneTool("opencode", []string{filepath.Dir(real), opencode.BinDir(home)})
+		assertLauncherShadowed(t, got, real, opencode.WindowsCMDPath(home), opencode.BinDir(home))
+	})
+
 	t.Run("marker-only file is not a managed launcher", func(t *testing.T) {
 		doctorGOOS = "linux"
 		executableExtsFn = func() []string { return []string{""} }
@@ -1359,6 +1385,35 @@ func TestCheckOneToolTreatsManagedLauncherAndTargetAsOneInstallation(t *testing.
 			t.Fatalf("marker-only file = %#v, want duplicate warning", got)
 		}
 	})
+}
+
+func assertLauncherShadowed(t *testing.T, got CheckResult, target, launcher, binDir string) {
+	t.Helper()
+	if got.Status != CheckStatusWarn || !strings.Contains(got.Detail, target) || !strings.Contains(got.Detail, launcher) || !strings.Contains(got.Detail, "bypass") {
+		t.Fatalf("target before launcher = %#v, want warn that %s bypasses %s", got, target, launcher)
+	}
+	if got.Remedy == nil || got.Remedy.ID == doctor.RemedyRemoveDuplicates || !strings.Contains(got.Remedy.Description, binDir) {
+		t.Fatalf("target before launcher remedy = %#v, want PATH-order remedy naming %s", got.Remedy, binDir)
+	}
+}
+
+// A shell whose startup cannot be modeled is informational: warn with
+// guidance, never fail.
+func TestCheckOpenCodeProfileUnverifiableShellWarnsWithGuidance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login shells are not used on Windows")
+	}
+	t.Setenv("SHELL", "/usr/bin/fish")
+	t.Setenv("ZDOTDIR", "")
+	home := t.TempDir()
+	activateDoctorLauncher(t, home, "linux", "")
+	got := checkOpenCodeProfile(home, []string{opencode.BinDir(home), "/usr/bin"})
+	if got.Status != CheckStatusWarn || !strings.Contains(got.Detail, "could not verify") {
+		t.Fatalf("unverifiable shell = %#v, want informational warn", got)
+	}
+	if got.Remedy == nil || !strings.Contains(got.Remedy.Description, "command -v opencode") || !strings.Contains(got.Remedy.Description, opencode.ProfileExportLine(opencode.BinDir(home))) {
+		t.Fatalf("unverifiable shell remedy = %#v, want verification guidance", got.Remedy)
+	}
 }
 
 func TestRunDoctorAddsOpenCodeProfileCheckOnlyWhenBackgroundIsOn(t *testing.T) {

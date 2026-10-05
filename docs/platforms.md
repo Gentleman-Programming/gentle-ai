@@ -38,7 +38,8 @@ The activation report and `gentle-ai doctor` state whether activation is effecti
 | `ready` | New login shells run the managed launcher. |
 | `pending` | Activation is not applied yet, or no startup file puts `~/.gentle-ai/bin/` on `PATH`. |
 | `shadowed` | A startup file adds another OpenCode directory ahead of the launcher. The OpenCode installer does this when it appends `export PATH=~/.opencode/bin:$PATH` to `~/.zshrc` or `~/.bashrc`, which run after the login profile. The report names the file; remove that line or add the `export PATH=...` line after it. Gentle AI never edits rc files. |
-| `unsupported` / `unknown` | The OpenCode runtime cannot be activated safely; execution stays in the foreground. |
+| `unknown` | Gentle AI cannot verify which `opencode` new shells run. This is informational: either the OpenCode runtime could not be probed (execution stays in the foreground), the shell's startup cannot be modeled (fish, unset `SHELL`), or a startup file read after the managed block contains something that may change `PATH` but cannot be replayed statically — `eval` (for example `brew shellenv` or `mise activate`), command substitution in a `PATH` value, `PATH` changes inside a function, `case`, loop, or `else` body (pnpm, nvm), or a sourced file that cannot be resolved or read. The reason names the file; run `command -v opencode` in a new login shell to check it prints the managed launcher. |
+| `unsupported` | The OpenCode version is too old, or (on Windows) its path cannot be used safely; execution stays in the foreground. |
 | `off` | Background subagents are turned off. |
 
 On Windows, `ready` means the `PATH` that new terminals inherit (machine entries, then user entries) resolves `opencode` to the managed launcher. Gentle AI refuses activation when the resolved OpenCode path contains `%`, `!`, `"`, or control characters, because `cmd.exe` would expand or split them inside `opencode.cmd`.
