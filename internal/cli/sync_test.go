@@ -7245,6 +7245,39 @@ func TestWorkspaceSyncPrepareIgnoresAgentWithoutAnAgentWriter(t *testing.T) {
 	}
 }
 
+// Persisted OpenCode model assignments are written into agent by every sync,
+// including a workspace sync without routing or Persona, so an unsafe agent
+// value must be refused before any mutation.
+func TestWorkspaceSyncPrepareRefusesAgentWhenModelAssignmentsWriteIt(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	content := `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`
+	mustWriteFile(t, filepath.Join(workspace, "opencode.jsonc"), []byte(content))
+
+	selection := model.Selection{
+		Agents:           []model.AgentID{model.AgentOpenCode},
+		ModelAssignments: map[string]model.ModelAssignment{"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-5"}},
+	}
+	rt, err := newSyncRuntimeWithScope(home, selection, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := rt.stagePlan().Prepare[0]
+	if gate.ID() != "prepare:opencode-settings-validation" {
+		t.Fatalf("first prepare step = %q, want the settings validation", gate.ID())
+	}
+	if err := gate.Run(); err == nil {
+		t.Fatal("workspace sync with model assignments accepted a comment inside agent")
+	}
+}
+
 func TestSyncPrepareValidationFollowsExistingContract(t *testing.T) {
 	t.Run("missing settings pass the gate and sync succeeds", func(t *testing.T) {
 		home := t.TempDir()

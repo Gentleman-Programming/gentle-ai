@@ -541,8 +541,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		prepare = append([]pipeline.Step{openCodeSettingsValidationStep{
 			id:           "prepare:opencode-settings-validation",
 			settingsPath: syncOpenCodeSettingsPath(r.homeDir, r.workspaceDir, r.scope, opencodeagent.NewAdapter()),
-			// A workspace sync skips OpenCode routing guidance (global only).
-			touchedKeys: openCodeSettingsWriterKeys(installOrderedComponents(r.selection.Components), r.scope != ScopeWorkspace),
+			// A workspace sync skips OpenCode routing guidance (global only), but
+			// persisted model assignments still write agent in every scope.
+			touchedKeys: openCodeSettingsWriterKeys(installOrderedComponents(r.selection.Components), r.scope != ScopeWorkspace || len(r.selection.ModelAssignments) > 0),
 		}}, prepare...)
 	}
 	apply := []pipeline.Step{
