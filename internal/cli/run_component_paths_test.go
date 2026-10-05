@@ -11,11 +11,13 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
@@ -1727,5 +1729,256 @@ func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
 			t.Fatalf("%s returned duplicate path %q\npaths = %v", label, path, paths)
 		}
 		seen[path] = struct{}{}
+	}
+}
+
+// ─── JSONC settings stay JSONC through the legacy trigger-rule cleanup ─────
+//
+// Issue #5035 slice A: cleanup must reuse the JSONC-preserving merge for
+// opencode.jsonc instead of normalizing the whole settings document. Comments
+// and trailing commas around untouched members survive, and documents the
+// JSONC rewrite cannot safely touch are a silent no-op: the cleanup is
+// best-effort and the routing injector that runs immediately after is the
+// fail-closed authority on the same conditions.
+func TestLegacyTriggerCleanupPreservesJSONCCommentsAndTrailingCommas(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+
+	seeded := filemerge.InjectMarkdownSection("# Existing orchestrator policy\n\nHand-written rules that must survive.\n", legacyTriggerRulesSection, "Retired WorkRun ceremony\n")
+	promptJSON, err := json.Marshal(map[string]any{"prompt": seeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := "{\n  // user provider note\n  \"provider\": {\n    \"local\": {\"models\": {\"m\": {},},},\n  },\n  \"theme\": \"default\",\n  \"agent\": {\n    \"gentle-orchestrator\": " + string(promptJSON) + ",\n  },\n}\n"
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(settingsPath), err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(before), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+	}
+
+	result, err := stripLegacyTriggerRulesFromOrchestrator(settingsPath)
+	if err != nil {
+		t.Fatalf("stripLegacyTriggerRulesFromOrchestrator error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("cleanup reported no change for a seeded legacy section")
+	}
+
+	after := readTextFile(t, settingsPath)
+	for _, want := range []string{
+		"// user provider note",
+		`"m": {},`,
+		`"theme": "default",`,
+		",\n}",
+	} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("JSONC comment or trailing comma %q was destroyed:\n%s", want, after)
+		}
+	}
+
+	settings, err := filemerge.UnmarshalJSONObject([]byte(after))
+	if err != nil {
+		t.Fatalf("cleaned JSONC no longer parses: %v\n%s", err, after)
+	}
+	prompt := settings["agent"].(map[string]any)[opencodedefault.ManagedAgent].(map[string]any)["prompt"].(string)
+	if strings.Contains(prompt, legacyTriggerRulesSection) || strings.Contains(prompt, "Retired WorkRun ceremony") {
+		t.Fatalf("legacy trigger-rules content survived the cleanup:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# Existing orchestrator policy") {
+		t.Fatalf("cleanup destroyed unmanaged prompt content:\n%s", prompt)
+	}
+	if provider, ok := settings["provider"].(map[string]any); !ok || provider["local"] == nil {
+		t.Fatalf("untouched provider member was altered: %#v", settings["provider"])
+	}
+}
+
+func TestLegacyTriggerCleanupFailsClosedOnUnsafeJSONC(t *testing.T) {
+	seeded := filemerge.InjectMarkdownSection("# Existing orchestrator policy\n", legacyTriggerRulesSection, "Retired WorkRun ceremony\n")
+	promptJSON, err := json.Marshal(map[string]any{"prompt": seeded})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": ` + string(promptJSON) + `}}`},
+		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": ` + string(promptJSON) + `}}`},
+		{"duplicate top-level keys", `{"agent": {"gentle-orchestrator": ` + string(promptJSON) + `}, "theme": 1, "theme": 2}`},
+		{"malformed document", "// interrupted user edit\n{\n  \"agent\": {\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(settingsPath), err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+			}
+
+			result, err := stripLegacyTriggerRulesFromOrchestrator(settingsPath)
+			if err != nil {
+				t.Fatalf("best-effort cleanup returned an error: %v", err)
+			}
+			if result.Changed || len(result.Files) != 0 {
+				t.Fatalf("cleanup reported work for unsafe JSONC: %+v", result)
+			}
+			if got := readTextFile(t, settingsPath); got != tc.content {
+				t.Fatalf("cleanup rewrote unsafe JSONC settings:\n got: %s\nwant: %s", got, tc.content)
+			}
+		})
+	}
+}
+
+func TestInstallPrepareRefusesUnsafeOpenCodeSettingsBeforeAnyMutation(t *testing.T) {
+	for _, tc := range []struct{ name, content string }{
+		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": {"prompt": "x"}}}`},
+		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`},
+		{"duplicate top-level keys", `{"agent": {}, "theme": 1, "theme": 2}`},
+		{"malformed document", "// interrupted user edit\n{\n  \"agent\": {\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+			settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+			mustWriteFile(t, settingsPath, []byte(tc.content))
+
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+			rt := newTestInstallRuntime(t, home, selection)
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(rt.stagePlan())
+
+			if result.Err == nil {
+				t.Fatal("install accepted unsafe OpenCode settings")
+			}
+			assertInstallPrepareRefusal(t, result, rt.backupRoot, home, settingsPath, tc.content)
+		})
+	}
+}
+
+func assertInstallPrepareRefusal(t *testing.T, result pipeline.ExecutionResult, backupRoot, home, settingsPath, content string) {
+	t.Helper()
+	if len(result.Prepare.Steps) != 1 {
+		t.Fatalf("prepare recorded %d step(s), want only the failed settings validation: %#v", len(result.Prepare.Steps), result.Prepare.Steps)
+	}
+	last := result.Prepare.Steps[0]
+	if last.StepID != "prepare:opencode-settings-validation" {
+		t.Fatalf("first prepare step = %q, want the settings validation refusal before any other gate", last.StepID)
+	}
+	if last.Status != pipeline.StepStatusFailed || last.Err == nil {
+		t.Fatalf("validation step = (%s, %v), want failed with an error", last.Status, last.Err)
+	}
+	if len(result.Apply.Steps) != 0 {
+		t.Fatalf("apply ran %d step(s) after the settings refusal", len(result.Apply.Steps))
+	}
+	if got := readTextFile(t, settingsPath); got != content {
+		t.Fatalf("settings changed by a refused install:\n got: %s\nwant: %s", got, content)
+	}
+	if entries, err := os.ReadDir(backupRoot); err != nil || len(entries) != 0 {
+		t.Fatalf("pre-install snapshot taken before the settings refusal: %v (%v)", entries, err)
+	}
+	for _, path := range telemetryruntime.ManagedPaths(opencodeagent.NewAdapter().GlobalConfigDir(home)) {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("telemetry runtime asset created by a refused install: %s (%v)", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "tui.json")); !os.IsNotExist(err) {
+		t.Fatalf("plugin tui.json created by a refused install: %v", err)
+	}
+}
+
+func TestInstallPrepareValidationFollowsExistingContract(t *testing.T) {
+	t.Run("valid JSONC passes the gate and keeps user data", func(t *testing.T) {
+		home := t.TempDir()
+		setOpenCodeTestHome(t, home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+		settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+		before := "{\n  // user provider note\n  \"provider\": {\"local\": {\"models\": {\"m\": {},}}},\n  \"theme\": \"default\",\n  \"agent\": {\"gentle-orchestrator\": {\"prompt\": \"x\"}},\n}\n"
+		mustWriteFile(t, settingsPath, []byte(before))
+
+		selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+		rt := newTestInstallRuntime(t, home, selection)
+		result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(rt.stagePlan())
+		if result.Err != nil {
+			t.Fatalf("install rejected valid OpenCode settings: %v", result.Err)
+		}
+		// The ownership writers normalize a JSONC document (pre-existing
+		// behavior, #5028); the data contract is that user members survive and
+		// the result stays parseable.
+		after, err := filemerge.UnmarshalJSONObject([]byte(readTextFile(t, settingsPath)))
+		if err != nil {
+			t.Fatalf("settings unreadable after install: %v", err)
+		}
+		provider, ok := after["provider"].(map[string]any)
+		if !ok || provider["local"] == nil {
+			t.Fatalf("user provider data destroyed by install: %#v", after["provider"])
+		}
+	})
+
+	t.Run("project-selected opencode.jsonc is the validation target", func(t *testing.T) {
+		home, workspace := t.TempDir(), t.TempDir()
+		setOpenCodeTestHome(t, home)
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+		projectPath := filepath.Join(workspace, "opencode.jsonc")
+		mustWriteFile(t, projectPath, []byte(`{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`))
+
+		rt := newTestInstallRuntime(t, home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+		rt.workspaceDir = workspace
+		plan := rt.stagePlan()
+		var validation *openCodeSettingsValidationStep
+		for _, step := range plan.Prepare {
+			if s, ok := step.(openCodeSettingsValidationStep); ok {
+				validation = &s
+			}
+		}
+		if validation == nil {
+			t.Fatal("prepare stage lacks the OpenCode settings validation step")
+		}
+		if validation.settingsPath != projectPath {
+			t.Fatalf("validation target = %q, want project-selected %q", validation.settingsPath, projectPath)
+		}
+		if err := validation.Run(); err == nil {
+			t.Fatal("unsafe project-selected settings accepted")
+		}
+	})
+}
+
+// The preflight refuses unsafe JSONC only inside values a selected writer
+// touches. A comment inside theme must not block an install that does not
+// select the Theme component, and must still be refused when it does.
+func TestInstallPrepareValidationScopesRefusalsToSelectedWriters(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+	content := `{"theme": {/* user theme note */ "name": "x"}, "agent": {}}`
+	mustWriteFile(t, settingsPath, []byte(content))
+
+	for _, tc := range []struct {
+		name       string
+		components []model.ComponentID
+		wantRefuse bool
+	}{
+		{name: "theme not selected", components: nil, wantRefuse: false},
+		{name: "theme selected", components: []model.ComponentID{model.ComponentTheme}, wantRefuse: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: tc.components}
+			gate := newTestInstallRuntime(t, home, selection).stagePlan().Prepare[0]
+			if gate.ID() != "prepare:opencode-settings-validation" {
+				t.Fatalf("first prepare step = %q, want the settings validation", gate.ID())
+			}
+			if err := gate.Run(); (err != nil) != tc.wantRefuse {
+				t.Fatalf("validation error = %v, want refusal %v", err, tc.wantRefuse)
+			}
+			if got := readTextFile(t, settingsPath); got != content {
+				t.Fatal("validation mutated the settings document")
+			}
+		})
 	}
 }

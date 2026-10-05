@@ -796,6 +796,18 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir, consent: r.sdkConsent}}, prepare...)
 	}
+	// The read-only settings refusal is prepended last so it runs first in the
+	// prepare stage (issue #5035): an unsafe selected settings document must
+	// fail before the SDK dependency install, telemetry, plugin, Persona,
+	// Engram, or guidance steps can mutate any managed file.
+	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
+		prepare = append([]pipeline.Step{openCodeSettingsValidationStep{
+			id:           "prepare:opencode-settings-validation",
+			settingsPath: openCodeLoadedSettingsPath(r.homeDir, r.workspaceDir, opencodeagent.NewAdapter()),
+			// Routing guidance is scheduled for every install agent.
+			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true),
+		}}, prepare...)
+	}
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
@@ -1955,7 +1967,10 @@ func removeLegacyTriggerRulesModule(modulePath string) (agentguidance.Result, er
 //
 // Every unexpected shape yields a silent no-op rather than an error: this is
 // best-effort cleanup, and the routing injector that runs immediately after is
-// the fail-closed authority on an unreadable settings document.
+// the fail-closed authority on an unreadable settings document. JSONC settings
+// (opencode.jsonc) are rewritten with the JSONC-preserving merge, so comments
+// and trailing commas around untouched members survive; a JSONC refusal is the
+// same silent no-op, because the injector fails closed on identical conditions.
 func stripLegacyTriggerRulesFromOrchestrator(settingsPath string) (agentguidance.Result, error) {
 	if strings.TrimSpace(settingsPath) == "" {
 		return agentguidance.Result{}, nil
@@ -1988,8 +2003,16 @@ func stripLegacyTriggerRulesFromOrchestrator(settingsPath string) (agentguidance
 		return agentguidance.Result{}, fmt.Errorf("encode legacy %q removal for %q: %w", legacyTriggerRulesSection, settingsPath, err)
 	}
 
-	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
 	if err != nil {
+		if strings.HasSuffix(settingsPath, ".jsonc") {
+			// A JSONC refusal (duplicate keys, an escaped spelling of a touched
+			// key, or comments inside the touched agent value) must leave the
+			// user's document byte-for-byte intact. Cleanup stays best-effort:
+			// the routing injector that runs immediately after fails closed on
+			// the same conditions, so a silent no-op loses nothing.
+			return agentguidance.Result{}, nil
+		}
 		return agentguidance.Result{}, fmt.Errorf("merge legacy %q removal into %q: %w", legacyTriggerRulesSection, settingsPath, err)
 	}
 
@@ -2256,6 +2279,43 @@ type openCodeTelemetryStep struct {
 	configDir    string
 	changedFiles *[]string
 	checkOnly    bool
+}
+
+// openCodeSettingsValidationStep validates the effective OpenCode settings
+// before install/sync mutations. Non-OpenCode plans never include this step.
+type openCodeSettingsValidationStep struct {
+	id           string
+	settingsPath string
+	touchedKeys  []string
+}
+
+func (s openCodeSettingsValidationStep) ID() string { return s.id }
+
+func (s openCodeSettingsValidationStep) Run() error {
+	return opencodeactivation.ValidateSettingsForWriters(s.settingsPath, s.touchedKeys)
+}
+
+// openCodeSettingsWriterKeys lists the top-level OpenCode settings keys the
+// planned JSONC-preserving writers touch: routing guidance and Persona write
+// agent, Engram and Context7 write mcp, and the Permission and Theme
+// components write permission and theme. The preflight refuses unsafe JSONC
+// only inside those values, so a key no selected writer touches never blocks
+// the run.
+func openCodeSettingsWriterKeys(components []model.ComponentID, routing bool) []string {
+	var keys []string
+	if routing || slices.Contains(components, model.ComponentPersona) {
+		keys = append(keys, "agent")
+	}
+	if slices.Contains(components, model.ComponentEngram) || slices.Contains(components, model.ComponentContext7) {
+		keys = append(keys, "mcp")
+	}
+	if slices.Contains(components, model.ComponentPermission) {
+		keys = append(keys, "permission")
+	}
+	if slices.Contains(components, model.ComponentTheme) {
+		keys = append(keys, "theme")
+	}
+	return keys
 }
 
 func (s openCodeTelemetryStep) ID() string { return s.id }

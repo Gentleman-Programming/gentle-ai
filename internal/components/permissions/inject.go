@@ -60,46 +60,6 @@ var claudeCodeOverlayJSON = []byte(`{
 }
 `)
 
-// openCodeOverlayJSON uses the OpenCode "permission" key with bash/read granularity.
-var openCodeOverlayJSON = []byte(`{
-  "permission": {
-    "bash": {
-      "*": "allow",
-      "git commit *": "ask",
-      "git push *": "ask",
-      "git push": "ask",
-      "git push --force *": "ask",
-      "git rebase *": "ask",
-      "git reset --hard *": "ask",
-      "ssh": "ask",
-      "ssh *": "ask",
-      "scp": "ask",
-      "scp *": "ask",
-      "sftp": "ask",
-      "sftp *": "ask",
-      "rsync": "ask",
-      "rsync *": "ask"
-    },
-    "read": {
-      "*": "allow",
-      "*.env": "deny",
-      "*.env.*": "deny",
-      "**/.env": "deny",
-      "**/.env.*": "deny",
-      "**/secrets/**": "deny",
-      "**/credentials.json": "deny",
-      "**/.ssh/**": "deny",
-      "**/.credentials/**": "deny",
-      "**/Library/Keychains/**": "deny",
-      "**/.aws/credentials": "deny",
-      "**/.config/gh/hosts.yml": "deny",
-      "**/*.pem": "deny",
-      "**/*.key": "deny"
-    }
-  }
-}
-`)
-
 // geminiCLIOverlayJSON sets Gemini CLI to "auto_edit" mode (auto-approve edit tools).
 var geminiCLIOverlayJSON = []byte(`{
   "general": {

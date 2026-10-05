@@ -535,10 +535,12 @@ func TestInstallV2SDKPreflightBeforeManagedRuntimeWrites(t *testing.T) {
 			agents := []model.AgentID{model.AgentOpenCode}
 			rt := &installRuntime{homeDir: home, workspaceDir: t.TempDir(), scope: ScopeGlobal, resolved: planner.ResolvedPlan{Agents: agents}, selection: model.Selection{Agents: agents}, state: &runtimeState{}}
 			plan := rt.stagePlan()
-			if plan.Prepare[0].ID() != "prepare:opencode-plugin-dependency" || plan.Prepare[1].ID() != "prepare:opencode-telemetry" {
-				t.Fatalf("preflight must precede telemetry: %s, %s", plan.Prepare[0].ID(), plan.Prepare[1].ID())
+			// The read-only settings refusal (#5035) runs first; the SDK preflight
+			// still precedes telemetry and every managed runtime write.
+			if plan.Prepare[0].ID() != "prepare:opencode-settings-validation" || plan.Prepare[1].ID() != "prepare:opencode-plugin-dependency" || plan.Prepare[2].ID() != "prepare:opencode-telemetry" {
+				t.Fatalf("prepare order = %s, %s, %s; want settings validation, SDK preflight, telemetry", plan.Prepare[0].ID(), plan.Prepare[1].ID(), plan.Prepare[2].ID())
 			}
-			err := plan.Prepare[0].Run()
+			err := plan.Prepare[1].Run()
 			if tc.wantError {
 				if err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
 					t.Fatalf("missing SDK preflight error = %v", err)
