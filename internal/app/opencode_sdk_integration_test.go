@@ -112,7 +112,7 @@ func TestTUIOpenCodeSDKConsentProvisioningIntegration(t *testing.T) {
 			// Prepare gates stop at the first refusal under every failure policy
 			// (#5035): a failed SDK step ends the stage; otherwise the deliberate
 			// telemetry ownership conflict does.
-			wantIDs := []string{"prepare:opencode-settings-validation", "prepare:opencode-plugin-dependency"}
+			wantIDs := []string{"prepare:opencode-settings-validation", "prepare:check-dependencies", "prepare:opencode-plugin-dependency"}
 			if tc.wantSDKerr == "" {
 				wantIDs = append(wantIDs, "prepare:opencode-telemetry")
 			}
@@ -124,9 +124,9 @@ func TestTUIOpenCodeSDKConsentProvisioningIntegration(t *testing.T) {
 					t.Fatalf("Prepare step %d = %s, want %s", i, step.StepID, wantIDs[i])
 				}
 				wantErr := ""
-				if i == 1 {
+				if step.StepID == "prepare:opencode-plugin-dependency" {
 					wantErr = tc.wantSDKerr
-				} else if i == 2 {
+				} else if step.StepID == "prepare:opencode-telemetry" {
 					wantErr = "telemetry runtime ownership conflict"
 				}
 				if wantErr != "" {

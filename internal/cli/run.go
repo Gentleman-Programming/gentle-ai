@@ -777,7 +777,6 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	targets, targetErr := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
 	prepare := []pipeline.Step{
-		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection, resolved: r.resolved, channel: r.channel},
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
 			snapshotter: backup.NewSnapshotter(),
@@ -800,6 +799,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir, consent: r.sdkConsent}}, prepare...)
 	}
+	// Check prerequisites before any SDK package-manager operation or telemetry.
+	prepare = append([]pipeline.Step{checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection, resolved: r.resolved, channel: r.channel}}, prepare...)
 	// The read-only settings refusal is prepended last so it runs first in the
 	// prepare stage (issue #5035): an unsafe selected settings document must
 	// fail before the SDK dependency install, telemetry, plugin, Persona,

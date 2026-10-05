@@ -537,10 +537,10 @@ func TestInstallV2SDKPreflightBeforeManagedRuntimeWrites(t *testing.T) {
 			plan := rt.stagePlan()
 			// The read-only settings refusal (#5035) runs first; the SDK preflight
 			// still precedes telemetry and every managed runtime write.
-			if plan.Prepare[0].ID() != "prepare:opencode-settings-validation" || plan.Prepare[1].ID() != "prepare:opencode-plugin-dependency" || plan.Prepare[2].ID() != "prepare:opencode-telemetry" {
-				t.Fatalf("prepare order = %s, %s, %s; want settings validation, SDK preflight, telemetry", plan.Prepare[0].ID(), plan.Prepare[1].ID(), plan.Prepare[2].ID())
+			if plan.Prepare[0].ID() != "prepare:opencode-settings-validation" || plan.Prepare[1].ID() != "prepare:check-dependencies" || plan.Prepare[2].ID() != "prepare:opencode-plugin-dependency" || plan.Prepare[3].ID() != "prepare:opencode-telemetry" {
+				t.Fatalf("prepare order = %v; want settings validation, dependencies, SDK preflight, telemetry", plan.Prepare)
 			}
-			err := plan.Prepare[1].Run()
+			err := plan.Prepare[2].Run()
 			if tc.wantError {
 				if err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
 					t.Fatalf("missing SDK preflight error = %v", err)

@@ -92,14 +92,20 @@ func TestBetaEngramPreflightPublicInstallConsumers(t *testing.T) {
 		osUserHomeDir, cmdLookPath = originalHome, originalLookup
 		installStagePlan, tuiInstallStagePlan = originalCLI, originalTUI
 	})
-	for _, entry := range []string{"beta", "nightly", "tui-stable"} {
+	for _, entry := range []string{"beta", "nightly", "beta-go-present", "tui-stable"} {
 		t.Run(entry, func(t *testing.T) {
 			home := t.TempDir()
+			if entry != "tui-stable" {
+				home, _ = freshV2SDKConfig(t)
+			}
 			osUserHomeDir = func() (string, error) { return home, nil }
 			goLookups, backupCalls, applyCalls := 0, 0, 0
 			cmdLookPath = func(name string) (string, error) {
 				if name == "go" {
 					goLookups++
+					if entry == "beta-go-present" {
+						return "go", nil
+					}
 				}
 				return "", errNotFound{}
 			}
@@ -146,8 +152,12 @@ func TestBetaEngramPreflightPublicInstallConsumers(t *testing.T) {
 				}
 				return
 			}
-			_, err := RunInstall([]string{"--agent", "opencode", "--component", "engram", "--channel", entry}, system.DetectionResult{})
-			if err == nil || !strings.Contains(err.Error(), "beta Engram requires Go") || goLookups != 1 || backupCalls != 0 || applyCalls != 0 {
+			channel, wantError := entry, "beta Engram requires Go"
+			if entry == "beta-go-present" {
+				channel, wantError = "beta", "@opencode/plugin@2.0.4"
+			}
+			_, err := RunInstall([]string{"--agent", "opencode", "--component", "engram", "--channel", channel}, system.DetectionResult{})
+			if err == nil || !strings.Contains(err.Error(), wantError) || goLookups != 1 || backupCalls != 0 || applyCalls != 0 {
 				t.Fatalf("public CLI: err=%v go=%d backup=%d apply=%d", err, goLookups, backupCalls, applyCalls)
 			}
 		})
