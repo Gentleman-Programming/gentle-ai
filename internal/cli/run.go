@@ -610,6 +610,10 @@ func goInstallBinDirFromGoEnv() (string, error) {
 
 const engramBetaGoInstallPackage = "github.com/Gentleman-Programming/engram/cmd/engram@main"
 
+func betaEngramRequiresGo(channel InstallChannel, component model.ComponentID) bool {
+	return channel.IsBeta() && component == model.ComponentEngram
+}
+
 func installBetaEngramFromMain() (string, error) {
 	if err := runCommand("go", "install", engramBetaGoInstallPackage); err != nil {
 		return "", err
@@ -2558,7 +2562,7 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentEngram:
 		engramCommand := "engram"
 		var installErr error
-		if s.channel.IsBeta() {
+		if betaEngramRequiresGo(s.channel, s.component) {
 			binaryPath, err := installBetaEngramFromMain()
 			if err != nil {
 				return fmt.Errorf("install beta engram from main: %w", err)
@@ -4090,14 +4094,10 @@ func (s checkDependenciesStep) ID() string {
 }
 
 func (s checkDependenciesStep) Run() error {
-	if s.channel.IsBeta() {
-		for _, component := range s.resolved.OrderedComponents {
-			if component != model.ComponentEngram {
-				continue
-			}
+	for _, component := range s.resolved.OrderedComponents {
+		if betaEngramRequiresGo(s.channel, component) {
 			if _, err := cmdLookPath("go"); err != nil {
-				// refusal:by-design world-action: installing Go requires user action outside gentle-ai.
-				return fmt.Errorf("beta Engram requires Go in PATH before installation. Install Go from https://go.dev/dl/ and restart your terminal")
+				return fmt.Errorf("beta Engram requires Go; stopped before backup or component apply. Run `%s`, restart the terminal, then rerun your original `gentle-ai install` command", system.InstallHintForDep("go", s.profile))
 			}
 			break
 		}
