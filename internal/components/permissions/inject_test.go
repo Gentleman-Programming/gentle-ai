@@ -242,7 +242,32 @@ func TestOpenCodePermissionsMirrorPiSafetyModel(t *testing.T) {
 		{"bash", "git push -f origin main", "deny"},
 		{"bash", "chmod -R 777 .", "deny"},
 		{"bash", "chown -R me:me .", "deny"},
+		// Hard-deny forms found by independent verification.
+		{"bash", "git clean -f", "deny"},
+		{"bash", "git clean -fx", "deny"},
+		{"bash", "git clean -xf", "deny"},
+		{"bash", "git clean --force", "deny"},
+		{"bash", "git reset HEAD~1 --hard", "deny"},
+		{"bash", "git reset -q --hard", "deny"},
+		{"bash", "rm -Rf ./", "deny"},
+		{"bash", "rm -fR ../", "deny"},
+		{"bash", "rm -rfv ~", "deny"},
+		{"bash", "rm -vrf /", "deny"},
+		{"bash", "rm -Rfv .", "deny"},
+		{"bash", "rm -rf build /", "deny"},
+		{"bash", `rm -rf "$HOME"`, "deny"},
+		{"bash", "sudo rm -rf /", "deny"},
+		{"bash", "git -C repo push --force", "deny"},
+		{"bash", "git -C repo reset --hard", "deny"},
+		{"bash", "git push -uf origin main", "deny"},
+		// Forms that must stay allowed.
+		{"bash", "git clean -n", "allow"},
+		{"bash", "rm -f report.txt", "allow"},
 		// Pi confirm.
+		{"bash", "rm -rfv build", "ask"},
+		{"bash", "git -C repo push", "ask"},
+		{"bash", "git push --follow-tags", "ask"},
+		{"bash", `psql -c "DROP TABLE users"`, "ask"},
 		{"bash", "rm -rf build", "ask"},
 		{"bash", "rm -r dist", "ask"},
 		{"bash", "find . -name '*.tmp' -delete", "ask"},
@@ -260,7 +285,7 @@ func TestOpenCodePermissionsMirrorPiSafetyModel(t *testing.T) {
 		{"read", "go.mod", "allow"},
 	}
 	// Secret-bearing paths: read and edit (edit covers write and patch).
-	for _, path := range []string{".env", "app/.env", ".env.local", "app/.env.production", ".env_backup", "secrets/token", "app/secrets/db.json", "/home/u/.ssh/id_ed25519", ".ssh/config", "server.pem", "keys/tls.key", "cert.p12", "cert.pfx", "/home/u/.aws/credentials", "/home/u/.config/gh/hosts.yml", "/home/u/.credentials/token", "/Users/u/Library/Keychains/login.keychain-db"} {
+	for _, path := range []string{".env", "app/.env", ".env.local", "app/.env.production", ".env_backup", "secrets/token", "app/secrets/db.json", "/home/u/.ssh/id_ed25519", ".ssh/config", "server.pem", "keys/tls.key", "cert.p12", "cert.pfx", "/home/u/.aws/credentials", "/home/u/.config/gh/hosts.yml", "/home/u/.config/gh/hosts.yaml", "/home/u/.credentials/token", "/Users/u/Library/Keychains/login.keychain-db", "/home/u/.ssh", "secrets", ".aws/credentials", ".config/gh/hosts.yml"} {
 		cases = append(cases, struct{ tool, input, want string }{"read", path, "deny"}, struct{ tool, input, want string }{"edit", path, "deny"})
 	}
 	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
