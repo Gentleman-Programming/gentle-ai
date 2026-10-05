@@ -1,4 +1,5 @@
-// Package legacyassets enumerates retired managed paths for snapshots and rollback.
+// Package legacyassets enumerates retired managed paths for snapshots and
+// rollback, and records the v3 prose that identifies a retired SDD sub-agent.
 // It does not install or render SDD assets.
 package legacyassets
 
@@ -21,12 +22,38 @@ var promptPhases = [...]string{
 	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 }
 
-// agentNames is the fixed inventory of eleven historical SDD sub-agents. v3
-// wrote the same phase names as native agents, and Claude Code kept them in
-// ~/.claude/agents/ after the upgrade to v4.
-var agentNames = [...]string{
-	"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
-	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+// legacySubAgents is the fixed inventory of eleven historical SDD sub-agents.
+// v3 wrote the same phase names as native agents, and Claude Code kept them in
+// ~/.claude/agents/ after the upgrade to v4. Each name carries the sentence
+// only Gentle AI's v3 template wrote, so the installer can tell a retired
+// managed agent apart from a user file that merely shares its name.
+var legacySubAgents = [...]LegacySubAgent{
+	{Name: "sdd-init", Marker: "You are the SDD **init** executor."},
+	{Name: "sdd-explore", Marker: "You are the SDD **explore** executor."},
+	{Name: "sdd-research", Marker: "You are an output-only evidence collector, not the orchestrator."},
+	{Name: "sdd-propose", Marker: "You are the SDD **propose** executor."},
+	{Name: "sdd-spec", Marker: "You are the SDD **spec** executor."},
+	{Name: "sdd-design", Marker: "You are the SDD **design** executor."},
+	{Name: "sdd-tasks", Marker: "You are the SDD **tasks** executor."},
+	{Name: "sdd-apply", Marker: "You are the SDD **apply** executor."},
+	{Name: "sdd-verify", Marker: "You are the SDD **verify** executor."},
+	{Name: "sdd-archive", Marker: "You are the SDD **archive** executor."},
+	{Name: "sdd-onboard", Marker: "You are the SDD **onboard** executor."},
+}
+
+// LegacySubAgent is one retired v3 SDD agent: the file name it was written
+// under, and the sentence that identifies Gentle AI's v3 template.
+type LegacySubAgent struct {
+	Name   string
+	Marker string
+}
+
+// SubAgents returns an independent copy of the retired SDD sub-agent
+// inventory. The marker is embedded v3 prose deliberately: it is the only
+// ownership evidence available for files a release predating the current
+// ownership ledger wrote.
+func SubAgents() []LegacySubAgent {
+	return append([]LegacySubAgent(nil), legacySubAgents[:]...)
 }
 
 // SlashCommandPaths inventories historical commands; Claude has both namespaced
@@ -50,21 +77,6 @@ func SharedPromptDir(homeDir string) string {
 // SharedPromptPhases returns an independent copy of historical prompt names.
 func SharedPromptPhases() []string {
 	return append([]string(nil), promptPhases[:]...)
-}
-
-// SubAgentPaths inventories the historical SDD agents a v3 install left in a
-// native agents directory. Only Claude Code used that directory; runtimes with
-// no legacy agents there return no paths. Enumeration does not create or delete
-// files.
-func SubAgentPaths(agent model.AgentID, agentsDir string) []string {
-	if agent != model.AgentClaudeCode {
-		return nil
-	}
-	paths := make([]string, 0, len(agentNames))
-	for _, name := range agentNames {
-		paths = append(paths, filepath.Join(agentsDir, name+".md"))
-	}
-	return paths
 }
 
 // IsLegacyClaudeCommandPath matches exactly the retired unprefixed Claude files.

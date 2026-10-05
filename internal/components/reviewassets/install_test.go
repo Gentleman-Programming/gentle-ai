@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
@@ -118,10 +119,31 @@ func TestInstalledNativeAgentParity(t *testing.T) {
 	}
 }
 
+// legacySDDAgentBody renders the shape of a real v3 SDD agent file: the phase
+// banner is the ownership marker the installer looks for.
+func legacySDDAgentBody(name, marker string) string {
+	return "---\nname: " + name + "\ndescription: Legacy v3 SDD phase agent.\nmodel: sonnet\n---\n\n" + marker + " Do this phase's work yourself. Do NOT delegate further.\n"
+}
+
+var legacySDDAgentNames = []string{
+	"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
+	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+}
+
+func writeLegacySDDAgents(t *testing.T, dir string) {
+	t.Helper()
+	for _, agent := range legacyassets.SubAgents() {
+		body := legacySDDAgentBody(agent.Name, agent.Marker)
+		if err := os.WriteFile(filepath.Join(dir, agent.Name+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestInstallNativeAgentsRemovesLegacySDDAgents covers issue #5253: a v3.x
 // install left eleven sdd-*.md agents in the Claude agents directory, and v4
-// removed neither of them. The names are retired by name because the ownership
-// ledger only records names v4 wrote, so it cannot vouch for these files.
+// removed neither of them. Removal is gated on the v3 template marker, because
+// these names predate the ownership ledger.
 func TestInstallNativeAgentsRemovesLegacySDDAgents(t *testing.T) {
 	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
 	if err != nil {
@@ -132,16 +154,7 @@ func TestInstallNativeAgentsRemovesLegacySDDAgents(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	legacy := []string{
-		"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
-		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
-	}
-	for _, name := range legacy {
-		body := "---\nname: " + name + "\ndescription: Legacy v3 SDD phase agent.\n---\n\nLegacy v3 SDD agent.\n"
-		if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	writeLegacySDDAgents(t, dir)
 	// A user-authored agent the installer never manages must survive.
 	userAgent := filepath.Join(dir, "my-own-agent.md")
 	if err := os.WriteFile(userAgent, []byte("user-owned bytes\n"), 0o644); err != nil {
@@ -152,7 +165,7 @@ func TestInstallNativeAgentsRemovesLegacySDDAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range legacy {
+	for _, name := range legacySDDAgentNames {
 		path := filepath.Join(dir, name+".md")
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("legacy SDD agent %s survived install: %v", name, err)
@@ -170,9 +183,48 @@ func TestInstallNativeAgentsRemovesLegacySDDAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range legacy {
+	for _, name := range legacySDDAgentNames {
 		if containsFile(second.Files, filepath.Join(dir, name+".md")) {
 			t.Errorf("second install reported legacy agent %s", name)
+		}
+	}
+}
+
+// TestInstallNativeAgentsPreservesSameNameUserFile pins the ownership gate: a
+// file at a retired path that does not carry the v3 marker is not Gentle AI's
+// to delete. It must survive and be reported for manual removal.
+func TestInstallNativeAgentsPreservesSameNameUserFile(t *testing.T) {
+	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	dir := adapter.SubAgentsDir(home)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Same retired names, user-authored bodies, no v3 marker anywhere.
+	for _, name := range legacySDDAgentNames {
+		body := "---\nname: " + name + "\n---\n\nMy own agent. It reuses the old name on purpose.\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range legacySDDAgentNames {
+		path := filepath.Join(dir, name+".md")
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("user-authored %s was removed: %v", name, err)
+		}
+		if containsFile(result.Files, path) {
+			t.Errorf("user-authored %s reported as removed", name)
+		}
+		if !containsFile(result.Skipped, path) {
+			t.Errorf("user-authored %s not reported for manual removal", name)
 		}
 	}
 }

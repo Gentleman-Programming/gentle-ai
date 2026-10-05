@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
@@ -4645,18 +4646,16 @@ func TestRunSyncRemovesLegacySDDClaudeAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seed exactly the inventory a v3.x install left in the agents directory.
-	legacy := []string{
-		"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
-		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
-	}
+	// Seed exactly the inventory a v3.x install left in the agents directory,
+	// including the v3 template marker that proves Gentle AI wrote each file.
+	legacy := legacyassets.SubAgents()
 	agentsDir := filepath.Join(home, ".claude", "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range legacy {
-		body := "---\nname: " + name + "\ndescription: Legacy v3 SDD phase agent.\n---\n\nLegacy v3 SDD agent.\n"
-		if err := os.WriteFile(filepath.Join(agentsDir, name+".md"), []byte(body), 0o644); err != nil {
+	for _, agent := range legacy {
+		body := "---\nname: " + agent.Name + "\nmodel: sonnet\n---\n\n" + agent.Marker + " Do this phase's work yourself.\n"
+		if err := os.WriteFile(filepath.Join(agentsDir, agent.Name+".md"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -4665,15 +4664,54 @@ func TestRunSyncRemovesLegacySDDClaudeAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range legacy {
-		if _, err := os.Stat(filepath.Join(agentsDir, name+".md")); !os.IsNotExist(err) {
-			t.Errorf("legacy SDD agent %s.md survived sync: %v", name, err)
+	for _, agent := range legacy {
+		if _, err := os.Stat(filepath.Join(agentsDir, agent.Name+".md")); !os.IsNotExist(err) {
+			t.Errorf("legacy SDD agent %s.md survived sync: %v", agent.Name, err)
 		}
 	}
 	for _, path := range []string{"agents/review-risk.md", "settings.json", "CLAUDE.md"} {
 		if _, err := os.Stat(filepath.Join(home, ".claude", path)); err != nil {
 			t.Errorf("retained owner %s: %v", path, err)
 		}
+	}
+}
+
+// TestRunSyncPreservesSameNameUserAgentAtRetiredPath is the ownership gate at
+// sync level: a file that merely shares a retired name is not Gentle AI's to
+// delete, so sync must leave it alone.
+func TestRunSyncPreservesSameNameUserAgentAtRetiredPath(t *testing.T) {
+	home := t.TempDir()
+	previousHome := osUserHomeDir
+	previousBackup := backup.UserHomeDirFn
+	t.Cleanup(func() { osUserHomeDir = previousHome; backup.UserHomeDirFn = previousBackup })
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = osUserHomeDir
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"}, SelectionConfigured: true,
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentSkills},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(home, ".claude", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userPath := filepath.Join(agentsDir, "sdd-apply.md")
+	userBody := "---\nname: sdd-apply\n---\n\nMy own agent reusing the old name.\n"
+	if err := os.WriteFile(userPath, []byte(userBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RunSync([]string{"--agents", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(userPath)
+	if err != nil {
+		t.Fatalf("user-authored agent at a retired path was removed: %v", err)
+	}
+	if string(data) != userBody {
+		t.Errorf("user-authored agent was rewritten:\ngot=%q\nwant=%q", data, userBody)
 	}
 }
 

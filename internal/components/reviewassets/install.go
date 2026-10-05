@@ -1,6 +1,7 @@
 package reviewassets
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,11 +79,11 @@ type claudeModelResolver interface {
 
 // InstallNativeAgents installs only retained review, Judgment Day, and Kimi native agents.
 // It removes two families: the retired review agents Gentle AI owns (see
-// RetiredNativeAgentManifest), and the v3 SDD phase agents v4 never writes
-// (see legacyassets.SubAgentPaths). The SDD names are removed by name: the
-// ownership ledger only records names Gentle AI wrote in v4, so it cannot
-// speak for files an earlier release left behind. User-owned agents under any
-// other name are preserved.
+// RetiredNativeAgentManifest), and the v3 SDD phase agents v4 never writes (see
+// legacyassets.SubAgents). The SDD names predate the ownership ledger, so
+// ownership is proven by the v3 template marker the file must still carry. A
+// file at a retired path without that marker is preserved and reported, never
+// deleted. User-owned agents under any other name are untouched.
 func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOptions) (InstallResult, error) {
 	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
@@ -172,14 +173,18 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 		}
 		ledgerChanged = ledgerChanged || dropped
 	}
-	for _, path := range legacyassets.SubAgentPaths(adapter.Agent(), dir) {
-		removed, err := removeLegacyNativeAgent(journal, path)
+	for _, legacy := range legacyassets.SubAgents() {
+		path := filepath.Join(dir, legacy.Name+".md")
+		removed, preserved, err := removeLegacyNativeAgent(journal, path, legacy.Marker)
 		if err != nil {
 			return rollback(err)
 		}
 		if removed != "" {
 			result.Changed = true
 			result.Files = append(result.Files, removed)
+		}
+		if preserved != "" {
+			result.Skipped = append(result.Skipped, preserved)
 		}
 	}
 	for _, c := range candidates {
@@ -286,32 +291,40 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 	return content, nil
 }
 
-// removeLegacyNativeAgent removes one legacy SDD agent file by name. Gentle AI
-// owned these names in v3 and no longer writes them, and the ownership ledger
-// predates them, so name identity is the only evidence available. A symlink or
-// other non-regular file is never ours to delete.
-func removeLegacyNativeAgent(journal *mutationjournal.Journal, path string) (string, error) {
+// removeLegacyNativeAgent removes one legacy SDD agent file only when the
+// bytes still carry the v3 template marker. These names predate the ownership
+// ledger, so the marker is the only ownership evidence available: a user file
+// that merely shares the name is preserved and returned for reporting. A
+// symlink or other non-regular file is never ours to delete either.
+func removeLegacyNativeAgent(journal *mutationjournal.Journal, path, marker string) (removed string, preserved string, err error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("stat legacy native agent %s: %w", path, err)
+		return "", "", fmt.Errorf("stat legacy native agent %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", nil
+		return "", path, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", fmt.Errorf("read legacy native agent %s: %w", path, err)
+	}
+	if !bytes.Contains(data, []byte(marker)) {
+		return "", path, nil
 	}
 	if err := journal.Validate(path); err != nil {
-		return "", err
+		return "", "", err
 	}
-	removed, err := journal.Remove(path)
+	didRemove, err := journal.Remove(path)
 	if err != nil {
-		return "", fmt.Errorf("remove legacy native agent %s: %w", path, err)
+		return "", "", fmt.Errorf("remove legacy native agent %s: %w", path, err)
 	}
-	if !removed {
-		return "", nil
+	if !didRemove {
+		return "", "", nil
 	}
-	return path, nil
+	return path, "", nil
 }
 
 // removeRetiredNativeAgent removes one retired agent file when Gentle AI owns

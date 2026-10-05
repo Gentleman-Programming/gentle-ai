@@ -3,6 +3,7 @@ package legacyassets
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -29,21 +30,35 @@ func TestLegacyCommandPaths(t *testing.T) {
 	}
 }
 
-func TestLegacySubAgentPaths(t *testing.T) {
-	names := []string{"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"}
-	dir := filepath.Join(t.TempDir(), "agents")
-	want := make([]string, 0, len(names))
-	for _, name := range names {
-		want = append(want, filepath.Join(dir, name+".md"))
+// TestLegacySubAgentsPairEveryNameWithItsTemplateMarker pins the ownership
+// evidence: each retired name must carry the v3 sentence, and the two lists must
+// never drift apart.
+func TestLegacySubAgentsPairEveryNameWithItsTemplateMarker(t *testing.T) {
+	agents := SubAgents()
+	if len(agents) != 11 {
+		t.Fatalf("inventory has %d agents, want 11", len(agents))
 	}
-	if got := SubAgentPaths(model.AgentClaudeCode, dir); !reflect.DeepEqual(got, want) {
-		t.Errorf("claude sub-agent paths = %v, want %v", got, want)
-	}
-	// Only Claude Code kept v3 SDD agents in a native agents directory.
-	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKimi, model.AgentCursor} {
-		if got := SubAgentPaths(agent, dir); got != nil {
-			t.Errorf("%s sub-agent paths = %v, want nil", agent, got)
+	seen := make(map[string]bool, len(agents))
+	for _, agent := range agents {
+		if agent.Name == "" || agent.Marker == "" {
+			t.Errorf("agent %+v is missing a name or marker", agent)
 		}
+		if seen[agent.Name] {
+			t.Errorf("duplicate inventory name %q", agent.Name)
+		}
+		seen[agent.Name] = true
+		// sdd-research is the one v3 template that never used the phase banner.
+		if agent.Name == "sdd-research" {
+			continue
+		}
+		if want := "You are the SDD **" + strings.TrimPrefix(agent.Name, "sdd-") + "** executor."; agent.Marker != want {
+			t.Errorf("%s marker = %q, want %q", agent.Name, agent.Marker, want)
+		}
+	}
+	// Mutating the copy must not reach the package inventory.
+	agents[0].Name = "mutated"
+	if SubAgents()[0].Name == "mutated" {
+		t.Error("SubAgents returned a shared slice")
 	}
 }
 
