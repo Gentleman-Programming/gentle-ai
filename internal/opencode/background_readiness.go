@@ -664,7 +664,9 @@ func (m *startupPathModel) appendSegment(next []startupPathEntry, segment, sourc
 	case segment == "" || strings.Contains(segment, unresolvedMarker) || strings.Contains(segment, pathSentinel) || !filepath.IsAbs(segment):
 		return next
 	default:
-		if samePath(segment, m.binDir, m.goos) {
+		// Only a prepend places the managed directory ahead of the existing
+		// PATH; an append after it leaves earlier uncertainties relevant.
+		if samePath(segment, m.binDir, m.goos) && len(next) == 0 {
 			m.placedSeq = m.seq
 		}
 		return append(next, startupPathEntry{dir: filepath.Clean(segment), source: source})

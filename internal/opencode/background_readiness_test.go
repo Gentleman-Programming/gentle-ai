@@ -353,6 +353,10 @@ func TestLoginShellModelReplaysOnlyStaticPathEdits(t *testing.T) {
 		{name: "eval brew shellenv", shell: "/bin/zsh", file: ".zshrc", rc: "eval \"$(/opt/homebrew/bin/brew shellenv)\"\n", want: ActivationStatusUnknown, reason: "eval"},
 		{name: "eval before the managed block", shell: "/bin/zsh", file: ".zshenv", rc: "eval \"$(/opt/homebrew/bin/brew shellenv)\"\n", want: ActivationStatusReady},
 		{name: "mise activate", shell: "/bin/bash", file: ".bashrc", rc: "eval \"$(mise activate bash)\"\n", want: ActivationStatusUnknown, reason: "eval"},
+		// Appending the managed directory does not place it first, so an
+		// earlier unmodeled eval still makes the order unverifiable.
+		{name: "eval before a managed append", shell: "/bin/zsh", file: ".zshrc", rc: "eval \"$(fnm env)\"\nPATH=\"$PATH:$HOME/.gentle-ai/bin\"\n", want: ActivationStatusUnknown, reason: "eval"},
+		{name: "eval before a managed array append", shell: "/bin/zsh", file: ".zshrc", rc: "eval \"$(fnm env)\"\npath+=($HOME/.gentle-ai/bin)\n", want: ActivationStatusUnknown, reason: "eval"},
 		{name: "pnpm case block", shell: "/bin/zsh", file: ".zshrc", rc: "export PNPM_HOME=\"%s\"\ncase \":$PATH:\" in\n  *\":$PNPM_HOME:\"*) ;;\n  *) export PATH=\"$PNPM_HOME:$PATH\" ;;\nesac\n", want: ActivationStatusUnknown, reason: "case"},
 		{name: "nvm source with backslash-dot", shell: "/bin/zsh", file: ".zshrc", rc: "export NVM_DIR=\"$HOME/.nvm\"\n[ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\"\n",
 			extra: map[string]string{".nvm/nvm.sh": "nvm_use() {\n  export PATH=\"$NVM_DIR/versions/node/v20/bin:$PATH\"\n}\nnvm_use\n"}, want: ActivationStatusUnknown, reason: "function"},
