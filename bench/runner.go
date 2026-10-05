@@ -32,10 +32,10 @@ type Sandbox struct {
 	// shell the product models; the sandbox leaves SHELL unset otherwise.
 	LoginShell string
 	Root       string
-	Home         string
-	Repo         string
-	Remote       string
-	TracePath    string
+	Home       string
+	Repo       string
+	Remote     string
+	TracePath  string
 	// BenchCrashAtPhase, when non-empty, is read by product binaries built
 	// with `-tags bench_fixture` as GENTLE_AI_BENCH_CRASH_AT_PHASE
 	// (format "<phase>:<lineage_id>"): the deterministic phase-hook
