@@ -36,7 +36,9 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 	handle, err := windows.CreateFile(
 		name,
 		windows.GENERIC_READ|windows.DELETE,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		// No FILE_SHARE_WRITE: an in-place edit between validation and
+		// deletion must not be deleted with the launcher.
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE,
 		nil,
 		windows.OPEN_EXISTING,
 		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT,

@@ -108,7 +108,7 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 		if restoreErr := restoreLauncherQuarantine(parentFD, quarantine, name); restoreErr != nil {
 			return ManagedLauncherRemovalResult{}, errors.Join(
 				fmt.Errorf("inspect captured managed launcher %q: %w", path, err),
-				fmt.Errorf("restore captured managed launcher %q: %w", path, restoreErr),
+				fmt.Errorf("restore captured managed launcher %q; the captured entry is preserved at %q: %w", path, filepath.Join(filepath.Dir(path), quarantine), restoreErr),
 			)
 		}
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil
@@ -117,7 +117,7 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 	if captured == nil {
 		_ = unix.Close(capturedFD)
 		if restoreErr := restoreLauncherQuarantine(parentFD, quarantine, name); restoreErr != nil {
-			return ManagedLauncherRemovalResult{}, fmt.Errorf("restore captured managed launcher %q after opening: %w", path, restoreErr)
+			return ManagedLauncherRemovalResult{}, fmt.Errorf("restore captured managed launcher %q after opening; the captured entry is preserved at %q: %w", path, filepath.Join(filepath.Dir(path), quarantine), restoreErr)
 		}
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil
 	}
@@ -128,14 +128,14 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 		if restoreErr := restoreLauncherQuarantine(parentFD, quarantine, name); restoreErr != nil {
 			return ManagedLauncherRemovalResult{}, errors.Join(
 				fmt.Errorf("stat captured managed launcher %q: %w", path, err),
-				fmt.Errorf("restore captured managed launcher %q: %w", path, restoreErr),
+				fmt.Errorf("restore captured managed launcher %q; the captured entry is preserved at %q: %w", path, filepath.Join(filepath.Dir(path), quarantine), restoreErr),
 			)
 		}
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil
 	}
 	if !capturedInfo.Mode().IsRegular() {
 		if restoreErr := restoreLauncherQuarantine(parentFD, quarantine, name); restoreErr != nil {
-			return ManagedLauncherRemovalResult{}, fmt.Errorf("restore non-regular managed launcher %q: %w", path, restoreErr)
+			return ManagedLauncherRemovalResult{}, fmt.Errorf("restore non-regular managed launcher %q; the captured entry is preserved at %q: %w", path, filepath.Join(filepath.Dir(path), quarantine), restoreErr)
 		}
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil
 	}
@@ -145,7 +145,7 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 		if restoreErr := restoreLauncherQuarantine(parentFD, quarantine, name); restoreErr != nil {
 			return ManagedLauncherRemovalResult{}, errors.Join(
 				fmt.Errorf("read captured managed launcher %q: %w", path, err),
-				fmt.Errorf("restore captured managed launcher %q: %w", path, restoreErr),
+				fmt.Errorf("restore captured managed launcher %q; the captured entry is preserved at %q: %w", path, filepath.Join(filepath.Dir(path), quarantine), restoreErr),
 			)
 		}
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil
@@ -154,7 +154,7 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 		if restoreErr := restoreLauncherQuarantine(parentFD, quarantine, name); restoreErr != nil {
 			return ManagedLauncherRemovalResult{}, errors.Join(
 				fmt.Errorf("stale managed launcher substitution %q: captured entry is not the validated launcher", path),
-				fmt.Errorf("restore captured managed launcher %q: %w", path, restoreErr),
+				fmt.Errorf("restore captured managed launcher %q; the captured entry is preserved at %q: %w", path, filepath.Join(filepath.Dir(path), quarantine), restoreErr),
 			)
 		}
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil

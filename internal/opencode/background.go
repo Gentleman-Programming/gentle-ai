@@ -527,7 +527,7 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 		}
 		plan.before[path] = snapshot
 		if snapshot.exists && !snapshot.owned {
-			return nil, fmt.Errorf("refusing user-owned OpenCode launcher collision at %q", path)
+			return nil, fmt.Errorf("refusing user-owned OpenCode launcher collision at %q: its bytes differ from the launcher Gentle AI generates, so it is treated as yours; move or delete it to let Gentle AI regenerate it, or turn background subagents off", path)
 		}
 		content := launcherContent(options.OS, target)
 		plan.desired[path] = []byte(content[filepath.Base(path)])

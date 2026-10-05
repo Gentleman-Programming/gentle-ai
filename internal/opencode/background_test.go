@@ -663,7 +663,7 @@ func TestActivationRefusesIncidentalLauncherMarker(t *testing.T) {
 		AddToUserPath: func(string) error { return nil },
 		ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil },
 	})
-	if err == nil || plan != nil || !strings.Contains(err.Error(), "user-owned") {
+	if err == nil || plan != nil || !strings.Contains(err.Error(), "user-owned") || !strings.Contains(err.Error(), "move or delete it") {
 		t.Fatalf("PrepareActivation() plan!=nil=%t error=%v, want user-owned collision refusal", plan != nil, err)
 	}
 	if got, err := os.ReadFile(launcher); err != nil || string(got) != userBytes {
