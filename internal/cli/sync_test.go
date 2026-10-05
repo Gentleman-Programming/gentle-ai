@@ -3437,6 +3437,95 @@ func TestNativeReviewSyncPipelineRollbackRestoresLedgerAndAgent(t *testing.T) {
 	}
 }
 
+// legacyV3ClaudeSDDApply returns the v3.7.0 sdd-apply.md template rendered
+// with an opus model the way v3 sdd.Inject filled its placeholders.
+func legacyV3ClaudeSDDApply(t *testing.T) []byte {
+	t.Helper()
+	template, err := os.ReadFile(filepath.Join("..", "components", "reviewassets", "testdata", "legacy_sdd", "v3.7.0", "sdd-apply.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.ReplaceAll(string(template), "{{CLAUDE_MODEL}}", "opus")
+	content = strings.ReplaceAll(content, "{{CLAUDE_EFFORT_FRONTMATTER}}\n", "")
+	for _, tool := range []string{"mem_search", "mem_get_observation", "mem_save", "mem_update"} {
+		content = strings.ReplaceAll(content, "{{ENGRAM_TOOL_PREFIX}}"+tool, "mcp__engram__"+tool+", mcp__plugin_engram_engram__"+tool)
+	}
+	if strings.Contains(content, "{{") {
+		t.Fatalf("unrendered placeholder in v3 fixture: %s", content)
+	}
+	return []byte(content)
+}
+
+func TestLegacySDDSyncRemovesV3AgentAndRollbackRestoresIt(t *testing.T) {
+	home := t.TempDir()
+	adapter := claude.NewAdapter()
+	path := filepath.Join(adapter.SubAgentsDir(home), "sdd-apply.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := legacyV3ClaudeSDDApply(t)
+	if err := os.WriteFile(path, legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}}
+	runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := runtime.stagePlan()
+	if !containsPath(runtime.managedPaths, path) {
+		t.Fatalf("pipeline snapshot missing legacy SDD agent: %v", runtime.managedPaths)
+	}
+	plan.Apply = append(plan.Apply, failingSyncStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil || !result.Rollback.Success {
+		t.Fatalf("pipeline rollback result = %+v", result)
+	}
+	if !containsPath(runtime.changedFiles, path) {
+		t.Fatalf("legacy SDD agent was not removed before rollback: %v", runtime.changedFiles)
+	}
+	restored, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(restored, legacy) {
+		t.Fatalf("rollback did not restore legacy SDD agent: %v", err)
+	}
+}
+
+func TestLegacySDDSyncPreservesModifiedAgentWithLegacyAction(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	adapter := claude.NewAdapter()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}}
+	path := filepath.Join(adapter.SubAgentsDir(home), "sdd-apply.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	custom := append(legacyV3ClaudeSDDApply(t), []byte("\n## My rules\n\nAlways run make lint.\n")...)
+	if err := os.WriteFile(path, custom, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := syncBackupTargetsScoped(home, workspace, ScopeGlobal, selection, []agents.Adapter{adapter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPath(targets, path) {
+		t.Fatalf("snapshot targets missing legacy SDD agent: %v", targets)
+	}
+	state := &runtimeState{}
+	changed := []string{}
+	step := nativeReviewAgentStep{id: "sync-test", agent: model.AgentClaudeCode, homeDir: home, workspaceDir: workspace, scope: ScopeGlobal, selection: selection, changedFiles: &changed, state: state}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if containsPath(changed, path) {
+		t.Fatalf("modified legacy SDD agent reported as changed: %v", changed)
+	}
+	if len(state.nativeReviewActions) != 1 || state.nativeReviewActions[0] != legacySDDAgentPreservedAction(path) {
+		t.Fatalf("actions = %v", state.nativeReviewActions)
+	}
+	if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, custom) {
+		t.Fatalf("modified legacy SDD agent changed: %v", err)
+	}
+}
+
 func TestNativeReviewSyncPreservesUnknownAndSnapshotsLedger(t *testing.T) {
 	home, workspace := t.TempDir(), t.TempDir()
 	adapter, err := agents.NewAdapter(model.AgentKiroIDE)

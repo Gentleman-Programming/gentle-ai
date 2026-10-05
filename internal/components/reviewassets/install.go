@@ -51,7 +51,8 @@ func NativeAgentsSupported(agent model.AgentID) bool {
 // remove for a runtime, so a caller can snapshot all of them before it runs.
 func NativeAgentFileNames(agent model.AgentID) []string {
 	names := append([]string(nil), NativeAgentManifest[agent]...)
-	return append(names, RetiredNativeAgentManifest[agent]...)
+	names = append(names, RetiredNativeAgentManifest[agent]...)
+	return append(names, LegacySDDNativeAgentManifest[agent]...)
 }
 
 type InstallOptions struct {
@@ -76,8 +77,10 @@ type claudeModelResolver interface {
 }
 
 // InstallNativeAgents installs only retained review, Judgment Day, and Kimi native agents.
-// It never removes legacy SDD files or user-owned agents; it removes only the
-// retired review agents Gentle AI owns (see RetiredNativeAgentManifest).
+// It never removes user-owned agents. It removes the retired review agents
+// Gentle AI owns (see RetiredNativeAgentManifest) and the legacy v3 SDD agents
+// whose bytes match a known v3 render (see LegacySDDNativeAgentManifest); a
+// legacy SDD agent it cannot prove owned is preserved and reported in Skipped.
 func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOptions) (InstallResult, error) {
 	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
@@ -166,6 +169,19 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 			result.Files = append(result.Files, removed)
 		}
 		ledgerChanged = ledgerChanged || dropped
+	}
+	for _, name := range LegacySDDNativeAgentManifest[adapter.Agent()] {
+		removed, preserved, err := removeLegacySDDAgent(journal, dir, name)
+		if err != nil {
+			return rollback(err)
+		}
+		if removed != "" {
+			result.Changed = true
+			result.Files = append(result.Files, removed)
+		}
+		if preserved != "" {
+			result.Skipped = append(result.Skipped, preserved)
+		}
 	}
 	for _, c := range candidates {
 		if c.exists && !c.owned {
