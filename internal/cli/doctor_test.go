@@ -16,6 +16,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 // --- checkOneTool ---
@@ -1161,6 +1162,98 @@ func TestRunDoctor_HomeDirError(t *testing.T) {
 	err := RunDoctor(context.Background(), &buf)
 	if err == nil {
 		t.Error("expected error when home dir fails")
+	}
+}
+
+// Issue #3452: doctor reports whether new login shells will find the managed
+// OpenCode launcher directory.
+func TestCheckOpenCodeProfileReportsPersistence(t *testing.T) {
+	// The check reads the profile the current login shell uses.
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("ZDOTDIR", "")
+	home := t.TempDir()
+	binDir := opencode.BinDir(home)
+
+	missing := checkOpenCodeProfile(home, []string{"/usr/bin"})
+	if missing.Status != CheckStatusWarn || missing.Remedy == nil || !strings.Contains(missing.Remedy.Description, opencode.ProfileExportLine(binDir)) {
+		t.Fatalf("missing persistence result = %#v", missing)
+	}
+
+	if onPath := checkOpenCodeProfile(home, []string{"/usr/bin", binDir}); onPath.Status != CheckStatusPass {
+		t.Fatalf("bin directory on PATH result = %#v", onPath)
+	}
+
+	profile := filepath.Join(home, ".profile")
+	edited := "# >>> gentle-ai managed OpenCode launcher >>>\nexport PATH=/user:\"$PATH\"\n# <<< gentle-ai managed OpenCode launcher <<<\n"
+	if err := os.WriteFile(profile, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkOpenCodeProfile(home, nil); got.Status != CheckStatusWarn {
+		t.Fatalf("edited block result = %#v, want warn", got)
+	}
+
+	block := "# >>> gentle-ai managed OpenCode launcher >>>\n" + opencode.ProfileExportLine(binDir) + "\n# <<< gentle-ai managed OpenCode launcher <<<\n"
+	if err := os.WriteFile(profile, []byte("export USER=1\n"+block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkOpenCodeProfile(home, nil); got.Status != CheckStatusPass || !strings.Contains(got.Detail, profile) {
+		t.Fatalf("managed profile result = %#v, want pass naming %s", got, profile)
+	}
+}
+
+func TestRunDoctorAddsOpenCodeProfileCheckOnlyWhenBackgroundIsOn(t *testing.T) {
+	origLookPath := lookPathFn
+	origAvail := availableBytesFn
+	origHTTP := httpGetFn
+	origPathDirs := pathDirsFn
+	origHomeDir := osUserHomeDirDoctor
+	origExecutable := osExecutableDoctor
+	origGOOS := doctorGOOS
+	t.Cleanup(func() {
+		lookPathFn = origLookPath
+		availableBytesFn = origAvail
+		httpGetFn = origHTTP
+		pathDirsFn = origPathDirs
+		osUserHomeDirDoctor = origHomeDir
+		osExecutableDoctor = origExecutable
+		doctorGOOS = origGOOS
+	})
+	lookPathFn = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil }
+	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
+	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
+	osExecutableDoctor = func() (string, error) { return "/usr/local/bin/gentle-ai", nil }
+
+	for _, tt := range []struct {
+		name      string
+		goos      string
+		payload   string
+		wantCheck bool
+	}{
+		{name: "background on", goos: "linux", payload: `{"installed_agents":["opencode"],"opencode_background_subagents":"on"}`, wantCheck: true},
+		{name: "background off", goos: "linux", payload: `{"installed_agents":["opencode"],"opencode_background_subagents":"off"}`},
+		{name: "windows uses user PATH", goos: "windows", payload: `{"installed_agents":["opencode"],"opencode_background_subagents":"on"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			doctorGOOS = tt.goos
+			homeDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(tt.payload), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+			var buf bytes.Buffer
+			if err := RunDoctor(context.Background(), &buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(buf.String(), string(doctor.CheckOpenCodeProfile)); got != tt.wantCheck {
+				t.Fatalf("profile check present = %t, want %t; output:\n%s", got, tt.wantCheck, buf.String())
+			}
+		})
 	}
 }
 

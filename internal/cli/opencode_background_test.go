@@ -676,6 +676,10 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 }
 
 func TestSyncReportsManagedLauncherChanges(t *testing.T) {
+	// Issue #3452: a supported login shell also persists the managed bin
+	// directory in its login profile, and sync reports that change.
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", "")
 	home := syncBackgroundTestHome(t)
 	target := filepath.Join(home, "opencode-real")
 	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
@@ -714,6 +718,20 @@ func TestSyncReportsManagedLauncherChanges(t *testing.T) {
 		if !contains(result.ChangedFiles, launcher) {
 			t.Fatalf("sync ChangedFiles %v missing managed launcher %q", result.ChangedFiles, launcher)
 		}
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	profile := filepath.Join(home, ".zprofile")
+	if !contains(result.ChangedFiles, profile) {
+		t.Fatalf("sync ChangedFiles %v missing managed login profile %q", result.ChangedFiles, profile)
+	}
+	data, err := os.ReadFile(profile)
+	if err != nil || !strings.Contains(string(data), opencodeactivation.ProfileExportLine(opencodeactivation.BinDir(home))) {
+		t.Fatalf("login profile = %q, %v; want managed PATH export", data, err)
+	}
+	if guidance := renderOpenCodeBackgroundActivation(background); !strings.Contains(guidance, profile) {
+		t.Fatalf("activation report = %q, want login profile guidance", guidance)
 	}
 }
 

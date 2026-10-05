@@ -611,6 +611,10 @@ func goInstallBinDirFromGoEnv() (string, error) {
 
 const engramBetaGoInstallPackage = "github.com/Gentleman-Programming/engram/cmd/engram@main"
 
+func betaEngramRequiresGo(channel InstallChannel, component model.ComponentID) bool {
+	return channel.IsBeta() && component == model.ComponentEngram
+}
+
 func installBetaEngramFromMain() (string, error) {
 	if err := runCommand("go", "install", engramBetaGoInstallPackage); err != nil {
 		return "", err
@@ -774,7 +778,6 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	targets, targetErr := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
 	prepare := []pipeline.Step{
-		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
 			snapshotter: backup.NewSnapshotter(),
@@ -797,6 +800,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir, consent: r.sdkConsent}}, prepare...)
 	}
+	// Check prerequisites before any SDK package-manager operation or telemetry.
+	prepare = append([]pipeline.Step{checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection, resolved: r.resolved, channel: r.channel}}, prepare...)
 	// The read-only settings refusal is prepended last so it runs first in the
 	// prepare stage (issue #5035): an unsafe selected settings document must
 	// fail before the SDK dependency install, telemetry, plugin, Persona,
@@ -2657,7 +2662,7 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentEngram:
 		engramCommand := "engram"
 		var installErr error
-		if s.channel.IsBeta() {
+		if betaEngramRequiresGo(s.channel, s.component) {
 			binaryPath, err := installBetaEngramFromMain()
 			if err != nil {
 				return fmt.Errorf("install beta engram from main: %w", err)
@@ -4180,6 +4185,8 @@ type checkDependenciesStep struct {
 	profile   system.PlatformProfile
 	homeDir   string
 	selection model.Selection
+	resolved  planner.ResolvedPlan
+	channel   InstallChannel
 }
 
 func (s checkDependenciesStep) ID() string {
@@ -4187,6 +4194,15 @@ func (s checkDependenciesStep) ID() string {
 }
 
 func (s checkDependenciesStep) Run() error {
+	for _, component := range s.resolved.OrderedComponents {
+		if betaEngramRequiresGo(s.channel, component) {
+			if _, err := cmdLookPath("go"); err != nil {
+				return fmt.Errorf("beta Engram requires Go; stopped before backup or component apply. Run `%s`, restart the terminal, then rerun your original `gentle-ai install` command", system.InstallHintForDep("go", s.profile))
+			}
+			break
+		}
+	}
+
 	// Run detection but do NOT write to stdout/stderr — this step runs
 	// inside the Bubble Tea alternate screen in TUI mode, so any raw
 	// output corrupts the display (see issue #2). Missing deps are

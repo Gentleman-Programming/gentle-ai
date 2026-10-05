@@ -1688,9 +1688,10 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	})
 
 	// Runtime telemetry files are reconciled before persisted visual components.
-	// The last two entries are the routing guidance targets. Guidance is written
-	// for every configured agent regardless of which components are persisted, so
-	// a first sync of a purely visual selection still delivers it (issue #1794).
+	// Routing guidance targets follow: guidance is written for every configured
+	// agent regardless of which components are persisted, so a first sync of a
+	// purely visual selection still delivers it (issue #1794). Managed OpenCode
+	// plugins converge last, as install provisions them (issue #5192).
 	wantFiles := []string{
 		filepath.Join(home, ".config", "opencode", "plugins", "telemetry-runtime.ts"),
 		filepath.Join(home, ".config", "opencode", ".gentle-ai-telemetry-runtime.json"),
@@ -1713,6 +1714,9 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 		filepath.Join(home, ".claude", "CLAUDE.md"),
 		filepath.Join(home, ".config", "opencode", "opencode.json"),
 		filepath.Join(home, ".config", "opencode", ".gentle-ai-default-agent.json"),
+		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "skill-registry.ts"),
 	}
 
 	first, err := RunSync([]string{"--agents", "claude-code,opencode"})
@@ -1786,8 +1790,9 @@ func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
 
 // TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent
 // reproduces issue #1440: when the persisted selection lacks the SDD component
-// but managed OpenCode plugins are already installed on disk, `gentle-ai sync`
-// must refresh them to the embedded assets of the running binary.
+// but a previous release's managed OpenCode plugins are installed on disk,
+// `gentle-ai sync` must refresh them to the embedded assets of the running
+// binary.
 func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
@@ -1802,11 +1807,8 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
 	stalePlugins := map[string]string{
 		"opencode-review-transport.ts": filepath.Join(pluginsDir, "opencode-review-transport.ts"),
-		"model-variants.ts":            filepath.Join(pluginsDir, "model-variants.ts"),
 	}
-	for name, path := range stalePlugins {
-		mustWriteFile(t, path, []byte("// stale v2.1.7 managed plugin "+name))
-	}
+	mustWriteFile(t, stalePlugins["opencode-review-transport.ts"], releasedOpenCodePlugin(t, "v3.7.0/plugins/opencode-review-transport.ts"))
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -1835,12 +1837,6 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 			t.Errorf("ChangedFiles missing refreshed plugin path %q\nchanged = %#v", path, result.ChangedFiles)
 		}
 	}
-
-	// skill-registry.ts was never installed — sync must not create it.
-	skillRegistry := filepath.Join(pluginsDir, "skill-registry.ts")
-	if _, err := os.Stat(skillRegistry); !os.IsNotExist(err) {
-		t.Errorf("sync must not create never-installed plugin %q; stat err = %v", skillRegistry, err)
-	}
 }
 
 // TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode ensures a stale
@@ -1858,7 +1854,7 @@ func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 
 	pluginsDir := filepath.Join(home, ".config", "kilo", "plugins")
 	reviewPlugin := filepath.Join(pluginsDir, "review-result-artifacts.ts")
-	mustWriteFile(t, reviewPlugin, []byte("// stale v2.1.7 managed plugin"))
+	mustWriteFile(t, reviewPlugin, releasedOpenCodePlugin(t, "v2.1.7/plugins/review-result-artifacts.ts"))
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -1880,26 +1876,26 @@ func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 	if !containsPath(result.ChangedFiles, reviewPlugin) {
 		t.Errorf("ChangedFiles missing removed Kilocode plugin path %q\nchanged = %#v", reviewPlugin, result.ChangedFiles)
 	}
-
-	// skill-registry.ts was never installed — sync must not create it.
-	skillRegistry := filepath.Join(pluginsDir, "skill-registry.ts")
-	if _, err := os.Stat(skillRegistry); !os.IsNotExist(err) {
-		t.Errorf("sync must not create never-installed plugin %q; stat err = %v", skillRegistry, err)
-	}
 }
 
-// TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled guards the
-// refresh behavior for issue #1440: users who never had the SDD/OpenCode
-// plugins installed must not receive them from a plain sync.
-func TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled(t *testing.T) {
+// TestRunSyncRecreatesMissingManagedOpenCodePlugins guards issues #5192 and
+// #5099: sync converges with install, so a deleted or never-provisioned
+// managed plugin is recreated from the running binary's assets.
+func TestRunSyncRecreatesMissingManagedOpenCodePlugins(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
-		InstalledAgents:     []string{"opencode"},
+		InstalledAgents:     []string{"opencode", "kilocode"},
 		SelectionConfigured: true,
 		Components:          []model.ComponentID{model.ComponentEngram},
 		Persona:             "neutral",
 	}); err != nil {
 		t.Fatalf("state.Write() error = %v", err)
+	}
+	openCodePlugins := filepath.Join(home, ".config", "opencode", "plugins")
+	for _, name := range opencoderuntimeplugins.ManagedPluginNames(model.AgentOpenCode) {
+		if name != "opencode-review-transport.ts" {
+			mustWriteFile(t, filepath.Join(openCodePlugins, name), []byte(assets.MustRead("opencode/plugins/"+name)))
+		}
 	}
 
 	restoreHome := osUserHomeDir
@@ -1911,13 +1907,23 @@ func TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled(t *testing.T
 		backup.UserHomeDirFn = restoreBackupHome
 	})
 
-	if _, err := RunSync(nil); err != nil {
+	result, err := RunSync(nil)
+	if err != nil {
 		t.Fatalf("RunSync() error = %v", err)
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
-	if _, err := os.Stat(pluginPath); !os.IsNotExist(err) {
-		t.Errorf("sync must not install %q for users who never had it; stat err = %v", pluginPath, err)
+	for configDir, agent := range map[string]model.AgentID{"opencode": model.AgentOpenCode, "kilo": model.AgentKilocode} {
+		for _, name := range opencoderuntimeplugins.ManagedPluginNames(agent) {
+			path := filepath.Join(home, ".config", configDir, "plugins", name)
+			got, readErr := os.ReadFile(path)
+			if readErr != nil || string(got) != assets.MustRead("opencode/plugins/"+name) {
+				t.Errorf("sync did not converge managed plugin %q: %v", path, readErr)
+			}
+		}
+	}
+	recreated := filepath.Join(openCodePlugins, "opencode-review-transport.ts")
+	if !containsPath(result.ChangedFiles, recreated) {
+		t.Errorf("ChangedFiles missing recreated plugin %q\nchanged = %#v", recreated, result.ChangedFiles)
 	}
 }
 
@@ -2154,7 +2160,7 @@ func TestSyncRollbackRestoresLegacyOpenCodePluginAndRemovesReplacement(t *testin
 	home := t.TempDir()
 	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
 	legacyPath := filepath.Join(pluginsDir, opencoderuntimeplugins.LegacyOpenCodeReviewPluginName)
-	legacyBytes := []byte("legacy review plugin\n")
+	legacyBytes := releasedOpenCodePlugin(t, "v2.1.7/plugins/review-result-artifacts.ts")
 	mustWriteFile(t, legacyPath, legacyBytes)
 
 	selection := model.Selection{
@@ -3012,6 +3018,17 @@ func hasStepID(steps []pipeline.Step, id string) bool {
 	return false
 }
 
+// releasedOpenCodePlugin returns plugin bytes exactly as a published release
+// shipped them, from the opencoderuntimeplugins fixtures.
+func releasedOpenCodePlugin(t *testing.T, rel string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "components", "opencoderuntimeplugins", "testdata", "released", filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func mustWriteFile(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -3031,7 +3048,7 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 		t.Fatalf("MkdirAll(plugins) error = %v", err)
 	}
 	legacyPluginPath := filepath.Join(pluginsDir, "background-agents.ts")
-	if err := os.WriteFile(legacyPluginPath, []byte("legacy background agents plugin"), 0o644); err != nil {
+	if err := os.WriteFile(legacyPluginPath, releasedOpenCodePlugin(t, "v1.7.19/plugins/background-agents.ts"), 0o644); err != nil {
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
 	}
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -6826,7 +6843,7 @@ func TestSyncRoutingGuidanceSurvivesOpenCodePluginRefresh(t *testing.T) {
 		t.Fatalf("install omitted OpenCode routing or remote authorization:\n%s", prompt)
 	}
 	plugin := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
-	if err := os.WriteFile(plugin, []byte("stale review plugin"), 0o644); err != nil {
+	if err := os.WriteFile(plugin, releasedOpenCodePlugin(t, "v3.7.0/plugins/opencode-review-transport.ts"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	changed := runSyncInjectionSteps(t, home, selection)

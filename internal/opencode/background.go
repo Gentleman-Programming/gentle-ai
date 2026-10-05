@@ -278,8 +278,13 @@ func RunVersion(target string) (string, error) {
 // ActivationOptions supplies platform and process seams for activation. Zero
 // values use the current process and the real system PATH implementation.
 type ActivationOptions struct {
-	OS                       string
-	Path                     string
+	OS   string
+	Path string
+	// Shell is the user's login shell; it selects the login profile that
+	// persists the managed bin directory on POSIX. Defaults to $SHELL.
+	Shell string
+	// ZDotDir is zsh's profile directory override. Defaults to $ZDOTDIR.
+	ZDotDir                  string
 	RunVersion               VersionRunner
 	AddToUserPath            func(string) error
 	RemoveFromUserPath       func(string) error
@@ -296,6 +301,12 @@ func (o ActivationOptions) normalized() ActivationOptions {
 	}
 	if o.Path == "" {
 		o.Path = os.Getenv("PATH")
+	}
+	if o.Shell == "" {
+		o.Shell = os.Getenv("SHELL")
+	}
+	if o.ZDotDir == "" {
+		o.ZDotDir = os.Getenv("ZDOTDIR")
 	}
 	if o.RunVersion == nil {
 		o.RunVersion = RunVersion
@@ -486,6 +497,7 @@ type ActivationPlan struct {
 	changed      []string
 	pathAddition system.UserPathAddition
 	pathAdded    bool
+	profiles     []profileChange
 	applied      bool
 }
 
@@ -532,6 +544,11 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 		content := launcherContent(options.OS, target)
 		plan.desired[path] = []byte(content[filepath.Base(path)])
 	}
+	if options.OS != "windows" {
+		if err := plan.prepareProfileActivation(); err != nil {
+			return nil, err
+		}
+	}
 	return plan, nil
 }
 
@@ -555,6 +572,11 @@ func PrepareDeactivation(homeDir string, options ActivationOptions) (*Activation
 			return nil, err
 		}
 		plan.before[path] = snapshot
+	}
+	if options.OS != "windows" {
+		if err := plan.prepareProfileDeactivation(); err != nil {
+			return nil, err
+		}
 	}
 	return plan, nil
 }
@@ -630,7 +652,7 @@ func (p *ActivationPlan) ChangedPaths() []string {
 	if p == nil {
 		return nil
 	}
-	return append([]string(nil), p.changed...)
+	return append(append([]string(nil), p.changed...), p.appliedProfilePaths()...)
 }
 
 // Apply writes or removes the prepared owned launchers. A failure restores all
@@ -661,6 +683,9 @@ func (p *ActivationPlan) Apply() error {
 			if err := p.options.WriteFile(path, desired, 0o755); err != nil {
 				return p.failAndRollback(fmt.Errorf("write managed OpenCode launcher %q: %w", path, err))
 			}
+		}
+		if err := p.applyProfiles(); err != nil {
+			return p.failAndRollback(err)
 		}
 		if p.goos == "windows" {
 			addition, err := p.options.AddToUserPathWithResult(BinDir(p.homeDir))
@@ -693,6 +718,9 @@ func (p *ActivationPlan) Apply() error {
 		}
 		p.changed = append(p.changed, path)
 	}
+	if err := p.applyProfiles(); err != nil {
+		return p.failAndRollback(err)
+	}
 	p.applied = true
 	return nil
 }
@@ -704,8 +732,8 @@ func (p *ActivationPlan) failAndRollback(cause error) error {
 	return cause
 }
 
-// Rollback restores only paths changed by this plan and removes a user PATH
-// entry only when this plan added it.
+// Rollback restores only paths and login profiles changed by this plan and
+// removes a user PATH entry only when this plan added it.
 func (p *ActivationPlan) Rollback() error {
 	if p == nil {
 		return nil
@@ -731,6 +759,9 @@ func (p *ActivationPlan) Rollback() error {
 		if err := p.options.WriteFile(path, snapshot.data, snapshot.mode); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore managed OpenCode launcher %q: %w", path, err))
 		}
+	}
+	if err := p.rollbackProfiles(); err != nil {
+		rollbackErr = errors.Join(rollbackErr, err)
 	}
 	if p.pathAdded {
 		if err := p.options.RollbackUserPathAddition(BinDir(p.homeDir), p.pathAddition); err != nil {
