@@ -1946,3 +1946,39 @@ func TestInstallPrepareValidationFollowsExistingContract(t *testing.T) {
 		}
 	})
 }
+
+// The preflight refuses unsafe JSONC only inside values a selected writer
+// touches. A comment inside theme must not block an install that does not
+// select the Theme component, and must still be refused when it does.
+func TestInstallPrepareValidationScopesRefusalsToSelectedWriters(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+	content := `{"theme": {/* user theme note */ "name": "x"}, "agent": {}}`
+	mustWriteFile(t, settingsPath, []byte(content))
+
+	for _, tc := range []struct {
+		name       string
+		components []model.ComponentID
+		wantRefuse bool
+	}{
+		{name: "theme not selected", components: nil, wantRefuse: false},
+		{name: "theme selected", components: []model.ComponentID{model.ComponentTheme}, wantRefuse: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: tc.components}
+			gate := newTestInstallRuntime(t, home, selection).stagePlan().Prepare[0]
+			if gate.ID() != "prepare:opencode-settings-validation" {
+				t.Fatalf("first prepare step = %q, want the settings validation", gate.ID())
+			}
+			if err := gate.Run(); (err != nil) != tc.wantRefuse {
+				t.Fatalf("validation error = %v, want refusal %v", err, tc.wantRefuse)
+			}
+			if got := readTextFile(t, settingsPath); got != content {
+				t.Fatal("validation mutated the settings document")
+			}
+		})
+	}
+}

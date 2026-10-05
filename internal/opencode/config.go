@@ -495,29 +495,20 @@ func intValue(value any) int {
 	}
 }
 
-// managedSettingsWriterKeys are the top-level OpenCode settings document keys
-// the managed install/sync writers touch through the JSONC-preserving merge:
-// routing/parity guidance and Persona (agent), the permission defaults
-// (permission), theme selection (theme), and the managed MCP servers (mcp).
-// The default-agent and share ownership writes go through the shared merge and
-// deliberately keep the shared writer contract, so they are not refusal-scoped
-// here: the JSONC refusal set mirrors exactly the writers that refuse.
-var managedSettingsWriterKeys = []string{"agent", "permission", "theme", "mcp"}
-
 // ValidateSettingsForWriters is the read-only OpenCode settings preflight the
 // install and sync prepare stages run (issue #5035). It applies the refusals
-// the managed settings writers apply — locked, symlinked, or non-regular
-// targets, malformed JSONC, duplicate keys at any depth, and escaped spellings
-// of or comments inside the touched top-level values (managedSettingsWriterKeys)
-// — without writing anything, so an unsafe selected settings document is
-// refused before any managed file is mutated.
+// the selected managed settings writers would apply after mutating other
+// files — locked, symlinked, or non-regular targets, malformed JSONC,
+// duplicate keys at any depth, and escaped spellings of or comments inside
+// the top-level values those writers touch (touchedKeys) — without writing
+// anything, so an unsafe selected settings document is refused before any
+// managed file is mutated. Keys no selected writer touches are not refused.
 //
 // An empty path and a missing file are accepted: the writers create the
-// document. A strict .json path keeps the shared writer contract, whose merge
-// normalizes malformed or duplicate-key input instead of refusing it; only the
+// document. A strict .json path keeps the shared writer contract; only the
 // target-level (locked/symlink/non-regular) refusal applies to it.
-func ValidateSettingsForWriters(settingsPath string) error {
-	return validateSettingsForWriters(settingsPath, managedSettingsWriterKeys)
+func ValidateSettingsForWriters(settingsPath string, touchedKeys []string) error {
+	return validateSettingsForWriters(settingsPath, touchedKeys)
 }
 
 func validateSettingsForWriters(settingsPath string, touchedKeys []string) error {

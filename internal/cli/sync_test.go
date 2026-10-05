@@ -7196,7 +7196,8 @@ func TestWorkspaceSyncPrepareRefusesUnsafeWorkspaceOpenCodeSettings(t *testing.T
 	settingsPath := filepath.Join(workspace, "opencode.jsonc")
 	mustWriteFile(t, settingsPath, []byte(unsafe))
 
-	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	// Persona writes agent in a workspace sync (routing guidance is global only).
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPersona}}
 	rt, err := newSyncRuntimeWithScope(home, selection, ScopeWorkspace)
 	if err != nil {
 		t.Fatal(err)
@@ -7213,6 +7214,34 @@ func TestWorkspaceSyncPrepareRefusesUnsafeWorkspaceOpenCodeSettings(t *testing.T
 	}
 	if got := readTextFile(t, settingsPath); got != unsafe {
 		t.Fatalf("workspace settings changed by a refused sync:\n got: %s\nwant: %s", got, unsafe)
+	}
+}
+
+// A workspace sync skips OpenCode routing guidance, so without Persona no
+// writer touches agent: a comment inside agent must not block it.
+func TestWorkspaceSyncPrepareIgnoresAgentWithoutAnAgentWriter(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	content := `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`
+	mustWriteFile(t, filepath.Join(workspace, "opencode.jsonc"), []byte(content))
+
+	rt, err := newSyncRuntimeWithScope(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := rt.stagePlan().Prepare[0]
+	if gate.ID() != "prepare:opencode-settings-validation" {
+		t.Fatalf("first prepare step = %q, want the settings validation", gate.ID())
+	}
+	if err := gate.Run(); err != nil {
+		t.Fatalf("workspace sync validation refused agent with no agent writer: %v", err)
 	}
 }
 

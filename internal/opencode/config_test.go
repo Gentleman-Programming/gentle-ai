@@ -523,7 +523,7 @@ func TestValidateSettingsForWritersRefusesUnsafeOpenCodeSettings(t *testing.T) {
 			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := ValidateSettingsForWriters(settingsPath); err == nil {
+			if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err == nil {
 				t.Fatalf("ValidateSettingsForWriters() = nil, want refusal for %q", tc.content)
 			}
 		})
@@ -539,7 +539,7 @@ func TestValidateSettingsForWritersRefusesUnsafeOpenCodeSettings(t *testing.T) {
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
-		if err := ValidateSettingsForWriters(link); err == nil {
+		if err := ValidateSettingsForWriters(link, allOpenCodeWriterKeys); err == nil {
 			t.Fatal("ValidateSettingsForWriters() = nil, want symlink refusal")
 		}
 	})
@@ -549,7 +549,7 @@ func TestValidateSettingsForWritersRefusesUnsafeOpenCodeSettings(t *testing.T) {
 		if err := os.WriteFile(settingsPath, []byte(`{"agent":{}}`), 0o000); err != nil {
 			t.Fatal(err)
 		}
-		if err := ValidateSettingsForWriters(settingsPath); err == nil {
+		if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err == nil {
 			t.Fatal("ValidateSettingsForWriters() = nil, want locked-file refusal")
 		}
 	})
@@ -559,7 +559,7 @@ func TestValidateSettingsForWritersRefusesUnsafeOpenCodeSettings(t *testing.T) {
 		if err := os.Mkdir(settingsPath, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := ValidateSettingsForWriters(settingsPath); err == nil {
+		if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err == nil {
 			t.Fatal("ValidateSettingsForWriters() = nil, want non-regular refusal")
 		}
 	})
@@ -580,21 +580,42 @@ func TestValidateSettingsForWritersFollowsExistingContract(t *testing.T) {
 			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := ValidateSettingsForWriters(settingsPath); err != nil {
+			if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err != nil {
 				t.Fatalf("ValidateSettingsForWriters() error = %v, want pass", err)
 			}
 		})
 	}
 
 	t.Run("missing settings file is accepted", func(t *testing.T) {
-		if err := ValidateSettingsForWriters(filepath.Join(t.TempDir(), "opencode.jsonc")); err != nil {
+		if err := ValidateSettingsForWriters(filepath.Join(t.TempDir(), "opencode.jsonc"), allOpenCodeWriterKeys); err != nil {
 			t.Fatalf("missing settings refused: %v", err)
 		}
 	})
 
 	t.Run("empty settings path is accepted", func(t *testing.T) {
-		if err := ValidateSettingsForWriters(""); err != nil {
+		if err := ValidateSettingsForWriters("", allOpenCodeWriterKeys); err != nil {
 			t.Fatalf("empty settings path refused: %v", err)
 		}
 	})
+}
+
+// allOpenCodeWriterKeys is every top-level key a managed OpenCode settings
+// writer can touch when all of them are selected.
+var allOpenCodeWriterKeys = []string{"agent", "permission", "theme", "mcp"}
+
+func TestValidateSettingsForWritersIgnoresKeysNoSelectedWriterTouches(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.jsonc")
+	content := `{"theme": {/* user theme note */ "name": "x"}, "\u0070ermission": {}, "agent": {}}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSettingsForWriters(settingsPath, []string{"agent"}); err != nil {
+		t.Fatalf("ValidateSettingsForWriters(agent only) error = %v, want pass for untouched theme/permission", err)
+	}
+	if err := ValidateSettingsForWriters(settingsPath, []string{"agent", "theme"}); err == nil {
+		t.Fatal("ValidateSettingsForWriters(agent, theme) = nil, want refusal for a comment inside the touched theme value")
+	}
+	if got, _ := os.ReadFile(settingsPath); string(got) != content {
+		t.Fatal("validation mutated the settings document")
+	}
 }
