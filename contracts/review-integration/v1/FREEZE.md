@@ -43,6 +43,21 @@ resolve that horizon — it only records that until it is declared and
 proven satisfied by a later, separate change, this directory stays exactly
 as it is.
 
+## Authorized exceptions
+
+Each entry records a deliberate, user-authorized byte change to this
+frozen directory. Nothing else may change.
+
+- **2026-10-05 — issue #5255.** A negotiated START under contract v1 emits
+  a `repository_context.handle` minted as `rctx2_…`, which the published v1
+  schemas rejected (`^rctx1_[0-9a-f]{64}$`). The handle pattern is widened
+  to `^rctx[12]_[0-9a-f]{64}$`, matching `contracts/review-integration/v2`,
+  in `schemas/start.schema.json`, `schemas/start-v2.schema.json`,
+  `schemas/status.schema.json`, and `schemas/transition-execution.schema.json`.
+  Historical `rctx1_` handles still validate; no other field, fixture, or
+  schema changed. Pinned hashes are updated in
+  `internal/cli/review_provider_artifact_contract_test.go`.
+
 ## Exit evidence this freeze must show at Wave 7 close-out (WU20)
 
 - [ ] Every file's content hash unchanged from this freeze commit forward

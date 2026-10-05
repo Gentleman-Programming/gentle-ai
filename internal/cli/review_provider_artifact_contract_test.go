@@ -33,13 +33,17 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/artifact-subject.schema.json":   "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
 		"schemas/capabilities-v1.4.schema.json":  "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
-		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
+		// issue #5255: a negotiated v1 START mints rctx2_ repository context
+		// handles, so start, start-v2, status, and transition-execution widened
+		// their handle pattern to ^rctx[12]_ under a recorded FREEZE.md
+		// exception. rctx1_ still validates. Deliberate, not drift.
+		"schemas/start.schema.json": "736b5579b8943a686f141d9aeb81823739844b3f683e1ea59758bbbbb6e50660",
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
-		"schemas/start-v2.schema.json":             "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
+		"schemas/start-v2.schema.json":             "675d7ed211936f3a6eb176707ef31eb047286ed69790baaeccecad969b876ba7",
+		"schemas/status.schema.json":               "98274aa65b2dd57c4272c39e5307c4abd4f14360c12257db4a3b0f5dc81cfa13",
 		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
-		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
+		"schemas/transition-execution.schema.json": "d7cd641db6a7d9396df128f207da2823e646d0e8ea9a648a2e3876845718ef27",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
