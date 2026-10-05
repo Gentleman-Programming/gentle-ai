@@ -333,7 +333,7 @@ func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 		accepted[name.(string)] = true
 	}
 	for _, surface := range [][]ReviewCapabilityFeature{result.Features.Optional, reviewCapabilitiesStaticSurface().Features.Optional} {
-		if optionalSchema["minItems"] != float64(len(surface)) || optionalSchema["maxItems"] != float64(len(surface)) {
+		if optionalSchema["minItems"] != float64(13) || optionalSchema["maxItems"] != float64(15) || len(surface) < 13 || len(surface) > 15 {
 			t.Fatalf("optional feature bounds do not accept provider surface: %#v", optionalSchema)
 		}
 		for _, feature := range surface {
@@ -651,6 +651,8 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 		{Name: "recovered_correction_evidence", Supported: true, Requires: []string{"compact_v2_authority", "provider_targeted_validation_request"}},
 		{Name: "risk_reasons", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 		{Name: "scope_change_diagnostics", Supported: true, Requires: []string{"uniform_failure_envelope"}},
+		{Name: "start_agent_escalation", Supported: true, Requires: []string{"risk_reasons"}},
+		{Name: "start_request_context", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "validating_result_reopen", Supported: true, Requires: []string{"compact_v2_authority", "provider_artifact_admission"}},
 	}
 	if !reflect.DeepEqual(result.Features.Mandatory, wantMandatory) || !reflect.DeepEqual(result.Features.Optional, wantOptional) {

@@ -172,7 +172,12 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
 		"fixtures/start-v4.fixture.json":          "639a6e78b40cb5e000ec15265fd444c243e28594035c7d376c378142162bfb02",
-		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
+		// rdd-risk-gated S14 (A3): the feature_name enum admits
+		// start_agent_escalation and start_request_context, which capabilities
+		// v2.6 advertises for review start --escalate-item/--escalate-reason and
+		// --request-context; the v2.3 optional count stays exactly 15, so v2.3
+		// through v2.5 advertisements are unchanged. Deliberate, not drift.
+		"schemas/capabilities-v2.3.schema.json": "c30d794b917df19eb44ebaed8c9e8647562bcb4da2e65eb52e11aed88f699235",
 		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
 		// code and signal the classifier already publishes. Deliberate, not drift.
 		//

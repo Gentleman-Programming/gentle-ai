@@ -51,3 +51,13 @@ as it is.
       path across every subsequent Wave 7 commit).
 - [ ] No file under `internal/` added during Wave 7 imports or reads from
       this directory for new-lineage (v3) behavior.
+
+## Authorized in-place edits after the freeze
+
+- 2026-10-05, rdd-risk-gated S14 (A3), user decision "1- edita":
+  `schemas/capabilities-v1.5.schema.json` admits the optional features
+  `start_agent_escalation` and `start_request_context` (optional count
+  13 through 15, retaining validity of released 13-feature advertisements), and `fixtures/capabilities-v1.5.fixture.json` lists them, so
+  callers detect `review start --escalate-item/--escalate-reason` and
+  `--request-context` without probing. Same in-place convention as the
+  START schema edits in 746ebd84 and dda1aa14.

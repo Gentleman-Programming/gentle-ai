@@ -267,6 +267,8 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 				{Name: "recovered_correction_evidence", Supported: true, Requires: []string{"compact_v2_authority", "provider_targeted_validation_request"}},
 				{Name: "risk_reasons", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 				{Name: "scope_change_diagnostics", Supported: true, Requires: []string{"uniform_failure_envelope"}},
+				{Name: "start_agent_escalation", Supported: true, Requires: []string{"risk_reasons"}},
+				{Name: "start_request_context", Supported: true, Requires: []string{"compact_v2_authority"}},
 				{Name: "validating_result_reopen", Supported: true, Requires: []string{"compact_v2_authority", "provider_artifact_admission"}},
 			},
 		},

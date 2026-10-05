@@ -84,6 +84,17 @@ START accepts the same escalation pair as `review assess`, with the same validat
 
 Without the flags, START and the persisted authority are unchanged. Authority that carries an escalation is not readable by older binaries; see the request-context compatibility note above. The `next_transition` of `review assess` is a `review status` preflight, not a START, so it does not carry the escalation: pass the same pair to START yourself.
 
+#### Detecting support (`review capabilities`)
+
+Callers detect both START inputs from `gentle-ai review capabilities` instead of probing START. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list two optional features:
+
+| Feature | START input | Requires |
+| --- | --- | --- |
+| `start_request_context` | `--request-context <file>` | `compact_v2_authority` |
+| `start_agent_escalation` | `--escalate-item <1-6> --escalate-reason <text>` | `risk_reasons` |
+
+When a feature is absent, omit its flags: released binaries without it reject them. The published v1.5 and v2.6 schemas accept historical optional-feature counts (13 and 15) as well as current counts (15 and 17); the contract version alone does not prove START input support. Older advertisements (`capabilities/v2.3` through `v2.5`) keep their exact feature lists.
+
 ### 3. Bound calls drive the transaction
 
 A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:

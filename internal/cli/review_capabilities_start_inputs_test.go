@@ -1,0 +1,122 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+)
+
+// rdd-risk-gated S14 (A3): callers such as gentle-shell detect the optional
+// `review start --request-context` and `--escalate-item/--escalate-reason`
+// inputs from the negotiated capabilities instead of probing START.
+var reviewStartInputCapabilityFeatures = []ReviewCapabilityFeature{
+	{Name: "start_agent_escalation", Supported: true, Requires: []string{"risk_reasons"}},
+	{Name: "start_request_context", Supported: true, Requires: []string{"compact_v2_authority"}},
+}
+
+func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.T) {
+	tests := []struct {
+		name     string
+		contract string
+		validate func(t *testing.T, payload []byte) *jsonschema.Schema
+	}{
+		{
+			name: "v1.5", contract: ReviewIntegrationContractV1,
+			validate: func(t *testing.T, payload []byte) *jsonschema.Schema {
+				schema := compileWholePublishedReviewSchema(t, "v1", "capabilities-v1.5.schema.json")
+				validatePublishedReviewSchema(t, schema, payload)
+				return schema
+			},
+		},
+		{
+			name: "v2.6", contract: ReviewIntegrationContractV2,
+			validate: func(t *testing.T, payload []byte) *jsonschema.Schema {
+				return validateReviewCapabilitiesSchema(t, "capabilities-v2.6.schema.json", ReviewIntegrationCapabilitiesSchemaIDV26, payload)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview([]string{"capabilities", "--contract", tt.contract}, &output); err != nil {
+				t.Fatal(err)
+			}
+			var got ReviewCapabilitiesResult
+			decodeStrictReviewJSON(t, output.Bytes(), &got)
+			for _, want := range reviewStartInputCapabilityFeatures {
+				if !slices.ContainsFunc(got.Features.Optional, func(feature ReviewCapabilityFeature) bool {
+					return feature.Name == want.Name && feature.Supported == want.Supported && slices.Equal(feature.Requires, want.Requires)
+				}) {
+					t.Fatalf("%s capabilities do not advertise %#v: %#v", tt.name, want, got.Features.Optional)
+				}
+			}
+			schema := tt.validate(t, output.Bytes())
+			var document map[string]any
+			if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+				t.Fatal(err)
+			}
+			features := document["features"].(map[string]any)
+			features["optional"] = slices.DeleteFunc(features["optional"].([]any), func(feature any) bool {
+				name := feature.(map[string]any)["name"]
+				return name == "start_request_context" || name == "start_agent_escalation"
+			})
+			// Released binaries advertise the same contract version without
+			// these optional START inputs. Their advertisements remain valid.
+			wantHistoricalCount := 13
+			if tt.contract == ReviewIntegrationContractV2 {
+				wantHistoricalCount = 15
+			}
+			if got := len(features["optional"].([]any)); got != wantHistoricalCount {
+				t.Fatalf("%s historical optional count = %d, want %d", tt.name, got, wantHistoricalCount)
+			}
+			if err := schema.Validate(document); err != nil {
+				t.Fatalf("%s schema rejected a historical advertisement: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestReviewCapabilitiesOlderV2AdvertisementsKeepTheirExactFeatureCount
+// proves the in-place schema edit stays additive: capabilities v2.3 through
+// v2.5 still pin exactly the 15 optional features their binaries emitted, and
+// v2.6 admits both historical advertisements and the two START input features.
+func TestReviewCapabilitiesOlderV2AdvertisementsKeepTheirExactFeatureCount(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.3.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.3.schema.json", ReviewIntegrationCapabilitiesSchemaIDV23, fixture)
+	var document map[string]any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	features := document["features"].(map[string]any)
+	optional := features["optional"].([]any)
+	if len(optional) != 15 {
+		t.Fatalf("v2.3 fixture optional features = %d, want 15", len(optional))
+	}
+	for _, feature := range reviewStartInputCapabilityFeatures {
+		features["optional"] = append(slices.Clone(optional), map[string]any{"name": feature.Name, "supported": true, "requires": []any{feature.Requires[0]}})
+		if err := schema.Validate(document); err == nil {
+			t.Fatalf("v2.3 schema accepted a 16th optional feature %q", feature.Name)
+		}
+	}
+	for _, name := range []string{"capabilities-v2.4.schema.json", "capabilities-v2.5.schema.json"} {
+		payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "schemas", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var older map[string]any
+		if err := json.Unmarshal(payload, &older); err != nil {
+			t.Fatal(err)
+		}
+		if ref := older["properties"].(map[string]any)["features"].(map[string]any)["$ref"]; ref != "capabilities-v2.3.schema.json#/properties/features" {
+			t.Fatalf("%s features = %#v, want the v2.3 15-feature block", name, ref)
+		}
+	}
+}

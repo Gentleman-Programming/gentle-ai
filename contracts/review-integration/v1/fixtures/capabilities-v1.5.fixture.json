@@ -201,6 +201,20 @@
         ]
       },
       {
+        "name": "start_agent_escalation",
+        "supported": true,
+        "requires": [
+          "risk_reasons"
+        ]
+      },
+      {
+        "name": "start_request_context",
+        "supported": true,
+        "requires": [
+          "compact_v2_authority"
+        ]
+      },
+      {
         "name": "validating_result_reopen",
         "supported": true,
         "requires": [
