@@ -482,8 +482,35 @@ func assertRetainedOpenCodePluginPaths(t *testing.T) {
 			t.Errorf("ODD install snapshot missing retained plugin %s", want)
 		}
 	}
-	if containsPath(targets, filepath.Join(home, ".config", "opencode", "plugins", "sdd-task-result-artifacts.ts")) {
-		t.Error("retired plugin in snapshot")
+	// Install removes retired plugins whose bytes a release shipped, so the
+	// snapshot must cover them for rollback.
+	for _, plugin := range []string{"background-agents.ts", "review-result-artifacts.ts", "sdd-task-result-artifacts.ts"} {
+		want := filepath.Join(home, ".config", "opencode", "plugins", plugin)
+		if !containsPath(targets, want) {
+			t.Errorf("install snapshot missing retired plugin %s", want)
+		}
+	}
+}
+
+// Install writes and retires Kilocode's managed plugins too, so its snapshot
+// covers exactly the plugin paths Install can mutate.
+func TestBackupTargetsIncludeKilocodePluginLifecycle(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentKilocode}}
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, ".config", "kilo", "plugins")
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts", "background-agents.ts", "review-result-artifacts.ts"} {
+		if want := filepath.Join(dir, plugin); !containsPath(targets, want) {
+			t.Errorf("Kilocode install snapshot missing plugin %s", want)
+		}
+	}
+	for _, plugin := range []string{"opencode-review-transport.ts", "sdd-task-result-artifacts.ts"} {
+		if path := filepath.Join(dir, plugin); containsPath(targets, path) {
+			t.Errorf("Kilocode install snapshot includes plugin Install never touches: %s", path)
+		}
 	}
 }
 

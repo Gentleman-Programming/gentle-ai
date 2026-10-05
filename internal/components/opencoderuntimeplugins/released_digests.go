@@ -41,6 +41,15 @@ var releasedPluginDigests = map[string][]string{
 		"06969058586a3ac26f59ccc8be8dc236db3815ec4b6b4ca62f7ca1e0b9270c87", // plugins/ v2.4.0-rc.1 to v2.4.0-rc.6
 		"5ab48f728e7a8d1799dff1624e5842ab76077ca0aa346b04a7f7ac1fcee0f27f", // plugins/ v2.4.0-rc.7
 	},
+	"sdd-task-result-artifacts.ts": {
+		"bfd291ff60c7d186d3e727327a9cc038a8ac4275128bcb8b406cb322858eb6f6", // plugins/ v2.4.0-rc.8 to v2.4.0
+		"a571b08f05c6f0d3726fbbd0144b387d2b139c4a701f398d7c7d2044878dd3d5", // plugins/ v2.5.0-rc.1 to v2.5.0-rc.3
+		"0c514e085be33de5871da15bd2b021aea286676c2a4b723c31ba02b8acd8833d", // plugins/ v2.5.0 to v2.6.0
+		"b8f1cdcfe38df960d37d8700eb6a9875335302761bfca1d0d10df02b4c18b7d4", // plugins/ v2.7.0-rc.1 to v2.7.0
+		"9440325b6ea325804f4972a993cbb457b7babe0085010a47e16c00763afb9c5f", // plugins/ v2.8.0 to v2.8.1
+		"e497b37070f5178fcab110bd964b7fd0af6e299c467eb630093f9c4d9ca7e404", // plugins/ v2.8.2 to v3.7.0
+		"2c49d774b21edaf7bd6ffb9d3447d9dd54828dce6dd846fcc49274173bebd3ca", // plugins-v2/ v3.3.0 to v3.7.0
+	},
 	"skill-registry.ts": {
 		"b24f83e90d455807dbd122f12a953952e7ff6550e3a0d733030c22843f0ce148", // plugins/ v1.39.1 to v2.4.0-rc.7
 		"d402d2414b3c9ec5b31cad6f85787d152037e76148c3cea18fd443c1d7f5eab4", // plugins/ v2.4.0-rc.8

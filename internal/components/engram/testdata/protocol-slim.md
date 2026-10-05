@@ -4,6 +4,18 @@ Engram persistent memory is ACTIVE. The full protocol (save format, lifecycle,
 search flow, after-compaction steps) is delivered every session by the Engram
 MCP server instructions and the SessionStart hook. Always-on rules:
 
+- Before the first `mem_context`, `mem_search`, or `mem_review`, call
+  `mem_current_project` and wait for it (pass the runtime workspace as `cwd`
+  only if the tool schema accepts it). Apply the first matching rule and stop:
+  (1) runtime workspace unknown, returned `cwd` missing or different, or the
+  call fails: skip those initial reads and say Engram must run from the
+  correct workspace; (2) `available_projects` non-empty or `project_source`
+  `ambiguous`: ask the user to choose exactly one value, never pass it as
+  `project`, and re-resolve only via `cwd` with that repository's directory,
+  else skip those reads; (3) empty `project`: skip those reads; (4) otherwise
+  pass the exact returned `project` as `project`. Never invent a name or fall
+  back to all projects unless the user explicitly asks to recall across
+  projects or from a named other project.
 - Call `mem_save` PROACTIVELY after any decision, bugfix, discovery, convention,
   or config change — do not wait to be asked. Use `capture_prompt: false` for
   automated/SDD artifacts.

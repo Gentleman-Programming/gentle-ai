@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
 	agent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
@@ -166,6 +167,7 @@ func TestInstallUpgradesPreviouslyReleasedPluginBytes(t *testing.T) {
 					"opencode-review-transport.ts": releasedFixture(t, fixture),
 					"background-agents.ts":         releasedFixture(t, "v1.7.19/plugins/background-agents.ts"),
 					LegacyOpenCodeReviewPluginName: releasedFixture(t, "v2.1.7/plugins/review-result-artifacts.ts"),
+					"sdd-task-result-artifacts.ts": releasedFixture(t, strings.Replace(fixture, "opencode-review-transport.ts", "sdd-task-result-artifacts.ts", 1)),
 				} {
 					if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
 						t.Fatal(err)
@@ -180,7 +182,7 @@ func TestInstallUpgradesPreviouslyReleasedPluginBytes(t *testing.T) {
 						t.Fatalf("plugin %s not upgraded: %v", name, err)
 					}
 				}
-				for _, name := range []string{"background-agents.ts", LegacyOpenCodeReviewPluginName} {
+				for _, name := range []string{"background-agents.ts", LegacyOpenCodeReviewPluginName, "sdd-task-result-artifacts.ts"} {
 					if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 						t.Fatalf("retired plugin %s kept: %v", name, err)
 					}
@@ -194,7 +196,7 @@ func TestInstallUpgradesPreviouslyReleasedPluginBytes(t *testing.T) {
 // refusal names the file and its recovery before any plugin is written.
 func TestInstallPreservesUserEditedPluginBytes(t *testing.T) {
 	for version := range runtimeAssetDirs {
-		for _, name := range []string{"skill-registry.ts", "background-agents.ts", LegacyOpenCodeReviewPluginName} {
+		for _, name := range []string{"skill-registry.ts", "background-agents.ts", LegacyOpenCodeReviewPluginName, "sdd-task-result-artifacts.ts"} {
 			t.Run(version+"/"+name, func(t *testing.T) {
 				useRuntime(t, version)
 				home := t.TempDir()
@@ -248,5 +250,103 @@ func TestInstallRefusesReleasedBytesUnderAnotherName(t *testing.T) {
 				t.Fatalf("cross-name bytes changed: %v", err)
 			}
 		})
+	}
+}
+
+// Kilocode received background-agents.ts under ~/.config/kilo/plugins from
+// v1.19.0 to v1.37.2; its shipped bytes are retired, user bytes refused.
+func TestKilocodeInstallRetiresReleasedBackgroundAgents(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		data    []byte
+		retired bool
+	}{
+		{"released", releasedFixture(t, "v1.33.2/plugins/background-agents.ts"), true},
+		{"user-edited", append(releasedFixture(t, "v1.33.2/plugins/background-agents.ts"), "// user edit\n"...), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter := kilocode.NewAdapter()
+			dir := filepath.Join(adapter.GlobalConfigDir(home), "plugins")
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "background-agents.ts")
+			if err := os.WriteFile(path, tc.data, 0644); err != nil {
+				t.Fatal(err)
+			}
+			result, err := InstallFromDirectory(home, adapter, "opencode/plugins/")
+			if !tc.retired {
+				if err == nil || result.Changed || !strings.Contains(err.Error(), path) {
+					t.Fatalf("user-edited Kilocode plugin not refused: %+v %v", result, err)
+				}
+				if got, err := os.ReadFile(path); err != nil || string(got) != string(tc.data) {
+					t.Fatalf("user bytes lost: %v", err)
+				}
+				return
+			}
+			if err != nil || !result.Changed {
+				t.Fatalf("install: %+v %v", result, err)
+			}
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("retired Kilocode plugin kept: %v", err)
+			}
+		})
+	}
+}
+
+// A symlinked plugins directory is user-owned: the refusal names it and its
+// remedy, and nothing is written through the link.
+func TestInstallRefusesSymlinkedPluginsDirectory(t *testing.T) {
+	home := t.TempDir()
+	adapter := agent.NewAdapter()
+	root := adapter.GlobalConfigDir(home)
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	dir := filepath.Join(root, "plugins")
+	if err := os.Symlink(target, dir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	result, err := InstallFromDirectory(home, adapter, "opencode/plugins/")
+	if err == nil || result.Changed || !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "move or delete") {
+		t.Fatalf("symlinked plugins directory not refused actionably: %+v %v", result, err)
+	}
+	if info, err := os.Lstat(dir); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink replaced: %v %v", info, err)
+	}
+	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+		t.Fatalf("refusal wrote through symlink: %v %v", entries, err)
+	}
+}
+
+// A symlinked config root (for example a dotfiles-managed ~/.config/opencode)
+// is the user's chosen location, so plugins install through it.
+func TestInstallFollowsSymlinkedConfigRoot(t *testing.T) {
+	home := t.TempDir()
+	adapter := agent.NewAdapter()
+	root := adapter.GlobalConfigDir(home)
+	if err := os.MkdirAll(filepath.Dir(root), 0755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(t.TempDir(), "dotfiles-opencode")
+	if err := os.MkdirAll(real, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, root); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	result, err := InstallFromDirectory(home, adapter, "opencode/plugins/")
+	if err != nil || !result.Changed {
+		t.Fatalf("install through symlinked config root: %+v %v", result, err)
+	}
+	for _, name := range ManagedPluginNames(adapter.Agent()) {
+		if got, err := os.ReadFile(filepath.Join(real, "plugins", name)); err != nil || string(got) != assets.MustRead("opencode/plugins/"+name) {
+			t.Fatalf("plugin %s not installed through config root symlink: %v", name, err)
+		}
+	}
+	if info, err := os.Lstat(root); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config root symlink replaced: %v %v", info, err)
 	}
 }

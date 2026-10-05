@@ -80,11 +80,20 @@ The accepted temporary logo omission does not authorize dropping other features.
 
 Install and global sync converge the managed plugins identically on both runtime
 majors: they rewrite them from the running binary, recreate missing ones, and
-retire legacy plugins. A plugin path counts as Gentle AI-owned only when it is a
-regular file whose bytes match a plugin some Gentle AI release shipped for that
-name (the digest registry in `internal/components/opencoderuntimeplugins/`,
-regenerated with `go generate` from the release tags). Anything else stops the
-operation before any plugin changes and names the file to move or delete.
+retire legacy plugins. Retired plugins are `background-agents.ts` and
+`review-result-artifacts.ts` (OpenCode and Kilocode) and
+`sdd-task-result-artifacts.ts` (OpenCode only). A plugin path counts as Gentle
+AI-owned only when it is a regular file whose bytes match a plugin some Gentle AI
+release shipped for that name (the digest registry in
+`internal/components/opencoderuntimeplugins/`, regenerated with `go generate`
+from the release tags; the generator refuses an incomplete local tag set, so run
+`git fetch --tags` first). Anything else, including a `plugins` path that is a
+symlink or not a directory, stops the operation before any plugin changes and
+names the path to move or delete. A symlinked config root is followed. Install,
+sync, and upgrade snapshot every plugin path install can write or remove, and
+post-sync verification checks that every retired plugin is gone for OpenCode and
+Kilocode. Uninstall removes only bytes the same registry recognizes and leaves a
+symlinked `plugins` directory and its contents untouched.
 
 Before writing V2 managed plugins, install and sync check the SDK installed in
 the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so

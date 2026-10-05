@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	kilocodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
@@ -7333,4 +7334,48 @@ func TestSyncPrepareValidationFollowsExistingContract(t *testing.T) {
 			t.Fatalf("user provider data destroyed by sync: %#v", after["provider"])
 		}
 	})
+}
+
+// Post-sync verification proves every retired managed plugin is gone, not
+// only the legacy review plugin.
+func TestPostSyncVerificationRequiresEveryRetiredPluginRemoved(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	adapter := opencodeagent.NewAdapter()
+	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "sdd-task-result-artifacts.ts")
+	mustWriteFile(t, stale, []byte("stale"))
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	for _, check := range report.Checks {
+		if check.ID == "verify:sync:file:"+stale {
+			if check.Status != verify.CheckStatusFailed {
+				t.Fatalf("retired plugin check status = %v, want failed", check.Status)
+			}
+			return
+		}
+	}
+	t.Fatalf("no post-sync check for retired plugin %s; checks = %v", stale, report.Checks)
+}
+
+// Kilocode receives managed plugins too, so post-sync verification proves its
+// retired plugins are gone like OpenCode's.
+func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	adapter := kilocodeagent.NewAdapter()
+	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "background-agents.ts")
+	mustWriteFile(t, stale, []byte("stale"))
+	selection := model.Selection{Agents: []model.AgentID{model.AgentKilocode}}
+	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	for _, check := range report.Checks {
+		if check.ID == "verify:sync:file:"+stale {
+			if check.Status != verify.CheckStatusFailed {
+				t.Fatalf("retired Kilocode plugin check status = %v, want failed", check.Status)
+			}
+			return
+		}
+	}
+	t.Fatalf("no post-sync check for retired Kilocode plugin %s; checks = %v", stale, report.Checks)
 }

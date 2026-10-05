@@ -252,6 +252,12 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		add(managedSkillBackupPaths(homeDir, adapter, diagnostics)...)
 	}
 
+	// The managed plugin install resolves the config directory through the
+	// adapter and owns the plugin list; the snapshot must match it (#3219).
+	if opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		add(opencoderuntimeplugins.PluginPaths(homeDir, adapter)...)
+	}
+
 	switch adapter.Agent() {
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
@@ -262,12 +268,6 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		// settings path, which honors an absolute OPENCODE_CONFIG_DIR; the
 		// snapshot must resolve it the same way.
 		add(opencodedefault.OwnershipPath(opencode.EffectiveSettingsPath(homeDir, "")))
-		// The SDD plugin writer resolves the config directory through the
-		// adapter and owns the plugin list; the snapshot must match it (#3219).
-		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
-			add(filepath.Join(pluginsDir, name))
-		}
 		add(
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
