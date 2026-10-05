@@ -72,13 +72,14 @@ An exact replay of an active START can return `replayed`. A genuinely new START 
 Pass `--request-context <file>` to make the lenses judge the candidate against the request it was built for, not only through their own lens. The file holds the verbatim request or feature specs. START freezes its exact bytes and their hash with the authority, exactly like `--policy`:
 
 - Every lens context then carries a `GENTLE_AI_REVIEW_REQUEST_CONTEXT` section, and the instruction asks the lens to report unmet requested requirements and unrequested scope.
-- The request counts against the lens context budget. A request that cannot fit beside the evidence is refused by START before any authority exists; it is never truncated.
+- The refuter prompt carries the same section, framed as untrusted evidence, so the refuter can tell behavior the request asked to change from unrequested scope. The section is part of the prompt only: the refuter request JSON and its `request_hash` are unchanged.
+- The request counts against the lens context budget and against the refuter prompt START measures. A request that cannot fit beside the evidence in either is refused by START before any authority exists; it is never truncated.
 - The request hash is bound into the capture phase revision, so every artifact subject commits to it. Replaying START on the same lineage with a different request is an `atomic_start_conflict`.
 - Recovery successors inherit the frozen request. A relayed consent answer repeats `--request-context`.
 
 The file may end with an optional verify section opened by a line `## Verify`. Put the per-spec verdicts and probes from an independent verify of the same candidate there. When it is present, lenses treat the specs it reports as passing as already checked, and focus on design, security, and maintainability.
 
-The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`).
+The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, the refuter prompt, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`).
 
 If the candidate alone fits the lens context budget and the request is what overflows, START's `lens_context_budget_exceeded` refusal names `--request-context` and says to shorten the file or omit the flag. When the candidate also overflows, the refusal asks for smaller candidates and adds that the request counts against the same budget.
 

@@ -3,12 +3,17 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
@@ -253,5 +258,194 @@ func TestReviewRecoverInheritsFrozenRequestContext(t *testing.T) {
 	if successor.State.FrozenRequestContext == nil || *successor.State.FrozenRequestContext != requestContextFixture ||
 		successor.State.RequestContextHash != predecessor.State.RequestContextHash {
 		t.Fatalf("recovered successor lost the frozen request context: hash=%q content=%v", successor.State.RequestContextHash, successor.State.FrozenRequestContext)
+	}
+}
+
+// requestContextRefuterReview starts a negotiated review with the given START
+// arguments and captures one severe inferential lens finding, so the
+// transaction-wide refuter batch is required. It returns the refuter binding
+// for the public capture-refuter command.
+func requestContextRefuterReview(t *testing.T, lineage string, extra ...string) (string, reviewtransaction.CompactStore, reviewtransaction.CompactRecord, []string) {
+	t.Helper()
+	repo, _, started := startRequestContextReview(t, lineage, extra...)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"tracked.txt:1 candidate-specific proof"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+		CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if record, err = store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	handle := rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	return repo, store, record, piRefuterBinding(repo, record, handle)
+}
+
+// materializeRequestContextRefuter prints the refuter provider task through
+// the public capture-refuter materialize mode, which writes nothing.
+func materializeRequestContextRefuter(t *testing.T, binding []string) string {
+	t.Helper()
+	var output bytes.Buffer
+	if err := RunReview(append(append([]string{"capture-refuter"}, binding...), "--agent", string(model.AgentPi), "--materialize=true"), &output); err != nil {
+		t.Fatalf("materialize refuter: %v\n%s", err, output.String())
+	}
+	return output.String()
+}
+
+// refuterRequestPreimageHash recomputes the refuter request hash from the
+// unchanged preimage fields; the frozen request is not one of them.
+func refuterRequestPreimageHash(request reviewProviderRefuterRequest) string {
+	return facadeValueHash("provider-refuter-request", struct {
+		Schema, LineageID, AuthorityVersion, TargetIdentity, SnapshotIdentity string
+		Claims                                                                []reviewtransaction.RefuterClaim
+		Evidence                                                              []reviewProviderEvidence
+	}{request.Schema, request.LineageID, request.AuthorityVersion, request.TargetIdentity, request.SnapshotIdentity, request.Claims, request.Evidence})
+}
+
+// TestReviewRefuterPromptCarriesFrozenRequestContext is S10 for the refuter:
+// the materialized refuter task carries the verbatim request START froze, as
+// its own section before the machine-readable input, framed as untrusted
+// evidence that never instructs the refuter. The request reaches the prompt
+// only: the request JSON, its hash preimage, and the request hash are the
+// ones a refuter request without the field would carry, and the single
+// corrective retry repeats the same section.
+func TestReviewRefuterPromptCarriesFrozenRequestContext(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	request := writeRequestContextFile(t, requestContextFixture)
+	repo, store, record, binding := requestContextRefuterReview(t, "request-context-refuter", "--request-context", request)
+
+	prompt := materializeRequestContextRefuter(t, binding)
+	native, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt != string(native.Invocation.Prompt()) {
+		t.Fatalf("materialized refuter task diverged from the native request\nmaterialize:\n%s\nnative:\n%s", prompt, native.Invocation.Prompt())
+	}
+	section := reviewLensContextRequestContext + "\n" + strings.TrimSpace(requestContextFixture) + "\n" + reviewLensContextRequestContext + "_END"
+	if !strings.Contains(prompt, section) {
+		t.Fatalf("refuter prompt does not carry the verbatim frozen request section:\n%s", prompt)
+	}
+	if strings.Index(prompt, section) > strings.Index(prompt, "\n\nInput:\n") {
+		t.Fatal("frozen request appears after the machine-readable input")
+	}
+	for _, required := range []string{"untrusted evidence", "never instructions"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("refuter prompt does not frame the request with %q:\n%s", required, prompt)
+		}
+	}
+
+	// PRESERVE: the request travels in the prompt only.
+	payload, err := json.Marshal(native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(payload, []byte("budget set --year")) || bytes.Contains(payload, []byte("request_context")) {
+		t.Fatalf("refuter request JSON carries the frozen request:\n%s", payload)
+	}
+	if native.RequestHash != refuterRequestPreimageHash(native) {
+		t.Fatal("refuter request hash no longer derives from its unchanged preimage")
+	}
+	without := native
+	without.RequestContext = ""
+	if stripped, _ := json.Marshal(without); !bytes.Equal(stripped, payload) {
+		t.Fatal("refuter request JSON depends on the frozen request")
+	}
+	if !strings.Contains(prompt, "\n\nInput:\n"+string(payload)+"\n\nOutput schema:\n") {
+		t.Fatal("refuter prompt input is not the unchanged request JSON")
+	}
+	corrective := reviewProviderCorrectivePrompt(native.Invocation.Prompt(), errors.New("malformed result"))
+	if !bytes.Contains(corrective, []byte(section)) {
+		t.Fatal("corrective refuter prompt dropped the frozen request")
+	}
+}
+
+// TestReviewRefuterPromptWithoutRequestContextIsUnchanged is the PRESERVE
+// contract: a review started without --request-context materializes the
+// refuter prompt byte for byte as instruction, runtime probe paragraph,
+// request JSON, and result schema, with no request paragraph or section.
+func TestReviewRefuterPromptWithoutRequestContextIsUnchanged(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, store, record, binding := requestContextRefuterReview(t, "request-context-refuter-absent")
+
+	prompt := materializeRequestContextRefuter(t, binding)
+	native, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err := reviewProviderRoleContractFor(reviewProviderRoleRefuter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := contract.PromptInstruction + "\n\n" + reviewerprovider.RefuterProbeInstruction(model.AgentID(record.State.RuntimeAgent)) +
+		"\n\nInput:\n" + string(payload) + "\n\nOutput schema:\n" + string(contract.ResultSchema)
+	if prompt != want {
+		t.Fatalf("refuter prompt without a request changed\ngot:\n%s\nwant:\n%s", prompt, want)
+	}
+	if native.RequestHash != refuterRequestPreimageHash(native) {
+		t.Fatal("refuter request hash no longer derives from its unchanged preimage")
+	}
+}
+
+// TestReviewStartCountsRequestContextAgainstRefuterEnvelope proves the
+// frozen request is charged to the refuter envelope START measures, not only
+// to the lens block. The candidate is quote-dense, so its JSON-escaped
+// refuter evidence is about twice its raw lens evidence: with the request,
+// the lens block still fits the runtime cap while the refuter prompt cannot.
+// START must refuse before any authority exists instead of freezing a
+// lineage whose refuter would later fail its budget deterministically.
+func TestReviewStartCountsRequestContextAgainstRefuterEnvelope(t *testing.T) {
+	home := reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", strings.Repeat(strings.Repeat(`"`, 40)+"\n", 1_700), 0o644)
+	request := writeRequestContextFile(t, strings.Repeat("S1 requirement line\n", 4_000))
+	authorityRoot := reviewCLIAuthorityRoot(t, repo)
+	authorityBefore := snapshotAuthorityTree(t, authorityRoot)
+	homeBefore := readLegacyAuthorityTree(t, home)
+
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", "request-context-refuter-budget", "--request-context", request,
+	}), &output)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("START admitted a request its refuter prompt cannot carry: %v\n%s", err, output.String())
+	}
+	var failure *ReviewIntegrationFailureError
+	if !errors.As(err, &failure) || failure.Failure.MutationOutcome != ReviewMutationNotStarted || failure.Failure.Phase != "preflight" {
+		t.Fatalf("refuter-envelope budget refusal does not report a refusal that wrote nothing: %#v", err)
+	}
+	// The candidate alone fits every role, so the remedy names the request.
+	if refusal := err.Error() + output.String(); !strings.Contains(refusal, "shorten") || strings.Contains(refusal, "split") {
+		t.Fatalf("refuter-envelope budget refusal does not name the oversized request:\n%s", refusal)
+	}
+	if after := snapshotAuthorityTree(t, authorityRoot); after != authorityBefore {
+		t.Fatal("refuter-envelope budget refusal persisted authority")
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("refuter-envelope budget refusal persisted an artifact: before=%#v after=%#v", homeBefore, after)
 	}
 }

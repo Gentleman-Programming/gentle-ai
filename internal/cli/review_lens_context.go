@@ -340,7 +340,7 @@ func reviewLensContextBudgetProbe(
 	if state.FrozenPolicyContent != nil {
 		frozenPolicy = *state.FrozenPolicyContent
 	}
-	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, frozenPolicy, state.InitialSnapshot); floorErr != nil {
+	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, frozenPolicy, reviewFrozenRequestContext(state), state.InitialSnapshot); floorErr != nil {
 		var refusal *reviewLensContextError
 		if errors.As(floorErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
 			return reviewLensContextOverBudget, nil
