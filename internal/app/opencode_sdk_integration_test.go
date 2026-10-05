@@ -286,7 +286,7 @@ func runSDKFullApplyIntegration(t *testing.T, home, config, log string, realSDK 
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantNPM := strings.Join([]string{physicalConfig, "install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + physicalConfig, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4", ""}, "\n")
+	wantNPM := strings.Join([]string{physicalConfig, "install", "--save-exact", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + physicalConfig, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4", ""}, "\n")
 	if got := string(read(log)); got != wantNPM {
 		t.Fatalf("expected exactly one pinned SDK install with isolated arguments: got %q, want %q", got, wantNPM)
 	}
@@ -495,7 +495,7 @@ func TestSDKRealNPMOfflineHelper(t *testing.T) {
 	}
 	config := filepath.Join(root, "config", "opencode")
 	args := os.Args[marker+2:]
-	want := []string{"install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4"}
+	want := []string{"install", "--save-exact", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4"}
 	if strings.Join(args, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("refusing unexpected npm arguments: %q", args)
 	}

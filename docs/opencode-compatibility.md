@@ -78,6 +78,25 @@ not be disabled. Plugin dependencies differ: V1 uses `@opencode-ai/plugin`, whil
 V2 uses `@opencode/plugin`. Existing user-owned incompatible assets are preserved.
 The accepted temporary logo omission does not authorize dropping other features.
 
+Before writing V2 managed plugins, install and sync check the SDK installed in
+the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so
+an SDK that matches a newer OpenCode runtime is kept as is. A missing SDK, an older
+release, a prerelease or another major is refused, and the refusal names the
+version it found. The printed command pins the minimum exactly
+(`npm install --save-exact ... @opencode/plugin@2.0.4` or
+`bun add --exact @opencode/plugin@2.0.4`), so a later routine install or update in
+that directory cannot float it. Newer 2.x releases are accepted by semantic
+versioning; the managed assets only call `Plugin.define`, but SDK type contracts
+are checked against 2.0.4 only.
+
+A config directory that predates V2 can still hold the V1 SDK
+`@opencode-ai/plugin` and its peer-installed `@opentui` packages. Those conflict
+with the optional `@opentui/core` peer of `@opencode/plugin`, so npm stops with
+`ERESOLVE`. When the V1 SDK is present, the npm refusal says so and prints
+`npm uninstall --no-audit --no-fund @opencode-ai/plugin` for that directory;
+the V2 managed plugins do not use the V1 SDK. Do not use `--legacy-peer-deps`:
+it prunes every peer-installed package, including `@opentui` and `solid-js`.
+
 The local conformance harness uses disposable configuration, an allowlisted
 environment, fixture authentication and process cleanup. Its loopback mode requires
 a supported per-process network guard and never uses an external model. CI checks

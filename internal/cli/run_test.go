@@ -630,7 +630,7 @@ func TestV2SDKPreflightNamesInstalledPackageManagerContinuation(t *testing.T) {
 		t.Fatalf("continuation failed: %v: %s", runErr, output)
 	}
 	got, readErr := os.ReadFile(marker)
-	if readErr != nil || string(got) != config+"|install --save --no-audit --no-fund @opencode/plugin@2.0.4\n" {
+	if readErr != nil || string(got) != config+"|install --save-exact --no-audit --no-fund @opencode/plugin@2.0.4\n" {
 		t.Fatalf("wrong package manager or directory: %q, %v", got, readErr)
 	}
 }
@@ -758,7 +758,7 @@ func TestV2SDKProvisionRequiresMatchingInvocationConsent(t *testing.T) {
 	if physicalCwd, evalErr := filepath.EvalSymlinks(cwd); evalErr == nil {
 		cwd = physicalCwd
 	}
-	if err != nil || cwd != physicalConfig || args != "install --save --no-audit --no-fund --ignore-scripts --workspaces=false --prefix="+physicalConfig+" --registry=https://registry.npmjs.org @opencode/plugin@2.0.4" {
+	if err != nil || cwd != physicalConfig || args != "install --save-exact --no-audit --no-fund --ignore-scripts --workspaces=false --prefix="+physicalConfig+" --registry=https://registry.npmjs.org @opencode/plugin@2.0.4" {
 		t.Fatalf("manager operation = %q, %v", got, err)
 	}
 }
@@ -1128,13 +1128,13 @@ func TestV2SDKBunOwnerRefusesAutomaticProvision(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	proposal, err := OpenCodeSDKInstallProposal(home)
-	if proposal != nil || err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+	if proposal != nil || err == nil || !strings.Contains(err.Error(), "bun add --exact @opencode/plugin@2.0.4") {
 		t.Fatalf("Bun owner must give manual continuation, proposal = %+v, %v", proposal, err)
 	}
-	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil || !strings.Contains(err.Error(), "bun add --exact @opencode/plugin@2.0.4") {
 		t.Fatalf("Bun preflight must give manual continuation: %v", err)
 	}
-	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: &OpenCodeSDKConsent{ConfigDir: config, Manager: "bun"}}).Run(); err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home, consent: &OpenCodeSDKConsent{ConfigDir: config, Manager: "bun"}}).Run(); err == nil || !strings.Contains(err.Error(), "bun add --exact @opencode/plugin@2.0.4") {
 		t.Fatalf("Bun consent must not permit execution: %v", err)
 	}
 	if err := openCodeSDKRunApprovedManager(&OpenCodeSDKConsent{Manager: "bun"}); err == nil {
@@ -1179,10 +1179,10 @@ func TestV2SDKBunMetadataWithoutExecutableStillNamesManualContinuation(t *testin
 	oldPath := cmdLookPath
 	t.Cleanup(func() { cmdLookPath = oldPath })
 	cmdLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
-	if proposal, err := OpenCodeSDKInstallProposal(home); proposal != nil || err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+	if proposal, err := OpenCodeSDKInstallProposal(home); proposal != nil || err == nil || !strings.Contains(err.Error(), "bun add --exact @opencode/plugin@2.0.4") {
 		t.Fatalf("Bun-owned proposal without executable = %+v, %v", proposal, err)
 	}
-	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil || !strings.Contains(err.Error(), "bun add @opencode/plugin@2.0.4") {
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err == nil || !strings.Contains(err.Error(), "bun add --exact @opencode/plugin@2.0.4") {
 		t.Fatalf("Bun-owned preflight without executable = %v", err)
 	}
 }
@@ -1278,7 +1278,7 @@ func TestOpenCodeV2SDKWindowsPowerShellContinuation(t *testing.T) {
 	// PowerShell reports the long path while t.TempDir() may use an 8.3 short
 	// name (C:\Users\RUNNER~1), so compare directory identity, not bytes.
 	dir, args, found := strings.Cut(strings.TrimSpace(string(data)), "|")
-	if !found || args != "install --save --no-audit --no-fund @opencode/plugin@2.0.4" {
+	if !found || args != "install --save-exact --no-audit --no-fund @opencode/plugin@2.0.4" {
 		t.Fatalf("PowerShell ran the wrong command: %q", data)
 	}
 	want, wantErr := os.Stat(config)
