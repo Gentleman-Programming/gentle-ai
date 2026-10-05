@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -610,6 +611,10 @@ func goInstallBinDirFromGoEnv() (string, error) {
 
 const engramBetaGoInstallPackage = "github.com/Gentleman-Programming/engram/cmd/engram@main"
 
+func betaEngramRequiresGo(channel InstallChannel, component model.ComponentID) bool {
+	return channel.IsBeta() && component == model.ComponentEngram
+}
+
 func installBetaEngramFromMain() (string, error) {
 	if err := runCommand("go", "install", engramBetaGoInstallPackage); err != nil {
 		return "", err
@@ -773,7 +778,6 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	targets, targetErr := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
 	prepare := []pipeline.Step{
-		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
 			snapshotter: backup.NewSnapshotter(),
@@ -796,6 +800,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		prepare = append([]pipeline.Step{openCodePluginDependencyPreflightStep{id: "prepare:opencode-plugin-dependency", homeDir: r.homeDir, consent: r.sdkConsent}}, prepare...)
 	}
+	// Check prerequisites before any SDK package-manager operation or telemetry.
+	prepare = append([]pipeline.Step{checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection, resolved: r.resolved, channel: r.channel}}, prepare...)
 	// The read-only settings refusal is prepended last so it runs first in the
 	// prepare stage (issue #5035): an unsafe selected settings document must
 	// fail before the SDK dependency install, telemetry, plugin, Persona,
@@ -1021,7 +1027,7 @@ func OpenCodeSDKInstallProposal(homeDir string) (*OpenCodeSDKConsent, error) {
 		} else if manager == "" {
 			manager = "npm"
 		}
-		return nil, fmt.Errorf("automatic OpenCode SDK install refused: %w; run `%s` manually, then retry Gentle AI", err, openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency))
+		return nil, fmt.Errorf("automatic OpenCode SDK install refused: %w; OpenCode V2 requires %s; run `%s` manually, then retry Gentle AI%s", err, openCodeSDKRequirement(config, dependency), openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency), openCodeSDKPeerConflictHint(runtime.GOOS, config, manager, dependency))
 	}
 	executable, err := cmdLookPath("npm")
 	if err != nil {
@@ -1173,16 +1179,82 @@ func openCodeSDKPackageState(config string) ([32]byte, error) {
 	return signature, nil
 }
 
+// The pinned dependency is the minimum the managed assets were written
+// against; any installed release of the same major at or above it satisfies
+// them, so a newer SDK is never reported missing or downgraded.
 func openCodeSDKInstalled(config, dependency string) bool {
+	minimum, ok := openCodeSDKReleaseVersion(strings.TrimPrefix(dependency, "@opencode/plugin@"))
+	installed, found := openCodeSDKReleaseVersion(openCodeSDKInstalledVersion(config))
+	if !ok || !found || installed[0] != minimum[0] {
+		return false
+	}
+	if installed[1] != minimum[1] {
+		return installed[1] > minimum[1]
+	}
+	return installed[2] >= minimum[2]
+}
+
+func openCodeSDKInstalledVersion(config string) string {
 	manifest := filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json")
 	data, err := os.ReadFile(manifest)
 	if err != nil || len(data) > 1<<20 {
-		return false
+		return ""
 	}
 	var pkg struct {
 		Version string `json:"version"`
 	}
-	return json.Unmarshal(data, &pkg) == nil && pkg.Version == strings.TrimPrefix(dependency, "@opencode/plugin@")
+	if json.Unmarshal(data, &pkg) != nil {
+		return ""
+	}
+	return pkg.Version
+}
+
+// Only plain MAJOR.MINOR.PATCH releases qualify; prereleases and build
+// metadata are refused rather than ordered.
+func openCodeSDKReleaseVersion(version string) ([3]int, bool) {
+	var parts [3]int
+	fields := strings.Split(version, ".")
+	if len(fields) != 3 {
+		return parts, false
+	}
+	for i, field := range fields {
+		if field == "" || len(field) > 9 || strings.Trim(field, "0123456789") != "" {
+			return parts, false
+		}
+		parts[i], _ = strconv.Atoi(field)
+	}
+	return parts, true
+}
+
+// openCodeSDKRequirement names the accepted range and, when present, the
+// installed SDK that falls outside it.
+func openCodeSDKRequirement(config, dependency string) string {
+	requirement := "installed " + dependency
+	if minimum, ok := openCodeSDKReleaseVersion(strings.TrimPrefix(dependency, "@opencode/plugin@")); ok {
+		requirement += fmt.Sprintf(" or a newer %d.x release", minimum[0])
+	}
+	if version := openCodeSDKInstalledVersion(config); version != "" {
+		requirement += fmt.Sprintf(" (found @opencode/plugin@%s)", openCodeSDKDisplayVersion(version))
+	}
+	return requirement
+}
+
+// openCodeSDKDisplayVersion keeps a package.json version safe to echo: only
+// printable ASCII, bounded, so a hostile manifest cannot inject terminal
+// escapes or flood the refusal.
+func openCodeSDKDisplayVersion(version string) string {
+	const limit = 32
+	var b strings.Builder
+	for _, r := range version {
+		if b.Len() == limit {
+			return b.String() + "..."
+		}
+		if r < 0x20 || r > 0x7e {
+			r = '?'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func (s openCodePluginDependencyPreflightStep) ID() string { return s.id }
@@ -1221,37 +1293,63 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 		}
 		return nil
 	}
+	requirement := openCodeSDKRequirement(config, dependency)
 	if err := openCodeSDKCheckProjectConfig(config); err == nil {
 		location := openCodeSDKInstallContinuation(runtime.GOOS, config, "npm", dependency)
 		if runtime.GOOS == "windows" {
 			// refusal:by-design world-action: PowerShell must run the displayed manual install
-			return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; in PowerShell run: %s; then retry Gentle AI", dependency, location)
+			return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; in PowerShell run: %s; then retry Gentle AI", requirement, location)
 		}
 		// refusal:by-design world-action: the operator must run the displayed manual install
-		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; run `%s`, then retry Gentle AI", dependency, location)
+		return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; run `%s`, then retry Gentle AI", requirement, location)
 	}
 	manager := openCodePluginPackageManager(config)
 	if manager == "" {
 		if openCodePluginLockfileConflict(config) {
 			// refusal:by-design operator-knowledge: conflicting lockfiles cannot safely establish ownership without user choice
-			return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; bun and npm lockfiles conflict in %s, so choose and reconcile the owning package manager before retrying", dependency, config)
+			return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; bun and npm lockfiles conflict in %s, so choose and reconcile the owning package manager before retrying", requirement, config)
 		}
 		if openCodeSDKManualBunOwner(config) {
 			return openCodeSDKManualBunError(config, dependency)
 		}
 		// refusal:by-design world-action: no executable package manager is available for the existing package ownership
-		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; no compatible package manager is available for %s", dependency, config)
+		return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; no compatible package manager is available for %s", requirement, config)
 	}
 	if manager == "bun" {
 		return openCodeSDKManualBunError(config, dependency)
 	}
 	location := openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency)
+	hint := openCodeSDKPeerConflictHint(runtime.GOOS, config, manager, dependency)
 	if runtime.GOOS == "windows" {
 		// refusal:by-design world-action: this command is generated for PowerShell, not cmd.exe
-		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; in PowerShell run: %s; then retry Gentle AI", dependency, location)
+		return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; in PowerShell run: %s; then retry Gentle AI%s", requirement, location, hint)
 	}
 	// refusal:by-design world-action: the runnable package-manager command is selected from the user's package ownership and quoted config path at runtime
-	return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; run `%s`, then retry Gentle AI", dependency, location)
+	return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; run `%s`, then retry Gentle AI%s", requirement, location, hint)
+}
+
+// #5208: a config that predates V2 keeps the V1 SDK and its peer-installed
+// @opentui tree, which conflicts with the optional @opentui/core peer of the
+// V2 SDK, so the pinned npm install stops with ERESOLVE. --legacy-peer-deps
+// and uninstalling the V1 SDK both prune that peer tree, which existing TUI
+// plugins still load; --force overrides the conflict and keeps it.
+func openCodeSDKPeerConflictHint(goos, config, manager, dependency string) string {
+	if manager != "npm" {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(config, "node_modules", "@opencode-ai", "plugin", "package.json")); err != nil {
+		return ""
+	}
+	// #5208 evidence: --force accepts the optional @opentui/core peer
+	// mismatch and removed no packages, while --legacy-peer-deps and removing
+	// the V1 SDK both prune the @opentui tree that existing TUI plugins load.
+	force := openCodeSDKCommandIn(goos, config, "npm install --save-exact --force --no-audit --no-fund "+dependency)
+	if goos == "windows" {
+		force = "PowerShell: " + force
+	} else {
+		force = "`" + force + "`"
+	}
+	return "; if npm stops with ERESOLVE, the cause is the OpenCode V1 SDK @opencode-ai/plugin still installed there: its peer-installed @opentui packages conflict with the optional @opentui/core peer of @opencode/plugin. Rerun the install with --force, which overrides the peer conflict and does not prune peer packages (#5208): " + force + ". Do not use --legacy-peer-deps or uninstall @opencode-ai/plugin: both prune the peer-installed @opentui and solid-js packages that existing OpenCode TUI plugins load"
 }
 
 // Bun ownership is a manual-only route even when Bun is unavailable on PATH.
@@ -1277,10 +1375,10 @@ func openCodeSDKManualBunError(config, dependency string) error {
 	location := openCodeSDKInstallContinuation(runtime.GOOS, config, "bun", dependency)
 	if runtime.GOOS == "windows" {
 		// refusal:by-design world-action: Bun-owned packages require an operator-run PowerShell continuation
-		return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; Bun-owned packages cannot be provisioned automatically; in PowerShell run: %s; then retry Gentle AI", dependency, location)
+		return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; Bun-owned packages cannot be provisioned automatically; in PowerShell run: %s; then retry Gentle AI", openCodeSDKRequirement(config, dependency), location)
 	}
 	// refusal:by-design world-action: Bun-owned packages require an operator-run continuation
-	return fmt.Errorf("OpenCode V2 requires installed %s before managed plugins can be written; Bun-owned packages cannot be provisioned automatically; run `%s`, then retry Gentle AI", dependency, location)
+	return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; Bun-owned packages cannot be provisioned automatically; run `%s`, then retry Gentle AI", openCodeSDKRequirement(config, dependency), location)
 }
 
 // The process receives no ambient package-manager auth, user configuration,
@@ -1366,11 +1464,17 @@ func openCodeSDKIsolatedEnv(isolated string, proposal *OpenCodeSDKConsent) []str
 	return env
 }
 
+// The continuation pins the minimum exactly, so a later routine install or
+// update in that directory cannot float it.
 func openCodeSDKInstallContinuation(goos, config, manager, dependency string) string {
-	arguments := "bun add " + dependency
+	arguments := "bun add --exact " + dependency
 	if manager == "npm" {
-		arguments = "npm install --save --no-audit --no-fund " + dependency
+		arguments = "npm install --save-exact --no-audit --no-fund " + dependency
 	}
+	return openCodeSDKCommandIn(goos, config, arguments)
+}
+
+func openCodeSDKCommandIn(goos, config, arguments string) string {
 	if goos == "windows" {
 		return "Set-Location -LiteralPath '" + strings.ReplaceAll(config, "'", "''") + "'; if ($?) { " + arguments + " }"
 	}
@@ -1378,7 +1482,7 @@ func openCodeSDKInstallContinuation(goos, config, manager, dependency string) st
 }
 
 func openCodeSDKInstallArgs(dependency, config string) []string {
-	return []string{"install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=" + openCodeSDKRegistry, dependency}
+	return []string{"install", "--save-exact", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=" + openCodeSDKRegistry, dependency}
 }
 
 func openCodePluginPackageManager(config string) string {
@@ -2558,7 +2662,7 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentEngram:
 		engramCommand := "engram"
 		var installErr error
-		if s.channel.IsBeta() {
+		if betaEngramRequiresGo(s.channel, s.component) {
 			binaryPath, err := installBetaEngramFromMain()
 			if err != nil {
 				return fmt.Errorf("install beta engram from main: %w", err)
@@ -4082,6 +4186,8 @@ type checkDependenciesStep struct {
 	profile   system.PlatformProfile
 	homeDir   string
 	selection model.Selection
+	resolved  planner.ResolvedPlan
+	channel   InstallChannel
 }
 
 func (s checkDependenciesStep) ID() string {
@@ -4089,6 +4195,15 @@ func (s checkDependenciesStep) ID() string {
 }
 
 func (s checkDependenciesStep) Run() error {
+	for _, component := range s.resolved.OrderedComponents {
+		if betaEngramRequiresGo(s.channel, component) {
+			if _, err := cmdLookPath("go"); err != nil {
+				return fmt.Errorf("beta Engram requires Go; stopped before backup or component apply. Run `%s`, restart the terminal, then rerun your original `gentle-ai install` command", system.InstallHintForDep("go", s.profile))
+			}
+			break
+		}
+	}
+
 	// Run detection but do NOT write to stdout/stderr — this step runs
 	// inside the Bubble Tea alternate screen in TUI mode, so any raw
 	// output corrupts the display (see issue #2). Missing deps are

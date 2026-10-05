@@ -119,11 +119,16 @@ Check exactly ONE in the template and add the matching label:
 
 Mark boxes only with observed evidence; leave pending actions unchecked and describe them. An unchecked required gate is not merge-ready:
 - Linked an approved issue using the human-selected closing or non-closing reference
+- PR stays within 400 changed lines, or the canonical `size:exception` authority is recorded
 - Added exactly one `type:*` label (confirmed by target-host readback)
-- Unit tests, Go format and E2E tests pass
+- Unit tests pass (`go test ./...`)
+- Go format passes (`go run ./internal/gofmtcheck`)
+- E2E tests pass (`cd e2e && ./docker-test.sh`)
 - Benchmark validation completed, or explained as not applicable in the Test Plan
 - If behavior changed, docs in `docs/` are updated in the same PR
 - Conventional commit format
+- Understood, reviewed, and took responsibility for the complete submission
+- Selected exactly one AI-assistance option and completed the applicable declaration fields
 - No `Co-Authored-By` trailers
 
 ---

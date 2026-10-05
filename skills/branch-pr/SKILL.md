@@ -129,9 +129,13 @@ cd e2e && ./docker-test.sh
 - [ ] PR stays within 400 changed lines, or the human-selected `size:exception` rationale, current direct human instruction for the exact target/action and actor `MAINTAIN`/`ADMIN` are documented
 - [ ] API read-back confirms exactly one appropriate `type:*` label on this PR
 - [ ] Unit tests pass (`go test ./...`)
+- [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] If behavior changed, docs in `docs/` are updated in the same PR (reference docs track `main`)
 - [ ] My commits follow Conventional Commits format
+- [ ] I understand, reviewed, and take responsibility for the complete submission
+- [ ] I selected exactly one AI-assistance option and, if material assistance was used, completed all applicable declaration fields
 - [ ] My commits do not include `Co-Authored-By` trailers
 
 ## Automated Checks

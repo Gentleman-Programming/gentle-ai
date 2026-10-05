@@ -112,7 +112,7 @@ func TestTUIOpenCodeSDKConsentProvisioningIntegration(t *testing.T) {
 			// Prepare gates stop at the first refusal under every failure policy
 			// (#5035): a failed SDK step ends the stage; otherwise the deliberate
 			// telemetry ownership conflict does.
-			wantIDs := []string{"prepare:opencode-settings-validation", "prepare:opencode-plugin-dependency"}
+			wantIDs := []string{"prepare:opencode-settings-validation", "prepare:check-dependencies", "prepare:opencode-plugin-dependency"}
 			if tc.wantSDKerr == "" {
 				wantIDs = append(wantIDs, "prepare:opencode-telemetry")
 			}
@@ -124,9 +124,9 @@ func TestTUIOpenCodeSDKConsentProvisioningIntegration(t *testing.T) {
 					t.Fatalf("Prepare step %d = %s, want %s", i, step.StepID, wantIDs[i])
 				}
 				wantErr := ""
-				if i == 1 {
+				if step.StepID == "prepare:opencode-plugin-dependency" {
 					wantErr = tc.wantSDKerr
-				} else if i == 2 {
+				} else if step.StepID == "prepare:opencode-telemetry" {
 					wantErr = "telemetry runtime ownership conflict"
 				}
 				if wantErr != "" {
@@ -286,7 +286,7 @@ func runSDKFullApplyIntegration(t *testing.T, home, config, log string, realSDK 
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantNPM := strings.Join([]string{physicalConfig, "install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + physicalConfig, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4", ""}, "\n")
+	wantNPM := strings.Join([]string{physicalConfig, "install", "--save-exact", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + physicalConfig, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4", ""}, "\n")
 	if got := string(read(log)); got != wantNPM {
 		t.Fatalf("expected exactly one pinned SDK install with isolated arguments: got %q, want %q", got, wantNPM)
 	}
@@ -495,7 +495,7 @@ func TestSDKRealNPMOfflineHelper(t *testing.T) {
 	}
 	config := filepath.Join(root, "config", "opencode")
 	args := os.Args[marker+2:]
-	want := []string{"install", "--save", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4"}
+	want := []string{"install", "--save-exact", "--no-audit", "--no-fund", "--ignore-scripts", "--workspaces=false", "--prefix=" + config, "--registry=https://registry.npmjs.org", "@opencode/plugin@2.0.4"}
 	if strings.Join(args, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("refusing unexpected npm arguments: %q", args)
 	}

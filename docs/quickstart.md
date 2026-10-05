@@ -128,6 +128,10 @@ gentle-ai install
 
 The installer detects your platform automatically — no flags needed to select macOS vs Linux. On Linux, it uses the first supported package manager it finds on `PATH`; see [Supported Platforms](platforms.md) for the full list and detection order.
 
+For a beta install that selects Engram, Go must be on `PATH`. If it is missing, dependency preflight stops before the backup snapshot or component apply and prints a platform-specific installation hint.
+
+Stable Engram installs and beta plans without Engram do not gain a Go requirement.
+
 After completion, verify that agent configs and selected components were installed to their expected paths.
 
 The agents you select during install become the default scope for future `gentle-ai sync` runs. Gentle AI records that selection in `~/.gentle-ai/state.json` and does not automatically sync every agent config directory that exists on your machine. To check what will be updated after an upgrade, run:
