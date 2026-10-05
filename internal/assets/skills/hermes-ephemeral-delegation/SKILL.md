@@ -14,7 +14,7 @@ Load this skill when you are acting as the parent orchestrator and the work ahea
 - A map you need to decide or route that exceeds the inline evidence budget (codebase mapping, approach comparison); never to read files you will read anyway before writing inline
 - A writer reason: 2+ independent units launched together, or the context backstop; a large task alone is tracked, not delegated
 - A high-risk change that needs an independent verifier, or a large task's long suites and builds
-- Fresh adversarial review (diffs, PR readiness, incident audit)
+- Fresh adversarial review (diffs, PR readiness, incident audit); never restart it automatically for a candidate whose terminal `approved` authority was already burned and that is unchanged since, unless a new independent review is deliberately requested
 - Multi-step debugging that would flood the parent context
 
 Do NOT load this skill if you are already inside a delegated child task — you are the executor, not the orchestrator.
