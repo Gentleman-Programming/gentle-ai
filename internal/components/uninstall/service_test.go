@@ -15,23 +15,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 )
 
 func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
@@ -101,8 +101,11 @@ func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
 					}
 				}
 				info, err := os.Stat(path)
-				if err != nil || info.Mode().Perm() != 0600 {
-					t.Fatalf("mode: %v, %v", info, err)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+					t.Fatalf("mode: %v", info.Mode().Perm())
 				}
 			}
 		})
@@ -893,9 +896,9 @@ func TestPartialUninstallPiReportsRetainedResourcesAndOptionalCleanup(t *testing
 	wantCommands := []string{
 		"pi remove npm:gentle-pi",
 		"pi remove npm:gentle-engram",
-		"pi remove npm:pi-mcp-adapter",
 		"pi remove npm:pi-web-access",
 		"pi remove npm:pi-btw",
+		"pi remove npm:pi-mcp-adapter",
 	}
 	if !slices.Equal(result.OptionalPiPackageCleanupCommands, wantCommands) {
 		t.Fatalf("OptionalPiPackageCleanupCommands = %v, want %v", result.OptionalPiPackageCleanupCommands, wantCommands)
@@ -2201,6 +2204,72 @@ func TestUninstallSkillsRemovesLegacySharedMarkerAfterUpgrade(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Dir(marker)); (err == nil) != tt.wantSharedDir {
 				t.Fatalf("_shared present = %v, want %v (err %v)", err == nil, tt.wantSharedDir, err)
+			}
+		})
+	}
+}
+
+// TestPartialUninstallLeavesNonJSONNativeSettingsUntouched covers #1828: Kimi
+// (TOML) and Hermes (YAML) native settings must never reach the generic JSON
+// cleaner, while managed persona text and Kimi's separate JSON MCP file are
+// still cleaned.
+func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
+	tests := []struct {
+		name     string
+		agent    model.AgentID
+		settings string
+		content  string
+		prompt   string
+		mcp      string
+	}{
+		{name: "kimi legacy", agent: model.AgentKimi, settings: ".kimi/config.toml", content: "default_model = \"k2\"\n[models.k2]\nprovider = \"moonshot\"\n", prompt: ".kimi/KIMI.md", mcp: ".kimi/mcp.json"},
+		{name: "kimi current", agent: model.AgentKimi, settings: ".kimi-code/config.toml", content: "default_model = \"k2\"\n", prompt: ".kimi-code/AGENTS.md", mcp: ".kimi-code/mcp.json"},
+		{name: "hermes", agent: model.AgentHermes, settings: ".hermes/config.yaml", content: "providers:\n  - name: hermes\n", prompt: ".hermes/SOUL.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settings)
+			promptPath := filepath.Join(home, tt.prompt)
+			writeBatchFile(t, settingsPath, tt.content)
+			if err := os.Chmod(settingsPath, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeBatchFile(t, promptPath, "My own rules.\n\n<!-- gentle-ai:persona -->\nmanaged\n<!-- /gentle-ai:persona -->\n")
+			if tt.mcp != "" {
+				writeBatchFile(t, filepath.Join(home, tt.mcp), `{"mcpServers":{"engram":{"command":"engram"},"context7":{"url":"x"},"mine":{"command":"mine"}}}`)
+			}
+			if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(tt.agent), "claude-code"}}); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+
+			result, err := svc.PartialUninstall([]model.AgentID{tt.agent}, nil)
+			if err != nil {
+				t.Fatalf("PartialUninstall() error = %v, want native %s left to its owner", err, filepath.Base(settingsPath))
+			}
+			if !slices.Equal(result.AgentsRemovedFromState, []model.AgentID{tt.agent}) || len(result.FailedAgents) != 0 {
+				t.Fatalf("removed = %v, failed = %v, want only %s removed", result.AgentsRemovedFromState, result.FailedAgents, tt.agent)
+			}
+			if got := string(mustReadServiceFile(t, settingsPath)); got != tt.content {
+				t.Fatalf("native settings = %q, want bytes preserved %q", got, tt.content)
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			}
+			prompt := string(mustReadServiceFile(t, promptPath))
+			if strings.Contains(prompt, "gentle-ai:persona") || !strings.Contains(prompt, "My own rules.") {
+				t.Fatalf("prompt = %q, want managed persona removed and user text kept", prompt)
+			}
+			if tt.mcp != "" {
+				servers, _ := readJSONFileForTest(t, filepath.Join(home, tt.mcp))["mcpServers"].(map[string]any)
+				if _, ok := servers["engram"]; ok || servers["mine"] == nil || servers["context7"] != nil {
+					t.Fatalf("mcpServers = %v, want owned servers removed and custom server kept", servers)
+				}
 			}
 		})
 	}

@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // recoveryCollectBindingFixture is the #3099/#2910 shape: an escalated
 // lineage frozen with two selected untracked paths, a changed candidate, and a
 // negotiated STATUS that selected the exclude scope. It returns the repository,
-// the exclude selectors STATUS used, and the binding a maintainer assembles
-// from the recovery_authorization_required collect alone.
+// the exclude selectors STATUS used, and an explicit compatibility binding
+// assembled from the native recovery's exact predecessor and target.
 func recoveryCollectBindingFixture(t *testing.T, lineage string) (string, []string, map[string]string, string) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
@@ -61,18 +61,14 @@ func recoveryCollectBindingFixture(t *testing.T, lineage string) (string, []stri
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
-		status.NextTransition.ReasonCode != "recovery_authorization_required" ||
-		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.recover" {
 		t.Fatalf("STATUS transition = %#v", status.NextTransition)
 	}
-	input := status.NextTransition.Collect.Inputs[0]
-	bound, err := reviewTransitionArgumentMap(input.Arguments)
-	if err != nil {
-		t.Fatal(err)
-	}
+	binding := status.NextTransition.Execute.Binding
+	bound := map[string]string{"lineage": binding.LineageID, "expected-revision": binding.Revision, "target": binding.TargetIdentity, "disposition": string(status.ActionDisposition)}
 	return repo, selectors, bound, strings.Join([]string{
-		input.Schema,
+		"gentle-ai.review-recovery-authorization/v1",
 		"predecessor_lineage=" + bound["lineage"],
 		"predecessor_revision=" + bound["expected-revision"],
 		"target_identity=" + bound["target"],
@@ -92,15 +88,15 @@ func recoverWithCollectBinding(repo string, bound map[string]string, successor, 
 	return output.Bytes(), err
 }
 
-// TestRecoveryCollectBindingRunsRecoverWithTheSelectorsStatusUsed pins the
-// converging half: the binding assembled from the collect is exactly the one
+// TestRecoveryCollectBindingRunsRecoverWithTheSelectorsStatusUsed preserves
+// explicit-binding compatibility: the binding from STATUS is exactly the one
 // `review recover` accepts once recover derives the same successor target.
 func TestRecoveryCollectBindingRunsRecoverWithTheSelectorsStatusUsed(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, selectors, bound, authorization := recoveryCollectBindingFixture(t, "collect-binding-converges")
 	payload, err := recoverWithCollectBinding(repo, bound, "collect-bound-successor", authorization, selectors...)
 	if err != nil {
-		t.Fatalf("recover refused the binding assembled from its own collect: %v\n%s", err, payload)
+		t.Fatalf("recover refused the explicit binding assembled from STATUS: %v\n%s", err, payload)
 	}
 	var result ReviewRecoverResult
 	decodeStrictReviewJSON(t, payload, &result)

@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -69,6 +69,15 @@ func stdioProbeDeadline(configured time.Duration) time.Duration {
 // otherwise valid Engram configuration unreadable: that consequence is worse
 // than the defect this fixes.
 func stdioTimeoutFromConfig(value any) time.Duration {
+	// JSON settings decode numbers as exact json.Number tokens; seconds keep
+	// the float64 semantics, and a token out of float64 range falls back.
+	if number, ok := value.(json.Number); ok {
+		seconds, err := number.Float64()
+		if err != nil {
+			return 0
+		}
+		value = seconds
+	}
 	switch typed := value.(type) {
 	case float64:
 		if typed > 0 {

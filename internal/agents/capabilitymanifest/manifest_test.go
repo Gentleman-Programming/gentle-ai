@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestCanonicalImplementationRoutingBoundaries(t *testing.T) {
@@ -16,18 +17,25 @@ func TestCanonicalImplementationRoutingBoundaries(t *testing.T) {
 	got := CanonicalImplementationRouting()
 	want := ImplementationRoutingFacts{
 		DirectInline: DirectInlineFacts{
-			MinUnderstandingFiles:                    1,
-			MaxUnderstandingFiles:                    3,
+			MaxEvidenceBatches:                       1,
+			MaxEvidenceCalls:                         3,
+			ApproxEvidenceTokens:                     10000,
+			EvidenceMustUseBoundedRanges:             true,
 			MaxMechanicalWriteFiles:                  1,
 			MechanicalWriteMustBeAlreadyUnderstood:   true,
 			MechanicalWriteMustNotRequireResearch:    true,
 			MechanicalWriteMustNotHaveOpenDesignWork: true,
 		},
 		DelegatedDirect: DelegatedDirectFacts{
-			MappingMinUnderstandingFiles:  4,
-			WriterMinNonTrivialFiles:      2,
-			DelegateWhenReadPreparesWrite: true,
-			DelegateWhenBroadResearch:     true,
+			ApproxSequentialLookupLimit:    5,
+			DelegateWhenLongSessionMapping: true,
+			ApproxHandoffTokens:            2000,
+			MaxParentSpotChecks:            1,
+			ApproxParentContextTokens:      150000,
+			ContextBackstopIsAdvisory:      true,
+			WriterMinNonTrivialFiles:       2,
+			DelegateWhenReadPreparesWrite:  true,
+			DelegateWhenBroadResearch:      true,
 		},
 		SDD: SDDProposalFacts{
 			ProposeWhenSubstantialOrAmbiguous:     true,
@@ -49,21 +57,93 @@ func TestManifestRejectsWeakenedRoutingFacts(t *testing.T) {
 		weaken func(*AgentCapabilityManifest)
 	}{
 		{
-			name: "direct understanding starts below one file",
+			name: "legacy minimum file count is rejected",
 			weaken: func(manifest *AgentCapabilityManifest) {
-				manifest.ImplementationRouting.DirectInline.MinUnderstandingFiles = 0
+				manifest.ImplementationRouting.DirectInline.MinUnderstandingFiles = 1
 			},
 		},
 		{
-			name: "direct understanding exceeds three files",
+			name: "legacy maximum file count is rejected",
 			weaken: func(manifest *AgentCapabilityManifest) {
 				manifest.ImplementationRouting.DirectInline.MaxUnderstandingFiles = 4
 			},
 		},
 		{
-			name: "mapping starts after four files",
+			name: "legacy mapping file count is rejected",
 			weaken: func(manifest *AgentCapabilityManifest) {
 				manifest.ImplementationRouting.DelegatedDirect.MappingMinUnderstandingFiles = 5
+			},
+		},
+		{
+			name:   "multiple inline batches",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.MaxEvidenceBatches = 2 },
+		},
+		{
+			name:   "four inline calls",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.MaxEvidenceCalls = 4 },
+		},
+		{
+			name:   "larger inline evidence",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.ApproxEvidenceTokens = 20000 },
+		},
+		{
+			name: "unbounded reads",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.EvidenceMustUseBoundedRanges = false
+			},
+		},
+		{
+			name: "longer sequential exploration",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.ApproxSequentialLookupLimit = 6
+			},
+		},
+		{
+			name: "long-session mapping stays inline",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.DelegateWhenLongSessionMapping = false
+			},
+		},
+		{
+			name:   "larger mapper handoff",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DelegatedDirect.ApproxHandoffTokens = 10000 },
+		},
+		{
+			name:   "parent repeats mapped evidence",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DelegatedDirect.MaxParentSpotChecks = 2 },
+		},
+		{
+			name: "later context backstop",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.ApproxParentContextTokens = 200000
+			},
+		},
+		{
+			name: "claims mechanical context enforcement",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.ContextBackstopIsAdvisory = false
+			},
+		},
+		{
+			name:   "multiple mechanical write files",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.MaxMechanicalWriteFiles = 2 },
+		},
+		{
+			name: "mechanical write not already understood",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.MechanicalWriteMustBeAlreadyUnderstood = false
+			},
+		},
+		{
+			name: "mechanical write requires research",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.MechanicalWriteMustNotRequireResearch = false
+			},
+		},
+		{
+			name: "mechanical write has open design work",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.MechanicalWriteMustNotHaveOpenDesignWork = false
 			},
 		},
 		{
@@ -121,7 +201,7 @@ func TestManifestRejectsWeakenedRoutingFacts(t *testing.T) {
 func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) {
 	t.Parallel()
 
-	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
+	const wantRoutingDigest = "sha256:1c343ca2792be730e02b35f1655a19884a2672dc0d2915ef2afb33b6ac01bc1c"
 	// Digests pin the four providers with an enforceable fresh-reviewer
 	// boundary: Claude Code's generated reviewer has no live tools, OpenCode
 	// relays one ordinary task through Go-owned admission, Codex's provider
@@ -129,22 +209,23 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	// forwards the Go-issued opaque task to a fresh locked-down pi
 	// subprocess (gentle-pi#311, gentle-ai#3249).
 	wantManifestDigests := map[model.AgentID]string{
-		model.AgentAntigravity:   "sha256:8e09945cd860b793c59f73db19827bcb4dcfd75c9ecc7f876167ab52fe77ccc2",
-		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
-		model.AgentCodex:         "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
-		model.AgentCursor:        "sha256:08e32b28b4cde7ffaf67210354fb95df2aaf424016ec6093190fb38c5f7226cb",
-		model.AgentGeminiCLI:     "sha256:5738280648925ebc011e6564b59bd6108bb573b5615771286fbcba97876a61dc",
-		model.AgentHermes:        "sha256:25a9583f4b1fe58dbc64a33a016e9a1d88acb545d3d6f6648bbf08dc29cb5656",
-		model.AgentKilocode:      "sha256:9cd93b70fee7da43b7dffdd4f0a7a949886b24c97bef163ef99f4d04d21dc06d",
-		model.AgentKimi:          "sha256:6cc52c4b6e00d15a91b76259f2e594001904b8dd0eabb0b41c4d3b72669d9964",
-		model.AgentKiroIDE:       "sha256:ac77662bea712a283a44e7985257ec68f4d1217cf311dbb9322966f9e5c8423a",
-		model.AgentOpenClaw:      "sha256:f83aee743181528688a9555639f1b573c8273d0cfc28b7b499bffa21c406deb2",
-		model.AgentOpenCode:      "sha256:3df2c0ee0a61774b7b7f0d547abed55721cc37ecc332c131935ce72fb142103f",
-		model.AgentPi:            "sha256:0332851d2286a97ab824a1d656b94f02651bfbf85bdf0f6cc47fe8f7d09765ad",
-		model.AgentQwenCode:      "sha256:11e49bee9741be99ae23257471e78258b1429d74ac491e79395bcfe46774614c",
-		model.AgentTrae:          "sha256:fbbc5ae0a54d31aee4322a89a4d95f854a564d6ea16438c30d0de01b34f7bb8e",
-		model.AgentVSCodeCopilot: "sha256:d982315762ac70ed1a855aec32bc75547b02ba16ae87a330af14366e0e8facee",
-		model.AgentWindsurf:      "sha256:0b70f983ef8d5154f1d13c9d377d70d04cae1eaa460f280ee96db6a43f84fa28",
+		model.AgentAntigravity:   "sha256:4666df6712fc63b0aacf1227cb28d0afdace1f98cbdd611aa2d5e8d4048b87ce",
+		model.AgentClaudeCode:    "sha256:0644de1b6539cffee24ed3d673b450bf1f460fe5db7e8f05c5a0911aace8b280",
+		model.AgentCodex:         "sha256:b47855dc0acdae65aa2215eba09135087d32a890814dc73baab13595ecb6602b",
+		model.AgentConductor:     "sha256:f06b2f6250b4fe2795a4f3c5dba242f4d19933ba2601311f1e8ed1b9fc95e48f",
+		model.AgentCursor:        "sha256:acb6f0092917d40ee12ca88b2661f623f317f0c7436b8b4205fccabf6dd9a9ca",
+		model.AgentGeminiCLI:     "sha256:98095b61c7598a2b36088a0d28309ca95d27944298e20d09159375874b09d9fa",
+		model.AgentHermes:        "sha256:9f3a958ce7ca8d5b667f6af894eb8085535cd10b81d5ff238ffd358de12f7a5f",
+		model.AgentKilocode:      "sha256:13b99f2e8461693bd696ab8c9cea79dfcf37d1859a99f50a74396ff425004d99",
+		model.AgentKimi:          "sha256:57b074845e1fe0c98a6bdbb03486d6768a9fa4b48a87c0d4ad68cfdab972f21d",
+		model.AgentKiroIDE:       "sha256:e453ea65b26eca021f460b0d833c49eb3047e100aa3f81cb9fb77b77832c0da3",
+		model.AgentOpenClaw:      "sha256:5c14949d82e9bce1f283e77733cd7fab50116b5b37fad7fefa0d8fc8dee68299",
+		model.AgentOpenCode:      "sha256:c4889e14ddd1f82160d8d5bb49bcdf29bdac5fe367218adf6458a80bc9d5af9d",
+		model.AgentPi:            "sha256:cf2edc78e304c31a4fb0fe7ffb034128c008801499200eb6da97303f3a3b719d",
+		model.AgentQwenCode:      "sha256:490e77af62787bd18dd47145b673fdd222de199815ad1bed9fa33042eba80387",
+		model.AgentTrae:          "sha256:6ee937b8a1a35f51dcb8db6d90b9f05a52b651cedff9d323dede48d9c4a3fde8",
+		model.AgentVSCodeCopilot: "sha256:cc800f1eca6d5ea36ae83ae4fd43b59223093196970bdfee59096c60fe22fffe",
+		model.AgentWindsurf:      "sha256:2ccb52ebf0926b16f39f59e3df4bbf392c7bdd7fcc76dfb38ee758574be3ad00",
 	}
 
 	for agent, wantDigest := range wantManifestDigests {
@@ -179,6 +260,16 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 			if err != nil {
 				t.Fatalf("CanonicalJSON() error = %v", err)
 			}
+			// Keep the v1 capability envelope and adapter claims, but never
+			// serialize the retired file-count policy as active routing facts.
+			for _, retired := range []string{"minUnderstandingFiles", "maxUnderstandingFiles", "mappingMinUnderstandingFiles"} {
+				if strings.Contains(string(payload), retired) {
+					t.Errorf("canonical JSON retains %s", retired)
+				}
+			}
+			if manifest.SchemaVersion != SchemaV1 {
+				t.Error("routing update changed capability schema")
+			}
 			var roundTrip AgentCapabilityManifest
 			if err := json.Unmarshal(payload, &roundTrip); err != nil {
 				t.Fatalf("Unmarshal(CanonicalJSON()) error = %v", err)
@@ -206,28 +297,28 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	}
 }
 
-// TestEveryManifestDigestStaysByteStable pins every non-Pi row at the closed
-// review-transport baseline. The 12 non-RDD rows change only because their
-// transport claim becomes dormant; the three non-Pi RDD rows remain unchanged.
+// TestEveryManifestDigestStaysByteStable pins every non-Pi row at the
+// evidence-budget routing baseline without changing review transport claims.
 func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 	t.Parallel()
 
 	wantNonPiDigests := map[model.AgentID]string{
-		model.AgentAntigravity:   "sha256:8e09945cd860b793c59f73db19827bcb4dcfd75c9ecc7f876167ab52fe77ccc2",
-		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
-		model.AgentCodex:         "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
-		model.AgentCursor:        "sha256:08e32b28b4cde7ffaf67210354fb95df2aaf424016ec6093190fb38c5f7226cb",
-		model.AgentGeminiCLI:     "sha256:5738280648925ebc011e6564b59bd6108bb573b5615771286fbcba97876a61dc",
-		model.AgentHermes:        "sha256:25a9583f4b1fe58dbc64a33a016e9a1d88acb545d3d6f6648bbf08dc29cb5656",
-		model.AgentKilocode:      "sha256:9cd93b70fee7da43b7dffdd4f0a7a949886b24c97bef163ef99f4d04d21dc06d",
-		model.AgentKimi:          "sha256:6cc52c4b6e00d15a91b76259f2e594001904b8dd0eabb0b41c4d3b72669d9964",
-		model.AgentKiroIDE:       "sha256:ac77662bea712a283a44e7985257ec68f4d1217cf311dbb9322966f9e5c8423a",
-		model.AgentOpenClaw:      "sha256:f83aee743181528688a9555639f1b573c8273d0cfc28b7b499bffa21c406deb2",
-		model.AgentOpenCode:      "sha256:3df2c0ee0a61774b7b7f0d547abed55721cc37ecc332c131935ce72fb142103f",
-		model.AgentQwenCode:      "sha256:11e49bee9741be99ae23257471e78258b1429d74ac491e79395bcfe46774614c",
-		model.AgentTrae:          "sha256:fbbc5ae0a54d31aee4322a89a4d95f854a564d6ea16438c30d0de01b34f7bb8e",
-		model.AgentVSCodeCopilot: "sha256:d982315762ac70ed1a855aec32bc75547b02ba16ae87a330af14366e0e8facee",
-		model.AgentWindsurf:      "sha256:0b70f983ef8d5154f1d13c9d377d70d04cae1eaa460f280ee96db6a43f84fa28",
+		model.AgentAntigravity:   "sha256:4666df6712fc63b0aacf1227cb28d0afdace1f98cbdd611aa2d5e8d4048b87ce",
+		model.AgentClaudeCode:    "sha256:0644de1b6539cffee24ed3d673b450bf1f460fe5db7e8f05c5a0911aace8b280",
+		model.AgentCodex:         "sha256:b47855dc0acdae65aa2215eba09135087d32a890814dc73baab13595ecb6602b",
+		model.AgentConductor:     "sha256:f06b2f6250b4fe2795a4f3c5dba242f4d19933ba2601311f1e8ed1b9fc95e48f",
+		model.AgentCursor:        "sha256:acb6f0092917d40ee12ca88b2661f623f317f0c7436b8b4205fccabf6dd9a9ca",
+		model.AgentGeminiCLI:     "sha256:98095b61c7598a2b36088a0d28309ca95d27944298e20d09159375874b09d9fa",
+		model.AgentHermes:        "sha256:9f3a958ce7ca8d5b667f6af894eb8085535cd10b81d5ff238ffd358de12f7a5f",
+		model.AgentKilocode:      "sha256:13b99f2e8461693bd696ab8c9cea79dfcf37d1859a99f50a74396ff425004d99",
+		model.AgentKimi:          "sha256:57b074845e1fe0c98a6bdbb03486d6768a9fa4b48a87c0d4ad68cfdab972f21d",
+		model.AgentKiroIDE:       "sha256:e453ea65b26eca021f460b0d833c49eb3047e100aa3f81cb9fb77b77832c0da3",
+		model.AgentOpenClaw:      "sha256:5c14949d82e9bce1f283e77733cd7fab50116b5b37fad7fefa0d8fc8dee68299",
+		model.AgentOpenCode:      "sha256:c4889e14ddd1f82160d8d5bb49bcdf29bdac5fe367218adf6458a80bc9d5af9d",
+		model.AgentQwenCode:      "sha256:490e77af62787bd18dd47145b673fdd222de199815ad1bed9fa33042eba80387",
+		model.AgentTrae:          "sha256:6ee937b8a1a35f51dcb8db6d90b9f05a52b651cedff9d323dede48d9c4a3fde8",
+		model.AgentVSCodeCopilot: "sha256:cc800f1eca6d5ea36ae83ae4fd43b59223093196970bdfee59096c60fe22fffe",
+		model.AgentWindsurf:      "sha256:2ccb52ebf0926b16f39f59e3df4bbf392c7bdd7fcc76dfb38ee758574be3ad00",
 	}
 
 	nonPiAgents := make([]model.AgentID, 0, len(wantNonPiDigests))
@@ -235,8 +326,8 @@ func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 		nonPiAgents = append(nonPiAgents, agent)
 	}
 
-	if got := len(nonPiAgents); got != 15 {
-		t.Fatalf("want 15 non-Pi agents, got %d", got)
+	if got := len(nonPiAgents); got != 16 {
+		t.Fatalf("want 16 non-Pi agents, got %d", got)
 	}
 
 	for _, agent := range nonPiAgents {

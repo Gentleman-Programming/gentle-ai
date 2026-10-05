@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func TestOpenCodeReviewTransportFinalLensClosesAndBurnsThroughSharedGoReducer(t *testing.T) {
@@ -320,7 +322,7 @@ func TestOpenCodeReviewTransportRefusesCanonicalTaskAuthorityMismatchesBeforePro
 
 			prompt := forged.Prompt
 			if test.materialized {
-				issuedSession, err := openCodeTransportStartBound(t.Context(), issued.Prompt)
+				issuedSession, err := openCodeTransportStartBound(t.Context(), issued.Prompt, "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -747,6 +749,86 @@ func TestOpenCodeReviewTransportRefusesUnavailableAuthorityAtStartOrCompletion(t
 	}
 }
 
+func TestOpenCodeTaskHostOutputPreservesOpaqueReviewerSyntax(t *testing.T) {
+	// Host decoding does not admit reviewer JSON. Each role's raw output must
+	// reach the shared provider parser unchanged, including invalid syntax.
+	for _, role := range []struct{ name, payload string }{
+		{name: "lens", payload: "{\"findings\":[]}"},
+		{name: "refuter", payload: "{\"results\":[]}"},
+		{name: "validator", payload: "{\"verdict\":\"pass\"}"},
+	} {
+		t.Run(role.name, func(t *testing.T) {
+			for _, test := range []struct{ name, raw string }{
+				{name: "valid JSON", raw: " \r\n\t" + role.payload + "  \n"},
+				{name: "fenced JSON", raw: "```json\n" + role.payload + "\n```\n"},
+				{name: "malformed JSON", raw: " \n{\"message\":\"café 🧪\",\"result\":[\t"},
+				{name: "multiple objects", raw: role.payload + "\n" + role.payload},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					for _, wrapped := range []bool{false, true} {
+						t.Run(fmt.Sprintf("wrapped=%t", wrapped), func(t *testing.T) {
+							raw := test.raw
+							if wrapped {
+								raw = "<task id=\"opaque\" state=\"completed\">\n<task_result>\n" + raw + "\n</task_result>\n</task>"
+							}
+							got, err := decodeOpenCodeTaskHostOutput([]byte(raw))
+							if err != nil || !bytes.Equal(got, []byte(test.raw)) {
+								t.Fatalf("decoded = %q, %v; want byte-exact %q", got, err, test.raw)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestOpenCodeTransportCompletionRejectsUnavailableHostOutput(t *testing.T) {
+	// These refusals precede authority lookup, so no host, review lineage, or
+	// advertised V2 capability is needed to exercise the native boundary.
+	for _, role := range []reviewProviderRole{"", reviewerprovider.RoleRefuter, reviewerprovider.RoleTargetedValidator} {
+		name := string(role)
+		if name == "" {
+			name = "lens"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, test := range []struct {
+				name, failure, code string
+				output              *string
+			}{
+				{name: "missing output", code: "opencode_task_output_empty"},
+				{name: "empty raw forwarded by V2", output: stringPointer(""), code: "opencode_task_output_empty"},
+				{name: "whitespace raw forwarded by V2", output: stringPointer(" \r\n\t"), code: "opencode_task_output_empty"},
+				{name: "unavailable V2 child", failure: "opencode_task_host_output_unavailable", code: "opencode_task_transport_failed"},
+				{name: "transport error wins over payload", output: stringPointer(`{"findings":[]}`), failure: "host failed", code: "opencode_task_transport_failed"},
+				{name: "incomplete legacy task", output: stringPointer("<task id=\"opaque\" state=\"running\">\n<task_result>\n{}\n</task_result>\n</task>"), code: "opencode_task_not_completed"},
+				{name: "failed legacy task", output: stringPointer("<task id=\"opaque\" state=\"error\">\n<task_error>\nfailed\n</task_error>\n</task>"), code: "opencode_task_error"},
+				{name: "truncated legacy completion", output: stringPointer("<task id=\"opaque\" state=\"completed\">\n<task_result>\n{"), code: "opencode_task_output_truncated"},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					session := openCodeTransportSession{}
+					session.binding.Role = role
+					result, err := openCodeTransportComplete(t.Context(), session, openCodeTransportEnvelope{
+						Schema: openCodeReviewTransportSchema, Operation: "complete", Output: test.output, Error: test.failure,
+					})
+					if err == nil || !strings.Contains(err.Error(), test.code) {
+						t.Fatalf("completion error = %v, want %s", err, test.code)
+					}
+					if test.failure == "" {
+						var outputErr *openCodeTaskOutputError
+						if !errors.As(err, &outputErr) || outputErr.Code != test.code {
+							t.Fatalf("completion error = %v, want typed %s", err, test.code)
+						}
+					}
+					if result.Output != nil || result.Operation != "" {
+						t.Fatalf("failed completion returned a result: %#v", result)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestOpenCodeTaskHostOutputPreservesPayloadBytesAndFailsClosed(t *testing.T) {
 	payload := "  {\n\t\"findings\": []\n}  "
 	tests := []struct {
@@ -1090,4 +1172,281 @@ func TestOpenCodeTransportCaptureRefusalCause(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The host subagent that runs a Task is part of the binding: a role Task may
+// only run under the agent Go issued for that role, and a lens Task only under
+// its own lens agent. The prompt alone must never decide the admitted role.
+func TestOpenCodeReviewTransportRefusesHostAgentNotBoundToTheTaskRole(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
+	reviewEnabledHome(t)
+	repo, _, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	otherLens := reviewtransaction.LensRisk
+	if lens == otherLens {
+		otherLens = reviewtransaction.LensResilience
+	}
+	contextHandle := rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	})
+	roleTask := func(role reviewProviderRole) string {
+		task, err := newReviewProviderTask(role, ReviewTransitionBinding{
+			LineageID: record.State.LineageID, Revision: record.State.CapturePhaseRevision,
+			TargetIdentity: record.State.InitialSnapshot.Identity, RepositoryContext: contextHandle,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task.Prompt
+	}
+	lensPrompt := openCodeLensTransportStart(t, repo, record, lens).Prompt
+	t.Chdir(repo)
+	_, before, err := discoverCompactFacadeReview(t.Context(), repo, record.State.LineageID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, prompt, agent string }{
+		{"refuter task under a lens agent", roleTask(reviewerprovider.RoleRefuter), lens},
+		{"refuter task under the validator agent", roleTask(reviewerprovider.RoleRefuter), "review-validator"},
+		{"validator task under the refuter agent", roleTask(reviewerprovider.RoleTargetedValidator), "review-refuter"},
+		{"validator task under a lens agent", roleTask(reviewerprovider.RoleTargetedValidator), lens},
+		{"lens task under the refuter agent", lensPrompt, "review-refuter"},
+		{"lens task under another lens agent", lensPrompt, otherLens},
+		{"lens task under an unknown agent", lensPrompt, "general"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
+				Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: test.prompt, Agent: test.agent,
+			})
+			assertOpenCodeTransportRefusal(t, err, []string{openCodeTransportAgentMismatchCode})
+			assertOpenCodeRelayAuthorityUnchanged(t, repo, record.State.LineageID, store, before)
+		})
+	}
+
+	relay := startOpenCodeTransportRelay(t, repo, openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: lensPrompt, Agent: lens,
+	})
+	if !strings.HasPrefix(relay.prompt.Prompt, openCodeTransportMaterializationHeader+" ") {
+		t.Fatalf("bound lens agent was not materialized: %q", relay.prompt.Prompt)
+	}
+	if err := relay.closeWithoutCompletion(); err == nil {
+		t.Fatal("relay closed without a completion must still refuse")
+	}
+	assertOpenCodeRelayAuthorityUnchanged(t, repo, record.State.LineageID, store, before)
+}
+
+func TestOpenCodeTransportBoundAgentFollowsTheIssuedRole(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		binding openCodeTransportTaskBinding
+		want    string
+	}{
+		{"lens slot", openCodeTransportTaskBinding{Lens: reviewtransaction.LensReliability}, reviewtransaction.LensReliability},
+		{"refuter", openCodeTransportTaskBinding{Role: reviewerprovider.RoleRefuter}, "review-refuter"},
+		{"targeted validator", openCodeTransportTaskBinding{Role: reviewerprovider.RoleTargetedValidator}, "review-validator"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := openCodeTransportBoundAgent(test.binding); got != test.want {
+				t.Fatalf("bound agent = %q, want %q", got, test.want)
+			}
+			if err := validateOpenCodeTransportAgent(test.binding, test.want); err != nil {
+				t.Fatalf("bound agent refused: %v", err)
+			}
+			// An absent agent is the V1 wire shape; the V2 start frame requires it.
+			if err := validateOpenCodeTransportAgent(test.binding, ""); err != nil {
+				t.Fatalf("absent V1 agent refused: %v", err)
+			}
+			if err := validateOpenCodeTransportAgent(test.binding, "unbound-"+test.want); err == nil {
+				t.Fatal("unbound agent admitted")
+			}
+		})
+	}
+}
+
+func TestOpenCodeTransportStartRequiresHostAgentOnlyUnderV2Declaration(t *testing.T) {
+	start := openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: "opaque"}
+	t.Setenv(openCodeRelayContractEnvironment, "")
+	if err := validateOpenCodeTransportStart(start); err != nil {
+		t.Fatalf("V1 start without an agent refused: %v", err)
+	}
+	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
+	if err := validateOpenCodeTransportStart(start); err == nil || !strings.Contains(err.Error(), "opencode_review_transport_envelope_invalid") {
+		t.Fatalf("V2 start without an agent = %v, want envelope refusal", err)
+	}
+	start.Agent = reviewtransaction.LensRisk
+	if err := validateOpenCodeTransportStart(start); err != nil {
+		t.Fatalf("V2 start with an agent refused: %v", err)
+	}
+}
+
+// Every Go refusal reaches the V2 parent only as one bounded, allow-listed
+// reason code: never raw child output, paths, or free text.
+func TestOpenCodeTransportRefusalReasonClassifiesEveryRefusal(t *testing.T) {
+	outputError := func(raw string) error {
+		_, err := decodeOpenCodeTaskHostOutput([]byte(raw))
+		if err == nil {
+			t.Fatalf("host output %q was admitted", raw)
+		}
+		return err
+	}
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"capability refused", errors.New(reviewImmutableTransportUnsupportedCode), openCodeRefusalCapabilityUnavailable},
+		{"strict envelope", errors.New("opencode_review_transport_envelope_invalid: relay start requires only the original Task prompt"), openCodeRefusalEnvelopeInvalid},
+		{"host agent", validateOpenCodeTransportAgent(openCodeTransportTaskBinding{Role: reviewerprovider.RoleRefuter}, reviewtransaction.LensRisk), openCodeRefusalAgentMismatch},
+		{"task binding", openCodeTransportBindingInvalid("Task target does not match the resolved repository context"), openCodeRefusalBindingMismatch},
+		{"live authority moved", openCodeTransportStaleAuthority("Task binding does not match live compact review authority"), openCodeRefusalStaleAuthority},
+		{"authority unavailable", openCodeTransportAuthorityUnavailable(errors.New("/private/secret/path is locked")), openCodeRefusalStaleAuthority},
+		{"completion revision moved", openCodeTransportFailure("opencode_review_transport_completion_unavailable"), openCodeRefusalStaleAuthority},
+		{"empty output", outputError(" \n"), openCodeRefusalOutputRefused},
+		{"truncated output", outputError("<task id=\"x\" state=\"completed\">\n<task_result>\n{\"findings\""), openCodeRefusalOutputRefused},
+		{"malformed output", outputError("<task"), openCodeRefusalOutputRefused},
+		{"reviewer result refused", openCodeTransportFailure("opencode_reviewer_result_refused"), openCodeRefusalOutputRefused},
+		{"role result refused", openCodeTransportCaptureRefusal(errors.New("RAW CHILD OUTPUT")), openCodeRefusalOutputRefused},
+		{"child task error", outputError("<task id=\"x\" state=\"error\">\n<task_error>\nprovider 400\n</task_error>\n</task>"), openCodeRefusalProviderFailed},
+		{"host output unavailable", openCodeTransportFailure("opencode_task_transport_failed"), openCodeRefusalProviderFailed},
+		{"provider result missing", openCodeTransportFailure("opencode_review_transport_provider_result_missing"), openCodeRefusalProviderFailed},
+		{"materialization unavailable", openCodeTransportFailure("opencode_review_transport_materialization_unavailable"), openCodeRefusalRelayUnavailable},
+		{"capture failed", openCodeTransportFailure("opencode_review_transport_capture_failed"), openCodeRefusalRelayUnavailable},
+		{"unclassified free text", errors.New("RAW CHILD OUTPUT at /Users/someone/repo"), openCodeRefusalRelayUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.err == nil {
+				t.Fatal("fixture produced no refusal")
+			}
+			got := openCodeTransportRefusalReason(test.err)
+			if got != test.want {
+				t.Fatalf("reason = %q, want %q (err=%v)", got, test.want, test.err)
+			}
+			if !slicesContainsString(openCodeRefusalReasons, got) {
+				t.Fatalf("reason %q is outside the allow-list", got)
+			}
+		})
+	}
+}
+
+func slicesContainsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+// The refusal frame is V2-only: the V1 plugin keeps reading Go's stderr text,
+// so a V1 relay must not start emitting a frame it would treat as malformed.
+func TestOpenCodeTransportRefusalFrameIsEmittedOnlyUnderTheV2Declaration(t *testing.T) {
+	start, err := json.Marshal(openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: "no provider binding", Agent: reviewtransaction.LensRisk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(openCodeRelayContractEnvironment, "")
+	var v1 bytes.Buffer
+	if err := runReviewOpenCodeTransport(nil, bytes.NewReader(start), &v1); err == nil {
+		t.Fatal("unbound V1 start admitted")
+	}
+	if v1.Len() != 0 {
+		t.Fatalf("V1 relay wrote a refusal frame: %q", v1.String())
+	}
+
+	// The TestMain runtime fake is V1, so the V2 declaration disagrees with the
+	// detected runtime: the declared relay refuses at the gate and names it.
+	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
+	var v2 bytes.Buffer
+	transportErr := runReviewOpenCodeTransport(nil, bytes.NewReader(start), &v2)
+	if transportErr == nil {
+		t.Fatal("declared relay admitted an unbound start")
+	}
+	var frame openCodeTransportEnvelope
+	decoder := json.NewDecoder(&v2)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&frame); err != nil {
+		t.Fatalf("V2 refusal frame = %q: %v", v2.String(), err)
+	}
+	want := openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "refused", Error: openCodeTransportRefusalReason(transportErr)}
+	if !reflect.DeepEqual(frame, want) || decoder.More() {
+		t.Fatalf("V2 refusal frame = %#v, want exactly %#v", frame, want)
+	}
+}
+
+// The plugin keeps its own copy of the allow-list so arbitrary relay text can
+// never reach the parent; it must name exactly the reasons Go can emit.
+func TestOpenCodeV2PluginRefusalAllowListMatchesGo(t *testing.T) {
+	source, err := assets.Read("opencode/plugins-v2/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range openCodeRefusalReasons {
+		if !strings.Contains(source, `"`+reason+`"`) {
+			t.Fatalf("V2 plugin allow-list lacks Go refusal reason %q", reason)
+		}
+	}
+}
+
+// openCodeV2RuntimeForTest declares the managed V2 relay contract and reports a
+// V2 runtime, the only V2 combination the capability gate admits.
+func openCodeV2RuntimeForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
+	old := runtimeopencode.VersionRunnerOverride
+	t.Cleanup(func() { runtimeopencode.VersionRunnerOverride = old })
+	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
+		return runtimeopencode.CommandOutput{Stdout: []byte("opencode v2.0.19")}, nil
+	}
+}
+
+// With V2 admitted, the declared relay materializes, captures, and closes a
+// bound lens Task, and names agent mismatch in its bounded refusal frame.
+func TestOpenCodeV2RelayAdmitsBoundLensAndNamesAgentMismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
+	reviewEnabledHome(t)
+	openCodeV2RuntimeForTest(t)
+	repo, _, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	start := openCodeLensTransportStart(t, repo, record, lens)
+
+	mismatch := start
+	mismatch.Agent = "review-refuter"
+	encoded, err := json.Marshal(mismatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	_, before, err := discoverCompactFacadeReview(t.Context(), repo, record.State.LineageID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused bytes.Buffer
+	if err := runReviewOpenCodeTransport(nil, bytes.NewReader(encoded), &refused); err == nil {
+		t.Fatal("V2 relay admitted a lens Task under the refuter agent")
+	}
+	want := `{"schema":"` + openCodeReviewTransportSchema + `","operation":"refused","error":"agent_mismatch"}` + "\n"
+	if refused.String() != want {
+		t.Fatalf("V2 refusal output = %q, want %q", refused.String(), want)
+	}
+	assertOpenCodeRelayAuthorityUnchanged(t, repo, record.State.LineageID, store, before)
+
+	start.Agent = lens
+	relay := startOpenCodeTransportRelay(t, repo, start)
+	raw := string(admittedReviewerPayloadForTest(t, repo, record, lens, 0))
+	completed, err := relay.complete(openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &raw,
+	})
+	if err != nil || completed.Output == nil {
+		t.Fatalf("V2 lens completion = %#v, %v", completed, err)
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, []byte(*completed.Output), &terminal)
+	if terminal.Operation != "review/capture-result" || terminal.State != reviewtransaction.StateApproved {
+		t.Fatalf("V2 lens closure = %#v", terminal)
+	}
+	assertApprovedCompactAuthorityBurned(t, store, record.State.LineageID)
 }

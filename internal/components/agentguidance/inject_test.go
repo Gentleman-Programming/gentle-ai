@@ -1,18 +1,23 @@
 package agentguidance
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencoderuntime "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 func TestCodexODDRoutingInjectionPreservesUserTextAndResync(t *testing.T) {
@@ -128,6 +133,9 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 		if agent.ID == model.AgentPi {
 			continue // The install/sync step leaves package-owned Pi prompts untouched.
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance carrier (see conductor_catalog_only_test.go).
+		}
 		covered++
 		t.Run(string(agent.ID), func(t *testing.T) {
 			home := t.TempDir()
@@ -159,6 +167,9 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 func TestInjectRoutingDeliversOnlyODDWorkflow(t *testing.T) {
 	t.Parallel()
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 			result, err := InjectRoutingWithOptions(t.TempDir(), agent.ID, RoutingOptions{})
@@ -180,6 +191,9 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: covered by TestInjectRoutingNoOpsForCatalogOnlyConductor.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -192,18 +206,19 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 			if !result.Changed {
 				t.Fatalf("InjectRouting(%q) reported no change on a fresh target", agent.ID)
 			}
-			if len(result.Files) != 1 {
-				t.Fatalf("InjectRouting(%q) touched %v, want exactly one file", agent.ID, result.Files)
+			if len(result.Files) == 0 {
+				t.Fatalf("InjectRouting(%q) reported no written files", agent.ID)
+			}
+			for _, path := range result.Files {
+				if !filepath.IsAbs(path) {
+					t.Fatalf("InjectRouting(%q) reported non-absolute path %q", agent.ID, path)
+				}
+				if !strings.HasPrefix(path, targetDir) {
+					t.Fatalf("InjectRouting(%q) wrote outside the target dir: %q", agent.ID, path)
+				}
 			}
 
 			path := result.Files[0]
-			if !filepath.IsAbs(path) {
-				t.Fatalf("InjectRouting(%q) reported non-absolute path %q", agent.ID, path)
-			}
-			if !strings.HasPrefix(path, targetDir) {
-				t.Fatalf("InjectRouting(%q) wrote outside the target dir: %q", agent.ID, path)
-			}
-
 			// Read the scope the agent actually loads, not merely the bytes on
 			// disk: adapters whose guidance lives inside a settings document
 			// carry the block as an encoded string, never as raw markdown.
@@ -235,13 +250,27 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 // outside the target dir — into the real user config — and the idempotency
 // guarantee silently breaks because state leaks across runs.
 //
+// The OpenCode --version probe is stubbed to "not installed": a real opencode
+// on PATH would be spawned by that probe, inherit the hostile
+// XDG_CONFIG_HOME, and create its own config dir there. That is the external
+// binary's behavior, not adapter path resolution, and it made this test pass
+// or fail depending on whether the machine had opencode installed.
+//
 // No t.Parallel here: t.Setenv is process-wide and forbids it.
 func TestInjectRoutingStaysContainedUnderHostileEnvironment(t *testing.T) {
 	hostile := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(hostile, "xdg"))
 	t.Setenv("APPDATA", filepath.Join(hostile, "AppData", "Roaming"))
+	previousVersionRunner := opencoderuntime.VersionRunnerOverride
+	opencoderuntime.VersionRunnerOverride = func(context.Context, opencoderuntime.Command) (opencoderuntime.CommandOutput, error) {
+		return opencoderuntime.CommandOutput{}, exec.ErrNotFound
+	}
+	t.Cleanup(func() { opencoderuntime.VersionRunnerOverride = previousVersionRunner })
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			targetDir := t.TempDir()
 
@@ -417,10 +446,15 @@ func TestInjectRoutingSurvivesJinjaTemplateBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InjectRouting error = %v", err)
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("InjectRouting touched %v, want exactly one file", result.Files)
+	var guidancePath string
+	for _, path := range result.Files {
+		if filepath.Base(path) == routingModuleFile {
+			guidancePath = path
+		}
 	}
-	guidancePath := result.Files[0]
+	if guidancePath == "" {
+		t.Fatalf("InjectRouting touched %v, want %s included", result.Files, routingModuleFile)
+	}
 
 	rendered, err := RenderRouting(model.AgentKimi)
 	if err != nil {
@@ -444,6 +478,42 @@ func TestInjectRoutingSurvivesJinjaTemplateBootstrap(t *testing.T) {
 	include := `{% include "` + filepath.Base(guidancePath) + `"`
 	if !strings.Contains(entry, include) {
 		t.Fatalf("router template %q does not include %q:\n%s", adapter.SystemPromptFile(targetDir), filepath.Base(guidancePath), entry)
+	}
+}
+
+func TestInjectRoutingCurrentKimiReportsRenderedHubWrite(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	configDir := filepath.Join(targetDir, ".kimi-code")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	declared, err := RoutingPaths(targetDir, model.AgentKimi)
+	if err != nil {
+		t.Fatalf("RoutingPaths error = %v", err)
+	}
+	wantHub := filepath.Join(configDir, "AGENTS.md")
+	wantModule := filepath.Join(configDir, routingModuleFile)
+	if !samePathSet(declared, []string{wantModule, wantHub}) {
+		t.Fatalf("RoutingPaths(current Kimi) = %v, want module and hub", declared)
+	}
+
+	result, err := InjectRoutingWithOptions(targetDir, model.AgentKimi, RoutingOptions{})
+	if err != nil {
+		t.Fatalf("InjectRouting error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("InjectRouting changed = false, want true for first hub/module write")
+	}
+	if !samePathSet(result.Files, declared) {
+		t.Fatalf("InjectRouting files = %v, want declared %v", result.Files, declared)
+	}
+
+	hub := readFile(t, wantHub)
+	if !strings.Contains(hub, "<!-- gentle-ai:kimi-agents-hub -->") || !strings.Contains(hub, "Organic Driven Development") {
+		t.Fatalf("current Kimi hub does not contain rendered managed guidance:\n%s", hub)
 	}
 }
 
@@ -654,6 +724,9 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -682,10 +755,108 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 	}
 }
 
+// Only the three policy evidence sizes are exempt; other token vocabulary
+// remains forbidden. Rune-aware boundaries reject word continuations, including
+// Unicode numbers/marks, and numeric prefixes such as 1.2k or -2k. This shared
+// test helper changes neither rendered guidance nor runtime behavior.
+func routingBlockWithoutEvidenceSizes(block string) string {
+	isContinuation := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) ||
+			(unicode.IsSymbol(r) && r != '`') || unicode.Is(unicode.Pc, r) || unicode.Is(unicode.Pd, r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
+	}
+	for _, phrase := range []string{"10k tokens", "2k tokens", "150k parent-context tokens"} {
+		for offset := 0; offset < len(block); {
+			next := strings.Index(block[offset:], phrase)
+			if next < 0 {
+				break
+			}
+			start := offset + next
+			end := start + len(phrase)
+			left, right := true, true
+			if start > 0 {
+				r, _ := utf8.DecodeLastRuneInString(block[:start])
+				left = !isContinuation(r) && r != '.' && r != ',' && r != '+'
+			}
+			if end < len(block) {
+				r, _ := utf8.DecodeRuneInString(block[end:])
+				right = !isContinuation(r)
+			}
+			if left && right {
+				block = block[:start] + "evidence size" + block[end:]
+				offset = start + len("evidence size")
+			} else {
+				offset = end
+			}
+		}
+	}
+	return block
+}
+
+func TestInjectedRoutingTokenGuardSelectiveExceptions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		block     string
+		forbidden bool
+	}{
+		{"inline budget", "approximately 10k tokens of evidence", false},
+		{"handoff budget", "at most approximately 2k tokens with path:line evidence", false},
+		{"context budget", "approximately 150k parent-context tokens, advisory", false},
+		{"combined budgets", "10k tokens; 2k tokens; 150k parent-context tokens", false},
+		{"repeated budget", "10k tokens and 10k tokens", false},
+		{"punctuated budgets", "(10k tokens), `2k tokens`; [150k parent-context tokens].", false},
+		{"authorization vocabulary", "authorization token", true},
+		{"budget does not hide other vocabulary", "10k tokens and access token", true},
+		{"unapproved evidence size", "20k tokens", true},
+		{"prefixed size", "110k tokens", true},
+		{"decimal prefix", "1.2k tokens", true},
+		{"decimal prefix inline", "1.10k tokens", true},
+		{"decimal prefix context", "1.150k parent-context tokens", true},
+		{"fraction without integer", ".2k tokens", true},
+		{"negative size", "-2k tokens", true},
+		{"positive sign", "+2k tokens", true},
+		{"Unicode minus", "−2k tokens", true},
+		{"comma prefix", "1,2k tokens", true},
+		{"Unicode letter prefix", "é2k tokens", true},
+		{"Unicode letter suffix", "10k tokensé", true},
+		{"Unicode number prefix", "٢2k tokens", true},
+		{"Unicode number suffix", "10k tokens٢", true},
+		{"Unicode combining prefix", "\u03012k tokens", true},
+		{"Unicode combining suffix", "10k tokens\u0301", true},
+		{"Unicode format continuation", "10k tokens\u200d", true},
+		{"embedded word", "budget2k tokens", true},
+		{"hyphenated continuation", "10k tokens-extra", true},
+		{"singular token", "10k token", true},
+		{"suffixed word", "10k tokens_extra", true},
+		{"other retired vocabulary", "10k tokens and work-start", true},
+	} {
+		for _, guard := range []struct {
+			name  string
+			check func(string, string) string
+		}{
+			{"injection", func(block, _ string) string { return routingBlockWithoutEvidenceSizes(block) }},
+			{"routing", routingVocabularyForGuard},
+		} {
+			t.Run(guard.name+"/"+test.name, func(t *testing.T) {
+				forbidden := false
+				for _, word := range retiredRemoteControlPlaneVocabulary {
+					checked := strings.ToLower(guard.check(test.block, word))
+					forbidden = forbidden || strings.Contains(checked, strings.ToLower(word))
+				}
+				if forbidden != test.forbidden {
+					t.Errorf("guard rejects %q = %t, want %t", test.block, forbidden, test.forbidden)
+				}
+			})
+		}
+	}
+}
+
 func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
 	for _, agent := range catalog.AllAgents() {
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
+		}
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -700,7 +871,7 @@ func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 			if strings.TrimSpace(block) == "" {
 				t.Fatalf("InjectRouting(%q) delivered no managed routing block", agent.ID)
 			}
-			lowered := strings.ToLower(block)
+			lowered := strings.ToLower(routingBlockWithoutEvidenceSizes(block))
 			for _, forbidden := range retiredRemoteControlPlaneVocabulary {
 				if strings.Contains(lowered, strings.ToLower(forbidden)) {
 					t.Fatalf("InjectRouting(%q) delivered retired vocabulary %q:\n%s", agent.ID, forbidden, block)
@@ -721,6 +892,9 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		if agent.ID == model.AgentOpenCode || agent.ID == model.AgentKilocode {
 			continue
 		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: inherits Claude Code config, no prompt file of its own.
+		}
 		adapter, err := agents.NewAdapter(agent.ID)
 		if err != nil {
 			t.Fatalf("NewAdapter(%q) error = %v", agent.ID, err)
@@ -730,8 +904,8 @@ func markdownSectionAgents(t *testing.T) []model.AgentID {
 		}
 		selected = append(selected, agent.ID)
 	}
-	if len(selected) != supportedAgentCount-3 {
-		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-3)
+	if len(selected) != supportedAgentCount-4 {
+		t.Fatalf("selected %d markdown-section agents, want %d", len(selected), supportedAgentCount-4)
 	}
 	return selected
 }

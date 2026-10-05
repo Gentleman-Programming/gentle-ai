@@ -13,25 +13,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 )
 
 type Manager interface {
@@ -792,11 +792,12 @@ func retainedPiResources(homeDir, workspaceDir string) []string {
 	return retained
 }
 
-// optionalPiPackageCleanupCommands mirrors the Pi adapter's canonical package
-// sources. Each command remains separate because Pi 0.85.1 supports
-// `pi remove <source>`, not a bulk remove form.
+// optionalPiPackageCleanupCommands mirrors the Pi adapter's uninstall package
+// sources: the managed packages plus the retired pi-mcp-adapter that older
+// releases installed. Each command remains separate because Pi 0.85.1
+// supports `pi remove <source>`, not a bulk remove form.
 func optionalPiPackageCleanupCommands() []string {
-	sources := pi.ManagedPackageSources()
+	sources := pi.UninstallPackageSources()
 	commands := make([]string, 0, len(sources))
 	for _, source := range sources {
 		commands = append(commands, "pi remove "+source)
@@ -827,8 +828,11 @@ func dedupeSortedStrings(items []string) []string {
 	return slices.Compact(cloned)
 }
 
+// settingsTargets returns the JSON settings files generic cleaners may rewrite.
+// Only the native path is classified: OpenCode's effective path is caller
+// selected and kept as-is.
 func settingsTargets(homeDir string, adapter agents.Adapter) []string {
-	path := adapter.SettingsPath(homeDir)
+	path := agents.JSONSettingsPath(homeDir, adapter)
 	if path == "" {
 		return nil
 	}
@@ -1158,9 +1162,8 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 				}
 				return true, true, nil
 			}
-			// Preserve the file's existing mode: ~/.claude.json is injected
-			// with 0600 because it holds the OAuth session, and an uninstall
-			// rewrite must not widen it.
+			// Preserve the file's existing mode: an uninstall rewrite must
+			// not widen permissions on a file the user or agent restricted.
 			perm := os.FileMode(0o644)
 			if info, statErr := os.Lstat(path); statErr == nil {
 				perm = info.Mode().Perm()

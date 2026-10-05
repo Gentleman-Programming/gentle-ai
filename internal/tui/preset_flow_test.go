@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
 type flowAction struct {
@@ -20,6 +20,20 @@ type flowAction struct {
 	runCmd    bool
 }
 
+func TestOpenCodePresetSkipsExternalPlugins(t *testing.T) {
+	for _, preset := range []model.PresetID{model.PresetMinimal, model.PresetFullGentleman, model.PresetEcosystemOnly} {
+		t.Run(string(preset), func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen, m.Selection.Agents = ScreenPreset, []model.AgentID{model.AgentOpenCode}
+			m.Cursor = presetCursor(t, preset)
+			state := applyFlowAction(t, m, flowAction{key: tea.KeyMsg{Type: tea.KeyEnter}})
+			if state.Screen != ScreenDependencyTree {
+				t.Fatalf("preset reached %v, want install plan", state.Screen)
+			}
+		})
+	}
+}
+
 func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -27,15 +41,15 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 		preset model.PresetID
 		want   Screen
 	}{
-		{"full OpenCode", []model.AgentID{model.AgentOpenCode}, model.PresetFullGentleman, ScreenOpenCodePlugins},
-		{"ecosystem OpenCode", []model.AgentID{model.AgentOpenCode}, model.PresetEcosystemOnly, ScreenOpenCodePlugins},
-		{"minimal OpenCode", []model.AgentID{model.AgentOpenCode}, model.PresetMinimal, ScreenOpenCodePlugins},
+		{"full OpenCode", []model.AgentID{model.AgentOpenCode}, model.PresetFullGentleman, ScreenDependencyTree},
+		{"ecosystem OpenCode", []model.AgentID{model.AgentOpenCode}, model.PresetEcosystemOnly, ScreenDependencyTree},
+		{"minimal OpenCode", []model.AgentID{model.AgentOpenCode}, model.PresetMinimal, ScreenDependencyTree},
 		{"custom OpenCode", []model.AgentID{model.AgentOpenCode}, model.PresetCustom, ScreenDependencyTree},
 		{"full Cursor", []model.AgentID{model.AgentCursor}, model.PresetFullGentleman, ScreenDependencyTree},
 		{"ecosystem Cursor", []model.AgentID{model.AgentCursor}, model.PresetEcosystemOnly, ScreenDependencyTree},
 		{"minimal Cursor", []model.AgentID{model.AgentCursor}, model.PresetMinimal, ScreenDependencyTree},
 		{"custom Cursor", []model.AgentID{model.AgentCursor}, model.PresetCustom, ScreenDependencyTree},
-		{"full picker agents", []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCodex, model.AgentOpenCode}, model.PresetFullGentleman, ScreenOpenCodePlugins},
+		{"full picker agents", []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCodex, model.AgentOpenCode}, model.PresetFullGentleman, ScreenDependencyTree},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			m := NewModel(system.DetectionResult{}, "dev")
@@ -48,8 +62,6 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 			title := "Install Plan"
 			if tt.preset == model.PresetCustom {
 				title = "Select Components"
-			} else if tt.want == ScreenOpenCodePlugins {
-				title = "Optional OpenCode Community Plugins"
 			}
 			assertInstallerView(t, state, title)
 			if tt.want == ScreenDependencyTree && tt.preset != model.PresetCustom {
@@ -59,8 +71,6 @@ func TestPresetSelectionNextScreenFlowMatrix(t *testing.T) {
 				assertInstallerSnapshot(t, state, customComponentsSnapshot)
 			} else if tt.preset == model.PresetMinimal && tt.agents[0] == model.AgentCursor {
 				assertInstallerSnapshot(t, state, minimalPlanSnapshot)
-			} else if tt.want == ScreenOpenCodePlugins {
-				assertInstallerSnapshot(t, state, openCodePluginsSnapshot)
 			}
 			state = applyFlowAction(t, state, flowAction{key: tea.KeyMsg{Type: tea.KeyEsc}})
 			if state.Screen != ScreenPreset {
@@ -77,8 +87,8 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 		components []model.ComponentID
 		want       Screen
 	}{
-		{"OpenCode Engram", model.AgentOpenCode, []model.ComponentID{model.ComponentEngram}, ScreenOpenCodePlugins},
-		{"OpenCode Skills", model.AgentOpenCode, []model.ComponentID{model.ComponentSkills}, ScreenOpenCodePlugins},
+		{"OpenCode Engram", model.AgentOpenCode, []model.ComponentID{model.ComponentEngram}, ScreenInstallReviewMode},
+		{"OpenCode Skills", model.AgentOpenCode, []model.ComponentID{model.ComponentSkills}, ScreenSkillPicker},
 		{"Cursor Skills", model.AgentCursor, []model.ComponentID{model.ComponentSkills}, ScreenSkillPicker},
 		{"Cursor Engram", model.AgentCursor, []model.ComponentID{model.ComponentEngram}, ScreenInstallReviewMode},
 	} {
@@ -92,9 +102,7 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 			if state.Screen != tt.want {
 				t.Fatalf("screen = %v, want %v", state.Screen, tt.want)
 			}
-			if tt.want == ScreenOpenCodePlugins {
-				assertInstallerSnapshot(t, state, openCodePluginsSnapshot)
-			} else if tt.want == ScreenSkillPicker {
+			if tt.want == ScreenSkillPicker {
 				assertInstallerSnapshot(t, state, skillPickerSnapshot)
 			} else {
 				assertInstallerView(t, state, "Receipt-Driven Development")
@@ -126,10 +134,10 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 	}{
 		{"minimal Cursor", model.AgentCursor, model.PresetMinimal, nil, []Screen{ScreenDependencyTree}, []Screen{ScreenPreset}},
 		{"full Cursor", model.AgentCursor, model.PresetFullGentleman, nil, []Screen{ScreenDependencyTree}, []Screen{ScreenPreset}},
-		{"minimal OpenCode", model.AgentOpenCode, model.PresetMinimal, nil, []Screen{ScreenOpenCodePlugins, ScreenDependencyTree}, []Screen{ScreenOpenCodePlugins, ScreenPreset}},
-		{"full OpenCode", model.AgentOpenCode, model.PresetFullGentleman, nil, []Screen{ScreenOpenCodePlugins, ScreenDependencyTree}, []Screen{ScreenOpenCodePlugins, ScreenPreset}},
+		{"minimal OpenCode", model.AgentOpenCode, model.PresetMinimal, nil, []Screen{ScreenDependencyTree}, []Screen{ScreenPreset}},
+		{"full OpenCode", model.AgentOpenCode, model.PresetFullGentleman, nil, []Screen{ScreenDependencyTree}, []Screen{ScreenPreset}},
 		{"custom Cursor Skills", model.AgentCursor, model.PresetCustom, []model.ComponentID{model.ComponentSDD, model.ComponentSkills}, []Screen{ScreenSkillPicker}, []Screen{ScreenDependencyTree}},
-		{"custom OpenCode Skills", model.AgentOpenCode, model.PresetCustom, []model.ComponentID{model.ComponentSDD, model.ComponentSkills}, []Screen{ScreenOpenCodePlugins, ScreenSkillPicker}, []Screen{ScreenDependencyTree}},
+		{"custom OpenCode Skills", model.AgentOpenCode, model.PresetCustom, []model.ComponentID{model.ComponentSDD, model.ComponentSkills}, []Screen{ScreenSkillPicker}, []Screen{ScreenDependencyTree}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			m := NewModel(system.DetectionResult{}, "dev")
@@ -141,9 +149,6 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				m.Screen, m.Cursor = ScreenPreset, presetCursor(t, tt.preset)
 			}
 			for i, want := range tt.forward {
-				if i > 0 && m.Screen == ScreenOpenCodePlugins {
-					m.Cursor = len(opencodepluginDefinitions()) * 2
-				}
 				m = applyFlowAction(t, m, flowAction{key: tea.KeyMsg{Type: tea.KeyEnter}})
 				if m.Screen != want {
 					t.Fatalf("forward %d = %v, want %v", i, m.Screen, want)
@@ -294,22 +299,6 @@ Components to install
   Back
 
 j/k: navigate • enter: select • esc: back
-`
-
-const openCodePluginsSnapshot = `╔═══════════════════════════════════════════════════════════════════════════════════╗
-║                                                                                   ║
-║  Optional OpenCode Community Plugins                                              ║
-║                                                                                   ║
-║  Install community TUI plugins now, or open their repos first to review them.     ║
-║                                                                                   ║
-║  > [ ] Sub-agent Statusline — OpenCode sidebar/statusline for sub-agent activity  ║
-║    View repo: https://github.com/Joaquinvesapa/sub-agent-statusline               ║
-║    Continue                                                                       ║
-║    Back                                                                           ║
-║                                                                                   ║
-║  space/enter: toggle • repo row: open browser • esc: back                         ║
-║                                                                                   ║
-╚═══════════════════════════════════════════════════════════════════════════════════╝
 `
 
 const skillPickerSnapshot = `Select Skills

@@ -55,9 +55,6 @@ internal/components/engram/download.go	downloadAndExtractTarGz
 internal/components/engram/download.go	downloadAndExtractZip
 internal/components/engram/inject.go	Inject
 internal/components/engram/inject.go	SetLookPathForTest
-internal/components/engram/inject.go	engramServerJSON
-internal/components/engram/inject.go	ensureAntigravitySettings
-internal/components/engram/inject.go	isAbsoluteEngramPath
 internal/components/engram/verify.go	CountVersionCallsForTest
 internal/components/engram/verify.go	SetVersionForTest
 internal/components/filemerge/toml.go	RemoveTOMLTableKeys
@@ -68,6 +65,8 @@ internal/components/gga/install.go	ShouldInstall
 internal/components/gga/runtime.go	RuntimeBinDir
 internal/components/mcp/inject.go	context7Args
 internal/components/telemetryruntime/managed.go	Reconcile
+internal/filecoord/lock.go	UnsupportedError.Error
+internal/filecoord/lock.go	UnsupportedError.Unwrap
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv

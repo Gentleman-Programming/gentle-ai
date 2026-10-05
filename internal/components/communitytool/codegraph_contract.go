@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const codeGraphUpstreamVersion = "1.4.1"
@@ -49,6 +49,11 @@ var codeGraphCompatibilityTable = map[model.AgentID]codeGraphCompatibility{
 	model.AgentPi:            reconciledCompatibility(model.AgentPi, ""),
 	model.AgentTrae:          excludedCompatibility(model.AgentTrae),
 	model.AgentHermes:        nativeCompatibility(model.AgentHermes, "hermes"),
+	// Conductor is detection/catalog-only and inherits Claude Code
+	// configuration for its workspaces, so it owns no direct CodeGraph wiring;
+	// it stays in the table so a future capability claim cannot silently
+	// bypass the exhaustive compatibility contract.
+	model.AgentConductor: excludedCompatibility(model.AgentConductor),
 }
 
 func nativeCompatibility(id model.AgentID, target string) codeGraphCompatibility {

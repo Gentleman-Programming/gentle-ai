@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/doctor"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/storage"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/storage"
 )
 
 type CheckStatus = doctor.Status
@@ -553,6 +553,16 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 		}
 	}
 	if len(commands) == 0 {
+		// Engram on Pi runs through gentle-engram's native tools, not an MCP
+		// server, so a Pi-only host has no Engram MCP entry by design and
+		// 'gentle-ai sync' would never create one.
+		if onlyNativeEngramAgents(installedAgents) {
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusPass,
+				Detail: "engram MCP not applicable: Pi uses gentle-engram native memory tools",
+			}
+		}
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusWarn,
@@ -602,6 +612,20 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 		Status: CheckStatusPass,
 		Detail: "engram MCP (stdio) answered the initialize handshake for persisted configuration: " + strings.Join(sources, ", "),
 	}
+}
+
+// onlyNativeEngramAgents reports whether every installed agent reaches Engram
+// through native tools instead of MCP. Pi is the only such agent.
+func onlyNativeEngramAgents(installedAgents []string) bool {
+	if len(installedAgents) == 0 {
+		return false
+	}
+	for _, agentID := range installedAgents {
+		if agentID != "pi" {
+			return false
+		}
+	}
+	return true
 }
 
 // checkEngramHTTP probes the HTTP deployment the user declared via

@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const (
@@ -815,6 +815,7 @@ func newReviewLensProviderTask(arguments []ReviewTransitionArgument, subject *re
 type reviewNextTransitionInput struct {
 	Gate                                           reviewtransaction.GateKind
 	Successor, Reason, Actor, Authorization        string
+	RecoveryInputsProvided                         bool
 	RepairActor, RepairReason, RepairAuthorization string
 	StartLineage                                   string
 	RuntimeAgent                                   model.AgentID
@@ -1133,9 +1134,15 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 			})
 		}
 	}
-	if input.recoveryAuthorized(binding) {
-		arguments := []ReviewTransitionArgument{{Name: "predecessor-lineage", Value: binding.LineageID}, {Name: "expected-predecessor-revision", Value: binding.Revision}, {Name: "successor-lineage", Value: input.Successor}, {Name: "disposition", Value: string(disposition)}, {Name: "reason", Value: input.Reason}, {Name: "actor", Value: input.Actor}, {Name: "maintainer-authorization", Value: input.Authorization}}
-		transition := reviewExecuteTransition("recovery_authorized", "review.recover", append(arguments, selectorArguments...), []ReviewTransitionArgument{{Name: "state", Value: string(status.Authority.State)}, {Name: "recovery_authorization", Value: "provided"}}, binding, nil)
+	explicit := input.RecoveryInputsProvided || input.Reason != "" || input.Actor != "" || input.Authorization != ""
+	if input.Successor != "" && (!explicit || input.recoveryAuthorized(binding)) {
+		arguments := []ReviewTransitionArgument{{Name: "predecessor-lineage", Value: binding.LineageID}, {Name: "expected-predecessor-revision", Value: binding.Revision}, {Name: "successor-lineage", Value: input.Successor}, {Name: "disposition", Value: string(disposition)}}
+		authorization := "native"
+		if explicit {
+			arguments = append(arguments, ReviewTransitionArgument{Name: "reason", Value: input.Reason}, ReviewTransitionArgument{Name: "actor", Value: input.Actor}, ReviewTransitionArgument{Name: "maintainer-authorization", Value: input.Authorization})
+			authorization = "provided"
+		}
+		transition := reviewExecuteTransition("recovery_authorized", "review.recover", append(arguments, selectorArguments...), []ReviewTransitionArgument{{Name: "state", Value: string(status.Authority.State)}, {Name: "recovery_authorization", Value: authorization}}, binding, nil)
 		if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
 			transition.Execute.SelectorArguments = reviewTransitionSelectorArguments(selectorArguments)
 		}

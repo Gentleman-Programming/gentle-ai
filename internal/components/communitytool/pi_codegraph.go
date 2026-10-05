@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	piagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const (
@@ -258,9 +258,7 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	if probe == nil {
 		probe = piCodeGraphEffectiveMCPProbe
 		if effectiveMCPPath != paths.MCPConfig {
-			probe = func(mcpPath string) (PiCodeGraphMCPProbeResult, error) {
-				return probePiCodeGraphMCPWithAgentDir(mcpPath, paths.AgentDir)
-			}
+			probe = probePiCodeGraphMCP
 		}
 	}
 	if err = verifyPiCodeGraphWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
@@ -503,21 +501,16 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 	return verification, nil
 }
 
-func probePiCodeGraphMCP(mcpPath string) (PiCodeGraphMCPProbeResult, error) {
-	return probePiCodeGraphMCPWithAgentDir(mcpPath, filepath.Dir(mcpPath))
-}
-
-func probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir string) (PiCodeGraphMCPProbeResult, error) {
+// probePiCodeGraphMCP verifies the configured CodeGraph stdio server directly.
+// Pi >= 0.99.0 runs mcp.json servers through its built-in MCP support, so no
+// extension package on disk is required.
+func probePiCodeGraphMCP(string) (PiCodeGraphMCPProbeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return probePiCodeGraphMCPWithAgentDirContext(ctx, mcpPath, agentDir)
+	return probePiCodeGraphMCPContext(ctx)
 }
 
-func probePiCodeGraphMCPWithAgentDirContext(ctx context.Context, mcpPath, agentDir string) (probeResult PiCodeGraphMCPProbeResult, returnErr error) {
-	adapterPath := filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts")
-	if _, err := os.Stat(adapterPath); err != nil {
-		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("Pi MCP adapter extension is unavailable at %q: %w", adapterPath, err)
-	}
+func probePiCodeGraphMCPContext(ctx context.Context) (probeResult PiCodeGraphMCPProbeResult, returnErr error) {
 	command := exec.CommandContext(ctx, "codegraph", "serve", "--mcp")
 	system.EnsureCommandDir(command)
 	stdin, err := command.StdinPipe()

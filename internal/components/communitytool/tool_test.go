@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
 // TestMain neutralizes ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
@@ -287,6 +287,7 @@ func TestInstallWithHomeReportsEffectiveMCPAdapterSchema(t *testing.T) {
 
 func TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
 	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
 	mustWrite(t, filepath.Join(home, ".pi", "agent", "subagents", "worker.md"), "---\ntools: bash\n---\nwork\n")
 	previous := piCodeGraphEffectiveMCPProbe
@@ -737,7 +738,7 @@ func TestInstallRunsCommandsAndReturnsLazyProjectIndexManualAction(t *testing.T)
 
 func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testing.T) {
 	home := t.TempDir()
-	mustWrite(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
 	previousProbe := piCodeGraphEffectiveMCPProbe
 	piCodeGraphEffectiveMCPProbe = func(path string) (PiCodeGraphMCPProbeResult, error) {
 		result, _ := piProbeForTest(path)

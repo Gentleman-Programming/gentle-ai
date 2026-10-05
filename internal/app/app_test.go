@@ -19,17 +19,17 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 )
 
 func TestClaudeNativeReviewAssignmentsPersistThroughAppStateConversion(t *testing.T) {
@@ -1877,11 +1877,11 @@ func TestApplyOverrides_CodexCarrilModelAssignments(t *testing.T) {
 	if len(sel.CodexCarrilModelAssignments) != len(carrilModels) {
 		t.Fatalf("CodexCarrilModelAssignments len = %d, want %d", len(sel.CodexCarrilModelAssignments), len(carrilModels))
 	}
-	if sel.CodexCarrilModelAssignments["sdd-cheap"] != "gpt-6-luna" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-cheap] = %q, want gpt-6-luna", sel.CodexCarrilModelAssignments["sdd-cheap"])
+	if sel.CodexCarrilModelAssignments["sdd-cheap"] != "gpt-6.1-luna" {
+		t.Errorf("CodexCarrilModelAssignments[sdd-cheap] = %q, want gpt-6.1-luna", sel.CodexCarrilModelAssignments["sdd-cheap"])
 	}
-	if sel.CodexCarrilModelAssignments["sdd-strong"] != "gpt-6-sol" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-6-sol", sel.CodexCarrilModelAssignments["sdd-strong"])
+	if sel.CodexCarrilModelAssignments["sdd-strong"] != "gpt-6.1-sol" {
+		t.Errorf("CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-6.1-sol", sel.CodexCarrilModelAssignments["sdd-strong"])
 	}
 }
 
@@ -1937,9 +1937,9 @@ func TestTuiSyncMigratesLegacyCodexCarrilDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range []string{
-		"| `odd-explorer` | `gpt-6-luna` | `high` |",
-		"| `odd-worker` | `gpt-6-luna` | `high` |",
-		"| `odd-verify` | `gpt-6-sol` | `medium` |",
+		"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+		"| `odd-worker` | `gpt-6.1-luna` | `high` |",
+		"| `odd-verify` | `gpt-6.1-sol` | `medium` |",
 	} {
 		if !strings.Contains(string(body), row) {
 			t.Errorf("migrated Codex routing missing %q", row)

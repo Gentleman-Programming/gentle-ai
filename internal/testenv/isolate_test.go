@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
 // TestIsolateUnsetsKnownAgentRuntimeDirOverrides pins the exact set of

@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestOpenCodeBackgroundIntentValidation(t *testing.T) {
@@ -648,7 +648,8 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				Persona:    model.PersonaNeutral,
 			}
 			background := OpenCodeBackgroundResolution{Intent: tt.intent, Effective: tt.intent, Persist: tt.intent}
-			result, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{})
+			persisted, persistedErr := state.Read(home)
+			result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, persistedErr, background, PiBackgroundResolution{})
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
 			}
@@ -699,7 +700,8 @@ func TestSyncReportsManagedLauncherChanges(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentPersona},
 		Persona:    model.PersonaNeutral,
 	}
-	result, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{})
+	persisted, persistedErr := state.Read(home)
+	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, persistedErr, background, PiBackgroundResolution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -732,7 +734,8 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 		Persona:    model.PersonaNeutral,
 	}
 	background := OpenCodeBackgroundResolution{Intent: model.OpenCodeBackgroundOn, Effective: model.OpenCodeBackgroundOn, Persist: model.OpenCodeBackgroundOn}
-	if _, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{}); err != nil {
+	initial, initialErr := state.Read(home)
+	if _, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, initial, initialErr, background, PiBackgroundResolution{}); err != nil {
 		t.Fatalf("initial sync error = %v", err)
 	}
 	persisted, err := state.Read(home)
@@ -743,7 +746,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 	if err := state.Write(home, persisted); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runSyncWithSelection(home, selection, background, PiBackgroundResolution{})
+	result, err := runSyncWithSelectionScope(home, selection, ScopeGlobal, persisted, nil, background, PiBackgroundResolution{})
 	if err != nil {
 		t.Fatalf("no-op sync error = %v", err)
 	}

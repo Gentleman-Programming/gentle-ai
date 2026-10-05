@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // CodexModelPreset represents a named effort-tier preset for Codex per-phase
@@ -32,9 +32,9 @@ var codexPresetOrder = []CodexModelPreset{
 }
 
 var codexPresetDescriptions = map[CodexModelPreset]string{
-	CodexPresetLowCost:     "Lowest-cost GPT-6 mix — Sol for reasoning, Luna for code and light work",
-	CodexPresetRecommended: "Balanced GPT-6 mix — Sol for reasoning, Luna for code and light work",
-	CodexPresetPowerful:    "High-effort GPT-6 mix — Astra for reasoning, Sol for code, Luna for light work",
+	CodexPresetLowCost:     "Lowest-cost GPT-6.1 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetRecommended: "Balanced GPT-6.1 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetPowerful:    "High-effort GPT-6.1 mix — Astra for reasoning, Sol for code, Luna for light work",
 }
 
 var codexPresetConstructors = map[CodexModelPreset]func() map[string]model.CodexEffort{

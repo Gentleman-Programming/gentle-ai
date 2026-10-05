@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestSkillRegistryPreservesExistingClaudeHooks(t *testing.T) {
@@ -113,8 +114,21 @@ func TestSkillRegistryHooksWithoutSDD(t *testing.T) {
 			if err := json.Unmarshal(content, &document); err != nil {
 				t.Fatal(err)
 			}
-			if filepath.Base(result.Files[0]) != tc.file || !strings.Contains(string(content), strings.ReplaceAll(tc.command, `"`, `\"`)) {
-				t.Fatalf("unexpected hook: %s", content)
+			command := tc.command
+			if tc.agent == model.AgentClaudeCode && runtime.GOOS == "windows" {
+				command = `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
+			}
+			event := "SessionStart"
+			if tc.agent == model.AgentClaudeCode {
+				event = "UserPromptSubmit"
+			}
+			entries, ok := document["hooks"].(map[string]any)[event].([]any)
+			if !ok || len(entries) != 1 || filepath.Base(result.Files[0]) != tc.file {
+				t.Fatalf("unexpected hook shape: %s", content)
+			}
+			hook := entries[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
+			if hook["type"] != "command" || hook["command"] != command {
+				t.Fatalf("hook = %v, want exact %q", hook, command)
 			}
 			again, err := InstallSkillRegistry(home, adapter)
 			if err != nil {

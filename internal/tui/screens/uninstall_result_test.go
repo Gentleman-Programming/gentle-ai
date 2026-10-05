@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestRenderUninstallResultIncludesManualCleanup(t *testing.T) {
@@ -102,9 +102,9 @@ func TestRenderUninstallResultDistinguishesRetainedPiResourcesAndCommands(t *tes
 		OptionalPiPackageCleanupCommands: []string{
 			"pi remove npm:gentle-pi",
 			"pi remove npm:gentle-engram",
-			"pi remove npm:pi-mcp-adapter",
 			"pi remove npm:pi-web-access",
 			"pi remove npm:pi-btw",
+			"pi remove npm:pi-mcp-adapter",
 		},
 	}, nil, model.UninstallModePartial, nil, model.EngramUninstallScopeGlobal, false, nil, nil)
 

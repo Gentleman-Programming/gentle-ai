@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func createWindowsCompatibilityJunction(t *testing.T, link, target string) {
@@ -419,7 +419,7 @@ func TestWindowsCompatibilityTransactionRollbackRemovesCreatedFilesAfterDuplicat
 	writeStale(t, existing)
 	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
 
-	first, err := newSyncRuntime(home, selection)
+	first, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestWindowsCompatibilityTransactionRollbackRemovesCreatedFilesAfterDuplicat
 	first.state.cleanupRollbackSnapshot()
 	first.state.cleanupCompatibilityTransaction()
 
-	runtime, err := newSyncRuntime(home, selection)
+	runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testing.T) {
@@ -161,14 +161,12 @@ func TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance(t *testing.T) {
 	}
 }
 
-func TestBackupTargetsIncludeSelectedOpenCodePluginPaths(t *testing.T) {
+func TestBackupTargetsIncludeGentleLogoComponentPaths(t *testing.T) {
 	home := t.TempDir()
 	targets, err := backupTargets(home, "", ScopeGlobal, model.Selection{
-		OpenCodePlugins: []model.OpenCodeCommunityPluginID{
-			model.OpenCodePluginSubAgentStatusline,
-			model.OpenCodePluginGentleLogo,
-		},
-	}, planner.ResolvedPlan{})
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentOpenCodeGentleLogo}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,10 +194,10 @@ func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testin
 	}
 
 	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, model.Selection{
-		Agents:          []model.AgentID{model.AgentOpenCode},
-		OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline},
-		CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
-	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+		Agents:         []model.AgentID{model.AgentOpenCode},
+		Components:     []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentOpenCodeGentleLogo}}, system.PlatformProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,13 +242,10 @@ func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistrati
 			}
 
 			runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, model.Selection{
-				Agents: []model.AgentID{model.AgentOpenCode},
-				OpenCodePlugins: []model.OpenCodeCommunityPluginID{
-					model.OpenCodePluginSubAgentStatusline,
-					model.OpenCodePluginGentleLogo,
-				},
+				Agents:         []model.AgentID{model.AgentOpenCode},
+				Components:     []model.ComponentID{model.ComponentOpenCodeGentleLogo},
 				CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-			}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+			}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentOpenCodeGentleLogo}}, system.PlatformProfile{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -310,7 +305,7 @@ func (s failAfterPluginRegistrationStep) Run() error {
 	if err := json.Unmarshal(tui, &config); err != nil {
 		return fmt.Errorf("decode plugin registration %q: %w", s.tuiPath, err)
 	}
-	for _, plugin := range []string{"opencode-subagent-statusline", s.logoPath} {
+	for _, plugin := range []string{s.logoPath} {
 		if !slices.Contains(config.Plugin, plugin) {
 			return fmt.Errorf("plugin registration %q is missing exact plugin %q", s.tuiPath, plugin)
 		}
@@ -334,10 +329,10 @@ func TestSuccessfulCodeGraphReconciliationStillRegistersOpenCodePlugin(t *testin
 	}
 
 	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, model.Selection{
-		Agents:          []model.AgentID{model.AgentOpenCode},
-		OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline},
-		CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
-	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+		Agents:         []model.AgentID{model.AgentOpenCode},
+		Components:     []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentOpenCodeGentleLogo}}, system.PlatformProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +344,7 @@ func TestSuccessfulCodeGraphReconciliationStillRegistersOpenCodePlugin(t *testin
 	}
 
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
-	if err != nil || !strings.Contains(string(data), "opencode-subagent-statusline") {
+	if err != nil || !strings.Contains(string(data), "gentle-logo.tsx") {
 		t.Fatalf("OpenCode plugin registration = %q, %v; want successful registration", data, err)
 	}
 }
@@ -704,7 +699,6 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			writePiInstallFixture(t, home)
-			mustWriteFile(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), []byte("export default {}\n"))
 			installFakeCodeGraphMCP(t, tc.tools)
 
 			result, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true})
@@ -724,10 +718,10 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 
 func TestSyncPlanIncludesPiCodeGraphReconciliationAfterComponentsWhenSelected(t *testing.T) {
 	home := t.TempDir()
-	runtime, err := newSyncRuntime(home, model.Selection{
+	runtime, err := newSyncRuntimeWithScope(home, model.Selection{
 		Agents:         []model.AgentID{model.AgentPi},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
-	})
+	}, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

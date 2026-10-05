@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // This file is the RED-first proof for the Flow 11 defect an external
@@ -343,6 +343,22 @@ func TestReviewTransitionCommandQuotesFreeTextValues(t *testing.T) {
 	want := "gentle-ai review repair --lineage=review-quote '--reason=historical alias repair' '--actor=o'\\''brien'"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
+	}
+}
+
+// TestReviewRecoverCommandQuotesCwd proves the printed recovery continuation
+// keeps a working directory with spaces or Windows backslashes as one argv
+// entry; an unquoted path lost its separators when a shell re-read it.
+func TestReviewRecoverCommandQuotesCwd(t *testing.T) {
+	for _, cwd := range []string{
+		`C:\Users\runneradmin\AppData\Local\Temp\TestRecover001`,
+		"/tmp/review repo/o'brien",
+	} {
+		command := reviewRecoverCommand(cwd, "pred", "rev", "succ", "escalated")
+		words := reviewShellWords(t, command)
+		if len(words) < 2 || words[len(words)-2] != "--cwd" || words[len(words)-1] != cwd {
+			t.Fatalf("recover command %q split into %q, want trailing --cwd %q", command, words, cwd)
+		}
 	}
 }
 
