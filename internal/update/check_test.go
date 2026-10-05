@@ -18,6 +18,14 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
+func TestUpdateCatalogOmitsExternalOpenCodePlugins(t *testing.T) {
+	for _, tool := range Tools {
+		if tool.Name == "opencode-subagent-statusline" || tool.Name == "opencode-sdd-engram-manage" {
+			t.Errorf("retired plugin %q remains in update catalog", tool.Name)
+		}
+	}
+}
+
 func TestMain(m *testing.M) {
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
@@ -1125,8 +1133,8 @@ func TestCheckAll(t *testing.T) {
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "1.5.0", profile)
 
-	if len(results) != 4 {
-		t.Fatalf("len(results) = %d, want 4", len(results))
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3", len(results))
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
@@ -1137,7 +1145,6 @@ func TestCheckAll(t *testing.T) {
 
 	// gga: not installed
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
-	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
 }
 
 func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
@@ -1540,18 +1547,17 @@ func TestParseVersionFromOutput(t *testing.T) {
 
 // TestRegistryContents verifies the registry has all expected tools.
 func TestRegistryContents(t *testing.T) {
-	if len(Tools) != 4 {
-		t.Fatalf("len(Tools) = %d, want 4", len(Tools))
+	if len(Tools) != 3 {
+		t.Fatalf("len(Tools) = %d, want 3", len(Tools))
 	}
 
 	expected := map[string]struct {
 		owner string
 		repo  string
 	}{
-		"gentle-ai":                    {owner: "Gentleman-Programming", repo: "gentle-ai"},
-		"engram":                       {owner: "Gentleman-Programming", repo: "engram"},
-		"gga":                          {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
-		"opencode-subagent-statusline": {owner: "Joaquinvesapa", repo: "sub-agent-statusline"},
+		"gentle-ai": {owner: "Gentleman-Programming", repo: "gentle-ai"},
+		"engram":    {owner: "Gentleman-Programming", repo: "engram"},
+		"gga":       {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
 	}
 
 	for _, tool := range Tools {
@@ -1581,9 +1587,6 @@ func TestRegistryContents(t *testing.T) {
 	}
 	if Tools[2].DetectCmd == nil {
 		t.Fatalf("gga DetectCmd should not be nil")
-	}
-	if Tools[3].NpmPackage == "" {
-		t.Fatalf("OpenCode plugin tools should declare NpmPackage")
 	}
 }
 

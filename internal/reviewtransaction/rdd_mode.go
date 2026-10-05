@@ -356,7 +356,7 @@ func SetCloneLocalRDDMode(
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
-	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(dir, rddModeLockName))
+	lock, err := acquireCloneLocalRDDModeLock(ctx, filepath.Join(dir, rddModeLockName))
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
@@ -497,6 +497,16 @@ type cloneLocalRDDModeMirror struct {
 // walk, EIO, or ESTALE on a network mount. Production always uses the real
 // scan.
 var cloneLocalRDDModeMirrorSlotScan = cloneLocalRDDOverrideHeadGeneration
+
+// acquireCloneLocalRDDModeLock takes this build's clone-local writer lock.
+//
+// It is a variable because the lost-race contract cannot be proven by timing:
+// a writer that reads the head and then waits behind the winner can exhaust
+// the bounded lock wait on a slow runner before it ever reaches the
+// compare-and-set it exists to exercise. A test holds every writer at this
+// point until all of them have read the same head. Production always uses
+// the real bounded acquisition.
+var acquireCloneLocalRDDModeLock = acquireRARAuthorityLock
 
 func openCloneLocalRDDModeMirror(ctx context.Context, repo string) *cloneLocalRDDModeMirror {
 	mirror := &cloneLocalRDDModeMirror{}

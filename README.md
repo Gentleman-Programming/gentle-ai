@@ -136,9 +136,9 @@ Small changes should not need a planning pipeline, and larger work should not lo
 
 ---
 
-### Strict TDD — Prove behavior when enabled
+### Test-first by default — Prove each requested rule
 
-ODD uses the configured TDD mode and exact test runner. When Strict TDD is enabled, capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. When disabled, run applicable functional checks anyway. The presence of tests alone does not enable Strict TDD.
+ODD applies test-first development by default when a relevant runnable test and a clear expected outcome exist: capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. Each requested rule gets one RED test, each touched existing command or option gets one test proving its previous behavior still holds, and nothing else is padded in. Without a meaningful runnable test, the agent explains the exception and runs applicable functional checks anyway.
 
 **[Docs →](docs/usage.md#organic-driven-development-odd)**
 
@@ -213,8 +213,8 @@ brew install gentleman-programming/tap/gentle-ai
 # macOS / Linux (curl)
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
-# Windows (PowerShell) — source install, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
+# Windows (PowerShell) — source install of the latest release, needs Go 1.25.10+
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0
 ```
 
 ```bash
@@ -224,7 +224,7 @@ gentle-ai doctor   # verify — read-only, changes nothing
 
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
-> **Beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
+> **Beta channel and per-distro prerequisites: [Quickstart →](docs/quickstart.md) · Signature verification: [Release signing →](docs/release-signing.md#user-verification)**
 
 <div align="right"><a href="#top">Back to top</a></div>
 

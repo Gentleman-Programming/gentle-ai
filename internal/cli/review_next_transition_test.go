@@ -439,16 +439,55 @@ func TestReviewRecoveryCollectionSameTargetSelectorGuard(t *testing.T) {
 		wantKind   string
 		wantReason string
 	}{
-		{name: "invalidated current changes collects authorization", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}, wantKind: reviewNextTransitionCollect, wantReason: "recovery_authorization_required"},
+		{name: "invalidated current changes executes native recovery", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}, wantKind: reviewNextTransitionExecute, wantReason: "recovery_authorized"},
 		{name: "unchanged base diff stops", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseDiff}, wantKind: reviewNextTransitionStop, wantReason: "recovery_scope_unchanged"},
 		{name: "unchanged workspace overlay stops", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay}, wantKind: reviewNextTransitionStop, wantReason: "recovery_scope_unchanged"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{
-				Selector: &reviewTransitionSelector{Recovery: &tt.recovery},
+				Selector: &reviewTransitionSelector{Recovery: &tt.recovery}, Successor: "native-successor",
 			})
 			if got.Kind != tt.wantKind || got.ReasonCode != tt.wantReason {
 				t.Fatalf("same-target recovery transition = %#v", got)
+			}
+			if got.Execute == nil {
+				return
+			}
+			if err := got.Validate(); err != nil || len(got.Execute.Arguments) != 4 {
+				t.Fatalf("four-argument transition invalid: %v", err)
+			}
+			// Rebuild command/tokens so rejection tests argument semantics,
+			// rather than merely detecting a stale command string.
+			validate := func(args []ReviewTransitionArgument) error {
+				transition := reviewExecuteTransition(got.ReasonCode, got.Execute.Operation, args, got.Execute.Preconditions, got.Execute.Binding, nil)
+				return transition.Validate()
+			}
+			for _, argument := range []ReviewTransitionArgument{
+				{Name: "actor", Value: "maintainer"}, {Name: "reason", Value: "partial"},
+				{Name: "maintainer-authorization", Value: "wrong"}, {Name: "extra", Value: "extraneous"},
+			} {
+				if validate(append(slices.Clone(got.Execute.Arguments), argument)) == nil {
+					t.Fatalf("native recovery accepted partial/extraneous %s", argument.Name)
+				}
+			}
+			explicit := append(slices.Clone(got.Execute.Arguments),
+				ReviewTransitionArgument{Name: "actor", Value: "maintainer"}, ReviewTransitionArgument{Name: "reason", Value: "compatibility"},
+				ReviewTransitionArgument{Name: "maintainer-authorization", Value: reviewTransitionRecoveryAuthorization(got.Execute.Binding, "", "maintainer", "compatibility")})
+			if err := validate(explicit); err != nil {
+				t.Fatalf("seven-argument compatibility invalid: %v", err)
+			}
+			for _, value := range []string{"", "wrong"} {
+				if validate(setSelectorTransitionArgument(slices.Clone(explicit), "maintainer-authorization", value)) == nil {
+					t.Fatalf("explicit authorization %q accepted", value)
+				}
+			}
+			for _, argument := range []ReviewTransitionArgument{
+				{Name: "predecessor-lineage", Value: "wrong"}, {Name: "expected-predecessor-revision", Value: "wrong"},
+				{Name: "successor-lineage", Value: status.Authority.LineageID}, {Name: "disposition", Value: "wrong"},
+			} {
+				if validate(setSelectorTransitionArgument(slices.Clone(got.Execute.Arguments), argument.Name, argument.Value)) == nil {
+					t.Fatalf("native recovery accepted malformed %s", argument.Name)
+				}
 			}
 		})
 	}

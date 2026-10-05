@@ -346,6 +346,22 @@ func TestReviewTransitionCommandQuotesFreeTextValues(t *testing.T) {
 	}
 }
 
+// TestReviewRecoverCommandQuotesCwd proves the printed recovery continuation
+// keeps a working directory with spaces or Windows backslashes as one argv
+// entry; an unquoted path lost its separators when a shell re-read it.
+func TestReviewRecoverCommandQuotesCwd(t *testing.T) {
+	for _, cwd := range []string{
+		`C:\Users\runneradmin\AppData\Local\Temp\TestRecover001`,
+		"/tmp/review repo/o'brien",
+	} {
+		command := reviewRecoverCommand(cwd, "pred", "rev", "succ", "escalated")
+		words := reviewShellWords(t, command)
+		if len(words) < 2 || words[len(words)-2] != "--cwd" || words[len(words)-1] != cwd {
+			t.Fatalf("recover command %q split into %q, want trailing --cwd %q", command, words, cwd)
+		}
+	}
+}
+
 // TestReviewTransitionCommandQuotedTokensSurviveShellWordSplitting proves the
 // quoting above by execution rather than by assertion: a real /bin/sh parses
 // the emitted line and reports each argv entry, which must be byte-identical

@@ -425,34 +425,69 @@ func TestCloneLocalRDDModeTransitionsPublishExactlyOneGeneration(t *testing.T) {
 }
 
 func TestCloneLocalRDDOverrideConcurrentWritersKeepOneWinner(t *testing.T) {
+	const writers = 4
 	repo := initSnapshotRepo(t)
 	global := RDDGlobalMode{Value: "on"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Every writer reads the empty head before any of them may take the lock,
+	// so each loser is guaranteed to reach the compare-and-set under the lock
+	// holding a stale revision. Waiting out the winner is not the behavior
+	// under test, so a bounded-wait expiry retries until the test deadline
+	// instead of racing the product's lock budget on a slow runner.
+	var (
+		arrivedMutex sync.Mutex
+		arrived      int
+		allRead      = make(chan struct{})
+	)
+	real := acquireCloneLocalRDDModeLock
+	t.Cleanup(func() { acquireCloneLocalRDDModeLock = real })
+	acquireCloneLocalRDDModeLock = func(ctx context.Context, path string) (*storeLock, error) {
+		arrivedMutex.Lock()
+		if arrived++; arrived == writers {
+			close(allRead)
+		}
+		arrivedMutex.Unlock()
+		select {
+		case <-allRead:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		for {
+			lock, err := real(ctx, path)
+			if !errors.Is(err, ErrAuthorityLockTimeout) || ctx.Err() != nil {
+				return lock, err
+			}
+		}
+	}
+
 	var (
 		group   sync.WaitGroup
 		mutex   sync.Mutex
-		winners int
+		winners []RDDModeStatus
 		failed  []error
 	)
-	for range 4 {
+	for range writers {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOff, "", global)
+			status, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
 			mutex.Lock()
 			defer mutex.Unlock()
 			if err == nil {
-				winners++
+				winners = append(winners, status)
 				return
 			}
 			failed = append(failed, err)
 		}()
 	}
 	group.Wait()
-	if winners != 1 {
-		t.Fatalf("concurrent writers = %d winners, want exactly 1 (errors: %v)", winners, failed)
+	if len(winners) != 1 {
+		t.Fatalf("concurrent writers = %d winners, want exactly 1 (errors: %v)", len(winners), failed)
 	}
 	for _, err := range failed {
-		if !errors.Is(err, ErrRDDModeRevisionMismatch) && !errors.Is(err, ErrRARAuthorityConflict) {
+		if !errors.Is(err, ErrRDDModeRevisionMismatch) {
 			t.Fatalf("losing writer error = %v, want a CAS rejection", err)
 		}
 	}
@@ -460,8 +495,8 @@ func TestCloneLocalRDDOverrideConcurrentWritersKeepOneWinner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRDDMode error = %v", err)
 	}
-	if status.Effective != RDDModeOff || status.Revision == "" {
-		t.Fatalf("concurrent writers corrupted the record: %#v", status)
+	if status.Effective != RDDModeOff || status.Revision == "" || status.Revision != winners[0].Revision {
+		t.Fatalf("concurrent writers corrupted the record: %#v, winner %#v", status, winners[0])
 	}
 }
 

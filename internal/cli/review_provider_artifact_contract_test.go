@@ -27,7 +27,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"fixtures/status-v2.fixture.json":        "ff3690a9e716c9fa48e3c26a67047f9b4ce4c3cce8391a240dbe9834bd4e13ee",
 		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
-		"fixtures/status-recover.fixture.json":   "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
+		"fixtures/status-recover.fixture.json":   "ad814f34f438583fdf699cd5ce95ab7cd0700de9b21a4d1ed79207de9c463dfc",
 		"fixtures/status-unrelated.fixture.json": "deab36c877ced3c9b480ca33724c10d88f75c761d6426fa14be850345122891d",
 		"schemas/admitted-result.schema.json":    "7796e8dbba331434594108c902dfab7ec46f691fa447a9259a78f2448111b0de",
 		"schemas/artifact-subject.schema.json":   "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",

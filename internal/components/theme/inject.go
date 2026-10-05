@@ -87,7 +87,7 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return injectSettings(adapter.SettingsPath(homeDir))
+	return injectSettings(agents.JSONSettingsPath(homeDir, adapter))
 }
 
 // InjectAtPath writes the theme to a caller-selected settings file. OpenCode

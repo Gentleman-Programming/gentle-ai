@@ -1,5 +1,8 @@
 # Wave 7 Deletion Proof Tracker — `superseded-by-design` Backlog Rows
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 **Written at:** WU3 (S9a), the add-only bracket, before any deletion slice
 (WU4-WU19) has landed.
 

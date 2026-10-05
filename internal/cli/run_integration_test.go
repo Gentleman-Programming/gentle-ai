@@ -42,6 +42,35 @@ func assertFileContains(t *testing.T, path string, want string) {
 	}
 }
 
+func assertFileNotContains(t *testing.T, path string, unwanted string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if strings.Contains(string(body), unwanted) {
+		t.Fatalf("file %q still contains %q; got:\n%s", path, unwanted, string(body))
+	}
+}
+
+// seedLegacyPiMCPAdapter writes the pi-mcp-adapter entries older releases
+// provisioned, so install tests can prove they are retired.
+func seedLegacyPiMCPAdapter(t *testing.T, agentDir string) {
+	t.Helper()
+	files := map[string]string{
+		filepath.Join(agentDir, "settings.json"):       `{"packages":["npm:other@1.0.0","npm:pi-mcp-adapter"]}`,
+		filepath.Join(agentDir, "npm", "package.json"): `{"dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"}}`,
+	}
+	for path, body := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+}
+
 func stringSliceContains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
@@ -218,6 +247,8 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	})
 	t.Cleanup(restorePreflightLookPath)
 
+	seedLegacyPiMCPAdapter(t, filepath.Join(home, ".pi", "agent"))
+
 	var commands []string
 	runCommand = func(name string, args ...string) error {
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
@@ -247,12 +278,15 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:pi-mcp-adapter")
-	assertFileContains(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), "pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "mcp.json"), "engram")
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:other@1.0.0")
+	assertFileNotContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), "left-pad")
+	assertFileNotContains(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), "pi-mcp-adapter")
 	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
 
-	if !stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
-		t.Fatalf("commands missing %q; got %v", "pi install npm:pi-mcp-adapter", commands)
+	if stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
+		t.Fatalf("commands still install the retired pi-mcp-adapter; got %v", commands)
 	}
 	if !stringSliceContains(commands, engramInitCommandForTest) {
 		t.Fatalf("commands missing %q; got %v", engramInitCommandForTest, commands)
@@ -276,6 +310,7 @@ func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
 	}
 	configured := filepath.Join(t.TempDir(), "gentle-shell-home", "agent")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
+	seedLegacyPiMCPAdapter(t, configured)
 
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -323,8 +358,9 @@ func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	assertFileContains(t, filepath.Join(configured, "settings.json"), "npm:pi-mcp-adapter")
-	assertFileContains(t, filepath.Join(configured, "npm", "package.json"), "pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(configured, "mcp.json"), "engram")
+	assertFileNotContains(t, filepath.Join(configured, "settings.json"), "pi-mcp-adapter")
+	assertFileNotContains(t, filepath.Join(configured, "npm", "package.json"), "pi-mcp-adapter")
 
 	if _, statErr := os.Stat(filepath.Join(home, ".pi")); !os.IsNotExist(statErr) {
 		t.Fatalf("real home .pi dir stat err = %v, want IsNotExist (install must not touch the real ~/.pi while PI_CODING_AGENT_DIR is set)", statErr)
@@ -406,7 +442,7 @@ func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
 		t.Fatalf("agentInstallStep.Run() error = %v", err)
 	}
 
-	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-mcp-adapter", engramInitCommandForTest, "pi install npm:pi-web-access", "pi install npm:pi-btw"}
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", engramInitCommandForTest, "pi install npm:pi-web-access", "pi install npm:pi-btw"}
 	if len(events) != len(wantPackages)*2 {
 		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
 	}
@@ -501,7 +537,6 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 	for _, want := range []string{
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
 		engramInitCommandForTest,
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",

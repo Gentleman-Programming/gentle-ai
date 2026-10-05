@@ -1,5 +1,8 @@
 # Review Integration Contract
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 `gentle-ai.review-integration/v2` coordinates one immutable review transaction at a time. Go owns the candidate snapshot, review admission, correction boundary, terminal burn, and all provider-facing bindings. Claude Code, OpenCode, Codex, and Pi transport provider-issued work; no runtime adapter decides review or delivery.
@@ -65,6 +68,30 @@ A reviewing START carries `next_transition.execute(review.status)` — the provi
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
 
+#### Native recovery for an explicitly selected lineage
+
+When native STATUS selects legal, representable recovery, its returned
+`review.recover` invocation carries four core arguments: predecessor lineage,
+exact predecessor revision, successor lineage, and disposition. Replay every
+returned target selector unchanged, including declared untracked scope and its
+inventory digest. Native RECOVER derives actor, reason, and the exact audit
+binding; consumers must not manufacture an external authorization collection.
+This does not supply missing runtime consent or authorize delivery.
+
+STATUS preserves an explicit `--recovery-successor-lineage`; otherwise it derives
+one name from the existing worktree-and-target identity. It never searches for
+an available suffix. An occupied name, the predecessor's own name, or an already
+recorded successor fails closed with a read-only `review inspect-authority`
+diagnostic. Run that diagnostic with the requested repository as process cwd;
+do not invent a new successor to bypass the conflict.
+
+Explicit compatibility remains available through the complete successor,
+`--recovery-actor`, `--recovery-reason`, and `--recovery-authorization` binding.
+STATUS renders the existing seven-argument RECOVER form only for an exact binding.
+Explicit empty/wrong authorization or a partial tuple refuses without mutation;
+it never falls back to self-derivation. Core recovery legality remains unchanged,
+including failed-criteria and accounting-only evidence checks.
+
 ### 4. Approved authority awaits acknowledgement, then burns
 
 Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. A successful final capture or zero-lens START first records `approved` with one exact acknowledgement transition. The terminal closure and approved authority remain replayable until that acknowledgement succeeds.
@@ -102,9 +129,11 @@ Medium and high-risk START may return the typed `gentle-ai.review-integration.co
 
 ## Read-only risk assessment (`gentle-ai review assess`)
 
-`gentle-ai review assess --cwd <repo> [--agent <runtime>] [--base-ref <ref> --committed-only] [--untracked-scope exclude|select --intended-untracked <path> --expected-untracked-inventory <digest>] [--json]` prints the same candidate risk classification START uses to select lenses (`reviewtransaction.AssessSnapshotRisk`), without creating any review authority, lineage, or store mutation. It works identically with receipt-driven development on or off, so a host can gate delegated verification on the result before ever calling `review start`.
+`gentle-ai review assess --cwd <repo> [--agent <runtime>] [--base-ref <ref> --committed-only] [--untracked-scope exclude|select --intended-untracked <path> --expected-untracked-inventory <digest>] [--escalate-item <1-6> --escalate-reason <text>] [--json]` prints the same candidate risk classification START uses to select lenses (`reviewtransaction.AssessSnapshotRisk`), without creating any review authority, lineage, or store mutation. It works identically with receipt-driven development on or off, so a host can gate delegated verification on the result before ever calling `review start`.
 
 It builds the exact same candidate `review start` would: current changes by default, or an immutable base-to-HEAD comparison with `--base-ref` (which requires `--committed-only` to acknowledge dirty tracked changes, exactly like `review start`). The untracked-scope flags accept the same values `review start` does. The optional `--agent` declares the runtime identity to carry on `next_transition` below; it is validated exactly as `review status --agent` is.
+
+The optional `--escalate-item` and `--escalate-reason` let an agent raise the risk to `high` by citing one high-risk item. They must be passed together: `--escalate-item` is an integer from 1 to 6 (1 data or irreversible effects, 2 security, 3 contracts others consume, 4 concurrency, 5 delivery or environment, 6 no test would catch a regression), and `--escalate-reason` is a non-empty reason of at most 500 bytes (UTF-8); keep it to one line. Escalation raises `passive` or `medium` to `high`, never lowers a tier, and appends an `agent_escalation` reason naming the item. Missing either flag, an item outside 1-6, or an empty or oversized reason fails with a rerun hint.
 
 With `--json`, it prints the typed `gentle-ai.review-assessment/v1` envelope:
 

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
@@ -753,6 +755,101 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 	}
 }
 
+// Only the three policy evidence sizes are exempt; other token vocabulary
+// remains forbidden. Rune-aware boundaries reject word continuations, including
+// Unicode numbers/marks, and numeric prefixes such as 1.2k or -2k. This shared
+// test helper changes neither rendered guidance nor runtime behavior.
+func routingBlockWithoutEvidenceSizes(block string) string {
+	isContinuation := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) ||
+			(unicode.IsSymbol(r) && r != '`') || unicode.Is(unicode.Pc, r) || unicode.Is(unicode.Pd, r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
+	}
+	for _, phrase := range []string{"10k tokens", "2k tokens", "150k parent-context tokens"} {
+		for offset := 0; offset < len(block); {
+			next := strings.Index(block[offset:], phrase)
+			if next < 0 {
+				break
+			}
+			start := offset + next
+			end := start + len(phrase)
+			left, right := true, true
+			if start > 0 {
+				r, _ := utf8.DecodeLastRuneInString(block[:start])
+				left = !isContinuation(r) && r != '.' && r != ',' && r != '+'
+			}
+			if end < len(block) {
+				r, _ := utf8.DecodeRuneInString(block[end:])
+				right = !isContinuation(r)
+			}
+			if left && right {
+				block = block[:start] + "evidence size" + block[end:]
+				offset = start + len("evidence size")
+			} else {
+				offset = end
+			}
+		}
+	}
+	return block
+}
+
+func TestInjectedRoutingTokenGuardSelectiveExceptions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		block     string
+		forbidden bool
+	}{
+		{"inline budget", "approximately 10k tokens of evidence", false},
+		{"handoff budget", "at most approximately 2k tokens with path:line evidence", false},
+		{"context budget", "approximately 150k parent-context tokens, advisory", false},
+		{"combined budgets", "10k tokens; 2k tokens; 150k parent-context tokens", false},
+		{"repeated budget", "10k tokens and 10k tokens", false},
+		{"punctuated budgets", "(10k tokens), `2k tokens`; [150k parent-context tokens].", false},
+		{"authorization vocabulary", "authorization token", true},
+		{"budget does not hide other vocabulary", "10k tokens and access token", true},
+		{"unapproved evidence size", "20k tokens", true},
+		{"prefixed size", "110k tokens", true},
+		{"decimal prefix", "1.2k tokens", true},
+		{"decimal prefix inline", "1.10k tokens", true},
+		{"decimal prefix context", "1.150k parent-context tokens", true},
+		{"fraction without integer", ".2k tokens", true},
+		{"negative size", "-2k tokens", true},
+		{"positive sign", "+2k tokens", true},
+		{"Unicode minus", "−2k tokens", true},
+		{"comma prefix", "1,2k tokens", true},
+		{"Unicode letter prefix", "é2k tokens", true},
+		{"Unicode letter suffix", "10k tokensé", true},
+		{"Unicode number prefix", "٢2k tokens", true},
+		{"Unicode number suffix", "10k tokens٢", true},
+		{"Unicode combining prefix", "\u03012k tokens", true},
+		{"Unicode combining suffix", "10k tokens\u0301", true},
+		{"Unicode format continuation", "10k tokens\u200d", true},
+		{"embedded word", "budget2k tokens", true},
+		{"hyphenated continuation", "10k tokens-extra", true},
+		{"singular token", "10k token", true},
+		{"suffixed word", "10k tokens_extra", true},
+		{"other retired vocabulary", "10k tokens and work-start", true},
+	} {
+		for _, guard := range []struct {
+			name  string
+			check func(string, string) string
+		}{
+			{"injection", func(block, _ string) string { return routingBlockWithoutEvidenceSizes(block) }},
+			{"routing", routingVocabularyForGuard},
+		} {
+			t.Run(guard.name+"/"+test.name, func(t *testing.T) {
+				forbidden := false
+				for _, word := range retiredRemoteControlPlaneVocabulary {
+					checked := strings.ToLower(guard.check(test.block, word))
+					forbidden = forbidden || strings.Contains(checked, strings.ToLower(word))
+				}
+				if forbidden != test.forbidden {
+					t.Errorf("guard rejects %q = %t, want %t", test.block, forbidden, test.forbidden)
+				}
+			})
+		}
+	}
+}
+
 func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
@@ -774,7 +871,7 @@ func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 			if strings.TrimSpace(block) == "" {
 				t.Fatalf("InjectRouting(%q) delivered no managed routing block", agent.ID)
 			}
-			lowered := strings.ToLower(block)
+			lowered := strings.ToLower(routingBlockWithoutEvidenceSizes(block))
 			for _, forbidden := range retiredRemoteControlPlaneVocabulary {
 				if strings.Contains(lowered, strings.ToLower(forbidden)) {
 					t.Fatalf("InjectRouting(%q) delivered retired vocabulary %q:\n%s", agent.ID, forbidden, block)

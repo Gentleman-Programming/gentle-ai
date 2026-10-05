@@ -1,5 +1,8 @@
 # Components, Skills & Presets
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 ---
@@ -9,7 +12,6 @@
 | Component | ID | Description |
 |-----------|-----|-------------|
 | Engram™ | `engram` | Persistent cross-session memory via MCP — auto-detection of project name, full-text search, git sync, project consolidation. See [engram repo](https://github.com/Gentleman-Programming/engram) |
-| SDD | `sdd` | Optional Spec-Driven Development workflow, including `sdd-onboard`; selected explicitly when its formal phase artifacts are wanted |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
 | Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
@@ -17,11 +19,13 @@
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
 
-ODD (Organic Driven Development) is shared routing guidance, not a separate component to install. Use it for everyday direct/delegated work; installing the SDD component does not select SDD for a task. See [ODD and recovery](usage.md#organic-driven-development-odd).
+ODD (Organic Driven Development) is shared routing guidance, not a separate component to install. It is the only implementation workflow for direct and delegated work. See [ODD and recovery](usage.md#organic-driven-development-odd).
+
+> **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets.
 
 ## Primary remote-authorization guidance
 
-Always-installed agent guidance includes a canonical remote-operation boundary, independent of the optional persona, SDD, and permissions components. Local-development access does not authorize remote execution, transfer, or discovery/reuse of ambient SSH agents, ControlMaster sockets, credentials, or sessions. Ask for explicit destination, operation, and credential/session authorization; authorized work remains allowed within stricter user/runtime restrictions.
+Always-installed agent guidance includes a canonical remote-operation boundary, independent of the optional persona and permissions components. Local-development access does not authorize remote execution, transfer, or discovery/reuse of ambient SSH agents, ControlMaster sockets, credentials, or sessions. Ask for explicit destination, operation, and credential/session authorization; authorized work remains allowed within stricter user/runtime restrictions.
 
 This first delivery covers the 15 non-Pi primary instruction carriers, not every executor role or named profile. Pi remains owned by `gentle-pi`. The behavioral section provides no sandbox or fresh-human-per-execution guarantee. Separately, OpenCode/Kilocode permission defaults ask for direct ssh/scp/sftp/rsync commands, without silently replacing personal allows or restrictions; existing installs must opt into permission sync. See [sync update instructions and limitations](usage.md#sync). Issue #4324 remains open for the remaining projections and native approvals.
 
@@ -54,22 +58,12 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 
 ### Included Skills (installed by gentle-ai)
 
-22 skill files organized by category, embedded in the binary and injected into your agent's configuration:
+Skill files organized by category, embedded in the binary and injected into your agent's configuration:
 
-#### SDD (Spec-Driven Development)
+#### Review
 
 | Skill | ID | Description |
 |-------|-----|-------------|
-| SDD Init | `sdd-init` | Bootstrap SDD context in a project |
-| SDD Explore | `sdd-explore` | Investigate codebase before committing to a change |
-| SDD Propose | `sdd-propose` | Create change proposal with intent, scope, approach |
-| SDD Spec | `sdd-spec` | Write specifications with requirements and scenarios |
-| SDD Design | `sdd-design` | Technical design with architecture decisions |
-| SDD Tasks | `sdd-tasks` | Break down a change into implementation tasks |
-| SDD Apply | `sdd-apply` | Implement tasks following specs and design |
-| SDD Verify | `sdd-verify` | Validate implementation matches specs |
-| SDD Archive | `sdd-archive` | Sync delta specs to main specs and archive |
-| SDD Onboard | `sdd-onboard` | Guided end-to-end SDD walkthrough on the real codebase |
 | Judgment Day | `judgment-day` | Parallel adversarial review — two independent judges review the same target |
 
 #### Foundation
@@ -100,9 +94,9 @@ For framework-specific skills (React 19, Angular, TypeScript, Tailwind 4, Zod 4,
 
 | Preset | ID | What's Included |
 |--------|-----|-----------------|
-| Dev Stack + Polish | `full-gentleman` | All components (Engram + SDD + Skills + Context7 + GGA + Permissions + Theme) + all skills |
-| Dev Stack | `ecosystem-only` | Core components (Engram + SDD + Skills + Context7 + GGA) + all skills |
-| Memory Only | `minimal` | Engram + SDD skills only |
+| Dev Stack + Polish | `full-gentleman` | All components (Engram + Skills + Context7 + GGA + Permissions + visual polish) + all skills |
+| Dev Stack | `ecosystem-only` | Core components (Engram + Skills + Context7 + GGA) + all skills |
+| Memory Only | `minimal` | Engram only |
 | Custom | `custom` | You choose components and skills manually while keeping any existing persona/settings unmanaged |
 
 Persona is selected separately on the Persona screen and applied independently of the preset.
