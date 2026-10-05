@@ -78,6 +78,14 @@ not be disabled. Plugin dependencies differ: V1 uses `@opencode-ai/plugin`, whil
 V2 uses `@opencode/plugin`. Existing user-owned incompatible assets are preserved.
 The accepted temporary logo omission does not authorize dropping other features.
 
+Install and global sync converge the managed plugins identically on both runtime
+majors: they rewrite them from the running binary, recreate missing ones, and
+retire legacy plugins. A plugin path counts as Gentle AI-owned only when it is a
+regular file whose bytes match a plugin some Gentle AI release shipped for that
+name (the digest registry in `internal/components/opencoderuntimeplugins/`,
+regenerated with `go generate` from the release tags). Anything else stops the
+operation before any plugin changes and names the file to move or delete.
+
 The local conformance harness uses disposable configuration, an allowlisted
 environment, fixture authentication and process cleanup. Its loopback mode requires
 a supported per-process network guard and never uses an external model. CI checks

@@ -39,6 +39,26 @@ func TestInstallRefusesNonregularPluginBeforeWrites(t *testing.T) {
 	}
 }
 
+func TestInstallRefusesNonregularRetiredPluginBeforeWrites(t *testing.T) {
+	home := t.TempDir()
+	adapter := agent.NewAdapter()
+	dir := filepath.Join(adapter.GlobalConfigDir(home), "plugins")
+	retired := filepath.Join(dir, "background-agents.ts")
+	if err := os.MkdirAll(retired, 0755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := InstallFromDirectory(home, adapter, "opencode/plugins/")
+	if err == nil || !strings.Contains(err.Error(), retired) || result.Changed {
+		t.Fatalf("nonregular retired plugin accepted: %+v %v", result, err)
+	}
+	if info, err := os.Stat(retired); err != nil || !info.IsDir() {
+		t.Fatalf("directory replaced: %v %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "model-variants.ts")); !os.IsNotExist(err) {
+		t.Fatalf("partial write: %v", err)
+	}
+}
+
 func TestPluginVersionSelectionAndUserEdits(t *testing.T) {
 	old := opencode.VersionRunnerOverride
 	t.Cleanup(func() { opencode.VersionRunnerOverride = old })
@@ -71,7 +91,7 @@ func TestPluginVersionSelectionAndUserEdits(t *testing.T) {
 				if err := os.WriteFile(path, []byte("user-owned"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := Refresh(home, adapter); err == nil || !strings.Contains(err.Error(), "preserved") {
+				if _, err := Install(home, adapter); err == nil || !strings.Contains(err.Error(), "preserved") {
 					t.Fatalf("custom V2 plugin overwritten: %v", err)
 				}
 				if got, err := os.ReadFile(path); err != nil || string(got) != "user-owned" {
@@ -79,51 +99,6 @@ func TestPluginVersionSelectionAndUserEdits(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestRefreshSkipsNonregularPaths(t *testing.T) {
-	old := opencode.VersionRunnerOverride
-	t.Cleanup(func() { opencode.VersionRunnerOverride = old })
-	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
-		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
-	}
-	home := t.TempDir()
-	adapter := agent.NewAdapter()
-	dir := filepath.Join(adapter.GlobalConfigDir(home), "plugins")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(home, "user-owned.ts")
-	if err := os.WriteFile(target, []byte("user-owned"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(dir, "opencode-review-transport.ts")
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(dir, "model-variants.ts"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	stale := filepath.Join(dir, "skill-registry.ts")
-	if err := os.WriteFile(stale, []byte("stale"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	result, err := Refresh(home, adapter)
-	if err != nil || !result.Changed {
-		t.Fatalf("refresh: %+v %v", result, err)
-	}
-	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("symlink replaced: %v %v", info, err)
-	}
-	if got, err := os.ReadFile(target); err != nil || string(got) != "user-owned" {
-		t.Fatalf("target changed: %v", err)
-	}
-	if info, err := os.Stat(filepath.Join(dir, "model-variants.ts")); err != nil || !info.IsDir() {
-		t.Fatalf("directory replaced: %v %v", info, err)
-	}
-	if got, err := os.ReadFile(stale); err != nil || string(got) != assets.MustRead("opencode/plugins/skill-registry.ts") {
-		t.Fatalf("regular plugin not refreshed: %v", err)
 	}
 }
 
@@ -149,5 +124,102 @@ func TestManagedOpenCodePluginLifecycle(t *testing.T) {
 	again, err := Install(home, adapter)
 	if err != nil || again.Changed {
 		t.Fatalf("idempotent install: %+v %v", again, err)
+	}
+}
+
+func useRuntime(t *testing.T, version string) {
+	t.Helper()
+	old := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = old })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte(version)}, nil
+	}
+}
+
+// releasedFixture returns plugin bytes exactly as a published release tag
+// shipped them (testdata/released/<tag>/<asset dir>/<name>).
+func releasedFixture(t *testing.T, rel string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "released", filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+var runtimeAssetDirs = map[string]string{"1.18.30": "opencode/plugins/", "2.0.4": "opencode/plugins-v2/"}
+
+// Issue #5185: bytes a previous release shipped are Gentle AI-owned on both
+// runtime majors, whichever asset directory they came from.
+func TestInstallUpgradesPreviouslyReleasedPluginBytes(t *testing.T) {
+	for version, assetDir := range runtimeAssetDirs {
+		for _, fixture := range []string{"v3.7.0/plugins/opencode-review-transport.ts", "v3.7.0/plugins-v2/opencode-review-transport.ts"} {
+			t.Run(version+"/"+fixture, func(t *testing.T) {
+				useRuntime(t, version)
+				home := t.TempDir()
+				adapter := agent.NewAdapter()
+				dir := filepath.Join(adapter.GlobalConfigDir(home), "plugins")
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				for name, data := range map[string][]byte{
+					"opencode-review-transport.ts": releasedFixture(t, fixture),
+					"background-agents.ts":         releasedFixture(t, "v1.7.19/plugins/background-agents.ts"),
+					LegacyOpenCodeReviewPluginName: releasedFixture(t, "v2.1.7/plugins/review-result-artifacts.ts"),
+				} {
+					if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				result, err := Install(home, adapter)
+				if err != nil || !result.Changed {
+					t.Fatalf("upgrade refused released bytes: %+v %v", result, err)
+				}
+				for _, name := range ManagedPluginNames(adapter.Agent()) {
+					if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != assets.MustRead(assetDir+name) {
+						t.Fatalf("plugin %s not upgraded: %v", name, err)
+					}
+				}
+				for _, name := range []string{"background-agents.ts", LegacyOpenCodeReviewPluginName} {
+					if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+						t.Fatalf("retired plugin %s kept: %v", name, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Bytes no release shipped stay untouched on both runtime majors, and the
+// refusal names the file and its recovery before any plugin is written.
+func TestInstallPreservesUserEditedPluginBytes(t *testing.T) {
+	for version := range runtimeAssetDirs {
+		for _, name := range []string{"skill-registry.ts", "background-agents.ts", LegacyOpenCodeReviewPluginName} {
+			t.Run(version+"/"+name, func(t *testing.T) {
+				useRuntime(t, version)
+				home := t.TempDir()
+				adapter := agent.NewAdapter()
+				dir := filepath.Join(adapter.GlobalConfigDir(home), "plugins")
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, name)
+				edited := append(releasedFixture(t, "v3.7.0/plugins/opencode-review-transport.ts"), "// user edit\n"...)
+				if err := os.WriteFile(path, edited, 0600); err != nil {
+					t.Fatal(err)
+				}
+				result, err := Install(home, adapter)
+				if err == nil || result.Changed || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "move or delete") {
+					t.Fatalf("user-edited plugin not refused actionably: %+v %v", result, err)
+				}
+				if got, err := os.ReadFile(path); err != nil || string(got) != string(edited) {
+					t.Fatalf("user bytes lost: %v", err)
+				}
+				entries, err := os.ReadDir(dir)
+				if err != nil || len(entries) != 1 {
+					t.Fatalf("refusal wrote plugins: %v %v", entries, err)
+				}
+			})
+		}
 	}
 }

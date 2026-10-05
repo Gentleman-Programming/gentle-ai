@@ -647,14 +647,11 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	// Managed OpenCode-compatible plugins are versioned runtime artifacts tied
-	// to the installed binary (OpenCode and Kilocode receive them). When the
-	// persisted selection lacks the SDD component, no SDD step is planned and
-	// already-installed plugins would silently stay stale after upgrades
-	// (issue #1440). Refresh installed copies explicitly; the step never
-	// installs plugins that were never present. When SDD is selected, its
-	// inject step already rewrites the plugins.
+	// to the installed binary (OpenCode and Kilocode receive them). Sync
+	// converges them exactly as install does, so upgrades refresh them and a
+	// missing plugin is recreated (issues #1440, #5192, #5099).
 	if r.scope == ScopeGlobal && anyAgentReceivesManagedOpenCodePlugins(r.agentIDs) {
-		apply = append(apply, openCodePluginRefreshSyncStep{
+		apply = append(apply, openCodePluginSyncStep{
 			id:           "sync:opencode:managed-plugins",
 			homeDir:      r.homeDir,
 			agents:       r.agentIDs,
@@ -811,8 +808,8 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	}
 	// Managed OpenCode-compatible plugin paths are part of sync's
 	// backup/snapshot contract whenever a plugin-receiving agent (OpenCode,
-	// Kilocode) is synced, independent of the SDD component: the
-	// openCodePluginRefreshSyncStep may rewrite installed copies (issue #1440).
+	// Kilocode) is synced: openCodePluginSyncStep may write, recreate, or
+	// retire them (issue #1440).
 	// Plugins are binary-versioned runtime artifacts in the global config root,
 	// so a workspace sync neither refreshes nor snapshots them.
 	if !workspace {
@@ -821,7 +818,7 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 				continue
 			}
 			pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-			for _, name := range opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent()) {
+			for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
 				paths[filepath.Join(pluginsDir, name)] = struct{}{}
 			}
 		}
@@ -1232,39 +1229,26 @@ type piCodeGraphSyncStep struct {
 	changedFiles              *[]string
 }
 
-// openCodePluginRefreshSyncStep refreshes already-installed managed
-// OpenCode-compatible plugins (OpenCode, Kilocode) from the embedded assets
-// when the SDD component is not part of the sync selection (issue #1440).
-// It never creates plugins that were never installed.
-type openCodePluginRefreshSyncStep struct {
+// openCodePluginSyncStep converges managed OpenCode-compatible plugins
+// (OpenCode, Kilocode) with install: it rewrites them from the running
+// binary's assets, recreates missing ones, and retires legacy plugins. Bytes no
+// Gentle AI release shipped are refused and preserved (issues #5185, #5192,
+// #5099).
+type openCodePluginSyncStep struct {
 	id           string
 	homeDir      string
 	agents       []model.AgentID
 	changedFiles *[]string
 }
 
-func (s openCodePluginRefreshSyncStep) ID() string { return s.id }
+func (s openCodePluginSyncStep) ID() string { return s.id }
 
-func (s openCodePluginRefreshSyncStep) Run() error {
+func (s openCodePluginSyncStep) Run() error {
 	for _, adapter := range resolveAdapters(s.agents) {
 		if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 			continue
 		}
-		// The legacy background plugin identifies an older managed installation:
-		// migrate it to the retained plugin set rather than treating it as an
-		// empty installation. Otherwise refresh only already-installed plugins.
-		legacy := filepath.Join(adapter.GlobalConfigDir(s.homeDir), "plugins", "background-agents.ts")
-		_, legacyErr := os.Lstat(legacy)
-		var res opencoderuntimeplugins.Result
-		var err error
-		if adapter.Agent() == model.AgentOpenCode && legacyErr == nil {
-			res, err = opencoderuntimeplugins.Install(s.homeDir, adapter)
-		} else {
-			if legacyErr != nil && !os.IsNotExist(legacyErr) {
-				return legacyErr
-			}
-			res, err = opencoderuntimeplugins.Refresh(s.homeDir, adapter)
-		}
+		res, err := opencoderuntimeplugins.Install(s.homeDir, adapter)
 		if err != nil {
 			return fmt.Errorf("sync managed OpenCode plugins: %w", err)
 		}
@@ -1276,7 +1260,7 @@ func (s openCodePluginRefreshSyncStep) Run() error {
 }
 
 // anyAgentReceivesManagedOpenCodePlugins reports whether any synced agent
-// receives the managed OpenCode-compatible plugins from the SDD injector.
+// receives the managed OpenCode-compatible plugins.
 func anyAgentReceivesManagedOpenCodePlugins(agentIDs []model.AgentID) bool {
 	for _, id := range agentIDs {
 		if opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(id) {
