@@ -417,3 +417,44 @@ func TestManagedProfileBlockRoundTripsQuotedBinDir(t *testing.T) {
 		t.Fatalf("rewriteProfileBlock(remove) = %q, %v", removed, err)
 	}
 }
+
+// One pasted CRLF line in an LF profile must not make the managed block CRLF:
+// a trailing CR on the export line corrupts the last PATH entry in bash.
+func TestProfileBlockFollowsTheLastLineEnding(t *testing.T) {
+	binDir := "/home/u/.gentle-ai/bin"
+	mixed := []byte("export A=1\r\nexport B=2\n")
+	got, err := rewriteProfileBlock(mixed, binDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := string(mixed) + profileBlock(binDir, "\n"); string(got) != want {
+		t.Fatalf("mixed-EOL profile = %q, want LF block %q", got, want)
+	}
+	crlf := []byte("export A=1\r\n")
+	got, err = rewriteProfileBlock(crlf, binDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := string(crlf) + profileBlock(binDir, "\r\n"); string(got) != want {
+		t.Fatalf("CRLF profile = %q, want CRLF block %q", got, want)
+	}
+}
+
+// Doctor counts only the login profile the current shell reads: a block left
+// in another shell's profile does not persist PATH.
+func TestManagedProfileWithBinDirChecksTheCurrentShellsProfile(t *testing.T) {
+	home := t.TempDir()
+	binDir := BinDir(home)
+	if err := os.WriteFile(filepath.Join(home, ".profile"), []byte(profileBlock(binDir, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ZDOTDIR", "")
+	t.Setenv("SHELL", "/bin/zsh")
+	if path, ok := ManagedProfileWithBinDir(home, binDir); ok {
+		t.Fatalf("zsh: block only in .profile reported as persisted by %q", path)
+	}
+	t.Setenv("SHELL", "/bin/sh")
+	if path, ok := ManagedProfileWithBinDir(home, binDir); !ok || path != filepath.Join(home, ".profile") {
+		t.Fatalf("sh: ManagedProfileWithBinDir = %q, %t; want .profile", path, ok)
+	}
+}

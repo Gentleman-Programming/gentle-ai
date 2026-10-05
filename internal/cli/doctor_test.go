@@ -1168,6 +1168,9 @@ func TestRunDoctor_HomeDirError(t *testing.T) {
 // Issue #3452: doctor reports whether new login shells will find the managed
 // OpenCode launcher directory.
 func TestCheckOpenCodeProfileReportsPersistence(t *testing.T) {
+	// The check reads the profile the current login shell uses.
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("ZDOTDIR", "")
 	home := t.TempDir()
 	binDir := opencode.BinDir(home)
 

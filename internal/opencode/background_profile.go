@@ -187,8 +187,10 @@ func rewriteProfileBlock(data []byte, binDir string, remove bool) ([]byte, error
 		if remove {
 			return append([]byte(nil), data...), nil
 		}
+		// Follow the file's last line ending: one pasted CRLF line in an LF
+		// profile must not append a CR that corrupts the PATH entry in bash.
 		eol := "\n"
-		if bytes.Contains(data, []byte("\r\n")) {
+		if last := bytes.LastIndexByte(data, '\n'); last > 0 && data[last-1] == '\r' {
 			eol = "\r\n"
 		}
 		desired := append([]byte(nil), data...)
@@ -210,15 +212,20 @@ func rewriteProfileBlock(data []byte, binDir string, remove bool) ([]byte, error
 // ManagedProfileWithBinDir returns the first managed login profile whose block
 // persists binDir. Doctor uses it to diagnose missing PATH persistence.
 func ManagedProfileWithBinDir(homeDir, binDir string) (string, bool) {
-	for _, path := range ManagedProfilePaths(homeDir) {
-		snapshot, reason, err := readProfileSnapshot(path)
-		if err != nil || reason != "" || !snapshot.exists {
-			continue
-		}
-		block, err := parseManagedProfileBlock(snapshot.data)
-		if err == nil && block != nil && samePath(block.binDir, binDir, "linux") {
-			return path, true
-		}
+	// Only the login profile the current $SHELL actually reads counts: a
+	// block left in a shadowed or another shell's profile does not persist
+	// PATH for the user's login shells.
+	path, reason := loginProfile(homeDir, ActivationOptions{}.normalized())
+	if reason != "" {
+		return "", false
+	}
+	snapshot, reason, err := readProfileSnapshot(path)
+	if err != nil || reason != "" || !snapshot.exists {
+		return "", false
+	}
+	block, err := parseManagedProfileBlock(snapshot.data)
+	if err == nil && block != nil && samePath(block.binDir, binDir, "linux") {
+		return path, true
 	}
 	return "", false
 }
