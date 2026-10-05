@@ -7334,3 +7334,26 @@ func TestSyncPrepareValidationFollowsExistingContract(t *testing.T) {
 		}
 	})
 }
+
+// Post-sync verification proves every retired managed plugin is gone, not
+// only the legacy review plugin.
+func TestPostSyncVerificationRequiresEveryRetiredPluginRemoved(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	adapter := opencodeagent.NewAdapter()
+	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "sdd-task-result-artifacts.ts")
+	mustWriteFile(t, stale, []byte("stale"))
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	for _, check := range report.Checks {
+		if check.ID == "verify:sync:file:"+stale {
+			if check.Status != verify.CheckStatusFailed {
+				t.Fatalf("retired plugin check status = %v, want failed", check.Status)
+			}
+			return
+		}
+	}
+	t.Fatalf("no post-sync check for retired plugin %s; checks = %v", stale, report.Checks)
+}

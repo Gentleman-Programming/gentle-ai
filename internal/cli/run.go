@@ -3304,10 +3304,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 				paths[filepath.Join(dir, name)] = struct{}{}
 			}
 		}
-		if adapter.Agent() == model.AgentOpenCode {
-			pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-			for _, name := range opencoderuntimeplugins.ManagedOpenCodePluginNames() {
-				paths[filepath.Join(pluginsDir, name)] = struct{}{}
+		// The managed plugin step writes and retires plugins in the global
+		// config root for every plugin-receiving agent, whatever the scope.
+		if opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+			for _, path := range opencoderuntimeplugins.PluginPaths(homeDir, adapter) {
+				paths[path] = struct{}{}
 			}
 		}
 	}

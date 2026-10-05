@@ -817,9 +817,8 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 			if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 				continue
 			}
-			pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-			for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
-				paths[filepath.Join(pluginsDir, name)] = struct{}{}
+			for _, path := range opencoderuntimeplugins.PluginPaths(homeDir, adapter) {
+				paths[path] = struct{}{}
 			}
 		}
 	}
@@ -2726,19 +2725,21 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 				continue
 			}
 			pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-			legacyPath := filepath.Join(pluginsDir, opencoderuntimeplugins.LegacyOpenCodeReviewPluginName)
-			checks = append(checks, verify.Check{
-				ID:          "verify:sync:file:" + legacyPath,
-				Description: "legacy OpenCode review plugin removed",
-				Run: func(context.Context) error {
-					if _, err := os.Lstat(legacyPath); err == nil {
-						return fmt.Errorf("legacy OpenCode review plugin still exists; rerun `gentle-ai sync` to complete the managed plugin migration")
-					} else if !os.IsNotExist(err) {
-						return err
-					}
-					return nil
-				},
-			})
+			for _, name := range opencoderuntimeplugins.RetiredPluginNames(adapter.Agent()) {
+				retiredPath := filepath.Join(pluginsDir, name)
+				checks = append(checks, verify.Check{
+					ID:          "verify:sync:file:" + retiredPath,
+					Description: "retired OpenCode plugin " + name + " removed",
+					Run: func(context.Context) error {
+						if _, err := os.Lstat(retiredPath); err == nil {
+							return fmt.Errorf("retired OpenCode plugin %s still exists; rerun `gentle-ai sync` to complete the managed plugin migration", retiredPath)
+						} else if !os.IsNotExist(err) {
+							return err
+						}
+						return nil
+					},
+				})
+			}
 		}
 	}
 

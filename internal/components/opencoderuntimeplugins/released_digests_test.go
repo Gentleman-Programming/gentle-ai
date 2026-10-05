@@ -15,7 +15,14 @@ import (
 // AI-owned after it ships, so changing an asset requires regenerating the
 // registry (go generate ./internal/components/opencoderuntimeplugins/).
 func TestReleasedPluginDigestsCoverEmbeddedAssets(t *testing.T) {
-	names := append(ManagedPluginNames(model.AgentOpenCode), retiredPluginNames(model.AgentOpenCode)...)
+	var names []string
+	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		for _, name := range OpenCodePluginLifecycleNames(agent) {
+			if !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+	}
 	slices.Sort(names)
 	if got := slices.Sorted(maps.Keys(releasedPluginDigests)); !slices.Equal(got, names) {
 		t.Fatalf("registry names = %v, want lifecycle names %v", got, names)
@@ -26,7 +33,7 @@ func TestReleasedPluginDigestsCoverEmbeddedAssets(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			if sum := sha256.Sum256([]byte(data)); !releasedPlugin(name, []byte(data)) {
+			if sum := sha256.Sum256([]byte(data)); !ReleasedPlugin(name, []byte(data)) {
 				t.Errorf("embedded %s%s digest %s missing from releasedPluginDigests; run go generate ./internal/components/opencoderuntimeplugins/", dir, name, hex.EncodeToString(sum[:]))
 			}
 		}

@@ -39,11 +39,11 @@ func AssetDirectory(agent model.AgentID) (string, error) {
 // release shipped for that name. Any other bytes are user-owned.
 func ValidateReplacement(dir string, agent model.AgentID) error {
 	if info, err := os.Lstat(dir); err == nil && !info.IsDir() {
-		return fmt.Errorf("OpenCode plugin directory %s is not a directory; user path preserved", dir)
+		return fmt.Errorf("OpenCode plugin directory %s is not a directory; user path preserved; move or delete it to let Gentle AI install its managed plugins", dir)
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	for _, name := range append(ManagedPluginNames(agent), retiredPluginNames(agent)...) {
+	for _, name := range OpenCodePluginLifecycleNames(agent) {
 		path := filepath.Join(dir, name)
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
@@ -59,26 +59,17 @@ func ValidateReplacement(dir string, agent model.AgentID) error {
 		if err != nil {
 			return err
 		}
-		if !releasedPlugin(name, data) {
+		if !ReleasedPlugin(name, data) {
 			return fmt.Errorf("OpenCode plugin %s does not match any Gentle AI release; custom bytes preserved; move or delete it to let Gentle AI install its managed plugins", path)
 		}
 	}
 	return nil
 }
 
-// retiredPluginNames are earlier managed plugins Install removes.
-func retiredPluginNames(agent model.AgentID) []string {
-	switch agent {
-	case model.AgentOpenCode:
-		return []string{"background-agents.ts", LegacyOpenCodeReviewPluginName}
-	case model.AgentKilocode:
-		return []string{LegacyOpenCodeReviewPluginName}
-	default:
-		return nil
-	}
-}
-
-func releasedPlugin(name string, data []byte) bool {
+// ReleasedPlugin is the ownership proof for managed and retired plugins: data
+// is Gentle AI-owned only when some release shipped exactly these bytes under
+// name. Every other byte sequence belongs to the user.
+func ReleasedPlugin(name string, data []byte) bool {
 	sum := sha256.Sum256(data)
 	return slices.Contains(releasedPluginDigests[name], hex.EncodeToString(sum[:]))
 }
@@ -89,6 +80,16 @@ func Install(home string, adapter agents.Adapter) (Result, error) {
 		return Result{}, err
 	}
 	return InstallFromDirectory(home, adapter, assetDir)
+}
+
+// PluginPaths lists every path Install can write or remove for the adapter.
+func PluginPaths(home string, adapter agents.Adapter) []string {
+	dir := filepath.Join(adapter.GlobalConfigDir(home), "plugins")
+	paths := make([]string, 0)
+	for _, name := range OpenCodePluginLifecycleNames(adapter.Agent()) {
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	return paths
 }
 
 func InstallFromDirectory(home string, adapter agents.Adapter, assetDir string) (Result, error) {

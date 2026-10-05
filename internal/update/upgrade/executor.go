@@ -265,7 +265,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		// The SDD plugin writer resolves the config directory through the
 		// adapter and owns the plugin list; the snapshot must match it (#3219).
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
+		for _, name := range opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent()) {
 			add(filepath.Join(pluginsDir, name))
 		}
 		add(

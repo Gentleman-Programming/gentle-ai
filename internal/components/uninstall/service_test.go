@@ -2189,6 +2189,70 @@ func TestRetainedHooksOutsideFullAgentRemoval(t *testing.T) {
 	}
 }
 
+// Uninstall owns every plugin byte sequence a Gentle AI release shipped under
+// that name, including retired plugins, and preserves all other bytes.
+func TestFullAgentOpenCodeUninstallRemovesReleasedPluginBytes(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("OpenCode adapter not found")
+	}
+	pluginDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	released := func(rel string) []byte {
+		data, err := os.ReadFile(filepath.Join("..", "opencoderuntimeplugins", "testdata", "released", filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	owned := map[string][]byte{
+		"opencode-review-transport.ts": released("v3.7.0/plugins/opencode-review-transport.ts"),
+		"sdd-task-result-artifacts.ts": released("v3.7.0/plugins-v2/sdd-task-result-artifacts.ts"),
+		"background-agents.ts":         released("v1.33.2/plugins/background-agents.ts"),
+		"review-result-artifacts.ts":   released("v2.1.7/plugins/review-result-artifacts.ts"),
+	}
+	user := map[string][]byte{
+		"skill-registry.ts": append(released("v3.7.0/plugins/opencode-review-transport.ts"), "// user edit\n"...),
+		"model-variants.ts": released("v3.7.0/plugins/sdd-task-result-artifacts.ts"),
+	}
+	for _, files := range []map[string][]byte{owned, user} {
+		for name, data := range files {
+			if err := os.WriteFile(filepath.Join(pluginDir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan, []model.AgentID{model.AgentOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range owned {
+		path := filepath.Join(pluginDir, name)
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("released plugin bytes %s kept: %v", name, err)
+		}
+		if !slices.Contains(result.RemovedFiles, path) {
+			t.Errorf("released plugin removal not reported: %s", path)
+		}
+	}
+	for name, data := range user {
+		if got, err := os.ReadFile(filepath.Join(pluginDir, name)); err != nil || string(got) != string(data) {
+			t.Errorf("user plugin bytes %s changed: %v", name, err)
+		}
+	}
+}
+
 // TestFullAgentOpenCodePluginsUnderXDGConfigHome pins #3219 for the retained
 // plugin owner: uninstall resolves the same OpenCode config dir as installation.
 func TestFullAgentOpenCodePluginsUnderXDGConfigHome(t *testing.T) {
