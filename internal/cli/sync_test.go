@@ -4627,6 +4627,56 @@ func TestRunSyncLegacySDDStateKeepsRetainedOwners(t *testing.T) {
 	}
 }
 
+// TestRunSyncRemovesLegacySDDClaudeAgents verifies that a sync removes the
+// eleven sdd-*.md agents a v3.x Claude Code install left behind in
+// ~/.claude/agents/ (issue #5253), while assets gentle-ai still owns survive.
+// The sibling test above only proves a clean sync never recreates them.
+func TestRunSyncRemovesLegacySDDClaudeAgents(t *testing.T) {
+	home := t.TempDir()
+	previousHome := osUserHomeDir
+	previousBackup := backup.UserHomeDirFn
+	t.Cleanup(func() { osUserHomeDir = previousHome; backup.UserHomeDirFn = previousBackup })
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = osUserHomeDir
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"}, SelectionConfigured: true,
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentSkills},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed exactly the inventory a v3.x install left in the agents directory.
+	legacy := []string{
+		"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
+		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+	}
+	agentsDir := filepath.Join(home, ".claude", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range legacy {
+		body := "---\nname: " + name + "\ndescription: Legacy v3 SDD phase agent.\n---\n\nLegacy v3 SDD agent.\n"
+		if err := os.WriteFile(filepath.Join(agentsDir, name+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := RunSync([]string{"--agents", "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range legacy {
+		if _, err := os.Stat(filepath.Join(agentsDir, name+".md")); !os.IsNotExist(err) {
+			t.Errorf("legacy SDD agent %s.md survived sync: %v", name, err)
+		}
+	}
+	for _, path := range []string{"agents/review-risk.md", "settings.json", "CLAUDE.md"} {
+		if _, err := os.Stat(filepath.Join(home, ".claude", path)); err != nil {
+			t.Errorf("retained owner %s: %v", path, err)
+		}
+	}
+}
+
 func TestRunSyncPlainSyncHonoursPersistedComponentsWithoutProfile(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir

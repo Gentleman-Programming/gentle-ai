@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
@@ -76,8 +77,12 @@ type claudeModelResolver interface {
 }
 
 // InstallNativeAgents installs only retained review, Judgment Day, and Kimi native agents.
-// It never removes legacy SDD files or user-owned agents; it removes only the
-// retired review agents Gentle AI owns (see RetiredNativeAgentManifest).
+// It removes two families: the retired review agents Gentle AI owns (see
+// RetiredNativeAgentManifest), and the v3 SDD phase agents v4 never writes
+// (see legacyassets.SubAgentPaths). The SDD names are removed by name: the
+// ownership ledger only records names Gentle AI wrote in v4, so it cannot
+// speak for files an earlier release left behind. User-owned agents under any
+// other name are preserved.
 func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOptions) (InstallResult, error) {
 	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
@@ -166,6 +171,16 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 			result.Files = append(result.Files, removed)
 		}
 		ledgerChanged = ledgerChanged || dropped
+	}
+	for _, path := range legacyassets.SubAgentPaths(adapter.Agent(), dir) {
+		removed, err := removeLegacyNativeAgent(journal, path)
+		if err != nil {
+			return rollback(err)
+		}
+		if removed != "" {
+			result.Changed = true
+			result.Files = append(result.Files, removed)
+		}
 	}
 	for _, c := range candidates {
 		if c.exists && !c.owned {
@@ -269,6 +284,34 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 		content = agentguidance.InjectRemoteAuthorization(content)
 	}
 	return content, nil
+}
+
+// removeLegacyNativeAgent removes one legacy SDD agent file by name. Gentle AI
+// owned these names in v3 and no longer writes them, and the ownership ledger
+// predates them, so name identity is the only evidence available. A symlink or
+// other non-regular file is never ours to delete.
+func removeLegacyNativeAgent(journal *mutationjournal.Journal, path string) (string, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("stat legacy native agent %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil
+	}
+	if err := journal.Validate(path); err != nil {
+		return "", err
+	}
+	removed, err := journal.Remove(path)
+	if err != nil {
+		return "", fmt.Errorf("remove legacy native agent %s: %w", path, err)
+	}
+	if !removed {
+		return "", nil
+	}
+	return path, nil
 }
 
 // removeRetiredNativeAgent removes one retired agent file when Gentle AI owns

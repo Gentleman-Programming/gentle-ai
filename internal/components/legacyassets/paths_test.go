@@ -29,6 +29,24 @@ func TestLegacyCommandPaths(t *testing.T) {
 	}
 }
 
+func TestLegacySubAgentPaths(t *testing.T) {
+	names := []string{"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"}
+	dir := filepath.Join(t.TempDir(), "agents")
+	want := make([]string, 0, len(names))
+	for _, name := range names {
+		want = append(want, filepath.Join(dir, name+".md"))
+	}
+	if got := SubAgentPaths(model.AgentClaudeCode, dir); !reflect.DeepEqual(got, want) {
+		t.Errorf("claude sub-agent paths = %v, want %v", got, want)
+	}
+	// Only Claude Code kept v3 SDD agents in a native agents directory.
+	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKimi, model.AgentCursor} {
+		if got := SubAgentPaths(agent, dir); got != nil {
+			t.Errorf("%s sub-agent paths = %v, want nil", agent, got)
+		}
+	}
+}
+
 func TestRetiredManagedPath(t *testing.T) {
 	root := t.TempDir()
 	for _, tc := range []struct {

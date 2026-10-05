@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -114,5 +115,102 @@ func TestInstalledNativeAgentParity(t *testing.T) {
 	}
 	if count != 12 {
 		t.Fatalf("fixture has %d paths, want 12", count)
+	}
+}
+
+// TestInstallNativeAgentsRemovesLegacySDDAgents covers issue #5253: a v3.x
+// install left eleven sdd-*.md agents in the Claude agents directory, and v4
+// removed neither of them. The names are retired by name because the ownership
+// ledger only records names v4 wrote, so it cannot vouch for these files.
+func TestInstallNativeAgentsRemovesLegacySDDAgents(t *testing.T) {
+	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	dir := adapter.SubAgentsDir(home)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []string{
+		"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
+		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+	}
+	for _, name := range legacy {
+		body := "---\nname: " + name + "\ndescription: Legacy v3 SDD phase agent.\n---\n\nLegacy v3 SDD agent.\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A user-authored agent the installer never manages must survive.
+	userAgent := filepath.Join(dir, "my-own-agent.md")
+	if err := os.WriteFile(userAgent, []byte("user-owned bytes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range legacy {
+		path := filepath.Join(dir, name+".md")
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("legacy SDD agent %s survived install: %v", name, err)
+		}
+		if !containsFile(result.Files, path) {
+			t.Errorf("removed legacy agent %s not reported in result.Files", name)
+		}
+	}
+	if _, err := os.Stat(userAgent); err != nil {
+		t.Errorf("user-owned agent removed: %v", err)
+	}
+
+	// The removal is idempotent: a second install has nothing left to retire.
+	second, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range legacy {
+		if containsFile(second.Files, filepath.Join(dir, name+".md")) {
+			t.Errorf("second install reported legacy agent %s", name)
+		}
+	}
+}
+
+// TestInstallNativeAgentsLeavesLegacySDDSymlinkAlone pins the non-regular-file
+// guard: a symlink is never Gentle AI's to delete, even under a retired name.
+func TestInstallNativeAgentsLeavesLegacySDDSymlinkAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs POSIX privileges")
+	}
+	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	dir := adapter.SubAgentsDir(home)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, "elsewhere.md")
+	if err := os.WriteFile(target, []byte("not ours\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "sdd-apply.md")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("symlinked legacy agent was removed: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlinked legacy agent replaced by %v", info.Mode())
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("symlink target removed: %v", err)
 	}
 }
