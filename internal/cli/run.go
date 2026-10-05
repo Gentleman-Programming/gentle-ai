@@ -936,10 +936,18 @@ func (s nativeReviewAgentStep) Run() error {
 	}
 	if s.state != nil {
 		for _, path := range res.Skipped {
+			if reviewassets.IsLegacySDDNativeAgent(s.agent, path) {
+				s.state.nativeReviewActions = append(s.state.nativeReviewActions, legacySDDAgentPreservedAction(path))
+				continue
+			}
 			s.state.nativeReviewActions = append(s.state.nativeReviewActions, nativeReviewPreservedAction(path))
 		}
 	}
 	return nil
+}
+
+func legacySDDAgentPreservedAction(path string) string {
+	return fmt.Sprintf("Legacy SDD agent %s was preserved: its content does not match any agent Gentle AI v3 installed, so it may hold your changes. SDD was retired in v4.0.0 and Gentle AI no longer manages this file, but Claude Code can still dispatch it by name. If you no longer need it, back it up and remove it; Gentle AI will not delete it automatically.", path)
 }
 
 func nativeReviewPreservedAction(path string) string {
@@ -3236,7 +3244,8 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 			paths[filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")] = struct{}{}
 		}
 		// Native review and Judgment Day agents are installed independently of SDD.
-		// Retired review agents are listed too: the installer may remove them.
+		// Retired review and legacy v3 SDD agents are listed too: the installer
+		// may remove them.
 		if names := reviewassets.NativeAgentFileNames(adapter.Agent()); len(names) > 0 {
 			dir := adapter.SubAgentsDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
 			paths[filepath.Join(dir, reviewassets.OwnershipLedgerFilename)] = struct{}{}

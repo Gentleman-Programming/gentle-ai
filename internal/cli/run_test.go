@@ -1400,3 +1400,40 @@ func TestOpenCodeTelemetryOrdinaryInstall(t *testing.T) {
 		})
 	}
 }
+
+func TestInstallBackupSnapshotsLegacySDDAgents(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}}
+	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sdd-apply.md", "sdd-verify.md", "sdd-research.md"} {
+		path := filepath.Join(home, ".claude", "agents", name)
+		if !containsPath(targets, path) {
+			t.Errorf("install backup misses legacy SDD agent %s, so rollback cannot restore it", path)
+		}
+	}
+}
+
+func TestLegacySDDAgentPreservedAction(t *testing.T) {
+	path := "/fixture with spaces/.claude/agents/sdd-apply.md"
+	got := legacySDDAgentPreservedAction(path)
+	for _, want := range []string{
+		"Legacy SDD agent " + path + " was preserved",
+		"does not match any agent Gentle AI v3 installed",
+		"SDD was retired in v4.0.0",
+		"Claude Code can still dispatch it by name",
+		"back it up and remove it",
+		"Gentle AI will not delete it automatically",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("action missing %q: %s", want, got)
+		}
+	}
+	// Rerunning install or sync never recreates a legacy SDD agent, so the
+	// review-agent opt-in recovery would mislead.
+	if strings.Contains(got, "rerun") || strings.Contains(got, "opt into management") {
+		t.Errorf("action suggests a recovery that does not apply to retired SDD agents: %s", got)
+	}
+}
