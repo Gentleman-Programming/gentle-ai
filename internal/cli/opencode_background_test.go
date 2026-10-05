@@ -298,6 +298,93 @@ func TestInstallActivationCapabilityControlsPolicyAndReport(t *testing.T) {
 	}
 }
 
+// Issue #3453: install reports effective readiness after apply. The OpenCode
+// installer's .zshrc PATH line runs after the login profile and shadows the
+// launcher, so the report must say shadowed instead of ready.
+func TestInstallReportsShadowedActivationFromPostApplyState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login shells are not used on Windows")
+	}
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", "")
+	home := installTestHome(t)
+	realTarget := filepath.Join(home, ".opencode", "bin", "opencode")
+	if err := os.MkdirAll(filepath.Dir(realTarget), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realTarget, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zshrc := filepath.Join(home, ".zshrc")
+	rc := "export PATH=" + filepath.Dir(realTarget) + ":$PATH\n"
+	if err := os.WriteFile(zshrc, []byte(rc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldVersion, oldTarget, oldPath := runOpenCodeVersion, resolveOpenCodeTarget, addUserPath
+	runOpenCodeVersion = func(string) (string, error) { return "1.15.11", nil }
+	resolveOpenCodeTarget = func(string, string, string) (string, error) { return realTarget, nil }
+	addUserPath = func(string) error { return nil }
+	t.Cleanup(func() { runOpenCodeVersion, resolveOpenCodeTarget, addUserPath = oldVersion, oldTarget, oldPath })
+
+	result, err := RunInstall([]string{"--agent", "opencode", "--component", "persona", "--opencode-background-subagents=on"}, system.DetectionResult{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Background.Activation; got.Status != opencodeactivation.ActivationStatusShadowed || got.Effective {
+		t.Fatalf("activation = %#v, want shadowed", got)
+	}
+	for _, want := range []string{"OpenCode background activation status: shadowed", zshrc, realTarget} {
+		if !strings.Contains(result.Verify.FinalNote, want) {
+			t.Fatalf("verification note = %q, want %q", result.Verify.FinalNote, want)
+		}
+	}
+	if data, err := os.ReadFile(zshrc); err != nil || string(data) != rc {
+		t.Fatalf(".zshrc = %q, %v; want untouched", data, err)
+	}
+}
+
+func TestRenderOpenCodeBackgroundActivationUsesEffectiveStatus(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		activation opencodeactivation.ActivationReport
+		want       []string
+		notWant    string
+	}{
+		{
+			name: "capability ready but pending persistence",
+			activation: opencodeactivation.ActivationReport{
+				Capability:       opencodeactivation.CapabilityResolution{Status: opencodeactivation.CapabilityReady},
+				Action:           "on",
+				Status:           opencodeactivation.ActivationStatusPending,
+				ActivationReason: "PATH persistence is pending",
+			},
+			want:    []string{"activation status: pending", "activation reason: PATH persistence is pending"},
+			notWant: "activation status: ready",
+		},
+		{
+			name: "off is intentional",
+			activation: opencodeactivation.ActivationReport{
+				Capability: opencodeactivation.CapabilityResolution{Status: opencodeactivation.CapabilityReady},
+				Action:     "off",
+			},
+			want:    []string{"activation status: off"},
+			notWant: "activation status: ready",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderOpenCodeBackgroundActivation(OpenCodeBackgroundResolution{Activation: tt.activation})
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("render = %q, want %q", got, want)
+				}
+			}
+			if strings.Contains(got, tt.notWant) {
+				t.Fatalf("render = %q, must not contain %q", got, tt.notWant)
+			}
+		})
+	}
+}
+
 func TestLegacySDDInstallDoesNotWriteBackgroundPolicy(t *testing.T) {
 	home := t.TempDir()
 	if err := (componentApplyStep{component: model.ComponentSDD, homeDir: home, workspaceDir: home, scope: ScopeGlobal, agents: []model.AgentID{model.AgentOpenCode}, selection: model.Selection{SDDMode: model.SDDModeSingle}, backgroundPolicy: true}).Run(); err != nil {

@@ -129,24 +129,36 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// checkOpenCodeProfile reports whether new POSIX login shells will find the
-// managed OpenCode launcher directory: either a login profile carries the
-// managed PATH block, or the directory is already on PATH by other means.
+// checkOpenCodeProfile reports whether a new POSIX login shell runs the
+// managed OpenCode launcher for bare `opencode`. It shares activation's
+// startup-file model, so a later rc file that puts another OpenCode ahead of
+// the launcher is reported instead of trusting the profile block alone.
 func checkOpenCodeProfile(homeDir string, pathDirs []string) CheckResult {
 	const id = doctor.CheckOpenCodeProfile
 	binDir := opencode.BinDir(homeDir)
-	if profile, ok := opencode.ManagedProfileWithBinDir(homeDir, binDir); ok {
-		return CheckResult{Name: id, Status: CheckStatusPass, Detail: "login profile " + profile + " persists " + binDir + " on PATH"}
-	}
-	for _, dir := range pathDirs {
-		if filepath.Clean(dir) == filepath.Clean(binDir) {
-			return CheckResult{Name: id, Status: CheckStatusPass, Detail: binDir + " is on PATH; no managed login profile block was found"}
+	resolution := opencode.ResolveLoginShellActivation(homeDir, opencode.ActivationOptions{
+		OS:   doctorGOOS,
+		Path: strings.Join(pathDirs, string(os.PathListSeparator)),
+	})
+	switch resolution.Status {
+	case opencode.ActivationStatusReady:
+		return CheckResult{Name: id, Status: CheckStatusPass, Detail: resolution.Reason}
+	case opencode.ActivationStatusShadowed:
+		remedy := "In " + resolution.Source + ", remove the line that adds " + filepath.Dir(resolution.Resolved) + " to PATH, or add " + opencode.ProfileExportLine(binDir) + " after it; then start a new login shell"
+		if !filepath.IsAbs(resolution.Source) {
+			remedy = "Prepend " + binDir + " to PATH with " + opencode.ProfileExportLine(binDir) + " in your login profile, then start a new login shell"
+		}
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "OpenCode background subagents are on, but " + resolution.Reason,
+			Remedy: doctor.NewRemedy(doctor.RemedyEditShellPath, remedy),
 		}
 	}
 	return CheckResult{
 		Name:   id,
 		Status: CheckStatusWarn,
-		Detail: "OpenCode background subagents are on, but no login profile persists " + binDir + " on PATH, so new shells bypass the managed launcher",
+		Detail: "OpenCode background subagents are on, but new shells bypass the managed launcher: " + resolution.Reason,
 		Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' from a zsh or bash login shell, or add "+opencode.ProfileExportLine(binDir)+" to your login profile, then start a new login shell"),
 	}
 }
@@ -228,6 +240,9 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	if shim != "" {
 		detail += " (" + shim + ")"
 	}
+	if target, ok := doctorManagedLauncherTarget(resolved); ok {
+		detail += " (Gentle AI managed launcher for " + target + ")"
+	}
 	if tool == "gentle-ai" {
 		detail += doctorInvokedGentleAIClause(resolved)
 	}
@@ -299,6 +314,7 @@ func resolveDoctorTool(tool string) (string, string, error) {
 func doctorToolCopies(tool string, pathDirs []string) []string {
 	seenCopies := make(map[string]struct{}, len(pathDirs))
 	copies := make([]string, 0, len(pathDirs))
+	var launcherTargets []string
 	for _, dir := range pathDirs {
 		if p := toolInDir(dir, tool); p != "" {
 			resolved, err := filepath.EvalSymlinks(p)
@@ -310,9 +326,68 @@ func doctorToolCopies(tool string, pathDirs []string) []string {
 			}
 			seenCopies[resolved] = struct{}{}
 			copies = append(copies, p)
+			if target, ok := doctorManagedLauncherTarget(p); ok {
+				launcherTargets = append(launcherTargets, target)
+			}
 		}
 	}
-	return copies
+	if len(launcherTargets) == 0 {
+		return copies
+	}
+	// A managed launcher and the executable it delegates to form one
+	// installation; removing either would break OpenCode (#5238).
+	chained := copies[:0]
+	for _, p := range copies {
+		target := false
+		for _, launcherTarget := range launcherTargets {
+			if doctorSameFile(p, launcherTarget) {
+				target = true
+				break
+			}
+		}
+		if !target {
+			chained = append(chained, p)
+		}
+	}
+	return chained
+}
+
+// doctorManagedLauncherTarget returns the delegation target when path is the
+// Gentle-owned OpenCode launcher: located in the managed bin directory and
+// holding exactly the generated launcher bytes.
+func doctorManagedLauncherTarget(path string) (string, bool) {
+	homeDir, err := osUserHomeDirDoctor()
+	if err != nil || !doctorSamePath(filepath.Dir(path), opencode.BinDir(homeDir)) {
+		return "", false
+	}
+	return opencode.ManagedLauncherTarget(path)
+}
+
+// doctorSameFile reports whether a and b name the same file, tolerating
+// symlinks, short names, and Windows case differences.
+func doctorSameFile(a, b string) bool {
+	if infoA, err := os.Stat(a); err == nil {
+		if infoB, err := os.Stat(b); err == nil {
+			return os.SameFile(infoA, infoB)
+		}
+	}
+	resolvedA, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		resolvedA = a
+	}
+	resolvedB, err := filepath.EvalSymlinks(b)
+	if err != nil {
+		resolvedB = b
+	}
+	return doctorSamePath(resolvedA, resolvedB)
+}
+
+func doctorSamePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if doctorGOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // executableExtensions returns the filename suffixes to probe when scanning a

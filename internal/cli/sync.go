@@ -2088,7 +2088,8 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	result.BackgroundPolicyEnabled = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 	if background.activationPlan != nil {
-		result.Background.Activation = background.activationPlan.Report()
+		background.Activation = background.activationPlan.Report()
+		result.Background.Activation = background.Activation
 	}
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, rt.runtimeReady, agentIDs)
 	if !result.Verify.Ready {

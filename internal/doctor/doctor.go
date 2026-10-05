@@ -35,6 +35,7 @@ const (
 	RemedyInstall          RemedyID = "install"
 	RemedyRepairState      RemedyID = "repair-state"
 	RemedySync             RemedyID = "sync"
+	RemedyEditShellPath    RemedyID = "edit-shell-path"
 	RemedyStartEngram      RemedyID = "start-engram"
 	RemedyInspectEngram    RemedyID = "inspect-engram"
 	RemedyFreeDiskSpace    RemedyID = "free-disk-space"
@@ -89,6 +90,8 @@ func NewRemedy(id RemedyID, description string) *Remedy {
 		r.Category, r.EligibilityReason = RemedyCategoryInstall, "no bounded managed install was identified"
 	case RemedyRemoveDuplicates:
 		r.Category, r.EligibilityReason = RemedyCategoryEnvironment, "binary ownership is unknown"
+	case RemedyEditShellPath:
+		r.Category, r.EligibilityReason = RemedyCategoryEnvironment, "shell startup files are user-owned"
 	case RemedyRepairState:
 		r.Category, r.EligibilityReason = RemedyCategoryConfiguration, "no safe recovery source was identified"
 	case RemedySync:

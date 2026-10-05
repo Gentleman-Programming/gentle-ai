@@ -156,14 +156,14 @@ func TestBashActivationPrefersBashProfileAndCreatesProfileWhenNoneExist(t *testi
 		}
 		profile := filepath.Join(home, ".profile")
 		assertProfile(t, profile, expectedProfileBlock(BinDir(home)), 0o644)
-		if !strings.Contains(plan.RestartGuidance(), profile) {
-			t.Fatalf("restart guidance = %q, want profile path", plan.RestartGuidance())
+		if report := plan.Report(); report.Status != ActivationStatusReady || !strings.Contains(report.ActivationReason, profile) {
+			t.Fatalf("activation report = %#v, want ready naming profile path", report)
 		}
 	})
 }
 
 // Profiles that cannot be updated safely are never modified; the launcher is
-// still written and the guidance tells the user exactly what to add.
+// still written and the activation reason tells the user exactly what to add.
 func TestActivationRefusesUnsafeLoginProfilesWithManualGuidance(t *testing.T) {
 	skipProfileTestOnWindows(t)
 	for _, tt := range []struct {
@@ -171,6 +171,10 @@ func TestActivationRefusesUnsafeLoginProfilesWithManualGuidance(t *testing.T) {
 		shell  string
 		setup  func(t *testing.T, home string) (path string, content string)
 		reason string
+		// wantReady marks refused profiles that still put the managed bin
+		// directory on PATH: activation is effective even though Gentle AI
+		// will not rewrite them.
+		wantReady bool
 	}{
 		{name: "unsupported shell", shell: "/usr/bin/fish", reason: "not supported"},
 		{name: "unknown shell", shell: "", reason: "SHELL is not set"},
@@ -199,7 +203,7 @@ func TestActivationRefusesUnsafeLoginProfilesWithManualGuidance(t *testing.T) {
 			}
 			return path, content
 		}},
-		{name: "duplicated managed block", shell: "/bin/zsh", reason: "malformed, edited, or multiple", setup: func(t *testing.T, home string) (string, string) {
+		{name: "duplicated managed block", shell: "/bin/zsh", wantReady: true, setup: func(t *testing.T, home string) (string, string) {
 			path := filepath.Join(home, ".zprofile")
 			content := expectedProfileBlock(BinDir(home)) + expectedProfileBlock(BinDir(home))
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -226,9 +230,13 @@ func TestActivationRefusesUnsafeLoginProfilesWithManualGuidance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			guidance := plan.RestartGuidance()
-			if !strings.Contains(guidance, "PATH persistence is pending") || !strings.Contains(guidance, tt.reason) || !strings.Contains(guidance, ProfileExportLine(BinDir(home))) {
-				t.Fatalf("restart guidance = %q, want pending reason %q and manual export line", guidance, tt.reason)
+			report := plan.Report()
+			if tt.wantReady {
+				if report.Status != ActivationStatusReady || !strings.Contains(report.ActivationReason, path) {
+					t.Fatalf("activation report = %#v, want ready naming %s", report, path)
+				}
+			} else if report.Status != ActivationStatusPending || !strings.Contains(report.ActivationReason, "PATH persistence is pending") || !strings.Contains(report.ActivationReason, tt.reason) || !strings.Contains(report.ActivationReason, ProfileExportLine(BinDir(home))) {
+				t.Fatalf("activation report = %#v, want pending reason %q and manual export line", report, tt.reason)
 			}
 			if _, err := os.Stat(POSIXLauncherPath(home)); err != nil {
 				t.Fatalf("launcher stat error = %v, want written", err)
@@ -400,9 +408,6 @@ func TestRemoveManagedProfileBlockLeavesUnsafeProfilesUntouched(t *testing.T) {
 	}
 	assertProfile(t, edited, editedContent, 0o644)
 	assertProfile(t, readOnly, block, 0o444)
-	if got, ok := ManagedProfileWithBinDir(home, BinDir(home)); ok {
-		t.Fatalf("ManagedProfileWithBinDir() = %s, want none for unsafe profiles", got)
-	}
 }
 
 func TestManagedProfileBlockRoundTripsQuotedBinDir(t *testing.T) {
@@ -440,21 +445,25 @@ func TestProfileBlockFollowsTheLastLineEnding(t *testing.T) {
 	}
 }
 
-// Doctor counts only the login profile the current shell reads: a block left
-// in another shell's profile does not persist PATH.
-func TestManagedProfileWithBinDirChecksTheCurrentShellsProfile(t *testing.T) {
+// Only the startup files the current shell reads count: a block left in
+// another shell's profile does not put the launcher on a new shell's PATH.
+func TestResolveLoginShellActivationReadsTheCurrentShellsProfile(t *testing.T) {
+	skipProfileTestOnWindows(t)
 	home := t.TempDir()
 	binDir := BinDir(home)
-	if err := os.WriteFile(filepath.Join(home, ".profile"), []byte(profileBlock(binDir, "\n")), 0o644); err != nil {
+	writeExecutable(t, POSIXLauncherPath(home), posixLauncher("/opt/opencode/bin/opencode"))
+	profile := filepath.Join(home, ".profile")
+	if err := os.WriteFile(profile, []byte(profileBlock(binDir, "\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ZDOTDIR", "")
 	t.Setenv("SHELL", "/bin/zsh")
-	if path, ok := ManagedProfileWithBinDir(home, binDir); ok {
-		t.Fatalf("zsh: block only in .profile reported as persisted by %q", path)
+	options := ActivationOptions{OS: "linux", Path: "/usr/bin"}
+	if got := ResolveLoginShellActivation(home, options); got.Status != ActivationStatusPending {
+		t.Fatalf("zsh: block only in .profile = %#v, want pending", got)
 	}
 	t.Setenv("SHELL", "/bin/sh")
-	if path, ok := ManagedProfileWithBinDir(home, binDir); !ok || path != filepath.Join(home, ".profile") {
-		t.Fatalf("sh: ManagedProfileWithBinDir = %q, %t; want .profile", path, ok)
+	if got := ResolveLoginShellActivation(home, options); got.Status != ActivationStatusReady || got.Source != profile {
+		t.Fatalf("sh: ResolveLoginShellActivation = %#v, want ready from %s", got, profile)
 	}
 }

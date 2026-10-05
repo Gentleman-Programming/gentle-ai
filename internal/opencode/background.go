@@ -213,13 +213,17 @@ type CapabilityResolution struct {
 
 // ActivationReport is the public outcome of a managed launcher transaction.
 // Capability status remains meaningful when activation is intentionally a
-// foreground fallback for an unsupported or unknown runtime.
+// foreground fallback for an unsupported or unknown runtime; Status and
+// Effective describe whether a new shell actually runs the managed launcher.
 type ActivationReport struct {
-	Capability    CapabilityResolution
-	Action        string
-	Applied       bool
-	ChangedPaths  []string
-	LauncherPaths []string
+	Capability       CapabilityResolution
+	Action           string
+	Applied          bool
+	Effective        bool
+	Status           ActivationStatus
+	ActivationReason string
+	ChangedPaths     []string
+	LauncherPaths    []string
 }
 
 // Ready reports whether the runtime is eligible for managed activation.
@@ -293,6 +297,9 @@ type ActivationOptions struct {
 	ResolveTarget            func(homeDir, goos, pathValue string) (string, error)
 	WriteFile                func(path string, content []byte, mode os.FileMode) error
 	RemoveFile               func(path string) error
+	// NewShellPath returns the PATH a new Windows terminal inherits. POSIX
+	// readiness is modeled from login startup files instead.
+	NewShellPath func() (string, error)
 }
 
 func (o ActivationOptions) normalized() ActivationOptions {
@@ -336,6 +343,9 @@ func (o ActivationOptions) normalized() ActivationOptions {
 	}
 	if o.RemoveFile == nil {
 		o.RemoveFile = removeManagedLauncherFile
+	}
+	if o.NewShellPath == nil {
+		o.NewShellPath = system.NewShellPath
 	}
 	return o
 }
@@ -439,11 +449,18 @@ func splitPath(value, goos string) []string {
 	return strings.Split(value, separator)
 }
 
+// targetNames lists the OpenCode command names in lookup order. Windows
+// follows PATHEXT like cmd.exe and exec.LookPath.
 func targetNames(goos string) []string {
-	if goos == "windows" {
-		return []string{"opencode.exe", "opencode.cmd", "opencode.bat", "opencode"}
+	if goos != "windows" {
+		return []string{"opencode"}
 	}
-	return []string{"opencode"}
+	extensions := windowsExecutableExtensions()
+	names := make([]string, 0, len(extensions))
+	for _, extension := range extensions {
+		names = append(names, "opencode"+extension)
+	}
+	return names
 }
 
 func samePath(a, b, goos string) bool {
@@ -498,7 +515,12 @@ type ActivationPlan struct {
 	pathAddition system.UserPathAddition
 	pathAdded    bool
 	profiles     []profileChange
-	applied      bool
+	// profileReason explains why no login profile persists the managed bin
+	// directory; empty when a profile block does.
+	profileReason    string
+	applied          bool
+	status           ActivationStatus
+	activationReason string
 }
 
 // PrepareActivation resolves capability and preflights all owned launcher
@@ -523,6 +545,16 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 			Status: CapabilityUnknown,
 			Reason: targetErr.Error(),
 		}
+		plan.evaluate()
+		return plan, nil
+	}
+	if options.OS == "windows" && !windowsTargetSafe(target) {
+		plan.capability = CapabilityResolution{
+			Status:     CapabilityUnsupported,
+			TargetPath: target,
+			Reason:     fmt.Sprintf("OpenCode target %q contains characters cmd.exe would expand or split (%%, !, \", or control characters), so the managed CMD launcher cannot invoke it safely; install OpenCode under a path without them", target),
+		}
+		plan.evaluate()
 		return plan, nil
 	}
 	plan.capability = ResolveCapability(target, options.RunVersion)
@@ -530,6 +562,7 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 		plan.capability.RestartGuidance = restartGuidance(paths)
 	}
 	if !plan.capability.Ready() {
+		plan.evaluate()
 		return plan, nil
 	}
 	for _, path := range paths {
@@ -549,6 +582,7 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 			return nil, err
 		}
 	}
+	plan.evaluate()
 	return plan, nil
 }
 
@@ -578,6 +612,7 @@ func PrepareDeactivation(homeDir string, options ActivationOptions) (*Activation
 			return nil, err
 		}
 	}
+	plan.evaluate()
 	return plan, nil
 }
 
@@ -600,11 +635,14 @@ func (p *ActivationPlan) Report() ActivationReport {
 		capability.Reason = "deactivation does not require an OpenCode runtime probe"
 	}
 	return ActivationReport{
-		Capability:    capability,
-		Action:        string(p.action),
-		Applied:       p.applied,
-		ChangedPaths:  append([]string(nil), p.changed...),
-		LauncherPaths: append([]string(nil), p.paths...),
+		Capability:       capability,
+		Action:           string(p.action),
+		Applied:          p.applied,
+		Effective:        p.status == ActivationStatusReady,
+		Status:           p.status,
+		ActivationReason: p.activationReason,
+		ChangedPaths:     append([]string(nil), p.changed...),
+		LauncherPaths:    append([]string(nil), p.paths...),
 	}
 }
 
@@ -666,6 +704,7 @@ func (p *ActivationPlan) Apply() error {
 	if p.action == activationActionOn {
 		if !p.capability.Ready() {
 			p.applied = true
+			p.evaluate()
 			return nil
 		}
 		for _, path := range p.paths {
@@ -698,6 +737,7 @@ func (p *ActivationPlan) Apply() error {
 			return p.failAndRollback(fmt.Errorf("add managed OpenCode bin directory %q to PATH: %w", BinDir(p.homeDir), err))
 		}
 		p.applied = true
+		p.evaluate()
 		return nil
 	}
 
@@ -722,6 +762,7 @@ func (p *ActivationPlan) Apply() error {
 		return p.failAndRollback(err)
 	}
 	p.applied = true
+	p.evaluate()
 	return nil
 }
 
@@ -842,22 +883,33 @@ func readLauncherSnapshot(path string) (launcherSnapshot, error) {
 // contains the ownership marker, or a generated launcher with extra or missing
 // bytes, belongs to the user.
 func IsManagedLauncher(path string, data []byte) bool {
+	_, ok := managedLauncherTarget(path, data)
+	return ok
+}
+
+// managedLauncherTarget returns the target of exactly generated launcher bytes
+// for path's launcher name.
+func managedLauncherTarget(path string, data []byte) (string, bool) {
 	text := string(data)
+	var target string
+	var ok bool
 	switch strings.ToLower(filepath.Base(path)) {
 	case POSIXLauncherPathPlaceholder:
 		prefix, suffix, _ := strings.Cut(posixLauncher("\x00"), "'\x00'")
-		target, ok := canonicalTarget(text, prefix, suffix, "'", `'\''`)
-		return ok && text == posixLauncher(target)
+		target, ok = canonicalTarget(text, prefix, suffix, "'", `'\''`)
+		ok = ok && text == posixLauncher(target)
 	case WindowsCMDPathPlaceholder:
-		target, ok := canonicalCMDTarget(text)
-		return ok && text == windowsCMDLauncher(target)
+		target, ok = canonicalCMDTarget(text)
+		ok = ok && text == windowsCMDLauncher(target)
 	case WindowsPS1PathPlaceholder:
 		prefix, suffix, _ := strings.Cut(windowsPS1Launcher("\x00"), "'\x00'")
-		target, ok := canonicalTarget(text, prefix, suffix, "'", "''")
-		return ok && text == windowsPS1Launcher(target)
-	default:
-		return false
+		target, ok = canonicalTarget(text, prefix, suffix, "'", "''")
+		ok = ok && text == windowsPS1Launcher(target)
 	}
+	if !ok {
+		return "", false
+	}
+	return target, true
 }
 
 // canonicalTarget extracts the quoted target between a generated prefix and
@@ -918,7 +970,8 @@ func posixLauncher(target string) string {
 }
 
 func windowsCMDLauncher(target string) string {
-	// cmd expands %VAR% in target paths; resolved targets containing % are unsupported.
+	// cmd expands %VAR% in target paths; PrepareActivation refuses targets
+	// that windowsTargetSafe rejects before this launcher is generated.
 	quotedTarget := strings.ReplaceAll(target, `"`, `""`)
 	invoke := `"` + quotedTarget + `" %*`
 	if strings.EqualFold(filepath.Ext(target), ".ps1") {

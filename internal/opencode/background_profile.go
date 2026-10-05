@@ -209,27 +209,6 @@ func rewriteProfileBlock(data []byte, binDir string, remove bool) ([]byte, error
 	return append(desired, data[block.end:]...), nil
 }
 
-// ManagedProfileWithBinDir returns the first managed login profile whose block
-// persists binDir. Doctor uses it to diagnose missing PATH persistence.
-func ManagedProfileWithBinDir(homeDir, binDir string) (string, bool) {
-	// Only the login profile the current $SHELL actually reads counts: a
-	// block left in a shadowed or another shell's profile does not persist
-	// PATH for the user's login shells.
-	path, reason := loginProfile(homeDir, ActivationOptions{}.normalized())
-	if reason != "" {
-		return "", false
-	}
-	snapshot, reason, err := readProfileSnapshot(path)
-	if err != nil || reason != "" || !snapshot.exists {
-		return "", false
-	}
-	block, err := parseManagedProfileBlock(snapshot.data)
-	if err == nil && block != nil && samePath(block.binDir, binDir, "linux") {
-		return path, true
-	}
-	return "", false
-}
-
 // HasManagedProfileBlock reports whether RemoveManagedProfileBlock would change
 // path.
 func HasManagedProfileBlock(path string) bool {
@@ -252,7 +231,7 @@ func RemoveManagedProfileBlock(path string) (bool, error) {
 }
 
 // prepareProfileActivation selects and preflights the login profile for an
-// activation plan and extends the restart guidance with the outcome.
+// activation plan and records why PATH persistence is unavailable, if it is.
 func (p *ActivationPlan) prepareProfileActivation() error {
 	binDir := BinDir(p.homeDir)
 	profile, reason := loginProfile(p.homeDir, p.options)
@@ -265,11 +244,10 @@ func (p *ActivationPlan) prepareProfileActivation() error {
 		}
 	}
 	if reason != "" {
-		p.capability.RestartGuidance += fmt.Sprintf(" PATH persistence is pending: %s. Add %s to your login profile, then start a new login shell.", reason, ProfileExportLine(binDir))
+		p.profileReason = fmt.Sprintf("PATH persistence is pending: %s. Add %s to your login profile, then start a new login shell", reason, ProfileExportLine(binDir))
 		return nil
 	}
 	p.profiles = []profileChange{change}
-	p.capability.RestartGuidance += fmt.Sprintf(" Login profile %s persists %s on PATH; start a new login shell so bare opencode resolves through the managed launcher.", profile, binDir)
 	return nil
 }
 

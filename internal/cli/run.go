@@ -270,6 +270,10 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		State:        runtime.state,
 	})
 	result.Verify = withPostInstallNotes(result.Verify, resolved)
+	if backgroundActivation != nil {
+		// Notes describe the applied outcome, not the prepared prediction.
+		background.Activation = backgroundActivation.Report()
+	}
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, runtime.runtimeReady, resolved.Agents)
 	result.Verify = withOpenCodeBackgroundActivationNote(result.Verify, background, resolved.Agents)
 	if plan := piBackground.projectionPlan; plan != nil && plan.skipReason != "" {

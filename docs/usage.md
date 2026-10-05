@@ -328,8 +328,9 @@ Checks performed:
 
 | Check | What it verifies |
 |-------|-----------------|
-| Tool binaries | Required tools present on `PATH`; shadow detection (wrong binary resolves first) |
+| Tool binaries | Required tools present on `PATH`; shadow detection (wrong binary resolves first). The managed OpenCode launcher and the executable it delegates to count as one installation |
 | `state.json` validity | Parses `~/.gentle-ai/state.json` and reports any schema/corruption issues |
+| OpenCode activation (`opencode:managed_profile`) | With OpenCode background subagents on (POSIX): a new login shell resolves `opencode` to the managed launcher, not to a copy that a later startup file puts first on `PATH` |
 | Engram MCP reachability | Confirms the Engram MCP server responds |
 | Disk space | Warns when available space is critically low |
 
