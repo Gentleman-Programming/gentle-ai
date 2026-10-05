@@ -513,8 +513,24 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe is not configured")
 	}
 	result, err := probe(mcpPath)
-	if err != nil && !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
-		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", piCodeGraphProbeFailure(err))
+	if err != nil {
+		failure := piCodeGraphProbeFailure(err)
+		// A transport closure is its own pending reason. Handle it before the
+		// adapter-health tolerance below: errors.Is matches any child of a join,
+		// so a probe that closed AND reported unverifiable health would otherwise
+		// collapse to the sentinel alone and claim a verified capability it never
+		// observed.
+		if failure != err {
+			if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+				// Two pending reasons have no single honest action, so the join stays
+				// fatal (see piCodeGraphPendingManualAction).
+				return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", errors.Join(ErrPiCodeGraphAdapterHealthUnavailable, failure))
+			}
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", failure)
+		}
+		if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", failure)
+		}
 	}
 	if !result.AdapterAvailable || !result.Initialized {
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe did not observe an available adapter and initialized server")

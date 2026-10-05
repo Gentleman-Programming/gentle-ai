@@ -671,6 +671,53 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 	}
 }
 
+// TestVerifyPiMCPKeepsJoinedPendingReasonsFatal pins the second finding of the
+// #5070 review. errors.Is matches any child of a join, so a probe that closed
+// the transport AND reported unverifiable adapter health used to fall through to
+// the sentinel-only branch with validated capability evidence. That claimed
+// "pending, capability verified" while silently dropping the closure, and a join
+// of two pending reasons has no single honest action.
+func TestVerifyPiMCPKeepsJoinedPendingReasonsFatal(t *testing.T) {
+	mcpPath := filepath.Join(t.TempDir(), "mcp.json")
+	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+
+	validTool := PiCodeGraphMCPTool{
+		Name: "codegraph_explore",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":       map[string]any{"type": "string"},
+				"maxFiles":    map[string]any{"type": "integer"},
+				"projectPath": map[string]any{"type": "string"},
+			},
+			"required": []any{"query"},
+		},
+	}
+
+	previous := piCodeGraphEffectiveMCPProbe
+	piCodeGraphEffectiveMCPProbe = func(string) (PiCodeGraphMCPProbeResult, error) {
+		return PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{validTool}},
+			errors.Join(ErrPiCodeGraphAdapterHealthUnavailable, fmt.Errorf("MCP initialize: %w", io.EOF))
+	}
+	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
+
+	verification, err := verifyPiMCP(mcpPath)
+	if err == nil {
+		t.Fatalf("verifyPiMCP() = %#v, nil error, want failure", verification)
+	}
+	if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) && !errors.Is(err, io.EOF) {
+		t.Fatalf("joined pending reasons collapsed to the adapter-health sentinel and dropped the closure: %v", err)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("error = %v, want the transport closure preserved", err)
+	}
+	// The decisive property: the pipeline must not read this as a single pending
+	// reason, which is what PreservePiCodeGraphPending acts on.
+	if action, pending := piCodeGraphPendingManualAction(err); pending {
+		t.Fatalf("joined pending reasons reported one pending action %q: %v", action, err)
+	}
+}
+
 func TestPiCodeGraphFailureRestoresNewMCPAndChild(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")

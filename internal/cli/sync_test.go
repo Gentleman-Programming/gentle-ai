@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -2966,6 +2967,39 @@ func TestRunSyncReleasesRetiredPiSDDAgentsFromCodeGraphManifest(t *testing.T) {
 	}
 	if text := readTextFile(t, manifestPath); strings.Contains(text, "sdd-apply.md") || strings.Contains(text, "sdd-verify.md") {
 		t.Fatalf("manifest still owns retired Pi SDD agents:\n%s", text)
+	}
+}
+
+// TestRunSyncSurfacesPiCodeGraphManualActions pins issue #2146's second half:
+// converting an incomplete probe into a non-fatal pending action is only useful
+// if sync actually reports that action. The step previously forwarded changed
+// files and dropped ManualActions, so the user saw a clean sync with no reason
+// and no instruction to retry.
+func TestRunSyncSurfacesPiCodeGraphManualActions(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}); err != nil {
+		t.Fatal(err)
+	}
+	writeManagedPiCodeGraphManifest(t, home)
+
+	pending := "Pi CodeGraph integration remains pending: the MCP capability probe did not complete."
+	previousRefresh := refreshPiCodeGraphIfConfigured
+	refreshPiCodeGraphIfConfigured = func(string, string) (communitytool.PiCodeGraphResult, bool, error) {
+		return communitytool.PiCodeGraphResult{ManualActions: []string{pending}}, true, nil
+	}
+	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+
+	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if !slices.Contains(result.ManualActions, pending) {
+		t.Fatalf("sync manual actions = %v, want the Pi CodeGraph pending action", result.ManualActions)
+	}
+	var rendered strings.Builder
+	renderSyncManualActions(&rendered, result.ManualActions)
+	if !strings.Contains(rendered.String(), pending) {
+		t.Fatalf("rendered manual actions = %q, want the Pi CodeGraph pending action", rendered.String())
 	}
 }
 
