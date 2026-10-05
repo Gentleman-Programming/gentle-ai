@@ -72,6 +72,12 @@ var claudePhaseLabels = map[string]string{
 	"default":      "General delegation",
 }
 
+// claudeModelOnlyRole reports whether a role is delegated through the Agent
+// tool `model` parameter, which takes no effort, so effort is not offered.
+func claudeModelOnlyRole(phase string) bool {
+	return strings.HasPrefix(phase, "odd-")
+}
+
 // claudeAliasOrder defines the display order in the model selection screen.
 var claudeAliasOrder = []model.ClaudeModelAlias{
 	model.ClaudeModelFable,
@@ -336,11 +342,11 @@ func handleClaudeCustomModelSelectNav(
 		phase := state.SelectedPhase
 		assignment := state.CustomAssignments[phase]
 		assignment.Model = claudeAliasOrder[cursor]
-		if !model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
+		if claudeModelOnlyRole(phase) || !model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
 			assignment.Effort = model.ClaudeEffortDefault
 		}
 		state.CustomAssignments[phase] = assignment
-		if len(model.ClaudeEffortsForModel(assignment.Model)) > 1 {
+		if !claudeModelOnlyRole(phase) && len(model.ClaudeEffortsForModel(assignment.Model)) > 1 {
 			state.Mode = ClaudeModeEffortSelect
 		} else {
 			state.Mode = ClaudeModePhaseList
@@ -464,6 +470,9 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) str
 		}
 
 		label := fmt.Sprintf("%-20s %s %s", claudePhaseLabels[phase], aliasTag(assignment.Model), effortTag(assignment.Effort))
+		if claudeModelOnlyRole(phase) {
+			label = fmt.Sprintf("%-20s %s", claudePhaseLabels[phase], aliasTag(assignment.Model))
+		}
 
 		if focused {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
@@ -495,6 +504,9 @@ func renderCustomModelSelect(state ClaudeModelPickerState, cursor int) string {
 	for idx, alias := range claudeAliasOrder {
 		focused := idx == cursor
 		label := fmt.Sprintf("%-8s %s", alias, effortSummary(alias))
+		if claudeModelOnlyRole(phase) {
+			label = string(alias)
+		}
 		if focused {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
 		} else {

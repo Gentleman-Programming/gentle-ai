@@ -1,6 +1,10 @@
 package model
 
-import "maps"
+import (
+	"fmt"
+	"maps"
+	"strings"
+)
 
 // ClaudeModelAlias represents one of the Claude model tiers used for
 // per-phase model assignments in the SDD orchestrator.
@@ -105,6 +109,39 @@ type ClaudePhaseAssignment struct {
 // Valid reports whether the model is valid and the effort is supported by it.
 func (a ClaudePhaseAssignment) Valid() bool {
 	return a.Model.Valid() && ClaudeEffortAllowedForModel(a.Model, a.Effort)
+}
+
+// claudeODDRoles are the ODD worker classes the Claude orchestrator delegates
+// through the native Agent tool. They are not installed named agents.
+var claudeODDRoles = []string{"odd-explorer", "odd-worker", "odd-verify"}
+
+// RenderClaudeODDAssignments provides Agent tool `model` arguments for ODD
+// work. The Agent tool takes no effort, so the table is model only. Resolution
+// mirrors native agent installation: the role, then "default", then sonnet,
+// with phase assignments overriding legacy model-only assignments.
+func RenderClaudeODDAssignments(legacy map[string]ClaudeModelAlias, phases map[string]ClaudePhaseAssignment) string {
+	resolve := func(role string) (ClaudeModelAlias, bool) {
+		if value, ok := phases[role]; ok && value.Model.Valid() {
+			return value.Model, true
+		}
+		if value, ok := legacy[role]; ok && value.Valid() {
+			return value, true
+		}
+		return "", false
+	}
+	var b strings.Builder
+	b.WriteString("| ODD worker class | Model |\n|---|---|\n")
+	for _, role := range claudeODDRoles {
+		alias, ok := resolve(role)
+		if !ok {
+			alias, ok = resolve("default")
+		}
+		if !ok {
+			alias = ClaudeModelSonnet
+		}
+		fmt.Fprintf(&b, "| `%s` | `%s` |\n", role, alias)
+	}
+	return b.String()
 }
 
 // ClaudePhaseAssignmentsFromLegacy converts the historical model-only map into
