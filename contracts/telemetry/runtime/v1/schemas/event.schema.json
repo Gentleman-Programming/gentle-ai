@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gentle-ai.telemetry-runtime-event/v1",
+  "description": "Anonymous POST /v1/runtime-events, at most 16384 UTF-8 bytes. Reject duplicate JSON keys. delivery_id is a fresh independent random delivery identity, never a local batch, source, session, installation or user identity. The client makes one attempt only and never retains the event. Server deduplication remains defensive. Row order is significant for server canonicalization, not session composition. No activity timestamp is collected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "registry", "delivery_id", "host", "rows"],
+  "properties": {
+    "schema": {"const": "gentle-ai.telemetry-runtime-event/v1"},
+    "registry": {"const": 1},
+    "delivery_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "host": {"$ref": "aggregate.schema.json#/properties/host"},
+    "rows": {"$ref": "aggregate.schema.json#/properties/rows"}
+  },
+  "$defs": {
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "decision"],
+      "properties": {
+        "schema": {"const": "gentle-ai.telemetry-runtime-delivery/v1"},
+        "decision": {"enum": ["stored", "duplicate"]}
+      }
+    }
+  }
+}

@@ -7,7 +7,6 @@ die() {
 }
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-: "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required}"
 : "${MINISIGN_PUBLIC_KEYS:?MINISIGN_PUBLIC_KEYS is required}"
 [[ "$GITHUB_REPOSITORY" == "Gentleman-Programming/gentle-ai" ]] || die "unexpected repository"
 
@@ -16,15 +15,33 @@ if ! canonical_public_keys=$(./scripts/canonicalize-release-public-keys.sh); the
 fi
 [[ "$canonical_public_keys" == "$MINISIGN_PUBLIC_KEYS" ]] || die "public-key canonicalization changed the configured value"
 
-tag=$GITHUB_REF_NAME
+if [[ -v RELEASE_VERIFICATION_TAG ]]; then
+  tag=$RELEASE_VERIFICATION_TAG
+  [[ -n "$tag" ]] || die "RELEASE_VERIFICATION_TAG is empty"
+else
+  : "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required when RELEASE_VERIFICATION_TAG is unset}"
+  tag=$GITHUB_REF_NAME
+fi
 [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "tag is not exact stable semver"
 version=${tag#v}
+if [[ -v PROVIDER_CONTRACT_SEMVER ]]; then
+  contract_semver=$PROVIDER_CONTRACT_SEMVER
+else
+  contract_semver=$(tr -d '\n' < contracts/review-provider-contract/CONTRACT_SEMVER)
+fi
+[[ "$contract_semver" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "provider contract semver is invalid"
 
 archives=(
   "gentle-ai_${version}_darwin_amd64.tar.gz"
   "gentle-ai_${version}_darwin_arm64.tar.gz"
   "gentle-ai_${version}_linux_amd64.tar.gz"
   "gentle-ai_${version}_linux_arm64.tar.gz"
+  "gentle-ai-review-provider-contract-${contract_semver}.tar.gz"
+  # The deterministic provenance manifest (#3854) is a signed, checksummed
+  # archive like the others: the publication policy requires it, so the
+  # verifier must expect it too, or every stable after v2.4.0 fails here
+  # before a single byte is checked (#4016).
+  "gentle-ai-release-provenance-v1.tar.gz"
 )
 expected_assets=("${archives[@]}" checksums.txt checksums.txt.minisig)
 

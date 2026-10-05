@@ -13,11 +13,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 func TestMain(m *testing.M) {
+	// Neutralize ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
+	// OPENCODE_CONFIG_DIR) up front: this package's executor tests resolve
+	// Pi and OpenCode config paths through the real adapters/internal/opencode
+	// package, both of which honor these overrides directly from the
+	// environment. Individual tests keep their own explicit t.Setenv("", "")
+	// resets, which still work fine on top of this baseline.
+	testenv.Isolate()
+	// Existing upgrade fixtures explicitly represent V1, never the ambient CLI.
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
 	}
@@ -101,6 +114,96 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	}
 }
 
+// TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion is the
+// acceptance scenario for issue #4687: a stable-channel upgrade target whose
+// major differs from the running binary's major must compose a /vN suffix
+// matching the TARGET version, not the running binary. This is what makes a
+// cross-major upgrade resolvable: a v3 binary targeting v4.0.0 composes
+// .../v4/... and a v3 binary targeting v2.0.0 composes .../v2/....
+//
+// The composition happens inside goInstallUpgrade, which is reached from
+// runStrategy only on a Windows profile with Go on PATH and a declared
+// GoImportPath — gentleAISelfUpgradeMethod routes gentle-ai on Linux and
+// macOS to InstallBinary (the minisign-verified release download) and the
+// beta channel bypasses this path through goInstallMainUpgrade. The previous
+// rewrite used a Linux profile and never reached the composition: the
+// routing went straight to binaryUpgrade and the test failed on
+// ErrReleaseTrustUnavailable. The preflight gate inside goInstallUpgrade is
+// satisfied the same way as
+// TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget: a fake binary
+// is written into a temp GOBIN, lookPathFn resolves "gentle-ai" to that
+// path, and execCommand hands a synthetic GOBIN back to goInstallDestinationDir.
+func TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion(t *testing.T) {
+	var tool update.ToolInfo
+	for _, candidate := range update.Tools {
+		if candidate.Name == "gentle-ai" {
+			tool = candidate
+			break
+		}
+	}
+	if tool.GoImportPath == "" {
+		t.Fatal("shipped gentle-ai registry entry must declare GoImportPath")
+	}
+
+	tests := []struct {
+		name       string
+		latestVer  string
+		wantTarget string
+	}{
+		{
+			name:       "v3 binary targeting v4.0.0 composes /v4",
+			latestVer:  "4.0.0",
+			wantTarget: "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0",
+		},
+		{
+			name:       "v3 binary targeting v2.0.0 composes /v2",
+			latestVer:  "2.0.0",
+			wantTarget: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.0.0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gobin := t.TempDir()
+			destination := writeFakeBinary(t, gobin, "gentle-ai.exe")
+
+			origLookPath := lookPathFn
+			t.Cleanup(func() { lookPathFn = origLookPath })
+			lookPathFn = func(string) (string, error) { return destination, nil }
+
+			origExec := execCommand
+			t.Cleanup(func() { execCommand = origExec })
+
+			var gotName string
+			var gotArgs []string
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				if name == "go" && len(args) == 2 && args[0] == "env" {
+					return mockCmd("echo", gobin)
+				}
+				gotName = name
+				gotArgs = args
+				return mockCmd("true")
+			}
+
+			r := update.UpdateResult{
+				Tool:          tool,
+				LatestVersion: tc.latestVer,
+				Status:        update.UpdateAvailable,
+			}
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true, Supported: true}
+
+			if _, err := runStrategy(context.Background(), r, profile); err != nil {
+				t.Fatalf("runStrategy: %v", err)
+			}
+
+			wantArgs := []string{"install", tc.wantTarget}
+			if gotName != "go" || len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
+				t.Fatalf("exec command = %q %v, want %v", gotName, gotArgs, wantArgs)
+			}
+		})
+	}
+}
+
 func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
@@ -122,8 +225,10 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
 		},
-		LatestVersion: "main@972997650b51",
-		Status:        update.UpdateAvailable,
+		LatestVersion:  "main@972997650b51",
+		BetaCommit:     "972997650b51abcdef0123456789abcdef012345",
+		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4",
+		Status:         update.UpdateAvailable,
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}
 
@@ -135,18 +240,40 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	if gotName != "go" {
 		t.Fatalf("exec name = %q, want %q", gotName, "go")
 	}
-	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main"}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@972997650b51abcdef0123456789abcdef012345"}
 	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
 	for _, want := range []string{
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v4",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v4",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v4",
 	} {
 		if !envContains(gotCmd.Env, want) {
 			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
 		}
+	}
+}
+
+func TestBetaInstallRejectsUnverifiedTargetBeforeMutation(t *testing.T) {
+	origExec := execCommand
+	t.Cleanup(func() { execCommand = origExec })
+	called := false
+	execCommand = func(name string, args ...string) *exec.Cmd { called = true; return mockCmd("true") }
+	tool := update.ToolInfo{Name: "gentle-ai", Owner: "Gentleman-Programming", Repo: "gentle-ai", InstallMethod: update.InstallBinary}
+	cases := []struct{ name, sha, module, version string }{
+		{name: "no metadata", version: "main@972997650b51"},
+		{name: "wrong module", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/other/gentle-ai/v4", version: "main@972997650b51"},
+		{name: "mismatched short revision", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/gentleman-programming/gentle-ai/v4", version: "main@6eff4a1ba110"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := update.UpdateResult{Tool: tool, LatestVersion: tc.version, BetaCommit: tc.sha, BetaModulePath: tc.module, Status: update.UpdateAvailable}
+			_, err := runStrategy(context.Background(), r, system.PlatformProfile{OS: "linux", PackageManager: "apt"})
+			if err == nil || called {
+				t.Fatalf("unverified target should not execute: err=%v, called=%v", err, called)
+			}
+		})
 	}
 }
 
@@ -160,19 +287,19 @@ func envContains(env []string, want string) bool {
 }
 
 func TestGoProxyBypassEnvPreservesExistingPatterns(t *testing.T) {
-	module := "github.com/gentleman-programming/gentle-ai/v2"
+	module := "github.com/gentleman-programming/gentle-ai/v3"
 	env := goProxyBypassEnv([]string{
 		"PATH=/usr/bin",
 		"GONOSUMDB=example.com/private",
 		"GOPRIVATE=github.com/acme/*",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v3",
 	}, module)
 
 	for _, want := range []string{
 		"PATH=/usr/bin",
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2,example.com/private",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2,github.com/acme/*",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v3,example.com/private",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v3,github.com/acme/*",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v3",
 	} {
 		if !envContains(env, want) {
 			t.Fatalf("env missing %q in %v", want, env)
@@ -307,7 +434,7 @@ func TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy(t *testing.T
 	// against the Go checksum database, since goInstallUpgrade does not touch
 	// cmd.Env — is the only automatic upgrade path Windows has.
 	t.Run("Go availability upgrades through a pinned go install", func(t *testing.T) {
-		tool := update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/v2/cmd/gentle-ai"}
+		tool := update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/v3/cmd/gentle-ai"}
 		profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
 		method := effectiveMethod(tool, profile)
 		if method != update.InstallGoInstall {
@@ -587,27 +714,32 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 		cmd.Env = append(os.Environ(),
 			"GENTLE_AI_UPGRADE_HELPER=1",
 			"GENTLE_AI_UPGRADE_HELPER_CWD_FILE="+cwdFile,
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH="+filepath.Join(pkgDir, "package.json"),
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION=0.2.0",
 		)
 		return cmd
 	}
 
-	_, err := runStrategy(context.Background(), update.UpdateResult{
+	outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
 		Tool: update.ToolInfo{
 			Name:          pkg,
 			InstallMethod: update.InstallOpenCodePlugin,
 			NpmPackage:    pkg,
 		},
 		InstalledVersion: "0.1.0",
-		LatestVersion:    "0.2.0",
+		LatestVersion:    " 0.2.0 ",
 	}, system.PlatformProfile{PackageManager: "brew"})
 	if err != nil {
 		t.Fatalf("runStrategy OpenCode plugin: unexpected error: %v", err)
+	}
+	if outcome.observedVersion != "0.2.0" {
+		t.Fatalf("observed version = %q, want 0.2.0 from the installed manifest", outcome.observedVersion)
 	}
 
 	if gotName != "bun" {
 		t.Fatalf("exec name = %q, want bun", gotName)
 	}
-	wantArgs := []string{"add", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"add", pkg + "@0.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -633,6 +765,118 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	}
 	if gotCwd != wantCwd {
 		t.Fatalf("command cwd = %q, want %q", gotCwd, wantCwd)
+	}
+}
+
+func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T) {
+	tests := []struct {
+		name           string
+		manifest       string
+		registerOnly   bool
+		latestVersion  string
+		wantFallback   bool
+		wantErrorParts []string
+	}{
+		{
+			name:           "empty expected version skips before package manager mutation",
+			registerOnly:   true,
+			latestVersion:  "  ",
+			wantFallback:   true,
+			wantErrorParts: []string{"expected version is empty"},
+		},
+		{
+			name:           "package manager succeeds without materializing the package",
+			registerOnly:   true,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves the stale version",
+			manifest:       `{"version":"0.7.1"}`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "0.7.1", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves an invalid manifest",
+			manifest:       `{not valid json`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "invalid", "No automatic rollback", "restore or correct"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			origHomeDir, origLookPath, origExecCommand := openCodeHomeDir, lookPathCommand, execCommand
+			t.Cleanup(func() {
+				openCodeHomeDir, lookPathCommand, execCommand = origHomeDir, origLookPath, origExecCommand
+			})
+
+			home := t.TempDir()
+			opencodeDir := filepath.Join(home, ".config", "opencode")
+			if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			pkg := "opencode-subagent-statusline"
+			pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+			if tc.manifest != "" {
+				if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(tc.manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.registerOnly {
+				if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["`+pkg+`"]}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			openCodeHomeDir = func() (string, error) { return home, nil }
+			lookPathCommand = func(file string) (string, error) {
+				if file == "bun" {
+					return "/usr/bin/bun", nil
+				}
+				return "", errors.New("not found")
+			}
+			execCalled := false
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				execCalled = true
+				return mockCmd("true")
+			}
+
+			outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
+				Tool: update.ToolInfo{
+					Name:          pkg,
+					InstallMethod: update.InstallOpenCodePlugin,
+					NpmPackage:    pkg,
+				},
+				LatestVersion: tc.latestVersion,
+				Status:        update.UpdateAvailable,
+			}, system.PlatformProfile{})
+			if err == nil {
+				t.Fatal("expected verification failure after a successful package-manager command")
+			}
+			if outcome.observedVersion != "" {
+				t.Fatalf("observed version = %q, want empty on verification failure", outcome.observedVersion)
+			}
+			if hint, ok := AsManualFallback(err); ok != tc.wantFallback {
+				t.Fatalf("error = %T %v, ManualFallbackError = %t, want %t", err, err, ok, tc.wantFallback)
+			} else if ok && !strings.Contains(hint, tc.wantErrorParts[0]) {
+				t.Errorf("fallback hint %q does not contain %q", hint, tc.wantErrorParts[0])
+			}
+			if tc.wantFallback {
+				if execCalled {
+					t.Fatal("package manager must not run without a pinned expected version")
+				}
+				return
+			}
+			for _, want := range tc.wantErrorParts {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -668,6 +912,13 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
+		pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		return mockCmd("true")
 	}
 
@@ -677,7 +928,8 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 			InstallMethod: update.InstallOpenCodePlugin,
 			NpmPackage:    pkg,
 		},
-		Status: update.RegisteredNotMaterialized,
+		LatestVersion: "1.2.0",
+		Status:        update.RegisteredNotMaterialized,
 	}, system.PlatformProfile{})
 	if err != nil {
 		t.Fatalf("registered OpenCode plugin should be npm-managed during upgrade, got: %v", err)
@@ -685,7 +937,7 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	if gotName != "npm" {
 		t.Fatalf("exec name = %q, want npm", gotName)
 	}
-	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -730,7 +982,7 @@ func TestRunStrategyOpenCodePluginNpmERESOLVERetriesWithLegacyPeerDeps(t *testin
 	if len(callHistory) != 2 {
 		t.Fatalf("expected 2 exec calls (initial + retry), got %d", len(callHistory))
 	}
-	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@latest", "@opencode-ai/plugin@latest"}
+	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(callHistory[1], " ") != strings.Join(wantRetry, " ") {
 		t.Fatalf("retry command = %v, want %v", callHistory[1], wantRetry)
 	}
@@ -808,6 +1060,13 @@ func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exe
 	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	openCodeHomeDir = func() (string, error) { return home, nil }
 	lookPathCommand = func(file string) (string, error) {
 		if file == "npm" {
@@ -819,7 +1078,7 @@ func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exe
 }
 
 func openCodePluginUpdateResult(pkg string) update.UpdateResult {
-	return update.UpdateResult{Tool: update.ToolInfo{Name: pkg, InstallMethod: update.InstallOpenCodePlugin, NpmPackage: pkg}, Status: update.RegisteredNotMaterialized}
+	return update.UpdateResult{Tool: update.ToolInfo{Name: pkg, InstallMethod: update.InstallOpenCodePlugin, NpmPackage: pkg}, LatestVersion: "1.2.0", Status: update.RegisteredNotMaterialized}
 }
 
 func slicesContain(values []string, want string) bool {
@@ -919,6 +1178,13 @@ func TestOpenCodePluginUpgradeHelperProcess(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("GENTLE_AI_UPGRADE_HELPER_CWD_FILE"), []byte(cwd), 0o644); err != nil {
 		_, _ = os.Stderr.WriteString(err.Error())
 		os.Exit(2)
+	}
+	if manifestPath := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH"); manifestPath != "" {
+		version := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION")
+		if err := os.WriteFile(manifestPath, []byte(`{"version":"`+version+`"}`), 0o644); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
 	}
 	os.Exit(0)
 }

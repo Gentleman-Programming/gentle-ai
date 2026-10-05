@@ -1,14 +1,20 @@
 package theme
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -97,23 +103,224 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 }
 
-func TestInjectClaudeThemeIsIdempotent(t *testing.T) {
+// TestInjectLeavesNonJSONNativeSettingsUntouched covers #1829: valid native
+// TOML/YAML settings are not JSON targets, so Inject neither rewrites them nor
+// creates a JSON fixture when they are missing.
+func TestInjectLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
+	tests := []struct {
+		name     string
+		adapter  agents.Adapter
+		settings string
+		content  string
+	}{
+		{name: "kimi legacy", adapter: kimi.NewAdapter(), settings: ".kimi/config.toml", content: "default_model = \"k2\"\n"},
+		{name: "kimi current", adapter: kimi.NewAdapter(), settings: ".kimi-code/config.toml", content: "[models.k2]\nprovider = \"moonshot\"\n"},
+		{name: "hermes", adapter: hermes.NewAdapter(), settings: ".hermes/config.yaml", content: "providers:\n  - name: hermes\n"},
+		{name: "hermes missing", adapter: hermes.NewAdapter(), settings: ".hermes/config.yaml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settings)
+			if tt.content != "" {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			result, err := Inject(home, tt.adapter)
+			if err != nil || result.Changed || len(result.Files) != 0 {
+				t.Fatalf("Inject() = %#v, %v; want a no-op without reported files", result, err)
+			}
+			if tt.content == "" {
+				if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+					t.Fatalf("Inject() created %s; stat error = %v", settingsPath, err)
+				}
+				return
+			}
+			got, err := os.ReadFile(settingsPath)
+			if err != nil || string(got) != tt.content {
+				t.Fatalf("native settings = %q, %v; want bytes preserved", got, err)
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			}
+		})
+	}
+}
+
+func TestInjectAtPathAcceptsCustomSelectedFilename(t *testing.T) {
+	selected := filepath.Join(t.TempDir(), "custom-opencode-settings")
+	if err := os.WriteFile(selected, []byte(`{"custom":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := InjectAtPath(selected)
+	if err != nil || !result.Changed || len(result.Files) != 1 || result.Files[0] != selected {
+		t.Fatalf("InjectAtPath() = %#v, %v; want the selected file written", result, err)
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(got, []byte(`"theme": "gentleman"`)) || !bytes.Contains(got, []byte(`"custom": true`)) {
+		t.Fatalf("selected settings = %s, %v", got, err)
+	}
+}
+
+func TestInjectAtPathPreservesSelectedJSONCAndLeavesDecoy(t *testing.T) {
+	root := t.TempDir()
+	selected := filepath.Join(root, "opencode.jsonc")
+	decoy := filepath.Join(root, "opencode.json")
+	before := []byte("// selected\n{\"theme\":\"old\",\"custom\":true}\n")
+	if err := os.WriteFile(selected, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(decoy, []byte(`{"theme":"mine"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := InjectAtPath(selected)
+	if err != nil || !first.Changed || len(first.Files) != 1 || first.Files[0] != selected {
+		t.Fatalf("first injection = %#v, %v", first, err)
+	}
+	second, err := InjectAtPath(selected)
+	if err != nil || second.Changed {
+		t.Fatalf("second injection = %#v, %v", second, err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(selected)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("selected JSONC mode = %v, %v; want 0600", info, err)
+		}
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(got, []byte(`"theme":"gentleman"`)) || !bytes.Contains(got, []byte(`"custom":true`)) || !bytes.Contains(got, []byte("// selected")) {
+		t.Fatalf("selected JSONC = %s, %v", got, err)
+	}
+	got, err = os.ReadFile(decoy)
+	if err != nil || string(got) != `{"theme":"mine"}` {
+		t.Fatalf("decoy JSON = %s, %v", got, err)
+	}
+}
+
+func TestInjectAtPathRejectsZeroPermissionSettingsWithoutChangingThem(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not supported on Windows")
+	}
+
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	before := []byte("// private settings\n{\"theme\":\"old\"}\n")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Skipf("cannot set file mode 0000: %v", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode().Perm() != 0 {
+		t.Skipf("cannot verify file mode 0000: %v, %v", info, err)
+	}
+
+	result, err := InjectAtPath(path)
+	if err == nil || !strings.Contains(err.Error(), "0000") || !strings.Contains(err.Error(), "permissions") {
+		t.Errorf("InjectAtPath() = %#v, %v; want actionable mode 0000 error", result, err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Errorf("InjectAtPath() = %#v; want no changed files", result)
+	}
+	info, err = os.Lstat(path)
+	if err != nil || info.Mode().Perm() != 0 {
+		t.Fatalf("settings mode after injection = %v, %v; want 0000", info, err)
+	}
+	// Restore access only to inspect bytes, then leave the file locked down.
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := os.ReadFile(path)
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if readErr != nil || !bytes.Equal(got, before) {
+		t.Fatalf("settings bytes after injection = %q, %v; want %q", got, readErr, before)
+	}
+}
+
+func TestInjectAtPathRefusesSymlinkWithoutChangingLinkOrTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "user.jsonc")
+	selected := filepath.Join(dir, "opencode.jsonc")
+	before := []byte("// private settings\n{\"theme\":\"old\"}\n")
+	if err := os.WriteFile(target, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, selected); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if result, err := InjectAtPath(selected); err == nil || !strings.Contains(err.Error(), "select a regular settings file") || result.Changed {
+		t.Fatalf("InjectAtPath() = %#v, %v; want symlink refusal", result, err)
+	}
+	if link, err := os.Readlink(selected); err != nil || link != target {
+		t.Fatalf("selected symlink changed: %q, %v", link, err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(got, before) {
+		t.Fatalf("target bytes = %q, %v; want %q", got, err, before)
+	}
+	if info, err := os.Stat(target); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+		t.Fatalf("target mode changed: %v, %v", info, err)
+	}
+}
+
+// The selected-settings refusal is OpenCode-only; other agents keep the base
+// writer behavior for a dotfiles-managed (symlinked) settings file.
+func TestInjectNonOpenCodeSymlinkedSettingsKeepBaseWriterBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeAdapter()
+	settings := adapter.SettingsPath(home)
+	target := filepath.Join(home, "dotfiles", "settings.json")
+	before := []byte("{\"theme\":\"old\"}\n")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("Inject() = %#v, %v; want base writer symlink error, not the OpenCode refusal", result, err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, before) {
+		t.Fatalf("target bytes = %q, %v; want %q", got, err, before)
+	}
+}
+
+func TestInjectVisualThemesIsIdempotentForClaude(t *testing.T) {
 	home := t.TempDir()
 
-	first, err := InjectClaudeTheme(home, claudeAdapter())
+	first, err := InjectVisualThemes(home, claudeAdapter())
 	if err != nil {
-		t.Fatalf("InjectClaudeTheme() first error = %v", err)
+		t.Fatalf("InjectVisualThemes() first error = %v", err)
 	}
 	if !first.Changed {
-		t.Fatalf("InjectClaudeTheme() first changed = false")
+		t.Fatalf("InjectVisualThemes() first changed = false")
 	}
 
-	second, err := InjectClaudeTheme(home, claudeAdapter())
+	second, err := InjectVisualThemes(home, claudeAdapter())
 	if err != nil {
-		t.Fatalf("InjectClaudeTheme() second error = %v", err)
+		t.Fatalf("InjectVisualThemes() second error = %v", err)
 	}
 	if second.Changed {
-		t.Fatalf("InjectClaudeTheme() second changed = true")
+		t.Fatalf("InjectVisualThemes() second changed = true")
 	}
 
 	path := filepath.Join(home, ".claude", "themes", "gentleman.json")
@@ -122,32 +329,33 @@ func TestInjectClaudeThemeIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestInjectClaudeThemeSkipsNonClaudeAdapter(t *testing.T) {
+func TestInjectVisualThemesSkipsUnsupportedAdapter(t *testing.T) {
 	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentGeminiCLI)
 
-	result, err := InjectClaudeTheme(home, opencodeAdapter())
+	result, err := InjectVisualThemes(home, adapter)
 	if err != nil {
-		t.Fatalf("InjectClaudeTheme() error = %v", err)
+		t.Fatalf("InjectVisualThemes() error = %v", err)
 	}
 	if result.Changed || len(result.Files) != 0 {
-		t.Fatalf("InjectClaudeTheme() = %#v, want no-op for non-Claude adapter", result)
+		t.Fatalf("InjectVisualThemes() = %#v, want no-op for unsupported adapter", result)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "themes", "gentleman.json")); !os.IsNotExist(err) {
-		t.Fatalf("InjectClaudeTheme() should not write file for OpenCode; stat error = %v", err)
+		t.Fatalf("InjectVisualThemes() should not write Claude files for Gemini; stat error = %v", err)
 	}
 }
 
-func TestInjectClaudeThemeWritesGentlemanThemeFile(t *testing.T) {
+func TestInjectVisualThemesPreservesGentlemanClaudeTheme(t *testing.T) {
 	home := t.TempDir()
 
-	result, err := InjectClaudeTheme(home, claudeAdapter())
+	result, err := InjectVisualThemes(home, claudeAdapter())
 	if err != nil {
-		t.Fatalf("InjectClaudeTheme() error = %v", err)
+		t.Fatalf("InjectVisualThemes() error = %v", err)
 	}
 
 	themePath := filepath.Join(home, ".claude", "themes", "gentleman.json")
-	if len(result.Files) != 1 || result.Files[0] != themePath {
-		t.Fatalf("files = %#v, want only %q", result.Files, themePath)
+	if len(result.Files) != 2 || result.Files[0] != themePath {
+		t.Fatalf("files = %#v, want Gentleman first at %q", result.Files, themePath)
 	}
 
 	data, err := os.ReadFile(themePath)
@@ -187,4 +395,69 @@ func TestInjectClaudeThemeWritesGentlemanThemeFile(t *testing.T) {
 			t.Fatalf("theme contains forbidden non-Claude theme key %q", forbidden)
 		}
 	}
+}
+
+const (
+	gentlemanClaudeFixture   = `{"name":"gentleman","base":"dark","overrides":{"diffAdded":"#3F4A2D","diffRemoved":"#5C3838","diffAddedWord":"#76946A","diffRemovedWord":"#C34043","chromeYellow":"#DCA561","briefLabelYou":"#DCA561","rainbow_yellow":"#DCA561","yellow_FOR_SUBAGENTS_ONLY":"#DCA561"}}`
+	cuteClaudeFixture        = `{"name":"Gentleman Cute","base":"dark","overrides":{"claude":"#F095C8","claudeShimmer":"#FFB1DD","text":"#F6EFF3","inactive":"#A78E9B","subtle":"#76616B","suggestion":"#FFB1DD","permission":"#F095C8","promptBorder":"#F095C8","planMode":"#A9C7EE","autoAccept":"#FF81CC","bashBorder":"#E0C27A","remember":"#E0C27A","success":"#B4E7C7","merged":"#B4E7C7","error":"#FF718F","warning":"#F2B86D","diffAdded":"#1A2420","diffRemoved":"#2D151F","diffAddedWord":"#2D5A45","diffRemovedWord":"#7A2948","userMessageBackground":"#241822","userMessageBackgroundHover":"#342230","selectionBg":"#563040","memoryBackgroundColor":"#1A1218","bashMessageBackgroundColor":"#151316"}}`
+	gentlemanOpenCodeFixture = `{"$schema":"https://opencode.ai/theme.json","theme":{"background":"none","backgroundPanel":"#06080f","backgroundElement":"#06080f","text":"#F3F6F9","textMuted":"#5C6170","primary":"#7FB4CA","secondary":"#A3B5D6","accent":"#E0C15A","error":"#CB7C94","warning":"#DEBA87","success":"#B7CC85","info":"#7FB4CA","border":"#313342","borderActive":"#7FB4CA","borderSubtle":"#232A40","diffAdded":"#B7CC85","diffRemoved":"#CB7C94","diffContext":"#5C6170","diffHunkHeader":"#8394A3","diffHighlightAdded":"#D1E8A9","diffHighlightRemoved":"#DE8FA8","diffAddedBg":"#1a2e1a","diffRemovedBg":"#2e1a1a","diffContextBg":"#0d0f14","diffLineNumber":"#8394A3","diffAddedLineNumberBg":"#1a2e1a","diffRemovedLineNumberBg":"#2e1a1a","markdownText":"#F3F6F9","markdownHeading":"#B5B2D0","markdownLink":"#7FB4CA","markdownLinkText":"#79B8EA","markdownCode":"#B7CC85","markdownBlockQuote":"#DEBA87","markdownEmph":"#7CB9DD","markdownStrong":"#DEBA87","markdownHorizontalRule":"#5C6170","markdownListItem":"#7FB4CA","markdownListEnumeration":"#A3B5D6","markdownImage":"#7FB4CA","markdownImageText":"#79B8EA","markdownCodeBlock":"#F3F6F9","syntaxComment":"#8394A3","syntaxKeyword":"#C99AD6","syntaxFunction":"#B99BF2","syntaxVariable":"#F3F6F9","syntaxString":"#DFBD76","syntaxNumber":"#A4DAA7","syntaxType":"#8FB8DD","syntaxOperator":"#DEBA87","syntaxPunctuation":"#96A2B0"}}`
+	cuteOpenCodeFixture      = `{"$schema":"https://opencode.ai/theme.json","theme":{"background":"none","backgroundPanel":"#1A1218","backgroundElement":"#241822","text":"#F6EFF3","textMuted":"#A78E9B","primary":"#F095C8","secondary":"#D7A0B8","accent":"#F095C8","error":"#FF718F","warning":"#F2B86D","success":"#B4E7C7","info":"#D7A0B8","border":"#342230","borderActive":"#FFB1DD","borderSubtle":"#241822","diffAdded":"#B4E7C7","diffRemoved":"#FF718F","diffContext":"#A78E9B","diffHunkHeader":"#D7A0B8","diffHighlightAdded":"#B4E7C7","diffHighlightRemoved":"#FF718F","diffAddedBg":"#1A2420","diffRemovedBg":"#261019","diffContextBg":"#1A1218","diffLineNumber":"#76616B","diffAddedLineNumberBg":"#1A2420","diffRemovedLineNumberBg":"#261019","markdownText":"#F6EFF3","markdownHeading":"#E0C27A","markdownLink":"#F095C8","markdownLinkText":"#F095C8","markdownCode":"#E0C27A","markdownBlockQuote":"#A78E9B","markdownEmph":"#D7A0B8","markdownStrong":"#E0C27A","markdownHorizontalRule":"#A78E9B","markdownListItem":"#F095C8","markdownListEnumeration":"#D7A0B8","markdownImage":"#F095C8","markdownImageText":"#F095C8","markdownCodeBlock":"#F6EFF3","syntaxComment":"#A78E9B","syntaxKeyword":"#F095C8","syntaxFunction":"#A9C7EE","syntaxVariable":"#F6EFF3","syntaxString":"#B4E7C7","syntaxNumber":"#F2B86D","syntaxType":"#E0C27A","syntaxOperator":"#C4DAF6","syntaxPunctuation":"#A78E9B"}}`
+)
+
+func TestInjectVisualThemesWritesExpectedAssets(t *testing.T) {
+	home, xdg := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	for _, adapter := range []agents.Adapter{claudeAdapter(), opencodeAdapter()} {
+		settings := adapter.SettingsPath(home)
+		if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(settings, []byte(`{"theme":"user-selected"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		first, err := InjectVisualThemes(home, adapter)
+		if err != nil || !first.Changed {
+			t.Fatalf("first injection = %#v, %v", first, err)
+		}
+		if second, err := InjectVisualThemes(home, adapter); err != nil || second.Changed {
+			t.Fatalf("second injection = %#v, %v", second, err)
+		}
+		if got, err := os.ReadFile(settings); err != nil || string(got) != `{"theme":"user-selected"}` {
+			t.Fatalf("settings changed = %q, %v", got, err)
+		}
+	}
+	for _, tt := range []struct {
+		path, fixture string
+		value         any
+	}{
+		{filepath.Join(home, ".claude", "themes", "gentleman.json"), gentlemanClaudeFixture, &claudeTheme{}},
+		{filepath.Join(home, ".claude", "themes", "gentleman-cute.json"), cuteClaudeFixture, &claudeTheme{}},
+		{filepath.Join(xdg, "opencode", "themes", "gentleman.json"), gentlemanOpenCodeFixture, &openCodeTheme{}},
+		{filepath.Join(xdg, "opencode", "themes", "gentleman-cute.json"), cuteOpenCodeFixture, &openCodeTheme{}},
+	} {
+		got, err := os.ReadFile(tt.path)
+		if err != nil || !bytes.Equal(got, indentedJSON(t, tt.fixture, tt.value)) {
+			t.Fatalf("%s bytes mismatch: %v", tt.path, err)
+		}
+	}
+	cute := gentlemanCuteClaudeTheme
+	for _, key := range []string{"background", "backgroundFullscreen", "backgroundUser", "backgroundHover", "backgroundSelection", "backgroundMemory", "backgroundBash", "shimmer"} {
+		if _, exists := cute.Overrides[key]; exists {
+			t.Fatalf("Claude Cute contains invalid override %q", key)
+		}
+	}
+}
+
+func indentedJSON(t *testing.T, fixture string, value any) []byte {
+	t.Helper()
+	if err := json.Unmarshal([]byte(fixture), value); err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(result, '\n')
 }

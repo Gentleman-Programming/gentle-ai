@@ -5,9 +5,30 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
+
+func TestInstallFlagsRetiredModeRejectedAndHelpOmitted(t *testing.T) {
+	for _, args := range [][]string{{"--sdd-mode", "single"}, {"--sdd-mode=multi"}} {
+		if _, err := ParseInstallFlags(args); err == nil || !strings.Contains(err.Error(), "sdd-mode") {
+			t.Errorf("ParseInstallFlags(%q) = %v, want unknown flag", args, err)
+		}
+	}
+	var help strings.Builder
+	PrintInstallHelp(&help)
+	if strings.Contains(strings.ToLower(help.String()), "sdd") {
+		t.Fatalf("install help advertises SDD: %s", help.String())
+	}
+}
+
+func TestExplicitRetiredSDDComponentIsRejected(t *testing.T) {
+	_, err := RunInstall([]string{"--agent", "opencode", "--component", "sdd"}, system.DetectionResult{})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "sdd") {
+		t.Fatalf("explicit retired SDD selection must be rejected before installation, got %v", err)
+	}
+}
 
 func TestParseInstallFlagsSupportsCSVAndRepeated(t *testing.T) {
 	flags, err := ParseInstallFlags([]string{
@@ -69,12 +90,11 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	}
 
 	want := model.Selection{
-		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKilocode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentKiroIDE, model.AgentOpenClaw, model.AgentPi, model.AgentTrae, model.AgentHermes},
+		Agents:  []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKilocode, model.AgentGeminiCLI, model.AgentCodex, model.AgentCursor, model.AgentVSCodeCopilot, model.AgentAntigravity, model.AgentWindsurf, model.AgentKimi, model.AgentQwenCode, model.AgentKiroIDE, model.AgentOpenClaw, model.AgentPi, model.AgentTrae, model.AgentHermes, model.AgentConductor},
 		Persona: model.PersonaGentleman,
 		Preset:  model.PresetFullGentleman,
 		Components: []model.ComponentID{
 			model.ComponentEngram,
-			model.ComponentSDD,
 			model.ComponentSkills,
 			model.ComponentContext7,
 			model.ComponentPermission,
@@ -90,6 +110,36 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 	}
 	if input.Channel != ChannelStable {
 		t.Fatalf("Channel = %q, want %q", input.Channel, ChannelStable)
+	}
+}
+
+func TestDefaultInstallPresetsAndPickerExcludeLegacySDD(t *testing.T) {
+	for _, preset := range []model.PresetID{model.PresetFullGentleman, model.PresetEcosystemOnly, model.PresetMinimal} {
+		for _, component := range model.ComponentsForPreset(preset, model.PersonaGentleman) {
+			if component == model.ComponentSDD {
+				t.Errorf("preset %s selected legacy SDD", preset)
+			}
+		}
+	}
+	for _, component := range catalog.MVPComponents() {
+		if component.ID == model.ComponentSDD {
+			t.Fatal("install picker advertises legacy SDD")
+		}
+	}
+}
+
+func TestNormalizeInstallFlagsAcceptsBundledSkills(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{Skills: []string{
+		string(model.SkillSystemicIssueTriage),
+		string(model.SkillGentleAIBench),
+	}}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+
+	want := []model.SkillID{model.SkillSystemicIssueTriage, model.SkillGentleAIBench}
+	if !reflect.DeepEqual(input.Selection.Skills, want) {
+		t.Fatalf("skills = %v, want %v", input.Selection.Skills, want)
 	}
 }
 
@@ -150,7 +200,7 @@ func TestNormalizeInstallFlagsCustomAcceptsOptionalGentlemanInstallables(t *test
 	}
 }
 
-func TestNormalizeInstallFlagsPiOnlyDefaultsToEngramOnly(t *testing.T) {
+func TestNormalizeInstallFlagsPiOnlyDefaultsToEngramAndPersona(t *testing.T) {
 	input, err := NormalizeInstallFlags(InstallFlags{
 		Agents: []string{string(model.AgentPi)},
 	}, system.DetectionResult{})
@@ -162,7 +212,7 @@ func TestNormalizeInstallFlagsPiOnlyDefaultsToEngramOnly(t *testing.T) {
 	if !reflect.DeepEqual(input.Selection.Agents, wantAgents) {
 		t.Fatalf("agents = %#v, want %#v", input.Selection.Agents, wantAgents)
 	}
-	wantComponents := []model.ComponentID{model.ComponentEngram}
+	wantComponents := []model.ComponentID{model.ComponentEngram, model.ComponentPersona}
 	if !reflect.DeepEqual(input.Selection.Components, wantComponents) {
 		t.Fatalf("components = %#v, want %#v", input.Selection.Components, wantComponents)
 	}
@@ -248,14 +298,14 @@ func TestParseInstallFlagsSDDMode(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "flag set to multi",
-			args: []string{"--agent", "opencode", "--sdd-mode", "multi"},
-			want: "multi",
+			name:    "flag set to multi",
+			args:    []string{"--agent", "opencode", "--sdd-mode", "multi"},
+			wantErr: true,
 		},
 		{
-			name: "flag set to single",
-			args: []string{"--agent", "opencode", "--sdd-mode", "single"},
-			want: "single",
+			name:    "flag set to single",
+			args:    []string{"--agent", "opencode", "--sdd-mode", "single"},
+			wantErr: true,
 		},
 	}
 
@@ -265,7 +315,10 @@ func TestParseInstallFlagsSDDMode(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ParseInstallFlags() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if flags.SDDMode != tt.want {
+			if tt.wantErr && !strings.Contains(err.Error(), "sdd-mode") {
+				t.Fatalf("error = %q, want retired flag named", err)
+			}
+			if !tt.wantErr && flags.SDDMode != tt.want {
 				t.Fatalf("flags.SDDMode = %q, want %q", flags.SDDMode, tt.want)
 			}
 		})

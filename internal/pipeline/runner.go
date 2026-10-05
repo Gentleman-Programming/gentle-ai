@@ -28,6 +28,17 @@ func (r Runner) Run(stage Stage, steps []Step) StageResult {
 			FinishedAt: finished,
 		}
 
+		// Only explicit, nonempty skip outcomes are nonfatal. Wrapped ordinary
+		// errors retain the existing failure and rollback policy.
+		var skipped interface{ SkipReason() string }
+		if errors.As(err, &skipped) && skipped.SkipReason() != "" {
+			stepResult.Status = StepStatusSkipped
+			stepResult.Err = err
+			result.Steps = append(result.Steps, stepResult)
+			r.emitProgress(ProgressEvent{StepID: step.ID(), Stage: stage, Status: StepStatusSkipped, Err: err})
+			continue
+		}
+
 		if err != nil {
 			stepResult.Status = StepStatusFailed
 			stepResult.Err = err

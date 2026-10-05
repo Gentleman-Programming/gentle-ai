@@ -12,12 +12,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // --- helpers ---
@@ -169,6 +171,13 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
+		pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		return mockCmd("true")
 	}
 
@@ -187,8 +196,122 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 	if report.Results[0].Status != UpgradeSucceeded {
 		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSucceeded)
 	}
+	if report.Results[0].NewVersion != "1.2.0" {
+		t.Fatalf("new version = %q, want observed materialized version 1.2.0", report.Results[0].NewVersion)
+	}
 	if report.BackupID == "" {
 		t.Fatal("BackupID should be populated before executing registered-pending plugin upgrade")
+	}
+}
+
+func TestExecute_OpenCodePluginPostMutationVerificationFailureIsFailed(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-subagent-statusline"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		// Model a successful npm mutation that leaves the plugin manifest absent.
+		if err := os.WriteFile(filepath.Join(opencodeDir, "package-lock.json"), []byte(`{"packages":{}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return mockCmd("true")
+	}
+
+	result := makeResult("opencode-subagent-statusline", update.RegisteredNotMaterialized, "0.7.1", "0.8.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-subagent-statusline"
+	toolResult := executeOne(context.Background(), result, linuxProfile(), false)
+
+	if toolResult.Status != UpgradeFailed {
+		t.Fatalf("status = %q, want %q", toolResult.Status, UpgradeFailed)
+	}
+	if toolResult.Err == nil {
+		t.Fatal("Err = nil, want failed postcondition error")
+	}
+	if toolResult.NewVersion != "" {
+		t.Fatalf("new version = %q, want empty when materialization is unverified", toolResult.NewVersion)
+	}
+	if toolResult.ManualHint != "" {
+		t.Fatalf("ManualHint = %q, want empty for a real failure", toolResult.ManualHint)
+	}
+	for _, want := range []string{"after npm mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct", opencodeDir} {
+		if !strings.Contains(toolResult.Err.Error(), want) {
+			t.Errorf("error %q does not contain %q", toolResult.Err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(opencodeDir, "package-lock.json")); err != nil {
+		t.Fatalf("simulated package-manager mutation should remain inspectable: %v", err)
+	}
+}
+
+func TestExecute_OpenCodePluginUnregisteredSkipsWithoutMutation(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["other-plugin"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("true")
+	}
+
+	result := makeResult("opencode-subagent-statusline", update.UpdateAvailable, "0.7.1", "0.8.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-subagent-statusline"
+	toolResult := executeOne(context.Background(), result, linuxProfile(), false)
+
+	if toolResult.Status != UpgradeSkipped {
+		t.Fatalf("status = %q, want %q", toolResult.Status, UpgradeSkipped)
+	}
+	if toolResult.Err != nil {
+		t.Fatalf("Err = %v, want nil for a zero-mutation skip", toolResult.Err)
+	}
+	if toolResult.ManualHint == "" {
+		t.Fatal("ManualHint = empty, want an actionable pre-mutation hint")
+	}
+	if execCalled {
+		t.Fatal("package manager must not run for an unregistered, unmaterialized plugin")
+	}
+	if _, err := os.Stat(filepath.Join(opencodeDir, "package-lock.json")); !os.IsNotExist(err) {
+		t.Fatalf("package manager state exists after zero-mutation skip, stat err: %v", err)
 	}
 }
 
@@ -599,12 +722,17 @@ func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 	homeDir := t.TempDir()
 
 	managedFiles := map[string]string{
-		".claude.json":                   `{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"engram":{"command":"engram"}}}`,
-		".claude/CLAUDE.md":              "# Claude",
-		".config/opencode/AGENTS.md":     "# OpenCode",
-		".config/opencode/opencode.json": `{"model":"claude"}`,
-		".gemini/GEMINI.md":              "# Gemini",
-		".cursor/rules/gentle-ai.mdc":    "# Cursor rules",
+		".claude.json":                                `{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"engram":{"command":"engram"}}}`,
+		".claude/CLAUDE.md":                           "# Claude",
+		".claude/themes/gentleman.json":               `{"name":"gentleman"}`,
+		".claude/themes/gentleman-cute.json":          `{"name":"Gentleman Cute"}`,
+		".config/opencode/AGENTS.md":                  "# OpenCode",
+		".config/opencode/themes/gentleman.json":      `{"theme":{}}`,
+		".config/opencode/themes/gentleman-cute.json": `{"theme":{}}`,
+		".config/opencode/opencode.json":              `{"model":"claude"}`,
+		".gemini/GEMINI.md":                           "# Gemini",
+		".cursor/rules/gentle-ai.mdc":                 "# Cursor rules",
+		".kimi/agent-routing.md":                      "# Kimi orchestrator and routing",
 	}
 	unmanagedFile := filepath.Join(homeDir, ".claude", "conversation-transcript.md")
 
@@ -641,6 +769,40 @@ func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 // TestConfigPathsForBackup_HandlesEmptyDirs verifies that configPathsForBackup
 // returns a non-nil slice (possibly empty) when agent config directories don't exist.
 // It must NOT panic or error out — missing dirs simply contribute no paths.
+func TestConfigPathsForBackup_LegacyCommandSnapshot(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"sdd-init", "sdd-new", "sdd-continue", "sdd-status", "sdd-explore", "sdd-research", "sdd-ff", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
+		for _, prefix := range []string{"", "gentle-"} {
+			path := filepath.Join(home, ".claude", "commands", prefix+name+".md")
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("historical user content"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	paths := configPathsForBackup(home)
+	for _, name := range []string{"sdd-init", "sdd-new", "sdd-continue", "sdd-status", "sdd-explore", "sdd-research", "sdd-ff", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
+		for _, prefix := range []string{"", "gentle-"} {
+			path := filepath.Join(home, ".claude", "commands", prefix+name+".md")
+			found := false
+			for _, got := range paths {
+				if got == path {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("historical path absent from snapshot: %s", path)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Errorf("inventory removed user file %s: %v", path, err)
+			}
+		}
+	}
+}
+
 func TestConfigPathsForBackup_HandlesEmptyDirs(t *testing.T) {
 	homeDir := t.TempDir()
 	// No agent config directories exist in this temp dir.
@@ -1072,6 +1234,7 @@ func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
 // TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile verifies that upgrade
 // backups preserve managed Pi config without capturing session data.
 func TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	homeDir := t.TempDir()
 
 	managedPiSettings := filepath.Join(homeDir, ".pi", "agent", "settings.json")
@@ -1084,6 +1247,12 @@ func TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
 			t.Fatalf("WriteFile %s: %v", path, err)
 		}
+	}
+
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{string(model.AgentPi)},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
 	}
 
 	paths := configPathsForBackup(homeDir)
@@ -1432,6 +1601,39 @@ func TestConfigPathsForBackup_EmptyStateAgentsFallsBackToFilesystem(t *testing.T
 	}
 }
 
+func TestConfigPathsForBackup_ConfiguredEmptySelectionExcludesDetectedAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	claudeSettings := filepath.Join(homeDir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(claudeSettings), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(claudeSettings), err)
+	}
+	if err := os.WriteFile(claudeSettings, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", claudeSettings, err)
+	}
+	if err := state.Write(homeDir, state.InstallState{SelectionConfigured: true}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("agents.NewDefaultRegistry: %v", err)
+	}
+	claudeAdapter, ok := reg.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("default registry does not contain Claude Code")
+	}
+
+	actual := make(map[string]struct{})
+	for _, path := range configPathsForBackup(homeDir) {
+		actual[path] = struct{}{}
+	}
+	for _, path := range managedAgentBackupPaths(homeDir, claudeAdapter, &bytes.Buffer{}) {
+		if _, found := actual[path]; found {
+			t.Errorf("configPathsForBackup() included Claude-managed path %q for a configured empty selection", path)
+		}
+	}
+}
+
 func mockCmd(name string, args ...string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		if name == "echo" {
@@ -1453,4 +1655,71 @@ func mockCmd(name string, args ...string) *exec.Cmd {
 		}
 	}
 	return exec.Command(name, args...)
+}
+
+// TestManagedAgentBackupPathsOpenCodePluginsFollowXDGConfigHome pins #3219 for
+// the pre-upgrade snapshot: the managed OpenCode plugins live wherever the
+// adapter resolves the config directory, so the backup must snapshot them
+// there, and it must cover the current managed plugin set.
+func TestManagedAgentBackupPathsOpenCodePluginsFollowXDGConfigHome(t *testing.T) {
+	homeDir := t.TempDir()
+	xdg := filepath.Join(homeDir, ".xdg")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("opencode adapter not found in registry")
+	}
+
+	paths := managedAgentBackupPaths(homeDir, adapter, log.Writer())
+	pathSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pathSet[p] = struct{}{}
+		if strings.HasPrefix(p, filepath.Join(homeDir, ".config", "opencode", "plugins")) {
+			t.Fatalf("backup path %q ignores XDG_CONFIG_HOME", p)
+		}
+	}
+	for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(model.AgentOpenCode)...) {
+		want := filepath.Join(xdg, "opencode", "plugins", name)
+		if _, ok := pathSet[want]; !ok {
+			t.Fatalf("backup paths miss managed plugin %q; got %v", want, paths)
+		}
+	}
+}
+
+// TestManagedAgentBackupPathsOpenCodeDefaultAgentOwnershipFollowsConfigDir
+// pins that the snapshot targets the default-agent ownership record beside the
+// effective OpenCode settings path, which honors an absolute
+// OPENCODE_CONFIG_DIR, because that is where the routing step writes it.
+func TestManagedAgentBackupPathsOpenCodeDefaultAgentOwnershipFollowsConfigDir(t *testing.T) {
+	homeDir := t.TempDir()
+	configDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("OPENCODE_CONFIG_DIR", configDir)
+
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("opencode adapter not found in registry")
+	}
+
+	want := filepath.Join(configDir, ".gentle-ai-default-agent.json")
+	paths := managedAgentBackupPaths(homeDir, adapter, log.Writer())
+	for _, p := range paths {
+		if p == want {
+			return
+		}
+	}
+	t.Fatalf("backup paths miss default-agent ownership record %q; got %v", want, paths)
 }

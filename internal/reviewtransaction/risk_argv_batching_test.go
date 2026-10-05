@@ -356,7 +356,11 @@ func TestBatchBlobContentsPreservesBinaryObjectBoundariesAndErrors(t *testing.T)
 	for index, blob := range blobs {
 		oids[index] = blob.oid
 	}
-	got, err := batchBlobContents(context.Background(), repo, oids)
+	outputLimit := 0
+	for _, blob := range blobs {
+		outputLimit += int(catFileBatchRecordBytes(blob.oid, blob.size))
+	}
+	got, err := batchBlobContents(context.Background(), repo, oids, outputLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +369,25 @@ func TestBatchBlobContentsPreservesBinaryObjectBoundariesAndErrors(t *testing.T)
 			t.Fatalf("blob content for %q = %q, want %q", blob.path, got[blob.oid], contents[blob.path])
 		}
 	}
-	if _, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("0", 40)}); err == nil {
+	if _, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("0", 40)}, defaultGitOutputLimit); err == nil {
 		t.Fatal("missing batch object was accepted")
+	}
+}
+
+func TestCatFileBatchRecordBytesAccountsForProtocolFraming(t *testing.T) {
+	oid := strings.Repeat("a", 40)
+	for _, tt := range []struct {
+		name string
+		size int64
+		want int64
+	}{
+		{name: "empty blob", size: 0, want: 49},
+		{name: "two digit blob", size: 12, want: 62},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := catFileBatchRecordBytes(oid, tt.size); got != tt.want {
+				t.Fatalf("catFileBatchRecordBytes(%d) = %d, want %d", tt.size, got, tt.want)
+			}
+		})
 	}
 }

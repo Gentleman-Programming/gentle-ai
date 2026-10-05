@@ -3,24 +3,27 @@ package skills
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
-func TestSkillsForPresetMinimalReturnsSDDOnly(t *testing.T) {
+func TestSkillsForPresetMinimalRetainsJudgmentDay(t *testing.T) {
 	skills := SkillsForPreset(model.PresetMinimal)
-	if len(skills) == 0 {
-		t.Fatalf("SkillsForPreset(minimal) returned empty")
+	if len(skills) != 1 || skills[0] != model.SkillJudgmentDay {
+		t.Fatalf("SkillsForPreset(minimal) = %v, want judgment-day only", skills)
 	}
+}
 
-	// Orchestration skills that are always bundled with SDD.
-	orchestrationSkills := map[model.SkillID]bool{
-		model.SkillJudgmentDay: true,
+func TestPresetAndPickerNeverOfferRetiredSDDSkills(t *testing.T) {
+	for _, preset := range []model.PresetID{model.PresetMinimal, model.PresetEcosystemOnly, model.PresetFullGentleman, model.PresetCustom, "unknown"} {
+		for _, id := range SkillsForPreset(preset) {
+			if IsSDDSkill(id) {
+				t.Errorf("preset %q offers retired skill %q", preset, id)
+			}
+		}
 	}
-
-	for _, skill := range skills {
-		isSDD := len(skill) >= 4 && skill[:3] == "sdd"
-		if !isSDD && !orchestrationSkills[skill] {
-			t.Fatalf("minimal preset should only contain SDD/orchestration skills, got %q", skill)
+	for _, id := range AllSkillIDs() {
+		if IsSDDSkill(id) {
+			t.Errorf("picker offers retired skill %q", id)
 		}
 	}
 }
@@ -30,7 +33,6 @@ func TestSkillsForPresetEcosystemIncludesFrameworks(t *testing.T) {
 
 	hasGoTesting := false
 	hasSkillCreator := false
-	hasSDDInit := false
 	for _, skill := range skills {
 		if skill == model.SkillGoTesting {
 			hasGoTesting = true
@@ -38,16 +40,10 @@ func TestSkillsForPresetEcosystemIncludesFrameworks(t *testing.T) {
 		if skill == model.SkillCreator {
 			hasSkillCreator = true
 		}
-		if skill == model.SkillSDDInit {
-			hasSDDInit = true
-		}
 	}
 
 	if !hasGoTesting {
 		t.Fatalf("ecosystem preset should include go-testing")
-	}
-	if !hasSDDInit {
-		t.Fatalf("ecosystem preset should include sdd-init")
 	}
 	if !hasSkillCreator {
 		t.Fatalf("ecosystem preset should include skill-creator")
@@ -55,11 +51,71 @@ func TestSkillsForPresetEcosystemIncludesFrameworks(t *testing.T) {
 }
 
 func TestSkillsForPresetFullIncludesAll(t *testing.T) {
-	skills := SkillsForPreset(model.PresetFullGentleman)
+	preset := SkillsForPreset(model.PresetFullGentleman)
 	all := AllSkillIDs()
 
-	if len(skills) != len(all) {
-		t.Fatalf("full preset skills len = %d, all skills len = %d", len(skills), len(all))
+	presetSet := make(map[model.SkillID]bool, len(preset))
+	for _, id := range preset {
+		presetSet[id] = true
+	}
+
+	var selectableOnly []model.SkillID
+	for _, id := range all {
+		if !presetSet[id] {
+			selectableOnly = append(selectableOnly, id)
+		}
+	}
+
+	contributorOnly := map[model.SkillID]bool{
+		model.SkillGentleAIBench:       true,
+		model.SkillBranchPR:            true,
+		model.SkillIssueCreation:       true,
+		model.SkillCommentWriter:       true,
+		model.SkillRDDDefectWorkflow:   true,
+		model.SkillSystemicIssueTriage: true,
+	}
+	if len(selectableOnly) != len(contributorOnly) {
+		t.Fatalf("selectable inventory has %d skills outside the full preset (%v), want exactly the %d contributor skills", len(selectableOnly), selectableOnly, len(contributorOnly))
+	}
+	for _, id := range selectableOnly {
+		if !contributorOnly[id] {
+			t.Fatalf("selectable inventory contains unexpected non-preset skill %q; only contributor skills may live outside the presets", id)
+		}
+	}
+}
+
+func TestSkillsForPresetExcludesContributorSkills(t *testing.T) {
+	excluded := []model.SkillID{
+		model.SkillBranchPR,
+		model.SkillIssueCreation,
+		model.SkillSystemicIssueTriage,
+		model.SkillRDDDefectWorkflow,
+		model.SkillGentleAIBench,
+		model.SkillCommentWriter,
+	}
+	required := []model.SkillID{
+		model.SkillChainedPR,
+		model.SkillSkillRegistry,
+		model.SkillWorkUnitCommits,
+		model.SkillCognitiveDoc,
+	}
+	for _, preset := range []model.PresetID{model.PresetFullGentleman, model.PresetEcosystemOnly, "", "unknown"} {
+		t.Run(string(preset), func(t *testing.T) {
+			present := make(map[model.SkillID]bool)
+			for _, skill := range SkillsForPreset(preset) {
+				present[skill] = true
+			}
+			for _, skill := range excluded {
+				if present[skill] {
+					t.Errorf("SkillsForPreset(%q) includes contributor skill %q", preset, skill)
+				}
+			}
+			for _, skill := range required {
+				if !present[skill] {
+					t.Errorf("SkillsForPreset(%q) missing product skill %q", preset, skill)
+				}
+			}
+		})
 	}
 }
 
@@ -74,7 +130,6 @@ func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 	all := AllSkillIDs()
 
 	required := []model.SkillID{
-		model.SkillSDDInit,
 		model.SkillCreator,
 		model.SkillSkillRegistry,
 		model.SkillCognitiveDoc,
@@ -82,6 +137,8 @@ func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 		model.SkillJudgmentDay,
 		model.SkillImprover,
 		model.SkillGoTesting,
+		model.SkillSystemicIssueTriage,
+		model.SkillGentleAIBench,
 	}
 
 	skillSet := make(map[model.SkillID]struct{}, len(all))
@@ -101,9 +158,8 @@ func TestRequestedBundledSkillsAreInPresetSkillSets(t *testing.T) {
 		model.SkillCreator,
 		model.SkillSkillRegistry,
 		model.SkillCognitiveDoc,
-		model.SkillCommentWriter,
 		model.SkillJudgmentDay,
-		model.SkillSDDInit,
+		model.SkillWorkUnitCommits,
 		model.SkillImprover,
 	}
 

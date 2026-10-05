@@ -2,17 +2,20 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
+func screenName(s Screen) string { return fmt.Sprintf("Screen#%d", int(s)) }
+
 func TestRunningScreensRejectInputAndExposeNoOptions(t *testing.T) {
-	for _, screen := range []Screen{ScreenRestoreConfirm, ScreenSync, ScreenUpgradeSync, ScreenOpenCodePlugins, ScreenUninstallConfirm} {
+	for _, screen := range []Screen{ScreenRestoreConfirm, ScreenSync, ScreenUpgradeSync, ScreenUninstallConfirm, ScreenReviewStoreResetConfirm} {
 		t.Run(screenName(screen), func(t *testing.T) {
 			m := NewModel(system.DetectionResult{}, "dev")
 			m.Screen = screen
@@ -34,7 +37,7 @@ func TestRunningScreensRejectInputAndExposeNoOptions(t *testing.T) {
 }
 
 func TestResultScreensDoNotExposePhantomCursorRows(t *testing.T) {
-	for _, screen := range []Screen{ScreenRestoreResult, ScreenDeleteResult, ScreenUninstallResult, ScreenOpenCodePluginResult, ScreenCommunityToolResult, ScreenComplete} {
+	for _, screen := range []Screen{ScreenRestoreResult, ScreenDeleteResult, ScreenUninstallResult, ScreenCommunityToolResult, ScreenComplete, ScreenReviewStoreResetResult} {
 		m := NewModel(system.DetectionResult{}, "dev")
 		m.Screen = screen
 		if got := m.optionCount(); got != 0 {
@@ -43,42 +46,13 @@ func TestResultScreensDoNotExposePhantomCursorRows(t *testing.T) {
 	}
 }
 
-func TestProfileSyncActionsEnterRunningState(t *testing.T) {
-	tests := []struct {
-		name    string
-		prepare func(Model) Model
-	}{
-		{"create", func(m Model) Model {
-			m.Screen, m.ProfileCreateStep, m.Cursor = ScreenProfileCreate, 2, 0
-			return m
-		}},
-		{"delete", func(m Model) Model {
-			m.Screen, m.ProfileDeleteTarget, m.Cursor = ScreenProfileDelete, "old", 0
-			return m
-		}},
-	}
-	originalRemove := removeProfileAgentsFn
-	removeProfileAgentsFn = func(string, string) error { return nil }
-	t.Cleanup(func() { removeProfileAgentsFn = originalRemove })
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := tt.prepare(NewModel(system.DetectionResult{}, "dev"))
-			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			got := updated.(Model)
-			if got.Screen != ScreenSync || !got.OperationRunning || cmd == nil {
-				t.Fatalf("profile sync did not start safely: screen=%v running=%v cmd=%v", got.Screen, got.OperationRunning, cmd)
-			}
-		})
-	}
-}
-
 func TestConditionalPickerNavigationResetsState(t *testing.T) {
-	t.Run("empty model picker back returns to SDD mode", func(t *testing.T) {
+	t.Run("empty model picker back returns to configuration", func(t *testing.T) {
 		m := NewModel(system.DetectionResult{}, "dev")
-		m.Screen, m.Selection.SDDMode, m.Cursor = ScreenModelPicker, model.SDDModeMulti, 1
+		m.Screen, m.ModelConfigMode, m.Cursor = ScreenModelPicker, true, 1
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-		if got := updated.(Model).Screen; got != ScreenSDDMode {
-			t.Fatalf("screen = %v, want %v", got, ScreenSDDMode)
+		if got := updated.(Model).Screen; got != ScreenModelConfig {
+			t.Fatalf("screen = %v, want %v", got, ScreenModelConfig)
 		}
 	})
 
@@ -93,6 +67,7 @@ func TestConditionalPickerNavigationResetsState(t *testing.T) {
 			m := NewModel(system.DetectionResult{}, "dev")
 			m.Screen, m.Cursor = tc.screen, 3
 			if tc.screen == ScreenKiroModelPicker {
+				m.Cursor = 4 // Kiro has an additional Open Weight preset before Custom.
 				m.KiroModelPicker = screens.NewKiroModelPickerState()
 			} else {
 				m.CodexModelPicker = screens.NewCodexModelPickerState()
@@ -142,35 +117,5 @@ func TestAsyncCompletionCannotReenterAbandonedFlow(t *testing.T) {
 	got := updated.(Model)
 	if got.Screen != ScreenWelcome || got.RestoreErr != nil {
 		t.Fatalf("late restore changed abandoned flow: screen=%v err=%v", got.Screen, got.RestoreErr)
-	}
-	updated, _ = m.Update(OpenCodePluginRegistrationDoneMsg{})
-	if got := updated.(Model); got.Screen != ScreenWelcome {
-		t.Fatalf("late plugin completion changed screen to %v", got.Screen)
-	}
-}
-
-func TestProfileLoadErrorPreservesVisibleProfiles(t *testing.T) {
-	originalRead := readProfilesFn
-	readProfilesFn = func(string) ([]model.Profile, error) { return nil, errors.New("load failed") }
-	t.Cleanup(func() { readProfilesFn = originalRead })
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.ProfileList = []model.Profile{{Name: "existing"}}
-	m.setScreen(ScreenProfiles)
-	if len(m.ProfileList) != 1 || m.ProfileDeleteErr == nil {
-		t.Fatalf("load error lost visible state: profiles=%v err=%v", m.ProfileList, m.ProfileDeleteErr)
-	}
-}
-
-func TestProfileDeleteErrorSurvivesListRefresh(t *testing.T) {
-	originalRead, originalRemove := readProfilesFn, removeProfileAgentsFn
-	readProfilesFn = func(string) ([]model.Profile, error) { return []model.Profile{{Name: "existing"}}, nil }
-	removeProfileAgentsFn = func(string, string) error { return errors.New("delete failed") }
-	t.Cleanup(func() { readProfilesFn, removeProfileAgentsFn = originalRead, originalRemove })
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen, m.ProfileDeleteTarget = ScreenProfileDelete, "existing"
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	got := updated.(Model)
-	if got.Screen != ScreenProfiles || got.ProfileDeleteErr == nil {
-		t.Fatalf("delete error was cleared: screen=%v err=%v", got.Screen, got.ProfileDeleteErr)
 	}
 }

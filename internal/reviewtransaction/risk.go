@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,14 +42,15 @@ const (
 type RiskSignal string
 
 const (
-	SignalAuth         RiskSignal = "auth"
-	SignalUpdate       RiskSignal = "update"
-	SignalSecurity     RiskSignal = "security"
-	SignalPayments     RiskSignal = "payments"
-	SignalDataExposure RiskSignal = "data_exposure"
-	SignalDataLoss     RiskSignal = "data_loss"
-	SignalPermissions  RiskSignal = "permissions"
-	SignalShellProcess RiskSignal = "shell_process"
+	SignalAuth          RiskSignal = "auth"
+	SignalUpdate        RiskSignal = "update"
+	SignalSecurity      RiskSignal = "security"
+	SignalPayments      RiskSignal = "payments"
+	SignalDataExposure  RiskSignal = "data_exposure"
+	SignalDataLoss      RiskSignal = "data_loss"
+	SignalPermissions   RiskSignal = "permissions"
+	SignalShellProcess  RiskSignal = "shell_process"
+	SignalDangerousSink RiskSignal = "dangerous_sink"
 )
 
 type DiffStat struct {
@@ -69,6 +71,7 @@ const (
 	RiskReasonServiceToken     RiskReasonCode = "service_token"
 	RiskReasonShellSource      RiskReasonCode = "shell_source"
 	RiskReasonProcessBoundary  RiskReasonCode = "process_boundary"
+	RiskReasonDangerousSink    RiskReasonCode = "dangerous_sink"
 	RiskReasonProcessScanLimit RiskReasonCode = "process_scan_limit"
 	RiskReasonExecutableMode   RiskReasonCode = "executable_mode"
 	// RiskReasonLargeChange is never derived anymore; size stopped selecting a
@@ -231,6 +234,24 @@ func CorrectionBudget(originalChangedLines int) (int, error) {
 	return min(MaxCorrectionChangedLines, originalChangedLines/2+originalChangedLines%2), nil
 }
 
+// CompactCorrectionBudget freezes the correction budget for a compact review
+// state using the floor-two policy. Every positive budget permits one atomic
+// line replacement (one Git addition plus one Git deletion = two changed
+// lines), so the budget never falls below two while the original candidate
+// has at least one changed line. A zero-line candidate retains a zero budget.
+// The legacy CorrectionBudget formula is preserved for historical states and
+// non-compact authority (issue #2247).
+func CompactCorrectionBudget(originalChangedLines int) (int, error) {
+	if originalChangedLines < 0 {
+		return 0, errors.New("original changed lines cannot be negative")
+	}
+	legacy, _ := CorrectionBudget(originalChangedLines)
+	if originalChangedLines > 0 && legacy < 2 {
+		return 2, nil
+	}
+	return legacy, nil
+}
+
 // ClassifySnapshotRisk derives both risk and changed lines from one immutable
 // repository tree boundary and the canonical CountChangedLines contract.
 func (builder SnapshotBuilder) ClassifySnapshotRisk(ctx context.Context, snapshot Snapshot) (RiskLevel, int, error) {
@@ -332,6 +353,7 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 		return active, nil
 	}
 	oids := make([]string, 0, len(candidates)*2)
+	batchOutputLimit := int64(0)
 	for _, stat := range candidates {
 		for _, version := range []struct {
 			tree string
@@ -344,10 +366,18 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 			if !present {
 				return nil, fmt.Errorf("read immutable passive candidate %q: blob is absent from tree inventory", stat.Path) // refusal:by-design world-action: contradictory immutable Git evidence cannot be repaired by a review command
 			}
+			recordBytes := catFileBatchRecordBytes(blob.oid, blob.size)
+			if recordBytes >= processBoundaryScanByteLimit-batchOutputLimit {
+				for _, logicalPath := range paths {
+					active[logicalPath] = struct{}{}
+				}
+				return active, nil
+			}
+			batchOutputLimit += recordBytes
 			oids = append(oids, blob.oid)
 		}
 	}
-	contents, err := batchBlobContents(ctx, repo, oids)
+	contents, err := batchBlobContents(ctx, repo, oids, int(batchOutputLimit))
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +401,7 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 
 // batchBlobContents reads exact OIDs rather than rev:path expressions, keeping
 // path bytes out of cat-file's line-delimited batch protocol.
-func batchBlobContents(ctx context.Context, repo string, oids []string) (map[string][]byte, error) {
+func batchBlobContents(ctx context.Context, repo string, oids []string, outputLimit int) (map[string][]byte, error) {
 	contents := make(map[string][]byte, len(oids))
 	if len(oids) == 0 {
 		return contents, nil
@@ -381,7 +411,7 @@ func batchBlobContents(ctx context.Context, repo string, oids []string) (map[str
 		stdin = append(stdin, oid...)
 		stdin = append(stdin, '\n')
 	}
-	output, err := runGitCaptured(ctx, repo, nil, stdin, 0, false, true, "cat-file", "--batch")
+	output, err := runGitCaptured(ctx, repo, nil, stdin, outputLimit, false, true, "cat-file", "--batch")
 	if err != nil {
 		return nil, fmt.Errorf("read immutable passive candidate blobs: %w", err)
 	}
@@ -409,10 +439,19 @@ func batchBlobContents(ctx context.Context, repo string, oids []string) (map[str
 	return contents, nil
 }
 
+// catFileBatchRecordBytes accounts for Git's exact --batch framing:
+// "<oid> blob <decimal-size>\n<content>\n".
+func catFileBatchRecordBytes(oid string, size int64) int64 {
+	return int64(len(oid)+len(" blob ")+len(strconv.FormatInt(size, 10))+2) + size
+}
+
 // isPassiveDocumentContent proves a document is inert from its own bytes.
 // Extensions only nominate a candidate; an interpreter directive, runtime MDX
 // syntax, or bytes that are not decodable text all withdraw the nomination.
 func isPassiveDocumentContent(logicalPath string, content []byte) bool {
+	if isPassiveImageExtension(logicalPath) {
+		return hasPassiveImageSignature(content)
+	}
 	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
 		return false
 	}
@@ -539,6 +578,18 @@ func treeBlobSizes(ctx context.Context, repo, tree string, paths []string) ([]tr
 	return blobs, nil
 }
 
+// processBoundaryPattern is the case-insensitive extended regular expression
+// the frozen-tree scan hands to git grep. A bare spawn word (`subprocess`,
+// `child_process`, `execute_process`, `exec` as in `os/exec` or `exec "$@"`)
+// counts only when it is not a member of another value: `db.Exec(`,
+// `stmt.Exec(`, and `/re/.exec(` are database statements and regular
+// expressions, not process boundaries (#2542). Spawn calls that only exist in
+// member form are named explicitly instead.
+const processBoundaryPattern = `((^|[^[:alnum:]_.])(subprocess|child_process|execute_process|exec)([^[:alnum:]_]|$))` +
+	`|(execSync\(|getRuntime\(\)\.exec\(|ProcessBuilder|os\.system\(|os\.exec[lv]p?e?\(|posix_spawn|proc_open\(|shell_exec\(|passthru\(|popen\(|Process\.Start\()`
+
+var processSpawnLine = regexp.MustCompile(`(?i)` + processBoundaryPattern)
+
 func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, snapshot Snapshot, stats []DiffStat) ([]RiskReason, error) {
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {
@@ -546,7 +597,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 	}
 	paths := make([]string, 0, len(stats))
 	for _, stat := range stats {
-		if isContentScanEligible(stat) {
+		if isContentScanEligible(stat) && !isTestRiskPath(stat.Path) {
 			paths = append(paths, stat.Path)
 		}
 	}
@@ -570,12 +621,11 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 		if len(treePaths) == 0 {
 			continue
 		}
-		// An interpreter directive and a spawn construct are both process
-		// boundaries the file's extension can neither promise nor deny, so the
-		// same bounded pass looks for either inside the frozen bytes.
+		// Interpreter directives remain whole-file evidence, including on the
+		// base side, so removal of a script does not hide its process boundary.
 		fixedArgs := []string{
 			"grep", "-I", "-l", "-z", "-i", "-E",
-			`(^#!)|((^|[^[:alnum:]_])(subprocess|execute_process|exec)([^[:alnum:]_]|$))`, tree, "--",
+			`^#!`, tree, "--",
 		}
 		prefixLength := gitArgvPrefixLength(repo, fixedArgs...)
 		for _, batch := range batchLiteralPathspecs(treePaths, prefixLength) {
@@ -596,7 +646,77 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 			}
 		}
 	}
+	// Diff output is bounded separately from the blob inventory; an oversized
+	// patch fails closed into the same scan-limit reason the blob scan uses,
+	// instead of erroring the whole assessment. Presentation is pinned so user
+	// prefix config cannot break path attribution, a textconv driver cannot
+	// replace the frozen bytes being scanned, and a binary or -diff attribute
+	// cannot collapse the patch into "Binary files differ".
+	diffFixedArgs := []string{
+		"-c", "core.quotePath=false", "diff", "--text", "--no-color", "--no-ext-diff", "--no-textconv",
+		"--src-prefix=a/", "--dst-prefix=b/", "--unified=0",
+		snapshot.BaseTree, snapshot.CandidateTree, "--",
+	}
+	diffPrefixLength := gitArgvPrefixLength(repo, diffFixedArgs...)
+	for _, batch := range batchLiteralPathspecs(paths, diffPrefixLength) {
+		args := append(append([]string{}, diffFixedArgs...), batch...)
+		output, err := runGitCaptured(ctx, repo, nil, nil, int(processBoundaryScanByteLimit), false, true, args...)
+		var limitErr *GitOutputLimitError
+		if errors.As(err, &limitErr) {
+			return []RiskReason{{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: strings.TrimPrefix(batch[0], ":(literal)")}}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect process boundary diff: %w", err)
+		}
+		batchPaths := make(map[string]struct{}, len(batch))
+		for _, pathspec := range batch {
+			batchPaths[strings.TrimPrefix(pathspec, ":(literal)")] = struct{}{}
+		}
+		// ambiguousReason names the fail-closed scan-limit path when a section's
+		// attribution cannot be trusted: the first path handed to this batch, so
+		// the reason still points somewhere inspectable inside it.
+		ambiguousReason := RiskReason{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: strings.TrimPrefix(batch[0], ":(literal)")}
+		currentPath, inHunk, processSeen, sinkSeen := "", false, false, false
+		for _, line := range bytes.Split(output, []byte{'\n'}) {
+			switch {
+			case bytes.HasPrefix(line, []byte("diff --git ")):
+				separator := bytes.LastIndex(line, []byte(" b/"))
+				if separator < 0 {
+					return []RiskReason{ambiguousReason}, nil
+				}
+				currentPath, inHunk, processSeen, sinkSeen = string(line[separator+len(" b/"):]), false, false, false
+				if _, known := batchPaths[currentPath]; !known {
+					return []RiskReason{ambiguousReason}, nil
+				}
+			case bytes.HasPrefix(line, []byte("@@")):
+				inHunk = true
+			case inHunk && len(line) > 0 && line[0] == '+':
+				added := line[1:]
+				if !processSeen && processSpawnLine.Match(added) {
+					reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: currentPath})
+					processSeen = true
+				}
+				if !sinkSeen && dangerousSinkLine(currentPath, string(added)) {
+					reasons = append(reasons, RiskReason{Code: RiskReasonDangerousSink, Signal: SignalDangerousSink, Path: currentPath})
+					sinkSeen = true
+				}
+			}
+		}
+	}
 	return canonicalRiskReasons(reasons), nil
+}
+
+func isTestRiskPath(logicalPath string) bool {
+	for _, segment := range strings.Split(asciiLower(logicalPath), "/") {
+		switch segment {
+		case "test", "tests", "__tests__", "testdata", "spec":
+			return true
+		}
+	}
+	name := asciiLower(path.Base(logicalPath))
+	return strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") ||
+		strings.Contains(name, ".spec.") || strings.HasPrefix(name, "test_") && strings.HasSuffix(name, ".py") ||
+		strings.HasSuffix(name, "_test.py")
 }
 
 func removeFallbackRiskReasons(reasons []RiskReason) []RiskReason {
@@ -848,12 +968,194 @@ func asciiLower(value string) string {
 	}, value)
 }
 
+// ChangedLines charges only the authored change, not the accounting shape a
+// path-keyed diff stat has to use. A pure rename/move keeps snapshot identity
+// and the manifest exactly as DiffStats already reports them -- one deleted
+// entry at the old path, one added entry at the new path -- but counting each
+// entry's full text as authored would charge a relocation as a full delete
+// plus a full insert. This asks git's own rename heuristic for the change
+// actually authored inside the moved file and charges that instead (#4107).
 func (builder SnapshotBuilder) ChangedLines(ctx context.Context, snapshot Snapshot) (int, error) {
 	stats, err := builder.DiffStats(ctx, snapshot)
 	if err != nil {
 		return 0, err
 	}
-	return CountChangedLines(stats)
+	total, err := CountChangedLines(stats)
+	if err != nil {
+		return 0, err
+	}
+	// Rename-aware sizing is advisory, never load-bearing: a charge this
+	// attempt's budget depends on must not hard-fail because a second,
+	// independent diff invocation for sizing alone failed. Any error here
+	// falls back to the conservative no-rename total (zero savings) rather
+	// than refusing the charge outright.
+	if savings, savingsErr := builder.renameAwareSavings(ctx, snapshot, stats); savingsErr == nil {
+		total -= savings
+	}
+	return total, nil
+}
+
+// renameAwareSavings detects renames within the snapshot's base/candidate
+// boundary using git's own similarity heuristic (`-M`) and, for every
+// deleted/added path pair CountChangedLines charged as a full deletion plus a
+// full insertion, returns how many of those lines git's rename-aware diff
+// says were never actually touched. It reads an independent diff purely to
+// size an already-frozen pair; snapshot paths, the manifest, and candidate
+// identity are untouched.
+func (builder SnapshotBuilder) renameAwareSavings(ctx context.Context, snapshot Snapshot, stats []DiffStat) (int, error) {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return 0, err
+	}
+	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	pairs, degraded := frozenRenamePairs(ctx, repo, isolation, snapshot.BaseTree, snapshot.CandidateTree)
+	if degraded {
+		// This call's own pairing lookup failed: fall back to no rename
+		// credit here, the same rule PrepareCandidateInspector applies to
+		// ITS OWN independent lookup (--no-renames reads) on
+		// FrozenCandidateContext.RenamePairingDegraded. Both consumers
+		// share the fallback RULE, not this one invocation's result: a
+		// concurrent or later PrepareCandidateInspector call runs its own
+		// git invocation and is not informed by this failure (#4107/#3208).
+		return 0, nil
+	}
+	statsByPath := make(map[string]DiffStat, len(stats))
+	for _, stat := range stats {
+		statsByPath[stat.Path] = stat
+	}
+	savings := 0
+	seen := make(map[string]struct{}, len(pairs))
+	for path, info := range pairs {
+		if _, done := seen[path]; done {
+			continue
+		}
+		seen[path] = struct{}{}
+		seen[info.partner] = struct{}{}
+		first, ok := statsByPath[path]
+		if !ok {
+			continue
+		}
+		second, ok := statsByPath[info.partner]
+		if !ok {
+			continue
+		}
+		var oldStat, newStat DiffStat
+		switch {
+		case first.Additions == 0 && first.Deletions > 0 && second.Deletions == 0 && second.Additions > 0:
+			oldStat, newStat = first, second
+		case second.Additions == 0 && second.Deletions > 0 && first.Deletions == 0 && first.Additions > 0:
+			oldStat, newStat = second, first
+		default:
+			// Not the clean delete/add shape a no-rename diff charges for a
+			// pure move; leave the pairing's contribution as-is.
+			continue
+		}
+		if oldStat.Binary || oldStat.ModeOnly || newStat.Binary || newStat.ModeOnly ||
+			isGeneratedGoldenPath(oldStat.Path) || isGeneratedGoldenPath(newStat.Path) {
+			continue
+		}
+		overcounted := oldStat.Deletions + newStat.Additions
+		actual := info.additions + info.deletions
+		if overcounted > actual {
+			savings += overcounted - actual
+		}
+	}
+	return savings, nil
+}
+
+// renamePairInfo is one git-detected rename pairing between a base and
+// candidate tree, together with the actual line-level change git's own diff
+// reports for it -- independent of whatever a no-rename diff charges the two
+// endpoints separately.
+type renamePairInfo struct {
+	partner              string
+	additions, deletions int
+}
+
+// frozenRenamePairs is the single canonical rename-pairing DERIVATION for one
+// frozen base/candidate tree boundary: ChangedLines' rename-aware sizing and
+// PrepareCandidateInspector's rename-aware patch reads both call exactly this
+// function rather than each hand-rolling its own git invocation, so the two
+// can never disagree on LOGIC -- same flags, same parsing, same degradation
+// rule. It does NOT share a computed RESULT across those two call sites:
+// each caller runs its own independent git subprocess against the same
+// immutable trees, ordinarily at different times for different purposes
+// (charging a budget at settle vs. building reviewer context at review time).
+// On the ordinary path both invocations return identical pairings, because
+// the derivation is a pure function of two immutable tree SHAs, but a
+// transient failure hitting only one of the two invocations means that one
+// instance's result (or degraded flag) is not guaranteed to match the
+// other's for that occurrence (#4107/#3208). It never returns an error --
+// a lookup failure degrades that ONE invocation to an empty pairing with
+// degraded=true, the fallback its own caller then applies consistently for
+// itself (no rename credit for ChangedLines, --no-renames reads for the
+// inspector), never a partial or crashing failure within one call.
+func frozenRenamePairs(ctx context.Context, repo string, isolation []string, baseTree, candidateTree string) (pairs map[string]renamePairInfo, degraded bool) {
+	detected, err := detectRenamePairs(ctx, repo, isolation, baseTree, candidateTree)
+	if err != nil {
+		return nil, true
+	}
+	return detected, false
+}
+
+// detectRenamePairs asks git's own similarity heuristic (`-M`) which deleted
+// and added paths between base and candidate are the same file relocated, and
+// returns the pairing keyed by both sides so a caller can look it up from
+// either endpoint. It never mutates the snapshot's path set or manifest: it
+// only reads one independent diff to characterize pairs that set already
+// contains.
+func detectRenamePairs(ctx context.Context, repo string, isolation []string, baseTree, candidateTree string) (map[string]renamePairInfo, error) {
+	output, err := runGitIsolated(ctx, repo, isolation, nil, "diff", "--numstat", "-M", "-z",
+		"--no-ext-diff", "--no-textconv", "--ignore-submodules=none", baseTree, candidateTree, "--")
+	if err != nil {
+		return nil, err
+	}
+	pairs := make(map[string]renamePairInfo)
+	records := bytes.Split(output, []byte{0})
+	for index := 0; index < len(records); index++ {
+		record := records[index]
+		if len(record) == 0 {
+			continue
+		}
+		fields := bytes.SplitN(record, []byte{'\t'}, 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected rename-aware diff stat %q", record) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		if len(fields[2]) != 0 {
+			// An ordinary (non-rename) numstat record; nothing to pair.
+			continue
+		}
+		if index+2 >= len(records) {
+			return nil, fmt.Errorf("truncated rename-aware diff stat %q", record) // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
+		}
+		oldPath, err := normalizeLogicalPath(string(records[index+1]))
+		if err != nil {
+			return nil, err
+		}
+		newPath, err := normalizeLogicalPath(string(records[index+2]))
+		if err != nil {
+			return nil, err
+		}
+		index += 2
+		var additions, deletions int
+		if !bytes.Equal(fields[0], []byte{'-'}) {
+			additions, err = strconv.Atoi(string(fields[0]))
+			if err != nil {
+				return nil, fmt.Errorf("parse rename additions for %q: %w", newPath, err)
+			}
+			deletions, err = strconv.Atoi(string(fields[1]))
+			if err != nil {
+				return nil, fmt.Errorf("parse rename deletions for %q: %w", newPath, err)
+			}
+		}
+		pairs[oldPath] = renamePairInfo{partner: newPath, additions: additions, deletions: deletions}
+		pairs[newPath] = renamePairInfo{partner: oldPath, additions: additions, deletions: deletions}
+	}
+	return pairs, nil
 }
 
 func isRegularNonExecutableGitMode(mode string) bool {
@@ -944,11 +1246,39 @@ func isPassiveContentCandidatePath(logicalPath string) bool {
 	return true
 }
 
+// isPassiveImageExtension names the binary image formats a reviewer can never
+// read as prose or execute: their bytes carry no authored behavior, so a
+// binary blob under one of them stays passive instead of failing closed into a
+// lens that could not inspect it anyway (#4185).
+func isPassiveImageExtension(logicalPath string) bool {
+	switch strings.ToLower(path.Ext(logicalPath)) {
+	case ".png", ".jpg", ".jpeg", ".gif":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasPassiveImageSignature requires the bytes to open with the PNG, JPEG, or
+// GIF signature: an image extension alone never admits a blob as passive.
+func hasPassiveImageSignature(content []byte) bool {
+	for _, magic := range [][]byte{[]byte("\x89PNG\r\n\x1a\n"), {0xff, 0xd8, 0xff}, []byte("GIF87a"), []byte("GIF89a")} {
+		if bytes.HasPrefix(content, magic) {
+			return true
+		}
+	}
+	return false
+}
+
 // isPassiveContentCandidateStat adds the mode half of the tier-0 nomination: a
-// binary blob, a symlink, a gitlink, a mode-only entry, or an executable bit
-// cannot be reviewed as prose whatever its extension claims.
+// symlink, a gitlink, a mode-only entry, or an executable bit cannot be
+// reviewed as prose whatever its extension claims, and a binary blob only
+// qualifies under a passive image extension.
 func isPassiveContentCandidateStat(stat DiffStat) bool {
-	if stat.Binary || stat.ModeOnly || !isPassiveContentCandidatePath(stat.Path) {
+	if stat.Binary && !isPassiveImageExtension(stat.Path) {
+		return false
+	}
+	if stat.ModeOnly || !isPassiveContentCandidatePath(stat.Path) {
 		return false
 	}
 	return isRegularNonExecutableGitMode(stat.OldMode) && isRegularNonExecutableGitMode(stat.NewMode)
@@ -1085,7 +1415,7 @@ func hasHighSignal(signals []RiskSignal) bool {
 func validRiskSignal(signal RiskSignal) bool {
 	switch signal {
 	case SignalAuth, SignalUpdate, SignalSecurity, SignalPayments,
-		SignalDataExposure, SignalDataLoss, SignalPermissions, SignalShellProcess:
+		SignalDataExposure, SignalDataLoss, SignalPermissions, SignalShellProcess, SignalDangerousSink:
 		return true
 	default:
 		return false
@@ -1118,6 +1448,10 @@ func hotPathRiskSignals(logicalPath string) []RiskSignal {
 		case "update":
 			signals = append(signals, SignalUpdate)
 		case "security":
+			signals = append(signals, SignalSecurity)
+		case "webhook":
+			// Webhook handlers own signature verification, credential handling,
+			// and authorization boundaries, so they are security evidence.
 			signals = append(signals, SignalSecurity)
 		case "payments":
 			signals = append(signals, SignalPayments)

@@ -218,6 +218,78 @@ command = "engram"
 	}
 }
 
+func TestUpsertTopLevelTOMLString_ReplacesAssignmentVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "tab before equals",
+			input: "model\t= \"old-top-level-model\"\n\n[mcp_servers.engram]\ncommand = \"engram\"\n",
+			want: `model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "multiline basic value",
+			input: `model = """
+old-top-level-model
+"""
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "multiline literal value",
+			input: `model = '''
+old-top-level-model
+'''
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "multiline array value",
+			input: `model = [
+  "old-top-level-model",
+]
+other = "preserved"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `other = "preserved"
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTopLevelTOMLString(tt.input, "model", "new-top-level-model")
+
+			if got != tt.want {
+				t.Fatalf("UpsertTopLevelTOMLString() mismatch (-want +got):\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestUpsertTopLevelTOMLString_Idempotent(t *testing.T) {
 	input := `[mcp_servers.engram]
 command = "engram"
@@ -227,6 +299,157 @@ command = "engram"
 
 	if first != second {
 		t.Fatalf("UpsertTopLevelTOMLString is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestUpsertTopLevelTOMLString_PreservesHomonymousTableAssignments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "standard table",
+			input: `model = "old-top-level-model"
+model_reasoning_effort = "low"
+
+[profiles.default] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+			want: `model = "new-top-level-model"
+model_reasoning_effort = "high"
+[profiles.default] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+		},
+		{
+			name: "array table",
+			input: `model = "old-top-level-model"
+model_reasoning_effort = "low"
+
+[[profiles]] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+			want: `model = "new-top-level-model"
+model_reasoning_effort = "high"
+[[profiles]] # user profile
+model = "nested-model"
+model_reasoning_effort = "nested-effort"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTopLevelTOMLString(tt.input, "model", "new-top-level-model")
+			got = UpsertTopLevelTOMLString(got, "model_reasoning_effort", "high")
+
+			if got != tt.want {
+				t.Fatalf("UpsertTopLevelTOMLString() mismatch (-want +got):\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestUpsertTopLevelTOMLString_PreservesRootMultilineArrays(t *testing.T) {
+	input := `items = [
+["value"]
+]
+model = "old"
+`
+
+	got := UpsertTopLevelTOMLString(input, "model", "new")
+
+	if !strings.Contains(got, `items = [
+["value"]
+]
+`) {
+		t.Fatalf("root array was modified:\n%s", got)
+	}
+	if strings.Count(got, `model = "new"`) != 1 {
+		t.Fatalf("expected exactly one replacement, got:\n%s", got)
+	}
+	if strings.Contains(got, `model = "old"`) {
+		t.Fatalf("old root assignment was retained:\n%s", got)
+	}
+}
+
+func TestUpsertTopLevelTOMLString_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "basic string with array table text",
+			input: `instructions = """
+[[profiles]]
+"""
+model = "old-top-level-model"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `instructions = """
+[[profiles]]
+"""
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "literal string with standard table text",
+			input: `instructions = '''
+[profiles.default]
+'''
+model = "old-top-level-model"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `instructions = '''
+[profiles.default]
+'''
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+		{
+			name: "basic string with root key text",
+			input: `instructions = """
+model = "example text"
+"""
+model = "old-top-level-model"
+
+[mcp_servers.engram]
+command = "engram"
+`,
+			want: `instructions = """
+model = "example text"
+"""
+
+model = "new-top-level-model"
+[mcp_servers.engram]
+command = "engram"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTopLevelTOMLString(tt.input, "model", "new-top-level-model")
+
+			if got != tt.want {
+				t.Fatalf("UpsertTopLevelTOMLString() mismatch (-want +got):\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
 	}
 }
 
@@ -555,5 +778,300 @@ func TestRemoveTOMLTableKeys_Idempotent(t *testing.T) {
 
 	if first != second {
 		t.Fatalf("RemoveTOMLTableKeys is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+// ─── Multiline values hide table-like text (#5022) ───────────────────────────
+
+func TestUpsertTOMLTableKey_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "header inside basic multiline string is text",
+			input: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+`,
+			want: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+
+[features]
+multi_agent = true
+`,
+		},
+		{
+			name: "header inside literal multiline string is text",
+			input: `developer_instructions = '''
+[features]
+multi_agent = false
+'''
+`,
+			want: `developer_instructions = '''
+[features]
+multi_agent = false
+'''
+
+[features]
+multi_agent = true
+`,
+		},
+		{
+			name: "real header after a string mentioning it receives the key",
+			input: `developer_instructions = """
+[features]
+"""
+
+[features]
+other = 1
+`,
+			want: `developer_instructions = """
+[features]
+"""
+
+[features]
+multi_agent = true
+other = 1
+`,
+		},
+		{
+			name: "string mentioning the header after the real table does not receive the key",
+			input: `[features]
+other = 1
+
+[agents]
+developer_instructions = """
+[features]
+"""
+`,
+			want: `[features]
+multi_agent = true
+other = 1
+
+[agents]
+developer_instructions = """
+[features]
+"""
+`,
+		},
+		{
+			name: "triple quotes inside an ordinary string or comment do not hide a real header",
+			input: `note = '"""'
+# a comment with """ and '''
+
+[features]
+multi_agent = false
+`,
+			want: `note = '"""'
+# a comment with """ and '''
+
+[features]
+multi_agent = true
+`,
+		},
+		{
+			name: "header text inside a section value does not end the section",
+			input: `[features]
+notes = """
+[other]
+"""
+multi_agent = false
+`,
+			want: `[features]
+notes = """
+[other]
+"""
+multi_agent = true
+`,
+		},
+		{
+			name: "key text inside a section value is not replaced",
+			input: `[features]
+notes = """
+multi_agent = false
+"""
+`,
+			want: `[features]
+multi_agent = true
+notes = """
+multi_agent = false
+"""
+`,
+		},
+		{
+			name: "replaced key drops its old multiline value",
+			input: `[features]
+multi_agent = """
+[agents]
+"""
+other = 1
+`,
+			want: `[features]
+multi_agent = true
+other = 1
+`,
+		},
+		{
+			name: "commented header ends the section",
+			input: `[features]
+other = 1
+
+[agents] # tuned
+multi_agent = false
+`,
+			want: `[features]
+multi_agent = true
+other = 1
+
+[agents] # tuned
+multi_agent = false
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpsertTOMLTableKey(tt.input, "features", "multi_agent", "true")
+			if got != tt.want {
+				t.Fatalf("UpsertTOMLTableKey() mismatch:\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+			if again := UpsertTOMLTableKey(got, "features", "multi_agent", "true"); again != got {
+				t.Fatalf("UpsertTOMLTableKey() is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, again)
+			}
+		})
+	}
+}
+
+func TestRemoveTOMLTableKeys_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "header inside multiline string does not start the section",
+			input: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+`,
+			want: `developer_instructions = """
+[features]
+multi_agent = false
+"""
+`,
+		},
+		{
+			name: "key text inside a section value is preserved",
+			input: `[features]
+notes = '''
+multi_agent = false
+'''
+multi_agent = true
+`,
+			want: `[features]
+notes = '''
+multi_agent = false
+'''
+`,
+		},
+		{
+			name: "removed key drops its multiline value",
+			input: `[features]
+multi_agent = '''
+x
+'''
+other = 1
+`,
+			want: `[features]
+other = 1
+`,
+		},
+		{
+			name: "header text inside a section value does not end the section",
+			input: `[features]
+notes = """
+[other]
+"""
+multi_agent = true
+`,
+			want: `[features]
+notes = """
+[other]
+"""
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RemoveTOMLTableKeys(tt.input, "features", []string{"multi_agent"})
+			if got != tt.want {
+				t.Fatalf("RemoveTOMLTableKeys() mismatch:\nwant:\n%s\ngot:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestRemoveTOMLTable_IgnoresTableLikeMultilineValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "header inside multiline string is not removed",
+			input: `developer_instructions = """
+[mcp_servers.engram]
+command = "engram"
+"""
+model = "gpt-5.5"
+`,
+			want: `developer_instructions = """
+[mcp_servers.engram]
+command = "engram"
+"""
+model = "gpt-5.5"
+`,
+		},
+		{
+			name: "header text inside the removed table's value does not end it",
+			input: `[mcp_servers.engram]
+description = '''
+[other]
+'''
+command = "engram"
+
+[other]
+value = true
+`,
+			want: `[other]
+value = true
+`,
+		},
+		{
+			name: "commented header ends the removed table",
+			input: `[mcp_servers.engram]
+command = "engram"
+[other] # keep
+value = true
+`,
+			want: `[other] # keep
+value = true
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RemoveTOMLTable(tt.input, "mcp_servers.engram"); got != tt.want {
+				t.Fatalf("RemoveTOMLTable() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

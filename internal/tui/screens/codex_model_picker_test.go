@@ -4,9 +4,46 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
+
+func TestCodexPickerPresetRetainsODDEffortPolicy(t *testing.T) {
+	for _, preset := range []screens.CodexModelPreset{screens.CodexPresetLowCost, screens.CodexPresetPowerful} {
+		t.Run(string(preset), func(t *testing.T) {
+			state := screens.NewCodexModelPickerState()
+			cursor := 0
+			if preset == screens.CodexPresetPowerful {
+				cursor = 2
+			}
+			_, got := screens.HandleCodexModelPickerNav("enter", &state, cursor)
+			for role, effort := range model.CodexODDEffortsForPreset(string(preset)) {
+				if got[role] != effort {
+					t.Errorf("%s = %s, want %s", role, got[role], effort)
+				}
+			}
+			for role := range got {
+				if strings.HasPrefix(role, "sdd-") {
+					t.Errorf("new preset includes retired role %q", role)
+				}
+			}
+		})
+	}
+}
+
+func TestCodexPickerOffersOnlyActiveRoles(t *testing.T) {
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModePhaseList
+	rows := screens.RenderCodexModelPicker(state, 0)
+	for _, role := range []string{"odd-explorer", "odd-worker", "odd-verify", "rdd-risk", "rdd-validator", "default"} {
+		if !strings.Contains(rows, role) {
+			t.Errorf("missing active role %q: %s", role, rows)
+		}
+	}
+	if strings.Contains(rows, "sdd-") {
+		t.Errorf("retired SDD roles visible: %s", rows)
+	}
+}
 
 func TestNewCodexModelPickerState(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
@@ -67,12 +104,28 @@ func TestCodexModelPickerOptionCount(t *testing.T) {
 }
 
 func TestCodexModelPickerOptionCount_PhaseListMode(t *testing.T) {
-	// Phase-list sub-mode: 13 phases + 1 Confirm = 14
+	// Phase-list sub-mode: 13 active roles + Confirm
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
 	count := screens.CodexModelPickerOptionCount(state)
 	if count != 14 {
 		t.Errorf("CodexModelPickerOptionCount(phase-list) = %d, want 14", count)
+	}
+}
+
+func TestCodexCustomModelSelect_UsesStateCatalog(t *testing.T) {
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModeModelSelect
+	state.AvailableModels = []string{"state-model-a", "state-model-b"}
+
+	out := screens.RenderCodexModelPicker(state, 0)
+	for _, id := range state.AvailableModels {
+		if !strings.Contains(out, id) {
+			t.Fatalf("custom model picker missing state model %q; output:\n%s", id, out)
+		}
+	}
+	if strings.Contains(out, "gpt-5.5") {
+		t.Fatalf("custom model picker should use state catalog; output:\n%s", out)
 	}
 }
 
@@ -261,17 +314,16 @@ func TestHandleCodexModelPickerNav_CustomRowEntersPhaseList(t *testing.T) {
 	}
 }
 
-// TestCodexCustomPhaseList_Has13Phases verifies that the phase list mode renders
-// all 13 expected SDD phases.
-func TestCodexCustomPhaseList_Has13Phases(t *testing.T) {
+// TestCodexCustomPhaseList_HasActiveRoles verifies the visible inventory.
+func TestCodexCustomPhaseList_HasActiveRoles(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
 	out := screens.RenderCodexModelPicker(state, 0)
 
 	expectedPhases := []string{
-		"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
-		"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 		"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
+		"odd-explorer", "odd-worker", "odd-verify",
+		"rdd-risk", "rdd-readability", "rdd-reliability", "rdd-resilience", "rdd-refuter", "rdd-validator",
 	}
 	for _, phase := range expectedPhases {
 		if !strings.Contains(out, phase) {
@@ -379,7 +431,7 @@ func TestCodexCustom_SelectModelAndEffortUpdatesAssignment(t *testing.T) {
 		t.Fatalf("after enter Custom: mode = %v, want PhaseList", state.CustomMode)
 	}
 
-	// Select first phase (sdd-explore) via HandleCodexCustomNav.
+	// Select first active role (jd-judge-a) via HandleCodexCustomNav.
 	screens.HandleCodexCustomNav("enter", &state, 0) // select phase 0 → model select
 
 	if state.CustomMode != screens.CodexCustomModeModelSelect {
@@ -406,15 +458,15 @@ func TestCodexCustom_SelectModelAndEffortUpdatesAssignment(t *testing.T) {
 	}
 
 	// Verify that the assignment was recorded.
-	a, ok := state.CustomAssignments["sdd-explore"]
+	a, ok := state.CustomAssignments["jd-judge-a"]
 	if !ok {
-		t.Fatalf("CustomAssignments missing sdd-explore; got: %v", state.CustomAssignments)
+		t.Fatalf("CustomAssignments missing jd-judge-a; got: %v", state.CustomAssignments)
 	}
-	if a.ModelID != "gpt-5.6-sol" {
-		t.Errorf("CustomAssignments[sdd-explore].ModelID = %q, want gpt-5.6-sol", a.ModelID)
+	if a.ModelID != model.CodexAvailableModels()[0] {
+		t.Errorf("CustomAssignments[jd-judge-a].ModelID = %q, want first catalog model", a.ModelID)
 	}
 	if a.Effort != model.CodexEffortHigh {
-		t.Errorf("CustomAssignments[sdd-explore].Effort = %q, want high", a.Effort)
+		t.Errorf("CustomAssignments[jd-judge-a].Effort = %q, want high", a.Effort)
 	}
 }
 
@@ -478,7 +530,7 @@ func TestCodexCustomModelSelect_EnterSelectsThirdModel(t *testing.T) {
 	}
 
 	// The pending model must be the third model in the list, not the second.
-	allModels := model.FilterCodexModels("")
+	allModels := model.FilterCodexModelList(model.CodexAvailableModels(), "")
 	if len(allModels) < 3 {
 		t.Skip("fewer than 3 models available")
 	}
@@ -513,16 +565,77 @@ func TestCodexCustomEffortSelect_MultipleDownReachesIndex2(t *testing.T) {
 // user navigates to the Confirm row in phase list mode and presses enter,
 // HandleCodexModelPickerNav returns a non-nil, non-empty assignments map from
 // the stored custom per-phase assignments, and CustomConfirmed is set to true.
+func TestCodexCustomRestoresPresetWithWorkerEfforts(t *testing.T) {
+	for _, tc := range []struct {
+		preset  screens.CodexModelPreset
+		efforts map[string]model.CodexEffort
+	}{
+		{screens.CodexPresetLowCost, model.CodexModelPresetLowCost()},
+		{screens.CodexPresetRecommended, model.CodexModelPresetRecommended()},
+		{screens.CodexPresetPowerful, model.CodexModelPresetPowerful()},
+	} {
+		defaults := model.CodexPresetCarrilDefaults(string(tc.preset))
+		for _, role := range model.CodexODDRoleCarrils() {
+			tc.efforts[role.Role] = defaults[role.Carril].Effort
+		}
+		got := screens.NewCodexModelPickerStateFromAssignments(tc.efforts)
+		if got.Preset != tc.preset {
+			t.Errorf("restored preset = %s, want %s", got.Preset, tc.preset)
+		}
+	}
+}
+
+func TestCodexCustomShortTerminalFollowsRDDAndConfirm(t *testing.T) {
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModePhaseList
+	for _, tc := range []struct {
+		cursor          int
+		visible, hidden string
+	}{
+		{0, "jd-judge-a", "rdd-validator"},
+		{7, "rdd-risk", "jd-judge-a"},
+		{12, "rdd-validator", "jd-judge-a"},
+		{13, "Confirm assignments", "jd-judge-a"},
+	} {
+		out := screens.RenderCodexModelPicker(state, tc.cursor, 12)
+		if !strings.Contains(out, tc.visible) || strings.Contains(out, tc.hidden) {
+			t.Errorf("cursor %d viewport missing %q or showing %q: %q", tc.cursor, tc.visible, tc.hidden, out)
+		}
+	}
+}
+
+func TestCodexCustomODDAndRDDRowsRoundTrip(t *testing.T) {
+	roles := map[int]string{4: "odd-explorer", 5: "odd-worker", 6: "odd-verify", 7: "rdd-risk", 8: "rdd-readability", 9: "rdd-reliability", 10: "rdd-resilience", 11: "rdd-refuter", 12: "rdd-validator"}
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModePhaseList
+	for idx, role := range roles {
+		if handled, _ := screens.HandleCodexCustomNav("enter", &state, idx); !handled || state.CustomMode != screens.CodexCustomModeModelSelect {
+			t.Fatalf("row %d (%s) did not enter model selection", idx, role)
+		}
+		screens.HandleCodexCustomNav("enter", &state, idx)
+		screens.HandleCodexCustomNav("enter", &state, idx)
+		if got := state.CustomAssignments[role]; got.ModelID != model.CodexAvailableModels()[0] || got.Effort != model.CodexEffortLow {
+			t.Errorf("role %s = %+v", role, got)
+		}
+	}
+	_, efforts := screens.HandleCodexCustomNav("enter", &state, screens.CodexModelPickerOptionCount(state)-1)
+	for _, role := range roles {
+		if efforts[role] != model.CodexEffortLow {
+			t.Errorf("role %s effort = %s", role, efforts[role])
+		}
+	}
+}
+
 func TestCodexCustom_ConfirmReturnsPhaseModelAssignments(t *testing.T) {
 	state := screens.NewCodexModelPickerState()
 	state.CustomMode = screens.CodexCustomModePhaseList
 	// Pre-populate a custom assignment for one phase.
 	state.CustomAssignments = map[string]screens.CodexCustomAssignment{
-		"sdd-propose": {ModelID: "gpt-5.4", Effort: model.CodexEffortHigh},
+		"odd-worker": {ModelID: "gpt-5.4", Effort: model.CodexEffortHigh},
 	}
 
-	// Confirm row is the LAST row in phase-list mode (after 13 phases).
-	confirmIdx := 13 // 13 phases, confirm is at idx 13
+	// Confirm row is the LAST row in phase-list mode (after 14 phases).
+	confirmIdx := screens.CodexModelPickerOptionCount(state) - 1
 	handled, assignments := screens.HandleCodexModelPickerNav("enter", &state, confirmIdx)
 	if !handled {
 		t.Fatal("Confirm row: handled = false, want true")
@@ -534,8 +647,8 @@ func TestCodexCustom_ConfirmReturnsPhaseModelAssignments(t *testing.T) {
 		t.Fatal("Confirm row: assignments is empty, want at least one entry")
 	}
 	// The effort for the assigned phase must be reflected.
-	if assignments["sdd-propose"] != model.CodexEffortHigh {
-		t.Errorf("assignments[sdd-propose] = %q, want high", assignments["sdd-propose"])
+	if assignments["odd-worker"] != model.CodexEffortHigh {
+		t.Errorf("assignments[odd-worker] = %q, want high", assignments["odd-worker"])
 	}
 	// CustomConfirmed must be set to true after Confirm.
 	if !state.CustomConfirmed {

@@ -1,5 +1,8 @@
 # Integrations
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Gentle-AI integration code should stay thin: adapters describe where and how an agent accepts configuration; components decide what managed content to inject.
@@ -10,7 +13,7 @@ Gentle-AI integration code should stay thin: adapters describe where and how an 
 |---|---|---|
 | Agent IDs and config roots | `internal/model/types.go`, `internal/catalog/agents.go` | Declare supported agent names and roots. |
 | Adapter strategies | `internal/agents/<agent>/` | Return path, MCP strategy, prompt strategy, and capabilities. |
-| SDD assets | `internal/assets/<agent>/`, `internal/components/sdd/` | Install orchestrators, sub-agent prompts, and commands. |
+| ODD guidance and review assets | `internal/assets/<agent>/`, `internal/components/agentguidance/`, `internal/components/reviewassets/` | Deliver shared ODD guidance and managed reviewer contracts/agents through agent-specific adapters. |
 | Engram MCP | `internal/components/engram/` | Add external Engram MCP server entries. |
 | Context7 MCP | `internal/components/mcp/` | Add documentation MCP server entries. |
 | Skills | `internal/components/skills/`, `internal/assets/skills/` | Copy curated skill files. |

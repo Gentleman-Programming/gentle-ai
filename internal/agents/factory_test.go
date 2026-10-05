@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestFactoryResolvesPiAdapter(t *testing.T) {
@@ -72,6 +72,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 		model.AgentAntigravity,
 		model.AgentClaudeCode,
 		model.AgentCodex,
+		model.AgentConductor,
 		model.AgentCursor,
 		model.AgentGeminiCLI,
 		model.AgentHermes,
@@ -116,6 +117,40 @@ func TestDefaultRegistryIncludesHermes(t *testing.T) {
 
 	if got := adapter.Agent(); got != model.AgentHermes {
 		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentHermes)
+	}
+}
+
+func TestFactoryResolvesConductorAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentConductor)
+	if err != nil {
+		t.Fatalf("NewAdapter(%q) returned error: %v", model.AgentConductor, err)
+	}
+
+	if got := adapter.Agent(); got != model.AgentConductor {
+		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentConductor)
+	}
+}
+
+func TestDefaultRegistryIncludesConductor(t *testing.T) {
+	registry, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry() returned error: %v", err)
+	}
+
+	adapter, ok := registry.Get(model.AgentConductor)
+	if !ok {
+		t.Fatalf("registry missing %s adapter", model.AgentConductor)
+	}
+
+	if got := adapter.Agent(); got != model.AgentConductor {
+		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentConductor)
+	}
+
+	// Conductor inherits Claude Code configuration, so the adapter must claim
+	// no write capabilities.
+	if adapter.SupportsSkills() || adapter.SupportsSystemPrompt() || adapter.SupportsMCP() {
+		t.Fatalf("Conductor adapter claims write capabilities: skills=%t systemPrompt=%t mcp=%t",
+			adapter.SupportsSkills(), adapter.SupportsSystemPrompt(), adapter.SupportsMCP())
 	}
 }
 

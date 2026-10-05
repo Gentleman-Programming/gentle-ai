@@ -12,10 +12,11 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 )
 
 // selfUpdateNowFn returns the current time; injected for test determinism.
@@ -32,8 +33,13 @@ const (
 	envYesUpdate      = "GENTLE_AI_YES"
 )
 
+// isTerminal reports whether fd belongs to a native or Cygwin/MSYS2 terminal.
+func isTerminal(fd uintptr) bool {
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
 // isattyFn is a package-level var for TTY detection, injectable for tests.
-var isattyFn = func(fd uintptr) bool { return isatty.IsTerminal(fd) }
+var isattyFn = isTerminal
 
 // selfUpdateYesFn returns true when the caller wants the upgrade to proceed
 // without an interactive prompt. Set GENTLE_AI_YES=1 for scripted upgrades.
@@ -176,14 +182,9 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	// JSON, permission denied) means an existing file is present — do not
 	// overwrite it and risk dropping unrelated persisted fields.
 	if homeDir != "" {
-		s, readErr := state.Read(homeDir)
-		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			// File exists but is unreadable/corrupt — skip this round to avoid
-			// clobbering installed_agents, model assignments, etc.
-		} else {
-			s.PendingSync = true
-			_ = state.Write(homeDir, s)
-		}
+		// Re-read the latest state inside the canonical lock so a concurrent
+		// writer's changes survive the PendingSync set.
+		_ = markPendingSyncAfterSelfUpdate(homeDir)
 	}
 
 	return restartAfterGentleAIUpgrade(target.LatestVersion, stdout)
@@ -198,6 +199,22 @@ func gentleAIUpgradeSucceeded(report upgrade.UpgradeReport) (string, bool) {
 	return "", false
 }
 
+// markPendingSyncAfterSelfUpdate sets PendingSync under the canonical
+// install-state lock. It re-reads the latest state inside the lock so changes
+// written by a concurrent writer are preserved. When the state file exists
+// but is unreadable/corrupt (any read error other than ErrNotExist), it does
+// nothing to avoid clobbering installed_agents, model assignments, etc.
+func markPendingSyncAfterSelfUpdate(homeDir string) error {
+	return statecoord.WithLock(homeDir, func() error {
+		s, readErr := state.Read(homeDir)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return nil
+		}
+		s.PendingSync = true
+		return state.Write(homeDir, s)
+	})
+}
+
 func restartAfterGentleAIUpgrade(latestVersion string, stdout io.Writer) error {
 	latestVersion = strings.TrimPrefix(latestVersion, "v")
 	// Converged behavior (task 4.6): always print the restart message on every OS
@@ -207,4 +224,18 @@ func restartAfterGentleAIUpgrade(latestVersion string, stdout io.Writer) error {
 	// Tradeoff: Unix loses seamless re-exec restart; mitigated by clear copy below.
 	_, _ = fmt.Fprintf(stdout, "Updated to v%s — restart gentle-ai to continue.\n", latestVersion)
 	return nil
+}
+
+// printPostUpgradeDoctorAdvisory prints a non-blocking informational advisory
+// suggesting the user run 'gentle-ai doctor' to verify ecosystem health after
+// a successful gentle-ai upgrade. It is purely informational: it does not run
+// any checks, does not change exit status, and does not block the upgrade.
+//
+// The advisory is shown in two places:
+//  1. After a successful `gentle-ai upgrade` CLI invocation (printed by runUpgrade).
+//  2. On the next launch under the new binary when PendingSync=true is observed
+//     (covers the TUI self-update path, where the new binary was not yet running
+//     when the upgrade completed).
+func printPostUpgradeDoctorAdvisory(stdout io.Writer) {
+	_, _ = fmt.Fprintf(stdout, "\n[info]    Run 'gentle-ai doctor' to verify ecosystem health after upgrade\n")
 }

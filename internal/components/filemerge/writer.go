@@ -2,6 +2,8 @@ package filemerge
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,31 @@ import (
 // macOS the full error is propagated so unexpected failures are still surfaced.
 // See issues #293 and #294.
 var runtimeGOOS = func() string { return runtime.GOOS }
+
+// renameFn publishes the staged replacement. It is a package-level var so tests
+// can simulate a rename that reports success without taking effect: the shape
+// reported on Windows in #2319, where an antivirus/indexer hold turns the swap
+// into a silent no-op.
+var renameFn = os.Rename
+
+// stagedFile is the staged destination of a durable write. The interface exists
+// so tests can fault Chmod, Sync and Close, which a real *os.File only fails
+// under disk-level conditions no unit test can produce, and those are exactly
+// the conditions this package exists to survive.
+type stagedFile interface {
+	io.Writer
+	Name() string
+	Chmod(fs.FileMode) error
+	Sync() error
+	Close() error
+}
+
+// createStagedFile stages a replacement in dir. Package-level var for the fault
+// injection described on stagedFile.
+var createStagedFile = func(dir string) (stagedFile, error) {
+	return os.CreateTemp(dir, ".gentle-ai-*.tmp")
+}
+
 var syncDirFn = func(dir string) error {
 	fd, err := os.Open(dir)
 	if err != nil {
@@ -34,20 +61,66 @@ var syncDirFn = func(dir string) error {
 
 const maxAtomicFileSize = 16 << 20
 
+// WriteResult reports what happened to the destination path. It is truthful on
+// every return, including error returns: Changed is read back from disk after
+// the replacement, never inferred from the attempt.
 type WriteResult struct {
 	Changed bool
 	Created bool
 }
 
+// WriteFileAtomic replaces path with content and reports whether the
+// replacement actually occurred.
+//
+// perm applies only when path does not yet exist. Rewriting an existing
+// regular file preserves its current permission bits instead — a private file
+// (for example a settings document holding credentials) must never be widened
+// just because it was reinstalled or resynced. Callers that must force a
+// specific mode regardless of the file's current state (an executable script,
+// a credentials file pinned to a fixed mode, a backup restore recreating a
+// recorded mode) use WriteFileAtomicMode instead.
+//
+// A nil error means the bytes reached stable storage (staged file synced,
+// parent directory synced) and were read back from path. Any other outcome is
+// an error.
+//
+// Callers must not read "err != nil" as "nothing happened". Replacement is
+// published by a rename that can succeed while a later step fails; in that
+// window the returned WriteResult reports Changed=true alongside the error, so
+// rollback and journalling decisions come from the writer rather than from a
+// guess at each call site (#1676).
 func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
+	return writeFileAtomic(path, content, perm, false)
+}
+
+// WriteFileAtomicMode replaces path with content and always applies perm,
+// widening or narrowing an existing file's mode as needed — including when
+// content is unchanged, so a caller restoring a recorded mode still lands it.
+// Such a mode-only repair reports Changed=true when it actually changed the
+// file's permission bits; same bytes and same mode report Changed=false.
+// Use WriteFileAtomic instead unless the caller owns the target mode outright.
+func WriteFileAtomicMode(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
+	return writeFileAtomic(path, content, perm, true)
+}
+
+func writeFileAtomic(path string, content []byte, perm fs.FileMode, forceMode bool) (WriteResult, error) {
 	if perm == 0 {
-		perm = 0o644
+		// A forced zero mode comes from a recorded mode (restore paths); never
+		// widen it past owner-only. An omitted mode for a new file keeps 0644.
+		if forceMode {
+			perm = 0o600
+		} else {
+			perm = 0o644
+		}
 	}
 
 	created := false
 	existing, err := readComparableFile(path)
 	if err == nil {
 		if bytes.Equal(existing, content) {
+			if forceMode {
+				return enforceFileMode(path, perm)
+			}
 			return WriteResult{}, nil
 		}
 	} else if !os.IsNotExist(err) {
@@ -56,14 +129,140 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		created = true
 	}
 
-	dir := filepath.Dir(path)
-	if err := ensureAtomicParentDir(dir, path); err != nil {
-		return WriteResult{}, err
+	if !forceMode && !created {
+		perm = ExistingFileMode(path, perm)
 	}
 
-	tmp, err := os.CreateTemp(dir, ".gentle-ai-*.tmp")
+	landed, _, err := replaceDurably(path, bytes.NewReader(content), perm)
+	result := WriteResult{Changed: landed, Created: created && landed}
 	if err != nil {
-		return WriteResult{}, fmt.Errorf("create temp file for %q: %w", path, err)
+		return result, err
+	}
+	return result, nil
+}
+
+// enforceFileMode applies perm to the existing file at path and reports
+// Changed when the permission bits read back from disk differ from the ones
+// read before, so a platform that ignores part of perm (Windows keeps only the
+// read-only bit) never reports a repair that did not happen.
+func enforceFileMode(path string, perm fs.FileMode) (WriteResult, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return WriteResult{}, fmt.Errorf("stat %q before setting permissions: %w", path, err)
+	}
+	// A true no-op must not touch the file: even a same-mode chmod updates
+	// its ctime.
+	if before.Mode().Perm() == perm.Perm() {
+		return WriteResult{}, nil
+	}
+	if chmodErr := os.Chmod(path, perm); chmodErr != nil {
+		return WriteResult{}, fmt.Errorf("set permissions on %q: %w", path, chmodErr)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		// The chmod succeeded, so the mode may have changed; say so.
+		return WriteResult{Changed: true}, fmt.Errorf("read back permissions on %q: %w", path, err)
+	}
+	return WriteResult{Changed: after.Mode().Perm() != before.Mode().Perm()}, nil
+}
+
+// RefuseLockedSettingsFile rejects locked or non-regular settings before any
+// related assets are changed. ExistingFileMode's 0600 fallback is suitable for
+// other callers, but selected settings must not change a deliberate lock.
+func RefuseLockedSettingsFile(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect settings mode %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refuse to rewrite settings %q: selected path is a symlink; select a regular settings file before retrying", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refuse to rewrite settings %q: selected path is not a regular file; select a regular settings file before retrying", path)
+	}
+	if info.Mode().Perm() == 0 {
+		return fmt.Errorf("refuse to rewrite locked settings %q (mode 0000); restore read/write permissions explicitly before retrying", path)
+	}
+	return nil
+}
+
+// ExistingFileMode returns the permission bits of the regular file at path, or
+// fallback when path is absent or is not a regular file. A regular file with no
+// permission bits yields 0600 so it is never widened. WriteFileAtomic uses this
+// internally so a private file (for example a settings document holding
+// credentials) is never widened on rewrite; forced-mode callers computing
+// their own perm from the current file may still call it directly.
+func ExistingFileMode(path string, fallback fs.FileMode) fs.FileMode {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return fallback
+	}
+	perm := info.Mode().Perm()
+	if perm == 0 {
+		// WriteFileAtomic treats perm 0 as its 0644 default, which would widen
+		// a file the user locked down entirely; owner-only is the narrowest
+		// mode that still lets the rewrite read its own result back.
+		return 0o600
+	}
+	return perm
+}
+
+// StreamResult describes the bytes that landed at the destination.
+type StreamResult struct {
+	Bytes  int64
+	Digest string
+}
+
+// WriteStreamAtomic replaces path with everything readable from src and returns
+// the size and SHA-256 of the bytes read back from path afterwards.
+//
+// WriteStreamAtomic always applies perm, the same forced-mode contract as
+// WriteFileAtomicMode, never WriteFileAtomic's preserve-by-default one: its
+// callers stream fresh downloads and extracted executables, where the
+// destination's prior mode (if it has one at all) must not survive the
+// replacement.
+//
+// The digest describes the file on disk, never the copied stream: a stream
+// digest certifies its own copy and cannot detect a destination that ends up
+// holding something else, which is how a truncated download used to pass
+// checksum verification (#1998).
+//
+// A nil error means the bytes reached stable storage and were read back. The
+// caller owns any size policy: check StreamResult.Bytes and remove path if the
+// result is unacceptable.
+func WriteStreamAtomic(path string, src io.Reader, perm fs.FileMode) (StreamResult, error) {
+	_, result, err := replaceDurably(path, src, perm)
+	return result, err
+}
+
+// replaceDurably is the single durability sequence in this package: stage beside
+// the destination, apply the final metadata mutation, sync, close, publish with
+// a rename, read the destination back, then sync the parent directory.
+//
+// The ordering is load-bearing. Chmod precedes Sync so a recovered rename cannot
+// expose the file with the wrong mode, and the rename precedes the parent sync
+// because publication is a namespace operation while durability is not (#2216).
+//
+// landed reports whether path holds the staged bytes. It is meaningful even when
+// err is non-nil: publication happens before the last failure point, so a caller
+// that reads "error" as "nothing happened" is wrong in exactly that window
+// (#1676).
+func replaceDurably(path string, src io.Reader, perm fs.FileMode) (landed bool, result StreamResult, err error) {
+	if perm == 0 {
+		perm = 0o644
+	}
+
+	dir := filepath.Dir(path)
+	if err := ensureAtomicParentDir(dir, path); err != nil {
+		return false, StreamResult{}, err
+	}
+
+	tmp, err := createStagedFile(dir)
+	if err != nil {
+		return false, StreamResult{}, fmt.Errorf("create temp file for %q: %w", path, err)
 	}
 
 	tmpPath := tmp.Name()
@@ -74,40 +273,110 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		}
 	}()
 
-	if _, err := tmp.Write(content); err != nil {
+	// The staged digest is not the answer; it is the oracle the answer is
+	// checked against. Comparing it to the digest read back from the
+	// destination is what turns "the copy succeeded" into "the right bytes are
+	// at the right path".
+	staged := sha256.New()
+	written, err := io.Copy(io.MultiWriter(tmp, staged), src)
+	if err != nil {
 		_ = tmp.Close()
-		return WriteResult{}, fmt.Errorf("write temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("write temp file for %q: %w", path, err)
 	}
+	stagedDigest := hex.EncodeToString(staged.Sum(nil))
 
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
-		return WriteResult{}, fmt.Errorf("set permissions on temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("set permissions on temp file for %q: %w", path, err)
 	}
 
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return WriteResult{}, fmt.Errorf("sync temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("sync temp file for %q: %w", path, err)
 	}
 
 	if err := tmp.Close(); err != nil {
-		return WriteResult{}, fmt.Errorf("close temp file for %q: %w", path, err)
+		return false, StreamResult{}, fmt.Errorf("close temp file for %q: %w", path, err)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
-		return WriteResult{}, fmt.Errorf("replace %q atomically: %w", path, err)
+	if err := renameFn(tmpPath, path); err != nil {
+		return false, StreamResult{}, fmt.Errorf("replace %q atomically: %w", path, err)
 	}
 
-	// Sync the parent directory to flush the new directory entry to disk.
-	// On Windows, NTFS returns ErrPermission when syncing a directory fd — tolerate
-	// that specific error only. Any other error (e.g. disk full) is still fatal.
-	if err := syncDirFn(dir); err != nil {
-		if !(runtimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)) {
-			return WriteResult{}, fmt.Errorf("sync parent directory for %q: %w", path, err)
-		}
+	// Read the destination back before claiming anything about it. A rename that
+	// returns nil has not necessarily taken effect. On Windows an antivirus or
+	// indexer hold turns the swap into a silent no-op (#2319), and the whole
+	// point of this sequence is that its result describes disk, not intent.
+	diskDigest, diskBytes, err := digestFileOnDisk(path)
+	if err != nil {
+		return false, StreamResult{}, fmt.Errorf("read back %q after replacement: %w", path, err)
+	}
+	if diskBytes != written || diskDigest != stagedDigest {
+		return false, StreamResult{}, fmt.Errorf(
+			"replace %q atomically: the replacement did not land. The destination holds %d bytes (%s); %d bytes (%s) were written",
+			path, diskBytes, diskDigest, written, stagedDigest)
 	}
 
+	// Past this point the destination holds the new bytes. Every remaining
+	// failure must still say so, or callers will roll back nothing.
 	cleanup = false
-	return WriteResult{Changed: true, Created: created}, nil
+	result = StreamResult{Bytes: diskBytes, Digest: diskDigest}
+
+	if err := SyncDir(dir); err != nil {
+		return true, result, fmt.Errorf("sync parent directory for %q: %w", path, err)
+	}
+
+	return true, result, nil
+}
+
+// SyncDir flushes dir's entries to stable storage so a published name survives
+// recovery.
+//
+// Windows/NTFS refuses to fsync a directory handle and returns ErrPermission
+// regardless of privilege; that specific error is tolerated there and nowhere
+// else, so a real failure (a full disk, say) still surfaces.
+func SyncDir(dir string) error {
+	err := syncDirFn(dir)
+	if err == nil {
+		return nil
+	}
+	if runtimeGOOS() == "windows" && errors.Is(err, os.ErrPermission) {
+		return nil
+	}
+	return err
+}
+
+// FileDigest returns the SHA-256 and size of the file at path, read from disk.
+// Callers comparing a published file against what they staged use this on both
+// sides so the comparison is between two reads, not between a read and an
+// intention.
+func FileDigest(path string) (digest string, size int64, err error) {
+	return digestFileOnDisk(path)
+}
+
+// digestFileOnDisk streams path and returns its SHA-256 and size. It refuses
+// symlinks so a redirected destination cannot answer for the real one.
+func digestFileOnDisk(path string) (digest string, size int64, err error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", 0, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", 0, fmt.Errorf("destination %q is a symlink", path)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+
+	sum := sha256.New()
+	size, err = io.Copy(sum, file)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), size, nil
 }
 
 func readComparableFile(path string) ([]byte, error) {
@@ -161,6 +430,15 @@ func ensureAtomicParentDir(dir, path string) error {
 			return fmt.Errorf("stat symlink target %q for %q: %w", resolved, path, err)
 		}
 		dir = resolved
+	} else {
+		resolved, resolvedInfo, handled, err := resolveAtomicParentJunction(dir, info)
+		if err != nil {
+			return fmt.Errorf("resolve parent directory for %q: %w", path, err)
+		}
+		if handled {
+			dir = resolved
+			info = resolvedInfo
+		}
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("parent path %q for %q is not a directory", dir, path)

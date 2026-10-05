@@ -39,25 +39,36 @@ type CorrectionPlanFinding struct {
 }
 
 func BuildCorrectionPlanRequest(state CompactState, revision string) (CorrectionPlanRequest, error) {
-	if err := state.Validate(); err != nil {
-		return CorrectionPlanRequest{}, err
-	}
-	wantRevision, err := CompactRevisionForState(state)
-	if err != nil || revision != wantRevision {
-		return CorrectionPlanRequest{}, errors.New("correction plan request requires the exact compact authority revision") // refusal:by-design world-action: provider code must rebuild the request from current validated authority
+	if revision != state.CapturePhaseRevision {
+		return CorrectionPlanRequest{}, errors.New("correction plan request requires the exact compact capture phase") // refusal:by-design world-action: provider code must rebuild the request from current validated authority
 	}
 	if state.State != StateCorrectionRequired || state.CorrectionAttemptConsumed() || len(state.FixFindingIDs) == 0 {
 		return CorrectionPlanRequest{}, errors.New("correction plan request requires an available compact correction") // refusal:by-design world-action: only current provider authority can grant correction scope
 	}
-	byID := make(map[string]Finding, len(state.Findings))
-	for _, finding := range state.Findings {
+	fixFindingIDs, err := canonicalStrings(state.FixFindingIDs, "fix finding id")
+	if err != nil || !equalStrings(fixFindingIDs, state.FixFindingIDs) {
+		return CorrectionPlanRequest{}, errors.New("correction plan request finding IDs are not canonical") // refusal:by-design world-action: provider authority must preserve the exact accepted finding set
+	}
+	view, err := state.CompactReviewView()
+	if err != nil {
+		return CorrectionPlanRequest{}, err
+	}
+	viewFixFindingIDs, err := canonicalStrings(view.FixFindingIDs, "derived fix finding id")
+	if err != nil || !equalStrings(viewFixFindingIDs, view.FixFindingIDs) || !equalStrings(viewFixFindingIDs, fixFindingIDs) {
+		return CorrectionPlanRequest{}, errors.New("correction plan request findings are not satisfied by admitted compact authority") // refusal:by-design world-action: correction scope must be completely and unambiguously derived from admitted role evidence
+	}
+	if err := validateCompactReviewConsumerState(state, view); err != nil {
+		return CorrectionPlanRequest{}, err
+	}
+	byID := make(map[string]Finding, len(view.Findings))
+	for _, finding := range view.Findings {
 		byID[finding.ID] = finding
 	}
-	findings := make([]CorrectionPlanFinding, len(state.FixFindingIDs))
-	for index, id := range state.FixFindingIDs {
+	findings := make([]CorrectionPlanFinding, len(fixFindingIDs))
+	for index, id := range fixFindingIDs {
 		finding, ok := byID[id]
-		classification, classified := state.Classifications[id]
-		if !ok || !classified || state.Outcomes[id] != OutcomeCorroborated {
+		classification, classified := view.Classifications[id]
+		if !ok || !classified || view.Outcomes[id] != OutcomeCorroborated {
 			return CorrectionPlanRequest{}, errors.New("correction plan request finding is not accepted by compact authority") // refusal:by-design world-action: provider authority must be repaired before projecting findings
 		}
 		findings[index] = CorrectionPlanFinding{
@@ -76,6 +87,12 @@ func BuildCorrectionPlanRequest(state CompactState, revision string) (Correction
 		return CorrectionPlanRequest{}, err
 	}
 	return request, nil
+}
+
+// validateCompactReviewConsumerState validates compact lifecycle facts against
+// the canonical admitted-role view without rehydrating retired projections.
+func validateCompactReviewConsumerState(state CompactState, view CompactReviewView) error {
+	return validateCompactReviewLifecycle(state, view)
 }
 
 func ValidateCorrectionPlanRequest(request CorrectionPlanRequest) error {

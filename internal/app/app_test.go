@@ -3,28 +3,53 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 )
+
+func TestClaudeNativeReviewAssignmentsPersistThroughAppStateConversion(t *testing.T) {
+	roles := []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"}
+	assignments := make(map[string]model.ClaudePhaseAssignment)
+	for _, role := range roles {
+		assignments[role] = model.ClaudePhaseAssignment{Model: model.ClaudeModelHaiku}
+	}
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{ClaudePhaseAssignments: claudePhaseAssignmentsToState(assignments)}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := model.Selection{}
+	loadPersistedAssignments(home, &reopened)
+	for _, role := range roles {
+		if got := reopened.ClaudePhaseAssignments[role].Model; got != model.ClaudeModelHaiku {
+			t.Errorf("reopened %s model = %q, want haiku", role, got)
+		}
+	}
+}
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
 // newest-first by CreatedAt timestamp, matching the spec "newest first" ordering.
@@ -270,75 +295,80 @@ func TestRunArgsInstallHelpPrintsInstallSpecificHelp(t *testing.T) {
 	}
 }
 
-func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
+// TestRunArgsRestoreHelpBypassesSystemDetection verifies that an explicit
+// restore help request is answered before system detection, like the install
+// and sync help pre-dispatch: a host with no resolvable home directory must
+// still be able to read the restore usage. The complement case proves a
+// non-help restore invocation still goes through system detection.
+func TestRunArgsRestoreHelpBypassesSystemDetection(t *testing.T) {
+	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
-	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
-	ensureCurrentOSSupported = func() error {
-		return fmt.Errorf("unsupported platform")
+	t.Cleanup(func() {
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{}, fmt.Errorf("$HOME is not defined")
 	}
 
-	root := t.TempDir()
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "proposal.md"), "# Proposal\n")
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "specs", "auth", "spec.md"), "# Spec\n")
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "design.md"), "# Design\n")
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "tasks.md"), "- [ ] 1.1 Work\n")
+	for _, helpFlag := range []string{"--help", "-help", "-h", "--h"} {
+		t.Run(helpFlag, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := RunArgs([]string{"restore", helpFlag}, &buf); err != nil {
+				t.Fatalf("RunArgs(restore %s) error = %v", helpFlag, err)
+			}
+			out := buf.String()
+			for _, want := range []string{
+				"gentle-ai restore [--list | latest | <id>] [--yes]",
+				"list available backups without restoring",
+				"skip confirmation prompt",
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("restore help missing %q; output:\n%s", want, out)
+				}
+			}
+		})
+	}
 
+	// Complement: restore without a help flag must still be dispatched after
+	// system detection, so the failing stub must surface as an error.
 	var buf bytes.Buffer
-	err := RunArgs([]string{"sdd-status", "add-auth", "--cwd", root}, &buf)
-	if err != nil {
-		t.Fatalf("RunArgs(sdd-status) error = %v", err)
-	}
-	if !strings.Contains(buf.String(), "## SDD Status: add-auth") {
-		t.Fatalf("sdd-status output missing markdown status:\n%s", buf.String())
+	err := RunArgs([]string{"restore", "--list"}, &buf)
+	if err == nil || !strings.Contains(err.Error(), "$HOME is not defined") {
+		t.Fatalf("RunArgs(restore --list) error = %v, want detection failure", err)
 	}
 }
 
-func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing.T) {
-	err := RunArgs([]string{"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "1", "--scenarios", "1"}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "read verify report") {
-		t.Fatalf("RunArgs(sdd-verify-validate) error = %v", err)
+// TestHelpFlagSpellings pins the helper's contract: the flag package treats
+// one and two leading dashes as equivalent and both "help" and "h" trigger
+// flag.ErrHelp, so hasHelpFlag must recognise all four spellings and nothing
+// else.
+func TestHelpFlagSpellings(t *testing.T) {
+	for _, arg := range []string{"--help", "-help", "-h", "--h"} {
+		if !hasHelpFlag([]string{arg}) {
+			t.Errorf("hasHelpFlag(%q) = false, want true", arg)
+		}
+	}
+	for _, arg := range []string{"--list", "latest", "--helpx"} {
+		if hasHelpFlag([]string{arg}) {
+			t.Errorf("hasHelpFlag(%q) = true, want false", arg)
+		}
+	}
+	if hasHelpFlag(nil) {
+		t.Error("hasHelpFlag(empty) = true, want false")
 	}
 }
 
-func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
-	origEnsure := ensureCurrentOSSupported
-	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
-	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
-
-	root := t.TempDir()
-	command := exec.Command("git", "init", "-q", root)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, output)
-	}
-	var buf bytes.Buffer
-	if err := RunArgs([]string{"sdd-attempt", "status", "--cwd", root, "--change", "app-attempt"}, &buf); err != nil {
-		t.Fatalf("RunArgs(sdd-attempt) error = %v", err)
-	}
-	if !strings.Contains(buf.String(), `"schema": "gentle-ai.sdd-runtime-status/v1"`) || !strings.Contains(buf.String(), `"change": "app-attempt"`) {
-		t.Fatalf("sdd-attempt output missing native status:\n%s", buf.String())
-	}
-}
-
-func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
-	origEnsure := ensureCurrentOSSupported
-	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
-	ensureCurrentOSSupported = func() error {
-		return fmt.Errorf("unsupported platform")
-	}
-
-	root := t.TempDir()
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "proposal.md"), "# Proposal\n")
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "specs", "auth", "spec.md"), "# Spec\n")
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "design.md"), "# Design\n")
-	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "tasks.md"), "- [ ] 1.1 Work\n")
-
-	var buf bytes.Buffer
-	err := RunArgs([]string{"sdd-continue", "add-auth", "--cwd", root}, &buf)
-	if err != nil {
-		t.Fatalf("RunArgs(sdd-continue) error = %v", err)
-	}
-	if !strings.Contains(buf.String(), "## Native SDD Dispatcher: add-auth") {
-		t.Fatalf("sdd-continue output missing dispatcher markdown:\n%s", buf.String())
+func TestRunArgsNativeSDDCommandsNoLongerDispatch(t *testing.T) {
+	for _, command := range []string{"sdd-status", "sdd-continue", "sdd-attempt"} {
+		t.Run(command, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunArgs([]string{command, "--help"}, &output)
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unknown command %q", command)) {
+				t.Fatalf("RunArgs(%s --help) error = %v, want unknown command; output = %q", command, err, output.String())
+			}
+		})
 	}
 }
 
@@ -355,7 +385,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
-		{command: "review-validate", want: "review-validate requires --cwd and --receipt"},
+		{command: "review-validate", want: "review-validate requires --cwd"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			var output bytes.Buffer
@@ -390,8 +420,13 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
 		t.Fatalf("RunArgs(review --help) error = %v", err)
 	}
-	if !strings.Contains(output.String(), "review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd>") {
+	if !strings.Contains(output.String(), "review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-unachievable|capture-validation|lens-context|capabilities|assess|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport>") {
 		t.Fatalf("compact review help missing:\n%s", output.String())
+	}
+	for _, retired := range []string{"preserve-result", "dispose-result"} {
+		if strings.Contains(output.String(), retired) {
+			t.Fatalf("compact review help still advertises retired %q:\n%s", retired, output.String())
+		}
 	}
 	output.Reset()
 	if err := RunArgs([]string{"review", "repair", "--help"}, &output); err != nil || !strings.Contains(output.String(), "provider-owned") {
@@ -503,28 +538,6 @@ func TestTuiSyncStrictTDDNilOverrideNoChange(t *testing.T) {
 	}
 }
 
-func TestTuiSyncAppliesSDDProfileStrategyOverride(t *testing.T) {
-	overrides := &model.SyncOverrides{SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive}
-
-	selection := model.Selection{SDDProfileStrategy: model.SDDProfileStrategyGeneratedMulti}
-	applyOverrides(&selection, overrides)
-
-	if selection.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
-		t.Fatalf("Selection.SDDProfileStrategy = %q, want %q", selection.SDDProfileStrategy, model.SDDProfileStrategyExternalSingleActive)
-	}
-}
-
-func TestTuiSyncSDDProfileStrategyEmptyOverrideNoChange(t *testing.T) {
-	overrides := &model.SyncOverrides{}
-
-	selection := model.Selection{SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive}
-	applyOverrides(&selection, overrides)
-
-	if selection.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
-		t.Fatalf("Selection.SDDProfileStrategy changed unexpectedly to %q", selection.SDDProfileStrategy)
-	}
-}
-
 func boolPtr(b bool) *bool { return &b }
 
 func TestTuiSyncTargetAgentsOverridePersistedInstallState(t *testing.T) {
@@ -570,11 +583,244 @@ func TestTuiSyncSelectionPreservesCustomPermissionExclusion(t *testing.T) {
 func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)
-	selection := model.Selection{Preset: model.PresetCustom, Components: []model.ComponentID{}, Skills: []model.SkillID{}, SDDMode: model.SDDModeMulti, StrictTDD: true}
-	result := tuiExecute(selection, planner.ResolvedPlan{}, system.DetectionResult{}, nil)
+	if err := state.Write(home, state.InstallState{RDDMode: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Preset: model.PresetCustom, Components: []model.ComponentID{}, Skills: []model.SkillID{}, StrictTDD: true}
+	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, "", "", "", "", nil)
 	got, err := state.Read(home)
-	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || !got.StrictTDD || len(got.Components) != 0 || len(got.Skills) != 0 {
+	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.StrictTDD || got.RDDMode != "off" || !slices.Equal(got.InstalledAgents, []string{string(model.AgentClaudeCode)}) || len(got.Components) != 0 || len(got.Skills) != 0 {
 		t.Fatalf("persisted selection = %#v, execute err = %v, read err = %v", got, result.Err, err)
+	}
+	persisted, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(persisted, []byte(`"strict_tdd"`)) {
+		t.Fatalf("retired strict_tdd persisted: %s", persisted)
+	}
+}
+
+func TestTUIExecuteWithBackgroundPublishesChoiceAndPreservesState(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+	lastCheck := time.Now().UTC().Add(-time.Hour)
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:    []string{"claude-code"},
+		ManagedAssetDigest: "existing-writer",
+		LastUpdateCheck:    &lastCheck,
+		PendingSync:        true,
+		RDDMode:            "off",
+		BackgroundIntent:   model.OpenCodeBackgroundOff,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{},
+		Preset:     model.PresetCustom,
+	}
+	result := tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
+	if result.Err != nil {
+		t.Fatalf("tuiExecuteWithBackground() error = %v", result.Err)
+	}
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BackgroundIntent != model.OpenCodeBackgroundOn {
+		t.Fatalf("BackgroundIntent = %q, want on", got.BackgroundIntent)
+	}
+	if got.ManagedAssetDigest != "existing-writer" || got.LastUpdateCheck == nil || !got.LastUpdateCheck.Equal(lastCheck) || !got.PendingSync || got.RDDMode != "off" {
+		t.Fatalf("unrelated state was not preserved: %#v", got)
+	}
+}
+
+func TestTUIExecuteWithBackgroundPreservesConcurrentCLIStateMutation(t *testing.T) {
+	home := t.TempDir()
+	candidate := buildAppCandidateBinary(t)
+	setupMockHome(t, home)
+
+	initialRecordedAt := time.Now().UTC().Add(-time.Hour)
+	if err := state.Write(home, state.InstallState{
+		RDDMode:           "off",
+		RDDModeRecordedAt: &initialRecordedAt,
+		BackgroundIntent:  model.OpenCodeBackgroundOff,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	publicationReached := make(chan struct{})
+	releasePublication := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releasePublication) }) }
+	t.Cleanup(release)
+	previousWriteReconciled := appStateWriteReconciled
+	appStateWriteReconciled = func(homeDir string, installState state.InstallState) error {
+		close(publicationReached)
+		<-releasePublication
+		return state.WriteReconciled(homeDir, installState)
+	}
+	t.Cleanup(func() { appStateWriteReconciled = previousWriteReconciled })
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{},
+		Preset:     model.PresetCustom,
+	}
+	resultCh := make(chan pipeline.ExecutionResult, 1)
+	go func() {
+		resultCh <- tuiExecuteWithBackground(selection, planner.ResolvedPlan{}, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
+	}()
+
+	select {
+	case <-publicationReached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("TUI did not reach final state publication")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, candidate, "review", "mode", "enable", "--scope", "global")
+	command.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("candidate review mode enable succeeded while TUI owned the install-state transaction:\n%s", output)
+	}
+	intermediate, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read state after contended candidate review mode enable: %v", err)
+	}
+	if intermediate.RDDMode != "off" || intermediate.RDDModeRecordedAt == nil || !intermediate.RDDModeRecordedAt.Equal(initialRecordedAt) {
+		t.Fatalf("contended candidate review mode enable changed persisted state: %#v", intermediate)
+	}
+
+	release()
+	select {
+	case result := <-resultCh:
+		if result.Err != nil {
+			t.Fatalf("tuiExecuteWithBackground() error = %v", result.Err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("TUI did not finish final state publication")
+	}
+
+	command = exec.CommandContext(ctx, candidate, "review", "mode", "enable", "--scope", "global")
+	command.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	output, err = command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("candidate review mode enable retry failed: %v\n%s", err, output)
+	}
+
+	final, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("read final install state: %v", err)
+	}
+	if final.RDDMode != "on" || final.RDDModeRecordedAt == nil || !final.RDDModeRecordedAt.After(initialRecordedAt) || final.BackgroundIntent != model.OpenCodeBackgroundOn || !final.SelectionConfigured || final.Preset != model.PresetCustom || !slices.Equal(final.InstalledAgents, []string{string(model.AgentOpenCode)}) {
+		t.Fatalf("final install state lost retried CLI review-mode mutation or TUI-owned fields: %#v", final)
+	}
+}
+
+func buildAppCandidateBinary(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "gentle-ai")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	// A cold build of the whole binary on a shared CI runner can exceed
+	// 30s; the cap only guards against a hung toolchain, not build speed.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/gentle-ai")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build candidate binary: %v\n%s", err, output)
+	}
+	return binary
+}
+
+func TestTuiInstallOnThenSyncRefreshesCanonicalAndRefusesTamperedOpenCodeActivation(t *testing.T) {
+	home := t.TempDir()
+	previousUserHomeDir := appUserHomeDir
+	appUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { appUserHomeDir = previousUserHomeDir })
+	binDir := writeFakeOpenCodeRuntime(t)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD}, SDDMode: model.SDDModeSingle}
+	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentPersona, model.ComponentSDD}}
+	installResult := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
+	if installResult.Err != nil {
+		t.Fatalf("TUI install error = %v", installResult.Err)
+	}
+
+	// Issue #3209: the managed launcher name is host-dependent.
+	launcher := opencodeactivation.ManagedLauncherPaths(home, runtime.GOOS)[0]
+	before, err := os.ReadFile(launcher)
+	if err != nil {
+		t.Fatalf("ReadFile(launcher): %v", err)
+	}
+	if !strings.Contains(string(before), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS") {
+		t.Fatalf("TUI install launcher missing background environment: %s", before)
+	}
+	// Issue #3451: a generated launcher for an older OpenCode target is still
+	// managed and refreshed in place. The old target must stay runnable because
+	// sync probes the runtime through the launcher already on process PATH.
+	resolvedBinDir, err := filepath.EvalSymlinks(binDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(OpenCode bin): %v", err)
+	}
+	oldBinDir, err := filepath.EvalSymlinks(writeFakeOpenCodeRuntime(t))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(old OpenCode bin): %v", err)
+	}
+	if !strings.Contains(string(before), resolvedBinDir) {
+		t.Fatalf("TUI install launcher does not target %q: %s", resolvedBinDir, before)
+	}
+	staleTarget := strings.ReplaceAll(string(before), resolvedBinDir, oldBinDir)
+	if err := os.WriteFile(launcher, []byte(staleTarget), 0o755); err != nil {
+		t.Fatalf("WriteFile(stale-target launcher): %v", err)
+	}
+
+	changed, err := tuiSync(home)(nil)
+	if err != nil {
+		t.Fatalf("TUI sync error = %v", err)
+	}
+	after, err := os.ReadFile(launcher)
+	if err != nil {
+		t.Fatalf("ReadFile(refreshed launcher): %v", err)
+	}
+	if string(after) != string(before) || !slices.Contains(changed, launcher) {
+		t.Fatalf("TUI sync launcher/changed files = %q/%v, want refreshed launcher and changed path", after, changed)
+	}
+
+	// A hand-edited launcher is no longer the generated one: sync refuses it
+	// and leaves the user's bytes in place.
+	tampered := strings.Replace(string(before), "=true", "=stale", 1)
+	if err := os.WriteFile(launcher, []byte(tampered), 0o755); err != nil {
+		t.Fatalf("WriteFile(tampered launcher): %v", err)
+	}
+	if _, err := tuiSync(home)(nil); err == nil || !strings.Contains(err.Error(), "user-owned OpenCode launcher collision") {
+		t.Fatalf("TUI sync error = %v, want user-owned launcher refusal", err)
+	}
+	if preserved, err := os.ReadFile(launcher); err != nil || string(preserved) != tampered {
+		t.Fatalf("tampered launcher after refused sync = %q, %v; want preserved", preserved, err)
+	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	settings, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(OpenCode settings): %v", err)
+	}
+	if !strings.Contains(string(settings), `\u003c!-- gentle-ai:opencode-background-subagents --\u003e`) {
+		t.Fatalf("TUI sync did not preserve OpenCode background policy in SDD settings")
+	}
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if persisted.BackgroundIntent != model.OpenCodeBackgroundOn {
+		t.Fatalf("BackgroundIntent = %q, want on after TUI install and sync", persisted.BackgroundIntent)
 	}
 }
 
@@ -602,14 +848,8 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 	}
 
 	assignments := map[string]model.ClaudeModelAlias{
-		"sdd-explore": model.ClaudeModelHaiku,
-		"sdd-propose": model.ClaudeModelHaiku,
-		"sdd-spec":    model.ClaudeModelHaiku,
-		"sdd-design":  model.ClaudeModelHaiku,
-		"sdd-tasks":   model.ClaudeModelHaiku,
-		"sdd-apply":   model.ClaudeModelHaiku,
-		"sdd-verify":  model.ClaudeModelHaiku,
-		"sdd-archive": model.ClaudeModelHaiku,
+		"review-risk": model.ClaudeModelHaiku,
+		"jd-judge-a":  model.ClaudeModelHaiku,
 		"default":     model.ClaudeModelHaiku,
 	}
 
@@ -624,31 +864,33 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		t.Fatal("tuiSync Claude model config changed 0 files, want Claude assets written")
 	}
 
-	applyAgent := filepath.Join(home, ".claude", "agents", "sdd-apply.md")
-	body, err := os.ReadFile(applyAgent)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
-	}
-	if !strings.Contains(string(body), "model: haiku") {
-		t.Fatalf("sdd-apply agent did not receive selected model; got:\n%s", body)
+	for _, name := range []string{"review-risk.md", "jd-judge-a.md"} {
+		path := filepath.Join(home, ".claude", "agents", name)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", path, err)
+		}
+		if !strings.Contains(string(body), "model: haiku") {
+			t.Fatalf("%s did not receive selected model; got:\n%s", name, body)
+		}
 	}
 
-	workflowPath := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
-	body, err = os.ReadFile(workflowPath)
+	persisted, err := state.Read(home)
 	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", workflowPath, err)
+		t.Fatal(err)
+	}
+	for key, want := range assignments {
+		if got := persisted.ClaudeModelAssignments[key]; got != string(want) {
+			t.Fatalf("ClaudeModelAssignments[%s] = %q, want %q", key, got, want)
+		}
+	}
+	promptPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	body, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", promptPath, err)
 	}
 	if strings.Contains(string(body), "| orchestrator |") {
-		t.Fatalf("lazy SDD workflow should not expose orchestrator as a configurable model row; got:\n%s", body)
-	}
-	for _, want := range []string{
-		"| sdd-apply | haiku | default | Implementation |",
-		"| default | haiku | default | SDD/JD phase fallback |",
-		"Gentle AI does not configure the main orchestrator model",
-	} {
-		if !strings.Contains(string(body), want) {
-			t.Fatalf("lazy SDD workflow missing %q; got:\n%s", want, body)
-		}
+		t.Fatalf("Claude parent prompt should not expose orchestrator as a configurable model row; got:\n%s", body)
 	}
 }
 
@@ -657,7 +899,7 @@ func TestTuiSyncModelConfigPropagatesAssignmentWriteFailure(t *testing.T) {
 	original := state.InstallState{
 		InstalledAgents:          []string{string(model.AgentClaudeCode)},
 		CommunityToolsConfigured: true,
-		ClaudeModelAssignments:   map[string]string{"sdd-apply": "haiku"},
+		ClaudeModelAssignments:   map[string]string{"review-risk": "haiku"},
 	}
 	if err := state.Write(home, original); err != nil {
 		t.Fatalf("state.Write: %v", err)
@@ -675,7 +917,7 @@ func TestTuiSyncModelConfigPropagatesAssignmentWriteFailure(t *testing.T) {
 	_, err := tuiSync(home)(&model.SyncOverrides{
 		TargetAgents: []model.AgentID{model.AgentClaudeCode},
 		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
-			"sdd-apply": model.ClaudeModelSonnet,
+			"review-risk": model.ClaudeModelSonnet,
 		},
 	})
 	if err == nil {
@@ -698,17 +940,11 @@ func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
 	}
 
 	phaseAssignments := model.ClaudePhaseAssignmentsFromLegacy(map[string]model.ClaudeModelAlias{
-		"sdd-explore": model.ClaudeModelSonnet,
-		"sdd-propose": model.ClaudeModelSonnet,
-		"sdd-spec":    model.ClaudeModelSonnet,
-		"sdd-design":  model.ClaudeModelSonnet,
-		"sdd-tasks":   model.ClaudeModelSonnet,
-		"sdd-apply":   model.ClaudeModelSonnet,
-		"sdd-verify":  model.ClaudeModelSonnet,
-		"sdd-archive": model.ClaudeModelSonnet,
+		"review-risk": model.ClaudeModelSonnet,
+		"jd-judge-a":  model.ClaudeModelSonnet,
 		"default":     model.ClaudeModelSonnet,
 	})
-	phaseAssignments["sdd-apply"] = model.ClaudePhaseAssignment{
+	phaseAssignments["review-risk"] = model.ClaudePhaseAssignment{
 		Model:  model.ClaudeModelSonnet,
 		Effort: model.ClaudeEffortMax,
 	}
@@ -728,45 +964,45 @@ func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Read: %v", err)
 	}
-	applyState, ok := persisted.ClaudePhaseAssignments["sdd-apply"]
+	reviewState, ok := persisted.ClaudePhaseAssignments["review-risk"]
 	if !ok {
-		t.Fatalf("persisted state missing claude_phase_assignments.sdd-apply: %#v", persisted.ClaudePhaseAssignments)
+		t.Fatalf("persisted state missing claude_phase_assignments.review-risk: %#v", persisted.ClaudePhaseAssignments)
 	}
-	if applyState.Model != string(model.ClaudeModelSonnet) || applyState.Effort != string(model.ClaudeEffortMax) {
-		t.Fatalf("persisted sdd-apply = %#v, want sonnet/max", applyState)
+	if reviewState.Model != string(model.ClaudeModelSonnet) || reviewState.Effort != string(model.ClaudeEffortMax) {
+		t.Fatalf("persisted review-risk = %#v, want sonnet/max", reviewState)
 	}
 	if persisted.ClaudeModelAssignments != nil {
 		t.Fatalf("legacy claude_model_assignments should be cleared when phase assignments are persisted; got %#v", persisted.ClaudeModelAssignments)
 	}
 
-	applyAgent := filepath.Join(home, ".claude", "agents", "sdd-apply.md")
-	body, err := os.ReadFile(applyAgent)
+	reviewAgent := filepath.Join(home, ".claude", "agents", "review-risk.md")
+	body, err := os.ReadFile(reviewAgent)
 	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
+		t.Fatalf("ReadFile(%s): %v", reviewAgent, err)
 	}
 	for _, want := range []string{"model: sonnet", "effort: max"} {
 		if !strings.Contains(string(body), want) {
-			t.Fatalf("sdd-apply agent missing %q; got:\n%s", want, body)
+			t.Fatalf("review-risk agent missing %q; got:\n%s", want, body)
 		}
 	}
 
-	archiveAgent := filepath.Join(home, ".claude", "agents", "sdd-archive.md")
-	body, err = os.ReadFile(archiveAgent)
+	judgeAgent := filepath.Join(home, ".claude", "agents", "jd-judge-a.md")
+	body, err = os.ReadFile(judgeAgent)
 	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", archiveAgent, err)
+		t.Fatalf("ReadFile(%s): %v", judgeAgent, err)
 	}
-	if strings.Contains(string(body), "effort:") {
-		t.Fatalf("default-effort sdd-archive agent should omit effort frontmatter; got:\n%s", body)
+	if !strings.Contains(string(body), "model: sonnet") || strings.Contains(string(body), "effort:") {
+		t.Fatalf("default-effort judge should have model but omit effort frontmatter; got:\n%s", body)
 	}
 
 	beforeState := persisted.ClaudePhaseAssignments
-	beforeApply, err := os.ReadFile(applyAgent)
+	beforeReview, err := os.ReadFile(reviewAgent)
 	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
+		t.Fatalf("ReadFile(%s): %v", reviewAgent, err)
 	}
-	beforeArchive, err := os.ReadFile(archiveAgent)
+	beforeJudge, err := os.ReadFile(judgeAgent)
 	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", archiveAgent, err)
+		t.Fatalf("ReadFile(%s): %v", judgeAgent, err)
 	}
 	beforeAgentFiles := filesUnder(t, filepath.Join(home, ".claude", "agents"))
 
@@ -792,19 +1028,19 @@ func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
 	if !reflect.DeepEqual(persisted.ClaudePhaseAssignments, beforeState) {
 		t.Fatalf("ClaudePhaseAssignments changed after second sync: got %#v want %#v", persisted.ClaudePhaseAssignments, beforeState)
 	}
-	afterApply, err := os.ReadFile(applyAgent)
+	afterReview, err := os.ReadFile(reviewAgent)
 	if err != nil {
-		t.Fatalf("ReadFile(%s) after second sync: %v", applyAgent, err)
+		t.Fatalf("ReadFile(%s) after second sync: %v", reviewAgent, err)
 	}
-	if !bytes.Equal(afterApply, beforeApply) {
-		t.Fatalf("sdd-apply agent changed after idempotent sync")
+	if !bytes.Equal(afterReview, beforeReview) {
+		t.Fatalf("review-risk agent changed after idempotent sync")
 	}
-	afterArchive, err := os.ReadFile(archiveAgent)
+	afterJudge, err := os.ReadFile(judgeAgent)
 	if err != nil {
-		t.Fatalf("ReadFile(%s) after second sync: %v", archiveAgent, err)
+		t.Fatalf("ReadFile(%s) after second sync: %v", judgeAgent, err)
 	}
-	if !bytes.Equal(afterArchive, beforeArchive) {
-		t.Fatalf("sdd-archive agent changed after idempotent sync")
+	if !bytes.Equal(afterJudge, beforeJudge) {
+		t.Fatalf("jd-judge-a agent changed after idempotent sync")
 	}
 }
 
@@ -1376,6 +1612,7 @@ func TestRunArgs_UpgradeSkipsSelfUpdate(t *testing.T) {
 }
 
 func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
+	assumeInteractiveTTY(t)
 	// NOTE: modifies package-level vars; must not run in parallel.
 	origSelfUpdate := selfUpdateFn
 	origDetect := detectSystem
@@ -1419,6 +1656,37 @@ func TestRunArgs_TUISkipsSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestRunArgs_TUIFailsClosedOnUnreadableState(t *testing.T) {
+	assumeInteractiveTTY(t)
+	home := t.TempDir()
+	setupMockHome(t, home)
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(state.Path(home), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	origDetect, origEnsure, origRunTUI := detectSystem, ensureCurrentOSSupported, runTUI
+	t.Cleanup(func() {
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+		runTUI = origRunTUI
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	runTUI = func(tea.Model, ...tea.ProgramOption) (tea.Model, error) {
+		t.Fatal("runTUI called with unreadable state")
+		return nil, nil
+	}
+
+	if err := RunArgs(nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "read install state") {
+		t.Fatalf("RunArgs(TUI) error = %v, want unreadable state error", err)
+	}
+}
+
 func TestIsExplicitUpdateFlow(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1456,11 +1724,21 @@ func setupMockHome(t *testing.T, home string) {
 	os.Setenv("USERPROFILE", home)
 }
 
+// TestTUIExecuteReturnsStatePersistenceFailure verifies that the TUI applies
+// the same asset compensation as the CLI when state persistence fails.
 func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)
 	if err := state.Write(home, state.InstallState{}); err != nil {
 		t.Fatal(err)
+	}
+	originalState, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, err := os.ReadFile(configPath); !os.IsNotExist(err) {
+		t.Fatalf("pre-install config read error = %v, want absent", err)
 	}
 	statePath := state.Path(home)
 	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
@@ -1470,10 +1748,64 @@ func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
 	if err := os.Symlink(target, statePath); err != nil {
 		t.Skipf("state symlink unavailable: %v", err)
 	}
+	binDir := writeFakeOpenCodeRuntime(t)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	result := tuiExecute(model.Selection{CommunityTools: []model.CommunityToolID{}}, planner.ResolvedPlan{}, system.DetectionResult{}, nil)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{}}
+	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}
+	result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
 	if result.Err == nil || !strings.Contains(result.Err.Error(), "persist install state") {
 		t.Fatalf("tuiExecute() error = %v, want state persistence failure", result.Err)
+	}
+	if _, readErr := os.ReadFile(configPath); !os.IsNotExist(readErr) {
+		t.Fatalf("config after failed TUI install read error = %v, want absent", readErr)
+	}
+	if _, readErr := os.Stat(filepath.Join(home, ".gentle-ai", "bin", "opencode")); !os.IsNotExist(readErr) {
+		t.Fatalf("launcher after failed TUI install stat error = %v, want absent", readErr)
+	}
+	finalState, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(finalState) != string(originalState) {
+		t.Fatalf("state after failed TUI install changed:\n got %s\nwant %s", finalState, originalState)
+	}
+}
+
+// TestTUIExecuteRollsBackOnMalformedState verifies that an unreadable state
+// cannot leave managed assets or background activation without publication.
+func TestTUIExecuteRollsBackOnMalformedState(t *testing.T) {
+	home := t.TempDir()
+	setupMockHome(t, home)
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	malformedState := []byte("{not valid json")
+	if err := os.WriteFile(state.Path(home), malformedState, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := writeFakeOpenCodeRuntime(t)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{}}
+	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}
+	result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOn, "", "", nil)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "read persisted install state") {
+		t.Fatalf("tuiExecute() error = %v, want state read failure", result.Err)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, ".gentle-ai", "bin", "opencode")); !os.IsNotExist(err) {
+		t.Fatalf("launcher after failed TUI install stat error = %v, want absent", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode settings after failed TUI install stat error = %v, want absent", err)
+	}
+	gotState, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotState) != string(malformedState) {
+		t.Fatalf("state after failed TUI install = %q, want original malformed content %q", gotState, malformedState)
 	}
 }
 
@@ -1572,11 +1904,11 @@ func TestApplyOverrides_CodexCarrilModelAssignments(t *testing.T) {
 	if len(sel.CodexCarrilModelAssignments) != len(carrilModels) {
 		t.Fatalf("CodexCarrilModelAssignments len = %d, want %d", len(sel.CodexCarrilModelAssignments), len(carrilModels))
 	}
-	if sel.CodexCarrilModelAssignments["sdd-cheap"] != "gpt-5.6-luna" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-cheap] = %q, want gpt-5.6-luna", sel.CodexCarrilModelAssignments["sdd-cheap"])
+	if sel.CodexCarrilModelAssignments["sdd-cheap"] != "gpt-6.1-luna" {
+		t.Errorf("CodexCarrilModelAssignments[sdd-cheap] = %q, want gpt-6.1-luna", sel.CodexCarrilModelAssignments["sdd-cheap"])
 	}
-	if sel.CodexCarrilModelAssignments["sdd-strong"] != "gpt-5.6-sol" {
-		t.Errorf("CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-5.6-sol", sel.CodexCarrilModelAssignments["sdd-strong"])
+	if sel.CodexCarrilModelAssignments["sdd-strong"] != "gpt-6.1-sol" {
+		t.Errorf("CodexCarrilModelAssignments[sdd-strong] = %q, want gpt-6.1-sol", sel.CodexCarrilModelAssignments["sdd-strong"])
 	}
 }
 
@@ -1626,24 +1958,26 @@ func TestTuiSyncMigratesLegacyCodexCarrilDefaults(t *testing.T) {
 		changedSet[path] = true
 	}
 
-	wantProfiles := map[string][]string{
-		"sdd-strong.config.toml": {`model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"`},
-		"sdd-mid.config.toml":    {`model = "gpt-5.6-terra"`, `model_reasoning_effort = "medium"`},
-		"sdd-cheap.config.toml":  {`model = "gpt-5.6-luna"`, `model_reasoning_effort = "high"`},
+	promptPath := filepath.Join(home, ".codex", "AGENTS.md")
+	body, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, wantContent := range wantProfiles {
-		path := filepath.Join(home, ".codex", name)
-		body, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", path, err)
+	for _, row := range []string{
+		"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+		"| `odd-worker` | `gpt-6.1-luna` | `high` |",
+		"| `odd-verify` | `gpt-6.1-sol` | `medium` |",
+	} {
+		if !strings.Contains(string(body), row) {
+			t.Errorf("migrated Codex routing missing %q", row)
 		}
-		for _, want := range wantContent {
-			if !strings.Contains(string(body), want) {
-				t.Fatalf("%s missing %q; got:\n%s", name, want, body)
-			}
-		}
-		if !changedSet[path] {
-			t.Errorf("tuiSync changed files missing %s: %#v", path, changed)
+	}
+	if !changedSet[promptPath] {
+		t.Errorf("tuiSync changed files missing %s: %#v", promptPath, changed)
+	}
+	for _, name := range []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"} {
+		if _, err := os.Stat(filepath.Join(home, ".codex", name)); !os.IsNotExist(err) {
+			t.Errorf("retired profile %s generated: %v", name, err)
 		}
 	}
 
@@ -1802,6 +2136,7 @@ func writeAppSDDStatusFile(t *testing.T, path string, content string) {
 // reports a successful gentle-ai upgrade, RunArgs calls restartAfterGentleAIUpgrade
 // which (after task 4.6) prints the restart guidance message instead of re-execing.
 func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
+	assumeInteractiveTTY(t)
 	origDetect := detectSystem
 	origEnsure := ensureCurrentOSSupported
 	origRunTUI := runTUI
@@ -1843,6 +2178,7 @@ func TestRunArgs_TUIRestartsAfterGentleAIUpgradeResult(t *testing.T) {
 // state.json has PendingSync=true, RunArgs (TUI path / no args) calls
 // the deferred sync runner and writes PendingSync=false on success.
 func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -1906,6 +2242,7 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 // TestRunArgs_PendingSync_LeavesSetOnFailure verifies that when the deferred
 // sync fails, PendingSync remains true so the next launch retries idempotently.
 func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -1971,6 +2308,7 @@ func TestRunArgs_PendingSync_LeavesSetOnFailure(t *testing.T) {
 // error is printed to stdout and RunArgs does not return an error.
 // This guards against silently swallowed write failures (Issue 2).
 func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2034,6 +2372,7 @@ func TestRunArgs_PendingSync_ClearWriteFailureIsLogged(t *testing.T) {
 // TestRunArgs_NoPendingSync_NoSyncCall verifies that when PendingSync=false,
 // the deferred sync runner is NOT called (no extra sync on a normal launch).
 func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
+	assumeInteractiveTTY(t)
 	home := t.TempDir()
 	setupMockHome(t, home)
 
@@ -2082,6 +2421,166 @@ func TestRunArgs_NoPendingSync_NoSyncCall(t *testing.T) {
 
 	if syncCalled != 0 {
 		t.Errorf("deferredSyncFn called %d times, want 0 (no pending sync)", syncCalled)
+	}
+}
+
+// TestRunArgs_PendingSync_PrintsDoctorAdvisory verifies the TUI self-update
+// deferred path: when the new binary starts and observes PendingSync=true, it
+// prints the doctor advisory after the deferred sync attempt (success or
+// failure). The advisory lets the user verify ecosystem health against the
+// post-upgrade state. Per #1901, this reuses the existing PendingSync signal
+// rather than introducing a new persisted flag.
+func TestRunArgs_PendingSync_PrintsDoctorAdvisory(t *testing.T) {
+	assumeInteractiveTTY(t)
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     true,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	deferredSyncFn = func() error {
+		return nil // successful sync
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Run 'gentle-ai doctor' to verify ecosystem health after upgrade") {
+		t.Errorf("stdout = %q, want doctor advisory when PendingSync=true on launch", out)
+	}
+}
+
+// TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure verifies that
+// the doctor advisory is printed regardless of deferred sync outcome. The
+// advisory is informational and complements the sync outcome (not a replacement).
+func TestRunArgs_PendingSync_PrintsDoctorAdvisoryEvenOnSyncFailure(t *testing.T) {
+	assumeInteractiveTTY(t)
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     true,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	deferredSyncFn = func() error {
+		return fmt.Errorf("simulated network error")
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v (deferred sync failure must be non-fatal)", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Run 'gentle-ai doctor' to verify ecosystem health after upgrade") {
+		t.Errorf("stdout = %q, want doctor advisory even when deferred sync fails", out)
+	}
+}
+
+// TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory verifies that the
+// doctor advisory is NOT printed on a normal launch where PendingSync=false.
+// The advisory is gated strictly on the post-upgrade signal.
+func TestRunArgs_NoPendingSync_DoesNotPrintDoctorAdvisory(t *testing.T) {
+	assumeInteractiveTTY(t)
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"claude-code"},
+		PendingSync:     false,
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	origSelf := selfUpdateFn
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origRunTUI := runTUI
+	origDeferredSync := deferredSyncFn
+	t.Cleanup(func() {
+		selfUpdateFn = origSelf
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		runTUI = origRunTUI
+		deferredSyncFn = origDeferredSync
+	})
+
+	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
+		return nil
+	}
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, nil
+	}
+	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
+		return m, nil
+	}
+
+	var buf bytes.Buffer
+	if err := RunArgs(nil, &buf); err != nil {
+		t.Fatalf("RunArgs(nil) error = %v", err)
+	}
+
+	if strings.Contains(buf.String(), "ecosystem health after upgrade") {
+		t.Errorf("stdout must NOT contain doctor advisory on a normal launch (PendingSync=false):\n%s", buf.String())
 	}
 }
 
@@ -2134,4 +2633,101 @@ func TestCustomClearRoundTripLeavesFutureSyncInPreserveMode(t *testing.T) {
 	if future.CodexOrchestratorAssignment != nil || future.ClearCodexOrchestratorAssignment {
 		t.Fatalf("future sync did not return to preserve mode: assignment=%#v clear=%v", future.CodexOrchestratorAssignment, future.ClearCodexOrchestratorAssignment)
 	}
+}
+
+// ─── Issue #535: upgrade argument validation pre-effect gate ───────────────
+
+// installUpgradeSentinels replaces every effect that the upgrade preflight
+// MUST NOT reach, with stubs that fail the test if invoked. It restores the
+// originals on cleanup. HOME is isolated to a temp dir so the parser cannot
+// accidentally trigger real home-directory effects.
+func installUpgradeSentinels(t *testing.T, home string) {
+	t.Helper()
+	setupMockHome(t, home)
+
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origSelfUpdate := selfUpdateFn
+	origCheckFiltered := updateCheckFiltered
+	origCheckAll := updateCheckAll
+	origUpgradeExecute := upgradeExecute
+	origUpgradeExecuteWithOptions := upgradeExecuteWithOptions
+	t.Cleanup(func() {
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		selfUpdateFn = origSelfUpdate
+		updateCheckFiltered = origCheckFiltered
+		updateCheckAll = origCheckAll
+		upgradeExecute = origUpgradeExecute
+		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
+	})
+
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("ensureCurrentOSSupported must not run for this upgrade invocation")
+	}
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{}, fmt.Errorf("detectSystem must not run for this upgrade invocation")
+	}
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
+		return fmt.Errorf("selfUpdate must not run for this upgrade invocation")
+	}
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+		t.Fatalf("updateCheckFiltered must not run for this upgrade invocation")
+		return nil
+	}
+	updateCheckAll = func(context.Context, string, system.PlatformProfile) []update.UpdateResult {
+		t.Fatalf("updateCheckAll must not run for this upgrade invocation")
+		return nil
+	}
+	upgradeExecute = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, ...io.Writer) upgrade.UpgradeReport {
+		t.Fatalf("upgradeExecute must not run for this upgrade invocation")
+		return upgrade.UpgradeReport{}
+	}
+	upgradeExecuteWithOptions = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, upgrade.ExecuteOptions) upgrade.UpgradeReport {
+		t.Fatalf("upgradeExecuteWithOptions must not run for this upgrade invocation")
+		return upgrade.UpgradeReport{}
+	}
+}
+
+// TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect proves unsupported
+// dash args (--verbose) and the #535 remediation (--help, -h) are rejected
+// before every effect: identifiable token, errors.Is, zero effects.
+func TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect(t *testing.T) {
+	for _, token := range []string{"--verbose", "--help", "-h"} {
+		t.Run(token, func(t *testing.T) {
+			installUpgradeSentinels(t, t.TempDir())
+			var buf bytes.Buffer
+			err := RunArgs([]string{"upgrade", token}, &buf)
+			if err == nil {
+				t.Fatalf("RunArgs(upgrade %s) error = nil, want error", token)
+			}
+			want := fmt.Sprintf(`unsupported upgrade argument: %q`, token)
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("RunArgs(upgrade %s) error = %v, want %q", token, err, want)
+			}
+			if !errors.Is(err, errUnsupportedUpgradeArgument) {
+				t.Fatalf("RunArgs(upgrade %s) error not identifiable: %v", token, err)
+			}
+		})
+	}
+}
+
+// writeFakeOpenCodeRuntime places a fake opencode executable for the host OS
+// on a fresh dir and returns that dir. Windows needs a PATHEXT-visible .cmd
+// (there is no execute bit and sh scripts are not executable); issue #3209.
+func writeFakeOpenCodeRuntime(t *testing.T) string {
+	t.Helper()
+	binDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(binDir, "opencode.cmd")
+		if err := os.WriteFile(path, []byte("@echo off\r\necho opencode 1.15.11\r\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return binDir
+	}
+	path := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'opencode 1.15.11\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binDir
 }

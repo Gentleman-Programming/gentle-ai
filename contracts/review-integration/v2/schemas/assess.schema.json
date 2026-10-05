@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/assess.schema.json",
+  "title": "Gentle AI read-only review candidate risk assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "risk", "reasons", "changed_paths", "changed_lines", "candidate", "review_due", "review_due_reason"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-assessment/v1"},
+    "risk": {"enum": ["passive", "medium", "high"]},
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "detail": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "changed_paths": {"type": "integer", "minimum": 0},
+    "changed_lines": {"type": "integer", "minimum": 0},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "consumed"],
+      "properties": {
+        "kind": {"enum": ["current-changes", "base-diff"]},
+        "base_ref": {"type": "string", "minLength": 1},
+        "consumed": {
+          "type": "boolean",
+          "description": "True when this exact candidate identity's terminal review authority was already acknowledged (reviewtransaction.CompactTargetConsumed), the same evidence review status itself consults before offering a fresh START for the identical identity."
+        }
+      }
+    },
+    "review_due": {
+      "type": "boolean",
+      "description": "Whether an orchestrator should run the review preflight now. False when the candidate is consumed or passive, or when it is medium risk under the changed_lines slice budget; true for high risk, or for medium risk at or over reviewtransaction.LargeChangeLines (400) changed_lines. changed_lines is whatever range the caller assessed: run with --base-ref <last reviewed boundary> --committed-only to make it the accumulated ODD slice."
+    },
+    "review_due_reason": {
+      "enum": ["high_risk", "slice_budget_reached", "passive", "under_budget", "already_reviewed"],
+      "description": "The exact rule that produced review_due, in evaluation order: already_reviewed (candidate consumed) beats high_risk, which beats slice_budget_reached, which beats under_budget and passive."
+    },
+    "next_transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "command", "arguments"],
+      "description": "The exact, literally runnable `review status ... --next-transition` preflight continuation. Present only when review_due is true.",
+      "properties": {
+        "operation": {"const": "review.status"},
+        "command": {"type": "string", "minLength": 1},
+        "arguments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "value": {"type": "string"},
+              "token": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    }
+  }
+}

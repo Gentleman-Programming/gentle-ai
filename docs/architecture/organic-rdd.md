@@ -1,168 +1,121 @@
-# Organic RDD — architecture and change record
+# Organic RDD — atomic review architecture
 
-> Technical reference for PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). 154 commits, 340 files, +58,379 / −6,586. For the story behind it, see [the-organic-rdd-story.md](the-organic-rdd-story.md).
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
 
-## 1. What changed at the top
+← [Back to README](../../README.md)
 
-Receipt-Driven Development used to be a control plane. A change was routed into a work-run, the run carried capabilities, and the capabilities decided ceremony. That plane was deleted (`feat!: delete the retired work-routing control plane`) and replaced by three ideas that fit in a paragraph each.
+Receipt-Driven Development (RDD) reviews a finished candidate without taking ownership of delivery. It is deliberately small: native code freezes one worktree candidate, coordinates bounded review, burns completed authority, and returns control to the human.
 
-**Review happens after the candidate, not before the work.** There is no plan to approve, no run to open. You change something, and if it is worth reviewing, a review is offered on the exact bytes you produced.
+> For why this architecture exists at all — and what it cost to arrive at it — read [The story of fixing RDD](the-organic-rdd-story.md) first. This page is the technical half of that story.
 
-**Tier is decided by evidence, never by size.** A thousand-line documentation change is tier 0 and gets no reviewer. Two lines touching authentication are tier 2 and get four. The classifier names its own reason, so the cost is never unexplained.
+## The model
 
-**The switch is a switch.** `gentle-ai review mode disable` means RDD does not exist: nothing blocks, nothing gates, delivery falls to ordinary repository policy. Turning it back on re-validates from the current state rather than resuming stale obligations.
+- **Review follows work.** A candidate exists before review begins; the parent asks native STATUS to preflight that current worktree only.
+- **Native owns review mechanics.** Go derives risk, frozen trees, lenses, provider bindings, admission, refutation, one bounded correction, repository evidence, and targeted validation.
+- **Humans own delivery.** Approval never commits, pushes, opens a PR, or overrides repository policy.
 
-## 2. The lifecycle
+## Atomic transaction lifecycle
 
-```
-review start ──▶ reviewing ──▶ validating ──▶ approved ──▶ gates
-     │              │              │              │
-   frozen       reviewer       verification    receipt
-  candidate      results         evidence      governs
-```
+**The switch is user-owned, and defaults to ON.** RDD is opt-out: unset state
+reports `on` decided by `default`, without persisting a preference. Explicit
+global or clone-local OFF wins. Automation never toggles the mode automatically.
+Use `gentle-ai review mode disable` to opt out; ordinary repository policy
+always governs delivery. Enabling RDD revalidates the current
+candidate instead of resuming stale obligations.
 
-Every transition is bound to an immutable candidate identity. Authority never advances on anything but the exact bytes that were frozen.
-
-**`review start`** freezes the candidate, classifies risk, selects lenses, and creates the authority. It renders the frozen reviewer context *before* committing anything, so a candidate that cannot be expressed as reviewer work never becomes an authority.
-
-**`review capture-result`** admits one reviewer result per lens, bound to the frozen subject hash. `gentle-ai review schema reviewer` emits the schema with a working example.
-
-**`review finalize`** consumes captured results, then verification evidence, then reaches a terminal receipt.
-
-**`review validate --gate <gate>`** is the delivery boundary. Gates are `post-apply`, `pre-commit`, `pre-push`, `pre-pr`, `release`. They discover and validate the same receipt and never launch reviewers.
-
-## 3. The negotiated contract
-
-Two output modes, selected by the presence of `--contract gentle-ai.review-integration/v1`:
-
-| | human form | negotiated form |
-|---|---|---|
-| audience | a person reading a terminal | a tool driving the lifecycle |
-| shape | prose refusals, exit codes | typed JSON envelopes |
-| carries | the reason | the reason, the code, the next action |
-
-**Mode divergence was the largest defect class in this branch.** The two modes emitted different data, the mode was selected by an invisible flag, and nothing told the caller. Four separate community reports traced back to it. It is now guarded: a conformance test fails CI when contract documentation names a schema, command, or field that no code emits, and a parity test requires the negotiated envelope to be at least as specific as the human surface for the same condition.
-
-### Transitions are literally executable
-
-`next_transition` no longer carries only a dotted operation name. Every argument carries its exact argv `token`, and an `execute` transition carries the complete `command`:
-
-```json
-{
-  "kind": "execute",
-  "execute": {
-    "operation": "review.start",
-    "command": "gentle-ai review start --contract=... --target=sha256:... --projection=workspace",
-    "arguments": [
-      { "name": "target", "value": "sha256:...", "token": "--target=sha256:..." }
-    ]
-  }
-}
+```text
+selectorless STATUS -> exact START -> bound collection -> approved -> exact acknowledge-approved (burn) -> ordinary repository policy
 ```
 
-The verb is derived from `reviewIntegrationOperationRegistry`, the same table that already owned the mapping, so there is no second source to drift. Values carrying operator free text are POSIX-quoted, because `review repair` takes `--reason` and `--actor` and joined raw the shell split them into positionals every verb refuses.
+### Preflight and START
 
-A `collect` transition carries tokens too — its arguments *are* the flags of `review capture-result` — but deliberately no `command`, because `--input` points at an artifact that does not exist until a model has run the lens.
+The orchestrator enters this lifecycle once per candidate, after an authorized implementation is complete and normalized and before reporting it complete, whenever the switch reads enabled. It never skips the preflight because the user did not explicitly ask for a review; only a trivial passive documentation-only edit, an explicitly unreviewed candidate, or an already-bound transaction excuses the STATUS call.
 
-## 4. Recovery
+Selectorless STATUS does not scan or resume ambient authority. It preflights the current worktree candidate and returns one exact START invocation. START creates one compact transaction whose lineage, worktree, and target are explicit and immutable.
 
-The governing rule of this branch, stated once:
+The parent retains the lineage, revision, and target returned by START. Every subsequent STATUS, capture, and acknowledgement call uses those exact tokens. An exact active START replay can report `replayed`; a genuinely new START is independent. A burned lineage is never reused.
 
-> **A message may name a command only if running that command resolves the block.**
+This prevents a historical authority, a sibling worktree, or a stale lifecycle response from steering the current candidate.
 
-Naming a dead end is worse than naming nothing. That rule is the reason several fixes here look larger than the defect that prompted them.
+### Cross-repository root continuity
 
-**Scope-changed** at `pre-push` has two classes. One completes assessment and derives diagnostics; the other errors during discovery and previously carried none. Both now name a recovery, and the named recovery is gate-conditional: at `pre-push` over an already-committed delivery, a bare `recover` freezes an empty successor that re-trips the same rule, so the denial names the committed base-diff shape with a derived merge-base rather than a remote ref that can move between reading and running.
+A session rooted in repository A can review an explicitly user-authorized nested target in unrelated repository B. Go resolves the requested path to B's canonical worktree root; adapters remain opaque and never parse authorization or roots. Once B is selected, the host retains B through STATUS, consent, collection, correction, validation, acknowledgement, and burn. Provider-issued tokens remain exact; an invocation without `--cwd` runs with process cwd B.
 
-One sub-case keeps the honest fallback on purpose: when committed content is byte-identical to what was approved and only commit topology changed, no single `recover` expresses it, and naming a two-step chain whose first step does not clear the gate would repeat the defect.
+Opaque `repository_context` can materialize or capture from process cwd A, but remains bound to B. Identical lineage text in A and B names independent authority: approval burns B only and leaves A unchanged. Ordinary repository policy owns delivery, and any explicitly authorized delivery action runs in B only.
 
-**Preflight refusals** in the negotiated envelope collapsed into one opaque code with an empty `required_inputs`. The specific reason now travels in `cause`, set once at the collapse point rather than at eighty call sites. A stale snapshot gets its own code and `next_action: review.status`, because `correct_request` is actively wrong there: no edit to the request makes a stale snapshot fresh.
+Only Claude Code, Codex, OpenCode, and Pi receive this lifecycle. Unsupported runtimes fail before repository or authority mutation.
 
-**Git trust refusals** are typed rather than collapsed. gentle-ai never provisions `safe.directory` and never relaxes an ownership check; the fix is diagnostic only, and detection requires three independent signals from one failure so a miss degrades to the generic message and can never mislabel.
+### Review and acknowledgement
 
-## 5. The kill switch
+Reviewers receive provider-issued immutable context, not live workspace state. Adapters are opaque transport: they do not parse bindings, build prompts, admit findings, or decide workflow state. Only candidate-caused severe findings can block. Native review permits one bounded correction and only a validator that can inspect the frozen trees may return a verdict.
 
-Three consultation points existed in the whole binary, two of them behind `if !negotiated`. Any caller passing `--contract` never received the escape at all, and `internal/sddstatus` consulted it nowhere.
+Review closes on its final captured event. On `approved`, the parent uses bound STATUS to obtain or replay the exact provider-issued `acknowledge-approved` continuation and executes it unchanged. Only that continuation burns the approved authority and its artifacts; it reports the authority as `burned`. No terminal receipt, tombstone, witness, mirror, or delivery authority remains. Unrelated transactions remain untouched.
 
-It now reaches: the negotiated gate for every discovery kind, both non-stale ambiguous compositions, corrupted authority, mixed compact/legacy authority, the SDD remediation obligation, and the SDD archive gate.
+Any non-clean acknowledgement or burn outcome is not a completed review. This includes malformed or empty output, transport failure, post-mutation ambiguity, and the case where terminal authority may already be committed. The parent retains the exact lineage, revision, and target, queries bound STATUS once before any replay, then follows only the returned action. It never falls back to ambient recovery or invents another lineage.
 
-Three invariants hold while disabled:
+## Informational gates
 
-- **It never fabricates approval.** `disabled/unmanaged` keeps `allowed: false`. It exits 0 because it defers, not because it approved.
-- **It never destroys information.** An outcome the gate could not decide says so and carries its typed cause.
-- **An unreadable switch is not a disabled switch.** It resolves to managed, so a damaged or tampered mode record can never manufacture an unmanaged result.
+`review validate` and its named gates are compatibility/informational commands. They do not inspect authority, choose a lineage, allow, approve, or block a delivery.
 
-Declining relayed consent creates no review lineage or receipt. Instead, it atomically records one canonical native candidate-decline authorization in the Git common directory, bound to the frozen candidate identity, trees, paths, modes, base, and untracked proof. With RDD still enabled, that record permits only exact `pre-commit`, `pre-push`, and `pre-pr` delivery under ordinary repository policy and reports `candidate_declined/unmanaged`; it never reports approval and never authorizes release. A changed candidate, base, path, mode, untracked set, publication range, or advertised head cannot inherit the choice. Replaying the exact decline recovers lost output, while corruption or multiple matching records fail closed. The prompt's off-path text still matters: decline is one candidate's unmanaged delivery choice, not the global kill switch, and every later candidate asks again.
+| RDD mode | Result |
+| --- | --- |
+| Enabled | `invalidated/unmanaged` |
+| Disabled | `disabled/unmanaged` |
 
-## 6. Platform work
+Ordinary repository policy remains the delivery mechanism.
 
-**Windows self-upgrade.** It never worked: the routing short-circuited to a binary strategy before the Go check. With Go on PATH it now upgrades through a pinned `go install`, verified by the Go checksum database — a different trust anchor than our minisign key, not a missing one. Linux and macOS keep the authenticated binary download, enforced structurally rather than by ordering: gentle-ai routes through a helper whose only go-install exit is gated on Windows, so declaring `GoImportPath` cannot revive the previously-dead generic rule on every platform at once.
+## Delivery boundary
 
-On every platform, an upgrade now verifies that `go install` wrote where the user actually executes from, and names both absolute paths on mismatch.
+Review completion is evidence about the completed transaction, not delivery authority. Commit, push, PR, release, and archive remain governed by ordinary repository policy and their own explicit authorization. When B was selected from A, any authorized delivery action runs in B only.
 
-**macOS.** Four defects had escaped because CI has no Darwin lane: `/var` path aliasing, `EPERM` under managed profiles, reviewer-result publication on ExFAT, and first-use store contention. All four are now fixed and, for the first time, verified on real hardware.
+## Runtime boundary
 
-**Codex.** The permissions component stopped writing to `~/.codex/config.toml` entirely. It no longer injected a profile; what remained was a migration that removed the `default_permissions` pointer unconditionally while removing the profile table only when empty, so anyone who had customized that profile lost the pointer, kept the table, and Codex refused to start. Probing Codex directly showed every formulation of a surgical fix is also invalid, so the cleanup is gone rather than narrowed.
+The atomic lifecycle is rendered only for Claude Code, OpenCode, Codex, and Pi. Generic and non-RDD runtime guidance keeps ODD routing and makes no review-transport promise. Pi receives the review execution contract through `orchestration/pi.md` in the provider contract bundle, which gentle-pi mirrors and injects at session start; gentle-ai writes nothing into the Pi system prompt.
 
-## 7. The guards
+## Historical compatibility
 
-Ten defects in this branch shared one shape: **tests verified something was emitted, never that a consumer could act on it.** `review recover` is a real verb with real flags and the existence test passed, while the recovery it named dead-ended when run.
+Older contracts and historical artifacts may be read through explicit manual compatibility operations. They do not participate in the ordinary atomic lifecycle, restore burned authority, or decide delivery.
 
-Four mechanical guards now cover that class, all derived from source rather than hand-maintained lists:
+## The full lifecycle, end to end
 
-| Guard | What it proves |
-|---|---|
-| `TestPrePushScopeChangeNamedRecoveryReachesAllow` | reads the recovery out of the frozen diagnostics the denial carries, runs it, requires `allow` |
-| `TestEveryNamedReviewContinuationIsStructurallyReal` | AST-walks refusal strings; every named verb and flag resolves against the real dispatch and `FlagSet` |
-| mode parity in `review_preflight_reason_test.go` | every distinguishing token of the human refusal is recoverable from the negotiated envelope |
-| `scripts/deadcode-ratchet.sh` | fails on a new unreachable function; the 230 already present are frozen |
-| [guard population declarations](guard-population.md) | AST-binds eight scoped population claims to production guards and rejects exact registry drift |
+The organic implementation route, with RDD entering at the end over the frozen candidate:
 
-The ratchet is a ratchet on purpose. Demanding zero before it could exist would have meant it never existed.
+```mermaid
+flowchart TD
+    A["User requests a change<br/>(Claude Code · OpenCode · Codex...)"] --> B{"Implementation<br/>route"}
+    B -->|"understood work,<br/>or no named reason"| C["Direct inline"]
+    B -->|"map needed to decide,<br/>parallel units, or context backstop"| D["Delegated direct<br/>(one bounded worker per unit)"]
+    C --> E["Implementation + tests"]
+    D --> E
+    E --> F{"RDD enabled?<br/>(user-owned, opt-out)"}
+    F -->|"off (explicit)"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
+    F -->|"on (default or explicitly enabled)"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
+    G --> H{"Risk frozen<br/>at START"}
+    H -->|"low"| I["Structural readback<br/>0 lenses · silent"]
+    H -->|"medium"| J["1 focus lens<br/>+ consent"]
+    H -->|"high"| K["Canonical 4R + consent + forecast<br/>Risk · Resilience · Readability · Reliability"]
+    J --> L["Reviewers inspect the immutable candidate<br/>(review inspect-candidate)"]
+    K --> L
+    L --> M{"Severe candidate-caused<br/>findings?"}
+    I --> N["Review outcome: approved<br/>(informational)"]
+    M -->|"no"| N
+    M -->|"yes"| O["One bounded correction<br/>(frozen budget)"]
+    O --> P["Fix validator<br/>(read-only, immutable trees)"]
+    P -->|"passes"| N
+    P -->|"fails with evidence"| Q["Escalated"]
+    P -->|"no access to the diff"| R["Inconclusive: attempt not<br/>consumed, capture again"]
+    R --> P
+    Q --> S["review recover<br/>(authorized successor)"]
+    N --> AK["review.acknowledge-approved<br/>exact one-time token · only this<br/>burns/closes the lineage"]
+    AK --> T["Ordinary repository policy"]
+    T --> U["Commit → Push → PR"]
+    Z --> U
 
-## 8. The friction benchmark
-
-`bench/` is a separate Go module that drives a real `gentle-ai` binary through 36 end-to-end journeys and reports where the operator gets stuck. It is the evidence behind every friction claim in this branch, and it ships so the claims are reproducible rather than asserted.
-
+    style N fill:#2D4F67,color:#fff
+    style AK fill:#2D4F67,color:#fff
+    style Q fill:#B8860B,color:#fff
+    style U fill:#2D4F67,color:#fff
 ```
-cd bench && go run . run --binary $(command -v gentle-ai)
-```
 
-It classifies every block into exactly one class, and the split is the measurement, not the total:
-
-| Class | Meaning |
-|---|---|
-| `in_band` | the refusal names a command that runs and clears it |
-| `out_of_band` | the operator is stopped with nothing runnable named |
-| `by_design` | a correct refusal for which no command can honestly exist |
-| `dead_end` | nothing resolves it, anywhere |
-| `self_recovered` | the flow continued with no extra command |
-
-Two rules keep it from grading itself generously. Mechanical evidence outranks corpus annotation: a named runnable command classifies as `in_band` regardless of what the journey declared. And a `by_design` declaration costs a shape from a closed vocabulary plus the exact substring of the product's own next-action text, which is **verified present in the emitted bytes** before the exemption applies. A refusal with nothing to quote cannot be exempted, so an invalid declaration can only make a block look worse.
-
-Two harness defects found by pointing it at itself are worth knowing about, because both produced plausible numbers:
-
-- A lifecycle gate answering `disabled/unmanaged` at exit 0 was counted as an out-of-band block. It carries `allowed: false` because RDD is declining to express an opinion, not declining the delivery. The kill switch working was being reported as friction the product caused.
-- A missing `GIT_TRACE` file was read as unobservable rather than zero, so one journey that legitimately spawns no git erased the subprocess total for the whole corpus.
-
-`bench/README.md` carries the honesty contract: ten entries naming what the instrument does not measure, cannot measure, or measures with a known bias. Current known gap: `human_surface_bytes` varies by a byte or two across runs because `os.MkdirTemp` suffixes vary in length and two journeys quote that path back. Every classification and every count is stable.
-
-## 9. Contract surface
-
-`contracts/review-integration/v1` is published and digest-pinned. Three digests moved in this branch, each deliberately:
-
-| Artifact | Change | Observable by a pinned consumer |
-|---|---|---|
-| `schemas/status.schema.json` | `command` property, required `token` on execute arguments, corrected `$comment` | added optional properties; strict validators still accept |
-| `fixtures/status.fixture.json` | token keys on collect arguments | additive; `name`/`value` byte-identical |
-| `schemas/failure.schema.json` | not pinned; gained `cause` usage | none |
-
-`recovery_required_inputs` remains pinned at exactly six entries, which is why the gate-conditional recovery selectors are rendered in the human message and deliberately not projected into the negotiated envelope.
-
-## 10. Known open
-
-- **SDD `verify` still blocks with reviews off.** The archive gate honors the switch; `applyPreVerifyReviewRouting` blocks verify one phase earlier with `next: "review"`, and `review start` refuses. Unblocking it decides whether verify may run with no review at all.
-- **The `sdd-archive` assets still require `reviewGate.result: allow`** in prose, so the agent-facing contract blocks where the native projection now allows.
-- **`review status` and `--next-transition` do not carry escalation numbers.** `finalize` and the gates do.
-- **Reviewer-result authoring is discover-by-iteration strict.** `finding.lens` must be the unprefixed name; supplying the selector's own output string is rejected.
-- **`max` reasoning effort does not exist.** The Codex effort type accepts `low`, `medium`, `high`, `xhigh`. Codex itself validates nothing, so an unknown value would be silently ignored rather than rejected.
+Native review transitions own repository identity, candidate scope, lifecycle transitions and safe continuations. When scope changes or an operation is interrupted, use provider-owned status and recovery -- never infer authority from agent narration. Compact receipts, `FINALIZE` and delivery gates are retired; `review validate` and gate compatibility surfaces are unmanaged and never govern delivery.

@@ -27,8 +27,7 @@
     "reconciliation": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/reconciliation"},
     "eligibility": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/action_eligibility"},
     "next_transition": {"$ref": "#/$defs/next_transition"},
-    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
-    "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"}
+    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"}
   },
   "$defs": {
     "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -37,7 +36,7 @@
       "properties": {
         "kind": {"enum": ["execute", "collect", "stop"]},
         "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
-        "execute": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_execution"},
+        "execute": {"$ref": "transition-execution.schema.json"},
         "collect": {"$ref": "#/$defs/transition_collection"},
         "correction_request": {"$ref": "../../v1/schemas/correction-plan-request.schema.json"}
       },
@@ -61,7 +60,7 @@
         "capture_operation": {"type": "string", "minLength": 1},
         "arguments": {
           "type": "array", "minItems": 1,
-          "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}
+          "items": {"$ref": "transition-execution.schema.json#/$defs/transition_argument"}
         },
         "artifact_subject": {"$ref": "artifact-subject.schema.json"},
         "base_tree": {"$ref": "#/$defs/git_tree"},
@@ -99,8 +98,6 @@
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/1"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/2"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/3"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/5"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/6"}
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"}
   ]
 }

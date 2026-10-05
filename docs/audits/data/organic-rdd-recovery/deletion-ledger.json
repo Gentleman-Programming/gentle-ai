@@ -39,6 +39,25 @@
       ]
     },
     {
+      "earlyDeviation": false,
+      "noRetainedInvariant": true,
+      "path": "internal/cli/sdd_attempt.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
       "earlyDeviation": true,
       "noRetainedInvariant": true,
       "path": "internal/cli/work_advance.go",
@@ -370,6 +389,99 @@
       ]
     },
     {
+      "destinationPath": "internal/components/reviewassets/reviewassets_test.go",
+      "destinationProof": [
+        "internal/components/reviewassets/reviewassets_test.go"
+      ],
+      "earlyDeviation": false,
+      "noRetainedInvariant": false,
+      "path": "internal/components/sdd/bounded_review_contract_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/components/reviewassets/contract.go",
+      "destinationProof": [
+        "internal/components/reviewassets/reviewassets_test.go",
+        "internal/providercontractbundle/review_execution_contract_test.go"
+      ],
+      "earlyDeviation": false,
+      "noRetainedInvariant": false,
+      "path": "internal/components/sdd/boundedreview.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/components/reviewassets/install.go",
+      "destinationProof": [
+        "internal/components/reviewassets/install_test.go"
+      ],
+      "earlyDeviation": false,
+      "noRetainedInvariant": false,
+      "path": "internal/components/sdd/inject.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/components/reviewassets/install_test.go",
+      "destinationProof": [
+        "internal/components/reviewassets/install_test.go"
+      ],
+      "earlyDeviation": false,
+      "noRetainedInvariant": false,
+      "path": "internal/components/sdd/inject_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": true,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
       "destinationPath": "internal/components/agentguidance/routing.go",
       "destinationProof": [
         "internal/components/agentguidance/routing_test.go"
@@ -487,6 +599,44 @@
         },
         {
           "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "noRetainedInvariant": true,
+      "path": "internal/sddstatus/runtime_ledger.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "earlyDeviation": false,
+      "noRetainedInvariant": true,
+      "path": "internal/sddstatus/runtime_ledger_test.go",
+      "publication": [
+        {
+          "present": true,
+          "ref": "origin/main"
+        },
+        {
+          "present": true,
           "ref": "main"
         },
         {

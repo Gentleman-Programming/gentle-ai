@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.4.schema.json",
+  "title": "Gentle AI review integration capabilities protocol 2.4",
+  "type": "object", "additionalProperties": false,
+  "required": [
+    "schema", "contract", "protocol", "package", "build", "executable", "operations", "gates",
+    "projections", "schemas", "features", "compatibility"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.capabilities/v2.4"},
+    "contract": {"$ref": "capabilities-v2.3.schema.json#/properties/contract"},
+    "protocol": {
+      "type": "object", "additionalProperties": false, "required": ["major", "minor"],
+      "properties": {"major": {"const": 2}, "minor": {"const": 4}}
+    },
+    "package": {"$ref": "capabilities-v2.3.schema.json#/properties/package"},
+    "build": {"$ref": "capabilities-v2.3.schema.json#/properties/build"},
+    "executable": {"$ref": "capabilities-v2.3.schema.json#/properties/executable"},
+    "operations": {"$ref": "capabilities-v2.3.schema.json#/properties/operations"},
+    "gates": {"$ref": "capabilities-v2.3.schema.json#/properties/gates"},
+    "projections": {"$ref": "capabilities-v2.3.schema.json#/properties/projections"},
+    "schemas": {"type": "array", "minItems": 21, "maxItems": 21, "uniqueItems": true, "items": {"enum": [
+      "gentle-ai.review-admitted-result/v2", "gentle-ai.review-artifact-subject/v2",
+      "gentle-ai.review-authority-repair-assessment/v1", "gentle-ai.review-authority-status/v1",
+      "gentle-ai.review-gate-request/v1", "gentle-ai.review-integration.capabilities/v2.4",
+      "gentle-ai.review-integration.consent/v3", "gentle-ai.review-integration.failure/v2",
+      "gentle-ai.review-integration.operation/v2", "gentle-ai.review-integration.projection/v1",
+      "gentle-ai.review-integration.repair/v2", "gentle-ai.review-integration.start/v4",
+      "gentle-ai.review-integration.status/v5", "gentle-ai.review-integration.status/v6",
+          "gentle-ai.review-intended-untracked-selection/v1",
+      "gentle-ai.review-receipt/v1", "gentle-ai.review-result-artifact/v2",
+      "gentle-ai.review-targeted-validation-request/v1", "https://gentle-ai.dev/schema/review/refuter/v1",
+      "https://gentle-ai.dev/schema/review/reviewer/v1", "https://gentle-ai.dev/schema/review/validator/v1"
+    ]}},
+    "features": {"$ref": "capabilities-v2.3.schema.json#/properties/features"},
+    "bootstrap": {"$ref": "capabilities-v2.3.schema.json#/properties/bootstrap"},
+    "compatibility": {"$ref": "capabilities-v2.3.schema.json#/properties/compatibility"}
+  }
+}

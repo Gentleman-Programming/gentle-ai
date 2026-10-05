@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
 func TestPiCodeGraphUnselectedIsNoOp(t *testing.T) {
@@ -313,8 +313,12 @@ func TestPiCodeGraphRefreshRestoresMissingOwnedChild(t *testing.T) {
 }
 
 func TestPiCodeGraphPathsExcludesUnsafeManifestPaths(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	home := t.TempDir()
 	paths := piagent.CodeGraphPaths(home)
+	if want := filepath.Join(home, ".pi", "agent"); paths.AgentDir != want {
+		t.Fatalf("agent directory = %q, want isolated path %q", paths.AgentDir, want)
+	}
 	outside := filepath.Join(t.TempDir(), "outside.json")
 	escapedDir := filepath.Join(paths.AgentDir, "escaped")
 	escaped := filepath.Join(escapedDir, "child.md")
@@ -407,8 +411,9 @@ func TestVerifyPiCodeGraphRejectsNonCanonicalMCP(t *testing.T) {
 	}
 }
 
-func TestVerifyPiMCPFailsClosedWithoutAdapterOrProcess(t *testing.T) {
+func TestVerifyPiMCPFailsClosedWithoutMCPProcess(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
 	mcpPath := filepath.Join(home, "mcp.json")
 	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 	previous := piCodeGraphEffectiveMCPProbe
@@ -416,7 +421,7 @@ func TestVerifyPiMCPFailsClosedWithoutAdapterOrProcess(t *testing.T) {
 	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
 
 	if _, err := verifyPiMCP(mcpPath); err == nil {
-		t.Fatal("verifyPiMCP() succeeded without a Pi MCP adapter or MCP process")
+		t.Fatal("verifyPiMCP() succeeded without a CodeGraph MCP process")
 	}
 }
 
@@ -563,7 +568,6 @@ func TestPiCodeGraphPendingProbePreservesConfiguredFiles(t *testing.T) {
 	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
 	manifestPath := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
 	writePiFile(t, childPath, "---\ntools: bash\n---\nwork\n")
-	writePiFile(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 	installFakeCodeGraph(t)
 	previousProbe := piCodeGraphEffectiveMCPProbe
 	piCodeGraphEffectiveMCPProbe = probePiCodeGraphMCP
@@ -723,15 +727,15 @@ func TestPiCodeGraphFailsClosedForBrokenProjectMCPOverride(t *testing.T) {
 	}
 }
 
+// Pi >= 0.99.0 runs MCP servers through its built-in MCP support, so the
+// probe must not require the retired pi-mcp-adapter package on disk.
 func TestPiCodeGraphProbeVerifiesDirectMCPWithoutPiProcess(t *testing.T) {
 	home := t.TempDir()
-	agentDir := filepath.Join(home, "custom-agent")
 	mcpPath := filepath.Join(home, "project", ".mcp.json")
-	writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 	installFakeCodeGraph(t)
 
-	result, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir)
+	result, err := probePiCodeGraphMCP(mcpPath)
 	if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
 		t.Fatalf("probe error = %v, want unavailable adapter health", err)
 	}
@@ -817,8 +821,6 @@ func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 	for _, response := range responses {
 		t.Run(response, func(t *testing.T) {
 			home := t.TempDir()
-			agentDir := filepath.Join(home, "custom-agent")
-			writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 			if runtime.GOOS == "windows" {
 				t.Setenv("GENTLE_AI_CODEGRAPH_TEST_RESPONSE", response)
 				installFakeCodeGraphHelper(t, "invalid-response")
@@ -826,7 +828,7 @@ func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 				installFakeCodeGraphScript(t, `while IFS= read -r request; do printf '%s\n' '`+response+`'; done`)
 			}
 
-			_, err := probePiCodeGraphMCPWithAgentDir(filepath.Join(home, "mcp.json"), agentDir)
+			_, err := probePiCodeGraphMCP(filepath.Join(home, "mcp.json"))
 			if err == nil || !strings.Contains(err.Error(), "invalid JSON-RPC 2.0 result") {
 				t.Fatalf("probe error = %v, want invalid initialize response", err)
 			}
@@ -1037,4 +1039,58 @@ func installFakeCodeGraphScript(t *testing.T, body string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestCodeGraphIsolatedManifestWithConfiguredAgentDir(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	home := t.TempDir()
+	// internal/agents/pi.isRealUserHome only honors an absolute
+	// PI_CODING_AGENT_DIR override for the process's actual home directory,
+	// so this test must make home look real for the duration of the test.
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	// 1. Initial run under standard Pi config creates a manifest with an owned child.
+	defaultPaths := piagent.CodeGraphPaths(home)
+	defaultChild := filepath.Join(defaultPaths.AgentDir, "agents", "sdd-proposal.md")
+	writePiFile(t, defaultChild, "---\ntools: bash\n---\nproposal\n")
+	defaultManifest := piCodeGraphManifest{
+		Children: map[string]piCodeGraphOwnedFile{
+			defaultChild: {After: "---\ntools: bash\n---\nproposal\n", AfterHash: hashPiBytes([]byte("---\ntools: bash\n---\nproposal\n"))},
+		},
+	}
+	data, err := json.Marshal(defaultManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(defaultPaths.Manifest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultPaths.Manifest, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Gentle shell runs with PI_CODING_AGENT_DIR set to an isolated directory.
+	shellAgentDir := filepath.Join(home, ".gentle-shell", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", shellAgentDir)
+
+	// 3. UninstallPiCodeGraph (invoked when CodeGraph is not selected) must succeed
+	// without failing on "escapes allowed roots" from the default Pi manifest.
+	result, err := UninstallPiCodeGraph(home)
+	if err != nil {
+		t.Fatalf("UninstallPiCodeGraph() with configured PI_CODING_AGENT_DIR error = %v, want nil", err)
+	}
+	if len(result.Files) != 0 {
+		t.Fatalf("result.Files = %v, want empty", result.Files)
+	}
+
+	// Default Pi files and manifest must remain untouched.
+	if _, err := os.Stat(defaultChild); err != nil {
+		t.Fatalf("default child was removed: %v", err)
+	}
+	if _, err := os.Stat(defaultPaths.Manifest); err != nil {
+		t.Fatalf("default manifest was removed: %v", err)
+	}
 }

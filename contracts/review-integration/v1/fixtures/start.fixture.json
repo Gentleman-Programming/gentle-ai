@@ -31,16 +31,7 @@
     "byte_size": 226
   },
   "changed_path_manifest": [
-    {
-      "path": "scripts/deploy.sh",
-      "status": "A",
-      "old_mode": "000000",
-      "new_mode": "100644",
-      "deleted": false,
-      "type_changed": false,
-      "mode_only": false,
-      "intended_untracked": true
-    }
+    {"path":"scripts/deploy.sh","status":"A","old_mode":"000000","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":true}
   ],
   "repository_context": {
     "capability": "review.opaque_repository_context",

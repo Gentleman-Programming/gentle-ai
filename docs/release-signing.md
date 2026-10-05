@@ -1,6 +1,9 @@
 # Release signing and key rotation
 
-Gentle AI releases only when the protected `release` environment provides a real Minisign credential whose public key matches the trust anchors embedded in the binary. An unset, malformed, placeholder, or isolated test key stops both the updater and release workflow.
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
+Gentle AI™ releases only when the protected `release` environment provides a real Minisign credential whose public key matches the trust anchors embedded in the binary. An unset, malformed, placeholder, or isolated test key stops both the updater and release workflow.
 
 ## User verification
 
@@ -45,7 +48,7 @@ The public key is not secret, but its provenance is security-critical. A key fet
 The workflow validates the complete repository-variable value, exports a separate canonical value, and permits GoReleaser to inject only that validated output through this exact linker variable:
 
 ```text
-github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys
+github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys
 ```
 
 Source/test builds retain `UNSET`; their binary self-updater refuses network replacement. There is no grace version and no unsigned fallback.
@@ -70,6 +73,16 @@ If a key may be compromised, stop releases. Do not silently replace a trust anch
 
 ## Release gates
 
+### Release-note upgrade instruction
+
+Every release note that tells users to replace or upgrade the binary must include this step:
+
+```bash
+gentle-ai sync
+```
+
+Never publish binary-only upgrade guidance. Managed reviewer and runtime assets are version-bound to the binary, and review lifecycle operations fail closed until sync repairs missing or mismatched writer provenance.
+
 ### Windows distribution restoration gate
 
 Windows source compatibility, CI, and runtime tests remain supported. Official
@@ -78,7 +91,7 @@ Because there is no signed Windows asset to download, Windows never downloads an
 unsigned executable and never executes a remote update script. Instead:
 
 - With Go 1.25.10+ on `PATH`, the built-in upgrader runs
-  `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@vX.Y.Z`,
+  `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@vX.Y.Z`,
   pinned to the exact release tag. This is verified — just against a different
   trust anchor: the module is checked against the Go checksum database
   (`sum.golang.org`) rather than our minisign release signature. The upgrader
@@ -95,8 +108,8 @@ Restore Windows distribution only after all of these conditions are enforced:
 1. Provision publicly trusted RSA Authenticode signing, preferably managed OIDC
    with Azure Artifact Signing; self-signed or mock credentials are not acceptable.
 2. Sign both amd64 and arm64 executables before archive and checksum generation.
-3. Add pre-publication and remote-release verification that fails if either
-   executable is unsigned or its signature is not publicly trusted.
+3. Add pre-publication and remote-release verification that
+   fails if either executable is unsigned or its signature is not publicly trusted.
 4. Restore the Windows GoReleaser targets and Scoop publisher together, with
    regression coverage proving no unsigned artifact can be emitted.
 

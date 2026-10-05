@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestCanonicalImplementationRoutingBoundaries(t *testing.T) {
@@ -15,18 +17,25 @@ func TestCanonicalImplementationRoutingBoundaries(t *testing.T) {
 	got := CanonicalImplementationRouting()
 	want := ImplementationRoutingFacts{
 		DirectInline: DirectInlineFacts{
-			MinUnderstandingFiles:                    1,
-			MaxUnderstandingFiles:                    3,
+			MaxEvidenceBatches:                       1,
+			MaxEvidenceCalls:                         3,
+			ApproxEvidenceTokens:                     10000,
+			EvidenceMustUseBoundedRanges:             true,
 			MaxMechanicalWriteFiles:                  1,
 			MechanicalWriteMustBeAlreadyUnderstood:   true,
 			MechanicalWriteMustNotRequireResearch:    true,
 			MechanicalWriteMustNotHaveOpenDesignWork: true,
 		},
 		DelegatedDirect: DelegatedDirectFacts{
-			MappingMinUnderstandingFiles:  4,
-			WriterMinNonTrivialFiles:      2,
-			DelegateWhenReadPreparesWrite: true,
-			DelegateWhenBroadResearch:     true,
+			ApproxSequentialLookupLimit:    5,
+			DelegateWhenLongSessionMapping: true,
+			ApproxHandoffTokens:            2000,
+			MaxParentSpotChecks:            1,
+			ApproxParentContextTokens:      150000,
+			ContextBackstopIsAdvisory:      true,
+			WriterMinNonTrivialFiles:       2,
+			DelegateWhenReadPreparesWrite:  true,
+			DelegateWhenBroadResearch:      true,
 		},
 		SDD: SDDProposalFacts{
 			ProposeWhenSubstantialOrAmbiguous:     true,
@@ -48,21 +57,93 @@ func TestManifestRejectsWeakenedRoutingFacts(t *testing.T) {
 		weaken func(*AgentCapabilityManifest)
 	}{
 		{
-			name: "direct understanding starts below one file",
+			name: "legacy minimum file count is rejected",
 			weaken: func(manifest *AgentCapabilityManifest) {
-				manifest.ImplementationRouting.DirectInline.MinUnderstandingFiles = 0
+				manifest.ImplementationRouting.DirectInline.MinUnderstandingFiles = 1
 			},
 		},
 		{
-			name: "direct understanding exceeds three files",
+			name: "legacy maximum file count is rejected",
 			weaken: func(manifest *AgentCapabilityManifest) {
 				manifest.ImplementationRouting.DirectInline.MaxUnderstandingFiles = 4
 			},
 		},
 		{
-			name: "mapping starts after four files",
+			name: "legacy mapping file count is rejected",
 			weaken: func(manifest *AgentCapabilityManifest) {
 				manifest.ImplementationRouting.DelegatedDirect.MappingMinUnderstandingFiles = 5
+			},
+		},
+		{
+			name:   "multiple inline batches",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.MaxEvidenceBatches = 2 },
+		},
+		{
+			name:   "four inline calls",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.MaxEvidenceCalls = 4 },
+		},
+		{
+			name:   "larger inline evidence",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.ApproxEvidenceTokens = 20000 },
+		},
+		{
+			name: "unbounded reads",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.EvidenceMustUseBoundedRanges = false
+			},
+		},
+		{
+			name: "longer sequential exploration",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.ApproxSequentialLookupLimit = 6
+			},
+		},
+		{
+			name: "long-session mapping stays inline",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.DelegateWhenLongSessionMapping = false
+			},
+		},
+		{
+			name:   "larger mapper handoff",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DelegatedDirect.ApproxHandoffTokens = 10000 },
+		},
+		{
+			name:   "parent repeats mapped evidence",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DelegatedDirect.MaxParentSpotChecks = 2 },
+		},
+		{
+			name: "later context backstop",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.ApproxParentContextTokens = 200000
+			},
+		},
+		{
+			name: "claims mechanical context enforcement",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DelegatedDirect.ContextBackstopIsAdvisory = false
+			},
+		},
+		{
+			name:   "multiple mechanical write files",
+			weaken: func(m *AgentCapabilityManifest) { m.ImplementationRouting.DirectInline.MaxMechanicalWriteFiles = 2 },
+		},
+		{
+			name: "mechanical write not already understood",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.MechanicalWriteMustBeAlreadyUnderstood = false
+			},
+		},
+		{
+			name: "mechanical write requires research",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.MechanicalWriteMustNotRequireResearch = false
+			},
+		},
+		{
+			name: "mechanical write has open design work",
+			weaken: func(m *AgentCapabilityManifest) {
+				m.ImplementationRouting.DirectInline.MechanicalWriteMustNotHaveOpenDesignWork = false
 			},
 		},
 		{
@@ -120,24 +201,31 @@ func TestManifestRejectsWeakenedRoutingFacts(t *testing.T) {
 func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) {
 	t.Parallel()
 
-	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
+	const wantRoutingDigest = "sha256:1c343ca2792be730e02b35f1655a19884a2672dc0d2915ef2afb33b6ac01bc1c"
+	// Digests pin the four providers with an enforceable fresh-reviewer
+	// boundary: Claude Code's generated reviewer has no live tools, OpenCode
+	// relays one ordinary task through Go-owned admission, Codex's provider
+	// subprocess reaches the same contract, and gentle-pi's host relay
+	// forwards the Go-issued opaque task to a fresh locked-down pi
+	// subprocess (gentle-pi#311, gentle-ai#3249).
 	wantManifestDigests := map[model.AgentID]string{
-		model.AgentAntigravity:   "sha256:2f72974f6abdce68ca28a585705227d37d1c64c965120281727455223d678394",
-		model.AgentClaudeCode:    "sha256:1954836303597cd9efc3e9736f2eb7c72d2c3b5107f6f36e0ca63d82c561c005",
-		model.AgentCodex:         "sha256:fd1ed4fc30881c9ce53550f4c57ad7bd007e1b76bba943510ef53840b2e43a16",
-		model.AgentCursor:        "sha256:5ec0323fd33720a5a99ec2ff8b876312f52aa6a588871a71920516f748f23f80",
-		model.AgentGeminiCLI:     "sha256:3d51601fb11f71e2cc22daba09fd19dfdf473fbcbf3b16d732d4100f0a09cbbb",
-		model.AgentHermes:        "sha256:00d1f1d2db659d33a032a97dae373a0f5e4a676921ef65d0f1162923e4758aa1",
-		model.AgentKilocode:      "sha256:5472e4fb098caa868c650cf0d065bf277e079ddb8d5b8996b0cd9e8faa72d381",
-		model.AgentKimi:          "sha256:20da639dbb4c852aef56c81e417641bc0b817a7fa41fd6aa2eecfe42aad9fafa",
-		model.AgentKiroIDE:       "sha256:00cec3beeaa3506476151a6aa19966a6b3bfe52c3648ecf2e9d1804adafb86c2",
-		model.AgentOpenClaw:      "sha256:e3dadd12614a5d27daf1c3fbdde875df5cb52888b7987ded87e5abd7bca8d49f",
-		model.AgentOpenCode:      "sha256:77b30ecfac3cd3a6d54db33328b9ddddd8db3f11fa19ddd5e3829c5a0a506b80",
-		model.AgentPi:            "sha256:f1f8f67171ef2ea40f5690b4c2f20f7e0073e6292092b218c81a69b31281d5ae",
-		model.AgentQwenCode:      "sha256:def191f9b6ec065eda9fdd490817f27bbc89634b393db4bbbe9e81dffe1d9fba",
-		model.AgentTrae:          "sha256:aada07d8d187a2649cf18613c2ba4be6eefd1632c39a7e792c6ec23dcc8e803d",
-		model.AgentVSCodeCopilot: "sha256:3be9f31260509c10c8f4b2866c76f950ab4d2fabd8bf8684fd3af7a9b2391657",
-		model.AgentWindsurf:      "sha256:a8c46fa07497092005ce74cd3b71ef230704408ea035b08229ebd054f42794ae",
+		model.AgentAntigravity:   "sha256:4666df6712fc63b0aacf1227cb28d0afdace1f98cbdd611aa2d5e8d4048b87ce",
+		model.AgentClaudeCode:    "sha256:0644de1b6539cffee24ed3d673b450bf1f460fe5db7e8f05c5a0911aace8b280",
+		model.AgentCodex:         "sha256:b47855dc0acdae65aa2215eba09135087d32a890814dc73baab13595ecb6602b",
+		model.AgentConductor:     "sha256:f06b2f6250b4fe2795a4f3c5dba242f4d19933ba2601311f1e8ed1b9fc95e48f",
+		model.AgentCursor:        "sha256:acb6f0092917d40ee12ca88b2661f623f317f0c7436b8b4205fccabf6dd9a9ca",
+		model.AgentGeminiCLI:     "sha256:98095b61c7598a2b36088a0d28309ca95d27944298e20d09159375874b09d9fa",
+		model.AgentHermes:        "sha256:9f3a958ce7ca8d5b667f6af894eb8085535cd10b81d5ff238ffd358de12f7a5f",
+		model.AgentKilocode:      "sha256:13b99f2e8461693bd696ab8c9cea79dfcf37d1859a99f50a74396ff425004d99",
+		model.AgentKimi:          "sha256:57b074845e1fe0c98a6bdbb03486d6768a9fa4b48a87c0d4ad68cfdab972f21d",
+		model.AgentKiroIDE:       "sha256:e453ea65b26eca021f460b0d833c49eb3047e100aa3f81cb9fb77b77832c0da3",
+		model.AgentOpenClaw:      "sha256:5c14949d82e9bce1f283e77733cd7fab50116b5b37fad7fefa0d8fc8dee68299",
+		model.AgentOpenCode:      "sha256:c4889e14ddd1f82160d8d5bb49bcdf29bdac5fe367218adf6458a80bc9d5af9d",
+		model.AgentPi:            "sha256:cf2edc78e304c31a4fb0fe7ffb034128c008801499200eb6da97303f3a3b719d",
+		model.AgentQwenCode:      "sha256:490e77af62787bd18dd47145b673fdd222de199815ad1bed9fa33042eba80387",
+		model.AgentTrae:          "sha256:6ee937b8a1a35f51dcb8db6d90b9f05a52b651cedff9d323dede48d9c4a3fde8",
+		model.AgentVSCodeCopilot: "sha256:cc800f1eca6d5ea36ae83ae4fd43b59223093196970bdfee59096c60fe22fffe",
+		model.AgentWindsurf:      "sha256:2ccb52ebf0926b16f39f59e3df4bbf392c7bdd7fcc76dfb38ee758574be3ad00",
 	}
 
 	for agent, wantDigest := range wantManifestDigests {
@@ -156,10 +244,31 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 			if manifest.Advertises(ContractWorkRoutingV1) {
 				t.Fatal("work-routing must remain unadvertised before final activation")
 			}
+			wantImmutableExecutor := agent == model.AgentClaudeCode || agent == model.AgentOpenCode || agent == model.AgentCodex || agent == model.AgentPi
+			if got := manifest.Advertises(ContractImmutableReviewExecutorV1); got != wantImmutableExecutor {
+				t.Fatalf("immutable reviewer execution advertised = %t, want %t", got, wantImmutableExecutor)
+			}
+			wantExposure := ContractExposureDormant
+			if wantImmutableExecutor {
+				wantExposure = ContractExposureAdvertised
+			}
+			if got := manifest.Contracts.ImmutableReviewExecutorV1.Exposure; got != wantExposure {
+				t.Fatalf("immutable reviewer execution exposure = %q, want %q", got, wantExposure)
+			}
 
 			payload, err := manifest.CanonicalJSON()
 			if err != nil {
 				t.Fatalf("CanonicalJSON() error = %v", err)
+			}
+			// Keep the v1 capability envelope and adapter claims, but never
+			// serialize the retired file-count policy as active routing facts.
+			for _, retired := range []string{"minUnderstandingFiles", "maxUnderstandingFiles", "mappingMinUnderstandingFiles"} {
+				if strings.Contains(string(payload), retired) {
+					t.Errorf("canonical JSON retains %s", retired)
+				}
+			}
+			if manifest.SchemaVersion != SchemaV1 {
+				t.Error("routing update changed capability schema")
 			}
 			var roundTrip AgentCapabilityManifest
 			if err := json.Unmarshal(payload, &roundTrip); err != nil {
@@ -185,6 +294,81 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 				t.Fatalf("RoutingDigest() = %q, want %q", gotRoutingDigest, wantRoutingDigest)
 			}
 		})
+	}
+}
+
+// TestEveryManifestDigestStaysByteStable pins every non-Pi row at the
+// evidence-budget routing baseline without changing review transport claims.
+func TestEveryManifestDigestStaysByteStable(t *testing.T) {
+	t.Parallel()
+
+	wantNonPiDigests := map[model.AgentID]string{
+		model.AgentAntigravity:   "sha256:4666df6712fc63b0aacf1227cb28d0afdace1f98cbdd611aa2d5e8d4048b87ce",
+		model.AgentClaudeCode:    "sha256:0644de1b6539cffee24ed3d673b450bf1f460fe5db7e8f05c5a0911aace8b280",
+		model.AgentCodex:         "sha256:b47855dc0acdae65aa2215eba09135087d32a890814dc73baab13595ecb6602b",
+		model.AgentConductor:     "sha256:f06b2f6250b4fe2795a4f3c5dba242f4d19933ba2601311f1e8ed1b9fc95e48f",
+		model.AgentCursor:        "sha256:acb6f0092917d40ee12ca88b2661f623f317f0c7436b8b4205fccabf6dd9a9ca",
+		model.AgentGeminiCLI:     "sha256:98095b61c7598a2b36088a0d28309ca95d27944298e20d09159375874b09d9fa",
+		model.AgentHermes:        "sha256:9f3a958ce7ca8d5b667f6af894eb8085535cd10b81d5ff238ffd358de12f7a5f",
+		model.AgentKilocode:      "sha256:13b99f2e8461693bd696ab8c9cea79dfcf37d1859a99f50a74396ff425004d99",
+		model.AgentKimi:          "sha256:57b074845e1fe0c98a6bdbb03486d6768a9fa4b48a87c0d4ad68cfdab972f21d",
+		model.AgentKiroIDE:       "sha256:e453ea65b26eca021f460b0d833c49eb3047e100aa3f81cb9fb77b77832c0da3",
+		model.AgentOpenClaw:      "sha256:5c14949d82e9bce1f283e77733cd7fab50116b5b37fad7fefa0d8fc8dee68299",
+		model.AgentOpenCode:      "sha256:c4889e14ddd1f82160d8d5bb49bcdf29bdac5fe367218adf6458a80bc9d5af9d",
+		model.AgentQwenCode:      "sha256:490e77af62787bd18dd47145b673fdd222de199815ad1bed9fa33042eba80387",
+		model.AgentTrae:          "sha256:6ee937b8a1a35f51dcb8db6d90b9f05a52b651cedff9d323dede48d9c4a3fde8",
+		model.AgentVSCodeCopilot: "sha256:cc800f1eca6d5ea36ae83ae4fd43b59223093196970bdfee59096c60fe22fffe",
+		model.AgentWindsurf:      "sha256:2ccb52ebf0926b16f39f59e3df4bbf392c7bdd7fcc76dfb38ee758574be3ad00",
+	}
+
+	nonPiAgents := make([]model.AgentID, 0, len(wantNonPiDigests))
+	for agent := range wantNonPiDigests {
+		nonPiAgents = append(nonPiAgents, agent)
+	}
+
+	if got := len(nonPiAgents); got != 16 {
+		t.Fatalf("want 16 non-Pi agents, got %d", got)
+	}
+
+	for _, agent := range nonPiAgents {
+		agent := agent
+		wantDigest := wantNonPiDigests[agent]
+		t.Run(string(agent), func(t *testing.T) {
+			t.Parallel()
+
+			manifest := MustForAgent(agent)
+			gotDigest, err := manifest.Digest()
+			if err != nil {
+				t.Fatalf("Digest() error = %v", err)
+			}
+			if gotDigest != wantDigest {
+				t.Fatalf("Digest() = %q, want %q (byte-stable contract)", gotDigest, wantDigest)
+			}
+		})
+	}
+}
+
+func TestReviewTransportAdvertisementIsClosedCatalogSet(t *testing.T) {
+	const wantExposed = 4
+
+	exposed := 0
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			manifest := MustForAgent(agent.ID)
+			want := agent.ID == model.AgentClaudeCode ||
+				agent.ID == model.AgentOpenCode ||
+				agent.ID == model.AgentCodex ||
+				agent.ID == model.AgentPi
+			if got := manifest.Advertises(ContractReviewTransportV1); got != want {
+				t.Fatalf("review transport advertised = %t, want %t", got, want)
+			}
+			if want {
+				exposed++
+			}
+		})
+	}
+	if exposed != wantExposed {
+		t.Fatalf("advertised review transport runtimes = %d, want %d", exposed, wantExposed)
 	}
 }
 

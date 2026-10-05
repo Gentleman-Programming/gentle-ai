@@ -8,9 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestDetect(t *testing.T) {
@@ -100,22 +99,22 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "darwin uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@openai/codex@" + versions.Codex}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@openai/codex@latest"}},
 		},
 		{
 			name:    "linux system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@openai/codex@" + versions.Codex}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@openai/codex@latest"}},
 		},
 		{
 			name:    "linux nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@openai/codex@" + versions.Codex}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@openai/codex@latest"}},
 		},
 		{
 			name:    "windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@openai/codex@" + versions.Codex}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@openai/codex@latest"}},
 		},
 	}
 
@@ -204,6 +203,27 @@ func TestAdapterSubAgentsStayFalse(t *testing.T) {
 	}
 }
 
+// TestAdapterSystemPromptStrategyStaysFileReplaceForMarkerPersona pins the
+// #981 fix contract: Codex keeps StrategyFileReplace (the strategy other
+// components switch on), while the persona component special-cases
+// model.AgentCodex to wrap the persona in a <!-- gentle-ai:persona --> marker
+// section inside ~/.codex/AGENTS.md instead of letting it own the whole file.
+// Flipping the strategy or the agent ID would silently change which injection
+// path Codex takes — e.g. falling back to the generic whole-file replace.
+func TestAdapterSystemPromptStrategyStaysFileReplaceForMarkerPersona(t *testing.T) {
+	a := NewAdapter()
+
+	if got := a.Agent(); got != model.AgentCodex {
+		t.Fatalf("Agent() = %q, want %q — persona marker injection for Codex is keyed on this exact ID", got, model.AgentCodex)
+	}
+	if got := a.SystemPromptStrategy(); got != model.StrategyFileReplace {
+		t.Fatalf("SystemPromptStrategy() = %v, want StrategyFileReplace", got)
+	}
+	if got, want := a.SystemPromptFile("/home/user"), filepath.Join("/home/user", ".codex", "AGENTS.md"); got != want {
+		t.Fatalf("SystemPromptFile() = %q, want %q", got, want)
+	}
+}
+
 func TestCapabilities(t *testing.T) {
 	a := NewAdapter()
 
@@ -223,10 +243,6 @@ func TestCapabilities(t *testing.T) {
 
 	if got := a.SupportsSkills(); !got {
 		t.Fatal("SupportsSkills() = false, want true")
-	}
-
-	if got := a.SupportsAutoInstall(); !got {
-		t.Fatal("SupportsAutoInstall() = false, want true")
 	}
 
 	if got := a.SupportsSlashCommands(); got {

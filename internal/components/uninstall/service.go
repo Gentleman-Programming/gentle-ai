@@ -1,27 +1,37 @@
 package uninstall
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 )
 
 type Manager interface {
@@ -34,13 +44,20 @@ type Snapshotter interface {
 }
 
 type Result struct {
-	Manifest               backup.Manifest
-	BackupPath             string
-	ChangedFiles           []string
-	RemovedFiles           []string
-	RemovedDirectories     []string
-	ManualActions          []string
-	AgentsRemovedFromState []model.AgentID
+	Manifest                         backup.Manifest
+	BackupPath                       string
+	ChangedFiles                     []string
+	RemovedFiles                     []string
+	RemovedDirectories               []string
+	RetainedPiResources              []string
+	OptionalPiPackageCleanupCommands []string
+	ManualActions                    []string
+	AgentsRemovedFromState           []model.AgentID
+	// FailedAgents lists the agents whose cleanup did not complete. They are
+	// deliberately left in state.json so the recorded state keeps matching the
+	// disk, and each one is named in ManualActions with the command that
+	// retries it.
+	FailedAgents []model.AgentID
 }
 
 type Service struct {
@@ -52,21 +69,9 @@ type Service struct {
 	registry     *agents.Registry
 	now          func() time.Time
 
-	// profileNamesToRemove scopes SDD profile cleanup for this uninstall run.
-	// When profileSelectionScoped=false, SDD cleanup removes all detected profiles
-	// (legacy behavior). When true, only profileNamesToRemove are removed.
-	profileNamesToRemove   []string
-	profileSelectionScoped bool
-
 	// engramUninstallScope controls whether Engram cleanup removes global
 	// integration files/config (global) or project-local .engram data only.
 	engramUninstallScope model.EngramUninstallScope
-}
-
-type workflowCapability interface {
-	SupportsWorkflows() bool
-	WorkflowsDir(workspaceDir string) string
-	EmbeddedWorkflowsDir() string
 }
 
 type opType int
@@ -84,7 +89,6 @@ var (
 		model.ComponentEngram,
 		model.ComponentContext7,
 		model.ComponentPermission,
-		model.ComponentSDD,
 		model.ComponentSkills,
 		model.ComponentTheme,
 		model.ComponentClaudeTheme,
@@ -96,48 +100,31 @@ var (
 		model.ComponentEngram,
 		model.ComponentContext7,
 		model.ComponentPermission,
-		model.ComponentSDD,
 		model.ComponentSkills,
 		model.ComponentTheme,
 		model.ComponentClaudeTheme,
 		model.ComponentOpenCodeGentleLogo,
-	}
-	configuredAgents = []string{
-		"gentle-orchestrator",
-		"sdd-orchestrator", // legacy key — kept for backward-compat cleanup
-		"sdd-init",
-		"sdd-explore",
-		"sdd-propose",
-		"sdd-spec",
-		"sdd-design",
-		"sdd-tasks",
-		"sdd-apply",
-		"sdd-verify",
-		"sdd-archive",
-		"sdd-onboard",
-		"jd-judge-a",
-		"jd-judge-b",
-		"jd-fix-agent",
-	}
-	// sddSkillPhaseIDs contains SDD skill phase IDs only (used for skill dir cleanup).
-	// Derived from configuredAgents: excludes the orchestrator (not a skill) and any
-	// non-skill agents (e.g. jd-*). When new phases or agents are added to
-	// configuredAgents, this list stays in sync automatically.
-	sddSkillPhaseIDs func() []string = func() []string {
-		skills := make([]string, 0, len(configuredAgents))
-		for _, id := range configuredAgents {
-			if strings.HasPrefix(id, "sdd-") && id != "sdd-orchestrator" {
-				skills = append(skills, id)
-			}
-		}
-		return skills
 	}
 )
 
 type operation struct {
 	typeID opType
 	path   string
+	// agents records which agents' cleanup contributed this operation. It is
+	// what turns a flat operation list into a per-agent commit boundary: an
+	// operation that fails only blocks the agents that own it. An operation
+	// nobody owns blocks the whole batch, because nothing distinguishes whose
+	// cleanup it was.
+	agents []model.AgentID
 	apply  func(path string) (changed bool, removed bool, err error)
+}
+
+// operationFailure records one operation that did not complete, so the run can
+// keep going and still report exactly what was left undone.
+type operationFailure struct {
+	path   string
+	agents []model.AgentID
+	err    error
 }
 
 func NewService(homeDir, workspaceDir, appVersion string) (*Service, error) {
@@ -210,41 +197,40 @@ func CompleteUninstall(homeDir, workspaceDir, appVersion string) (Result, error)
 }
 
 func (s *Service) PartialUninstall(agentIDs []model.AgentID, componentIDs []model.ComponentID) (Result, error) {
-	s.profileNamesToRemove = nil
-	s.profileSelectionScoped = false
 	s.engramUninstallScope = model.EngramUninstallScopeGlobal
 
-	if len(agentIDs) == 0 {
-		return Result{}, fmt.Errorf("partial uninstall requires at least one agent")
-	}
-
-	components := componentIDs
-	if len(components) == 0 {
-		components = slices.Clone(allManagedComponents)
-	}
-	components = expandVisualPolishUninstallComponents(components)
-
-	plan, err := s.buildPlan(agentIDs, components)
-	if err != nil {
-		return Result{}, err
-	}
-
-	stateRemovals := stateAgentsToRemove(agentIDs, components)
-	return s.executePlan(plan, stateRemovals)
+	return s.partialUninstall(agentIDs, componentIDs)
 }
 
 func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (Result, error) {
-	s.SetProfileNamesToRemove(profileNames)
+	// Profiles only applied to the retired SDD component; component validation
+	// rejects that request before planning and preserves existing profiles.
+	_ = profileNames
 	s.SetEngramUninstallScope(engramScope)
 	defer func() {
-		s.profileNamesToRemove = nil
-		s.profileSelectionScoped = false
 		s.engramUninstallScope = model.EngramUninstallScopeGlobal
 	}()
 
+	return s.partialUninstall(agentIDs, componentIDs)
+}
+
+// partialUninstall is the shared body of PartialUninstall and
+// PartialUninstallWithProfiles. It resolves the requested components,
+// downgrades any that are still shared with an agent this run is not
+// removing (see reconcileSharedComponents), and executes the resulting plan.
+func (s *Service) partialUninstall(agentIDs []model.AgentID, componentIDs []model.ComponentID) (Result, error) {
+	if slices.Contains(componentIDs, model.ComponentSDD) {
+		return Result{}, fmt.Errorf("component %q is retired and cannot be uninstalled; existing files and settings were preserved", model.ComponentSDD)
+	}
 	if len(agentIDs) == 0 {
 		return Result{}, fmt.Errorf("partial uninstall requires at least one agent")
 	}
+
+	// explicitGGA tracks whether the caller itself named "gga" (as opposed to
+	// it only being present because the component list defaulted to
+	// allManagedComponents). It decides whether an unreadable install state
+	// fails the whole command or is merely downgraded to a kept-GGA note.
+	explicitGGA := slices.Contains(componentIDs, model.ComponentGGA)
 
 	components := componentIDs
 	if len(components) == 0 {
@@ -252,20 +238,122 @@ func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, compone
 	}
 	components = expandVisualPolishUninstallComponents(components)
 
+	components, sharedNote, err := s.reconcileSharedComponents(agentIDs, components, explicitGGA)
+	if err != nil {
+		return Result{}, err
+	}
+
 	plan, err := s.buildPlan(agentIDs, components)
 	if err != nil {
 		return Result{}, err
 	}
 
 	stateRemovals := stateAgentsToRemove(agentIDs, components)
-	return s.executePlan(plan, stateRemovals)
+	result, err := s.executePlan(plan, stateRemovals)
+	if err != nil {
+		return result, err
+	}
+	if sharedNote != "" {
+		result.ManualActions = append(result.ManualActions, sharedNote)
+	}
+	return result, nil
+}
+
+// reconcileSharedComponents downgrades components that are shared across all
+// installed agents (currently just GGA's global config) when at least one
+// agent outside agentIDs is still installed. Ownership is derived from the
+// persisted install state (state.json's InstalledAgents) rather than probing
+// disk, so it stays correct even when files were hand-edited (#3534).
+//
+// A missing state file is treated as "no other agent is recorded", matching
+// the pre-existing behavior of an install predating state.json. Any other
+// read failure (corrupt JSON, permission error, ...) fails closed toward
+// preservation: GGA is kept and a note explains why, and the rest of the
+// uninstall still proceeds — unless the caller explicitly asked for
+// "--components gga", in which case there is nothing safe left to do for
+// that explicit request and the error is returned instead.
+func (s *Service) reconcileSharedComponents(agentIDs []model.AgentID, componentIDs []model.ComponentID, explicitGGA bool) ([]model.ComponentID, string, error) {
+	if !slices.Contains(componentIDs, model.ComponentGGA) {
+		return componentIDs, "", nil
+	}
+
+	remaining, err := otherInstalledAgents(s.homeDir, agentIDs)
+	if err != nil {
+		if explicitGGA {
+			return nil, "", fmt.Errorf("check remaining installed agents for shared GGA config: %w", err)
+		}
+		note := fmt.Sprintf(
+			"No action needed: kept the shared GGA config (%s) because the install state could not be read (%v), so it is unclear whether another installed agent still depends on it.",
+			gga.ConfigPath(s.homeDir), err,
+		)
+		return withoutComponent(componentIDs, model.ComponentGGA), note, nil
+	}
+	if len(remaining) == 0 {
+		return componentIDs, "", nil
+	}
+
+	note := fmt.Sprintf(
+		"No action needed: kept the shared GGA config (%s) because installed agent(s) still use it: %s. It is removed automatically once those agents are also uninstalled.",
+		gga.ConfigPath(s.homeDir), strings.Join(remaining, ", "),
+	)
+	return withoutComponent(componentIDs, model.ComponentGGA), note, nil
+}
+
+// withoutComponent returns componentIDs with every occurrence of excluded
+// removed, preserving order.
+func withoutComponent(componentIDs []model.ComponentID, excluded model.ComponentID) []model.ComponentID {
+	kept := make([]model.ComponentID, 0, len(componentIDs))
+	for _, componentID := range componentIDs {
+		if componentID != excluded {
+			kept = append(kept, componentID)
+		}
+	}
+	return kept
+}
+
+// isStateNotFound reports whether err indicates the install state file does
+// not exist. It uses errors.Is against fs.ErrNotExist (rather than
+// os.IsNotExist) so a caller that wraps state.Read's error — e.g. via
+// fmt.Errorf's %w — is still classified correctly instead of falling through
+// to the "unreadable state" path.
+func isStateNotFound(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// otherInstalledAgents returns the sorted IDs of agents recorded as installed
+// in state.json that are not in agentIDs. It answers "which agents remain
+// installed after this uninstall" for components shared across every
+// installed agent.
+func otherInstalledAgents(homeDir string, agentIDs []model.AgentID) ([]string, error) {
+	current, err := state.Read(homeDir)
+	if err != nil {
+		if isStateNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	removing := make(map[string]struct{}, len(agentIDs))
+	for _, agentID := range agentIDs {
+		removing[string(agentID)] = struct{}{}
+	}
+
+	remaining := make([]string, 0, len(current.InstalledAgents))
+	for _, installed := range current.InstalledAgents {
+		if _, ok := removing[installed]; ok {
+			continue
+		}
+		remaining = append(remaining, installed)
+	}
+	slices.Sort(remaining)
+	return remaining, nil
 }
 
 func expandVisualPolishUninstallComponents(components []model.ComponentID) []model.ComponentID {
 	shouldExpand := false
 	visualPolish := model.VisualPolishComponents()
 	for _, component := range components {
-		if slices.Contains(visualPolish, component) {
+		if component != model.ComponentClaudeTheme && slices.Contains(visualPolish, component) {
 			shouldExpand = true
 		}
 	}
@@ -282,11 +370,6 @@ func expandVisualPolishUninstallComponents(components []model.ComponentID) []mod
 	return expanded
 }
 
-func (s *Service) SetProfileNamesToRemove(profileNames []string) {
-	s.profileNamesToRemove = dedupeSortedStrings(profileNames)
-	s.profileSelectionScoped = true
-}
-
 func (s *Service) SetEngramUninstallScope(scope model.EngramUninstallScope) {
 	if scope == model.EngramUninstallScopeProject {
 		s.engramUninstallScope = model.EngramUninstallScopeProject
@@ -296,8 +379,6 @@ func (s *Service) SetEngramUninstallScope(scope model.EngramUninstallScope) {
 }
 
 func (s *Service) CompleteUninstall() (Result, error) {
-	s.profileNamesToRemove = nil
-	s.profileSelectionScoped = false
 	s.engramUninstallScope = model.EngramUninstallScopeGlobal
 
 	allAgents := s.registry.SupportedAgents()
@@ -320,6 +401,9 @@ type plan struct {
 }
 
 func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.ComponentID) (plan, error) {
+	if slices.Contains(componentIDs, model.ComponentSDD) {
+		return plan{}, fmt.Errorf("component %q is retired and cannot be uninstalled; existing files and settings were preserved", model.ComponentSDD)
+	}
 	backupTargets := map[string]struct{}{}
 	operationsByKey := map[string]operation{}
 
@@ -344,14 +428,23 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 				}
 			}
 			for _, op := range ops {
+				op.agents = []model.AgentID{agentID}
 				key := operationKey(op)
-				if existing, ok := operationsByKey[key]; ok && op.typeID == opRewriteFile {
+				existing, ok := operationsByKey[key]
+				if !ok {
+					operationsByKey[key] = op
+					continue
+				}
+				if op.typeID == opRewriteFile {
 					// Merge rewrite operations on the same file so both
 					// mutations apply (e.g. persona + engram on system prompt).
 					operationsByKey[key] = mergeRewriteOps(existing, op)
-				} else {
-					operationsByKey[key] = op
+					continue
 				}
+				// Deduplicated non-rewrite operation: one apply still stands
+				// for every agent that asked for it, so ownership widens.
+				existing.agents = appendUniqueAgents(existing.agents, op.agents...)
+				operationsByKey[key] = existing
 			}
 		}
 	}
@@ -370,6 +463,90 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	if slices.Contains(agentIDs, model.AgentPi) {
 		for _, target := range communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir) {
 			backupTargets[target] = struct{}{}
+		}
+		if piAdapter, ok := s.registry.Get(model.AgentPi); ok {
+			backupTargets[piAdapter.SystemPromptFile(s.homeDir)] = struct{}{}
+		}
+	}
+	if removesAllAgentComponents(componentIDs) {
+		for _, agentID := range agentIDs {
+			adapter, _ := s.registry.Get(agentID)
+			var path string
+			switch agentID {
+			case model.AgentClaudeCode:
+				path = adapter.SettingsPath(s.homeDir)
+			case model.AgentCodex:
+				path = filepath.Join(adapter.GlobalConfigDir(s.homeDir), "hooks.json")
+			}
+			if path != "" {
+				backupTargets[path] = struct{}{}
+				op := rewriteSkillRegistryHook(path)
+				op.agents = []model.AgentID{agentID}
+				key := operationKey(op)
+				if existing, ok := operationsByKey[key]; ok {
+					op = mergeRewriteOps(existing, op)
+				}
+				operationsByKey[key] = op
+			}
+		}
+	}
+	if removesAllAgentComponents(componentIDs) {
+		for _, agentID := range agentIDs {
+			if agentID != model.AgentOpenCode && agentID != model.AgentKilocode {
+				continue
+			}
+			adapter, _ := s.registry.Get(agentID)
+			for _, path := range settingsTargets(s.homeDir, adapter) {
+				backupTargets[path] = struct{}{}
+				op := removeOpenCodeFamilyAgents(path, agentID)
+				op.agents = []model.AgentID{agentID}
+				key := operationKey(op)
+				if existing, ok := operationsByKey[key]; ok {
+					op = mergeRewriteOps(existing, op)
+				}
+				operationsByKey[key] = op
+			}
+		}
+	}
+	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
+		adapter, _ := s.registry.Get(model.AgentOpenCode)
+		// Only a complete OpenCode removal rolls back defaults owned by an
+		// earlier install. Snapshot the record alongside settings before writes.
+		for _, path := range settingsTargets(s.homeDir, adapter) {
+			defaultPlan, err := opencodedefault.PrepareUninstall(path)
+			if err != nil {
+				return plan{}, err
+			}
+			backupTargets[path] = struct{}{}
+			backupTargets[opencodedefault.OwnershipPath(path)] = struct{}{}
+			op := operation{typeID: opRewriteFile, path: path, agents: []model.AgentID{model.AgentOpenCode}, apply: func(path string) (bool, bool, error) {
+				raw, err := os.ReadFile(path)
+				if err != nil && !os.IsNotExist(err) {
+					return false, false, err
+				}
+				return defaultPlan.Apply(raw, err == nil)
+			}}
+			key := operationKey(op)
+			if existing, ok := operationsByKey[key]; ok {
+				op = mergeRewriteOps(op, existing)
+			}
+			operationsByKey[key] = op
+		}
+		configDir := adapter.GlobalConfigDir(s.homeDir)
+		if err := telemetryruntime.CheckManaged(configDir); err != nil {
+			return plan{}, err
+		}
+		for _, op := range removeOwnedTelemetryRuntime(configDir) {
+			backupTargets[op.path] = struct{}{}
+			operationsByKey[operationKey(op)] = op
+		}
+		for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
+			backupTargets[op.path] = struct{}{}
+			operationsByKey[operationKey(op)] = op
+		}
+		for _, path := range opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS) {
+			backupTargets[path] = struct{}{}
+			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
 		}
 	}
 
@@ -406,22 +583,57 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		Manifest:   manifest,
 		BackupPath: snapshotDir,
 	}
+	// A batch has no per-agent transaction, so aborting at the first failure
+	// left later agents untouched, state.json stale, and no record of how far
+	// the run got. Every operation is attempted, failures are attributed to the
+	// agents that own them, and only agents with no failed operation commit
+	// their state removal.
+	failures := make([]operationFailure, 0)
+
 	// Pi ownership hashes include the shared MCP file. Remove its managed entry
 	// before other component cleanup (notably Engram) mutates that file, otherwise
 	// an unrelated mutation is indistinguishable from user drift.
 	if slices.Contains(agentsToRemove, model.AgentPi) {
 		piResult, piErr := communitytool.UninstallPiCodeGraph(s.homeDir)
 		if piErr != nil {
-			return result, fmt.Errorf("remove Pi CodeGraph integration: %w", piErr)
+			failures = append(failures, operationFailure{
+				path:   firstOrEmpty(communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir)),
+				agents: []model.AgentID{model.AgentPi},
+				err:    fmt.Errorf("remove Pi CodeGraph integration: %w", piErr),
+			})
+		} else {
+			result.ChangedFiles = append(result.ChangedFiles, piResult.Files...)
+			result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
 		}
-		result.ChangedFiles = append(result.ChangedFiles, piResult.Files...)
-		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+
+		// Pi's SupportsSystemPrompt() gate keeps componentOperations() from
+		// ever queuing a rewrite for its SystemPromptFile, so a stale
+		// gentle-ai block left there by an older install is never cleaned up
+		// by the generic persona rewrite ops above. Retire it directly.
+		if piAdapter, ok := s.registry.Get(model.AgentPi); ok {
+			promptPath := piAdapter.SystemPromptFile(s.homeDir)
+			retireResult, retireErr := agentguidance.RetirePiSystemPromptBlocks(s.homeDir, piAdapter)
+			if retireErr != nil {
+				failures = append(failures, operationFailure{
+					path:   promptPath,
+					agents: []model.AgentID{model.AgentPi},
+					err:    fmt.Errorf("retire stale Pi system prompt blocks: %w", retireErr),
+				})
+			} else if retireResult.Changed {
+				if _, statErr := os.Stat(promptPath); os.IsNotExist(statErr) {
+					result.RemovedFiles = append(result.RemovedFiles, promptPath)
+				} else {
+					result.ChangedFiles = append(result.ChangedFiles, retireResult.Files...)
+				}
+			}
+		}
 	}
 
 	for _, op := range p.operations {
 		changed, removed, err := op.apply(op.path)
 		if err != nil {
-			return result, err
+			failures = append(failures, operationFailure{path: op.path, agents: op.agents, err: err})
+			continue
 		}
 		if op.typeID == opRemoveIfEmpty && !removed {
 			if note, ok := manualActionForNonEmptyDirectory(op.path); ok {
@@ -445,13 +657,152 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
-	removed, err := updateStateAfterUninstall(s.homeDir, agentsToRemove)
-	if err != nil {
-		return result, err
+	if slices.Contains(agentsToRemove, model.AgentPi) {
+		result.RetainedPiResources = retainedPiResources(s.homeDir, s.workspaceDir)
+		result.OptionalPiPackageCleanupCommands = optionalPiPackageCleanupCommands()
 	}
+
+	result.FailedAgents = failedAgents(failures, agentsToRemove)
+	result.ManualActions = append(result.ManualActions, failureManualActions(failures, agentsToRemove, s.homeDir)...)
+
+	committable := make([]model.AgentID, 0, len(agentsToRemove))
+	for _, agentID := range agentsToRemove {
+		if !slices.Contains(result.FailedAgents, agentID) {
+			committable = append(committable, agentID)
+		}
+	}
+
+	removed, stateErr := updateStateAfterUninstall(s.homeDir, committable)
 	result.AgentsRemovedFromState = removed
 	result.ManualActions = dedupeSortedStrings(result.ManualActions)
+
+	errs := make([]error, 0, len(failures)+1)
+	for _, failure := range failures {
+		errs = append(errs, failure.err)
+	}
+	if stateErr != nil {
+		errs = append(errs, stateErr)
+	}
+	if len(errs) > 0 {
+		return result, errors.Join(errs...)
+	}
 	return result, nil
+}
+
+// failedAgents reports which agents cannot claim a completed uninstall. A
+// failure that no agent owns blocks every agent in the batch: nothing
+// distinguishes whose cleanup it belonged to, so none of them may be recorded
+// as removed.
+func failedAgents(failures []operationFailure, batch []model.AgentID) []model.AgentID {
+	if len(failures) == 0 {
+		return nil
+	}
+	blocked := make([]model.AgentID, 0, len(batch))
+	for _, failure := range failures {
+		if len(failure.agents) == 0 {
+			blocked = appendUniqueAgents(blocked, batch...)
+			continue
+		}
+		blocked = appendUniqueAgents(blocked, failure.agents...)
+	}
+	if len(blocked) == 0 {
+		return nil
+	}
+
+	// Report in the order the caller named the agents so the summary reads in
+	// the same order as the invocation, with any agent outside the batch last.
+	ordered := make([]model.AgentID, 0, len(blocked))
+	for _, agentID := range batch {
+		if slices.Contains(blocked, agentID) {
+			ordered = append(ordered, agentID)
+		}
+	}
+	return appendUniqueAgents(ordered, blocked...)
+}
+
+func failureManualActions(failures []operationFailure, batch []model.AgentID, homeDir string) []string {
+	actions := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		owners := failure.agents
+		if len(owners) == 0 {
+			owners = batch
+		}
+		labels := make([]string, 0, len(owners))
+		retry := make([]string, 0, len(owners))
+		for _, agentID := range owners {
+			labels = append(labels, string(agentID))
+			retry = append(retry, "--agent "+string(agentID))
+		}
+		scope := strings.Join(labels, ", ")
+		if scope == "" {
+			scope = "this uninstall"
+		}
+		location := failure.path
+		if location == "" {
+			location = homeDir
+		}
+		command := "gentle-ai uninstall --all --yes"
+		if len(retry) > 0 {
+			command = "gentle-ai uninstall " + strings.Join(retry, " ") + " --yes"
+		}
+		actions = append(actions, fmt.Sprintf(
+			"Uninstall did not complete for %s at %s: %v. Those agents are still recorded in %s. Resolve the file, then rerun `%s`.",
+			scope, location, failure.err, state.Path(homeDir), command))
+	}
+	return actions
+}
+
+func appendUniqueAgents(existing []model.AgentID, additions ...model.AgentID) []model.AgentID {
+	for _, agentID := range additions {
+		if !slices.Contains(existing, agentID) {
+			existing = append(existing, agentID)
+		}
+	}
+	return existing
+}
+
+func firstOrEmpty(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	return items[0]
+}
+
+// retainedPiResources returns existing Pi-owned runtime and configuration paths
+// that gentle-ai deliberately leaves intact because they can be shared with Pi,
+// gentle-pi packages, or user-managed configuration.
+func retainedPiResources(homeDir, workspaceDir string) []string {
+	paths := []string{
+		filepath.Join(homeDir, ".pi", "agent", "agents"),
+		filepath.Join(homeDir, ".pi", "agent", "chains"),
+		filepath.Join(homeDir, ".pi", "agent", "gentle-ai"),
+		filepath.Join(homeDir, ".pi", "agent", "subagents.json"),
+		filepath.Join(homeDir, ".pi", "gentle-ai"),
+	}
+	if workspaceDir != "" {
+		paths = append(paths, filepath.Join(workspaceDir, ".pi", "gentle-ai"))
+	}
+
+	retained := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, err := os.Lstat(path); err == nil || !os.IsNotExist(err) {
+			retained = append(retained, path)
+		}
+	}
+	return retained
+}
+
+// optionalPiPackageCleanupCommands mirrors the Pi adapter's uninstall package
+// sources: the managed packages plus the retired pi-mcp-adapter that older
+// releases installed. Each command remains separate because Pi 0.85.1
+// supports `pi remove <source>`, not a bulk remove form.
+func optionalPiPackageCleanupCommands() []string {
+	sources := pi.UninstallPackageSources()
+	commands := make([]string, 0, len(sources))
+	for _, source := range sources {
+		commands = append(commands, "pi remove "+source)
+	}
+	return commands
 }
 
 func manualActionForNonEmptyDirectory(path string) (string, bool) {
@@ -477,6 +828,27 @@ func dedupeSortedStrings(items []string) []string {
 	return slices.Compact(cloned)
 }
 
+// settingsTargets returns the JSON settings files generic cleaners may rewrite.
+// Only the native path is classified: OpenCode's effective path is caller
+// selected and kept as-is.
+func settingsTargets(homeDir string, adapter agents.Adapter) []string {
+	path := agents.JSONSettingsPath(homeDir, adapter)
+	if path == "" {
+		return nil
+	}
+	if adapter.Agent() != model.AgentOpenCode {
+		return []string{path}
+	}
+	targets := []string{opencodeactivation.EffectiveSettingsPath(homeDir, "")}
+	legacyJSON := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
+	if legacyJSON != targets[0] {
+		if info, err := os.Stat(legacyJSON); err == nil && !info.IsDir() {
+			targets = append(targets, legacyJSON)
+		}
+	}
+	return dedupeSortedStrings(targets)
+}
+
 func (s *Service) componentOperations(adapter agents.Adapter, componentID model.ComponentID) ([]operation, []string, error) {
 	ops := make([]operation, 0)
 	targets := make([]string, 0)
@@ -484,6 +856,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 
 	switch componentID {
 	case model.ComponentPersona:
+		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+			for _, path := range settingsTargets(homeDir, adapter) {
+				targets = append(targets, path)
+				ops = append(ops, removeOpenCodeGentleman(path, adapter.Agent()))
+			}
+		}
 		if adapter.SupportsSystemPrompt() {
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)
@@ -499,12 +877,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeFile(path))
 			ops = append(ops, removeDirIfEmpty(adapter.OutputStyleDir(homeDir)))
 		}
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			jsonPaths := []jsonPath{{"outputStyle"}}
-			if adapter.Agent() == model.AgentOpenCode {
-				jsonPaths = append(jsonPaths, jsonPath{"agent", "gentleman"})
-			}
 			ops = append(ops, rewriteJSONFile(path, jsonPaths...))
 		}
 	case model.ComponentContext7:
@@ -530,7 +905,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}))
 		}
 	case model.ComponentPermission:
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			switch adapter.Agent() {
 			case model.AgentClaudeCode:
@@ -544,17 +919,22 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 		}
 	case model.ComponentTheme:
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			ops = append(ops, rewriteJSONFile(path, jsonPath{"theme"}))
 		}
 	case model.ComponentClaudeTheme:
-		if adapter.Agent() == model.AgentClaudeCode {
-			path := filepath.Join(homeDir, ".claude", "themes", "gentleman.json")
+		for _, path := range theme.VisualThemePaths(homeDir, adapter) {
 			targets = append(targets, path)
-			ops = append(ops, removeFile(path), removeDirIfEmpty(filepath.Dir(path)))
+			ops = append(ops, removeFile(path))
+		}
+		if paths := theme.VisualThemePaths(homeDir, adapter); len(paths) > 0 {
+			ops = append(ops, removeDirIfEmpty(filepath.Dir(paths[0])))
 		}
 	case model.ComponentOpenCodeGentleLogo:
+		if adapter.Agent() != model.AgentOpenCode {
+			break
+		}
 		pluginPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
 		targets = append(targets, pluginPath)
 		ops = append(ops, removeFile(pluginPath), removeDirIfEmpty(filepath.Dir(pluginPath)))
@@ -578,134 +958,29 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			targets = append(targets, dirPath)
 			ops = append(ops, removeTree(dirPath), removeDirIfEmpty(skillDir))
 		}
-	case model.ComponentSDD:
-		if adapter.SupportsSystemPrompt() {
-			path := adapter.SystemPromptFile(homeDir)
+		// _shared may hold user-authored notes, so only the embedded references
+		// the skills component writes are removed, never the whole directory.
+		shared, err := skills.SharedReferencePaths(skillDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, path := range shared {
 			targets = append(targets, path)
-			ops = append(ops, rewriteMarkdownFile(path, func(content string) (string, bool) {
-				return removeMarkdownSections(content, "sdd-orchestrator", "strict-tdd-mode")
-			}))
+			ops = append(ops, removeFile(path))
 		}
-		if adapter.SupportsSlashCommands() {
-			commandsDir := adapter.CommandsDir(homeDir)
-			commandsAssetDir := assets.SDDCommandsAssetDir(adapter.Agent())
-			entries, err := fs.ReadDir(assets.FS, commandsAssetDir)
-			if err != nil {
-				return nil, nil, fmt.Errorf("read embedded %s: %w", commandsAssetDir, err)
-			}
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				path := filepath.Join(commandsDir, entry.Name())
-				targets = append(targets, path)
-				ops = append(ops, removeFile(path))
-			}
-			ops = append(ops, removeDirIfEmpty(commandsDir))
+		// Upgraded installs may still hold the obsolete generated marker; install
+		// only ever removes it as a regular file, so uninstall does the same.
+		marker := skills.LegacySharedMarkerPath(skillDir)
+		targets = append(targets, marker)
+		ops = append(ops, removeRegularFile(marker))
+		ops = append(ops, removeDirIfEmpty(filepath.Join(skillDir, "_shared")))
+		commands, err := skills.AllSkillCommandPaths(homeDir, adapter)
+		if err != nil {
+			return nil, nil, err
 		}
-		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentClaudeCode {
+		for _, path := range commands {
 			targets = append(targets, path)
-			ops = append(ops, rewriteSkillRegistryHook(path))
-		}
-		if adapter.Agent() == model.AgentCodex {
-			path := filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")
-			targets = append(targets, path)
-			ops = append(ops, rewriteSkillRegistryHook(path))
-		}
-		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentOpenCode {
-			defaultPlan, err := opencodedefault.PrepareUninstall(path)
-			if err != nil {
-				return nil, nil, err
-			}
-			targets = append(targets, path, opencodedefault.OwnershipPath(path))
-			paths := make([]jsonPath, 0, len(configuredAgents))
-			for _, agentKey := range configuredAgents {
-				paths = append(paths, jsonPath{"agent", agentKey})
-			}
-
-			// Remove named SDD profile agents (suffixed keys). If a profile subset was
-			// selected in the uninstall flow, remove only those profiles; otherwise,
-			// preserve legacy behavior and remove all detected profiles.
-			if s.profileSelectionScoped {
-				for _, profileName := range s.profileNamesToRemove {
-					for _, agentKey := range sdd.ProfileAgentKeys(profileName) {
-						paths = append(paths, jsonPath{"agent", agentKey})
-					}
-				}
-			} else if profiles, err := sdd.DetectProfiles(path); err == nil {
-				for _, profile := range profiles {
-					for _, agentKey := range sdd.ProfileAgentKeys(profile.Name) {
-						paths = append(paths, jsonPath{"agent", agentKey})
-					}
-				}
-			}
-
-			ops = append(ops, rewriteOpenCodeSDDSettings(path, defaultPlan, paths...))
-
-			pluginDir := filepath.Join(homeDir, ".config", "opencode", "plugins")
-			for _, pluginPath := range []string{
-				filepath.Join(pluginDir, "background-agents.ts"),
-				filepath.Join(pluginDir, "model-variants.ts"),
-				filepath.Join(pluginDir, "skill-registry.ts"),
-			} {
-				targets = append(targets, pluginPath)
-				ops = append(ops, removeFile(pluginPath))
-			}
-			ops = append(ops, removeDirIfEmpty(pluginDir))
-
-			modelVariantsCacheDir := filepath.Join(homeDir, ".gentle-ai", "cache")
-			for _, cachePath := range modelVariantsCachePaths(modelVariantsCacheDir) {
-				targets = append(targets, cachePath)
-				ops = append(ops, removeFile(cachePath))
-			}
-
-			depDir := filepath.Join(homeDir, ".config", "opencode", "node_modules", "unique-names-generator")
-			targets = append(targets, depDir)
-			ops = append(ops, removeTree(depDir), removeDirIfEmpty(filepath.Dir(depDir)))
-		}
-		if adapter.SupportsSkills() {
-			skillDir := adapter.SkillsDir(homeDir)
-			sharedDir := filepath.Join(skillDir, "_shared")
-			targets = append(targets, sharedDir)
-			ops = append(ops, removeTree(sharedDir))
-			for _, skillID := range managedSDDSkillIDs() {
-				dirPath := filepath.Join(skillDir, skillID)
-				targets = append(targets, dirPath)
-				ops = append(ops, removeTree(dirPath))
-			}
-			ops = append(ops, removeDirIfEmpty(skillDir))
-		}
-		if cap, ok := adapter.(workflowCapability); ok && cap.SupportsWorkflows() && s.workspaceDir != "" {
-			workflowsDir := cap.WorkflowsDir(s.workspaceDir)
-			entries, err := fs.ReadDir(assets.FS, cap.EmbeddedWorkflowsDir())
-			if err != nil {
-				return nil, nil, fmt.Errorf("read embedded workflows: %w", err)
-			}
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				path := filepath.Join(workflowsDir, entry.Name())
-				targets = append(targets, path)
-				ops = append(ops, removeFile(path))
-			}
-			ops = append(ops, removeDirIfEmpty(workflowsDir), removeDirIfEmpty(filepath.Dir(workflowsDir)))
-		}
-		if adapter.SupportsSubAgents() {
-			agentsDir := adapter.SubAgentsDir(homeDir)
-			entries, err := fs.ReadDir(assets.FS, adapter.EmbeddedSubAgentsDir())
-			if err != nil {
-				return nil, nil, fmt.Errorf("read embedded sub-agents: %w", err)
-			}
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				path := filepath.Join(agentsDir, entry.Name())
-				targets = append(targets, path)
-				ops = append(ops, removeFile(path))
-			}
-			ops = append(ops, removeDirIfEmpty(agentsDir))
+			ops = append(ops, removeFile(path), removeDirIfEmpty(filepath.Dir(path)))
 		}
 	case model.ComponentGGA:
 		for _, path := range globalBackupTargets(homeDir) {
@@ -728,6 +1003,9 @@ func context7Targets(adapter agents.Adapter, homeDir string) []string {
 		}
 		return []string{adapter.MCPConfigPath(homeDir, "context7")}
 	case model.StrategyMergeIntoSettings, model.StrategyMCPConfigFile:
+		if adapter.Agent() == model.AgentOpenCode {
+			return settingsTargets(homeDir, adapter)
+		}
 		return []string{adapter.MCPConfigPath(homeDir, "context7")}
 	default:
 		return nil
@@ -744,10 +1022,14 @@ func context7Operations(adapter agents.Adapter, homeDir string) []operation {
 		path := adapter.MCPConfigPath(homeDir, "context7")
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
 	case model.StrategyMergeIntoSettings:
-		path := adapter.SettingsPath(homeDir)
 		if adapter.Agent() == model.AgentOpenCode {
-			return []operation{rewriteJSONFile(path, jsonPath{"mcp", "context7"})}
+			ops := make([]operation, 0)
+			for _, path := range settingsTargets(homeDir, adapter) {
+				ops = append(ops, rewriteJSONFile(path, jsonPath{"mcp", "context7"}))
+			}
+			return ops
 		}
+		path := adapter.SettingsPath(homeDir)
 		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "context7"})}
 	case model.StrategyMCPConfigFile:
 		path := adapter.MCPConfigPath(homeDir, "context7")
@@ -773,7 +1055,7 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 		}
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 	case model.StrategyMergeIntoSettings:
-		targets = append(targets, adapter.SettingsPath(homeDir))
+		targets = append(targets, settingsTargets(homeDir, adapter)...)
 	case model.StrategyMCPConfigFile:
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 	case model.StrategyTOMLFile:
@@ -795,10 +1077,14 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		}
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
 	case model.StrategyMergeIntoSettings:
-		path := adapter.SettingsPath(homeDir)
 		if adapter.Agent() == model.AgentOpenCode {
-			return []operation{rewriteJSONFile(path, jsonPath{"mcp", "engram"})}
+			ops := make([]operation, 0)
+			for _, path := range settingsTargets(homeDir, adapter) {
+				ops = append(ops, rewriteJSONFile(path, jsonPath{"mcp", "engram"}))
+			}
+			return ops
 		}
+		path := adapter.SettingsPath(homeDir)
 		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
 	case model.StrategyMCPConfigFile:
 		path := adapter.MCPConfigPath(homeDir, "engram")
@@ -876,9 +1162,8 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 				}
 				return true, true, nil
 			}
-			// Preserve the file's existing mode: ~/.claude.json is injected
-			// with 0600 because it holds the OAuth session, and an uninstall
-			// rewrite must not widen it.
+			// Preserve the file's existing mode: an uninstall rewrite must
+			// not widen permissions on a file the user or agent restricted.
 			perm := os.FileMode(0o644)
 			if info, statErr := os.Lstat(path); statErr == nil {
 				perm = info.Mode().Perm()
@@ -928,24 +1213,6 @@ func rewriteClaudeUserConfig(homeDir string, jsonPaths ...jsonPath) operation {
 	}
 }
 
-func rewriteOpenCodeSDDSettings(path string, plan *opencodedefault.UninstallPlan, jsonPaths ...jsonPath) operation {
-	return operation{typeID: opRewriteFile, path: path, apply: func(path string) (bool, bool, error) {
-		raw, err := readManagedFile(path)
-		exists := err == nil
-		if err != nil && !os.IsNotExist(err) {
-			return false, false, err
-		}
-		updated := raw
-		if exists {
-			updated, _, err = removeJSONPaths(raw, jsonPaths...)
-			if err != nil {
-				return false, false, err
-			}
-		}
-		return plan.Apply(updated, exists)
-	}}
-}
-
 func rewriteSkillRegistryHook(path string) operation {
 	return operation{
 		typeID: opRewriteFile,
@@ -980,6 +1247,15 @@ func rewriteSkillRegistryHook(path string) operation {
 	}
 }
 
+// Only exact installed commands are removed; arbitrary user commands remain intact.
+func managedRetainedHookCommand(cmd string) bool {
+	return cmd == `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true` ||
+		cmd == `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true` ||
+		cmd == "gentle-ai review stop-hook --agent "+string(model.AgentClaudeCode) ||
+		cmd == "gentle-ai telemetry runtime claude --json" ||
+		cmd == "gentle-ai telemetry runtime codex --json"
+}
+
 func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 	root := map[string]any{}
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -990,7 +1266,7 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 		return raw, false, nil
 	}
 	changed := false
-	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart"} {
+	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop", "PreToolUse", "PostToolUse", "SessionEnd"} {
 		entries, ok := hooksMap[hookKey].([]any)
 		if !ok {
 			continue
@@ -1011,7 +1287,7 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 			for _, hook := range hooks {
 				hookMap, ok := hook.(map[string]any)
 				cmd, _ := hookMap["command"].(string)
-				if ok && strings.Contains(cmd, "gentle-ai skill-registry refresh") {
+				if ok && managedRetainedHookCommand(cmd) {
 					changed = true
 					continue
 				}
@@ -1071,6 +1347,56 @@ func rewriteTOMLFile(path string, mutate func(content string) (string, bool)) op
 			return true, false, nil
 		},
 	}
+}
+
+// retainedOpenCodePluginOperations is an agent-removal boundary, independent of
+// legacy SDD and skills. Unknown or modified plugin bytes are never removed.
+func retainedOpenCodePluginOperations(adapter agents.Adapter, homeDir string) []operation {
+	pluginDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+	ops := make([]operation, 0)
+	for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
+		path := filepath.Join(pluginDir, name)
+		ops = append(ops, removeEmbeddedOpenCodePlugin(path, name))
+	}
+	ops = append(ops, removeDirIfEmpty(pluginDir))
+	for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
+		op := removeFile(path)
+		op.agents = []model.AgentID{model.AgentOpenCode}
+		ops = append(ops, op)
+	}
+	for i := range ops {
+		ops[i].agents = []model.AgentID{model.AgentOpenCode}
+	}
+	return ops
+}
+
+func removeEmbeddedOpenCodePlugin(path, name string) operation {
+	return operation{typeID: opRemoveFile, path: path, agents: []model.AgentID{model.AgentOpenCode}, apply: func(path string) (bool, bool, error) {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			return false, false, nil
+		}
+		if err != nil {
+			return false, false, err
+		}
+		if !info.Mode().IsRegular() {
+			return false, false, nil
+		}
+		installed, err := os.ReadFile(path)
+		if err != nil {
+			return false, false, err
+		}
+		for _, dir := range []string{"opencode/plugins/", "opencode/plugins-v2/"} {
+			managed, err := assets.Read(dir + name)
+			if err == nil && bytes.Equal(installed, []byte(managed)) {
+				if err := os.Remove(path); err != nil {
+					return false, false, err
+				}
+				return true, true, nil
+			}
+		}
+		return false, false, nil
+	}}
 }
 
 func modelVariantsCachePaths(cacheDir string) []string {
@@ -1184,6 +1510,31 @@ func removeFile(path string) operation {
 					return false, false, nil
 				}
 				return false, false, statErr
+			}
+			if err := removeFileIfExists(path); err != nil {
+				return false, false, err
+			}
+			return true, true, nil
+		},
+	}
+}
+
+// removeRegularFile removes path only when it is a regular file, leaving
+// symlinks, directories, and other non-regular entries untouched.
+func removeRegularFile(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			info, err := os.Lstat(path)
+			if os.IsNotExist(err) {
+				return false, false, nil
+			}
+			if err != nil {
+				return false, false, err
+			}
+			if !info.Mode().IsRegular() {
+				return false, false, nil
 			}
 			if err := removeFileIfExists(path); err != nil {
 				return false, false, err
@@ -1314,6 +1665,7 @@ func mergeRewriteOps(a, b operation) operation {
 	return operation{
 		typeID: opRewriteFile,
 		path:   a.path,
+		agents: appendUniqueAgents(slices.Clone(a.agents), b.agents...),
 		apply: func(path string) (bool, bool, error) {
 			changed1, removed1, err1 := a.apply(path)
 			if err1 != nil {
@@ -1334,12 +1686,25 @@ func compareOperations(a, b operation) int {
 	if a.typeID != b.typeID {
 		return int(a.typeID) - int(b.typeID)
 	}
+	if a.typeID == opRemoveIfEmpty {
+		// Deepest path first: a child directory such as skills/_shared must be
+		// evaluated before its parent, or the parent is still non-empty when
+		// checked and survives an uninstall that emptied it.
+		return strings.Compare(b.path, a.path)
+	}
 	return strings.Compare(a.path, b.path)
 }
 
-func managedSDDSkillIDs() []string {
-	ids := append([]string(nil), sddSkillPhaseIDs()...)
-	return append(ids, "judgment-day")
+func removesAllAgentComponents(componentIDs []model.ComponentID) bool {
+	if len(componentIDs) == 0 {
+		return true
+	}
+	for _, componentID := range fullAgentRemovalComponents {
+		if !slices.Contains(componentIDs, componentID) {
+			return false
+		}
+	}
+	return true
 }
 
 func globalBackupTargets(homeDir string) []string {
@@ -1349,12 +1714,53 @@ func globalBackupTargets(homeDir string) []string {
 	}
 }
 
+// One transactional removal of the pair, projected as two file results for the
+// existing uninstall reporter. Validation happens at execution, not plan time.
+func removeOwnedTelemetryRuntime(configDir string) []operation {
+	var attempted bool
+	var removed []string
+	var err error
+	var operations []operation
+	for _, path := range telemetryruntime.ManagedPaths(configDir) {
+		operations = append(operations, operation{
+			typeID: opRemoveFile, path: path, agents: []model.AgentID{model.AgentOpenCode},
+			apply: func(path string) (bool, bool, error) {
+				if !attempted {
+					attempted = true
+					removed, err = telemetryruntime.RemoveManaged(configDir)
+				}
+				changed := slices.Contains(removed, path)
+				return changed, changed, err
+			},
+		})
+	}
+	return operations
+}
+
+func removeOwnedOpenCodeLauncher(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		agents: []model.AgentID{model.AgentOpenCode},
+		apply: func(path string) (bool, bool, error) {
+			result, err := opencodeactivation.RemoveManagedLauncher(path)
+			if err != nil || !result.Removed() {
+				return false, false, err
+			}
+			return true, true, nil
+		},
+	}
+}
+
 func stateAgentsToRemove(agentIDs []model.AgentID, componentIDs []model.ComponentID) []model.AgentID {
 	selected := make(map[model.ComponentID]struct{}, len(componentIDs))
 	for _, componentID := range componentIDs {
 		selected[componentID] = struct{}{}
 	}
 	for _, required := range fullAgentRemovalComponents {
+		if required == model.ComponentSDD {
+			continue
+		}
 		if _, ok := selected[required]; !ok {
 			return nil
 		}
@@ -1367,36 +1773,51 @@ func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]mode
 		return nil, nil
 	}
 
-	current, err := state.Read(homeDir)
+	// removed must be declared outside the closure so it survives the lock;
+	// it is only assigned once the corresponding write has succeeded.
+	var removed []model.AgentID
+	err := statecoord.WithLock(homeDir, func() error {
+		// Re-read the latest state inside the lock so a concurrent writer's
+		// change is not clobbered by a stale snapshot taken before the lock.
+		current, err := state.Read(homeDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("read install state: %w", err)
+		}
+
+		removeSet := make(map[string]struct{}, len(toRemove))
+		for _, agentID := range toRemove {
+			removeSet[string(agentID)] = struct{}{}
+		}
+
+		kept := make([]string, 0, len(current.InstalledAgents))
+		removedHere := make([]model.AgentID, 0, len(toRemove))
+		for _, installed := range current.InstalledAgents {
+			if _, ok := removeSet[installed]; ok {
+				removedHere = append(removedHere, model.AgentID(installed))
+				continue
+			}
+			kept = append(kept, installed)
+		}
+		if len(removedHere) == 0 {
+			return nil
+		}
+
+		updated := current
+		updated.InstalledAgents = kept
+		if slices.Contains(toRemove, model.AgentOpenCode) {
+			updated.BackgroundIntent = ""
+		}
+		if err := state.Write(homeDir, updated); err != nil {
+			return fmt.Errorf("write install state: %w", err)
+		}
+		removed = removedHere
+		return nil
+	})
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read install state: %w", err)
-	}
-
-	removeSet := make(map[string]struct{}, len(toRemove))
-	for _, agentID := range toRemove {
-		removeSet[string(agentID)] = struct{}{}
-	}
-
-	kept := make([]string, 0, len(current.InstalledAgents))
-	removed := make([]model.AgentID, 0, len(toRemove))
-	for _, installed := range current.InstalledAgents {
-		if _, ok := removeSet[installed]; ok {
-			removed = append(removed, model.AgentID(installed))
-			continue
-		}
-		kept = append(kept, installed)
-	}
-	if len(removed) == 0 {
-		return nil, nil
-	}
-
-	updated := current
-	updated.InstalledAgents = kept
-	if err := state.Write(homeDir, updated); err != nil {
-		return nil, fmt.Errorf("write install state: %w", err)
+		return nil, err
 	}
 	return removed, nil
 }

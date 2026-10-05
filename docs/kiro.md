@@ -1,5 +1,8 @@
 # Kiro IDE
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 ---
@@ -15,7 +18,7 @@ When configured, gentle-ai installs:
 | Artifact | Path |
 |----------|------|
 | Steering file | `~/.kiro/steering/gentle-ai.md` |
-| Native SDD agents | `~/.kiro/agents/sdd-{phase}.md` *(10 files)* |
+| Native Judgment Day agents | `~/.kiro/agents/jd-fix-agent.md`, `jd-judge-a.md`, `jd-judge-b.md` *(3 files)* |
 | Skills directory | `~/.kiro/skills/` |
 | MCP config | `~/.kiro/settings/mcp.json` *(separate root — see note below)* |
 
@@ -35,42 +38,21 @@ In practice: **the installer detects Kiro from `~/.kiro`**, not from `PATH`. If 
 
 ---
 
-## SDD Execution Model
+## ODD Execution Model
+
+> **Since v4.0.0:** SDD (Spec-Driven Development) is retired in favor of [ODD](usage.md#organic-driven-development-odd). gentle-ai no longer installs `sdd-*` Kiro agents and no longer routes work through `.kiro/specs/`. Existing `sdd-*` agent files from earlier installs are left in place.
 
 Kiro runs with **native sub-agent delegation** via `~/.kiro/agents/`.
 
-The orchestrator stays in the steering file and coordinates phase execution, while each phase runs in its dedicated Kiro agent file:
+The ODD orchestrator stays in the steering file. It keeps work inline by default and delegates to Kiro's native subagents only for a named reason: an exploration map, parallel writers on disjoint edit surfaces, the context backstop, or independent verification of a high-risk change. Engram™ provides cross-session persistence when available.
 
-```
-sdd-init → sdd-explore → sdd-propose → sdd-spec → sdd-design → sdd-tasks → sdd-apply → sdd-verify → sdd-archive (+ sdd-onboard)
-```
-
-This follows the same SDD architecture used in gentle-ai: orchestrator coordinates, phase agents execute, Engram persists artifacts across phases.
-
-**Approval gates** remain required before `apply` and `archive`.
+The `jd-*` agents run the [Judgment Day](components.md#skills) adversarial review: two blind judges and one fix agent.
 
 ---
 
-## Native Kiro Specs Integration
-
-Kiro has a built-in spec workflow that gentle-ai leverages. For medium and large changes, the orchestrator will use native Kiro artifacts at:
-
-```
-.kiro/specs/<feature>/
-├── requirements.md
-├── design.md
-└── tasks.md
-```
+## Steering Files
 
 **Steering files** at `.kiro/steering/*.md` provide persistent workspace context across sessions — treat them like always-on system context for your project conventions, architecture decisions, and team rules.
-
-**Size classification** routes tasks through Small / Medium / Large paths to decide planning depth:
-
-| Size | Approach |
-|------|----------|
-| Small | Inline — no formal SDD phases |
-| Medium | Kiro native specs (`.kiro/specs/`) + Engram |
-| Large | Full SDD cycle: explore → propose → spec → design → tasks → apply → verify → archive |
 
 ---
 
@@ -88,7 +70,7 @@ inclusion: always
 
 ## Native Agent Frontmatter
 
-Kiro SDD phase agents are generated with YAML frontmatter including:
+Kiro Judgment Day agents are generated with YAML frontmatter including:
 
 - `name`
 - `description`
@@ -96,7 +78,7 @@ Kiro SDD phase agents are generated with YAML frontmatter including:
 - `model`
 - `includeMcpJson: true`
 
-The `model` value is injected during sync from Kiro model assignments (`auto|opus|sonnet|haiku|minimax|glm|deepseek|qwen`) to Kiro-native model IDs.
+The `model` value is injected during sync from Kiro model assignments, keyed by agent name or `default` (`auto|opus|sonnet|haiku|minimax|glm|deepseek|qwen`) to Kiro-native model IDs.
 
 ---
 
@@ -140,8 +122,8 @@ Kiro uses a **split-root layout** — gentle-ai managed files and IDE settings l
 
 - **Steering, skills, and native agents** → `~/.kiro/` (or `%USERPROFILE%\.kiro\` on Windows)
   - `~/.kiro/steering/gentle-ai.md` — orchestrator persona
-  - `~/.kiro/skills/` — SDD skill files
-  - `~/.kiro/agents/` — SDD phase subagents
+  - `~/.kiro/skills/` — gentle-ai skill files
+  - `~/.kiro/agents/` — Judgment Day subagents
 - **IDE settings** → platform-native Kiro User dir (`settings.json` only)
   - macOS: `~/Library/Application Support/Kiro/User/settings.json`
   - Windows: `%APPDATA%\kiro\User\settings.json`

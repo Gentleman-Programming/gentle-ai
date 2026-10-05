@@ -1,0 +1,126 @@
+package main
+
+// coreJourneyReviewModes is an explicit declaration for every core journey. Most
+// lifecycle journeys need the runner's isolated global opt-in; switch journeys are
+// deliberately untouched so they can prove their own mode transition.
+var coreJourneyReviewModes = map[string]ReviewPrecondition{
+	"j01-docs-happy-path":                                                       reviewOptedIn,
+	"j03-kill-switch":                                                           reviewUntouched,
+	"j04-size-does-not-escalate":                                                reviewOptedIn,
+	"j05-gate-without-any-review":                                               reviewOptedIn,
+	"j06-pre-push-after-publication":                                            reviewOptedIn,
+	"j07-disabled-with-stale-receipts":                                          reviewOptedIn,
+	"j08-finalize-without-reviewer-results":                                     reviewOptedIn,
+	"j09-finalize-without-evidence":                                             reviewOptedIn,
+	"j10-invalid-flag-combination":                                              reviewOptedIn,
+	"j100-pre-push-unqualified-selector-ignores-unreachable-remote":             reviewOptedIn,
+	"j101-zero-path-base-diff-stops-before-start":                               reviewOptedIn,
+	"j102-status-stops-oversized-lens-context":                                  reviewOptedIn,
+	"j104-repository-context-survives-fresh-process":                            reviewOptedIn,
+	"j105-compiled-provider-capture-retries-same-binding":                       reviewOptedIn,
+	"j106-captured-provider-validator-terminal-capture":                         reviewOptedIn,
+	"j11-unborn-head":                                                           reviewOptedIn,
+	"j110-untracked-terminal-burn-and-unmanaged-staged-validation":              reviewOptedIn,
+	"j111-approved-transaction-burns-and-shipped-gates-are-unmanaged":           reviewOptedIn,
+	"j113-correction-removes-candidate-only-path":                               reviewOptedIn,
+	"j114-last-reviewer-capture-closes-and-burns":                               reviewOptedIn,
+	"j12-rejected-capture-then-recapture":                                       reviewOptedIn,
+	"j13-next-transition-runs-verbatim":                                         reviewOptedIn,
+	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,
+	"j15-linked-worktree":                                                       reviewOptedIn,
+	"j16-detached-head":                                                         reviewOptedIn,
+	"j1658-native-status-recovery-executes-without-authored-authorization":      reviewOptedIn,
+	"j17-bare-repository":                                                       reviewOptedIn,
+	"j18-space-and-non-ascii-path":                                              reviewOptedIn,
+	"j19-submodule-gitlink":                                                     reviewOptedIn,
+	"j20-symlink-candidate":                                                     reviewOptedIn,
+	"j21-mode-only-change":                                                      reviewOptedIn,
+	"j2138-opencode-review-role-boundary":                                       reviewUntouched,
+	"j22-pure-rename":                                                           reviewOptedIn,
+	"j23-deletion-only":                                                         reviewOptedIn,
+	"j24-empty-file":                                                            reviewOptedIn,
+	"j25-no-trailing-newline":                                                   reviewOptedIn,
+	"j26-crlf-content":                                                          reviewOptedIn,
+	"j27-merge-in-progress":                                                     reviewOptedIn,
+	"j28-rebase-in-progress":                                                    reviewOptedIn,
+	"j29-cherry-pick-in-progress":                                               reviewOptedIn,
+	"j30-kill-switch-flipped-mid-review":                                        reviewOptedIn,
+	"j3043-opencode-managed-background-activation":                              reviewUntouched,
+	"j117-doctor-dangling-managed-config":                                       reviewUntouched,
+	"j118-doctor-dangling-config-ancestor":                                      reviewUntouched,
+	"j31-nonsense-mode-value":                                                   reviewUntouched,
+	"j32-recovery-of-a-recovery":                                                reviewOptedIn,
+	"j33-escalate-then-recover":                                                 reviewOptedIn,
+	"j3500-preserved-external-opencode-sync":                                    reviewUntouched,
+	"j34-abandon-then-start-again":                                              reviewOptedIn,
+	"j35-correction-budget-exactly-zero":                                        reviewOptedIn,
+	"j36-contract-right-name-wrong-version":                                     reviewOptedIn,
+	"j43-recovery-guard-rails-as-an-operator-meets-them":                        reviewOptedIn,
+	"j44-corrected-current-changes-delivery":                                    reviewOptedIn,
+	"j4435-selected-untracked-correction-continuation-is-selectorless":          reviewOptedIn,
+	"j45-completed-final-verification-retry":                                    reviewOptedIn,
+	"j46-correction-required-staged-recovery":                                   reviewOptedIn,
+	"j48-recovered-workspace-preserves-full-candidate-scope":                    reviewOptedIn,
+	"j50-candidate-decline-denies-generically-then-disabled":                    reviewUntouched,
+	"j51-negotiated-status-correction-continuation":                             reviewOptedIn,
+	"j59-current-status-and-start-ignore-sibling-worktree-transaction":          reviewOptedIn,
+	"j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow": reviewOptedIn,
+	"j61-pre-pr-multi-segment-delivery-denies-without-composition":              reviewOptedIn,
+	"j65-selectorless-committed-correction-continuation":                        reviewOptedIn,
+	"j66-v5-capture-evidence-descriptors-execute":                               reviewOptedIn,
+	"j67-v5-capture-evidence-correction-descriptor-executes":                    reviewOptedIn,
+	"j72-direct-review-start-refuses-empty-candidate":                           reviewOptedIn,
+	"j75-intended-untracked-selection-executes-printed-start":                   reviewOptedIn,
+	"j76-scope-changed-four-lens-successor":                                     reviewOptedIn,
+	"j77-capture-result-input-preflight-is-read-only":                           reviewOptedIn,
+	"j78-lens-finding-id-prefix-discovery":                                      reviewOptedIn,
+	"j82-reviewed-superset-pre-push-allows-unpublished-subset":                  reviewOptedIn,
+	"j83-pre-pr-moving-advertised-base-binds-merge-base":                        reviewOptedIn,
+	"j85-review-parse-refusals-are-preflight":                                   reviewOptedIn,
+	"j86-approved-base-diff-local-parent-merge-preserves-approved-receipt":      reviewOptedIn,
+	"j88-unborn-status-collects-untracked-selection":                            reviewOptedIn,
+	"j89-staged-validation-is-informational-and-unmanaged":                      reviewOptedIn,
+	"j90-explicit-frozen-reviewing-lineage-resumes-after-drift":                 reviewOptedIn,
+	"j91-audited-abandon-preplan-over-budget-correction":                        reviewOptedIn,
+	"j92-released-compact-history-quarantines-without-compatibility":            reviewOptedIn,
+	"j93-stale-managed-assets-start-is-not-unknown":                             reviewOptedIn,
+	"j94-escalated-changed-scope-negotiates-recovery":                           reviewOptedIn,
+	"j95-targeted-validator-inspects-provider-bound-corrected-tree":             reviewOptedIn,
+	"j97-pre-push-preserves-ls-remote-failure":                                  reviewOptedIn,
+	"j99-issue-2906-finalize-missing-contract":                                  reviewOptedIn,
+	"j115-recovery-selector-is-collected-before-authorization":                  reviewOptedIn,
+	"j116-codex-committed-correction-runs-returned-status-continuation":         reviewOptedIn,
+	"j119-global-review-mode-status-reports-persisted-source":                   reviewUntouched,
+	"j120-welcome-tui-runs-under-a-real-tty":                                    reviewUntouched,
+	"j121-rdd-tui-controls-global-mode":                                         reviewUntouched,
+	"j127-customizable-install-rdd-choice":                                      reviewUntouched,
+	"j4395-telemetry-trigger-resolves-rdd-repository":                           reviewUntouched,
+	"j4433-restored-escalated-derived-target-stops":                             reviewOptedIn,
+	"j122-global-review-mode-from-non-git-cwd":                                  reviewUntouched,
+	"j123-rejected-provider-validator-starts-fresh-high-risk-review":            reviewOptedIn,
+	"j125-claude-code-stop-hook-reminds-once-per-candidate":                     reviewOptedIn,
+	"j126-selected-untracked-terminal-status-resumes-without-flags":             reviewOptedIn,
+	"j2995-selector-scoped-historical-disposition-quarantine":                   reviewOptedIn,
+}
+
+func declareCoreJourneyReviewModes(journeys []Journey) []Journey {
+	for index := range journeys {
+		journeys[index].Review = coreJourneyReviewModes[journeys[index].ID]
+	}
+	return journeys
+}
+
+func declareAxisJourneyReviewMode(journeys []Journey, review ReviewPrecondition) []Journey {
+	for index := range journeys {
+		journeys[index].Review = review
+	}
+	return journeys
+}
+
+func allDeclaredJourneys() []Journey {
+	journeys := append([]Journey{}, Journeys()...)
+	for _, axis := range Axes() {
+		journeys = append(journeys, axis.Journeys()...)
+	}
+	return journeys
+}

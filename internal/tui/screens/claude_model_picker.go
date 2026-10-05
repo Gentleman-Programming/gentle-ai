@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // ClaudeModelPreset represents a named preset for Claude model assignments.
@@ -21,11 +21,11 @@ const (
 
 // claudePresetDescriptions describes each preset.
 var claudePresetDescriptions = map[ClaudeModelPreset]string{
-	ClaudePresetBalanced:    "Smart defaults: opus for architecture, sonnet for most phases, haiku for archiving",
-	ClaudePresetPerformance: "Maximum quality: opus for architecture, planning & verification phases",
-	ClaudePresetEconomy:     "Cost-optimised: sonnet for all phases, haiku for archiving",
+	ClaudePresetBalanced:    "Smart defaults for ODD delegation and review roles",
+	ClaudePresetPerformance: "Maximum quality for delegation and review roles",
+	ClaudePresetEconomy:     "Cost-optimised delegation and review roles",
 	ClaudePresetDiversity:   "Diversity: Opus for Judge A, Haiku for Judge B, Sonnet for fixes",
-	ClaudePresetCustom:      "Pick model and supported effort for each SDD phase, JD agent, and general delegation entry individually",
+	ClaudePresetCustom:      "Pick model and supported effort for ODD, JD and RDD roles individually",
 }
 
 // claudePresetOrder is the display order for presets.
@@ -39,36 +39,36 @@ var claudePresetOrder = []ClaudeModelPreset{
 
 // claudePhases is the ordered list of model-assignment keys shown in custom mode.
 var claudePhases = []string{
-	"sdd-explore",
-	"sdd-propose",
-	"sdd-spec",
-	"sdd-design",
-	"sdd-tasks",
-	"sdd-apply",
-	"sdd-verify",
-	"sdd-archive",
-	"sdd-onboard",
+	"odd-explorer",
+	"odd-worker",
+	"odd-verify",
 	"jd-judge-a",
 	"jd-judge-b",
 	"jd-fix-agent",
+	"risk",
+	"readability",
+	"reliability",
+	"resilience",
+	"refuter",
+	"validator",
 	"default",
 }
 
 // claudePhaseLabels are the human-readable labels for each configurable
-// agent phase (SDD phases, JD agents, and the general delegation row).
+// agent role (ODD, JD, RDD, and the general delegation row).
 var claudePhaseLabels = map[string]string{
-	"sdd-explore":  "Explore",
-	"sdd-propose":  "Propose",
-	"sdd-spec":     "Spec",
-	"sdd-design":   "Design",
-	"sdd-tasks":    "Tasks",
-	"sdd-apply":    "Apply",
-	"sdd-verify":   "Verify",
-	"sdd-archive":  "Archive",
-	"sdd-onboard":  "Onboard",
+	"odd-explorer": "ODD Explorer",
+	"odd-worker":   "ODD Worker",
+	"odd-verify":   "ODD Verify",
 	"jd-judge-a":   "JD Judge A",
 	"jd-judge-b":   "JD Judge B",
 	"jd-fix-agent": "JD Fix Agent",
+	"risk":         "RDD Risk",
+	"readability":  "RDD Readability",
+	"reliability":  "RDD Reliability",
+	"resilience":   "RDD Resilience",
+	"refuter":      "RDD Refuter",
+	"validator":    "RDD Validator",
 	"default":      "General delegation",
 }
 
@@ -114,7 +114,7 @@ type ClaudeModelPickerState struct {
 func NewClaudeModelPickerState() ClaudeModelPickerState {
 	return ClaudeModelPickerState{
 		Preset:            ClaudePresetBalanced,
-		CustomAssignments: model.ClaudePhaseAssignmentsFromModelPreset(model.ClaudeModelPresetBalanced()),
+		CustomAssignments: claudePickerPresetAssignments(model.ClaudeModelPresetBalanced()),
 		InCustomMode:      false,
 		Mode:              ClaudeModePresetList,
 	}
@@ -137,8 +137,9 @@ func NewClaudeModelPickerStateFromPhaseAssignments(assignments map[string]model.
 		return NewClaudeModelPickerState()
 	}
 	for preset, constructor := range presetConstructors {
-		presetAssignments := model.ClaudePhaseAssignmentsFromModelPreset(constructor())
-		if phaseAssignmentsEqual(presetAssignments, assignments) {
+		presetAssignments := claudePickerPresetAssignments(constructor())
+		if phaseAssignmentsEqual(presetAssignments, visibleClaudeAssignments(assignments)) ||
+			phaseAssignmentsEqual(model.ClaudePhaseAssignmentsFromModelPreset(constructor()), assignments) {
 			return ClaudeModelPickerState{
 				Preset:            preset,
 				CustomAssignments: copyPhaseAssignments(assignments),
@@ -153,6 +154,33 @@ func NewClaudeModelPickerStateFromPhaseAssignments(assignments map[string]model.
 		InCustomMode:      false,
 		Mode:              ClaudeModePresetList,
 	}
+}
+
+func visibleClaudeAssignments(assignments map[string]model.ClaudePhaseAssignment) map[string]model.ClaudePhaseAssignment {
+	visible := make(map[string]model.ClaudePhaseAssignment)
+	for _, role := range claudePhases {
+		if value, ok := assignments[role]; ok {
+			visible[role] = value
+		}
+	}
+	// The orchestrator is a persisted assignment, but not an editable role row.
+	if value, ok := assignments["orchestrator"]; ok {
+		visible["orchestrator"] = value
+	}
+	return visible
+}
+
+func claudePickerPresetAssignments(preset map[string]model.ClaudeModelAlias) map[string]model.ClaudePhaseAssignment {
+	assignments := model.ClaudePhaseAssignmentsFromModelPreset(preset)
+	for key := range assignments {
+		if strings.HasPrefix(key, "sdd-") {
+			delete(assignments, key)
+		}
+	}
+	assignments["odd-explorer"] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
+	assignments["odd-worker"] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
+	assignments["odd-verify"] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
+	return assignments
 }
 
 func phaseAssignmentsEqual(a, b map[string]model.ClaudePhaseAssignment) bool {
@@ -239,14 +267,19 @@ func handlePresetNav(
 		state.InCustomMode = true
 		state.Mode = ClaudeModePhaseList
 		if state.CustomAssignments == nil {
-			state.CustomAssignments = model.ClaudePhaseAssignmentsFromModelPreset(model.ClaudeModelPresetBalanced())
+			state.CustomAssignments = claudePickerPresetAssignments(model.ClaudeModelPresetBalanced())
 		}
 		return true, nil
 	}
 
 	// Named preset — build assignments and signal that the screen is done.
 	constructor := presetConstructors[selected]
-	assignments := model.ClaudePhaseAssignmentsFromModelPreset(constructor())
+	assignments := claudePickerPresetAssignments(constructor())
+	for key, value := range state.CustomAssignments {
+		if strings.HasPrefix(key, "sdd-") {
+			assignments[key] = value // Preserve legacy persisted values without exposing retired rows.
+		}
+	}
 	state.CustomAssignments = copyPhaseAssignments(assignments)
 	return true, copyPhaseAssignments(assignments)
 }
@@ -343,7 +376,7 @@ func handleClaudeCustomEffortSelectNav(
 }
 
 // RenderClaudeModelPicker renders the Claude model picker screen.
-func RenderClaudeModelPicker(state ClaudeModelPickerState, cursor int) string {
+func RenderClaudeModelPicker(state ClaudeModelPickerState, cursor int, height ...int) string {
 	if state.InCustomMode {
 		switch state.Mode {
 		case ClaudeModeModelSelect:
@@ -351,7 +384,11 @@ func RenderClaudeModelPicker(state ClaudeModelPickerState, cursor int) string {
 		case ClaudeModeEffortSelect:
 			return renderCustomEffortSelect(state, cursor)
 		default:
-			return renderCustomPhaseList(state, cursor)
+			availableHeight := 0
+			if len(height) > 0 {
+				availableHeight = height[0]
+			}
+			return renderCustomPhaseList(state, cursor, availableHeight)
 		}
 	}
 	return renderPresetList(state, cursor)
@@ -364,7 +401,7 @@ func renderPresetList(state ClaudeModelPickerState, cursor int) string {
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render("Current: " + string(state.Preset)))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how Claude models are assigned to each SDD phase:"))
+	b.WriteString(styles.SubtextStyle.Render("Choose how Claude models are assigned to ODD and review roles:"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range claudePresetOrder {
@@ -382,15 +419,41 @@ func renderPresetList(state ClaudeModelPickerState, cursor int) string {
 	return b.String()
 }
 
-func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
+func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) string {
+	// Keep the title, instruction, and help visible while following the cursor
+	// through the phase and action rows on short terminals.
+	start, end := 0, len(claudePhases)+2
+	if height > 0 && height < end+6 {
+		visible := height - 6
+		if visible < 1 {
+			visible = 1
+		}
+		start = cursor - visible + 1
+		if start < 0 {
+			start = 0
+		}
+		if start > end-visible {
+			start = end - visible
+		}
+		if start < 0 {
+			start = 0
+		}
+		end = start + visible
+		if end > len(claudePhases)+2 {
+			end = len(claudePhases) + 2
+		}
+	}
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Custom Claude Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Select a phase to choose its model, then choose a supported effort level."))
+	b.WriteString(styles.SubtextStyle.Render("Select a role to choose its model, then choose a supported effort level."))
 	b.WriteString("\n\n")
 
 	for idx, phase := range claudePhases {
+		if idx < start || idx >= end {
+			continue
+		}
 		focused := idx == cursor
 		assignment := state.CustomAssignments[phase]
 		if !assignment.Model.Valid() {
@@ -409,12 +472,14 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor int) string {
 		}
 	}
 
+	for idx, label := range []string{"Confirm", "← Back"} {
+		row := len(claudePhases) + idx
+		if row >= start && row < end {
+			b.WriteString(renderOptions([]string{label}, cursor-row))
+		}
+	}
 	b.WriteString("\n")
-
-	actionCursor := cursor - len(claudePhases)
-	b.WriteString(renderOptions([]string{"Confirm", "← Back"}, actionCursor))
-	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: edit phase / confirm • esc: back to presets"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: edit role / confirm • esc: back to presets"))
 
 	return b.String()
 }

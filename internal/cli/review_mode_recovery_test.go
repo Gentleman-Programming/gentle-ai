@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // An unreadable kill-switch value is not a disabled switch: it resolves to
@@ -33,6 +33,7 @@ func TestUnreadableGlobalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
 }
 
 func TestUnreadableCloneLocalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
+	reviewEnabledHome(t)
 	assertUnreadableModeIsRecoverable(t, reviewModeCorruption{clone: true})
 }
 
@@ -94,9 +95,14 @@ func assertUnreadableModeIsRecoverable(t *testing.T, corruption reviewModeCorrup
 // reviewModeUnreadableFixture builds a repository whose named scopes hold a
 // readable but nonsense mode value, and returns the message `review mode
 // status` -- the read-only diagnostic an operator reaches for first -- emits.
+//
+// The operator this models wants to review, so the fixture starts from an
+// explicit global "on" rather than relying on the unset ON default. Clearing a
+// corrupted clone-local override must restore that explicit opinion. A global
+// corruption below overwrites that same field, so the global case is unchanged.
 func reviewModeUnreadableFixture(t *testing.T, corruption reviewModeCorruption) (string, string) {
 	t.Helper()
-	home := reviewModeHome(t)
+	home := reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
 	if corruption.clone {
@@ -154,7 +160,7 @@ func reviewModeCorruptPaths(t *testing.T, corruption reviewModeCorruption, repo 
 
 func reviewModeCloneRecordPath(t *testing.T, repo string) string {
 	t.Helper()
-	root := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	root := filepath.Join(repo, ".git", "gentle-ai", "review-mode", "rar-authority", "v1", "rdd-mode")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatalf("clone-local override directory: %v", err)

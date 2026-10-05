@@ -145,7 +145,7 @@ func TestComputeChecksum_SkipsMissingFiles(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// IsDuplicate tests
+// DuplicateManifest tests
 // ---------------------------------------------------------------------------
 
 // makeTestBackup is a helper that creates a backup directory with a manifest
@@ -164,30 +164,37 @@ func makeTestBackup(t *testing.T, backupDir string, m Manifest) string {
 	return dir
 }
 
-// TestIsDuplicate_IdenticalChecksum verifies that IsDuplicate returns true
-// when the most recent backup has a Checksum matching newChecksum.
-func TestIsDuplicate_IdenticalChecksum(t *testing.T) {
+func TestDuplicateManifest_ReturnsExactMostRecentManifest(t *testing.T) {
 	backupDir := t.TempDir()
-
+	createdAt := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	makeTestBackup(t, backupDir, Manifest{
-		ID:        "backup-01",
-		CreatedAt: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		ID:        "backup-z",
+		CreatedAt: createdAt.Add(-time.Hour),
 		Checksum:  "abc123",
-		Entries:   []ManifestEntry{},
+		Entries:   []ManifestEntry{{OriginalPath: "/old"}},
+	})
+	makeTestBackup(t, backupDir, Manifest{
+		ID:        "backup-a",
+		CreatedAt: createdAt,
+		Checksum:  "abc123",
+		Entries:   []ManifestEntry{{OriginalPath: "/new"}},
 	})
 
-	got, err := IsDuplicate(backupDir, "abc123")
+	manifest, duplicate, err := DuplicateManifest(backupDir, "abc123")
 	if err != nil {
-		t.Fatalf("IsDuplicate() error = %v", err)
+		t.Fatalf("DuplicateManifest() error = %v", err)
 	}
-	if !got {
-		t.Error("IsDuplicate() = false, want true when checksum matches most recent backup")
+	if !duplicate {
+		t.Fatal("DuplicateManifest() duplicate = false, want true")
+	}
+	if manifest.ID != "backup-a" || len(manifest.Entries) != 1 || manifest.Entries[0].OriginalPath != "/new" {
+		t.Fatalf("DuplicateManifest() = %+v, want exact most recent matching manifest", manifest)
 	}
 }
 
-// TestIsDuplicate_DifferentChecksum verifies that IsDuplicate returns false
+// TestDuplicateManifest_DifferentChecksum verifies that DuplicateManifest returns false
 // when the most recent backup has a different Checksum.
-func TestIsDuplicate_DifferentChecksum(t *testing.T) {
+func TestDuplicateManifest_DifferentChecksum(t *testing.T) {
 	backupDir := t.TempDir()
 
 	makeTestBackup(t, backupDir, Manifest{
@@ -197,32 +204,32 @@ func TestIsDuplicate_DifferentChecksum(t *testing.T) {
 		Entries:   []ManifestEntry{},
 	})
 
-	got, err := IsDuplicate(backupDir, "def456")
+	_, got, err := DuplicateManifest(backupDir, "def456")
 	if err != nil {
-		t.Fatalf("IsDuplicate() error = %v", err)
+		t.Fatalf("DuplicateManifest() error = %v", err)
 	}
 	if got {
-		t.Error("IsDuplicate() = true, want false when checksum differs from most recent backup")
+		t.Error("DuplicateManifest() duplicate = true, want false when checksum differs from most recent backup")
 	}
 }
 
-// TestIsDuplicate_NoExistingBackups verifies that IsDuplicate returns false
+// TestDuplicateManifest_NoExistingBackups verifies that DuplicateManifest returns false
 // when the backup directory contains no prior backups.
-func TestIsDuplicate_NoExistingBackups(t *testing.T) {
+func TestDuplicateManifest_NoExistingBackups(t *testing.T) {
 	backupDir := t.TempDir()
 
-	got, err := IsDuplicate(backupDir, "abc123")
+	_, got, err := DuplicateManifest(backupDir, "abc123")
 	if err != nil {
-		t.Fatalf("IsDuplicate() error = %v", err)
+		t.Fatalf("DuplicateManifest() error = %v", err)
 	}
 	if got {
-		t.Error("IsDuplicate() = true, want false when no prior backups exist")
+		t.Error("DuplicateManifest() duplicate = true, want false when no prior backups exist")
 	}
 }
 
-// TestIsDuplicate_EmptyNewChecksum verifies that IsDuplicate returns false
+// TestDuplicateManifest_EmptyNewChecksum verifies that DuplicateManifest returns false
 // when newChecksum is empty — we never skip a backup when we have no checksum.
-func TestIsDuplicate_EmptyNewChecksum(t *testing.T) {
+func TestDuplicateManifest_EmptyNewChecksum(t *testing.T) {
 	backupDir := t.TempDir()
 
 	makeTestBackup(t, backupDir, Manifest{
@@ -232,18 +239,18 @@ func TestIsDuplicate_EmptyNewChecksum(t *testing.T) {
 		Entries:   []ManifestEntry{},
 	})
 
-	got, err := IsDuplicate(backupDir, "")
+	_, got, err := DuplicateManifest(backupDir, "")
 	if err != nil {
-		t.Fatalf("IsDuplicate() error = %v", err)
+		t.Fatalf("DuplicateManifest() error = %v", err)
 	}
 	if got {
-		t.Error("IsDuplicate() = true, want false when newChecksum is empty")
+		t.Error("DuplicateManifest() duplicate = true, want false when newChecksum is empty")
 	}
 }
 
-// TestIsDuplicate_MostRecentNoChecksum verifies that IsDuplicate returns false
+// TestDuplicateManifest_MostRecentNoChecksum verifies that DuplicateManifest returns false
 // when the most recent backup has an empty Checksum (old manifest without dedup).
-func TestIsDuplicate_MostRecentNoChecksum(t *testing.T) {
+func TestDuplicateManifest_MostRecentNoChecksum(t *testing.T) {
 	backupDir := t.TempDir()
 
 	makeTestBackup(t, backupDir, Manifest{
@@ -253,18 +260,18 @@ func TestIsDuplicate_MostRecentNoChecksum(t *testing.T) {
 		Entries:   []ManifestEntry{},
 	})
 
-	got, err := IsDuplicate(backupDir, "abc123")
+	_, got, err := DuplicateManifest(backupDir, "abc123")
 	if err != nil {
-		t.Fatalf("IsDuplicate() error = %v", err)
+		t.Fatalf("DuplicateManifest() error = %v", err)
 	}
 	if got {
-		t.Error("IsDuplicate() = true, want false when most recent backup has no checksum")
+		t.Error("DuplicateManifest() duplicate = true, want false when most recent backup has no checksum")
 	}
 }
 
-// TestIsDuplicate_PicksMostRecent verifies that IsDuplicate compares against
+// TestDuplicateManifest_PicksMostRecent verifies that DuplicateManifest compares against
 // the MOST RECENT backup by CreatedAt, not the first one found on disk.
-func TestIsDuplicate_PicksMostRecent(t *testing.T) {
+func TestDuplicateManifest_PicksMostRecent(t *testing.T) {
 	backupDir := t.TempDir()
 
 	// Older backup matches the new checksum.
@@ -283,12 +290,12 @@ func TestIsDuplicate_PicksMostRecent(t *testing.T) {
 	})
 
 	// Should compare against the NEWER backup — returns false.
-	got, err := IsDuplicate(backupDir, "match-me")
+	_, got, err := DuplicateManifest(backupDir, "match-me")
 	if err != nil {
-		t.Fatalf("IsDuplicate() error = %v", err)
+		t.Fatalf("DuplicateManifest() error = %v", err)
 	}
 	if got {
-		t.Error("IsDuplicate() = true, want false — the most recent backup has a different checksum")
+		t.Error("DuplicateManifest() duplicate = true, want false — the most recent backup has a different checksum")
 	}
 }
 

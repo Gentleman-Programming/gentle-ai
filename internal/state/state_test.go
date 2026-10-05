@@ -1,15 +1,136 @@
 package state
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
+
+// TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError verifies that
+// a persistence error is reconciled against the bytes visible on disk.
+func TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError(t *testing.T) {
+	home := t.TempDir()
+	desired := InstallState{InstalledAgents: []string{"opencode"}}
+	if err := Write(home, desired); err != nil {
+		t.Fatal(err)
+	}
+	statePath := Path(home)
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.Rename(statePath, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, statePath); err != nil {
+		t.Skipf("state symlink unavailable: %v", err)
+	}
+
+	if err := WriteReconciled(home, desired); err != nil {
+		t.Fatalf("WriteReconciled() error = %v", err)
+	}
+	visible, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(visible) != string(data) {
+		t.Fatalf("visible state changed:\n got %s\nwant %s", visible, data)
+	}
+}
+
+func fullyPopulatedInstallState() InstallState {
+	lastUpdateCheck := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
+	rddModeRecordedAt := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
+	return InstallState{
+		InstalledAgents:          []string{"claude-code", "opencode"},
+		InstalledBinaryVersion:   "1.2.3",
+		ManagedAssetDigest:       "sha256:managed-assets",
+		SelectionConfigured:      true,
+		Components:               []model.ComponentID{model.ComponentEngram, model.ComponentSDD},
+		Skills:                   []model.SkillID{model.SkillSDDInit, model.SkillWorkUnitCommits},
+		Preset:                   model.PresetCustom,
+		SDDMode:                  model.SDDModeMulti,
+		StrictTDD:                true,
+		CommunityTools:           []string{"codegraph"},
+		CommunityToolsConfigured: true,
+		ClaudeModelAssignments:   map[string]string{"sdd-explore": "sonnet"},
+		ClaudePhaseAssignments: map[string]ClaudePhaseAssignmentState{
+			"sdd-apply": {Model: "opus", Effort: "max"},
+		},
+		KiroModelAssignments: map[string]string{"sdd-design": "opus"},
+		CodexModelAssignments: map[string]string{
+			"sdd-verify": "high",
+		},
+		CodexOrchestratorAssignment: &CodexOrchestratorAssignmentState{Model: "gpt-5.6-luna", Effort: "high"},
+		CodexCarrilModelAssignments: map[string]string{
+			"sdd-strong": "gpt-5.6-luna",
+			"sdd-cheap":  "gpt-5.4-mini",
+		},
+		CodexPhaseModelAssignments: map[string]string{
+			"sdd-propose": "gpt-5.6-sol",
+		},
+		ModelAssignments: map[string]ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "medium"},
+		},
+		Persona:           "neutral",
+		PersonaPresent:    true,
+		LastUpdateCheck:   &lastUpdateCheck,
+		PendingSync:       true,
+		RDDMode:           "off",
+		RDDModeRecordedAt: &rddModeRecordedAt,
+		BackgroundIntent:  model.OpenCodeBackgroundOn,
+	}
+}
+
+func TestInstallStatePreservesEveryField(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		run  func(t *testing.T, want InstallState) InstallState
+	}{
+		{
+			name: "JSON round-trip",
+			run: func(t *testing.T, want InstallState) InstallState {
+				home := t.TempDir()
+				if err := Write(home, want); err != nil {
+					t.Fatal(err)
+				}
+				got, err := Read(home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return got
+			},
+		},
+		{
+			name: "MergeAgents",
+			run: func(_ *testing.T, want InstallState) InstallState {
+				return MergeAgents(want, []string{"opencode", "codex"})
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want := fullyPopulatedInstallState()
+			wantAfter := want
+			wantAfter.StrictTDD = false // retired selection is never persisted or propagated
+			if tt.name == "MergeAgents" {
+				wantAfter.InstalledAgents = []string{"claude-code", "opencode", "codex"}
+			}
+			got := tt.run(t, want)
+			if !reflect.DeepEqual(got, wantAfter) {
+				t.Fatalf("InstallState = %#v, want %#v", got, wantAfter)
+			}
+		})
+	}
+}
 
 // TestMergeAgents verifies that MergeAgents appends new agents to existing
 // installed_agents with deduplication and preserves all other fields.
@@ -114,6 +235,26 @@ func TestCommunityToolsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLegacySDDDecodesButNeverRestoresActiveSelection(t *testing.T) {
+	var legacy InstallState
+	if err := json.Unmarshal([]byte(`{"selection_configured":true,"components":["sdd","engram"],"sdd_mode":"multi","strict_tdd":true}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(legacy.Components, model.ComponentSDD) || legacy.SDDMode != model.SDDModeMulti {
+		t.Fatalf("legacy state decode lost: %+v", legacy)
+	}
+	selection := model.Selection{}
+	legacy.RestoreSelection(&selection)
+	if selection.HasComponent(model.ComponentSDD) || selection.SDDMode != "" || !selection.HasComponent(model.ComponentEngram) || selection.StrictTDD {
+		t.Fatalf("active selection restored retired mode: %+v", selection)
+	}
+	var next InstallState
+	next.SetSelection(model.Selection{Components: []model.ComponentID{model.ComponentEngram, model.ComponentSDD}, SDDMode: model.SDDModeMulti, StrictTDD: true})
+	if slices.Contains(next.Components, model.ComponentSDD) || next.SDDMode != "" || next.StrictTDD {
+		t.Fatalf("new state persisted retired mode: %+v", next)
+	}
+}
+
 func TestSelectionRoundTripPreservesPresenceAndExplicitEmpty(t *testing.T) {
 	tests := []InstallState{
 		{SelectionConfigured: true, Components: []model.ComponentID{model.ComponentSDD}, Skills: []model.SkillID{model.SkillSDDInit}, Preset: model.PresetCustom, SDDMode: model.SDDModeMulti, StrictTDD: true},
@@ -126,9 +267,33 @@ func TestSelectionRoundTripPreservesPresenceAndExplicitEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := Read(home)
-		if err != nil || got.SelectionConfigured != want.SelectionConfigured || !slices.Equal(got.Components, want.Components) || !slices.Equal(got.Skills, want.Skills) || got.Preset != want.Preset || got.SDDMode != want.SDDMode || got.StrictTDD != want.StrictTDD {
+		if err != nil || got.SelectionConfigured != want.SelectionConfigured || !slices.Equal(got.Components, want.Components) || !slices.Equal(got.Skills, want.Skills) || got.Preset != want.Preset || got.SDDMode != want.SDDMode || got.StrictTDD {
 			t.Errorf("case %d selection = %#v, want %#v", i, got, want)
 		}
+	}
+}
+
+func TestLegacyStrictTDDValuesDecodeButNeverWriteOrRestore(t *testing.T) {
+	for _, value := range []string{"true", "false"} {
+		t.Run(value, func(t *testing.T) {
+			var legacy InstallState
+			if err := json.Unmarshal([]byte(`{"selection_configured":true,"strict_tdd":`+value+`,"persona":"neutral"}`), &legacy); err != nil {
+				t.Fatal(err)
+			}
+			selection := model.Selection{StrictTDD: true}
+			legacy.RestoreSelection(&selection)
+			if selection.StrictTDD || selection.Persona != "" {
+				t.Fatalf("legacy toggle leaked into selection: %+v", selection)
+			}
+			home := t.TempDir()
+			if err := Write(home, legacy); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(Path(home))
+			if err != nil || bytes.Contains(raw, []byte(`"strict_tdd"`)) || !bytes.Contains(raw, []byte(`"persona": "neutral"`)) {
+				t.Fatalf("migration lost unrelated state or wrote retired toggle: %s, %v", raw, err)
+			}
+		})
 	}
 }
 
@@ -191,6 +356,147 @@ func TestPersonaBackwardCompat(t *testing.T) {
 	}
 	if s.Persona != "" {
 		t.Errorf("Persona = %q, want empty for pre-feature state", s.Persona)
+	}
+}
+
+func TestPersonaPresenceDistinguishesOmittedAndExplicitEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		stateJSON   string
+		wantPresent bool
+	}{
+		{name: "omitted", stateJSON: `{"installed_agents":["pi"]}`, wantPresent: false},
+		{name: "explicit empty", stateJSON: `{"installed_agents":["pi"],"persona":""}`, wantPresent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			got, err := Read(home)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if got.PersonaPresent != tc.wantPresent {
+				t.Fatalf("PersonaPresent = %t, want %t", got.PersonaPresent, tc.wantPresent)
+			}
+		})
+	}
+}
+
+// TestReadRejectsAmbiguousPersistedPersona verifies that state shapes which
+// would silently collapse to a different persona fail closed instead.
+func TestReadRejectsAmbiguousPersistedPersona(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stateJSON string
+		wantErr   string
+	}{
+		{name: "null document", stateJSON: "null", wantErr: "must contain a JSON object"},
+		{name: "padded null document", stateJSON: " \n null \n", wantErr: "must contain a JSON object"},
+		{name: "duplicate unknown then neutral", stateJSON: `{"persona":"unknown","persona":"neutral"}`, wantErr: `duplicate "persona" keys`},
+		{name: "duplicate neutral then unknown", stateJSON: `{"persona":"neutral","persona":"unknown"}`, wantErr: `duplicate "persona" keys`},
+		{name: "duplicate valid values", stateJSON: `{"persona":"neutral","persona":"gentleman"}`, wantErr: `duplicate "persona" keys`},
+		{name: "duplicate via unicode escape", stateJSON: `{"persona":"unknown","pers\u006fna":"neutral"}`, wantErr: `duplicate "persona" keys`},
+		{name: "case variant alone", stateJSON: `{"installed_agents":["pi"],"Persona":""}`, wantErr: `"Persona" must be spelled "persona"`},
+		{name: "case variant before canonical", stateJSON: `{"PERSONA":"unknown","persona":"neutral"}`, wantErr: `"PERSONA" must be spelled "persona"`},
+		{name: "case variant after canonical", stateJSON: `{"persona":"unknown","Persona":"neutral"}`, wantErr: `"Persona" must be spelled "persona"`},
+		{name: "unicode fold variant", stateJSON: `{"persona":"unknown","per\u017fona":"neutral"}`, wantErr: "must be spelled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			got, err := Read(home)
+			if err == nil {
+				t.Fatalf("Read() = %+v, want error containing %q", got, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Read() error = %q, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// An empty object would drop installation settings and the persona, so the
+// null refusal must point at restoring the intended state instead.
+func TestReadNullStateAdvisesRestoreNotReset(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(Path(home), []byte("null"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Read(home)
+	if err == nil {
+		t.Fatal("Read() error = nil, want null state refusal")
+	}
+	if msg := err.Error(); strings.Contains(msg, "{}") || !strings.Contains(msg, "restore a valid state file from a backup that keeps your intended persona and installation settings") {
+		t.Fatalf("Read() error = %q, want restore advice without an empty-object reset", msg)
+	}
+}
+
+// TestReadAcceptsUnambiguousPersistedPersona pins the shapes that must keep
+// decoding unchanged next to the ambiguity guard.
+func TestReadAcceptsUnambiguousPersistedPersona(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		stateJSON   string
+		wantPersona string
+		wantPresent bool
+	}{
+		{name: "canonical", stateJSON: `{"installed_agents":["pi"],"persona":"neutral"}`, wantPersona: "neutral", wantPresent: true},
+		{name: "canonical escaped", stateJSON: `{"pers\u006fna":"custom"}`, wantPersona: "custom", wantPresent: true},
+		{name: "missing legacy field", stateJSON: `{"installed_agents":["pi"]}`},
+		{name: "empty object", stateJSON: `{}`},
+		{name: "explicit null value", stateJSON: `{"persona":null}`, wantPresent: true},
+		{name: "nested persona keys", stateJSON: `{"claude_model_assignments":{"persona":"a","Persona":"b"},"persona":"gentleman"}`, wantPersona: "gentleman", wantPresent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			got, err := Read(home)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if got.Persona != tc.wantPersona || got.PersonaPresent != tc.wantPresent {
+				t.Fatalf("Persona = %q (present %t), want %q (present %t)", got.Persona, got.PersonaPresent, tc.wantPersona, tc.wantPresent)
+			}
+		})
+	}
+}
+
+// TestReadKeepsRejectingNonObjectAndTrailingDocuments pins existing strict
+// decoding for shapes the persona guard must not relax.
+func TestReadKeepsRejectingNonObjectAndTrailingDocuments(t *testing.T) {
+	for _, stateJSON := range []string{`[]`, `"persona"`, `1`, `{} {}`, `{"persona":"neutral"} null`, `{"persona":`} {
+		home := t.TempDir()
+		if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(Path(home), []byte(stateJSON), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		if got, err := Read(home); err == nil {
+			t.Fatalf("Read(%q) = %+v, want error", stateJSON, got)
+		}
 	}
 }
 
@@ -276,7 +582,7 @@ func TestWriteOverwrite(t *testing.T) {
 
 func TestWriteFailurePreservesExistingState(t *testing.T) {
 	home := t.TempDir()
-	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}
+	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral", PersonaPresent: true}
 	if err := Write(home, original); err != nil {
 		t.Fatal(err)
 	}
@@ -987,6 +1293,74 @@ func TestMergeAgents_PreservesRDDMode(t *testing.T) {
 	merged := MergeAgents(existing, []string{"opencode"})
 	if merged.RDDMode != "off" || merged.RDDModeRecordedAt == nil || !merged.RDDModeRecordedAt.Equal(recorded) {
 		t.Errorf("MergeAgents dropped the global mode: %q/%v", merged.RDDMode, merged.RDDModeRecordedAt)
+	}
+}
+
+// ─── LastSyncedAt round-trip and backward-compat ─────────────────────────
+
+func TestLastSyncedAt_RoundTrip(t *testing.T) {
+	home := t.TempDir()
+	ts := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	s := InstallState{InstalledAgents: []string{"codex"}, LastSyncedAt: &ts}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got.LastSyncedAt == nil || !got.LastSyncedAt.Equal(ts) {
+		t.Errorf("LastSyncedAt = %v, want %v", got.LastSyncedAt, ts)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !contains(string(data), "last_synced_at") {
+		t.Errorf("JSON must contain key last_synced_at; got:\n%s", data)
+	}
+}
+
+func TestLastSyncedAt_OmitWhenZero(t *testing.T) {
+	home := t.TempDir()
+	s := InstallState{InstalledAgents: []string{"codex"}}
+	if err := Write(home, s); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if contains(string(data), "last_synced_at") {
+		t.Error("JSON must not contain last_synced_at when zero")
+	}
+}
+
+func TestLastSyncedAt_BackwardCompat(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, stateDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"installed_agents":["codex"]}` + "\n"
+	if err := os.WriteFile(Path(home), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	s, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if s.LastSyncedAt != nil {
+		t.Errorf("LastSyncedAt = %v, want nil for legacy state", s.LastSyncedAt)
+	}
+}
+
+func TestMergeAgents_PreservesLastSyncedAt(t *testing.T) {
+	ts := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	existing := InstallState{InstalledAgents: []string{"codex"}, LastSyncedAt: &ts}
+	merged := MergeAgents(existing, []string{"opencode"})
+	if merged.LastSyncedAt == nil || !merged.LastSyncedAt.Equal(ts) {
+		t.Errorf("MergeAgents did not preserve LastSyncedAt: got %v, want %v",
+			merged.LastSyncedAt, ts)
 	}
 }
 

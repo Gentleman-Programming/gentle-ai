@@ -8,11 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -71,10 +71,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentClaudeCode)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
 	resolver := a.resolver
 	if resolver == nil {
@@ -120,14 +116,11 @@ func MergeUserConfig(homeDir string, overlayJSON []byte) (filemerge.WriteResult,
 			}
 			return filemerge.WriteResult{}, configPath, fmt.Errorf("gave up merging into %q after %d attempts: the file kept changing underneath the merge", configPath, maxAttempts)
 		}
-		writeResult, err := filemerge.WriteFileAtomic(configPath, merged, 0o600)
+		// WriteFileAtomicMode enforces 0600 even on a byte-identical write; the
+		// OAuth-bearing file must end at 0600 regardless.
+		writeResult, err := filemerge.WriteFileAtomicMode(configPath, merged, 0o600)
 		if err != nil {
 			return filemerge.WriteResult{}, configPath, err
-		}
-		// WriteFileAtomic skips byte-identical writes (and their mode);
-		// the OAuth-bearing file must end at 0600 regardless.
-		if chmodErr := os.Chmod(configPath, 0o600); chmodErr != nil {
-			return writeResult, configPath, fmt.Errorf("tighten mode of %q: %w", configPath, chmodErr)
 		}
 		return writeResult, configPath, nil
 	}

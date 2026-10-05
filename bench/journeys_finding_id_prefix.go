@@ -1,0 +1,144 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+const (
+	findingIDPrefixScratchKey = "finding-id-prefix:"
+	findingIDPrefixLineage    = "finding-id-prefix-discovery"
+)
+
+func findingIDPrefixJourneys() []Journey {
+	return []Journey{
+		{
+			ID:     "j78-lens-finding-id-prefix-discovery",
+			Review: reviewOptedIn,
+			Title:  "#3587: an exact active-lineage reviewer discovers lens finding-ID prefixes before native admission",
+			Source: "issue #1844 under #3587: exact active-lineage STATUS binds every discovered finding-ID prefix before native admission",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: stage high-risk code", Fixture: stageAuthCode},
+				{Name: "review start with an exact active lineage discloses canonical prefixes", Requires: startNamedCapability,
+					Args: productArgs("review", "start", "--lineage", findingIDPrefixLineage), After: rememberFindingIDPrefixes},
+				{Name: "capture explicit IDs from the exact active-lineage STATUS prefixes", Requires: captureResultCapability,
+					Composite: func(r *journeyRun) error { return captureDisclosedFindingIDPrefixes(r, findingIDPrefixLineage) }},
+			},
+		},
+	}
+}
+
+func rememberFindingIDPrefixes(sandbox *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("review start exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
+	if err := rememberLineage(sandbox, observation); err != nil {
+		return err
+	}
+	if sandbox.Lineage != findingIDPrefixLineage {
+		return fmt.Errorf("review start lineage = %q, want exact active lineage %q", sandbox.Lineage, findingIDPrefixLineage)
+	}
+	var start struct {
+		LensBindings []struct {
+			Lens            string `json:"lens"`
+			FindingIDPrefix string `json:"finding_id_prefix"`
+		} `json:"lens_bindings"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &start); err != nil {
+		return fmt.Errorf("parse review start: %w", err)
+	}
+	want := map[string]string{
+		"review-risk":        "R1-",
+		"review-readability": "R2-",
+		"review-reliability": "R3-",
+		"review-resilience":  "R4-",
+	}
+	if len(start.LensBindings) != len(want) {
+		return fmt.Errorf("review start lens bindings = %#v, want all four canonical mappings", start.LensBindings)
+	}
+	seen := map[string]bool{}
+	for _, binding := range start.LensBindings {
+		prefix, known := want[binding.Lens]
+		if !known || binding.FindingIDPrefix != prefix || seen[binding.Lens] {
+			return fmt.Errorf("review start lens binding = %#v, want unique canonical mapping", binding)
+		}
+		seen[binding.Lens] = true
+		sandbox.Scratch[findingIDPrefixScratchKey+binding.Lens] = binding.FindingIDPrefix
+	}
+	return nil
+}
+
+func captureDisclosedFindingIDPrefixes(r *journeyRun, lineage string) error {
+	for round := 0; round < 4; round++ {
+		envelope, err := readAtomicReviewStatus(r, lineage)
+		if err != nil {
+			return err
+		}
+		if envelope.Authority.LineageID != lineage || envelope.NextTransition.Kind != "collect" || len(envelope.NextTransition.Collect.Inputs) == 0 ||
+			envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
+			return fmt.Errorf("capture round %d did not publish a reviewer-result collection", round+1)
+		}
+		lens := envelope.argument("lens")
+		prefix := r.sandbox.Scratch[findingIDPrefixScratchKey+lens]
+		if prefix == "" {
+			return fmt.Errorf("capture lens %q has no prefix disclosed by review start", lens)
+		}
+		paths := envelope.paths()
+		if len(paths) == 0 {
+			return fmt.Errorf("capture lens %q has no frozen inspection paths", lens)
+		}
+		location := paths[0] + ":1"
+		payload, err := json.Marshal(map[string]any{
+			"subject_hash": envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash,
+			"inspection":   map[string]any{"status": "completed", "paths": paths},
+			"findings": []any{map[string]any{
+				"id": prefix + fmt.Sprintf("bench-%d", round+1), "location": location,
+				"severity": "WARNING", "claim": "the mapped finding ID reaches native admission",
+				"proof_refs": []string{location},
+			}},
+			"evidence": []string{"inspected the complete frozen candidate scope named by the capture binding"},
+		})
+		if err != nil {
+			return err
+		}
+		path, err := writeScratch(r.sandbox, fmt.Sprintf("mapped-reviewer-%d.json", round), payload)
+		if err != nil {
+			return err
+		}
+		observation := r.run([]string{
+			"review", "capture-result", "--cwd", r.sandbox.Repo,
+			"--lineage", envelope.argument("lineage"),
+			"--target", envelope.argument("target"),
+			"--expected-revision", envelope.argument("expected-revision"),
+			"--lens", lens,
+			"--order", envelope.argument("order"),
+			"--input", path,
+		}, true)
+		if observation.ExitCode != 0 {
+			return fmt.Errorf("capture mapped ID for %q exited %d: %s", lens, observation.ExitCode, firstLine(observation.Stderr))
+		}
+		var captured struct {
+			Schema            string `json:"schema"`
+			Operation         string `json:"operation"`
+			LineageID         string `json:"lineage_id"`
+			State             string `json:"state"`
+			AdmissionDecision string `json:"admission_decision"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &captured); err != nil {
+			return fmt.Errorf("decode mapped-ID capture for %q: %w", lens, err)
+		}
+		if captured.Schema == "gentle-ai.review-last-event-closure/v1" {
+			if round != 3 || captured.Operation != "review/capture-result" ||
+				captured.LineageID != lineage || captured.State != "approved" {
+				return fmt.Errorf("terminal mapped-ID acknowledgement capture for %q = %+v", lens, captured)
+			}
+			return requireAtomicLineageAcknowledged(r, lineage)
+		}
+		if captured.AdmissionDecision != "completed" {
+			return fmt.Errorf("capture mapped ID for %q = %q; want an admitted result or terminal closure", lens, observation.Stdout)
+		}
+	}
+	return fmt.Errorf("mapped finding-ID captures never produced terminal last-event closure")
+}

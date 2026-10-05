@@ -1,11 +1,11 @@
-Select SDD Mode
+STRICT TDD MODE
 
-How should the SDD orchestrator be configured for OpenCode?
+Should agents follow Strict TDD (RED → GREEN → REFACTOR) for every task?
+When enabled, agents write tests first and confirm failure,
+then implement the minimum code to pass before refactoring.
 
-▸ ( ) single
-    Single orchestrator — one agent handles all SDD phases
-  ( ) multi
-    Multi-agent — dedicated sub-agent per SDD phase (9 hidden agents)
+▸ ( ) Enable
+  (*) Disable
 
   Back
 
