@@ -28,7 +28,10 @@ type Sandbox struct {
 	// PathOverride is prepended to PATH for journeys that need a deterministic
 	// local runtime probe without depending on the host installation.
 	PathOverride string
-	Root         string
+	// LoginShell sets SHELL for journeys whose subject depends on the login
+	// shell the product models; the sandbox leaves SHELL unset otherwise.
+	LoginShell string
+	Root       string
 	Home         string
 	Repo         string
 	Remote       string
@@ -109,6 +112,9 @@ func (s *Sandbox) env() []string {
 		"NO_COLOR=1",
 		"TERM=dumb",
 		"LANG=C",
+	}
+	if s.LoginShell != "" {
+		env = append(env, "SHELL="+s.LoginShell)
 	}
 	if s.BenchCrashAtPhase != "" {
 		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
