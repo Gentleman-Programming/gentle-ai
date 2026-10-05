@@ -531,6 +531,10 @@ func registeredSubmoduleDirectories(ctx context.Context, root string) []string {
 		// case, never a resolution failure.
 		return nil
 	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
 	var directories []string
 	for _, line := range strings.Split(string(output), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -539,13 +543,22 @@ func registeredSubmoduleDirectories(ctx context.Context, root string) []string {
 		// The value is everything after the first space, so a submodule path
 		// containing spaces survives intact.
 		_, path, found := strings.Cut(line, " ")
-		if !found || path == "" {
+		if !found || path == "" || !filepath.IsLocal(filepath.FromSlash(path)) {
 			continue
 		}
-		directory := filepath.Join(root, path)
+		directory := filepath.Join(root, filepath.FromSlash(path))
 		// Registered but not checked out has no in-place working tree, exactly
 		// like a pruned linked worktree.
 		if info, err := os.Stat(directory); err != nil || !info.IsDir() {
+			continue
+		}
+		// .gitmodules is repository content: a path that escapes the host
+		// checkout, lexically or through a symlink, never names a candidate.
+		resolved, err := filepath.EvalSymlinks(directory)
+		if err != nil {
+			continue
+		}
+		if rel, err := filepath.Rel(canonicalRoot, resolved); err != nil || !filepath.IsLocal(rel) {
 			continue
 		}
 		directories = append(directories, directory)

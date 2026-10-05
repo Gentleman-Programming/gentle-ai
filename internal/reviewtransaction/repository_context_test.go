@@ -375,6 +375,69 @@ func deadRegisteredWorktree(t *testing.T, host string) string {
 	return dead
 }
 
+// A review bound to a submodule the host registered resolves from the host,
+// even though the submodule is not a linked worktree and its Git common
+// directory is <host>/.git/modules/<name>.
+func TestRctx2HostResolutionResolvesARegisteredSubmodule(t *testing.T) {
+	host := initSnapshotRepo(t)
+	source := initSnapshotRepo(t)
+	if err := runSnapshotGit(host, "-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "vendored"); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(host, "vendored")
+	store, binding, handle := rctx2AuthorityFixture(t, target, "rctx2-submodule")
+
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, resolved, err := ResolveReviewRepositoryContextBindingFromHost(t.Context(), host, handle, binding)
+	if err != nil || root != target || resolved != binding {
+		t.Fatalf("rctx2 host resolution to submodule = root %q, binding %#v, error %v; want root %q", root, resolved, err, target)
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("submodule host resolution mutated compact authority")
+	}
+}
+
+// .gitmodules is repository content, so a submodule path that escapes the host
+// checkout must never turn an unrelated repository into a host candidate.
+func TestRctx2HostResolutionRefusesASubmodulePathOutsideTheHost(t *testing.T) {
+	host := initSnapshotRepo(t)
+	outside := initSnapshotRepo(t)
+	store, binding, handle := rctx2AuthorityFixture(t, outside, "rctx2-escaping-submodule")
+	escape, err := filepath.Rel(host, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitmodules := "[submodule \"escape\"]\n\tpath = " + filepath.ToSlash(escape) + "\n\turl = ./escape\n"
+	if err := os.WriteFile(filepath.Join(host, ".gitmodules"), []byte(gitmodules), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertRctx2HostResolutionRefusedWithoutMutation(t, host, store, handle, binding)
+}
+
+func rctx2AuthorityFixture(t *testing.T, repo, lineage string) (CompactStore, ReviewRepositoryContextBinding, string) {
+	t.Helper()
+	record, _ := pristineReviewingFixture(t, repo, lineage)
+	store, err := CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := ReviewRepositoryContextBinding{
+		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
+	}
+	handle, err := deriveReviewRepositoryContextV2Token(t.Context(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, binding, handle
+}
+
 func historicalReviewRepositoryContextFixture(t *testing.T, lineage string) (string, ReviewRepositoryContextBinding) {
 	t.Helper()
 	home := t.TempDir()
