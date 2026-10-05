@@ -130,7 +130,7 @@ cd e2e && ./docker-test.sh
 - [ ] API read-back confirms exactly one appropriate `type:*` label on this PR
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
-- [ ] I have updated documentation if necessary
+- [ ] If behavior changed, docs in `docs/` are updated in the same PR (reference docs track `main`)
 - [ ] My commits follow Conventional Commits format
 - [ ] My commits do not include `Co-Authored-By` trailers
 

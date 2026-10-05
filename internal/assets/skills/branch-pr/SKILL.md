@@ -109,9 +109,10 @@ Check exactly ONE in the template and add the matching label:
 ### 5. Test Plan
 
 ```markdown
-- [ ] Scripts run without errors: `shellcheck scripts/*.sh` (check only if run and passed)
+- [ ] Unit tests pass: `go test ./...` (check only if run and passed)
+- [ ] Go format passes: `go run ./internal/gofmtcheck` (check only if run and passed)
+- [ ] E2E tests pass: `cd e2e && ./docker-test.sh` (check only if run and passed)
 - [ ] Manually tested the affected functionality (check only if observed)
-- [ ] Skills load correctly in target agent (check only if verified)
 ```
 
 ### 6. Contributor Checklist
@@ -119,9 +120,9 @@ Check exactly ONE in the template and add the matching label:
 Mark boxes only with observed evidence; leave pending actions unchecked and describe them. An unchecked required gate is not merge-ready:
 - Linked an approved issue using the human-selected closing or non-closing reference
 - Added exactly one `type:*` label (confirmed by target-host readback)
-- Ran shellcheck on modified scripts where applicable
-- Skills tested in at least one agent where applicable
-- Docs updated if behavior changed
+- Unit tests, Go format and E2E tests pass
+- Benchmark validation completed, or explained as not applicable in the Test Plan
+- If behavior changed, docs in `docs/` are updated in the same PR
 - Conventional commit format
 - No `Co-Authored-By` trailers
 
@@ -134,7 +135,10 @@ Mark boxes only with observed evidence; leave pending actions unchecked and desc
 | PR Validation | `Check Issue Reference` | Body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or `Refs #N` |
 | PR Validation | `Check Issue Has status:approved` | Linked issue has `status:approved` |
 | PR Validation | `Check PR Has type:* Label` | PR has exactly one `type:*` label |
-| CI | `Shellcheck` | Shell scripts pass `shellcheck` |
+| PR Validation | `Check PR Cognitive Load` | PR stays within 400 changed lines or uses `size:exception` |
+| CI | `Unit Tests` | `go test ./...` passes |
+| CI | `Go Format` | `go run ./internal/gofmtcheck` passes |
+| CI | `E2E Tests (<platform>)` | Docker E2E suite passes on each platform |
 
 ---
 
