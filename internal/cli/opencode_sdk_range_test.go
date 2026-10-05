@@ -157,7 +157,7 @@ func TestV2SDKRefusalNamesV1PeerConflictRemedy(t *testing.T) {
 				t.Fatalf("remedy prescribes a pruning npm command: %s", command)
 			}
 		}
-		for _, text := range []string{"removes no packages", "--legacy-peer-deps"} {
+		for _, text := range []string{"does not prune peer packages", "--legacy-peer-deps"} {
 			if !strings.Contains(message, text) {
 				t.Fatalf("peer-conflict refusal lacks %q: %v", text, err)
 			}

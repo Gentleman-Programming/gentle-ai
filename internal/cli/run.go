@@ -1326,8 +1326,8 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 // #5208: a config that predates V2 keeps the V1 SDK and its peer-installed
 // @opentui tree, which conflicts with the optional @opentui/core peer of the
 // V2 SDK, so the pinned npm install stops with ERESOLVE. --legacy-peer-deps
-// would prune that whole peer tree; removing the unused V1 SDK does not
-// touch anything the V2 managed plugins import.
+// and uninstalling the V1 SDK both prune that peer tree, which existing TUI
+// plugins still load; --force overrides the conflict and keeps it.
 func openCodeSDKPeerConflictHint(goos, config, manager, dependency string) string {
 	if manager != "npm" {
 		return ""
@@ -1344,7 +1344,7 @@ func openCodeSDKPeerConflictHint(goos, config, manager, dependency string) strin
 	} else {
 		force = "`" + force + "`"
 	}
-	return "; if npm stops with ERESOLVE, the cause is the OpenCode V1 SDK @opencode-ai/plugin still installed there: its peer-installed @opentui packages conflict with the optional @opentui/core peer of @opencode/plugin. Rerun the install with --force, which accepts that optional peer mismatch and removes no packages: " + force + ". Do not use --legacy-peer-deps or uninstall @opencode-ai/plugin: both prune the peer-installed @opentui and solid-js packages that existing OpenCode TUI plugins load"
+	return "; if npm stops with ERESOLVE, the cause is the OpenCode V1 SDK @opencode-ai/plugin still installed there: its peer-installed @opentui packages conflict with the optional @opentui/core peer of @opencode/plugin. Rerun the install with --force, which overrides the peer conflict and does not prune peer packages (#5208): " + force + ". Do not use --legacy-peer-deps or uninstall @opencode-ai/plugin: both prune the peer-installed @opentui and solid-js packages that existing OpenCode TUI plugins load"
 }
 
 // Bun ownership is a manual-only route even when Bun is unavailable on PATH.
