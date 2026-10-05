@@ -2715,12 +2715,9 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 	// The global legacy-plugin check is a global-scope concern: workspace
 	// sync never touches the global plugin directory, so a pre-existing global
 	// legacy plugin must not fail (or be migrated by) a workspace refresh
-	// (issue #1074).
+	// (issue #1074). Every plugin-receiving agent is checked, Kilocode included.
 	if !workspace {
 		for _, adapter := range adapters {
-			if workspaceAdapterManagedGlobally(model.ComponentPermission, adapter.Agent()) {
-				continue
-			}
 			if !opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 				continue
 			}

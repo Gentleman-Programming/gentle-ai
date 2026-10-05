@@ -89,9 +89,11 @@ release shipped for that name (the digest registry in
 from the release tags; the generator refuses an incomplete local tag set, so run
 `git fetch --tags` first). Anything else, including a `plugins` path that is a
 symlink or not a directory, stops the operation before any plugin changes and
-names the path to move or delete. A symlinked config root is followed. Install
-snapshots every plugin path it can write or remove, and uninstall removes only
-bytes the same registry recognizes.
+names the path to move or delete. A symlinked config root is followed. Install,
+sync, and upgrade snapshot every plugin path install can write or remove, and
+post-sync verification checks that every retired plugin is gone for OpenCode and
+Kilocode. Uninstall removes only bytes the same registry recognizes and leaves a
+symlinked `plugins` directory and its contents untouched.
 
 The local conformance harness uses disposable configuration, an allowlisted
 environment, fixture authentication and process cleanup. Its loopback mode requires

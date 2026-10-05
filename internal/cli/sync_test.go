@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	kilocodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
@@ -7356,4 +7357,25 @@ func TestPostSyncVerificationRequiresEveryRetiredPluginRemoved(t *testing.T) {
 		}
 	}
 	t.Fatalf("no post-sync check for retired plugin %s; checks = %v", stale, report.Checks)
+}
+
+// Kilocode receives managed plugins too, so post-sync verification proves its
+// retired plugins are gone like OpenCode's.
+func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	adapter := kilocodeagent.NewAdapter()
+	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "background-agents.ts")
+	mustWriteFile(t, stale, []byte("stale"))
+	selection := model.Selection{Agents: []model.AgentID{model.AgentKilocode}}
+	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	for _, check := range report.Checks {
+		if check.ID == "verify:sync:file:"+stale {
+			if check.Status != verify.CheckStatusFailed {
+				t.Fatalf("retired Kilocode plugin check status = %v, want failed", check.Status)
+			}
+			return
+		}
+	}
+	t.Fatalf("no post-sync check for retired Kilocode plugin %s; checks = %v", stale, report.Checks)
 }

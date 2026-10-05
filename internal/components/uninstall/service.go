@@ -1359,13 +1359,23 @@ func rewriteTOMLFile(path string, mutate func(content string) (string, bool)) op
 
 // retainedOpenCodePluginOperations is an agent-removal boundary, independent of
 // legacy SDD and skills. Plugin bytes no Gentle AI release shipped are never
-// removed.
+// removed, and neither is a plugins path that is not a real directory: Install
+// refuses a symlinked plugins directory as user-owned, so uninstall neither
+// removes the link nor deletes through it.
 func retainedOpenCodePluginOperations(adapter agents.Adapter, homeDir string) []operation {
 	ops := make([]operation, 0)
 	for _, path := range opencoderuntimeplugins.PluginPaths(homeDir, adapter) {
 		ops = append(ops, removeReleasedOpenCodePlugin(path))
 	}
-	ops = append(ops, removeDirIfEmpty(filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")))
+	dirOp := removeDirIfEmpty(filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins"))
+	removeEmpty := dirOp.apply
+	dirOp.apply = func(path string) (bool, bool, error) {
+		if real, err := isRealDirectory(path); !real || err != nil {
+			return false, false, err
+		}
+		return removeEmpty(path)
+	}
+	ops = append(ops, dirOp)
 	for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
 		op := removeFile(path)
 		op.agents = []model.AgentID{model.AgentOpenCode}
@@ -1377,8 +1387,23 @@ func retainedOpenCodePluginOperations(adapter agents.Adapter, homeDir string) []
 	return ops
 }
 
+// isRealDirectory reports whether path is a directory and not a symlink to one.
+func isRealDirectory(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return info.IsDir(), nil
+}
+
 func removeReleasedOpenCodePlugin(path string) operation {
 	return operation{typeID: opRemoveFile, path: path, agents: []model.AgentID{model.AgentOpenCode}, apply: func(path string) (bool, bool, error) {
+		if real, err := isRealDirectory(filepath.Dir(path)); !real || err != nil {
+			return false, false, err
+		}
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
 			return false, false, nil

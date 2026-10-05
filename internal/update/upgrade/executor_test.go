@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1685,11 +1686,34 @@ func TestManagedAgentBackupPathsOpenCodePluginsFollowXDGConfigHome(t *testing.T)
 			t.Fatalf("backup path %q ignores XDG_CONFIG_HOME", p)
 		}
 	}
-	for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(model.AgentOpenCode)...) {
+	for _, name := range opencoderuntimeplugins.OpenCodePluginLifecycleNames(model.AgentOpenCode) {
 		want := filepath.Join(xdg, "opencode", "plugins", name)
 		if _, ok := pathSet[want]; !ok {
 			t.Fatalf("backup paths miss managed plugin %q; got %v", want, paths)
 		}
+	}
+}
+
+// The pre-upgrade snapshot covers exactly the plugin paths the managed plugin
+// install can write or retire, for every plugin-receiving agent.
+func TestManagedAgentBackupPathsKilocodePluginLifecycle(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get(model.AgentKilocode)
+	if !ok {
+		t.Fatal("kilocode adapter not found in registry")
+	}
+	paths := managedAgentBackupPaths(homeDir, adapter, log.Writer())
+	for _, want := range opencoderuntimeplugins.PluginPaths(homeDir, adapter) {
+		if !slices.Contains(paths, want) {
+			t.Errorf("backup paths miss Kilocode plugin %q", want)
+		}
+	}
+	if len(opencoderuntimeplugins.PluginPaths(homeDir, adapter)) == 0 {
+		t.Fatal("no Kilocode plugin paths")
 	}
 }
 

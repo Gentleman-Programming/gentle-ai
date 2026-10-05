@@ -2253,6 +2253,60 @@ func TestFullAgentOpenCodeUninstallRemovesReleasedPluginBytes(t *testing.T) {
 	}
 }
 
+// A symlinked plugins directory is user-owned, as Install treats it: uninstall
+// neither removes the link nor deletes plugin bytes through it.
+func TestFullAgentOpenCodeUninstallPreservesSymlinkedPluginsDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("OpenCode adapter not found")
+	}
+	root := adapter.GlobalConfigDir(homeDir)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	body, err := assets.Read("opencode/plugins/model-variants.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipped := filepath.Join(target, "model-variants.ts")
+	if err := os.WriteFile(shipped, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pluginDir := filepath.Join(root, "plugins")
+	if err := os.Symlink(target, pluginDir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	preserved := func(stage string) {
+		t.Helper()
+		if info, err := os.Lstat(pluginDir); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s: symlinked plugins directory removed: %v %v", stage, info, err)
+		}
+		if got, err := os.ReadFile(shipped); err != nil || string(got) != body {
+			t.Fatalf("%s: deleted through plugins symlink: %v", stage, err)
+		}
+	}
+	// The plugin operations guard themselves, whatever else the plan checks.
+	for _, op := range retainedOpenCodePluginOperations(adapter, homeDir) {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("plugin operation %s: %v", op.path, err)
+		}
+	}
+	preserved("plugin operations")
+	// The full plan may refuse the symlink outright; either way nothing moves.
+	if plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents); err == nil {
+		if _, err := svc.executePlan(plan, []model.AgentID{model.AgentOpenCode}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	preserved("full uninstall")
+}
+
 // TestFullAgentOpenCodePluginsUnderXDGConfigHome pins #3219 for the retained
 // plugin owner: uninstall resolves the same OpenCode config dir as installation.
 func TestFullAgentOpenCodePluginsUnderXDGConfigHome(t *testing.T) {
