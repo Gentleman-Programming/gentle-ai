@@ -50,7 +50,9 @@ func (s Snapshotter) Create(snapshotDir string, paths []string) (Manifest, error
 			return Manifest{}, err
 		}
 		manifest.Entries = append(manifest.Entries, entry)
-		if entry.Existed {
+		// Only count files that have a SnapshotPath (regular files with archive content).
+		// Directories and symlinks-to-directories have Existed=true but no archive entry.
+		if entry.Existed && entry.SnapshotPath != "" {
 			manifest.FileCount++
 			archiveEntries = append(archiveEntries, archiveEntry)
 			existingPaths = append(existingPaths, archiveEntry.SourcePath)
@@ -99,18 +101,71 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 	cleanSource := filepath.Clean(sourcePath)
 	entry := ManifestEntry{OriginalPath: cleanSource}
 
-	info, err := os.Stat(cleanSource)
+	// Lstat: does NOT follow symlinks. We need the symlink's own mode
+	// bits to detect it as a symlink before classifying the target.
+	info, err := os.Lstat(cleanSource)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Path does not exist on disk: it is a prospective install target,
+			// not a user-owned artifact (sockets, FIFOs, devices, and dangling
+			// symlinks are handled separately below). Mark it as a regular
+			// file install target so the rollback removes anything the install
+			// subsequently creates at this path. Dangling symlinks fall through
+			// to the symlink branch and keep Kind="" (preserve), and special
+			// files keep Kind="" via the IsRegular guard.
+			entry.Kind = PathKindRegularFile
 			return entry, ArchiveEntry{}, nil
 		}
-		return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("stat source path %q: %w", cleanSource, err)
+		return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("lstat source path %q: %w", cleanSource, err)
+	}
+
+	mode := info.Mode()
+
+	switch {
+	case mode.IsDir():
+		// Empty directory. Record as Kind=directory, Existed=true,
+		// not archived. Restore ensures the directory exists.
+		entry.Kind = PathKindDirectory
+		entry.Existed = true
+		entry.Mode = uint32(mode)
+		return entry, ArchiveEntry{}, nil
+
+	case mode&os.ModeSymlink != 0:
+		// Symlink. Read the target via Readlink. Classify the resolved
+		// target via Stat (which DOES follow symlinks). Only treat as
+		// Kind=symlink_directory when the target is a directory.
+		// Leaf symlinks (target is a regular file) and dangling
+		// symlinks fall through to the regular-file branch via
+		// Stat(target) — same behavior as before, per the issue's
+		// "leaf-symlink behavior remains outside this change".
+		target, err := os.Readlink(cleanSource)
+		if err != nil {
+			return ManifestEntry{}, ArchiveEntry{}, fmt.Errorf("read symlink %q: %w", cleanSource, err)
+		}
+		targetInfo, statErr := os.Stat(cleanSource)
+		if statErr == nil && targetInfo.IsDir() {
+			entry.Kind = PathKindSymlinkDirectory
+			entry.LinkTarget = target
+			entry.Existed = true
+			entry.Mode = uint32(mode.Perm())
+			return entry, ArchiveEntry{}, nil
+		}
+		// Fall through to regular-file classification below.
+		// Replace `info` so the archive-entry builder uses the
+		// resolved target's mode rather than the symlink's Lstat mode.
+		if statErr == nil {
+			info = targetInfo
+		} else {
+			// Dangling symlink: record as unknown (Existed=false).
+			// We don't archive it; restore leaves it as the user wrote it.
+			return entry, ArchiveEntry{}, nil
+		}
 	}
 
 	if !info.Mode().IsRegular() {
-		// Skip directories and special runtime files such as sockets, FIFOs, and
-		// devices. Backup archives only contain regular files that can be restored
-		// safely as files.
+		// Sockets, FIFOs, devices, and any other non-regular type
+		// continue to be skipped (Existed=false). Per the issue,
+		// these are explicitly out of scope.
 		return entry, ArchiveEntry{}, nil
 	}
 
@@ -132,6 +187,7 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 	entry.SnapshotPath = relPath
 	entry.Existed = true
 	entry.Mode = uint32(info.Mode())
+	entry.Kind = PathKindRegularFile
 
 	return entry, archiveEntry, nil
 }

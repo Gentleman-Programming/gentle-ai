@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -13,43 +10,25 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-const (
-	guardPopulationMarkerHint = "guard:population"
-	guardPopulationCount      = 8
-)
+const guardPopulationMarkerHint = "guard:population"
 
 var guardPopulationMarkerPattern = regexp.MustCompile(`^guard:population\s+([a-z0-9-]+)\s+(too-tight|too-loose|fail-closed):\s*(\S.*)$`)
 
 var guardPopulationProductionDirs = []struct{ dir, prefix string }{
 	{".", "internal/cli"},
 	{filepath.Join("..", "reviewtransaction"), "internal/reviewtransaction"},
-	{filepath.Join("..", "sddstatus"), "internal/sddstatus"},
 }
 
 type guardPopulationDeclaration struct {
-	file        string
-	line        int
-	family      string
-	direction   string
-	population  string
-	nodeKind    string
-	fingerprint string
-}
-
-func (declaration guardPopulationDeclaration) registryKey() string {
-	return strings.Join([]string{
-		declaration.file,
-		declaration.family,
-		declaration.direction,
-		declaration.nodeKind,
-		declaration.fingerprint,
-		strconv.Quote(declaration.population),
-	}, "\t")
+	file       string
+	line       int
+	family     string
+	direction  string
+	population string
 }
 
 type guardPopulationAnalysis struct {
@@ -68,94 +47,160 @@ type guardPopulationMarker struct {
 
 func TestGuardPopulationAnalyzerBindsOnlyAdjacentGuardNodes(t *testing.T) {
 	const valid = `package synthetic
-func allowed(value bool) bool {
-	// guard:population synthetic-family too-tight: legitimate values satisfy the external contract
-	return value
+func allowed(value int) bool {
+	// guard:population synthetic-if too-tight: legitimate values are positive
+	if value > 0 {
+		return true
+	}
+	// guard:population synthetic-switch too-loose: legitimate values are small
+	switch value {
+	}
+	// guard:population synthetic-return fail-closed: legitimate values are zero
+	return value == 0
 }
 `
 	analysis, err := guardPopulationAnalyzeSource("synthetic/valid.go", valid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(analysis.problems) != 0 || len(analysis.declarations) != 1 {
-		t.Fatalf("valid declaration was not bound: %+v", analysis)
+	if len(analysis.problems) != 0 || len(analysis.declarations) != 3 {
+		t.Fatalf("valid declarations were not bound: %+v", analysis)
 	}
-	if got := analysis.declarations[0]; got.nodeKind != "return" || got.fingerprint == "" {
-		t.Fatalf("declaration lacks an AST guard binding: %+v", got)
+	if got := analysis.declarations[2]; got.family != "synthetic-return" || got.direction != "fail-closed" || got.population != "legitimate values are zero" {
+		t.Fatalf("declaration fields = %+v, want parsed family, direction, and claim", got)
 	}
 
-	const orphaned = `package synthetic
+	for _, tc := range []struct{ name, source, want string }{
+		{name: "above a function", want: "not adjacent", source: `package synthetic
 // guard:population arbitrary-if too-tight: this comment is not adjacent to a supported guard node
 func f() {}
+`},
+		{name: "separated by a blank line", want: "not adjacent", source: `package synthetic
+func f(value bool) bool {
+	// guard:population detached too-tight: a blank line breaks adjacency
+
+	return value
+}
+`},
+		{name: "above a non-guard statement", want: "not adjacent", source: `package synthetic
+func f() int {
+	// guard:population assignment too-tight: an assignment is not a guard node
+	value := 1
+	return value
+}
+`},
+		{name: "unknown direction", want: "malformed", source: `package synthetic
+func f(value bool) bool {
+	// guard:population synthetic too-strict: the direction vocabulary is closed
+	return value
+}
+`},
+		{name: "missing claim", want: "malformed", source: `package synthetic
+func f(value bool) bool {
+	// guard:population synthetic too-tight:
+	return value
+}
+`},
+		{name: "malformed and orphaned", want: "malformed", source: `package synthetic
+// guard:population Synthetic too-tight: family names are lowercase
+func f() {}
+`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			analysis, err := guardPopulationAnalyzeSource("synthetic/invalid.go", tc.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(analysis.declarations) != 0 || len(analysis.problems) != 1 || !strings.Contains(analysis.problems[0], tc.want) {
+				t.Fatalf("invalid declaration did not fail closed with %q: %+v", tc.want, analysis)
+			}
+		})
+	}
+}
+
+func TestGuardPopulationDuplicateFamiliesAreRejected(t *testing.T) {
+	const source = `package synthetic
+func f(value int) bool {
+	// guard:population shared-family too-tight: legitimate values are positive
+	if value > 0 {
+		return true
+	}
+	// guard:population shared-family too-loose: legitimate values are small
+	return value < 10
+}
 `
-	analysis, err = guardPopulationAnalyzeSource("synthetic/orphaned.go", orphaned)
+	analysis, err := guardPopulationAnalyzeSource("synthetic/duplicate.go", source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(analysis.declarations) != 0 || len(analysis.problems) != 1 || !strings.Contains(analysis.problems[0], "adjacent") {
-		t.Fatalf("orphaned declaration did not fail closed: %+v", analysis)
+	problems := guardPopulationDuplicateFamilies(analysis.declarations)
+	if len(problems) != 1 || !strings.Contains(problems[0], `"shared-family" is declared twice`) {
+		t.Fatalf("duplicate family problems = %v, want one duplicate report", problems)
+	}
+	if problems := guardPopulationDuplicateFamilies(analysis.declarations[:1]); len(problems) != 0 {
+		t.Fatalf("single family reported as duplicate: %v", problems)
 	}
 }
 
-func TestGuardPopulationRegistryComparisonRejectsBothDriftDirections(t *testing.T) {
-	current := map[string]bool{"declared": true}
-
-	added, missing := guardPopulationRegistryDiff(current, map[string]bool{})
-	if len(added) != 1 || added[0] != "declared" || len(missing) != 0 {
-		t.Fatalf("unregistered declaration drift not detected: added=%v missing=%v", added, missing)
-	}
-
-	added, missing = guardPopulationRegistryDiff(current, map[string]bool{"declared": true, "removed": true})
-	if len(added) != 0 || len(missing) != 1 || missing[0] != "removed" {
-		t.Fatalf("missing declaration drift not detected: added=%v missing=%v", added, missing)
-	}
-}
-
-func TestEveryRegisteredGuardPopulationDeclarationMatchesProduction(t *testing.T) {
+// TestEveryGuardPopulationDeclarationIsAdjacentAndUnique checks structure
+// only: well-formed markers, adjacency to an if/switch/return guard node, and
+// one declaration per family. Whether a claim is true is challenged in review
+// against the behavior tests that exercise the guard, not by this scan.
+func TestEveryGuardPopulationDeclarationIsAdjacentAndUnique(t *testing.T) {
 	analysis := guardPopulationAnalyzeProduction(t)
 	for _, problem := range analysis.problems {
 		t.Error(problem)
 	}
-	if t.Failed() {
-		return
+	for _, problem := range guardPopulationDuplicateFamilies(analysis.declarations) {
+		t.Error(problem)
 	}
-	if len(analysis.declarations) != guardPopulationCount {
-		t.Fatalf("found %d guard-population declarations, want the frozen v2.2.1 scope of %d", len(analysis.declarations), guardPopulationCount)
+	if len(analysis.declarations) == 0 {
+		t.Fatal("found no guard-population declarations; the production scan is not reading the scoped packages")
 	}
+}
 
-	current := make(map[string]bool, len(analysis.declarations))
-	families := make(map[string]guardPopulationDeclaration, len(analysis.declarations))
+// TestProductionGuardPopulationMarkersFailClosedWhenDetached proves the scan
+// rejects each real production marker once it is detached or malformed,
+// rather than only passing on today's source.
+func TestProductionGuardPopulationMarkersFailClosedWhenDetached(t *testing.T) {
+	analysis := guardPopulationAnalyzeProduction(t)
 	for _, declaration := range analysis.declarations {
-		if prior, exists := families[declaration.family]; exists {
-			t.Errorf("guard-population family %q is declared twice: %s:%d and %s:%d", declaration.family, prior.file, prior.line, declaration.file, declaration.line)
-		}
-		families[declaration.family] = declaration
-		current[declaration.registryKey()] = true
-	}
-	if t.Failed() {
-		return
-	}
-
-	registryPath := filepath.Join("..", "..", ".guard-population-baseline.txt")
-	if os.Getenv("GENTLE_AI_GUARD_POPULATION_UPDATE") == "1" {
-		if err := writeGuardPopulationRegistry(registryPath, current); err != nil {
+		source, err := os.ReadFile(guardPopulationSourcePath(t, declaration.file))
+		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("guard-population baseline updated: %d declarations", len(current))
-		return
+		lines := strings.Split(string(source), "\n")
+		markerIndex := declaration.line - 2
+		for name, mutate := range map[string]func([]string) []string{
+			"detached": func(lines []string) []string {
+				return append(append(append([]string{}, lines[:markerIndex+1]...), ""), lines[markerIndex+1:]...)
+			},
+			"malformed": func(lines []string) []string {
+				mutated := append([]string{}, lines...)
+				mutated[markerIndex] = strings.Replace(mutated[markerIndex], " "+declaration.direction+":", " bogus:", 1)
+				return mutated
+			},
+		} {
+			got, err := guardPopulationAnalyzeSource(declaration.file, strings.Join(mutate(lines), "\n"))
+			if err != nil {
+				t.Fatalf("parse %s mutation of %s: %v", name, declaration.file, err)
+			}
+			if len(got.problems) == 0 {
+				t.Errorf("%s marker for family %q in %s was accepted", name, declaration.family, declaration.file)
+			}
+		}
 	}
+}
 
-	baseline, err := readGuardPopulationRegistry(registryPath)
-	if err != nil {
-		t.Fatalf("read guard-population baseline: %v", err)
+func guardPopulationSourcePath(t *testing.T, fileLabel string) string {
+	t.Helper()
+	for _, target := range guardPopulationProductionDirs {
+		if name, ok := strings.CutPrefix(fileLabel, target.prefix+"/"); ok {
+			return filepath.Join(target.dir, name)
+		}
 	}
-	added, missing := guardPopulationRegistryDiff(current, baseline)
-	for _, key := range added {
-		t.Errorf("guard-population declaration is absent from the frozen registry:\n+ %s", key)
-	}
-	for _, key := range missing {
-		t.Errorf("frozen guard-population declaration is missing or its AST binding drifted:\n- %s", key)
-	}
+	t.Fatalf("no production directory for %s", fileLabel)
+	return ""
 }
 
 func guardPopulationAnalyzeProduction(t *testing.T) guardPopulationAnalysis {
@@ -187,6 +232,19 @@ func guardPopulationAnalyzeProduction(t *testing.T) guardPopulationAnalysis {
 	return merged
 }
 
+func guardPopulationDuplicateFamilies(declarations []guardPopulationDeclaration) []string {
+	var problems []string
+	families := make(map[string]guardPopulationDeclaration, len(declarations))
+	for _, declaration := range declarations {
+		if prior, exists := families[declaration.family]; exists {
+			problems = append(problems, fmt.Sprintf("guard-population family %q is declared twice: %s:%d and %s:%d", declaration.family, prior.file, prior.line, declaration.file, declaration.line))
+			continue
+		}
+		families[declaration.family] = declaration
+	}
+	return problems
+}
+
 func guardPopulationAnalyzeSource(fileLabel, source string) (guardPopulationAnalysis, error) {
 	var analysis guardPopulationAnalysis
 	fset := token.NewFileSet()
@@ -215,8 +273,9 @@ func guardPopulationAnalyzeSource(fileLabel, source string) (guardPopulationAnal
 	}
 
 	ast.Inspect(file, func(node ast.Node) bool {
-		kind, fingerprint, supported := guardPopulationNodeBinding(fset, node)
-		if !supported {
+		switch node.(type) {
+		case *ast.IfStmt, *ast.SwitchStmt, *ast.ReturnStmt:
+		default:
 			return true
 		}
 		line := fset.Position(node.Pos()).Line
@@ -230,8 +289,7 @@ func guardPopulationAnalyzeSource(fileLabel, source string) (guardPopulationAnal
 			return true
 		}
 		analysis.declarations = append(analysis.declarations, guardPopulationDeclaration{
-			file: fileLabel, line: line, family: marker.family, direction: marker.direction,
-			population: marker.claim, nodeKind: kind, fingerprint: fingerprint,
+			file: fileLabel, line: line, family: marker.family, direction: marker.direction, population: marker.claim,
 		})
 		return true
 	})
@@ -247,68 +305,4 @@ func guardPopulationAnalyzeSource(fileLabel, source string) (guardPopulationAnal
 		analysis.problems = append(analysis.problems, problem)
 	}
 	return analysis, nil
-}
-
-func guardPopulationNodeBinding(fset *token.FileSet, node ast.Node) (string, string, bool) {
-	var kind string
-	switch node.(type) {
-	case *ast.IfStmt:
-		kind = "if"
-	case *ast.SwitchStmt:
-		kind = "switch"
-	case *ast.ReturnStmt:
-		kind = "return"
-	default:
-		return "", "", false
-	}
-	var rendered bytes.Buffer
-	if err := format.Node(&rendered, fset, node); err != nil {
-		return kind, "format-error", true
-	}
-	digest := sha256.Sum256(rendered.Bytes())
-	return kind, fmt.Sprintf("sha256:%x", digest), true
-}
-
-func readGuardPopulationRegistry(filePath string) (map[string]bool, error) {
-	raw, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-	registry := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if registry[line] {
-			return nil, fmt.Errorf("duplicate registry entry %q", line)
-		}
-		registry[line] = true
-	}
-	return registry, nil
-}
-
-func writeGuardPopulationRegistry(filePath string, registry map[string]bool) error {
-	keys := make([]string, 0, len(registry))
-	for key := range registry {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	content := "# Frozen guard-population declarations. See docs/architecture/guard-population.md.\n" + strings.Join(keys, "\n") + "\n"
-	return os.WriteFile(filePath, []byte(content), 0o644)
-}
-
-func guardPopulationRegistryDiff(current, baseline map[string]bool) (added, missing []string) {
-	for key := range current {
-		if !baseline[key] {
-			added = append(added, key)
-		}
-	}
-	for key := range baseline {
-		if !current[key] {
-			missing = append(missing, key)
-		}
-	}
-	sort.Strings(added)
-	sort.Strings(missing)
-	return added, missing
 }

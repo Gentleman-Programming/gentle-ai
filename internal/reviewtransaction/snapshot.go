@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathidentity"
 )
 
 type TargetKind string
@@ -33,6 +34,12 @@ const (
 
 	ProjectionWorkspace Projection = "workspace"
 	ProjectionStaged    Projection = "staged"
+
+	// GeneratedPathInterpretationSummaryV1 identifies the current generated-path
+	// policy. An empty value is the historical representation: the frozen
+	// inspector must not summarize any path for an authority that predates this
+	// field.
+	GeneratedPathInterpretationSummaryV1 = "generated-summary/v1"
 )
 
 type Target struct {
@@ -44,18 +51,61 @@ type Target struct {
 	LedgerIDs         []string   `json:"ledger_ids,omitempty"`
 }
 
+// CanonicalTarget projects a requested selector onto the executable target
+// vocabulary before any snapshot identity is derived. A base diff is always a
+// committed-only comparison, so its staged spelling cannot name distinct
+// authority.
+func CanonicalTarget(target Target) Target {
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged {
+		target.Projection = ProjectionWorkspace
+	}
+	return target
+}
+
 type Snapshot struct {
-	Kind                   TargetKind `json:"kind"`
-	Projection             Projection `json:"projection,omitempty"`
-	UnbornHead             bool       `json:"unborn_head,omitempty"`
-	BaseTree               string     `json:"base_tree"`
-	CandidateTree          string     `json:"candidate_tree"`
-	PathsDigest            string     `json:"paths_digest"`
-	IntendedUntracked      []string   `json:"intended_untracked"`
-	IntendedUntrackedProof string     `json:"intended_untracked_proof"`
-	LedgerIDs              []string   `json:"ledger_ids,omitempty"`
-	Paths                  []string   `json:"paths"`
-	Identity               string     `json:"identity"`
+	Kind       TargetKind `json:"kind"`
+	Projection Projection `json:"projection,omitempty"`
+	UnbornHead bool       `json:"unborn_head,omitempty"`
+	// GeneratedPathInterpretation is deliberately outside Snapshot.Identity:
+	// the identity names candidate content, while this field freezes how a
+	// reviewer may represent that content. Empty is the legacy no-summary
+	// interpretation; fresh snapshots carry the current version explicitly.
+	GeneratedPathInterpretation string   `json:"generated_path_interpretation,omitempty"`
+	BaseTree                    string   `json:"base_tree"`
+	CandidateTree               string   `json:"candidate_tree"`
+	PathsDigest                 string   `json:"paths_digest"`
+	IntendedUntracked           []string `json:"intended_untracked"`
+	IntendedUntrackedProof      string   `json:"intended_untracked_proof"`
+	LedgerIDs                   []string `json:"ledger_ids,omitempty"`
+	Paths                       []string `json:"paths"`
+	Identity                    string   `json:"identity"`
+}
+
+// UnmarshalJSON validates the closed interpretation discriminator at the
+// authority boundary. Keeping this check on Snapshot makes a persisted unknown
+// version fail closed even when a caller only loads authority and has not yet
+// prepared reviewer context; the inner strict decoder also preserves the
+// repository's usual unknown-field behavior.
+func (snapshot *Snapshot) UnmarshalJSON(payload []byte) error {
+	type snapshotJSON Snapshot
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var decoded snapshotJSON
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values in snapshot") // refusal:by-design world-action: a snapshot payload with trailing JSON values is corrupt stored authority no review command can make trustworthy
+		}
+		return err
+	}
+	if err := validateGeneratedPathInterpretation(decoded.GeneratedPathInterpretation); err != nil {
+		return err
+	}
+	*snapshot = Snapshot(decoded)
+	return nil
 }
 
 type SnapshotBuilder struct {
@@ -63,10 +113,18 @@ type SnapshotBuilder struct {
 	unbornHead bool
 }
 
-var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
+var (
+	exactObjectPattern            = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
+	errUnbornStagedCandidateEmpty = errors.New("unborn repository has no staged changes; stage the review candidate with git add")
+)
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
-	return builder.build(ctx, target, false)
+	// Canonicalization makes a staged base diff committed-only. Validate the
+	// incompatible staged-only untracked form before that projection is erased.
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged && len(target.IntendedUntracked) != 0 {
+		return Snapshot{}, errors.New("staged projection does not accept intended-untracked paths")
+	}
+	return builder.build(ctx, CanonicalTarget(target), false)
 }
 
 // BuildStagedWorkspaceOverlayRecovery freezes the exact real index for the
@@ -188,6 +246,18 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 		return Snapshot{}, err
 	}
 
+	// Defensive guard: no snapshot may ever have empty base or candidate tree.
+	// This protects against any future code path or target kind that might
+	// leave trees unresolved without an error. Agents and downstream code
+	// must never see "base_tree: None" or "candidate_tree: None" after a
+	// successful Build(). (issue start-candidate-context-failure)
+	if strings.TrimSpace(baseTree) == "" {
+		return Snapshot{}, fmt.Errorf("base tree empty after resolving target %s; review the repository state and rerun with a valid base_ref", target.Kind) // refusal:by-design world-action: repository base or candidate tree should never be empty after Build(); if encountered, the working tree or index is corrupted
+	}
+	if strings.TrimSpace(candidateTree) == "" {
+		return Snapshot{}, fmt.Errorf("candidate tree empty after building target %s; the working tree or staged index may be corrupted", target.Kind) // refusal:by-design world-action: repository base or candidate tree should never be empty after Build(); if encountered, the working tree or index is corrupted
+	}
+
 	paths, err := builder.changedPaths(ctx, baseTree, candidateTree)
 	if err != nil {
 		return Snapshot{}, err
@@ -196,7 +266,7 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 	identity := snapshotIdentityForProjection(target.Kind, projection, baseTree, candidateTree, pathsDigest, untrackedProof, intended, ledgerIDs)
 	return Snapshot{
 		Kind: target.Kind, Projection: projection, BaseTree: baseTree, CandidateTree: candidateTree,
-		UnbornHead:  builder.unbornHead,
+		UnbornHead: builder.unbornHead, GeneratedPathInterpretation: GeneratedPathInterpretationSummaryV1,
 		PathsDigest: pathsDigest, IntendedUntracked: intended,
 		IntendedUntrackedProof: untrackedProof, LedgerIDs: ledgerIDs,
 		Paths: paths, Identity: identity,
@@ -225,7 +295,13 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 		}
 	}
 
-	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	gitDir, err := resolveGitDirectory(ctx, builder.Repo, "--git-dir")
+	if err != nil {
+		return "", "", err
+	}
+	// Keep the private index beside Git's writable control files. A restricted
+	// integration environment may not provide an accessible process temp dir.
+	temp, err := os.CreateTemp(gitDir, ".gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", err
 	}
@@ -254,6 +330,9 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 
 // ValidateEvidence binds snapshot metadata to repository object evidence.
 func (builder SnapshotBuilder) ValidateEvidence(ctx context.Context, snapshot Snapshot) error {
+	if err := validateGeneratedPathInterpretation(snapshot.GeneratedPathInterpretation); err != nil {
+		return err
+	}
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {
 		return err
@@ -336,62 +415,113 @@ func (builder SnapshotBuilder) ValidateLiveSnapshot(ctx context.Context, expecte
 	if err != nil {
 		return fmt.Errorf("rebuild live snapshot target: %w", err)
 	}
+	// The live tree is freshly rebuilt, but reviewer representation is part of
+	// the frozen authority. Carry the validated expected interpretation across
+	// this content comparison instead of rejecting a legacy authority whose
+	// content still matches its live target exactly.
+	live.GeneratedPathInterpretation = expected.GeneratedPathInterpretation
 	if live.UnbornHead != expected.UnbornHead || !snapshotsEqual(live, expected) {
 		return fmt.Errorf("live repository snapshot no longer matches frozen target: expected %s, got %s", expected.Identity, live.Identity)
 	}
 	return nil
 }
 
-func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Context, snapshot Snapshot, location string, causality CausalDisposition) (bool, error) {
+// CandidateLocationSupportsCausality reports whether a finding's location is
+// on a repository-derived changed line, and separately whether that answer's
+// evidence derivation degraded -- the underlying diff could not resolve a
+// dependable per-line signal for this path at all (binary content, or a
+// manifest-changed path whose isolated diff produced no hunks, which
+// --no-renames can leave behind for a rename it could not pair). A degraded
+// derivation's `false` must never be read as "proven not caused by the
+// candidate": the caller could not tell either way.
+func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Context, snapshot Snapshot, location string, causality CausalDisposition) (supported bool, degraded bool, err error) {
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
-		return false, err
+		return false, false, err
 	}
-	logicalPath, line, err := parseFindingLocation(location)
+	finding, err := parseFindingLocation(location)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	if stringIndex(snapshot.Paths, logicalPath) < 0 {
-		return false, nil
+	return builder.candidateFindingSupportsCausality(ctx, snapshot, finding, causality)
+}
+
+// candidateFindingSupportsCausality answers causality for an already parsed
+// finding location. The non-positive line refusal lives here, at the level the
+// causality comparisons actually consume, so a start or end line below 1 can
+// never be judged causal even when it reaches this point without having been
+// filtered by the location parser.
+func (builder SnapshotBuilder) candidateFindingSupportsCausality(ctx context.Context, snapshot Snapshot, finding findingLocation, causality CausalDisposition) (supported bool, degraded bool, err error) {
+	if stringIndex(snapshot.Paths, finding.Path) < 0 {
+		return false, false, nil
+	}
+	if !findingLocationHasPositiveLines(finding) {
+		return false, false, nil
 	}
 	if causality == CausalBehaviorActivated {
-		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 		if err != nil || len(entry) == 0 {
-			return false, err
+			return false, false, err
 		}
 		for _, tree := range []string{snapshot.CandidateTree} {
-			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+logicalPath)
+			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+finding.Path)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			lines := bytes.Count(blob, []byte{'\n'})
 			if len(blob) > 0 && blob[len(blob)-1] != '\n' {
 				lines++
 			}
-			if line <= lines {
-				return true, nil
+			if finding.EndLine <= lines {
+				return true, false, nil
 			}
 		}
-		return false, nil
+		return false, false, nil
 	}
 	if causality != CausalIntroduced && causality != CausalWorsened {
-		return false, nil
+		return false, false, nil
 	}
-	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	for _, match := range regexp.MustCompile(`(?m)^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`).FindAllSubmatch(output, -1) {
+	matches := regexp.MustCompile(`(?m)^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`).FindAllSubmatch(output, -1)
+	if len(matches) == 0 && diffReportsBinaryContent(output) {
+		// Git prints its binary marker as its own line in place of hunks,
+		// never inside one, so the probe is anchored to a whole line and
+		// consulted only when no hunk was parsed: a text diff whose added or
+		// removed content merely quotes the phrase still resolves by hunk.
+		return false, true, nil
+	}
+	for _, match := range matches {
 		offset := 3
 		start, _ := strconv.Atoi(string(match[offset]))
 		count := 1
 		if len(match[offset+1]) > 0 {
 			count, _ = strconv.Atoi(string(match[offset+1]))
 		}
-		if count > 0 && line >= start && line < start+count {
-			return true, nil
+		if count > 0 && finding.StartLine >= start && finding.EndLine < start+count {
+			return true, false, nil
 		}
 	}
-	return false, nil
+	if len(matches) == 0 && len(bytes.TrimSpace(output)) == 0 {
+		// snapshot.Paths already confirmed this path is part of the frozen
+		// changed-path manifest, yet its isolated diff produced no output at
+		// all -- not "no hunk covers this line" but no signal whatsoever. That
+		// is an absence of evidence, not evidence of absence.
+		return false, true, nil
+	}
+	return false, false, nil
+}
+
+// diffReportsBinaryContent reports whether git replaced the patch with its
+// "Binary files … differ" marker line.
+func diffReportsBinaryContent(output []byte) bool {
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		if bytes.HasPrefix(line, []byte("Binary files ")) && bytes.HasSuffix(bytes.TrimRight(line, "\r"), []byte(" differ")) {
+			return true
+		}
+	}
+	return false
 }
 
 func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot Snapshot) error {
@@ -413,6 +543,11 @@ func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot S
 	if err != nil {
 		return err
 	}
+	// Same carry-over as live snapshot validation: invalidation asks whether
+	// the repository still matches the authority's content, and a legacy
+	// authority must stay invalidatable rather than be stranded by a
+	// representation discriminator no live rebuild can reproduce.
+	live.GeneratedPathInterpretation = snapshot.GeneratedPathInterpretation
 	if !snapshotsEqual(live, snapshot) {
 		return fmt.Errorf("live repository snapshot no longer matches the reviewing authority: expected %s, got %s", snapshot.Identity, live.Identity)
 	}
@@ -595,9 +730,19 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	return root, nil
 }
 
-// DiscoverIntendedUntracked returns canonical untracked paths from the
-// requested repository while ignoring inherited Git repository selectors.
-func (builder SnapshotBuilder) DiscoverIntendedUntracked(ctx context.Context) ([]string, error) {
+// DiscoverUnignoredUntracked returns the canonical unignored untracked paths
+// of the requested repository while ignoring inherited Git repository
+// selectors.
+//
+// Issue #2394: this is a live worktree inventory, NOT a declaration of review
+// scope. It used to be handed straight to Target.IntendedUntracked, which made
+// every unignored file the user happened to have on disk part of the frozen
+// candidate and delivered its exact bytes to a reviewer. Review scope is now
+// declared the way Git has always let a user declare it: `git add` puts a new
+// file in the index, and the index is what the candidate is built from, so
+// callers that mean "what did the user submit" must not call this. The
+// remaining callers ask a different question: what is untracked right now.
+func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) ([]string, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return nil, err
@@ -636,6 +781,81 @@ func (builder SnapshotBuilder) DiscoverIntendedUntracked(ctx context.Context) ([
 		return nil, &UntrackedScopeRefusalError{Cause: err}
 	}
 	return canonical, nil
+}
+
+// IntendedUntrackedInventory returns the canonical digest-bound eligible workspace inventory.
+func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
+	paths, err := builder.DiscoverUnignoredUntracked(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return paths, intendedUntrackedInventoryDigest(paths), nil
+}
+
+// intendedUntrackedInventoryCommand is the runnable STATUS that publishes the
+// canonical untracked inventory; the bare `--next-transition` form is refused
+// without a negotiated contract and runtime identity (issue #2895).
+const intendedUntrackedInventoryCommand = "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <runtime> --next-transition"
+
+// StillUntracked keeps the entries of a frozen intended-untracked declaration
+// that the index does not carry yet (issue #3759). A declared path committed
+// after the declaration froze is no longer untracked: the current-changes
+// target already covers it, so replaying it would only trip the
+// "already tracked" refusal in buildCurrentChanges.
+func (builder SnapshotBuilder) StillUntracked(ctx context.Context, declared []string) ([]string, error) {
+	remaining := []string{}
+	if len(declared) == 0 {
+		return remaining, nil
+	}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	trackedOutput, err := runGitInventory(ctx, root, "ls-files", "--cached", "-z", "--")
+	if err != nil {
+		return nil, err
+	}
+	tracked := nulSeparatedPathSet(trackedOutput)
+	for _, path := range declared {
+		if _, isTracked := tracked[path]; !isTracked {
+			remaining = append(remaining, path)
+		}
+	}
+	return remaining, nil
+}
+
+// ValidateIntendedUntrackedSelection proves paths remain eligible in STATUS's inventory.
+func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
+	paths, digest, err := builder.IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if expectedDigest != digest {
+		return nil, errors.New("untracked inventory changed; rerun `" + intendedUntrackedInventoryCommand + "` before selecting paths")
+	}
+	selected, err = canonicalPaths(selected)
+	if err != nil {
+		return nil, err
+	}
+	eligible := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		eligible[path] = struct{}{}
+	}
+	for _, path := range selected {
+		if _, ok := eligible[path]; !ok {
+			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `"+intendedUntrackedInventoryCommand+"`", path)
+		}
+	}
+	return selected, nil
+}
+
+func intendedUntrackedInventoryDigest(paths []string) string {
+	hash := sha256.New()
+	writeLengthPrefixed(hash, []byte("gentle-ai.intended-untracked-inventory/v1"))
+	for _, path := range paths {
+		writeLengthPrefixed(hash, []byte(path))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 // UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
@@ -714,36 +934,6 @@ func linkedWorktreeDirectories(ctx context.Context, root string) ([]string, erro
 	return directories, nil
 }
 
-// DiscoverTrackedAndUnignoredPaths returns the canonical Git-owned workspace
-// inventory: every cached path plus every unignored untracked path.
-func (builder SnapshotBuilder) DiscoverTrackedAndUnignoredPaths(ctx context.Context) ([]string, error) {
-	root, err := builder.ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	output, err := runGitInventory(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return nil, err
-	}
-	parts := bytes.Split(output, []byte{0})
-	paths := make([]string, 0, len(parts))
-	for _, item := range parts {
-		if len(item) > 0 {
-			value := string(item)
-			if strings.HasSuffix(value, "/") {
-				value = strings.TrimSuffix(value, "/")
-				if value == "" || strings.HasSuffix(value, "/") {
-					return nil, fmt.Errorf("invalid opaque Git inventory path %q", item)
-				}
-			}
-			paths = append(paths, value)
-		}
-	}
-	return canonicalPaths(paths)
-}
-
-// HasDirtyTrackedChanges reports whether the worktree or index differs from
-// HEAD, excluding untracked paths.
 func (builder SnapshotBuilder) HasDirtyTrackedChanges(ctx context.Context) (bool, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -754,6 +944,85 @@ func (builder SnapshotBuilder) HasDirtyTrackedChanges(ctx context.Context) (bool
 		return false, err
 	}
 	return len(output) != 0, nil
+}
+
+func (builder SnapshotBuilder) WorktreeClean(ctx context.Context) (bool, error) {
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return false, err
+	}
+	output, err := runGit(ctx, root, nil, nil, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	return len(output) == 0, nil
+}
+
+// RebuildCommittedBaseDiffCorrectionCandidate derives a committed correction
+// from the immutable initial boundary, never from the mutable original ref.
+func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo string, state CompactState) (Snapshot, error) {
+	if err := state.Validate(); err != nil {
+		return Snapshot{}, fmt.Errorf("validate committed correction authority: %w", err)
+	}
+	initial := state.InitialSnapshot
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() || initial.Kind != TargetBaseDiff {
+		return Snapshot{}, errors.New("committed correction reconstruction is not eligible") // refusal:by-design world-action: only an open committed correction can rebuild its frozen boundary
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	clean, err := builder.WorktreeClean(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !clean {
+		return Snapshot{}, errors.New("committed correction reconstruction requires a clean worktree") // refusal:by-design world-action: commit or discard workspace changes before recovering a committed-only correction
+	}
+	projection, err := canonicalProjection(initial.Projection)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	live, err := builder.BuildStoredSnapshot(ctx, Target{
+		Kind: TargetBaseDiff, Projection: projection, BaseRef: initial.BaseTree,
+		IntendedUntracked: append([]string(nil), initial.IntendedUntracked...),
+	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := builder.ValidateEvidence(ctx, live); err != nil {
+		return Snapshot{}, fmt.Errorf("validate rebuilt committed correction: %w", err)
+	}
+	if live.UnbornHead != initial.UnbornHead || live.BaseTree != initial.BaseTree || live.Projection != projection ||
+		!equalStrings(live.IntendedUntracked, initial.IntendedUntracked) || live.IntendedUntrackedProof != initial.IntendedUntrackedProof {
+		return Snapshot{}, errors.New("committed correction reconstruction does not match frozen authority") // refusal:by-design world-action: repository history must match the immutable authority before correction routing can continue
+	}
+	if _, err := admitCorrectionScope(live.Paths, state.GenesisPaths); err != nil {
+		return Snapshot{}, fmt.Errorf("committed correction exceeds frozen genesis paths: %w", err)
+	}
+	intended := append([]string(nil), initial.IntendedUntracked...)
+	if intended == nil {
+		intended = []string{}
+	}
+	fix, err := builder.Build(ctx, Target{
+		Kind: TargetFixDiff, Projection: projection, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: intended, LedgerIDs: append([]string(nil), state.FixFindingIDs...),
+	})
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction delta: %w", err)
+	}
+	if fix.CandidateTree != live.CandidateTree {
+		return Snapshot{}, fmt.Errorf("%w: rebuilt committed correction candidate changed while measuring", ErrConcurrentUpdate)
+	}
+	remaining, err := compactCorrectionRemainingBudget(state)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("derive rebuilt committed correction remaining budget: %w", err)
+	}
+	actual, err := builder.ChangedLines(ctx, fix)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("measure rebuilt committed correction: %w", err)
+	}
+	if actual > remaining {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction: %w", &CorrectionBudgetExceededError{Actual: actual, Remaining: remaining})
+	}
+	return live, nil
 }
 
 func canonicalRepositoryPath(path string) (string, error) {
@@ -945,7 +1214,9 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
 		}
 	}
-	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	// Keep the private index beside Git's writable control files. A restricted
+	// integration environment may not provide an accessible process temp dir.
+	temp, err := os.CreateTemp(filepath.Dir(indexPath), ".gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", "", err
 	}
@@ -980,7 +1251,12 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 	}
 	if projection != ProjectionStaged {
 		if len(cachedEntries) > 0 {
-			if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
+			// #3993: this step's result is the exit code alone, so it discards
+			// output instead of bounding it, and its timeout scales with the
+			// tracked-path count `ls-files` just reported instead of the fixed
+			// local budget.
+			trackedPaths := bytes.Count(cachedEntries, []byte{0})
+			if err := runGitDiscardOutput(ctx, builder.Repo, env, nil, stagingCommandTimeout(trackedPaths), "add", "-u", "--", "."); err != nil {
 				return "", "", "", err
 			}
 		}
@@ -995,8 +1271,8 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 		return "", "", "", err
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
-	if unborn && candidateTree == baseTree {
-		return "", "", "", errors.New("unborn repository has no staged changes; stage the review candidate with git add")
+	if unborn && projection == ProjectionStaged && candidateTree == baseTree {
+		return "", "", "", errUnbornStagedCandidateEmpty
 	}
 	if allowStagedIntended && projection != ProjectionStaged {
 		if _, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--cached", "--quiet", candidateTree, "--"); err != nil {
@@ -1052,6 +1328,9 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 	if revision == "" || strings.Contains(revision, "...") {
 		return "", "", errors.New("commit-range requires one exact commit or A..B range")
 	}
+	if err := builder.rejectActiveLocalGraft(ctx); err != nil {
+		return "", "", err
+	}
 	if strings.Contains(revision, "..") {
 		parts := strings.Split(revision, "..")
 		if len(parts) != 2 || !exactObjectPattern.MatchString(parts[0]) || !exactObjectPattern.MatchString(parts[1]) {
@@ -1090,6 +1369,65 @@ func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revisio
 		return "", "", err
 	}
 	return strings.TrimSpace(string(emptyTreeOutput)), candidate, nil
+}
+
+// LocalGraftActiveError marks a repository-local Git graft as the
+// ANTICIPATED condition that made exact-revision derivation refuse -- the
+// same role UntrackedScopeRefusalError plays for an anticipated
+// working-tree shape: an operator's own repository state, not a product
+// defect worth a defect report.
+type LocalGraftActiveError struct{ Cause error }
+
+func (err *LocalGraftActiveError) Error() string { return err.Cause.Error() }
+func (err *LocalGraftActiveError) Unwrap() error { return err.Cause }
+
+// rejectActiveLocalGraft refuses exact-revision derivation while a
+// repository-local Git graft is active (#1719). Git's graft file lets
+// $GIT_COMMON_DIR/info/grafts substitute an arbitrary parent for a commit's
+// true one. `--no-replace-objects` (issue #1093) disables the newer
+// replace-ref mechanism, and stripping GIT_GRAFT_FILE from the child
+// environment (sanitizedGitEnvironmentForRun, also #1093) only blocks an env
+// override -- neither touches the repository's own info/grafts file. Left
+// unchecked, resolveExactRevision's `rev-list --parents` silently returns the
+// grafted parent, so the same full commit ID can freeze a different base
+// tree and changed-path set while the candidate tree stays identical.
+//
+// The common Git directory -- not builder.Repo -- is resolved so a linked
+// worktree is covered too: info/grafts is one of the files Git shares across
+// every worktree of a repository, never one it keeps per-worktree.
+func (builder SnapshotBuilder) rejectActiveLocalGraft(ctx context.Context) error {
+	commonDir, err := resolveGitDirectory(ctx, builder.Repo, "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	graftPath := filepath.Join(commonDir, "info", "grafts")
+	content, err := os.ReadFile(graftPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read repository-local Git graft file %s: %w", graftPath, err)
+	}
+	if !activeGraftFileContent(content) {
+		return nil
+	}
+	return &LocalGraftActiveError{Cause: fmt.Errorf("repository-local Git graft file %s is active; it can substitute an arbitrary parent for a commit's true one, so an exact-revision snapshot cannot be trusted while it exists -- remove it (`rm %s`) or delete its offending lines before deriving one", graftPath, graftPath)} // refusal:by-design world-action: disabling a repository-local graft is a repository-layout edit outside any command this product runs
+}
+
+// activeGraftFileContent reports whether a graft file's bytes contain at
+// least one effective entry. Git's graft format ignores blank lines and
+// lines starting with '#' (a comment), so an empty or comment-only file --
+// left over from a since-cleared graft, for instance -- has no ancestry
+// effect and must not trip this refusal.
+func activeGraftFileContent(content []byte) bool {
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (builder SnapshotBuilder) resolveTree(ctx context.Context, revision string) (string, error) {
@@ -1330,27 +1668,61 @@ func canonicalProjection(projection Projection) (Projection, error) {
 	}
 }
 
+func validateGeneratedPathInterpretation(interpretation string) error {
+	switch interpretation {
+	case "", GeneratedPathInterpretationSummaryV1:
+		return nil
+	default:
+		return fmt.Errorf("unsupported generated path interpretation %q", interpretation) // refusal:by-design world-action: an unrecognized persisted discriminator means the authority was written outside this build's vocabulary; no command can reinterpret immutable stored bytes
+	}
+}
+
 func snapshotIdentity(kind TargetKind, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
 	return snapshotIdentityForProjection(kind, "", baseTree, candidateTree, pathsDigest, proof, intended, ledgerIDs)
 }
 
+// IdentityForComponents recomputes the content-addressed snapshot identity
+// from its published components alone (issue #4494): kind, projection,
+// base_tree, candidate_tree, and paths_digest. The untracked-replay proof,
+// the intended untracked list, and ledger IDs are deliberately absent: they
+// never enter the identity hash (maintainer decision D1 on #2471), so a
+// negotiated continuation that carries these five components can prove that
+// its token and its --target identity belong to the same negotiation without
+// any persisted negotiation state.
+func IdentityForComponents(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest string) string {
+	return snapshotIdentityForProjection(kind, projection, baseTree, candidateTree, pathsDigest, "", nil, nil)
+}
+
+// snapshotIdentityForProjection mints the purified, content-addressed
+// identity domain (issue #2659, root 21 of #2471): a domain-separation tag
+// for kind/projection, then baseTree, candidateTree, pathsDigest, and
+// ledgerIDs. proof and intended are deliberately NOT part of this hash: they
+// describe HOW the candidate bytes were declared (a staged path vs. a
+// declared intended-untracked path), not WHAT those bytes are, so folding
+// them into identity let two byte-identical candidates carry different
+// identities. Maintainer decision D1 (recorded in #2471) keeps the
+// untracked-replay proof alive as SIDE-BAND evidence only -- still consumed
+// by BuildStagedWorkspaceOverlayRecovery and BuildCorrectedCandidate for
+// replay validation -- so the parameters stay for call-site compatibility
+// but are intentionally unused here.
+//
+// kind and projection stay in the hash domain on purpose: they are the
+// load-bearing separation that keeps a current-changes receipt from being
+// recognized as a base-workspace-overlay review of identical bytes.
 func snapshotIdentityForProjection(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
 	hash := sha256.New()
 	if kind == TargetBaseWorkspaceOverlay {
-		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v2\x00"))
 	} else if projection == ProjectionStaged {
-		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/v4\x00"))
 	} else {
-		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/v3\x00"))
 	}
-	values := []string{string(kind), baseTree, candidateTree, pathsDigest, proof}
+	values := []string{string(kind), baseTree, candidateTree, pathsDigest}
 	if projection == ProjectionStaged {
-		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest, proof}
+		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest}
 	}
 	for _, value := range values {
-		writeLengthPrefixed(hash, []byte(value))
-	}
-	for _, value := range intended {
 		writeLengthPrefixed(hash, []byte(value))
 	}
 	for _, value := range ledgerIDs {
@@ -1382,7 +1754,12 @@ type GitCommandTimeoutError struct {
 	Timeout   time.Duration
 	Remote    bool
 	Aggregate bool
-	Cause     error
+	// Elapsed is the observed wall-clock lifetime of the cut child. It is what
+	// makes a hang-guard timeout explainable on a loaded runner: a reader can
+	// tell a child that genuinely hung from one that was starved of CPU and
+	// cut just past the budget. Zero means unmeasured, never instantaneous.
+	Elapsed time.Duration
+	Cause   error
 }
 
 func (err *GitCommandTimeoutError) Error() string {
@@ -1393,7 +1770,14 @@ func (err *GitCommandTimeoutError) Error() string {
 	if err.Aggregate {
 		scope = "aggregate"
 	}
-	return fmt.Sprintf("%v within %s %s budget", ErrGitCommandTimeout, err.Timeout, scope)
+	message := fmt.Sprintf("%v within %s %s budget", ErrGitCommandTimeout, err.Timeout, scope)
+	if len(err.Args) > 0 {
+		message = fmt.Sprintf("%s: git %s", message, strings.Join(err.Args, " "))
+	}
+	if err.Elapsed > 0 {
+		message = fmt.Sprintf("%s ran %s before cancellation", message, err.Elapsed.Round(time.Millisecond))
+	}
+	return message
 }
 
 func (err *GitCommandTimeoutError) Unwrap() []error {
@@ -1424,6 +1808,21 @@ func (err *GitCommandError) Unwrap() error { return err.Cause }
 
 var ErrGitOutputLimit = errors.New("git output exceeded deterministic byte limit")
 
+// refusal:by-design world-action: unexpected Git diagnostics require repairing the repository or its environment; no Gentle AI command can safely infer that repair.
+var ErrGitInventoryDiagnostics = errors.New("git inventory produced diagnostics")
+
+// GitInventoryDiagnosticsError reports unexpected diagnostics from a Git
+// inventory command that otherwise completed successfully.
+type GitInventoryDiagnosticsError struct {
+	Diagnostics string
+}
+
+func (err *GitInventoryDiagnosticsError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrGitInventoryDiagnostics, err.Diagnostics)
+}
+
+func (err *GitInventoryDiagnosticsError) Unwrap() error { return ErrGitInventoryDiagnostics }
+
 // GitOutputLimitError reports that a bounded Git capture produced more bytes
 // than the caller permits. The capture retains at most Limit bytes while the
 // child is drained, so oversized output cannot grow process memory without
@@ -1439,10 +1838,17 @@ type GitOutputLimitError struct {
 	Args   []string
 	Limit  int
 	Actual int
+	// Entries counts the NUL-terminated records the child produced, including
+	// those past the limit, so an inventory overflow names its path count.
+	Entries int
 }
 
 func (err *GitOutputLimitError) Error() string {
-	return fmt.Sprintf("git %s output exceeds deterministic %d-byte limit", strings.Join(err.Args, " "), err.Limit)
+	message := fmt.Sprintf("git %s output exceeds deterministic %d-byte limit", strings.Join(err.Args, " "), err.Limit)
+	if err.Entries > 0 {
+		message += fmt.Sprintf(" (%d NUL-terminated entries)", err.Entries)
+	}
+	return message
 }
 
 func (err *GitOutputLimitError) Unwrap() error { return ErrGitOutputLimit }
@@ -1462,14 +1868,64 @@ func (err *GitProcessControlError) Error() string {
 
 func (err *GitProcessControlError) Unwrap() error { return err.Cause }
 
-var localGitCommandTimeout = 15 * time.Second
-var remoteGitCommandTimeout = 20 * time.Second
+// LocalGitCommandTimeout and RemoteGitCommandTimeout bound the wall-clock
+// lifetime of every Git child a runner spawns. They are hang guards, not
+// latency assertions: a genuinely hung child (credential prompt, filesystem
+// deadlock) must still fail, but a healthy child that is merely starved of CPU
+// on a loaded runner must never be cut. Issue #2483 observed a healthy git
+// exceed a 15-second budget on a loaded CI shard, so the ceilings sit roughly
+// an order of magnitude above that worst observed dilation. Inside a
+// negotiated operation the 25-second aggregate operation budget still fires
+// first; these per-command ceilings govern direct paths such as snapshot
+// builders and delivery gates. Exported as a test seam so callers in other
+// packages that need deterministic timeout ordering can shrink them.
+var LocalGitCommandTimeout = 120 * time.Second
+var RemoteGitCommandTimeout = 180 * time.Second
 var gitCommandWaitDelay = time.Second
 var gitCommandContext = exec.CommandContext
 var gitProcessTreeStarter = startGitProcessTree
 
+// StagingCommandTimeoutFloor and StagingCommandTimeoutPerTrackedPath bound
+// the runtime candidate's staging step (`git add -u -- .`, #3993). A fixed
+// LocalGitCommandTimeout starves that step on a repository whose tracked-path
+// count is large enough to make the walk I/O-bound rather than CPU-bound on a
+// slow filesystem (a WSL translation layer, network storage): every path is
+// individually fast, but the full walk is not. The floor keeps every existing
+// repository's effective budget unchanged; the per-path rate only ever adds
+// time, and StagingCommandTimeoutCeiling caps the product so a wedged walk on
+// a very large repository still releases the index lock within a bounded
+// window instead of holding the capture for hours. Exported, like the
+// timeouts above, as test seams.
+var StagingCommandTimeoutFloor = LocalGitCommandTimeout
+var StagingCommandTimeoutPerTrackedPath = 25 * time.Millisecond
+var StagingCommandTimeoutCeiling = 10 * time.Minute
+
+// stagingCommandTimeout returns the staging step's budget for a repository
+// with the given tracked-path count: the floor, or the proportional budget
+// when that is larger, clamped to the ceiling.
+func stagingCommandTimeout(trackedPaths int) time.Duration {
+	budget := StagingCommandTimeoutFloor
+	if proportional := time.Duration(trackedPaths) * StagingCommandTimeoutPerTrackedPath; proportional > budget {
+		budget = proportional
+	}
+	if StagingCommandTimeoutCeiling > 0 && budget > StagingCommandTimeoutCeiling {
+		budget = StagingCommandTimeoutCeiling
+	}
+	return budget
+}
+
+const (
+	defaultGitOutputLimit = 8 << 20
+	// defaultGitInventoryLimit bounds `git ls-files` inventories, whose size
+	// follows the tracked path count rather than a candidate's content: at
+	// roughly 190 bytes per path, 8 MiB refused ordinary repositories near
+	// 50k tracked paths (#3498). Consumers materialize the path set anyway.
+	defaultGitInventoryLimit = 64 << 20
+	defaultGitStderrLimit    = 64 << 10
+)
+
 func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
-	return runGitCaptured(ctx, repo, extraEnv, stdin, 0, false, false, args...)
+	return runGitCaptured(ctx, repo, extraEnv, stdin, defaultGitOutputLimit, false, false, args...)
 }
 
 func runGitInventory(ctx context.Context, repo string, args ...string) ([]byte, error) {
@@ -1477,11 +1933,11 @@ func runGitInventory(ctx context.Context, repo string, args ...string) ([]byte, 
 }
 
 func runGitInventoryWithEnv(ctx context.Context, repo string, extraEnv []string, args ...string) ([]byte, error) {
-	return runGitCaptured(ctx, repo, extraEnv, nil, 0, false, true, args...)
+	return runGitCaptured(ctx, repo, extraEnv, nil, defaultGitInventoryLimit, false, true, args...)
 }
 
 func runGitIsolated(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
-	return runGitCaptured(ctx, repo, extraEnv, stdin, 0, true, false, args...)
+	return runGitCaptured(ctx, repo, extraEnv, stdin, defaultGitOutputLimit, true, false, args...)
 }
 
 func runGitLimited(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputLimit int, args ...string) ([]byte, error) {
@@ -1496,11 +1952,33 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 	return output, err
 }
 
+// runGitDiscardOutput runs a Git command whose stdout/stderr the caller does
+// not read at all: it never rejects on overflow, so a command that
+// incidentally emits more than the shared capture buffers hold (thousands of
+// tracked paths each triggering a CRLF or embedded-repository warning on
+// `git add -u -- .`, #3993) fails only on its actual exit code, never on
+// buffered-output size nobody downstream inspects. timeout overrides the
+// standard local/remote selection when positive.
+func runGitDiscardOutput(ctx context.Context, repo string, extraEnv []string, stdin []byte, timeout time.Duration, args ...string) error {
+	_, _, err := runGitCapturedRangeWithTimeout(ctx, repo, extraEnv, stdin, 0, defaultGitOutputLimit, false, false, false, timeout, args...)
+	return err
+}
+
 func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, args ...string) ([]byte, int, error) {
+	return runGitCapturedRangeWithTimeout(ctx, repo, extraEnv, stdin, outputOffset, outputLimit, isolateConfig, rejectStderr, rejectOverflow, 0, args...)
+}
+
+// runGitCapturedRangeWithTimeout is runGitCapturedRange with an optional
+// override for the standard local/remote timeout selection (#3993): a
+// positive timeout replaces it, zero keeps the existing selection unchanged
+// for every other caller.
+func runGitCapturedRangeWithTimeout(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, timeoutOverride time.Duration, args ...string) ([]byte, int, error) {
 	remote := len(args) > 0 && args[0] == "ls-remote"
-	timeout := localGitCommandTimeout
-	if remote {
-		timeout = remoteGitCommandTimeout
+	timeout := LocalGitCommandTimeout
+	if timeoutOverride > 0 {
+		timeout = timeoutOverride
+	} else if remote {
+		timeout = RemoteGitCommandTimeout
 	}
 	commandContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1511,17 +1989,13 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
 	}
-	var combined, machineStdout, machineStderr bytes.Buffer
-	var stdout, stderr *boundedGitOutput
-	if outputLimit > 0 {
-		stdout = &boundedGitOutput{offset: outputOffset, limit: outputLimit}
-		stderr = &boundedGitOutput{limit: 64 << 10}
-		command.Stdout, command.Stderr = stdout, stderr
-	} else if rejectStderr {
-		command.Stdout, command.Stderr = &machineStdout, &machineStderr
-	} else {
-		command.Stdout, command.Stderr = &combined, &combined
+	if outputLimit <= 0 {
+		outputLimit = defaultGitOutputLimit
 	}
+	stdout := &boundedGitOutput{offset: outputOffset, limit: outputLimit}
+	stderr := &boundedGitOutput{limit: defaultGitStderrLimit}
+	command.Stdout, command.Stderr = stdout, stderr
+	started := time.Now()
 	release, startErr := gitProcessTreeStarter(command)
 	err := startErr
 	if err == nil {
@@ -1541,15 +2015,11 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 		_ = command.Process.Kill()
 		_ = command.Wait()
 	}
-	output, diagnostic := combined.Bytes(), combined.Bytes()
-	if stdout != nil {
-		output, diagnostic = stdout.Bytes(), stderr.Bytes()
-	} else if rejectStderr {
-		output, diagnostic = machineStdout.Bytes(), machineStderr.Bytes()
-	}
+	output, diagnostic := stdout.Bytes(), stderr.Bytes()
 	if errors.Is(err, exec.ErrWaitDelay) && commandContext.Err() == nil {
 		err = nil
 	}
+	overflow := gitOutputOverflow(args, outputLimit, stdout, stderr, rejectOverflow)
 	if err != nil {
 		if commandContext.Err() != nil {
 			cause := commandContext.Err()
@@ -1557,34 +2027,56 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 			if aggregate {
 				cause = ctx.Err()
 			}
-			return nil, 0, &GitCommandTimeoutError{
-				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate, Cause: cause,
-			}
+			return nil, 0, joinGitOutputOverflow(&GitCommandTimeoutError{
+				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate,
+				Elapsed: time.Since(started), Cause: cause,
+			}, overflow)
 		}
 		if startErr != nil {
-			return nil, 0, &GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}
+			return nil, 0, joinGitOutputOverflow(&GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}, overflow)
 		}
 		exitCode := -1
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		}
-		return nil, 0, &GitCommandError{
+		return nil, 0, joinGitOutputOverflow(&GitCommandError{
 			Args: append([]string{}, args...), ExitCode: exitCode, Remote: remote, Cause: err,
 			Output: strings.TrimSpace(string(diagnostic)),
-		}
+		}, overflow)
 	}
-	if stdout != nil && stdout.exceeded && rejectOverflow {
-		return nil, 0, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total}
+	if overflow != nil {
+		return nil, 0, overflow
 	}
 	if rejectStderr && len(diagnostic) != 0 {
-		return nil, 0, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
+		return nil, 0, &GitInventoryDiagnosticsError{Diagnostics: strings.TrimSpace(string(diagnostic))}
 	}
-	total := len(output)
-	if stdout != nil {
-		total = stdout.total
+	return output, stdout.total, nil
+}
+
+func gitOutputOverflow(args []string, outputLimit int, stdout, stderr *boundedGitOutput, rejectOverflow bool) error {
+	if !rejectOverflow {
+		return nil
 	}
-	return output, total, nil
+	var overflows []error
+	// Preserve stream order so errors.As deterministically finds stdout first.
+	if stdout.exceeded {
+		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total, Entries: stdout.entries})
+	}
+	if stderr.exceeded {
+		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: stderr.limit, Actual: stderr.total})
+	}
+	if len(overflows) == 1 {
+		return overflows[0]
+	}
+	return errors.Join(overflows...)
+}
+
+func joinGitOutputOverflow(err, overflow error) error {
+	if overflow == nil {
+		return err
+	}
+	return errors.Join(err, overflow)
 }
 
 type boundedGitOutput struct {
@@ -1597,12 +2089,16 @@ type boundedGitOutput struct {
 	// child is drained regardless -- and it is the only place the true size
 	// is ever visible, because nothing downstream retains the discarded tail.
 	total int
+	// entries counts NUL terminators the same way, so an overflowing
+	// inventory can still name how many paths it held.
+	entries int
 }
 
 func (output *boundedGitOutput) Write(payload []byte) (int, error) {
 	written := len(payload)
 	start := output.total
 	output.total += written
+	output.entries += bytes.Count(payload, []byte{0})
 	if output.total <= output.offset {
 		return written, nil
 	}

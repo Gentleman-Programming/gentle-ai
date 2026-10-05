@@ -1,294 +1,47 @@
 # Supported Agents
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
----
-
-## Agent Matrix
-
-| Agent           | ID               | Skills       | MCP | Delegation                       | Output Styles | Slash Commands | Config Path                         |
-| --------------- | ---------------- | ------------ | --- | -------------------------------- | ------------- | -------------- | ----------------------------------- |
-| Claude Code     | `claude-code`    | Yes          | Yes | Full (Task tool)                 | Yes           | No             | `~/.claude`                         |
-| OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/opencode`                |
-| Kilo Code       | `kilocode`       | Yes          | Yes | Full (multi-mode overlay)        | No            | Yes            | `~/.config/kilo`                    |
-| Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)              | No            | No             | `~/.gemini`                         |
-| Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.cursor`                         |
-| VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)               | No            | No             | `~/.copilot` + VS Code User profile |
-| Codex           | `codex`          | Yes          | Yes | Solo-agent (multi-agent opt-in, experimental) | No            | No             | `~/.codex`                          |
-| Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                       | No            | No             | `~/.codeium/windsurf`               |
-| Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control     | No            | No             | `~/.gemini/antigravity`             |
-| Kimi Code       | `kimi`           | Yes          | Yes | Full (native custom agents)      | Via KIMI.md include [^kimi-output-style] | No | `~/.kimi`                           |
-| Qwen Code       | `qwen-code`      | Yes          | Yes | Full (native sub-agents)         | No            | Yes            | `~/.qwen`                           |
-| Kiro IDE        | `kiro-ide`       | Yes          | Yes | Full (native subagents)          | No            | No             | `~/.kiro`                           |
-| OpenClaw        | `openclaw`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.openclaw`                       |
-| Trae            | `trae-ide`       | Yes          | Yes | Solo-agent                       | No            | No             | `~/.trae`                           |
-| Pi              | `pi`             | Yes          | Yes | Full (package-managed subagents) | No            | Yes            | `~/.pi`                             |
-| Hermes          | `hermes`         | Yes          | Yes | Full (delegate_task ephemeral)   | No            | No             | `~/.hermes`                         |
-
-Most agents receive the **full SDD orchestrator** policy, plus skill files written to their skills directory. Most receive it through their system prompt; OpenCode and Kilo Code receive it through the OpenCode-compatible `opencode.json` agent overlay. Pi is the exception: Gentle AI installs Pi packages, and `gentle-pi` owns Pi skills, prompts, SDD agents, and chains at runtime. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
-
-`gentle-ai install --scope=workspace` is supported across selected agents for agent-scoped files, not only Claude Code. In workspace scope, Gentle AI writes system prompts, skills, SDD agents, and persona files into the current project root when the agent supports project-local configuration. Global-only integrations, such as package installs or settings that the agent only reads from its global config, remain global by design.
-
-[^kimi-output-style]: Kimi has no `settings.json` `outputStyle` mechanism like Claude Code. Instead, `KIMI.md` unconditionally includes `output-style.md` as a Jinja module — the canonical tone/language/philosophy channel for Kimi's persona (`persona.md` carries only tooling/action directives plus a pointer to this module).
-
----
-
-## Delegation Models
-
-| Model                 | How It Works                                                                                                                                                                                       | Agents                                                                                                    |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation, package-managed subagents, or an OpenCode-compatible overlay. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi |
-| **Full (delegate_task)** | The orchestrator uses Hermes's native `delegate_task` primitive to spawn ephemeral workers in fresh context windows. Workers receive only a self-contained mission; the parent receives only their final summary. Toolsets, MCP, and skills must be passed explicitly (not inherited by default). | Hermes |
-| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.                                                                     | Codex, Windsurf, Antigravity, OpenClaw, Trae                                                              |
-
-### Cursor Native Subagents
-
-Cursor uses its built-in `.cursor/agents/` system. `gentle-ai` writes 10 agent files to `~/.cursor/agents/sdd-{phase}.md` — one per SDD phase. Cursor's Agent auto-delegates to the correct subagent based on the `description` field in each file's YAML frontmatter.
-
-- `sdd-explore` and `sdd-verify` run with `readonly: false` so they can inspect the codebase and execute verification commands
-- Each subagent gets its own context window (fresh context, no pollution)
-- The orchestrator resolves skill paths from the skill registry and passes exact `SKILL.md` files in the invocation message
-
-### Windsurf Cascade
-
-Windsurf runs as a solo-agent (no custom sub-agents). The orchestrator leverages Windsurf-native features:
-
-- **Plan Mode** — creates persistent plan documents that can be @mentioned across sessions; ideal for spec and design artifacts on large changes
-- **Code Mode** — default agentic execution mode
-- **Native Workflows** — `sdd-new` is available as a `.windsurf/workflows/sdd-new.md` workflow
-- **Size Classification** — the orchestrator routes tasks through Small/Medium/Large decision paths
-
-### Antigravity + Mission Control
-
-Antigravity is an agent-first platform with built-in sub-agents (Browser, Terminal) managed by Mission Control. However, custom sub-agent creation is not yet available. SDD phases run inline, with Mission Control handling automatic delegation to built-in sub-agents when specialized tooling is needed (e.g., Browser for research during `sdd-explore`).
-
-### Kiro Native Subagents
-
-Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase agents (`sdd-init` through `sdd-onboard` plus Judgment Day agents) and resolves the `model:` field during injection from Kiro model assignments (`auto|opus|sonnet|haiku|minimax|glm|deepseek|qwen`) to Kiro-native model IDs.
-
-- Frontmatter includes `includeMcpJson: true` for all phase agents
-- Phase-specific tools are preserved (`sdd-explore` and `sdd-verify` use read/shell/context7 as required)
-- Orchestrator remains in steering (`~/.kiro/steering/gentle-ai.md`) and delegates execution to native subagents
-
----
-
-## SDD Mode Support
-
-| Feature          | Claude Code | OpenCode | Kilo Code | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code | OpenClaw | Trae |   Pi    | Hermes |
-| ---------------- | :---------: | :------: | :-------: | :--------: | :----: | :-------------: | :---: | :------: | :---------: | :------: | :-------: | :------: | :--: | :-----: | :----: |
-| SDD orchestrator |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |  Yes   |
-| Single-mode SDD  |     Yes     |   Yes    |    Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     |   Yes    |    Yes    |   Yes    | Yes  |   Yes   |  Yes   |
-| Multi-mode SDD   |      —      |   Yes    |    Yes    |     —      |   —    |        —        |   —   |    —     |      —      |  Yes\*   |     —     |    —     |  —   | Yes\*\* |   —    |
-
-**Multi-mode** (assigning different AI models to each SDD phase) is supported by **OpenCode** and **Kilo Code** through the OpenCode-compatible multi-mode overlay, and by **Kiro IDE** through native subagent `model:` frontmatter. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
-
-> \* **Kiro multi-mode** assigns models per phase through `KiroModelAssignments` (configured via _Configure Models → Configure Kiro models_ in the TUI). The selected Kiro alias (`auto|opus|sonnet|haiku|minimax|glm|deepseek|qwen`) is resolved to a Kiro-native model ID and stamped into each `~/.kiro/agents/sdd-{phase}.md` at sync time.
-
-> \*\* **Pi multi-mode** is owned by the Pi packages. `gentle-pi` installs SDD agent and chain assets into `.pi/agents/` and `.pi/chains/`; model overrides live in those Pi-managed files or chain steps.
-
----
-
-## Agent Notes
-
-### Claude Code
-
-- Sub-agents via the native Task tool with isolated context windows
-- MCP servers configured as plugins in `~/.claude/mcp/`
-- Output styles in `~/.claude/output-styles/`
-- System prompt via markdown sections in `~/.claude/CLAUDE.md`
-
-### OpenCode
-
-- Full multi-agent overlay with 11 named agents in `opencode.json` (`gentle-orchestrator` plus 10 SDD phase agents)
-- Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
-- Native OpenCode `task` subagents; experimental background execution is available when OpenCode is launched with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`
-- The TUI model picker includes providers and models discovered from the local `opencode.json`, including custom providers
-- Custom models from `opencode.json` must set `tool_call: true` explicitly to appear as selectable SDD-capable options in the model picker
-- Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
-- Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
-- OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
-- If review launch fails with `Attempted to assign to readonly property`, follow the [OpenCode readonly task-argument recovery](review-integration.md#restart-opencode-after-a-readonly-task-argument-failure).
-
-### Kilo Code
-
-- **Detection**: gentle-ai detects Kilo Code from `~/.config/kilo` and checks for the `kilo` binary on `PATH`
-- Uses the OpenCode-compatible adapter: `AGENTS.md`, `skills/`, `commands/`, and `opencode.json` live under `~/.config/kilo`
-- Full SDD delegation is provided by the merged multi-agent overlay in `~/.config/kilo/opencode.json`, not by a separate native sub-agent directory
-- MCP servers are merged into `opencode.json`; Engram uses the OpenCode-style local MCP entry with `command` as an array
-- Auto-install is supported via npm: `npm install -g @kilocode/cli`
-
-### Gemini CLI
-
-- Sub-agents are experimental: require `experimental.enableAgents: true` in `settings.json`
-- Custom sub-agents defined as markdown files in `~/.gemini/agents/`
-
-### Cursor
-
-- Native subagents via `~/.cursor/agents/sdd-{phase}.md` (10 files installed by gentle-ai)
-- Skills at `~/.cursor/skills/`
-- System prompt in `~/.cursor/rules/gentle-ai.mdc`
-- MCP config in `~/.cursor/mcp.json`
-
-### VS Code Copilot
-
-- Uses the `runSubagent` tool with support for parallel execution
-- Skills at `~/.copilot/skills/`
-- System prompt at `Code/User/prompts/gentle-ai.instructions.md`
-- MCP config at `Code/User/mcp.json`
-
-### Codex
-
-- CLI-native agent with TOML config at `~/.codex/config.toml`
-- Skills at `~/.codex/skills/`
-- System prompt at `~/.codex/AGENTS.md`
-- Engram instruction files at `~/.codex/engram-instructions.md`
-- MCP servers (Engram and Context7) are upserted as `[mcp_servers.<name>]` blocks in `~/.codex/config.toml`
-- SDD model-selection profiles written as separate files at `~/.codex/<name>.config.toml`. GPT-5.6 defaults require Codex >= 0.144.0 (the separate-file mechanism itself is available since 0.134.0). Select a profile at runtime via `codex --profile <name>`:
-
-  Model and effort defaults vary together by preset. These effort levels are Gentle AI workload policy, not Codex defaults. The carriles split by what the phase actually does: `sdd-strong` phases reason over context delivered to them, `sdd-mid` phases write code in an agentic loop where effort matters more than raw model strength, and `sdd-cheap` phases do structured transcription with short context and verifiable output, so they buy effort instead of a bigger model.
-
-  Every curated preset runs the main orchestrator/session at `medium` effort — it plans, routes and adjudicates rather than doing the delegated work. The orchestrator *model* varies: Low-cost runs it on `gpt-5.6-terra` so a Plus plan can still afford `gpt-5.6-sol` in the strong carril, where the reasoning pays. Custom and legacy state preserve existing top-level settings:
-
-  | Profile | Low-cost | Recommended | Powerful | SDD phases |
-  |---------|----------|-------------|----------|------------|
-  | Orchestrator | `gpt-5.6-terra` / `medium` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `medium` | main session |
-  | `sdd-strong` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `medium` | `gpt-5.6-sol` / `xhigh` | explore, propose, design, verify, judge |
-  | `sdd-mid` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `high` | `gpt-5.6-sol` / `high` | apply, fix-agent |
-  | `sdd-cheap` | `gpt-5.6-luna` / `high` | `gpt-5.6-luna` / `high` | `gpt-5.6-luna` / `high` | spec, tasks, archive, onboard |
-
-- Explicit saved Codex model assignments are preserved on sync, including older pinned IDs such as `gpt-5.5` or `gpt-5.4-mini`. The narrow exception is the exact former implicit-default tuple (`sdd-strong=gpt-5.5`, `sdd-mid=gpt-5.5`, `sdd-cheap=gpt-5.4-mini`), which sync treats as Recommended and upgrades to the current GPT-5.6 tuple; partial, extended, or otherwise different maps remain custom and unchanged.
-- GPT-5.6 `max` reasoning effort and `ultra` mode are intentionally not enabled by this default update. `max` requires confirmed Codex support; `ultra` changes orchestration semantics and needs separate design.
-- Multi-agent SDD delegation is available as an **experimental opt-in** (default off). gentle-ai writes `features.multi_agent = false` and `agents.max_threads = 4` / `agents.max_depth = 2` into `~/.codex/config.toml`. To enable, set `multi_agent = true` in the `[features]` section. When enabled, the `sdd-orchestrator` asset targets Codex's multi-agent v2 collaboration surface: it spawns agents with `spawn_agent`, loops `wait_agent(timeout_ms=...)` plus `list_agents` correlation until the target reaches a terminal state, stops on non-success, and reuses completed or idle agents through `followup_task`. `send_message` provides in-flight guidance, while `interrupt_agent` is reserved for cancelling an active turn rather than cleaning up a completed agent. If the surface is unavailable, orchestration falls back to solo-agent inline execution.
-- **Delegation**: Solo-agent (multi-agent opt-in, experimental)
-
-### Windsurf
-
-- Skills at `~/.codeium/windsurf/skills/` (native Windsurf feature)
-- MCP config at `~/.codeium/windsurf/mcp_config.json`
-- Global rules at `~/.codeium/windsurf/memories/global_rules.md`
-- Workflows at `.windsurf/workflows/` (workspace-scoped)
-
-### Antigravity
-
-- Skills at `~/.gemini/antigravity/skills/` (native Antigravity feature)
-- MCP config at `~/.gemini/antigravity/mcp_config.json`
-- System prompt appended to `~/.gemini/GEMINI.md` (shared with Gemini CLI — collision check warns if both are installed)
-- Mission Control handles built-in sub-agent delegation (Browser, Terminal) automatically
-- Settings managed via the IDE's Agent settings UI, not via `settings.json`
-
-### Kimi Code
-
-- Installation requires the `uv` Python package manager (`uv tool install kimi-cli`).
-- Root custom agent at `~/.kimi/agents/gentleman.yaml` with `system_prompt_path: ../KIMI.md`
-- `KIMI.md` is a thin Jinja template that includes modular prompt files:
-  `persona.md`, `output-style.md`, `engram-protocol.md`, `sdd-orchestrator.md`
-- Built-in Kimi variables are preserved in `KIMI.md`: `${KIMI_AGENTS_MD}` and `${KIMI_SKILLS}`
-
-### Kiro IDE
-
-- **Detection**: gentle-ai detects Kiro from the `kiro` binary on `PATH`; when the binary is present, it also reports whether `~/.kiro` already exists. A config directory alone does not mark Kiro as installed.
-- **Steering file** (all platforms): `~/.kiro/steering/gentle-ai.md` with frontmatter `inclusion: always`
-- Native subagents at `~/.kiro/agents/sdd-{phase}.md` (10 files)
-- Skills (all platforms) at `~/.kiro/skills/`
-- **MCP config at a separate root** — always `~/.kiro/settings/mcp.json` (macOS/Linux) or `%USERPROFILE%\.kiro\settings\mcp.json` (Windows), regardless of GlobalConfigDir
-- Native Kiro specs workflow: `.kiro/specs/<feature>/requirements.md`, `design.md`, `tasks.md` — with approval gates before apply and archive phases
-- Manual install only — download from [kiro.dev/downloads](https://kiro.dev/downloads)
-- See [docs/kiro.md](kiro.md) for full path reference and SDD behavior details
-
-### Qwen Code
-
-- **Detection**: gentle-ai detects Qwen Code from its config root (`~/.qwen`) and checks for `qwen` binary on `PATH`
-- **Config root**: `~/.qwen/` (cross-platform)
-- **System prompt**: `~/.qwen/QWEN.md` (managed via `StrategyFileReplace`)
-- **Skills**: `~/.qwen/skills/`
-- **MCP config**: `~/.qwen/settings.json` (managed via `StrategyMergeIntoSettings` with `mcpServers` key)
-- **Slash commands**: `~/.qwen/commands/*.md` — supports custom namespaced slash commands (e.g., `commands/sdd/init.md` → `/sdd:init`)
-- **Permissions**: `auto_edit` mode — auto-approves file edits, manual approval for shell commands
-- **Install**: via npm — `npm install -g @qwen-code/qwen-code@latest`
-- **Engram slug**: `"qwen-code"` for `engram setup` integration
-- **SDD orchestrator**: `internal/assets/qwen/sdd-orchestrator.md` with Qwen-specific path references
-
-### OpenClaw
-
-- **Detection**: gentle-ai detects OpenClaw from the `openclaw` binary on `PATH` and its config root at `~/.openclaw`.
-- **Install**: manual only — install OpenClaw first, then run `gentle-ai install --agent openclaw`.
-- **Active workspace**: gentle-ai reads `agents.defaults.workspace` from `~/.openclaw/openclaw.json` and writes instruction files there.
-- **Instructions**: Engram and SDD protocols are injected into workspace `AGENTS.md`; persona is injected into workspace `SOUL.md`.
-- **MCP config**: Engram and Context7 are merged into global `~/.openclaw/openclaw.json` under `mcp.servers`; legacy root `mcpServers` entries are migrated.
-- **Skills**: SDD phase skills are workspace-scoped at `<workspace>/.openclaw/skills/sdd-*`; portable skills remain global at `~/.openclaw/skills/`.
-
-### Trae
-
-- **Detection**: gentle-ai detects Trae from `~/.trae` (desktop app — no binary on PATH)
-- **Global config root**: `~/.trae/` (cross-platform)
-- **Skills**: `~/.trae/skills/`
-- **System prompt / rules**: injected via `StrategyMarkdownSections` into the OS-specific `user_rules.md`
-  - macOS: `~/Library/Application Support/Trae/User/user_rules.md`
-  - Linux: `~/.config/Trae/User/user_rules.md` (respects `XDG_CONFIG_HOME`)
-  - Windows: `%APPDATA%\Trae\User\user_rules.md`
-- **MCP config**: same OS-specific dir → `mcp.json` (Cursor-compatible `mcpServers` object format)
-- **Install**: desktop app only — manual install required; no `--auto-install` support
-
-### Pi
-
-For the full Pi command and package reference, see [Pi Agent](pi.md).
-
-- **Detection**: gentle-ai detects Pi from the `pi` binary on `PATH` and its config root at `~/.pi`.
-- **Install**: Pi must already be installed. gentle-ai then installs the full Pi support stack with:
-  - `pi install npm:gentle-pi`
-  - `pi install npm:gentle-engram`
-  - `pi install npm:pi-mcp-adapter`
-  - `npm exec --yes --package gentle-engram@latest -- pi-engram init`
-  - `pi install npm:pi-subagents-j0k3r`
-  - `pi install npm:@juicesharp/rpiv-ask-user-question`
-  - `pi install npm:pi-web-access`
-  - `pi install npm:@juicesharp/rpiv-todo`
-  - `pi install npm:pi-btw`
-- **`gentle-pi` package**: adds the Gentleman harness for Pi: SDD/OpenSpec workflow, strict TDD guidance, safety defaults, `/gentle-ai:*` commands, skill assets, prompts, SDD agents, and SDD chains. On normal `session_start`, it copies project assets into `.pi/agents/`, `.pi/chains/`, and `.pi/gentle-ai/support/` without overwriting local files unless the Pi recovery command uses `--force`. Starting Pi with `pi -ns` skips startup skill loading/hooks, so that automatic refresh does not run in that mode.
-- **Package metadata**: latest verified `gentle-pi` version is `0.2.6`; npm lists `alan_buscaglia` as maintainer, with source at [Gentleman-Programming/gentle-pi](https://github.com/Gentleman-Programming/gentle-pi) and package docs at [npm: gentle-pi](https://www.npmjs.com/package/gentle-pi).
-- **Persona command**: `gentle-pi` owns Pi persona switching through `/gentleman:persona` (`/gentle-ai:persona` remains a compatibility alias). It switches between `gentleman` and `neutral`, saves `.pi/gentle-ai/persona.json`, and may require `/reload` or a new Pi session for the active prompt to refresh.
-- **Model assignment command**: `gentle-pi` owns Pi model selection through `/gentleman:models` (`/gentle-ai:models` remains a compatibility alias). It opens a Pi-native modal for project, user, and built-in agents, prioritizes SDD agents, saves `.pi/gentle-ai/models.json`, and applies overrides into `.pi/agents/*.md` or `.pi/settings.json`.
-- **`gentle-engram` package**: adds persistent Engram memory for Pi. It captures sessions, exposes Engram MCP tools through `pi-mcp-adapter`, and degrades safely when the local `engram` binary is missing.
-- **MCP adapter wiring**: ComponentEngram declares `npm:pi-mcp-adapter` in `.pi/agent/settings.json` packages and adds `pi-mcp-adapter` `^2.6.0` to `.pi/npm/package.json` without removing unrelated user entries. `pi-engram init` owns the Pi Engram MCP config schema and is run during installation.
-- **`pi-subagents-j0k3r` package**: discovers and runs SDD agents from `.pi/agents/`; Gentle AI installs it directly with `pi install npm:pi-subagents-j0k3r`.
-- **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
-- **Pi companion packages**: `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, todo tracking, and companion workflow support.
-- **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.
-
-### Hermes Ephemeral Delegation
-
-Hermes uses `delegate_task` to spawn ephemeral sub-agents. Each worker starts in a fresh context window and returns only its final summary to the parent orchestrator.
-
-**Delegation rules:**
-
-- Delegate when work needs broad exploration (4+ files), multi-file implementation, test/build execution, or fresh adversarial review.
-- Each worker mission must be self-contained: include the exact goal, file paths or targets, relevant prior context, constraints, expected evidence, and the toolsets/MCP/skills the worker is allowed to use.
-- Toolsets, MCP servers, and skills are NOT automatically inherited from the parent; pass them explicitly in the mission when `inherit_mcp_toolsets` is false (the default).
-- Prefer parallel workers only for truly independent workstreams. Dependencies must run sequentially.
-- Treat worker output as self-report: verify file writes, test pass/fail, URLs, and external side effects before reporting success.
-
-**Tuning knobs** (configure in `~/.hermes/config.yaml` under the `delegation` key):
-
-| Parameter | Default | Effect |
-|-----------|---------|--------|
-| `max_spawn_depth` | 2 | Maximum recursive delegation depth |
-| `max_concurrent_children` | 4 | Maximum parallel workers |
-| `max_iterations` | agent default | Iteration budget per worker |
-| `child_timeout_seconds` | agent default | Hard timeout per worker |
-| `inherit_mcp_toolsets` | false | When true, workers inherit parent MCP toolsets automatically |
-| `subagent_auto_approve` | false | When true, workers auto-approve tool calls |
-
-The full delegation decision table lives in `~/.hermes/skills/hermes-ephemeral-delegation/SKILL.md` (installed by gentle-ai). The SDD orchestrator in `~/.hermes/SOUL.md` references this skill.
-
-### Hermes
-
-- **Detection**: gentle-ai reports the `hermes` binary on `PATH` and the config root at `~/.hermes` independently; the config directory drives install detection (the binary can be absent and Hermes is still detected as configured).
-- **Install**: detect-only — gentle-ai cannot install Hermes. Install Hermes manually first, then run `gentle-ai install --agent hermes`.
-- **Config path**: `~/.hermes/` (config.yaml, SOUL.md, skills/)
-- **MCP config**: Engram and Context7 are injected as YAML blocks under `mcp_servers:` in `~/.hermes/config.yaml` (`StrategyMergeIntoYAML`). Pre-existing top-level keys (e.g. `model:`) are preserved verbatim.
-- **System prompt**: SDD orchestrator and persona are written to `~/.hermes/SOUL.md` via markdown section markers (`<!-- gentle-ai:sdd-orchestrator -->`, `<!-- gentle-ai:persona -->`).
-- **Skills**: `~/.hermes/skills/` — gentle-ai writes SDD phase skills; the skill registry also scans this path.
-- **Permissions**: Hermes uses an undocumented permission format. gentle-ai skips permission injection for Hermes.
-- **Profiles**: Hermes does not support multi-mode SDD (no per-phase model routing). Single-mode only.
-- **Memory**: Hermes has a native memory and skill-learning loop. Engram complements it — Engram provides cross-agent, cross-session memory protocol so knowledge is portable across all agents, not just Hermes.
-- **Persona markers and identity behavior**: The `<!-- gentle-ai:persona -->` / `<!-- /gentle-ai:persona -->` markers in `SOUL.md` tell gentle-ai which section it manages — they delimit where the persona content is written and updated on sync. The markers alone do NOT guarantee that Hermes answers identity questions ("who are you?", "quién eres?") as Gentle AI. That guarantee comes from the explicit `## Identity` section inside the managed persona content, which instructs Hermes to identify itself as **Gentle AI running on Hermes Agent** in any language. If the user has written a manual `## Identity` section OUTSIDE the managed markers, it is preserved by gentle-ai but may conflict with the managed identity instruction — the managed block is what gentle-ai guarantees, and any manual identity section outside the markers may need cleanup to avoid contradiction.
+Gentle AI configures agents you already have; it does not install an AI agent for you. ODD is the development workflow. Capabilities and delegation primitives depend on the client. [Usage](usage.md) covers installation and sync; [Pi](pi.md) explains the separately owned Pi integration.
+
+| Agent | ID | Integration notes |
+| --- | --- | --- |
+| <a id="claude-code"></a>Claude Code | `claude-code` | Task subagents, MCP, skills, output styles, skill-registry and review hooks |
+| <a id="opencode"></a>OpenCode | `opencode` | Native task subagents, skills, MCP, managed review plugins and optional background policy |
+| <a id="kilo-code"></a>Kilo Code | `kilocode` | OpenCode-compatible configuration, skills and MCP |
+| <a id="gemini-cli"></a>Gemini CLI | `gemini-cli` | Experimental native agents, skills and MCP |
+| <a id="cursor"></a>Cursor | `cursor` | Native subagents, rules, skills and MCP |
+| <a id="vs-code-copilot"></a>VS Code Copilot | `vscode-copilot` | `runSubagent`, user instructions, skills and MCP |
+| <a id="codex"></a>Codex | `codex` | Native multi-agent when available, solo fallback, skills and MCP |
+| <a id="windsurf"></a>Windsurf | `windsurf` | Native skills, global rules and MCP |
+| <a id="antigravity"></a>Antigravity | `antigravity` | Native skills, MCP and built-in Mission Control tools |
+| <a id="kimi-code"></a>Kimi Code | `kimi` | Native custom agents, skills and MCP |
+| <a id="qwen-code"></a>Qwen Code | `qwen-code` | Native subagents, skills and MCP |
+| <a id="kiro-ide"></a>Kiro IDE | `kiro-ide` | Native agents, steering, skills and MCP |
+| <a id="openclaw"></a>OpenClaw | `openclaw` | Workspace instructions, skills and global MCP config |
+| <a id="trae"></a>Trae | `trae-ide` | User rules, skills and MCP |
+| <a id="pi"></a>Pi | `pi` | Package-owned runtime through Gentle Shell; see [Pi](pi.md) |
+| <a id="hermes"></a>Hermes | `hermes` | Ephemeral `delegate_task` workers, skills and MCP |
+| <a id="conductor"></a>Conductor | `conductor` | Workspace orchestrator that inherits Claude Code configuration; detection and catalog only — no managed writes |
+
+## Agent guidance and ownership
+
+Gentle AI installs or refreshes managed guidance, skills, and supported review agents for selected clients. It does not own Pi's runtime prompts or child-agent lifecycle: the separately installed Gentle Shell (`gentle-pi`) package does. Installing a single agent merges it into the recorded installed-agent selection; sync normally refreshes only that selection. `gentle-ai install --scope=workspace` places supported agent-scoped files in the project instead of the global agent configuration, while global-only settings remain global.
+
+Delegated work stays focused: the parent supplies task context and exact relevant skill paths, then checks the outcome. A client without native delegation can perform smaller work inline; native availability does not grant permission for extra writes. Hermes workers require explicit mission context, tools and skills rather than assuming inheritance. Codex multi-agent execution depends on native tools and configuration. Review agents are separate from ordinary ODD implementation agents; RDD runs only under the user-owned switch and candidate consent when applicable.
+
+## Client-specific details
+
+- **Claude Code:** native Task subagents, skill-registry startup hook, and managed review/telemetry hooks. Review authority remains native, not a hook-generated approval.
+- **OpenCode:** model discovery uses the active project's providers and tools. Optional background jobs are process-local and non-durable; do not use them for dependent work or parallel writers in one worktree. Managed launchers respect explicit background-off preferences; other launch paths use foreground fallback. See [OpenCode background subagents](opencode-profiles.md).
+- **Kilo Code:** uses an OpenCode-compatible adapter; do not assume OpenCode runtime-specific guarantees automatically apply to Kilo.
+- **Kimi Code:** the system prompt hub includes its persona/output-style modules (`KIMI.md` for the legacy layout, `AGENTS.md` for the current layout); no Claude-style `settings.json` output-style mechanism is assumed. Config paths prefer the current kimi-code v0.11+ root `~/.kimi-code` when it exists as a directory and fall back to the legacy `~/.kimi` root; a plain file named `.kimi-code` is not treated as the current layout, and unexpected stat failures on the current root are surfaced instead of silently selecting the legacy root. Current-layout skills install to `~/.kimi-code/skills`; legacy installs keep the shared `~/.config/agents/skills` path. YAML agents (only discoverable by the legacy CLI via `--agent-file`) always install to the legacy `~/.kimi/agents` directory, so the current layout never receives agent files it cannot load.
+- **OpenClaw:** reads the active workspace from its configuration and writes managed `AGENTS.md`/`SOUL.md` there. MCP entries remain in global OpenClaw configuration.
+- **Hermes:** detected from its configuration directory; installation of the client itself is manual. Existing top-level configuration is preserved when MCP entries are merged.
+- **Conductor:** detected from the `~/.conductor` directory; installation of the desktop app itself is manual. Conductor workspaces inherit Claude Code configuration, so Gentle AI makes no Conductor-specific writes: it does not install skills, MCP servers, or system prompt files for Conductor — configure those through Claude Code instead.
+- **Pi:** the installer provisions companion packages, but Gentle Shell owns runtime prompts, model assignments, persona, and delegation. See [Pi integration](pi.md).
+
+Model assignment is client-specific and applies to supported generic and review roles, not a formal development-phase matrix. Use the TUI **Configure Models** screen to inspect available roles, including Judgment Day review roles. Strict TDD is an independently configured ODD mode, not inferred from the presence of tests. Run `gentle-ai doctor` for read-only installation diagnostics and `gentle-ai sync --dry-run` to preview managed updates. Uninstall previews and backs up managed configuration; it must preserve unrelated user files. [Full CLI guidance](usage.md#cli-commands).

@@ -1,25 +1,27 @@
 package skills
 
-import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v4/internal/model"
 
-// sddSkills are the SDD orchestrator skills — always included.
-var sddSkills = []model.SkillID{
-	model.SkillSDDInit,
-	model.SkillSDDExplore,
-	model.SkillSDDPropose,
-	model.SkillSDDSpec,
-	model.SkillSDDDesign,
-	model.SkillSDDTasks,
-	model.SkillSDDApply,
-	model.SkillSDDVerify,
-	model.SkillSDDArchive,
-	model.SkillSDDOnboard,
-	model.SkillJudgmentDay,
+// Retained orchestration skill installed by every non-custom preset.
+var orchestrationSkills = []model.SkillID{model.SkillJudgmentDay}
+
+// contributorSkills are this repository's own workflow skills. They stay
+// selectable through the TUI skill picker and explicit `--skills` resolution,
+// but no default preset installs them.
+var contributorSkills = []model.SkillID{
+	model.SkillGentleAIBench,
+	model.SkillBranchPR,
+	model.SkillIssueCreation,
+	model.SkillCommentWriter,
+	model.SkillRDDDefectWorkflow,
+	model.SkillSystemicIssueTriage,
 }
 
-// foundationSkills are baseline learning skills for the "recommended" tier.
-var foundationSkills = []model.SkillID{
+// selectableFoundationSkills is the canonical display order of the retained
+// general skills. Contributor skills keep their historical positions.
+var selectableFoundationSkills = []model.SkillID{
 	model.SkillGoTesting,
+	model.SkillGentleAIBench,
 	model.SkillCreator,
 	model.SkillImprover,
 	model.SkillBranchPR,
@@ -30,42 +32,43 @@ var foundationSkills = []model.SkillID{
 	model.SkillCommentWriter,
 	model.SkillWorkUnitCommits,
 	model.SkillRDDDefectWorkflow,
+	model.SkillSystemicIssueTriage,
 }
 
-// SkillsForPreset returns which skills should be installed for a given preset.
-//
-//   - "minimal" / PresetMinimal:       SDD skills only
-//   - "ecosystem-only" / PresetEcosystemOnly: SDD + common framework skills
-//   - "full-gentleman" / PresetFullGentleman: all available skills
-//   - "custom" / PresetCustom:         empty (caller should provide explicit list)
+var foundationSkills = excludeSkills(selectableFoundationSkills, contributorSkills)
+
+func excludeSkills(src, exclude []model.SkillID) []model.SkillID {
+	excluded := make(map[model.SkillID]struct{}, len(exclude))
+	for _, id := range exclude {
+		excluded[id] = struct{}{}
+	}
+	out := make([]model.SkillID, 0, len(src))
+	for _, id := range src {
+		if _, ok := excluded[id]; !ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// SkillsForPreset returns retained skills for a preset. Custom has no defaults;
+// unknown presets use the full product inventory.
 func SkillsForPreset(preset model.PresetID) []model.SkillID {
 	switch preset {
 	case model.PresetMinimal:
-		return copySkills(sddSkills)
-	case model.PresetEcosystemOnly:
-		return copySkills(append(sddSkills, foundationSkills...))
-	case model.PresetFullGentleman:
-		all := make([]model.SkillID, 0, len(sddSkills)+len(foundationSkills))
-		all = append(all, sddSkills...)
-		all = append(all, foundationSkills...)
-		return all
+		return copySkills(orchestrationSkills)
 	case model.PresetCustom:
 		return nil
 	default:
-		// Unknown preset — default to full.
-		all := make([]model.SkillID, 0, len(sddSkills)+len(foundationSkills))
-		all = append(all, sddSkills...)
-		all = append(all, foundationSkills...)
-		return all
+		all := copySkills(orchestrationSkills)
+		return append(all, foundationSkills...)
 	}
 }
 
-// AllSkillIDs returns every known skill ID.
+// AllSkillIDs returns every selectable retained skill, including contributors.
 func AllSkillIDs() []model.SkillID {
-	all := make([]model.SkillID, 0, len(sddSkills)+len(foundationSkills))
-	all = append(all, sddSkills...)
-	all = append(all, foundationSkills...)
-	return all
+	all := copySkills(orchestrationSkills)
+	return append(all, selectableFoundationSkills...)
 }
 
 func copySkills(src []model.SkillID) []model.SkillID {

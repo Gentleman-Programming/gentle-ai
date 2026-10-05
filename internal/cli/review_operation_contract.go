@@ -8,12 +8,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const ReviewIntegrationOperationSchema = "gentle-ai.review-integration.operation/v1"
@@ -25,17 +28,43 @@ const ReviewIntegrationFailureSchemaID = "https://gentle-ai.dev/contracts/review
 const ReviewIntegrationFailureSchemaV2 = "gentle-ai.review-integration.failure/v2"
 const ReviewIntegrationFailureSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/failure.schema.json"
 
-const (
-	ReviewIntegrationOperationFinalize               = "review.finalize"
-	ReviewIntegrationOperationValidate               = "review.validate"
-	ReviewIntegrationOperationBindSDD                = "review.bind_sdd"
-	ReviewIntegrationOperationRetryFinalVerification = "review.retry_final_verification"
-)
+const ReviewIntegrationOperationValidate = "review.validate"
 
 type reviewIntegrationOperationMetadata struct {
-	Command          string
-	Operation        string
-	Label            string
+	Command   string
+	Operation string
+	Label     string
+	// Negotiated reports whether this operation is part of the PUBLISHED
+	// negotiated integration surface: the capabilities `operations` array and
+	// the failure envelope's `operation` enum, both of which are versioned
+	// contracts with a closed vocabulary and a pinned length, and the
+	// `--contract` route that reaches runReviewCommandContext.
+	//
+	// It is false for a row that exists only to own the runnable CLI verb of
+	// an operation the status schemas publish as an execute transition. Issue
+	// #1864 is what that distinction is for: "review.recover" is emitted as an
+	// execute transition and dispatched by review_facade.go, but it is not a
+	// negotiated operation, so before this field the only way to give it a
+	// verb was to also publish it -- and publishing it would have broken every
+	// shipped capabilities schema and fixture. Conflating the two left the
+	// caller with `kind: execute`, an operation name, and an empty command.
+	Negotiated bool
+	// CollectCapture marks the third row class: a collect-satisfying capture
+	// operation ("review.capture-result", "review.capture-refuter",
+	// "review.capture-validation"). These verbs are
+	// dispatched on the plain route -- orchestrators invoke them WITHOUT
+	// --contract, exactly as the negotiated collect transitions render them --
+	// so they never join the negotiated command route or the published
+	// capabilities `operations` array (whose length is a pinned contract).
+	// They DO join the failure envelope's operation vocabulary: their success
+	// paths print JSON on stdout, and a machine caller that received bare
+	// stderr with empty stdout on refusal could only classify the failure as
+	// an unknown mutation outcome -- a false ambiguity for a refusal that
+	// provably never started (the capture-ambiguity diagnosis). Their flag
+	// metadata is exercised by safeReviewIntegrationLineage, and
+	// MutatesAuthority by the timeout classification, so unlike a verb-only
+	// row this metadata is consumed and kept honest.
+	CollectCapture   bool
 	ValueFlags       []string
 	BoolFlags        []string
 	IntFlags         []string
@@ -47,27 +76,51 @@ type reviewIntegrationOperationMetadata struct {
 
 // reviewIntegrationOperationRegistry is the single policy source for
 // negotiated routing, safe flag extraction, aggregate-timeout mutation truth,
-// capability publication, and operation-specific diagnostics.
+// capability publication, and operation-specific diagnostics -- and, for every
+// row, the runnable CLI verb an emitted transition command is built from.
+//
+// Those two jobs are not the same set. A row with Negotiated false owns only
+// the verb; see the field's own comment for why the difference is load-bearing.
 var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
-	{Command: "bind-sdd", Operation: ReviewIntegrationOperationBindSDD, Label: "Review BIND-SDD", ValueFlags: []string{"cwd", "change", "lineage", "expected-binding-revision"}, MutatesAuthority: true, JoinOnTimeout: true, TimeoutRetryable: true},
-	{Command: "capabilities", Operation: "review.capabilities", Label: "Review CAPABILITIES"},
-	// The reviewer-result and evidence routes are all declared here, including
-	// the retired "result": an undeclared flag makes safeReviewIntegrationArguments
-	// treat the whole invocation as unparseable, which silently drops lineage_id
-	// from the failure envelope. Only "result" was ever listed, so every
-	// negotiated finalize failure on the admitted routes reported less than the
-	// unsafe one did.
-	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", ValueFlags: []string{"cwd", "lineage", "expected-revision", "target", "request-hash", "repository-context", "validation", "refuter", "evidence", "trace", "result", "result-artifact", "result-artifact-file"}, BoolFlags: []string{"failed", "captured-results", "captured-evidence"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
-	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
-	{Command: "retry-final-verification", Operation: ReviewIntegrationOperationRetryFinalVerification, Label: "Review RETRY-FINAL-VERIFICATION", ValueFlags: []string{"cwd", "predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization"}, MutatesAuthority: true, JoinOnTimeout: true},
-	{Command: "start", Operation: "review.start", Label: "Review START", ValueFlags: []string{"cwd", "agent", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
-	{Command: "status", Operation: "review.status", Label: "Review STATUS", ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization"}, BoolFlags: []string{"workspace-overlay", "action-eligibility", "next-transition"}},
-	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
+	{Command: "capabilities", Operation: "review.capabilities", Label: "Review CAPABILITIES", Negotiated: true},
+	// review.assess owns a verb without joining the published negotiated
+	// surface (see Negotiated above). It is a read-only projection of the same
+	// candidate risk assessment START uses to select lenses: no authority, no
+	// lineage, no store mutation, so it declares no flag or timeout metadata --
+	// those fields are consumed only on the negotiated and collect-capture
+	// routes this row does not take (issue #4295).
+	{Command: "assess", Operation: "review.assess", Label: "Review ASSESS"},
+	// CollectCapture rows carry the exact flag sets their Run functions define,
+	// so a refusal envelope never silently drops the bound lineage.
+	{Command: "capture-correction-plan", Operation: reviewCaptureCorrectionPlanOperation, Label: "Review CAPTURE-CORRECTION-PLAN", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "request-hash"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
+	{Command: "capture-refuter", Operation: reviewCaptureRefuterCaptureOperation, Label: "Review CAPTURE-REFUTER", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "agent"}, BoolFlags: []string{"materialize", "execute"}, MutatesAuthority: true, ReadOnlyFlag: "materialize"},
+	{Command: "capture-result", Operation: reviewCaptureResultCaptureOperation, Label: "Review CAPTURE-RESULT", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "lens", "expected-revision", "subject-hash", "agent", "input"}, BoolFlags: []string{"preflight", "materialize"}, IntFlags: []string{"order"}, MutatesAuthority: true, ReadOnlyFlag: "preflight"},
+	{Command: "capture-unachievable", Operation: reviewCaptureUnachievableCaptureOperation, Label: "Review CAPTURE-UNACHIEVABLE", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "request-hash", "reason", "detail"}, BoolFlags: []string{"withdraw"}, MutatesAuthority: true},
+	{Command: "capture-validation", Operation: reviewCaptureValidationCaptureOperation, Label: "Review CAPTURE-VALIDATION", CollectCapture: true, ValueFlags: []string{"cwd", "repository-context", "lineage", "target", "expected-revision", "request-hash", "agent"}, BoolFlags: []string{"materialize", "execute"}, MutatesAuthority: true, ReadOnlyFlag: "materialize"},
+	{Command: "acknowledge-approved", Operation: "review.acknowledge-approved", Label: "Review ACKNOWLEDGE-APPROVED"},
+	// review.recover owns a verb without joining the published negotiated
+	// surface (see Negotiated above). It is emitted as an execute transition by
+	// reviewRecoveryCollection, both shipped status schemas publish it in their
+	// transition_execution operation enum, and `case "recover":` is a real
+	// dispatch in review_facade.go -- so the command line it renders is one a
+	// caller can run. It deliberately declares no flag or timeout metadata:
+	// those fields are consumed only on the negotiated route this row does not
+	// take, and metadata nothing exercises is metadata nothing keeps honest.
+	{Command: "recover", Operation: "review.recover", Label: "Review RECOVER"},
+	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", Negotiated: true, ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
+	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "target-evidence", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
+	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition"}},
+	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", Negotiated: true, ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
 }
 
+// reviewIntegrationOperationByCommand resolves the negotiated route for one
+// CLI verb. It answers only for published negotiated operations: a verb-owning
+// row is dispatched by runReviewCommand and has no negotiated handler, so
+// routing it here would wrap it in the negotiated facade and then feed it a
+// --contract flag its own flag set does not define.
 func reviewIntegrationOperationByCommand(command string) (reviewIntegrationOperationMetadata, bool) {
 	for _, metadata := range reviewIntegrationOperationRegistry {
-		if metadata.Command == command {
+		if metadata.Negotiated && metadata.Command == command {
 			return metadata, true
 		}
 	}
@@ -83,9 +136,16 @@ func reviewIntegrationOperationByName(operation string) (reviewIntegrationOperat
 	return reviewIntegrationOperationMetadata{}, false
 }
 
+// reviewIntegrationOperationNames is the published capabilities `operations`
+// array, so it carries only the negotiated surface. Every shipped
+// capabilities schema pins both an exact length and a closed enum, and an
+// external consumer reads them.
 func reviewIntegrationOperationNames() []string {
 	operations := make([]string, 0, len(reviewIntegrationOperationRegistry))
 	for _, metadata := range reviewIntegrationOperationRegistry {
+		if !metadata.Negotiated {
+			continue
+		}
 		operations = append(operations, metadata.Operation)
 	}
 	return operations
@@ -111,27 +171,179 @@ type ReviewIntegrationFailure struct {
 	RetrySafe              bool                            `json:"retry_safe"`
 	Replayability          reviewtransaction.Replayability `json:"replayability"`
 	LineageID              string                          `json:"lineage_id,omitempty"`
-	RequestDigest          string                          `json:"request_digest,omitempty"`
-	ProgressIdentity       string                          `json:"progress_identity,omitempty"`
-	RequiredInputs         []string                        `json:"required_inputs"`
-	NextAction             string                          `json:"next_action"`
-	CauseCategory          string                          `json:"cause_category,omitempty"`
-	// Cause is additive: the wrapped real native cause for the
-	// operation_outcome_unknown default envelope, so a caller is never left
-	// with only a fixed placeholder message. It is never populated on the
-	// read-only catch-all, which stays deliberately content-free.
+	// TargetIdentity binds an operation failure to the frozen candidate whose
+	// retained lineage the caller must query with STATUS. It is optional for
+	// unrelated historical failure classes.
+	TargetIdentity   string   `json:"target_identity,omitempty"`
+	RequestDigest    string   `json:"request_digest,omitempty"`
+	ProgressIdentity string   `json:"progress_identity,omitempty"`
+	RequiredInputs   []string `json:"required_inputs"`
+	NextAction       string   `json:"next_action"`
+	CauseCategory    string   `json:"cause_category,omitempty"`
+	// Cause is additive: the scrubbed, bounded native cause for a typed failure
+	// branch that has a safe diagnostic to publish.
 	Cause   string                           `json:"cause,omitempty"`
 	Context *ReviewIntegrationFailureContext `json:"context,omitempty"`
+	// Continuation is the one candidate-preserving runnable follow-up a
+	// managed_assets_outdated refusal can offer (#3299, #4170): the exact
+	// `gentle-ai sync` invocation that reconciles the recorded digest. It is
+	// additive and, on THIS envelope, only ever set for that one refusal code;
+	// the release continuation the type also carries travels on a STATUS stop,
+	// never here.
+	Continuation *ReviewStopContinuation `json:"continuation,omitempty"`
+}
+
+// ReviewStopContinuation names the one literally runnable follow-up a stop
+// that has one can carry, so no caller has to recover it from prose. Two
+// operations use it: `sync`, which resolves a managed_assets_outdated refusal
+// without abandoning the frozen candidate, and `abandon`, the release a
+// correction_context_budget_exceeded stop requires. Command is the runnable
+// command line, bound to the same runtime agent the blocked operation was
+// asked for. When this process can identify its executable, the token is
+// anchored to that binary (#4434). The final bare `gentle-ai` compatibility
+// fallback is not an exact executable identity and may resolve through PATH.
+// StaleAssets carries the stale recorded digest when it is known. Detail is
+// set only where the command is a preparatory step rather than the whole
+// operation, and then it says plainly what running it produces.
+type ReviewStopContinuation struct {
+	Operation   string   `json:"operation"`
+	Command     string   `json:"command"`
+	Agent       string   `json:"agent,omitempty"`
+	StaleAssets []string `json:"stale_assets,omitempty"`
+	Detail      string   `json:"detail,omitempty"`
+}
+
+// managedAssetsContinuationCommandPattern is the executable-identity half of
+// the published managed_assets_continuation `command` contract (failure.schema
+// .json carries the same regex). The executable token is either the bare
+// `gentle-ai` fallback, an unquoted path, or one of the two shell quoting forms
+// the renderer picks per platform -- POSIX single quotes (the only form no
+// POSIX shell expands) or Windows double quotes (cmd.exe command syntax) --
+// followed by `sync` and an optional `--agent <id>`. Keeping the JSON schema
+// and this Go mirror in one shape is what lets Validate() enforce the same
+// contract the published schema does. The pattern governs structure; the safe
+// choice of form for a given path is managedAssetsExecutableToken's job.
+const managedAssetsContinuationCommandPattern = `^(?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'\\'')*') sync(?: --agent \S+)?$`
+
+// managedAssetsBareExecutablePattern is the conservative allowlist of path
+// characters that are safe unquoted in every shell that may run the
+// continuation. An allowlist rather than a blacklist: a character outside it
+// (whitespace, $, backtick, quotes, globs, separators) always forces quoting,
+// so safety never depends on enumerating the metacharacter set of every shell
+// in existence.
+const managedAssetsBareExecutableClass = `[A-Za-z0-9/._+=@:,-]+`
+
+var managedAssetsBareExecutable = regexp.MustCompile(`^` + managedAssetsBareExecutableClass + `$`)
+
+// reviewManagedAssetsExecutablePath resolves the binary that would diagnose a
+// managed-asset skew, so its continuation can be anchored to it. Var
+// indirection keeps the resolution stubbable in tests.
+var reviewManagedAssetsExecutablePath = os.Executable
+
+// reviewManagedAssetsGOOS selects the quoting form for a path that needs it:
+// the invoking binary knows the platform the continuation will run on. Var
+// indirection keeps it stubbable in tests.
+var reviewManagedAssetsGOOS = runtime.GOOS
+
+// managedAssetsExecutableToken renders one executable path as a command-line
+// token using one exact platform-specific encoding (#4434): POSIX platforms
+// quote with single quotes, which no POSIX shell expands ($ and backticks
+// expand even inside double quotes); Windows quotes with double quotes, the
+// command syntax cmd.exe accepts, because cmd.exe does not treat single
+// quotes as command syntax. A path over the safe bare class stays bare and
+// runs as printed in every shell. Caveat: PowerShell requires the call
+// operator for a leading quoted token (`& "C:\..." sync ...`), so the quoted
+// Windows form is the cmd.exe contract, not a paste-and-run PowerShell one;
+// machine relays that spawn the anchored executable directly, and bare
+// tokens, are unaffected.
+func managedAssetsExecutableToken(path string) string {
+	if managedAssetsBareExecutable.MatchString(path) {
+		return path
+	}
+	if reviewManagedAssetsGOOS == "windows" {
+		return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
+	}
+	// The standard POSIX idiom for an embedded single quote: close the quoted
+	// span, emit an escaped quote, reopen the span.
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// managedAssetsContinuationExecutable resolves the executable identity the
+// continuation is anchored to. os.Executable is authoritative when it returns
+// a safe single-line path; an absolute argv[0] is the bounded fallback for
+// hosts where that lookup fails. The final bare `gentle-ai` fallback retains legacy
+// recovery behavior but is intentionally not presented as an exact identity.
+func managedAssetsContinuationExecutable() string {
+	if path, err := reviewManagedAssetsExecutablePath(); err == nil && managedAssetsExecutableIdentity(path) {
+		return managedAssetsExecutableToken(path)
+	}
+	if len(os.Args) > 0 && managedAssetsArgvZeroIdentity(os.Args[0]) {
+		return managedAssetsExecutableToken(os.Args[0])
+	}
+	return "gentle-ai"
+}
+
+// managedAssetsExecutableIdentity accepts os.Executable's resolved identity
+// only when it is non-empty and single-line. In particular, a CR or LF must not
+// reach either quoting renderer, because continuation commands are always one line.
+func managedAssetsExecutableIdentity(path string) bool {
+	return path != "" && !strings.ContainsAny(path, "\r\n")
+}
+
+// managedAssetsArgvZeroIdentity is narrower than the os.Executable path: an
+// unqualified argv[0] may be a PATH command, not this process's exact identity.
+func managedAssetsArgvZeroIdentity(path string) bool {
+	return managedAssetsExecutableIdentity(path) && filepath.IsAbs(path)
+}
+
+// managedAssetsContinuation builds the one continuation a
+// managed_assets_outdated refusal can offer: the exact `sync` invocation,
+// anchored to the invoking executable (#4434) and bound to the runtime agent
+// the blocked STATUS or START was asked for. An empty agent (no runtime
+// declared) produces the command without one instead of guessing it.
+func managedAssetsContinuation(agent string, staleAssets []string) *ReviewStopContinuation {
+	agent = strings.TrimSpace(agent)
+	executable := managedAssetsContinuationExecutable()
+	command := executable + " sync"
+	if agent != "" {
+		command = executable + " sync --agent " + agent
+	}
+	continuation := &ReviewStopContinuation{Operation: "sync", Command: command, Agent: agent}
+	if len(staleAssets) > 0 {
+		continuation.StaleAssets = append([]string{}, staleAssets...)
+	}
+	return continuation
 }
 
 type ReviewIntegrationFailureContext struct {
-	ScopeChange     *ReviewIntegrationScopeChange             `json:"scope_change,omitempty"`
-	BindingRevision *ReviewIntegrationBindingRevisionConflict `json:"binding_revision,omitempty"`
+	ScopeChange *ReviewIntegrationScopeChange `json:"scope_change,omitempty"`
+	// TargetDrift is the additive #4494 stale-target evidence: the negotiated
+	// components beside their live rebuild, with the differing component
+	// names. Exactly one of the two context variants is ever set.
+	TargetDrift *ReviewIntegrationTargetDrift `json:"target_drift,omitempty"`
 }
 
-type ReviewIntegrationBindingRevisionConflict struct {
-	Expected string `json:"expected"`
-	Current  string `json:"current"`
+// ReviewIntegrationTargetDrift decomposes one stale-target refusal into the
+// truthful cause: which components of the negotiated candidate evidence no
+// longer describe the live workspace (the moved class), or that every
+// component matches while the identity hash alone drifted (the derivation
+// defect class, #2700/#4353/#4412).
+type ReviewIntegrationTargetDrift struct {
+	Expected            ReviewIntegrationNegotiatedComponents `json:"expected"`
+	Actual              ReviewIntegrationNegotiatedComponents `json:"actual"`
+	DifferingComponents []string                              `json:"differing_components"`
+}
+
+// ReviewIntegrationNegotiatedComponents are the five identity components a
+// negotiated continuation carries. base_tree is optional: an unborn HEAD
+// current-changes candidate has no base tree, and absence means exactly
+// that, never an omission.
+type ReviewIntegrationNegotiatedComponents struct {
+	Kind          string `json:"kind"`
+	Projection    string `json:"projection"`
+	BaseTree      string `json:"base_tree,omitempty"`
+	CandidateTree string `json:"candidate_tree"`
+	PathsDigest   string `json:"paths_digest"`
 }
 
 type ReviewIntegrationScopeChange struct {
@@ -157,10 +369,20 @@ type ReviewIntegrationFailureError struct {
 	// tail for the unanticipated-residue class. It decorates only the
 	// operator-facing error line; the schema-bounded envelope never carries it.
 	defectReportClause string
+	// operatorMessage optionally replaces the bounded contract Message on the
+	// operator-facing error line. The collect-capture route sets it to the
+	// native refusal text so that gaining a typed stdout envelope never costs
+	// the human the specific reason stderr always carried; the envelope itself
+	// stays schema-bounded and never carries this prose.
+	operatorMessage string
 }
 
 func (err *ReviewIntegrationFailureError) Error() string {
-	return fmt.Sprintf("%s [%s]%s", err.Failure.Message, err.Failure.Code, err.defectReportClause)
+	message := err.Failure.Message
+	if err.operatorMessage != "" {
+		message = err.operatorMessage
+	}
+	return fmt.Sprintf("%s [%s]%s", message, err.Failure.Code, err.defectReportClause)
 }
 
 func (err *ReviewIntegrationFailureError) Unwrap() error { return err.cause }
@@ -196,11 +418,18 @@ const (
 // refusal. It carries only fields the published v1 failure schema already
 // defines, so classifying a refusal never changes the wire contract. The
 // human-readable half travels separately in the additive `cause` field.
+//
+// Context and RetrySafeFalse are additive classification extensions for the
+// #4494 stale-target decomposition: a moved-candidate refusal carries the
+// typed target_drift evidence, and the identity-only drift refusal must not
+// advertise the same retry as a retryable one.
 type reviewPreflightReason struct {
 	Code           string
 	Message        string
 	RequiredInputs []string
 	NextAction     string
+	Context        *ReviewIntegrationFailureContext
+	RetrySafeFalse bool
 }
 
 // reviewPreflightStaleTargetReason classifies every refusal whose precondition
@@ -227,23 +456,89 @@ var reviewPreflightUntrackedScopeReason = reviewPreflightReason{
 	NextAction: "stop",
 }
 
-// reviewPreflightMissingInputsReason names the contract-level inputs a caller
-// must supply. Callers pass only inputs the published required_inputs enum
-// actually defines; a refusal whose missing inputs are not all expressible
-// there keeps an empty list and names them in prose instead, because a partial
-// list would read as a complete one.
-func reviewPreflightMissingInputsReason(inputs ...string) reviewPreflightReason {
-	return reviewPreflightReason{
-		Code:           reviewIntegrationInvalidRequestCode,
-		Message:        reviewIntegrationGenericPreflightMessage,
-		RequiredInputs: append([]string{}, inputs...),
-		NextAction:     "correct_request",
-	}
+// reviewPreflightManagedAssetsReason classifies a START that is refused before
+// any authority can be created because this binary's managed reviewer assets
+// differ from the recorded installation state. The exact sync remediation stays
+// in the cause because it is the existing operator-facing source of truth.
+var reviewPreflightManagedAssetsReason = reviewPreflightReason{
+	Code:       "managed_assets_outdated",
+	Message:    "Managed reviewer assets are outdated; synchronize them before starting review.",
+	NextAction: "stop",
+}
+
+// reviewPreflightDirectRouteUncompletableReason classifies a direct
+// (non-negotiated) `review start` that would select at least one lens.
+// Issue #2447: the direct route's own response type cannot carry
+// repository_context, so no reviewer lens can ever capture a result against
+// a lineage it creates, and the negotiated facade does not rediscover a
+// lineage the direct route created. The named next action is the negotiated
+// review.start form; the exact runnable command travels in the cause.
+var reviewPreflightDirectRouteUncompletableReason = reviewPreflightReason{
+	Code:       "direct_start_uncompletable",
+	Message:    "The direct (non-negotiated) review start route cannot host a completable review: no reviewer lens can capture a result against the lineage it would create. Rerun with the negotiated contract form.",
+	NextAction: "review.start",
+}
+
+// reviewPreflightEmptyCandidateReason classifies a START -- negotiated or
+// direct -- whose frozen candidate has zero changed paths: a TargetCurrentChanges
+// candidate on a clean, fully-committed worktree (base_tree == candidate_tree
+// == HEAD), or a TargetBaseDiff candidate whose named base nets no manifest
+// entries (a mode-only or truly-empty diff). Left unguarded, either shape
+// would freeze, pass risk assessment, and mint an approved receipt that
+// inspected nothing -- issue #2586 (a stale zero-delta receipt discovered
+// as "governing" a later, genuinely unreviewed candidate that happens to
+// share its final tree). `base_ref` is already in the published
+// required_inputs enum, and `next_action: correct_request` is honest because
+// the caller genuinely must supply it: the system never auto-derives a base
+// ref (e.g. HEAD~1) on the caller's behalf.
+var reviewPreflightEmptyCandidateReason = reviewPreflightReason{
+	Code:           "empty_candidate_scope",
+	Message:        "The review candidate has no pending changes to freeze; name the base to compare against before retrying.",
+	RequiredInputs: []string{"base_ref"},
+	NextAction:     "correct_request",
+}
+
+// reviewPreflightCaptureBindingMismatchReason classifies every reviewer-lens
+// or provider-role capture refused because its frozen binding (lineage,
+// target, lens, order, revision, subject hash, or request hash) no longer
+// matches the current authority. Same not_started truth, same STATUS way out.
+var reviewPreflightCaptureBindingMismatchReason = reviewPreflightReason{
+	Code:       "capture_binding_mismatch",
+	Message:    "The capture binding does not match the current review authority; re-derive the exact next transition before retrying.",
+	NextAction: "review.status",
+}
+
+// reviewPreflightSlotOccupiedReason classifies the one capture refusal that is
+// neither a transport failure nor a bad binding: a different reviewer result
+// already occupies the immutable slot. STATUS discovers the committed capture
+// and continues without relaunching.
+var reviewPreflightSlotOccupiedReason = reviewPreflightReason{
+	Code:       reviewerResultSlotOccupiedCode,
+	Message:    "A different reviewer result already occupies this immutable slot; re-derive the exact next transition before retrying.",
+	NextAction: "review.status",
+}
+
+// reviewPreflightProviderCaptureRefusedReason classifies a non-lens provider
+// role capture (targeted validator or refuter) refused on both admission
+// attempts, including the single corrective re-invocation: the provider, not
+// the operator's request, produced malformed output twice, so
+// "correct_request" would be an actively wrong instruction (issue #4061).
+// Nothing was captured, and the bound slot is unchanged, so the way out is
+// the same STATUS re-query and relaunch every other capture refusal uses.
+var reviewPreflightProviderCaptureRefusedReason = reviewPreflightReason{
+	Code:       "provider_capture_result_refused",
+	Message:    "The provider role capture result was refused on both admission attempts; the provider, not the request, produced a malformed result.",
+	NextAction: "review.status",
 }
 
 type reviewIntegrationPreflightError struct {
 	cause  error
 	reason *reviewPreflightReason
+	// continuation is additive instance data (parallel to cause): the reason
+	// is a static classification shared by every occurrence of a code, while
+	// the continuation names the exact runnable command for THIS occurrence
+	// (bound to the agent this specific blocked call was asked for).
+	continuation *ReviewStopContinuation
 }
 
 func (err *reviewIntegrationPreflightError) Error() string { return err.cause.Error() }
@@ -277,6 +572,18 @@ func reviewPreflightRefusal(reason reviewPreflightReason, err error) error {
 	return &reviewIntegrationPreflightError{cause: err, reason: &reason}
 }
 
+// reviewPreflightRefusalWithContinuation is reviewPreflightRefusal plus the
+// one additive continuation a managed_assets_outdated refusal carries, so
+// START's own preflight failure names the same runnable sync as STATUS's
+// stop transition instead of leaving the caller to infer it from prose
+// (#3299, #4170).
+func reviewPreflightRefusalWithContinuation(reason reviewPreflightReason, err error, continuation *ReviewStopContinuation) error {
+	if err == nil {
+		return nil
+	}
+	return &reviewIntegrationPreflightError{cause: err, reason: &reason, continuation: continuation}
+}
+
 func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrationFailure) {
 	if len(args) == 0 {
 		return "", false, nil
@@ -295,11 +602,17 @@ func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrat
 	}
 	if missing {
 		failure := newReviewIntegrationPreflightFailure(operation, "invalid_request", "The negotiated review request is invalid.")
+		if provided && contract == ReviewIntegrationContractV2 {
+			failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+		}
 		failure.LineageID = safeReviewIntegrationLineage(operation, args[1:])
 		return operation, true, &failure
 	}
 	if contract == "" {
 		failure := newReviewIntegrationPreflightFailure(operation, "empty_contract", "The review integration contract cannot be empty.")
+		if provided && contract == ReviewIntegrationContractV2 {
+			failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+		}
 		failure.LineageID = safeReviewIntegrationLineage(operation, args[1:])
 		return operation, true, &failure
 	}
@@ -352,6 +665,14 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
+	// Root 8 (#2471): the typed cause is projected ONCE, here, for every
+	// branch below. Before this, Cause was per-branch opt-in and 17 of 25
+	// return sites forgot it, so the caller read a constant Message with the
+	// native reason already in the tool's hands and discarded. The helper
+	// scrubs and bounds to the schema's own maxLength, and the field is
+	// additive, so no branch has a reason to suppress it; a branch that needs
+	// a MORE specific cause may still overwrite this default.
+	failure.Cause = reviewIntegrationFailureCause(runErr)
 	// Both branches below refuse inside authorizeReviewStart, strictly before
 	// any review authority is created or mutated (organic-dx Phase 3b task
 	// 3b.6). Falling through to the generic operation_outcome_unknown default
@@ -393,89 +714,41 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Cause = reviewIntegrationFailureCause(rddDisabled)
 		return failure
 	}
-	var retryDenied *reviewtransaction.FinalVerificationRetryDeniedError
-	if errors.As(runErr, &retryDenied) {
+	var authorizationInexact *reviewtransaction.CompactRecoveryAuthorizationInexactError
+	if errors.As(runErr, &authorizationInexact) {
 		failure.Phase = "pre_native"
-		failure.Code = "final_verification_retry_denied"
-		failure.Message = "The final-verification retry did not satisfy the exact provider-owned admission boundary."
+		failure.Code = "escalated_recovery_authorization_inexact"
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "current_target"
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
-		failure.RequiredInputs = []string{}
-		// STATUS already re-derives retry eligibility for this lineage; the
-		// denial itself named nothing to look at next.
-		failure.NextAction = "review.status"
+		if authorizationInexact.Repairable {
+			failure.Message = "The escalated recovery authority carries a schema-prefixed authorization that does not match the exact binding; run review repair to derive the provider-owned disposition."
+			failure.NextAction = "review.repair"
+		} else {
+			failure.Message = "The escalated recovery authority carries an authorization that does not match the exact binding; no advertised repair operation admits this shape."
+			failure.NextAction = "stop"
+		}
 		return failure
 	}
-	var bindingConflict *sddstatus.BindingRevisionConflictError
-	if errors.As(runErr, &bindingConflict) {
+	// Exact atomic START binding conflicts are detected before the guarded write.
+	// They must never be reported as an unknown mutation or sent through ambient
+	// recovery discovery: callers can correct the request without replaying one.
+	var atomicStartConflict *reviewtransaction.CompactAtomicStartConflictError
+	if errors.As(runErr, &atomicStartConflict) {
 		failure.Phase = "pre_native"
-		failure.Code = "binding_revision_conflict"
-		failure.Message = "The expected SDD review binding revision does not match the current native binding."
+		failure.Code = "atomic_start_conflict"
+		failure.Message = "The exact START binding conflicts with the active authority at this lineage; no authority was changed."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "current_target"
 		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
-		failure.RequiredInputs = []string{"change", "lineage_id", "expected_binding_revision"}
-		failure.NextAction = ReviewIntegrationOperationBindSDD
-		failure.Context = &ReviewIntegrationFailureContext{BindingRevision: &ReviewIntegrationBindingRevisionConflict{
-			Expected: bindingConflict.Expected, Current: bindingConflict.Current,
-		}}
-		return failure
-	}
-	var replayMismatch *reviewtransaction.FinalizeAttemptReplayMismatchError
-	if errors.As(runErr, &replayMismatch) {
-		failure.Phase = "reconciliation"
-		failure.Code = "finalize_request_mismatch"
-		failure.Message = "The FINALIZE request differs from the durable incomplete attempt."
-		failure.MutationOutcome = ReviewMutationUnknown
-		failure.AuthorityApplicability = "current_target"
-		failure.RetrySafe = false
-		failure.Replayability = reviewtransaction.ReplayabilityStatusRequired
-		failure.LineageID = replayMismatch.LineageID
-		failure.RequiredInputs = []string{"lineage_id"}
-		failure.NextAction = "review.status"
-		return failure
-	}
-	var publication *ReviewFacadeReceiptPublicationError
-	if errors.As(runErr, &publication) {
-		failure.Phase = "native_committed"
-		if publication.Replayability == string(reviewtransaction.ReplayabilityManualActionRequired) {
-			failure.Code = "receipt_publication_conflict"
-			failure.Message = "Receipt publication conflicts with an existing immutable artifact."
-			failure.MutationOutcome = ReviewMutationCommitted
-			failure.AuthorityApplicability = "current_target"
-			failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
-			failure.LineageID = publication.LineageID
-			failure.RequestDigest = publication.RequestDigest
-			failure.RequiredInputs = []string{}
-			failure.NextAction = "explicit-maintainer-action"
-			return failure
+		failure.RequiredInputs = []string{}
+		failure.NextAction = "correct_request"
+		if validReviewIntegrationLineage(atomicStartConflict.LineageID) {
+			failure.LineageID = atomicStartConflict.LineageID
 		}
-		failure.Code = "receipt_publication_pending"
-		failure.Message = "Receipt publication did not complete after terminal authority was committed."
-		failure.MutationOutcome = ReviewMutationCommitted
-		failure.AuthorityApplicability = "current_target"
-		failure.Replayability = reviewtransaction.ReplayabilityExactReplaySafe
-		failure.LineageID = publication.LineageID
-		failure.RequestDigest = publication.RequestDigest
-		failure.RequiredInputs = []string{"lineage_id"}
-		failure.NextAction = "review.finalize"
-		return failure
-	}
-	var bindingPublication *sddstatus.ReviewBindingPublicationError
-	if errors.As(runErr, &bindingPublication) {
-		failure.Phase = "native_committed"
-		failure.Code = "binding_publication_pending"
-		failure.Message = "SDD review binding publication requires an exact replay to confirm directory durability."
-		failure.MutationOutcome = ReviewMutationCommitted
-		failure.AuthorityApplicability = "current_target"
-		failure.RetrySafe = true
-		failure.Replayability = reviewtransaction.ReplayabilityExactReplaySafe
-		failure.RequestDigest = facadeValueHash("bind-sdd-request", args)
-		failure.RequiredInputs = []string{"change", "lineage_id", "expected_binding_revision"}
-		failure.NextAction = ReviewIntegrationOperationBindSDD
+		failure.Cause = reviewIntegrationFailureCause(atomicStartConflict)
 		return failure
 	}
 	var startContext *reviewStartContextError
@@ -505,45 +778,6 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Replayability = reviewtransaction.ReplayabilityStatusRequired
 		failure.RequiredInputs = []string{"lineage_id"}
 		failure.NextAction = "review.status"
-		return failure
-	}
-	var progress *reviewFacadeOperationProgressError
-	if errors.As(runErr, &progress) {
-		failure.Phase = "native_committed"
-		failure.MutationOutcome = ReviewMutationUnknown
-		failure.AuthorityApplicability = "current_target"
-		failure.RetrySafe = false
-		failure.Replayability = reviewtransaction.ReplayabilityStatusRequired
-		failure.LineageID = progress.LineageID
-		failure.RequiredInputs = []string{}
-		failure.NextAction = "review.status"
-		var progressedGitTimeout *reviewtransaction.GitCommandTimeoutError
-		var progressedGitFailure *reviewtransaction.GitCommandError
-		var progressedGitControl *reviewtransaction.GitProcessControlError
-		switch {
-		case errors.As(runErr, &progressedGitTimeout):
-			failure.Code = "git_command_timeout"
-			failure.Message = "A bounded Git subprocess timed out after review authority committed a native transition."
-		case errors.As(runErr, &progressedGitFailure):
-			failure.Code = "git_command_failed"
-			failure.Message = "A Git subprocess failed after review authority committed a native transition."
-		case errors.As(runErr, &progressedGitControl):
-			failure.Code = "git_command_failed"
-			failure.Message = "A Git subprocess could not be started or controlled after review authority committed a native transition: " + progressedGitControl.Error()
-		case errors.Is(runErr, context.DeadlineExceeded):
-			failure.Code = "operation_timeout"
-			failure.Message = "The negotiated review operation timed out after review authority committed a native transition."
-		default:
-			// The classification above is deliberate and stays: 1861 requires a
-			// failure arriving after a committed native transition to keep
-			// reporting an unknown outcome, because retrying a maybe-committed
-			// mutation can double-apply it. Only the reason was being dropped.
-			// This branch returns before the general default assigns Cause, so
-			// without this the caller reads "failed without authoritative
-			// mutation evidence" with nothing to act on or report, for a state
-			// whose native reason the tool already holds.
-			failure.Cause = reviewIntegrationFailureCause(runErr)
-		}
 		return failure
 	}
 	var repairProgress *reviewtransaction.ClassifiedAuthorityRepairProgressError
@@ -609,8 +843,8 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "retry_with_bounded_backoff"
 		return failure
 	}
-	// The other half of the same race, and the reason a concurrent FINALIZE can
-	// lose without ever touching the lock contention above. The expected compact
+	// The other half of the same race is a concurrent capture that can lose
+	// without ever touching the lock contention above. The expected compact
 	// revision is read before the authority lock is taken, so a writer that wins
 	// the lock can still find that another writer advanced the authority in the
 	// meantime. That window is intended -- the lock serializes the commit, the
@@ -678,18 +912,33 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitTimeout)
 		return failure
 	}
 	var gitFailure *reviewtransaction.GitCommandError
 	if errors.As(runErr, &gitFailure) {
 		failure.Phase = "pre_native"
-		failure.Code = "git_command_failed"
-		failure.Message = "A Git subprocess failed before review authority mutation."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitFailure)
+		// #3497: a Git dubious-ownership refusal (a UNC share, for example)
+		// is a distinct, typed, path-free condition -- reviewGitOwnershipRefusal
+		// already exists to name it -- and no review action can repair it, since
+		// gentle-ai never provisions safe.directory. Before this branch, only
+		// resolveOpaqueReviewRepositoryRoot consulted that classifier, so every
+		// other route through this generic mapper (including negotiated
+		// review.status) reported the same refusal as the content-free
+		// git_command_failed code.
+		if reviewGitOwnershipRefusal(gitFailure) {
+			failure.Code = reviewGitTrustRefusalCode
+			failure.Message = reviewGitTrustRefusalAction
+			return failure
+		}
+		failure.Code = "git_command_failed"
+		failure.Message = "A Git subprocess failed before review authority mutation."
 		return failure
 	}
 	var gitControl *reviewtransaction.GitProcessControlError
@@ -702,6 +951,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitControl)
 		return failure
 	}
 	if errors.Is(runErr, context.DeadlineExceeded) {
@@ -723,10 +973,17 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		preflightFailure.LineageID = failure.LineageID
 		preflightFailure.RequiredInputs = append([]string{}, reason.RequiredInputs...)
 		preflightFailure.NextAction = reason.NextAction
-		if reason.Code == reviewImmutableTransportUnsupportedCode {
+		if reason.RetrySafeFalse {
+			preflightFailure.RetrySafe = false
+		}
+		if reason.Context != nil {
+			preflightFailure.Context = reason.Context
+		}
+		if reason.Code == reviewImmutableTransportUnsupportedCode || reason.Code == reviewTransportCapabilityUnsupportedCode {
 			preflightFailure.RetrySafe = false
 		}
 		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
+		preflightFailure.Continuation = preflight.continuation
 		return preflightFailure
 	}
 	var legacy *reviewtransaction.LegacyReadOnlyError
@@ -819,9 +1076,16 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			// should not have to consult documentation to find it.
 			failure.NextAction = "review.start"
 		case ReviewReceiptUnrelated:
-			// Every terminal receipt on file targets something else. STATUS
-			// re-derives the same discovery and can name the candidate
-			// lineages (or confirm none apply) without guessing.
+			// issue #3408: discovery assessed every terminal receipt on file
+			// against this candidate and none of them governs it, so the
+			// message leads with the candidate's own situation and its route
+			// instead of the generic "no unique exact receipt applies", which
+			// read as though one of those other receipts were the obstacle.
+			// NextAction stays review.status: STATUS is the negotiated entry
+			// that re-derives this discovery and returns the exact
+			// transition, which for a candidate nothing governs is the
+			// review.start the message names.
+			failure.Message = "No approved review receipt covers this candidate; review it with gentle-ai review start."
 			failure.NextAction = "review.status"
 		case ReviewReceiptScopeChanged:
 			if discovery.Context != nil {
@@ -863,6 +1127,28 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		case ReviewAuthorityCorrupted:
 			failure.AuthorityApplicability = "corrupted"
 			failure.CauseCategory = discovery.Category
+		case ReviewGateRemoteFetchRequired:
+			// issue #3342: the local clone is behind the advertised remote
+			// tip; nothing about the authority store was evaluated, and the
+			// cause names the runnable `git fetch <remote>` continuation.
+			failure.Message = "The advertised publication base commit is not available locally; fetch the publication remote, then retry the same gate."
+			failure.AuthorityApplicability = "not_evaluated"
+			failure.RetrySafe = true
+			failure.NextAction = "retry"
+		case ReviewAuthorityInventoryBusy:
+			// issue #3342: transient shared-store coordination, never damage;
+			// the cause names the lock, its recorded holder, and the
+			// continuation.
+			failure.Message = "The review authority store is busy with a concurrent review operation; retry the same gate."
+			failure.AuthorityApplicability = "not_evaluated"
+			failure.RetrySafe = true
+			failure.NextAction = "retry"
+		case ReviewAuthorityLockUnverifiable:
+			// Neither provably live nor provably dead: no event terminates a
+			// retry, so the continuation is manual and stays not retry-safe.
+			failure.Message = "The review authority store lock records a holder this host cannot verify; verify it on the recorded host, or remove the lock only if that machine is known idle."
+			failure.AuthorityApplicability = "not_evaluated"
+			failure.NextAction = "explicit-maintainer-action"
 		}
 		return failure
 	}
@@ -871,8 +1157,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Code = "operation_failed"
 		failure.Message = "The negotiated read-only review operation failed safely."
 		failure.MutationOutcome = ReviewMutationNotStarted
-		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		// Issues #2981 and #3379: the catch-all used to clear the universal
+		// scrubbed cause, so an unclassified read-only failure was content-free.
+		// It keeps the cause now; retry stays honest because this branch is the
+		// residue of everything the typed classifier did not recognise.
+		failure.RetrySafe = true
 		failure.NextAction = "retry"
 		return failure
 	}
@@ -969,9 +1259,6 @@ func safeReviewIntegrationLineage(operation string, args []string) string {
 		return ""
 	}
 	value := values["lineage"]
-	if operation == ReviewIntegrationOperationRetryFinalVerification {
-		value = values["predecessor-lineage"]
-	}
 	if !validReviewIntegrationLineage(value) {
 		return ""
 	}
@@ -1115,6 +1402,12 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		!validReviewIntegrationFailureOperation(failure.Operation) {
 		return errors.New("invalid negotiated review failure identity")
 	}
+	// The published v1 failure schema pins the original eight-operation enum;
+	// only the v2 schema admits the collect-satisfying capture operations, so
+	// a capture refusal must never publish under the legacy identity.
+	if metadata, ok := reviewIntegrationOperationByName(failure.Operation); ok && metadata.CollectCapture && !nativeGitContract {
+		return errors.New("collect capture failures publish only the v2 failure schema") // refusal:by-design world-action: a capture envelope under the legacy identity is a construction bug and requires a code fix, not an operator command
+	}
 	if !validReviewIntegrationFailureCode(failure.Code) || strings.TrimSpace(failure.Message) != failure.Message ||
 		failure.Message == "" || len(failure.Message) > 240 || strings.ContainsAny(failure.Message, "\r\n") {
 		return errors.New("invalid negotiated review failure message")
@@ -1153,10 +1446,12 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		}
 	}
 	if failure.Context != nil {
-		if (failure.Context.ScopeChange == nil) == (failure.Context.BindingRevision == nil) {
-			return errors.New("negotiated review failure context must select exactly one diagnostic")
+		scope := failure.Context.ScopeChange
+		drift := failure.Context.TargetDrift
+		if (scope == nil) == (drift == nil) {
+			return errors.New("negotiated review failure context carries exactly one variant")
 		}
-		if scope := failure.Context.ScopeChange; scope != nil {
+		if scope != nil {
 			if failure.Operation != ReviewIntegrationOperationValidate {
 				return errors.New("negotiated review scope context is not a gate denial")
 			}
@@ -1169,16 +1464,29 @@ func (failure ReviewIntegrationFailure) Validate() error {
 				return errors.New("negotiated review scope-change diagnostics are incomplete")
 			}
 		}
-		if conflict := failure.Context.BindingRevision; conflict != nil {
-			if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != "binding_revision_conflict" ||
-				!validOptionalReviewSHA256(conflict.Expected) || !validOptionalReviewSHA256(conflict.Current) ||
-				!reflect.DeepEqual(failure.RequiredInputs, []string{"change", "lineage_id", "expected_binding_revision"}) ||
-				failure.NextAction != ReviewIntegrationOperationBindSDD {
-				return errors.New("negotiated review binding-revision diagnostics are incomplete")
+		if drift != nil {
+			// Issue #4494: the stale-target refusal carries the decomposed
+			// candidate evidence beside its live rebuild, so the cause names
+			// the truthful difference instead of an opaque identity mismatch.
+			if failure.Operation != "review.start" || failure.Code != reviewPreflightStaleTargetCode {
+				return errors.New("negotiated review target-drift context is stale-target scoped")
+			}
+			if !validReviewTargetDriftComponents(drift.Expected) || !validReviewTargetDriftComponents(drift.Actual) ||
+				len(drift.DifferingComponents) == 0 || len(drift.DifferingComponents) > 5 ||
+				reflect.DeepEqual(drift.Expected, drift.Actual) {
+				return errors.New("negotiated review target-drift diagnostics are incomplete")
+			}
+			seen := make(map[string]bool, len(drift.DifferingComponents))
+			for _, name := range drift.DifferingComponents {
+				if !reviewTargetDriftComponentNames[name] || seen[name] {
+					return errors.New("negotiated review target-drift names an unknown component")
+				}
+				seen[name] = true
 			}
 		}
 	}
 	if failure.LineageID != "" && !validReviewIntegrationLineage(failure.LineageID) ||
+		failure.TargetIdentity != "" && !validReviewCapabilitySHA256(failure.TargetIdentity) ||
 		failure.RequestDigest != "" && !validReviewCapabilitySHA256(failure.RequestDigest) ||
 		failure.RequestDigest != "" && failure.LineageID == "" ||
 		failure.ProgressIdentity != "" && (!validReviewCapabilitySHA256(failure.ProgressIdentity) || failure.RequestDigest == "" || failure.Operation != "review.repair") ||
@@ -1196,46 +1504,114 @@ func (failure ReviewIntegrationFailure) Validate() error {
 	if failure.Replayability == reviewtransaction.ReplayabilityExactReplaySafe {
 		mutationAllowsExactReplay := failure.MutationOutcome == ReviewMutationCommitted ||
 			failure.Operation == "review.repair" && failure.MutationOutcome == ReviewMutationUnknown
-		if !mutationAllowsExactReplay || failure.LineageID == "" || failure.RequestDigest == "" {
-			return errors.New("exact negotiated review replay is incomplete")
+		if !mutationAllowsExactReplay || failure.LineageID == "" || failure.RequestDigest == "" ||
+			failure.Operation != "review.repair" || !reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) ||
+			failure.NextAction != "review.repair" || failure.ProgressIdentity == "" {
+			return errors.New("exact negotiated review repair replay is incomplete")
 		}
-		switch failure.Operation {
-		case ReviewIntegrationOperationFinalize:
-			if !reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) || failure.NextAction != ReviewIntegrationOperationFinalize {
-				return errors.New("exact negotiated review replay is incomplete")
-			}
-		case ReviewIntegrationOperationBindSDD:
-			if !reflect.DeepEqual(failure.RequiredInputs, []string{"change", "lineage_id", "expected_binding_revision"}) || failure.NextAction != ReviewIntegrationOperationBindSDD {
-				return errors.New("exact negotiated review replay is incomplete")
-			}
-		case "review.repair":
-			if !reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) || failure.NextAction != "review.repair" ||
-				failure.ProgressIdentity == "" {
-				return errors.New("exact negotiated review repair replay is incomplete")
-			}
-		default:
-			return errors.New("exact negotiated review replay operation is unsupported")
+	}
+	if (failure.Code == "managed_assets_outdated") != (failure.Continuation != nil) {
+		return errors.New("managed_assets_outdated failures must carry exactly the sync continuation") // refusal:by-design world-action: a producer that pairs this code with no continuation, or attaches one to any other code, built a malformed envelope and requires a code fix, not an operator command
+	}
+	if continuation := failure.Continuation; continuation != nil {
+		if err := validateManagedAssetsContinuation(continuation); err != nil {
+			return errors.New("invalid negotiated review failure continuation") // refusal:by-design world-action: a continuation whose command is not an executable-anchored `sync` invocation was built wrong; only a code fix produces a valid one
 		}
 	}
 	return nil
 }
 
-func validOptionalReviewSHA256(value string) bool {
-	return value == "" || validReviewCapabilitySHA256(value)
+// validManagedAssetsContinuationCommand reports whether one rendered
+// continuation command satisfies the published managed_assets_continuation
+// pattern: the bare `gentle-ai` fallback or an invoking-executable path --
+// quoted when it contains whitespace -- followed by `sync` and an optional
+// `--agent <id>` (#4434).
+func validManagedAssetsContinuationCommand(command string) bool {
+	if strings.ContainsAny(command, "\r\n") {
+		return false
+	}
+	matched, err := regexp.MatchString(managedAssetsContinuationCommandPattern, command)
+	return err == nil && matched
+}
+
+// correctionReleaseContinuationCommandPattern is the release half of the
+// stop continuation contract, shaped exactly like the sync one: the same
+// executable-identity alternatives, then the fixed `review abandon --cwd`
+// route and one repository token in any of the same quoting forms. The
+// flagless form is the whole pattern on purpose -- a continuation carrying
+// invented actor or authorization values would not run as printed.
+const correctionReleaseContinuationCommandPattern = `^(?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'\\'')*') review abandon --cwd (?:` + managedAssetsBareExecutableClass + `|"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\r\n]|'\\'')*')$`
+
+// validateCorrectionReleaseContinuation is the strict contract for the
+// correction_context_budget_exceeded release continuation (#4680). Detail is
+// required: the named command prepares the release rather than performing it,
+// and a caller handed the command without that statement would reasonably
+// read a refusal as a failure.
+func validateCorrectionReleaseContinuation(continuation *ReviewStopContinuation) error {
+	if continuation == nil || continuation.Operation != "abandon" || strings.TrimSpace(continuation.Detail) == "" {
+		return errors.New("invalid correction release continuation") // refusal:by-design world-action: a malformed provider continuation is a construction bug; only corrected producer code can emit a valid one
+	}
+	if strings.ContainsAny(continuation.Command, "\r\n") {
+		return errors.New("correction release continuation command is not a single line") // refusal:by-design world-action: continuation commands are always one line; only corrected producer code can emit one
+	}
+	matched, err := regexp.MatchString(correctionReleaseContinuationCommandPattern, continuation.Command)
+	if err != nil || !matched {
+		return errors.New("invalid correction release continuation command") // refusal:by-design world-action: a continuation whose command is not an executable-anchored `review abandon --cwd` invocation was built wrong; only a code fix produces a valid one
+	}
+	if len(continuation.StaleAssets) != 0 {
+		return errors.New("correction release continuation carries managed-asset evidence") // refusal:by-design world-action: stale-asset evidence belongs to the sync continuation only; only corrected producer code can drop it here
+	}
+	return nil
+}
+
+// validateManagedAssetsContinuation is the shared strict contract for the
+// managed-assets continuation emitted by FAILURE and STATUS. Its command and
+// structured agent must describe the same single sync invocation.
+func validateManagedAssetsContinuation(continuation *ReviewStopContinuation) error {
+	if continuation == nil || continuation.Operation != "sync" || !validManagedAssetsContinuationCommand(continuation.Command) {
+		return errors.New("invalid managed-assets continuation command") // refusal:by-design world-action: a malformed provider continuation is a construction bug; only corrected producer code can emit a valid command
+	}
+	expectedSuffix := " sync"
+	if continuation.Agent != "" {
+		expectedSuffix += " --agent " + continuation.Agent
+	}
+	if !strings.HasSuffix(continuation.Command, expectedSuffix) {
+		return errors.New("managed-assets continuation command and agent differ") // refusal:by-design world-action: mismatched provider fields are a construction bug; only corrected producer code can bind the command to its agent
+	}
+	return nil
 }
 
 func supportedReviewIntegrationFailureInput(input string) bool {
 	switch input {
-	case "lineage_id", "change", "expected_binding_revision", "predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor", "incident", "maintainer_authorization", "base_ref":
+	case "lineage_id", "predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor", "incident", "maintainer_authorization", "base_ref":
 		return true
 	default:
 		return false
 	}
 }
 
+// validReviewIntegrationFailureOperation guards the failure envelope's
+// `operation` field, whose published enum is the negotiated surface plus the
+// collect-satisfying capture operations (the v2 failure schema owns the wider
+// enum; v1 keeps the original eight). A verb-only row never reaches any
+// failure envelope, so admitting it here would only let Validate() pass an
+// envelope the shipped schema rejects.
 func validReviewIntegrationFailureOperation(operation string) bool {
-	_, valid := reviewIntegrationOperationByName(operation)
-	return valid
+	metadata, known := reviewIntegrationOperationByName(operation)
+	return known && (metadata.Negotiated || metadata.CollectCapture)
+}
+
+// reviewCollectCaptureOperationByCommand resolves the failure-envelope route
+// for one plain-dispatched collect-satisfying capture verb. It answers only
+// for CollectCapture rows: negotiated rows keep their own facade, and
+// verb-only rows keep the bare plain route.
+func reviewCollectCaptureOperationByCommand(command string) (reviewIntegrationOperationMetadata, bool) {
+	for _, metadata := range reviewIntegrationOperationRegistry {
+		if metadata.CollectCapture && metadata.Command == command {
+			return metadata, true
+		}
+	}
+	return reviewIntegrationOperationMetadata{}, false
 }
 
 func validReviewIntegrationFailureCode(code string) bool {
@@ -1262,23 +1638,6 @@ type ReviewIntegrationOperationResult struct {
 	Contract  string          `json:"contract"`
 	Operation string          `json:"operation"`
 	Result    json.RawMessage `json:"result"`
-}
-
-// ReviewIntegrationFinalizeResult preserves the existing finalize semantics
-// while excluding the provider-private receipt path from negotiated output.
-type ReviewIntegrationFinalizeResult struct {
-	Operation string                  `json:"operation"`
-	LineageID string                  `json:"lineage_id"`
-	State     reviewtransaction.State `json:"state"`
-	Action    string                  `json:"action"`
-	// Escalation carries the same correction-budget accounting sentence as
-	// ReviewFacadeFinalizeResult.Escalation, so the negotiated and legacy
-	// finalize surfaces explain a terminal escalation identically.
-	Escalation        string                                       `json:"escalation,omitempty"`
-	StoreRevision     string                                       `json:"store_revision"`
-	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
-	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`
-	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
 }
 
 func reviewIntegrationNegotiation(flags *flag.FlagSet, contract string) (bool, error) {
@@ -1338,47 +1697,6 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 		return fmt.Errorf("negotiated review operation result contains private field %q", field)
 	}
 	switch result.Operation {
-	case ReviewIntegrationOperationFinalize:
-		var finalized ReviewIntegrationFinalizeResult
-		if err := decodeStrictReviewIntegrationResult(result.Result, &finalized); err != nil {
-			return err
-		}
-		if finalized.Operation != "review/finalize" || strings.TrimSpace(finalized.LineageID) == "" ||
-			strings.TrimSpace(finalized.Action) == "" || !validReviewCapabilitySHA256(finalized.StoreRevision) || strings.TrimSpace(string(finalized.State)) == "" {
-			return errors.New("negotiated finalize result is incomplete")
-		}
-		if finalized.Eligibility != nil {
-			if err := finalized.Eligibility.ValidateFinalize(); err != nil {
-				return fmt.Errorf("negotiated finalize result action eligibility: %w", err)
-			}
-		}
-		if finalized.NextTransition != nil {
-			if err := finalized.NextTransition.Validate(); err != nil {
-				return fmt.Errorf("negotiated finalize result next transition: %w", err)
-			}
-			transitionRequest := reviewTransitionValidationRequest(finalized.NextTransition)
-			correctionEvidenceFirst := transitionRequest == nil && finalized.ValidationRequest != nil &&
-				(finalized.NextTransition.ReasonCode == "correction_repository_verification_required" ||
-					finalized.NextTransition.ReasonCode == "correction_repository_tooling_failed")
-			if !correctionEvidenceFirst && ((transitionRequest == nil) != (finalized.ValidationRequest == nil) ||
-				transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *finalized.ValidationRequest)) {
-				return errors.New("negotiated finalize validation request copies differ")
-			}
-			if request := finalized.NextTransition.CorrectionRequest; request != nil {
-				if finalized.State != reviewtransaction.StateCorrectionRequired || request.LineageID != finalized.LineageID ||
-					request.ExpectedRevision != finalized.StoreRevision {
-					return errors.New("negotiated finalize correction request binding is invalid") // refusal:by-design world-action: provider-generated finalize output requires a code fix when its bindings disagree
-				}
-			}
-		}
-		if finalized.ValidationRequest != nil {
-			if finalized.State != reviewtransaction.StateCorrectionRequired ||
-				finalized.ValidationRequest.LineageID != finalized.LineageID ||
-				finalized.ValidationRequest.ExpectedRevision != finalized.StoreRevision ||
-				reviewtransaction.ValidateTargetedValidationRequest(*finalized.ValidationRequest) != nil {
-				return errors.New("negotiated finalize result validation request is invalid")
-			}
-		}
 	case ReviewIntegrationOperationValidate:
 		var validated ReviewValidateResult
 		if err := decodeStrictReviewIntegrationResult(result.Result, &validated); err != nil {
@@ -1389,24 +1707,6 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 			(validated.Context.Gate != "" && !validReviewIntegrationGate(validated.Context.Gate)) ||
 			(validated.Allowed && !validReviewIntegrationGate(validated.Context.Gate)) {
 			return errors.New("negotiated validate result is inconsistent")
-		}
-	case ReviewIntegrationOperationBindSDD:
-		var binding sddstatus.ReviewBinding
-		if err := decodeStrictReviewIntegrationResult(result.Result, &binding); err != nil {
-			return err
-		}
-		if binding.Schema != "gentle-ai.sdd-review-binding/v1" || strings.TrimSpace(binding.Change) == "" || strings.TrimSpace(binding.Lineage) == "" ||
-			!validReviewCapabilitySHA256(binding.Revision) || !validReviewCapabilitySHA256(binding.AuthorityRevision) ||
-			!validReviewCapabilitySHA256(binding.ReceiptHash) || binding.GateContext.Gate != reviewtransaction.GatePostApply {
-			return errors.New("negotiated bind-sdd result is incomplete")
-		}
-	case ReviewIntegrationOperationRetryFinalVerification:
-		var retried ReviewFinalVerificationRetryResult
-		if err := decodeStrictReviewIntegrationResult(result.Result, &retried); err != nil {
-			return err
-		}
-		if err := retried.Validate(); err != nil {
-			return err
 		}
 	default:
 		return fmt.Errorf("unsupported negotiated review operation %q", result.Operation)

@@ -10,11 +10,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // ReviewModeSchema identifies the user-facing kill-switch projection.
@@ -35,14 +37,16 @@ type ReviewModeResult struct {
 	Status    reviewtransaction.RDDModeStatus `json:"status"`
 }
 
-// RunReviewMode is the user-controlled receipt-driven-development kill switch.
-// The global mode lives in uncommitted user state; the clone-local override
-// lives under this clone's Git common directory and can only disable. Any off
-// wins, status never mutates, and re-enabling applies to future candidates only.
+// RunReviewMode is the user-controlled receipt-driven-development switch.
+// Receipt-driven development is opt-out: with no source expressing an opinion it
+// resolves to on without persisting a user decision. The global
+// mode lives in uncommitted user state; the clone-local override lives under
+// this clone's Git common directory and can only disable. Any off wins, status
+// never mutates, and enabling applies to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
-		_, _ = fmt.Fprintln(stdout, "User-owned kill switch. Any off wins: a repository may disable receipt-driven development for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Re-enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is on by default: run 'gentle-ai review mode disable' to opt out. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
 		return nil
 	}
 	operation := args[0]
@@ -84,7 +88,9 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	var err error
 	if operation == "status" {
 		result.Scope = reviewModeScopeBoth
-		result.Status, err = reviewModeStatus(ctx, *cwd)
+		result.Status, err = ReviewModeStatus(ctx, *cwd)
+	} else if selectedScope == reviewModeScopeGlobal {
+		result.Status, err = SetGlobalReviewMode(ctx, *cwd, operation == "enable")
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
 	}
@@ -96,13 +102,54 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 
 // reviewModeStatus is strictly read-only: it never creates user state and never
 // creates repository state.
+// ReviewModeStatus resolves the persisted review-mode sources without mutating them.
+func ReviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
+	return reviewModeStatus(ctx, repo)
+}
+
+// SetGlobalReviewMode changes only the global review-mode source and returns the
+// resolved status for the requested repository.
+func SetGlobalReviewMode(ctx context.Context, repo string, enabled bool) (reviewtransaction.RDDModeStatus, error) {
+	operation := "disable"
+	if enabled {
+		operation = "enable"
+	}
+	return applyReviewMode(ctx, repo, operation, reviewModeScopeGlobal, "", false)
+}
+
 func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDModeStatus, error) {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Effective: reviewtransaction.RDDModeOff}, err
 	}
 	status, err := reviewtransaction.ResolveRDDMode(ctx, repo, global)
+	if err != nil && reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return globalOnlyReviewModeStatus(global), nil
+	}
 	return status, reviewModeUnreadable(ctx, repo, global, err)
+}
+
+func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtransaction.RDDModeStatus {
+	status := reviewtransaction.RDDModeStatus{
+		Schema:     reviewtransaction.RDDModeStatusSchema,
+		Global:     reviewtransaction.RDDModeUnset,
+		CloneLocal: reviewtransaction.RDDModeUnset,
+		Effective:  reviewtransaction.RDDModeOff,
+		Source:     reviewtransaction.RDDModeSourceDefault,
+	}
+	switch strings.TrimSpace(global.Value) {
+	case "":
+		status.Effective = reviewtransaction.RDDModeOn
+	case string(reviewtransaction.RDDModeOn):
+		status.Global = reviewtransaction.RDDModeOn
+		status.Effective = reviewtransaction.RDDModeOn
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	case string(reviewtransaction.RDDModeOff):
+		status.Global = reviewtransaction.RDDModeOff
+		status.Effective = reviewtransaction.RDDModeOff
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+	}
+	return status
 }
 
 // ReviewModeUnreadableScope names one kill-switch source whose persisted value
@@ -169,6 +216,114 @@ func (err *ReviewModeUnreadableError) Error() string {
 	)
 }
 
+type reviewModeUnsafePathError struct {
+	Path      string
+	Directory bool
+	Cause     error
+}
+
+func (err *reviewModeUnsafePathError) Unwrap() error { return err.Cause }
+
+func (err *reviewModeUnsafePathError) Error() string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(
+			"the clone-local review mode path %s is unsafe; run `%s` in a NON-ELEVATED Windows PowerShell 5.1 shell because an elevated TokenOwner can differ from the current user, then rerun the original command",
+			pathquote.Quote(err.Path), err.repairCommand(),
+		)
+	}
+	return fmt.Sprintf(
+		"the clone-local review mode path %s is unsafe; run `%s`, then rerun the original command",
+		pathquote.Quote(err.Path), err.repairCommand(),
+	)
+}
+
+func (err *reviewModeUnsafePathError) repairCommand() string {
+	if runtime.GOOS != "windows" {
+		mode := "600"
+		if err.Directory {
+			mode = "700"
+		}
+		return "chmod " + mode + " " + quotePOSIXShellToken(err.Path)
+	}
+	securityType := "FileSecurity"
+	inheritance := "'None'"
+	setAccessControl := "[System.IO.File]::SetAccessControl($p, $acl)"
+	if err.Directory {
+		securityType = "DirectorySecurity"
+		inheritance = "'ContainerInherit, ObjectInherit'"
+		setAccessControl = "[System.IO.Directory]::SetAccessControl($p, $acl)"
+	}
+	return strings.Join([]string{
+		"$p = " + quotePowerShellLiteral(err.Path),
+		"$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+		"$acl = New-Object System.Security.AccessControl." + securityType,
+		"$acl.SetOwner($sid)",
+		"$acl.SetAccessRuleProtection($true, $false)",
+		"$rule = New-Object -TypeName System.Security.AccessControl.FileSystemAccessRule -ArgumentList @($sid, 'FullControl', " + inheritance + ", 'None', 'Allow')",
+		"$acl.SetAccessRule($rule)",
+		setAccessControl,
+	}, "; ")
+}
+
+func quotePowerShellLiteral(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", "''") + "'"
+}
+
+func quotePOSIXShellToken(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'"'"'`) + "'"
+}
+
+// reviewModePrivateModeIneffectiveError rewrites the unsafe-path refusal for
+// the #5112 mount class: a filesystem that cannot represent private POSIX
+// modes makes the printed chmod repair a loop the operator can never exit,
+// so the refusal names the capability and the two continuations that actually
+// change the outcome instead. It is only ever constructed on mounts where the
+// probe proved the capability missing, and it wraps the same generic
+// unsafe-path refusal, so nothing about the fail-closed decision changes.
+type reviewModePrivateModeIneffectiveError struct {
+	Path  string
+	Cause error
+}
+
+func (err *reviewModePrivateModeIneffectiveError) Unwrap() error { return err.Cause }
+
+func (err *reviewModePrivateModeIneffectiveError) Error() string {
+	return fmt.Sprintf(
+		"the clone-local review mode path %s cannot be made private: the filesystem hosting it does not "+
+			"persist POSIX permission modes (WSL DrvFS without the metadata option, exFAT, and SMB without "+
+			"POSIX extensions all behave this way), so chmod cannot repair it; remount the drive with POSIX "+
+			"metadata enabled or move the repository to a filesystem that does, then rerun the original command",
+		pathquote.Quote(err.Path),
+	)
+}
+
+func reviewModeUnsafePathRefusal(err error) error {
+	var unsafePath *reviewtransaction.UnsafeRARPathError
+	if errors.As(err, &unsafePath) {
+		var ineffective *reviewtransaction.PrivateModeIneffectiveError
+		if errors.As(err, &ineffective) {
+			return &reviewModePrivateModeIneffectiveError{Path: unsafePath.Path, Cause: err}
+		}
+		return &reviewModeUnsafePathError{Path: unsafePath.Path, Directory: unsafePath.Directory, Cause: err}
+	}
+	return nil
+}
+
+type reviewModeRepositoryRequiredError struct{ Cause error }
+
+func (err *reviewModeRepositoryRequiredError) Unwrap() error { return err.Cause }
+
+func (err *reviewModeRepositoryRequiredError) Error() string {
+	return "clone-local review mode requires a Git repository; rerun the original command with --cwd pointing at the intended repository, or use `gentle-ai review mode enable --scope global` or `gentle-ai review mode disable --scope global` for machine-wide state"
+}
+
+func reviewModeRepositoryRequiredRefusal(err error) error {
+	if !reviewtransaction.ReviewRootResolutionReportsNoRepository(err) {
+		return nil
+	}
+	return &reviewModeRepositoryRequiredError{Cause: err}
+}
+
 func reviewModeCommandsByVerb(commands []string, verb string) []string {
 	selected := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -195,6 +350,12 @@ func reviewModeUnreadable(
 	if err == nil {
 		return nil
 	}
+	if unsafePath := reviewModeUnsafePathRefusal(err); unsafePath != nil {
+		return unsafePath
+	}
+	if repoRequired := reviewModeRepositoryRequiredRefusal(err); repoRequired != nil {
+		return repoRequired
+	}
 	scopes := make([]ReviewModeUnreadableScope, 0, 2)
 	if reviewtransaction.RDDModeValueUnintelligible(global.Value) {
 		if home, homeErr := os.UserHomeDir(); homeErr == nil {
@@ -214,27 +375,6 @@ func reviewModeUnreadable(
 	return &ReviewModeUnreadableError{Scopes: scopes, Cause: err}
 }
 
-// reviewDeliveryDisposition reports what governs delivery for the candidate
-// currently under a lifecycle gate. The kill switch alone never decides: an
-// existing receipt keeps governing because disabling freezes authority
-// read-only rather than unmaking an approval that is content-bound to exactly
-// these bytes.
-//
-// An unreadable switch is not a disabled switch. When the mode cannot be
-// resolved this fails closed to the managed disposition, so a broken or
-// tampered mode file can never relax a gate into reporting work as unmanaged by
-// choice.
-func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent bool) reviewtransaction.RDDDelivery {
-	status, err := reviewModeStatus(ctx, repo)
-	if err != nil {
-		if receiptPresent {
-			return reviewtransaction.RDDDeliveryReceiptGoverned
-		}
-		return reviewtransaction.RDDDeliveryUnmanaged
-	}
-	return reviewtransaction.RDDDeliveryDisposition(status, receiptPresent)
-}
-
 // reviewDrivenDevelopmentDisabled reports whether the user's kill switch is off
 // for this clone. It is the reach the switch needs outside the review gate:
 // every enforcement point that can refuse work on review grounds must be able
@@ -243,12 +383,12 @@ func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent 
 // An unreadable switch is not a disabled switch. It fails closed to "enabled"
 // for the same reason reviewDeliveryDisposition does: a broken or tampered mode
 // record must never be able to relax an enforcement point.
-func reviewDrivenDevelopmentDisabled(ctx context.Context, repo string) bool {
+func reviewDrivenDevelopmentDisabled(ctx context.Context, repo string) (bool, error) {
 	status, err := reviewModeStatus(ctx, repo)
 	if err != nil {
-		return false
+		return false, reviewModeUnsafePathRefusal(err)
 	}
-	return !status.Enabled()
+	return !status.Enabled(), nil
 }
 
 func applyReviewMode(
@@ -321,21 +461,23 @@ func writeGlobalRDDMode(operation string) error {
 	if err != nil {
 		return fmt.Errorf("resolve user home directory: %w", err)
 	}
-	persisted, err := state.Read(home)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read global review mode: %w", err)
-	}
-	mode := reviewtransaction.RDDModeOff
-	if operation == "enable" {
-		mode = reviewtransaction.RDDModeOn
-	}
-	recorded := time.Now().UTC()
-	persisted.RDDMode = string(mode)
-	persisted.RDDModeRecordedAt = &recorded
-	if err := state.Write(home, persisted); err != nil {
-		return fmt.Errorf("persist global review mode: %w", err)
-	}
-	return nil
+	return withInstallStateLock(home, func() error {
+		persisted, err := state.Read(home)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read global review mode: %w", err)
+		}
+		mode := reviewtransaction.RDDModeOff
+		if operation == "enable" {
+			mode = reviewtransaction.RDDModeOn
+		}
+		recorded := time.Now().UTC()
+		persisted.RDDMode = string(mode)
+		persisted.RDDModeRecordedAt = &recorded
+		if err := state.Write(home, persisted); err != nil {
+			return fmt.Errorf("persist global review mode: %w", err)
+		}
+		return nil
+	})
 }
 
 func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) error {
@@ -354,6 +496,31 @@ func emitReviewMode(stdout io.Writer, result ReviewModeResult, emitJSON bool) er
 		result.Status.Source,
 		reviewModeLabel(result.Status.Global),
 		reviewModeLabel(result.Status.CloneLocal),
+	)
+	if err != nil {
+		return err
+	}
+	if result.Operation == "enable" && result.Scope == reviewModeScopeClone &&
+		result.Status.Effective == reviewtransaction.RDDModeOff && result.Status.Source == reviewtransaction.RDDModeSourceGlobal {
+		// Clearing a clone override cannot override an explicit global OFF.
+		// Keep the next action on the human surface without extending the schema.
+		if _, err = fmt.Fprint(
+			stdout,
+			"  note:        a clone-local override can only disable, so this cleared the clone's off opinion and the global switch still decides; run `gentle-ai review mode enable --scope global` to turn receipt-driven development on\n",
+		); err != nil {
+			return err
+		}
+	}
+	if result.Status.Reach != reviewtransaction.RDDModeReachThisBuild {
+		return nil
+	}
+	// The switch is machine state. A write that reached only this build has to
+	// say so on the surface the operator actually reads, or it reports a
+	// working kill switch to someone half of whose gentle-ai installations are
+	// still enforcing review.
+	_, err = fmt.Fprint(
+		stdout,
+		"  note:        applied for this gentle-ai only; a gentle-ai installed before the switch moved reads a location this command could not open, and keeps enforcing the value it holds there\n",
 	)
 	return err
 }
@@ -429,14 +596,14 @@ func normalizeReviewConsentLocale(value string) (reviewConsentLocale, error) {
 
 const (
 	reviewConsentHeadline = "Gentle AI can review this change before you call it done."
-	reviewConsentValue    = "Reviewing takes a bit longer, and it makes the result substantially safer."
+	reviewConsentValue    = "Reviewing takes a little longer and makes the result safer."
 
 	// reviewConsentAnswerRunLabel and reviewConsentAnswerNotNowLabel are the
 	// single wording source for the two offered answers: the interactive
 	// prompt and the relayed consent envelope both speak them, so the two
 	// surfaces cannot drift.
-	reviewConsentAnswerRunLabel    = "Run the review now"
-	reviewConsentAnswerNotNowLabel = "Not now, just this once"
+	reviewConsentAnswerRunLabel    = "Review this change"
+	reviewConsentAnswerNotNowLabel = "Skip this time"
 	reviewConsentAnswers           = "  1) " + reviewConsentAnswerRunLabel + "\n  2) " + reviewConsentAnswerNotNowLabel + "\n"
 
 	// reviewConsentOffPath keeps the permanent disable reachable but deliberate.
@@ -450,16 +617,13 @@ const (
 	reviewConsentQuestion       = "Choose 1 or 2 [1]: "
 
 	// reviewConsentSkippedNotice keeps the fail-safe default discoverable: an
-	// unanswerable question must never look like a silent yes.
+	// unanswerable question must never look like a silent yes. It carries no
+	// provenance sentence about how reviews got switched on: either the unset
+	// default or an explicit enable may permit review. Explicit OFF is refused
+	// before this point.
 	reviewConsentSkippedNotice = "Gentle AI reviewed this change without asking, because this session has no terminal to answer on. " +
 		"Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
 
-	// reviewConsentSkippedDefaultProvenance rides with the skip notice only
-	// when the resolved mode source is `default`: reviews are on because
-	// nobody chose anything, and the operator deserves to know the switch was
-	// never explicitly set, with both commands that make it a real choice.
-	reviewConsentSkippedDefaultProvenance = "Reviews are on by default; this was never explicitly chosen. " +
-		"Run 'gentle-ai review mode enable' to make reviews an explicit choice, or 'gentle-ai review mode disable' to turn them off."
 	reviewConsentUnreadableNotice = "Gentle AI could not read an answer, so it reviewed this change and will ask again next time."
 	reviewConsentUnknownNotice    = "Gentle AI did not recognize that answer, so it reviewed this change and will ask again next time."
 
@@ -557,16 +721,23 @@ func reviewConsoleTerminal(file *os.File) bool {
 // A consent declaration selects candidate-scoped negotiated semantics: relay
 // always returns the typed question, while granted and declined apply only to
 // the exact frozen candidate and never touch the legacy clone-wide latch. An
-// undeclared START keeps the one-time console behavior unchanged.
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode) error {
+// undeclared plain START keeps the one-time console behavior unchanged; an
+// undeclared negotiated START authorizes silently (see below).
+func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool, runtimeAgent string) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return err
 	}
-	status, err := reviewtransaction.AuthorizeRDDOperation(
-		ctx, repo, global, reviewtransaction.RDDOperationStart)
-	if err != nil {
+	if _, err := reviewtransaction.AuthorizeRDDOperation(
+		ctx, repo, global, reviewtransaction.RDDOperationStart); err != nil {
 		return reviewModeUnreadable(ctx, repo, global, err)
+	}
+	// #3299, #4170: STATUS classifies this same skew before ever offering
+	// START, but a caller that reaches START directly (or replays a stale
+	// offer) still needs the exact sync continuation, not just a refusal.
+	if provenance := checkManagedReviewerAssets(); provenance.stale() {
+		continuation := managedAssetsContinuation(runtimeAgent, provenance.staleAssetIdentities())
+		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, errors.New(managedAssetProvenanceRefusal), continuation)
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce
@@ -593,6 +764,20 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		return nil
 	}
 	console := reviewConsole()
+	if negotiated && !console.Interactive {
+		// A non-interactive negotiated invocation is machine-readable end to
+		// end: stdout carries the typed envelope and a successful operation
+		// writes zero bytes to stderr (gentle-pi fails closed on any stderr a
+		// successful START writes), and machine listeners only ever spawn
+		// non-interactive processes. Negotiated consent is carried by the
+		// typed consent envelope (--consent relay/granted/declined), so this
+		// route returns before the latch read: neither the one-time consent
+		// latch nor the once-per-clone notice marker is consumed, and a later
+		// plain start in this clone can still ask and still announce. A human
+		// at a real terminal falls through to the unchanged one-time ceremony
+		// below and keeps the power to refuse.
+		return nil
+	}
 	asked, err := reviewtransaction.RDDConsentAsked(ctx, repo)
 	if err != nil {
 		// A damaged latch must neither block the review nor silently disable it:
@@ -614,13 +799,6 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		// occurrence must never be silently suppressed.
 		if shown, shownErr := reviewConsentNoticeAlreadyShown(ctx, repo); shownErr != nil || !shown {
 			_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedNotice)
-			if status.Source == reviewtransaction.RDDModeSourceDefault {
-				// The status already knows this provenance: reviews are on
-				// because no source expressed an opinion, and the operator
-				// working headless deserves to learn the switch was never
-				// explicitly chosen.
-				_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedDefaultProvenance)
-			}
 			_ = recordReviewConsentNoticeShown(ctx, repo)
 		}
 		return nil
@@ -679,53 +857,71 @@ func reviewConsentPrompt(assessment reviewtransaction.RiskAssessment) string {
 		reviewConsentAnswers, reviewConsentOffPath, reviewConsentQuestion)
 }
 
-// reviewConsentMediumReason is the single wording source for the tier-1
-// reason: the interactive consent prompt speaks it and the machine-readable
-// START result relays it verbatim, so the two surfaces cannot drift.
+// reviewConsentMediumReason remains the first medium-tier risk_evidence item.
+// The brief consent reason below deliberately does not repeat this detailed
+// evidence, which stays available in its own field for relays that need it.
 const reviewConsentMediumReason = "this change is not purely passive documentation, so it gets one consolidated review."
 
-// reviewConsentReason states why this candidate is reviewed, in the user's own
-// terms. Both tiers name the evidence that triggered them through the same
-// phrasing helper, so neither review's cost is ever unexplained: tier 1 keeps
-// the consolidated-review sentence and appends what made the candidate
-// non-passive (issue #1827); tier 2 names what triggered the deeper review.
-func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
-	evidence := reviewConsentEvidence(assessment.Reasons)
-	if assessment.Level != reviewtransaction.RiskHigh {
-		if evidence == "" {
-			return reviewConsentMediumReason
+type reviewConsentReasonCategory string
+
+const (
+	reviewConsentReasonBehavior  reviewConsentReasonCategory = "behavior"
+	reviewConsentReasonSecurity  reviewConsentReasonCategory = "security"
+	reviewConsentReasonExecution reviewConsentReasonCategory = "execution"
+	reviewConsentReasonUpdates   reviewConsentReasonCategory = "updates"
+)
+
+// reviewConsentReasonCategoryFor uses only the classifier's structured signals,
+// never the human-readable evidence phrases. Security signals take precedence,
+// followed by execution and update signals; absent or unknown signals fall back
+// to behavior, so a high tier alone never claims a security concern.
+func reviewConsentReasonCategoryFor(reasons []reviewtransaction.RiskReason) reviewConsentReasonCategory {
+	security, execution, updates := false, false, false
+	for _, reason := range reasons {
+		switch reason.Signal {
+		case reviewtransaction.SignalAuth, reviewtransaction.SignalSecurity,
+			reviewtransaction.SignalPayments, reviewtransaction.SignalDataExposure,
+			reviewtransaction.SignalDataLoss, reviewtransaction.SignalPermissions:
+			security = true
+		case reviewtransaction.SignalShellProcess:
+			execution = true
+		case reviewtransaction.SignalUpdate:
+			updates = true
 		}
-		return reviewConsentMediumReason + " The review starts from " + evidence + "."
 	}
-	if evidence == "" {
-		return "this change touches something sensitive, so it gets a deeper review."
+	switch {
+	case security:
+		return reviewConsentReasonSecurity
+	case execution:
+		return reviewConsentReasonExecution
+	case updates:
+		return reviewConsentReasonUpdates
+	default:
+		return reviewConsentReasonBehavior
 	}
-	return "this change gets a deeper review because it touches " + evidence + "."
 }
 
-func reviewConsentEvidence(reasons []reviewtransaction.RiskReason) string {
-	phrases := reviewConsentEvidencePhrases(reasons)
-	switch len(phrases) {
-	case 0:
-		return ""
-	case 1:
-		return phrases[0]
-	case 2:
-		return phrases[0] + " and " + phrases[1]
+// reviewConsentReason explains the broad concern and review benefit without
+// exposing paths or duplicating detailed risk evidence.
+func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
+	switch reviewConsentReasonCategoryFor(assessment.Reasons) {
+	case reviewConsentReasonSecurity:
+		return "Review can help identify potential security issues."
+	case reviewConsentReasonExecution:
+		return "Review can help detect execution issues in these changes."
+	case reviewConsentReasonUpdates:
+		return "Review can help detect update-related issues."
 	default:
-		// Naming every path would bury the decision the user has to make.
-		return fmt.Sprintf("%s, %s, and %d more", phrases[0], phrases[1], len(phrases)-2)
+		return "Review can help detect regressions in these changes."
 	}
 }
 
 // reviewConsentRiskEvidence projects an already-classified assessment into
-// the risk_evidence phrases a non-interactive START result carries. It is an
-// output-only projection of facts the start already computed: tier 2 names
-// the triggering evidence, tier 1 leads with the exact consolidated-review
-// reason the consent prompt speaks and appends the same evidence phrases so
-// the path that made the candidate non-passive is named (issue #1827), and
-// tier 0 stays nil so the omitempty field is absent rather than empty-string
-// noise.
+// the detailed risk_evidence phrases a non-interactive START result carries.
+// It remains separate from the brief generic consent reason: tier 2 names the
+// triggering evidence, tier 1 retains its consolidated-review sentence and
+// appends the path that made the candidate non-passive (issue #1827), and tier
+// 0 stays nil so the omitempty field is absent rather than empty-string noise.
 func reviewConsentRiskEvidence(assessment reviewtransaction.RiskAssessment) []string {
 	switch assessment.Level {
 	case reviewtransaction.RiskHigh:

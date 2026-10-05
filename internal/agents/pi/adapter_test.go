@@ -2,17 +2,32 @@ package pi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
+
+// setRealHome makes homeDir look like the current user's real home
+// directory for the duration of t's test, matching isRealUserHome's
+// os.UserHomeDir() lookup, so absolute/cwd-relative PI_CODING_AGENT_DIR
+// overrides resolve exactly as they do for a genuine user home.
+func setRealHome(t *testing.T, homeDir string) {
+	t.Helper()
+	t.Setenv("HOME", homeDir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", homeDir)
+	}
+}
 
 func TestAdapterIdentityAndCapabilities(t *testing.T) {
 	a := NewAdapter()
@@ -29,10 +44,9 @@ func TestAdapterIdentityAndCapabilities(t *testing.T) {
 		got  bool
 		want bool
 	}{
-		{"SupportsAutoInstall", a.SupportsAutoInstall(), true},
 		{"SupportsSkills", a.SupportsSkills(), false},
 		{"SupportsMCP", a.SupportsMCP(), true},
-		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), true},
+		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), false},
 		{"SupportsSlashCommands", a.SupportsSlashCommands(), false},
 		{"SupportsOutputStyles", a.SupportsOutputStyles(), false},
 		{"SupportsSubAgents", a.SupportsSubAgents(), false},
@@ -79,8 +93,375 @@ func TestAdapterPaths(t *testing.T) {
 	}
 }
 
+func TestAgentConfigPathHonorsPiCodingAgentDir(t *testing.T) {
+	homeDir := t.TempDir()
+	setRealHome(t, homeDir)
+	defaultPath := filepath.Join(homeDir, ".pi", "agent")
+
+	t.Run("unset uses default", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "")
+		if got := AgentConfigPath(homeDir); got != defaultPath {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, defaultPath)
+		}
+	})
+
+	t.Run("blank is ignored", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "   ")
+		if got := AgentConfigPath(homeDir); got != defaultPath {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, defaultPath)
+		}
+	})
+
+	t.Run("absolute override wins", func(t *testing.T) {
+		configured := filepath.Join(homeDir, "isolated-agent")
+		t.Setenv("PI_CODING_AGENT_DIR", configured)
+		if got := AgentConfigPath(homeDir); got != configured {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, configured)
+		}
+	})
+
+	t.Run("tilde override expands against home", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "~/gentle-shell/agent")
+		want := filepath.Join(homeDir, "gentle-shell", "agent")
+		if got := AgentConfigPath(homeDir); got != want {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("bare tilde override expands to home", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "~")
+		if got := AgentConfigPath(homeDir); got != homeDir {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, homeDir)
+		}
+	})
+
+	t.Run("relative override resolves against cwd", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "relative-pi-agent")
+		wantAbs, err := filepath.Abs("relative-pi-agent")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := AgentConfigPath(homeDir); got != wantAbs {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, wantAbs)
+		}
+	})
+
+	t.Run("relative override falls back to default agent dir when cwd resolution fails", func(t *testing.T) {
+		t.Setenv("PI_CODING_AGENT_DIR", "relative-pi-agent")
+		restore := resolveAbsPath
+		resolveAbsPath = func(string) (string, error) { return "", fmt.Errorf("getwd unavailable") }
+		t.Cleanup(func() { resolveAbsPath = restore })
+
+		want := filepath.Join(homeDir, ".pi", "agent")
+		if got := AgentConfigPath(homeDir); got != want {
+			t.Fatalf("AgentConfigPath() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestAgentConfigPathIgnoresAbsoluteOverrideForNonRealHome(t *testing.T) {
+	homeDir := t.TempDir()
+	sentinel := filepath.Join(t.TempDir(), "sentinel-agent-dir")
+	t.Setenv("PI_CODING_AGENT_DIR", sentinel)
+
+	got := AgentConfigPath(homeDir)
+	if got == sentinel {
+		t.Fatalf("AgentConfigPath() = %q, want the sentinel override ignored for a non-real home", got)
+	}
+	if !strings.HasPrefix(got, homeDir) {
+		t.Fatalf("AgentConfigPath() = %q, want a path under %q (non-real home must ignore absolute overrides)", got, homeDir)
+	}
+
+	a := NewAdapter()
+	if gotFile := a.SystemPromptFile(homeDir); !strings.HasPrefix(gotFile, homeDir) {
+		t.Fatalf("SystemPromptFile() = %q, want a path under %q", gotFile, homeDir)
+	}
+}
+
+func TestAdapterPathsFollowConfiguredAgentDirectory(t *testing.T) {
+	a := NewAdapter()
+	homeDir := t.TempDir()
+	setRealHome(t, homeDir)
+	piDir := filepath.Join(homeDir, ".pi")
+	configured := filepath.Join(t.TempDir(), "isolated-home", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", configured)
+
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		// GlobalConfigDir never follows the override: it always stays the
+		// homeDir/.pi parent root, even while PI_CODING_AGENT_DIR relocates
+		// the agent-owned paths below.
+		{"GlobalConfigDir", a.GlobalConfigDir(homeDir), piDir},
+		{"SystemPromptDir", a.SystemPromptDir(homeDir), configured},
+		{"SystemPromptFile", a.SystemPromptFile(homeDir), filepath.Join(configured, "APPEND_SYSTEM.md")},
+		{"SettingsPath", a.SettingsPath(homeDir), filepath.Join(configured, "settings.json")},
+		{"MCPConfigPath", a.MCPConfigPath(homeDir, "context7"), filepath.Join(configured, "mcp.json")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.name, tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProvisionEngramMCPTargetsConfiguredAgentDirectoryAndLeavesRealHomeUntouched(t *testing.T) {
+	a := NewAdapter()
+	realHome := t.TempDir()
+	setRealHome(t, realHome)
+	override := filepath.Join(t.TempDir(), "gentle-shell-home", "agent")
+	t.Setenv("PI_CODING_AGENT_DIR", override)
+	wantSettings := filepath.Join(override, "settings.json")
+	wantNPMPackage := filepath.Join(override, "npm", "package.json")
+	writeTestFile(t, wantSettings, `{"packages":["npm:pi-mcp-adapter"]}`)
+	writeTestFile(t, wantNPMPackage, `{"dependencies":{"pi-mcp-adapter":"^2.6.0"}}`)
+
+	changed, paths, err := a.ProvisionEngramMCP(realHome)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if !changed {
+		t.Fatalf("ProvisionEngramMCP() changed = false, want true")
+	}
+	if !reflect.DeepEqual(paths, []string{wantSettings, wantNPMPackage}) {
+		t.Fatalf("ProvisionEngramMCP() paths = %v, want [%q %q]", paths, wantSettings, wantNPMPackage)
+	}
+	if _, err := os.Stat(filepath.Join(override, "mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("stat mcp.json err = %v, want IsNotExist (Pi Engram is native-only; nothing to migrate)", err)
+	}
+
+	for _, path := range []string{wantSettings, wantNPMPackage} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", path, err)
+		}
+		if strings.Contains(string(body), "pi-mcp-adapter") {
+			t.Fatalf("%s = %s, want pi-mcp-adapter retired", path, body)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(realHome, ".pi")); !os.IsNotExist(err) {
+		t.Fatalf("real home .pi dir stat err = %v, want IsNotExist (real home must stay untouched by the override)", err)
+	}
+}
+
+func TestProvisionEngramMCPFreshAgentDirectoryWritesNothing(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	setRealHome(t, home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+
+	changed, paths, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if changed || len(paths) != 0 {
+		t.Fatalf("ProvisionEngramMCP() = (%v, %v), want (false, []) on a fresh agent directory", changed, paths)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".pi", "agent", "settings.json"),
+		filepath.Join(home, ".pi", "agent", "npm", "package.json"),
+		filepath.Join(home, ".pi", "agent", "mcp.json"),
+		filepath.Join(home, ".pi", "agent", "mcp-adapter.json"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("stat %q err = %v, want IsNotExist (nothing to retire, migrate, or create)", path, err)
+		}
+	}
+}
+
+func TestProvisionEngramMCPRetiresAdapterEntriesAndKeepsUnrelatedOnes(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	setRealHome(t, home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	npmPath := filepath.Join(home, ".pi", "agent", "npm", "package.json")
+	writeTestFile(t, settingsPath, `{
+  "theme": "kanagawa",
+  "packages": [
+    "npm:gentle-pi",
+    "npm:pi-mcp-adapter",
+    "npm:pi-mcp-adapter@2.6.0",
+    {"source": "npm:pi-mcp-adapter@2.5.0"},
+    {"source": "npm:pi-web-access"},
+    "npm:other@1.0.0"
+  ]
+}`)
+	writeTestFile(t, npmPath, `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0","pi-mcp-adapter":"^2.6.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
+
+	changed, _, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if !changed {
+		t.Fatalf("ProvisionEngramMCP() changed = false, want true")
+	}
+
+	var settings struct {
+		Theme    string `json:"theme"`
+		Packages []any  `json:"packages"`
+	}
+	readTestJSON(t, settingsPath, &settings)
+	wantPackages := []any{"npm:gentle-pi", map[string]any{"source": "npm:pi-web-access"}, "npm:other@1.0.0"}
+	if settings.Theme != "kanagawa" || !reflect.DeepEqual(settings.Packages, wantPackages) {
+		t.Fatalf("settings = %#v, want theme kept and packages %#v", settings, wantPackages)
+	}
+
+	var npmPackage map[string]any
+	readTestJSON(t, npmPath, &npmPackage)
+	wantNPM := map[string]any{
+		"name":            "pi-user",
+		"dependencies":    map[string]any{"left-pad": "^1.0.0"},
+		"devDependencies": map[string]any{"vitest": "^1.0.0"},
+	}
+	if !reflect.DeepEqual(npmPackage, wantNPM) {
+		t.Fatalf("npm/package.json = %#v, want %#v", npmPackage, wantNPM)
+	}
+
+	again, _, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() second error = %v", err)
+	}
+	if again {
+		t.Fatalf("ProvisionEngramMCP() second changed = true, want idempotent no-op")
+	}
+}
+
+func TestProvisionEngramMCPLeavesFilesWithoutAdapterUntouched(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	setRealHome(t, home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	npmPath := filepath.Join(home, ".pi", "agent", "npm", "package.json")
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	settingsBody := `{"theme":"kanagawa","packages":["npm:gentle-pi"]}`
+	npmBody := `{"dependencies":{"left-pad":"^1.0.0"}}`
+	mcpBody := `{"mcpServers":{"context7":{"command":"npx"}}}`
+	writeTestFile(t, settingsPath, settingsBody)
+	writeTestFile(t, npmPath, npmBody)
+	writeTestFile(t, mcpPath, mcpBody)
+
+	changed, _, err := a.ProvisionEngramMCP(home)
+	if err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	if changed {
+		t.Fatalf("ProvisionEngramMCP() changed = true, want false without adapter entries or servers to migrate")
+	}
+	for path, want := range map[string]string{settingsPath: settingsBody, npmPath: npmBody, mcpPath: mcpBody} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", path, err)
+		}
+		if string(body) != want {
+			t.Fatalf("%s rewritten to %s, want byte-identical %s", path, body, want)
+		}
+	}
+}
+
+// TestProvisionEngramMCPPreservesExactNumberTokens keeps unrelated number
+// tokens verbatim in every Pi file it rewrites (#1672).
+func TestProvisionEngramMCPPreservesExactNumberTokens(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	setRealHome(t, home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	agentDir := filepath.Join(home, ".pi", "agent")
+	numbers := `"big":9007199254740993,"neg":-9007199254740995,"max":9223372036854775807,` +
+		`"nested":{"list":[1.10,6.02214076e23,1E+2,{"min":-9223372036854775808}]},"huge":1e999`
+	files := map[string]string{
+		"settings.json":        `{"packages":["npm:pi-mcp-adapter"],` + numbers + `}`,
+		"npm/package.json":     `{"dependencies":{"pi-mcp-adapter":"^2.6.0"},` + numbers + `}`,
+		"mcp.json":             `{"mcpServers":{},` + numbers + `}`,
+		piMCPAdapterConfigFile: `{"mcpServers":{"context7":{"command":"npx",` + numbers + `}}}`,
+	}
+	for name, body := range files {
+		writeTestFile(t, filepath.Join(agentDir, name), body)
+	}
+
+	if _, _, err := a.ProvisionEngramMCP(home); err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	for _, name := range []string{"settings.json", "npm/package.json", "mcp.json"} {
+		body, err := os.ReadFile(filepath.Join(agentDir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", name, err)
+		}
+		if string(body) == files[name] {
+			t.Fatalf("%s was not rewritten; the test must exercise a re-encode", name)
+		}
+		var root map[string]any
+		decoder := json.NewDecoder(strings.NewReader(string(body)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&root); err != nil {
+			t.Fatalf("decode %s error = %v", name, err)
+		}
+		assertExactPiNumbers(t, name, root)
+		if name == "mcp.json" {
+			servers, _ := root["mcpServers"].(map[string]any)
+			migrated, _ := servers["context7"].(map[string]any)
+			assertExactPiNumbers(t, "mcp.json mcpServers.context7", migrated)
+		}
+	}
+
+	// Strict single-document JSON stays required: no trailing documents.
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+	writeTestFile(t, mcpPath, `{"mcpServers":{}}{"x":1}`)
+	if _, _, err := a.ProvisionEngramMCP(home); err == nil || !strings.Contains(err.Error(), "unmarshal pi json file") {
+		t.Fatalf("ProvisionEngramMCP() error = %v, want trailing document rejected", err)
+	}
+}
+
+// assertExactPiNumbers checks each number of the #1672 fixture at its path.
+func assertExactPiNumbers(t *testing.T, name string, object map[string]any) {
+	t.Helper()
+	nested, _ := object["nested"].(map[string]any)
+	list, _ := nested["list"].([]any)
+	if len(list) != 4 {
+		t.Fatalf("%s nested.list = %#v, want 4 entries", name, nested["list"])
+	}
+	last, _ := list[3].(map[string]any)
+	got := []any{object["big"], object["neg"], object["max"], list[0], list[1], list[2], last["min"], object["huge"]}
+	want := []string{"9007199254740993", "-9007199254740995", "9223372036854775807",
+		"1.10", "6.02214076e23", "1E+2", "-9223372036854775808", "1e999"}
+	for i := range want {
+		if number, ok := got[i].(json.Number); !ok || number.String() != want[i] {
+			t.Fatalf("%s number %d = %#v, want exact %s", name, i, got[i], want[i])
+		}
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func readTestJSON(t *testing.T, path string, target any) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if err := json.Unmarshal(data, target); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", path, err)
+	}
+}
+
 func TestCodeGraphPathsResolveConfiguredAgentDirectory(t *testing.T) {
 	home := t.TempDir()
+	setRealHome(t, home)
 	configured := filepath.Join(home, "custom-pi")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
 
@@ -91,13 +472,30 @@ func TestCodeGraphPathsResolveConfiguredAgentDirectory(t *testing.T) {
 	if paths.MCPConfig != filepath.Join(configured, "mcp.json") {
 		t.Fatalf("MCPConfig = %q", paths.MCPConfig)
 	}
-	if paths.Manifest != filepath.Join(home, ".gentle-ai", "pi-codegraph.json") {
-		t.Fatalf("Manifest = %q", paths.Manifest)
+	sum := sha256.Sum256([]byte(filepath.Clean(configured)))
+	wantManifest := filepath.Join(home, ".gentle-ai", fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
+	if paths.Manifest != wantManifest {
+		t.Fatalf("Manifest = %q, want %q", paths.Manifest, wantManifest)
+	}
+}
+
+func TestCodeGraphPathsDefaultAgentDirectory(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	home := t.TempDir()
+	paths := CodeGraphPaths(home)
+	wantAgentDir := filepath.Join(home, ".pi", "agent")
+	if paths.AgentDir != wantAgentDir {
+		t.Fatalf("AgentDir = %q, want %q", paths.AgentDir, wantAgentDir)
+	}
+	wantManifest := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
+	if paths.Manifest != wantManifest {
+		t.Fatalf("Manifest = %q, want %q", paths.Manifest, wantManifest)
 	}
 }
 
 func TestCodeGraphPathsKeepsAgentDirectoryWhenProjectMCPOverrides(t *testing.T) {
 	home := t.TempDir()
+	setRealHome(t, home)
 	configured := filepath.Join(home, "custom-pi")
 	workspace := filepath.Join(home, "project")
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
@@ -255,6 +653,36 @@ func TestAdapterDetectMissingPiBinary(t *testing.T) {
 	}
 }
 
+func TestManagedPackageSourcesReturnsCanonicalCopy(t *testing.T) {
+	want := []string{
+		"npm:gentle-pi",
+		"npm:gentle-engram",
+		"npm:pi-web-access",
+		"npm:pi-btw",
+	}
+	got := ManagedPackageSources()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ManagedPackageSources() = %v, want %v", got, want)
+	}
+	got[0] = "changed"
+	if sources := ManagedPackageSources(); sources[0] != want[0] {
+		t.Fatalf("ManagedPackageSources() exposed mutable adapter state: %v", sources)
+	}
+}
+
+func TestUninstallPackageSourcesAlsoRemovesRetiredMCPAdapter(t *testing.T) {
+	want := []string{
+		"npm:gentle-pi",
+		"npm:gentle-engram",
+		"npm:pi-web-access",
+		"npm:pi-btw",
+		"npm:pi-mcp-adapter",
+	}
+	if got := UninstallPackageSources(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("UninstallPackageSources() = %v, want %v", got, want)
+	}
+}
+
 func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T) {
 	a := &Adapter{
 		lookPath: func(file string) (string, error) {
@@ -273,12 +701,8 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	want := [][]string{
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
-		{"pi", "install", "npm:pi-mcp-adapter"},
 		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
-		piSubagentsInstallCommand(system.PlatformProfile{}),
-		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
-		{"pi", "install", "npm:@juicesharp/rpiv-todo"},
 		{"pi", "install", "npm:pi-btw"},
 	}
 	if !reflect.DeepEqual(commands, want) {
@@ -286,28 +710,7 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	}
 }
 
-func TestAdapterInstallCommandSequenceUsesSameSubagentsPackageForWindows(t *testing.T) {
-	a := &Adapter{
-		lookPath: func(file string) (string, error) {
-			if file == "pnpm" {
-				return "", os.ErrNotExist
-			}
-			return "/usr/local/bin/" + file, nil
-		},
-		statPath: defaultStat,
-	}
-	commands, err := a.InstallCommand(system.PlatformProfile{OS: "windows"})
-	if err != nil {
-		t.Fatalf("InstallCommand() error = %v", err)
-	}
-
-	want := []string{"pi", "install", "npm:pi-subagents-j0k3r"}
-	if !reflect.DeepEqual(commands[4], want) {
-		t.Fatalf("InstallCommand()[4] = %#v, want %#v", commands[4], want)
-	}
-}
-
-func TestAdapterInstallCommandSequenceUsesPnpmForEngramInitWhenAvailable(t *testing.T) {
+func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t *testing.T) {
 	a := &Adapter{
 		lookPath: func(file string) (string, error) {
 			if file == "pnpm" {
@@ -322,13 +725,63 @@ func TestAdapterInstallCommandSequenceUsesPnpmForEngramInitWhenAvailable(t *test
 		t.Fatalf("InstallCommand() error = %v", err)
 	}
 
-	want := []string{"pnpm", "dlx", "gentle-engram@latest", "pi-engram", "init"}
-	if !reflect.DeepEqual(commands[3], want) {
-		t.Fatalf("InstallCommand()[3] = %#v, want %#v", commands[3], want)
+	want := []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
+	if !reflect.DeepEqual(commands[2], want) {
+		t.Fatalf("InstallCommand()[2] = %#v, want %#v", commands[2], want)
 	}
 }
 
-func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
+func TestRetainPiPackagesKeepsSubagentsPackageWhileGentlePiIsPinnedBelowGentleAgents(t *testing.T) {
+	kept := retainPiPackages([]any{"npm:gentle-pi@2.4.0", "npm:pi-subagents-j0k3r@1.5.13", "npm:pi-mcp-adapter"})
+	if !reflect.DeepEqual(kept, []any{"npm:gentle-pi@2.4.0", "npm:pi-subagents-j0k3r@1.5.13"}) {
+		t.Fatalf("retainPiPackages() with an old gentle-pi pin = %v, want the subagents package kept", kept)
+	}
+	dropped := retainPiPackages([]any{"npm:gentle-pi@2.5.0", "npm:pi-subagents-j0k3r"})
+	if !reflect.DeepEqual(dropped, []any{"npm:gentle-pi@2.5.0"}) {
+		t.Fatalf("retainPiPackages() with gentle-pi 2.5.0 = %v, want the subagents package dropped", dropped)
+	}
+}
+
+func TestPrunePiSettingsFileRemovesRetiredCompanionPackages(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	initial := `{
+  "packages": [
+    "npm:@juicesharp/rpiv-todo",
+    "npm:@juicesharp/rpiv-todo@2.9.0",
+    "npm:pi-subagents-j0k3r",
+    "npm:pi-subagents-j0k3r@1.5.13",
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:other@1.0.0"
+  ]
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	if _, err := prunePiSettingsFile(settingsPath); err != nil {
+		t.Fatalf("prunePiSettingsFile() error = %v", err)
+	}
+
+	var settings struct {
+		Packages []string `json:"packages"`
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("Unmarshal(settings) error = %v", err)
+	}
+	if !reflect.DeepEqual(settings.Packages, []string{"npm:other@1.0.0"}) {
+		t.Fatalf("packages = %#v, want the retired todo, subagents-j0k3r, and ask-user-question packages gone and the rest untouched", settings.Packages)
+	}
+}
+
+func TestPrunePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -341,7 +794,7 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
     "npm:pi-subagents@1.0.0",
     "vendor/pi-subagents",
     "vendor/pi-subagents-fixed@0.0.1",
-    "npm:pi-subagents-j0k3r",
+    "npm:pi-web-access",
     "npm:other@1.0.0"
   ]
 }`
@@ -349,8 +802,8 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 		t.Fatalf("WriteFile(settings) error = %v", err)
 	}
 
-	if _, err := mergePiSettingsFile(settingsPath); err != nil {
-		t.Fatalf("mergePiSettingsFile() error = %v", err)
+	if _, err := prunePiSettingsFile(settingsPath); err != nil {
+		t.Fatalf("prunePiSettingsFile() error = %v", err)
 	}
 
 	var settings struct {
@@ -371,7 +824,7 @@ func TestMergePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 			}
 		}
 	}
-	if !reflect.DeepEqual(settings.Packages, []string{"npm:pi-subagents-j0k3r", "npm:other@1.0.0", "npm:pi-mcp-adapter"}) {
+	if !reflect.DeepEqual(settings.Packages, []string{"npm:pi-web-access", "npm:other@1.0.0"}) {
 		t.Fatalf("packages = %#v", settings.Packages)
 	}
 }

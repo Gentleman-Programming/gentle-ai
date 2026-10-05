@@ -17,12 +17,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const reviewTestZeroTarget = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -36,19 +35,23 @@ func reviewDefectReportDir(t *testing.T, repo string) string {
 	return filepath.Join(commonDir, "gentle-ai", reviewDefectReportDirName)
 }
 
-func injectReviewDiscoveryFault(t *testing.T, fault error) {
+// injectReviewStartFault forces an unanticipated internal fault at the
+// negotiated command runner to test unclaimed-error residue. START's candidate
+// freeze failures now produce a typed candidate_context_unavailable refusal,
+// so they no longer exercise the defect-report path.
+func injectReviewStartFault(t *testing.T, fault error) {
 	t.Helper()
-	previous := reviewFacadeDiscoverIntendedUntracked
-	reviewFacadeDiscoverIntendedUntracked = func(context.Context, reviewtransaction.SnapshotBuilder) ([]string, error) {
-		return nil, fault
+	previous := reviewFacadeCommandRunner
+	reviewFacadeCommandRunner = func(context.Context, []string, io.Writer) error {
+		return fault
 	}
-	t.Cleanup(func() { reviewFacadeDiscoverIntendedUntracked = previous })
+	t.Cleanup(func() { reviewFacadeCommandRunner = previous })
 }
 
 func TestNegotiatedStartUnanticipatedFaultEmitsEnvelopeAndDefectReport(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
-	injectReviewDiscoveryFault(t, errors.New("injected unanticipated discovery fault"))
+	injectReviewStartFault(t, errors.New("injected unanticipated discovery fault"))
 
 	var output bytes.Buffer
 	err := RunReview([]string{
@@ -123,7 +126,7 @@ func TestNamedRefusalsAndReadOnlyOperationsNeverWriteDefectReports(t *testing.T)
 func TestDefectReportSaveFailureNeverMasksTheEnvelopeOrError(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
-	injectReviewDiscoveryFault(t, errors.New("injected unanticipated discovery fault"))
+	injectReviewStartFault(t, errors.New("injected unanticipated discovery fault"))
 	// Occupy the report directory path with a regular file so persisting the
 	// report fails deterministically.
 	commonDir := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--git-common-dir"))

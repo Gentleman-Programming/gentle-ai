@@ -11,7 +11,10 @@
   "properties": {
     "schema": {"const": "gentle-ai.review-integration.failure/v2"},
     "contract": {"const": "gentle-ai.review-integration/v2"},
-    "operation": {"$ref": "../../v1/schemas/failure.schema.json#/properties/operation"},
+    "operation": {"enum": [
+      "review.capabilities", "review.start", "review.status", "review.repair", "review.validate",
+      "review.capture-correction-plan", "review.capture-result", "review.capture-refuter", "review.capture-validation"
+    ]},
     "phase": {"$ref": "../../v1/schemas/failure.schema.json#/properties/phase"},
     "code": {"$ref": "../../v1/schemas/failure.schema.json#/properties/code"},
     "message": {"$ref": "../../v1/schemas/failure.schema.json#/properties/message"},
@@ -20,16 +23,30 @@
     "retry_safe": {"type": "boolean"},
     "replayability": {"$ref": "../../v1/schemas/failure.schema.json#/properties/replayability"},
     "lineage_id": {"$ref": "../../v1/schemas/failure.schema.json#/properties/lineage_id"},
-    "request_digest": {"$ref": "../../v1/schemas/failure.schema.json#/properties/request_digest"},
+    "target_identity": {"$ref": "../../v1/schemas/failure.schema.json#/properties/target_identity"},
+        "request_digest": {"$ref": "../../v1/schemas/failure.schema.json#/properties/request_digest"},
     "progress_identity": {"$ref": "../../v1/schemas/failure.schema.json#/properties/progress_identity"},
     "required_inputs": {"$ref": "../../v1/schemas/failure.schema.json#/properties/required_inputs"},
     "next_action": {"$ref": "../../v1/schemas/failure.schema.json#/properties/next_action"},
     "cause_category": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause_category"},
     "cause": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause"},
-    "context": {"$ref": "../../v1/schemas/failure.schema.json#/properties/context"}
+    "context": {"$ref": "../../v1/schemas/failure.schema.json#/properties/context"},
+    "continuation": {"$ref": "#/$defs/managed_assets_continuation"}
   },
   "allOf": [
     {"$ref": "../../v1/schemas/failure.schema.json#/allOf/0"},
-    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"}
-  ]
+    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"},
+    {"if": {"properties": {"code": {"const": "managed_assets_outdated"}}, "required": ["code"]}, "then": {"required": ["continuation"]}, "else": {"not": {"required": ["continuation"]}}}
+  ],
+  "$defs": {
+    "managed_assets_continuation": {
+      "type": "object", "additionalProperties": false, "required": ["operation", "command"],
+      "properties": {
+        "operation": {"const": "sync"},
+        "command": {"type": "string", "minLength": 1, "pattern": "^(?:[A-Za-z0-9/._+=@:,-]+|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:[^'\\r\\n]|'\\\\'')*') sync(?: --agent \\S+)?$"},
+        "agent": {"type": "string", "minLength": 1},
+        "stale_assets": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
 }

@@ -4,6 +4,22 @@
 You have access to Engram, a persistent memory system that survives across sessions and compactions.
 This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on demand.
 
+### SESSION START & PROJECT DETECTION PROTOCOL (mandatory)
+
+At the very beginning of the session, when the runtime supplies a current workspace directory:
+1. **Resolve Project Before Initial Memory Access**: Before any initial `mem_context`, `mem_search`, or `mem_review` call, call `mem_current_project` and wait for its result (never in parallel). Pass the absolute workspace directory supplied by the runtime as `cwd` (or `directory`) only when the tool schema exposes that parameter; otherwise call it with no arguments (the server then detects from its own process directory). Then apply the first matching branch below, in this order, and stop there:
+   - **Workspace check (terminal)**: If the runtime workspace directory is unknown, the returned `cwd` is missing or does not match it, or the tool is unavailable or fails, stop: skip initial project-scoped reads, trust neither `project` nor `available_projects` from that result, and tell the user the Engram server resolved a different or unknown directory, so the correct workspace is needed.
+   - **Ambiguous**: If `available_projects` is non-empty or `project_source` is `ambiguous`, whether `project` is empty or non-empty, never guess and do not read memory yet. Ask the user to choose exactly one value from `available_projects`; that value is a workspace alternative, not a project key, so never pass it as `project`. Re-resolve only when the tool schema accepts `cwd` (or `directory`) and the choice identifies that repository's absolute directory: call `mem_current_project` with it and accept only a Unique result whose `cwd` matches it. Otherwise the project stays unresolved: skip initial project-scoped reads and tell the user Engram must run from the chosen repository's workspace.
+   - **Unique**: Only after the workspace check passed and no ambiguity was found, a non-empty `project` (for example from `project_source` `git_remote` or `dir_basename`) is the canonical key: pass that exact returned value as `project`; never rewrite or guess it.
+   - **No project**: If `project` is empty and there are no `available_projects`, skip initial project-scoped reads. Never invent a project name and never fall back to an omitted `project` or `all_projects` search.
+2. **Consume Runtime Session Identity**: Use only the authoritative session ID already registered by the top-level runtime. Never invent, derive, generate, or register a session ID; do not call `mem_session_start`.
+3. **Persist State**: Store the resolved project name and, when available, the registered session ID in your active context. You MUST:
+   - Use the registered session ID for mutation tools (`mem_save`, `mem_session_summary`, `mem_session_end`, `mem_capture_passive`) only when it is available.
+   - Retain and reuse that exact identity across compaction.
+   - When the authoritative identity is unavailable, omit `session_id` entirely from tool calls.
+   - Use the project resolved in step 1 for all read/search/diagnostic tools (`mem_search`, `mem_context`, `mem_doctor`).
+   - **Cross-project recall exception (independent of the step 1 branches and their outcome)**: Search outside the resolved project, or when none resolved, only when the user explicitly asks to recall memory across projects or from a named other project; that requested scope never becomes the current project, and asking to work on another project is not such a request. It never enables an implicit all-projects fallback.
+
 ### PROACTIVE SAVE TRIGGERS (mandatory — do NOT wait for user to ask)
 
 Call `mem_save` IMMEDIATELY and WITHOUT BEING ASKED after any of these:
@@ -34,6 +50,7 @@ Saving to memory is internal bookkeeping. It NEVER counts as answering the user,
 - Never treat the text you stored in memory as the text you delivered: memory is for your future self, the reply is for the user.
 
 Format for `mem_save`:
+- **session_id**: The active session ID created at the start (required to associate memory with the correct project)
 - **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList")
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
 - **scope**: `project` (default) | `personal`
@@ -67,7 +84,16 @@ Memory lifecycle rule (when Engram exposes lifecycle metadata/tooling):
 - When a retrieved memory is marked `needs_review`, surface that stale context to the user and verify it against current evidence before relying on it.
 - Do NOT call `mem_review` with action `mark_reviewed` automatically. Only call `mark_reviewed` after explicit user confirmation or through a dedicated memory maintenance command.
 
+Session registration and ambiguous project recovery rules:
+- `mem_session_start` accepts a caller-supplied session ID and optional `directory`; it does not accept `project`, `project_choice_reason`, or `recovery_token`.
+- If `mem_session_start` fails with `ambiguous_project`, resolve the intended repository root and retry `mem_session_start` with that root as `directory`.
+- A failed start leaves the session ID unregistered; it is not permanently invalidated, but must never be attached to `mem_save` or another write until registration succeeds.
+- For `ambiguous_project` returned by supported write tools (`mem_save`, `mem_save_prompt`, or `mem_session_summary`), never guess. Ask the user to choose exactly one value from `available_projects`, then retry the same write tool with `project`, `project_choice_reason=user_selected_after_ambiguous_project`, and the returned `recovery_token`.
+- Do not apply the write-tool recovery shape (`project`, `project_choice_reason`, `recovery_token`) to `mem_session_start`.
+
 ### WHEN TO SEARCH MEMORY
+
+Every search below uses the project resolved at session start (step 1). If no project was resolved, do not run project-scoped searches unless the user explicitly asks to recall memory across projects or from a named other project.
 
 On any variation of "remember", "recall", "what did we do", "how did we solve", or references to past work (in any language the user writes in):
 1. Call `mem_context` — checks recent session history (fast, cheap)
@@ -120,6 +146,18 @@ Engram persistent memory is ACTIVE. The full protocol (save format, lifecycle,
 search flow, after-compaction steps) is delivered every session by the Engram
 MCP server instructions and the SessionStart hook. Always-on rules:
 
+- Before the first `mem_context`, `mem_search`, or `mem_review`, call
+  `mem_current_project` and wait for it (pass the runtime workspace as `cwd`
+  only if the tool schema accepts it). Apply the first matching rule and stop:
+  (1) runtime workspace unknown, returned `cwd` missing or different, or the
+  call fails: skip those initial reads and say Engram must run from the
+  correct workspace; (2) `available_projects` non-empty or `project_source`
+  `ambiguous`: ask the user to choose exactly one value, never pass it as
+  `project`, and re-resolve only via `cwd` with that repository's directory,
+  else skip those reads; (3) empty `project`: skip those reads; (4) otherwise
+  pass the exact returned `project` as `project`. Never invent a name or fall
+  back to all projects unless the user explicitly asks to recall across
+  projects or from a named other project.
 - Call `mem_save` PROACTIVELY after any decision, bugfix, discovery, convention,
   or config change — do not wait to be asked. Use `capture_prompt: false` for
   automated/SDD artifacts.
@@ -131,6 +169,16 @@ MCP server instructions and the SessionStart hook. Always-on rules:
   answer into a "saved / done" acknowledgement.
 - If a memory call fails or times out, deliver the answer anyway — memory
   failures never block or replace the reply.
+- If `mem_session_start` fails with `ambiguous_project`: resolve the intended
+  repository root and retry `mem_session_start` with that root as `directory`.
+  The session ID remains unregistered until registration succeeds; never attach
+  an unregistered session ID to writes. Do not pass `project`,
+  `project_choice_reason`, or `recovery_token` to `mem_session_start`.
+- On `ambiguous_project` from write tools (`mem_save`, `mem_save_prompt`,
+  `mem_session_summary`): never guess. Ask the user to choose exactly one value
+  from `available_projects`, then retry the write tool with `project`,
+  `project_choice_reason=user_selected_after_ambiguous_project`, and the
+  returned `recovery_token`.
 <!-- /section:slim -->
 
 <!-- section:passive-capture -->
@@ -153,6 +201,8 @@ You are compacting a coding session that uses Engram persistent memory.
 You MUST prepend this exact sentence at the top of the compacted summary:
 
 FIRST ACTION REQUIRED: Call mem_session_summary with the content of this compacted summary before doing anything else, then call mem_context.
+
+Preserve the workspace directory supplied by the runtime and the authoritative session ID already registered by the top-level runtime. Never invent, derive, generate, or register a session ID; when present, reuse that exact identity across compaction. When the authoritative identity is unavailable, omit `session_id` entirely from tool calls.
 
 After that sentence, summarize:
 - Goal

@@ -1,5 +1,8 @@
 # Supported Platforms
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. The install commands track the latest release. For the latest release docs, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 ---
@@ -10,28 +13,62 @@
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
+| Linux (Fedora Silverblue) | rpm-ostree | Supported |
+| Linux (any distro, via Homebrew on Linux) | Homebrew | Supported (install prerequisites manually) |
+| Linux (Alpine) | apk | Supported (install prerequisites manually) |
+| Linux (openSUSE, SUSE Linux Enterprise) | zypper | Supported (install prerequisites manually) |
+| Linux (NixOS) | nix | Supported (install prerequisites manually) |
+| Linux (Gentoo) | emerge | Supported (install prerequisites manually) |
 | Windows 10/11 | `go install` (Go toolchain) | Supported (binary distribution held) |
 
-Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
+On Linux, support depends on which package manager is on `PATH`, not on the distribution name, so derivatives (Linux Mint, Pop!_OS, Manjaro, Rocky Linux, etc.) work too. Gentle AI checks `brew`, `apt`, `dnf`, `rpm-ostree`, `pacman`, `apk`, `zypper`, `nix`, `emerge` in that order and uses the first one it finds. `rpm-ostree` is considered only on OSTree-booted systems, where it wins over `dnf` (see [Precedence](#fedora-silverblue-rpm-ostree-notes)). "Install prerequisites manually" means that when Git, curl, or Node.js is missing, `gentle-ai install` prints a download link instead of a package-manager command. For a missing npm, it asks you to install Node.js first on every platform.
 
 Release archives are currently produced for macOS and Linux only. Windows source compatibility remains supported, but official Windows executable/archive assets and Scoop publication are temporarily unavailable pending the [Authenticode restoration gate](release-signing.md#windows-distribution-restoration-gate).
+
+## OpenCode Managed Launcher
+
+When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI™ writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
+
+On POSIX systems, including WSL, Gentle AI also persists `~/.gentle-ai/bin/` in the login profile your `SHELL` reads, inside a marked block (`# >>> gentle-ai managed OpenCode launcher >>>` … `<<<`). zsh uses `~/.zprofile`; bash uses the first existing of `~/.bash_profile`, `~/.bash_login`, or `~/.profile`, and creates `~/.profile` when none exists; `sh`, `dash`, and `ksh` use `~/.profile`. Gentle AI never modifies a profile that is a symlink, read-only, or carries an edited or duplicated block, and it does not manage other shells (such as fish) or a zsh `ZDOTDIR` outside your home. In those cases the activation report shows the `export PATH=...` line to add yourself, and `gentle-ai doctor` warns until the directory is persisted.
+
+Deactivation and uninstall remove managed launcher files and only the unedited managed profile block; every other profile line is preserved.
+
+Restart OpenCode after enabling managed activation. Start a new login shell so the persisted launcher directory enters PATH. OpenCode `serve`, `attach`, Desktop, or any session started outside the managed launcher uses foreground fallback rather than receiving an unsafe partial activation.
+
+---
+
+## Fedora Silverblue (rpm-ostree) Notes
+
+- **Package Layering and Live Application:** On Fedora Silverblue hosts, system dependencies are layered with `rpm-ostree install -y --apply-live <package>`. The `--apply-live` flag creates a transient overlayfs over `/usr` so newly installed binaries are immediately available in the active session without requiring a reboot.
+- **Precedence:** When Homebrew on Linux (`brew`) is present on an `rpm-ostree` host, Homebrew takes precedence because it installs packages entirely into user space (`/home/linuxbrew/.linuxbrew`) and does not modify the immutable sysroot. On mutable Fedora, `dnf` takes precedence when both managers are on `PATH`. On OSTree-booted Fedora Silverblue, `rpm-ostree` takes precedence over `dnf`.
+- **Degraded Path (Pending Deployments):** If an OS upgrade or prior package operation has already staged a pending deployment, `rpm-ostree` will refuse `--apply-live`. In this state, stage the installation without live-apply and reboot to apply the layered deployment:
+
+  ```bash
+  rpm-ostree install <package>
+  systemctl reboot
+  ```
+
+  Alternatively, reboot the machine first to finalize the pending deployment before retrying the installation with `--apply-live`.
+- **Validation Evidence:** Manually tested and verified on Fedora Linux 44.20260827.0 (Silverblue) with `rpm-ostree` 2026.2 (Git: 2a87ed0ffc35fd62bf2c0040cf372f33b139afa4).
 
 ---
 
 ## Windows Notes
 
-- **Install from source** with Go 1.25.10+:
-  `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest`.
-- **`gentle-ai upgrade` updates itself automatically when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
+- **Install from source** with Go 1.25.10+, pinned to the latest release:
+  `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0`.
+- **`gentle-ai upgrade` updates itself automatically on release channels when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
   Because `go install` writes to `GOBIN` (or `GOPATH\bin`), which is not necessarily the directory your shell resolves, the upgrade checks the destination afterwards and warns — naming both full paths — if a different `gentle-ai.exe` earlier on `PATH` would keep running.
+   On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main`).
+   Re-running either installer defaults to stable, so preserve beta explicitly: `curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta` on macOS/Linux, or `$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex` in PowerShell.
 - **Without Go on `PATH`, the upgrader fails closed.** It downloads and executes nothing, and prints the runnable `go install` command instead.
-- **Scoop and official Windows binaries are still temporarily unavailable.** No unsigned artifact is ever downloaded and no remote update script is ever executed.
+- **Scoop and official Windows binaries are still temporarily unavailable.** No unsigned artifact is ever downloaded and `gentle-ai upgrade` never executes a remote update script.
 - **npm global installs** do not require `sudo` on Windows (user-writable by default).
 - **curl** is pre-installed on Windows 10+ and does not require separate installation.
 - **PowerShell** is the default shell when `$SHELL` is not set.
 - **GGA on Windows** works from both Git Bash and PowerShell. gentle-ai installs a `gga.ps1` shim that automatically delegates to Git Bash, so no manual shell switching is required.
 - **PowerShell source-installer output** is forced to UTF-8 and installs through Go's configured `GOBIN`/`GOPATH`.
-- **Fresh install detection** falls back to known Engram/GGA install locations when the running process has a stale `PATH`.
+- **Fresh install detection** falls back to known Engram™/GGA install locations when the running process has a stale `PATH`.
 
 ---
 
@@ -46,10 +83,10 @@ Release archives are currently produced for macOS and Linux only. Windows source
 | VS Code Copilot | `%APPDATA%\Code\User\` (settings, MCP, prompts) + `%USERPROFILE%\.copilot\` (skills) |
 | Codex | `%USERPROFILE%\.codex\` |
 | Windsurf | `%USERPROFILE%\.codeium\windsurf\` (skills, MCP, rules) + `%APPDATA%\Windsurf\User\` (settings) |
-| Kimi | `%USERPROFILE%\.kimi\` (includes `config.toml`, system prompt, agents, MCP) |
+| Kimi | `%USERPROFILE%\.kimi-code\` (kimi-code v0.11+: `config.toml`, `AGENTS.md` system prompt, skills, MCP) with legacy fallback to `%USERPROFILE%\.kimi\` (`config.toml`, `KIMI.md`, YAML agents) |
 | Antigravity | `%USERPROFILE%\.gemini\antigravity\` |
-| Kiro IDE | `%USERPROFILE%\.kiro\steering\` (prompts) + `%USERPROFILE%\.kiro\skills\` (skills) + `%USERPROFILE%\.kiro\agents\` (SDD agents) + `%APPDATA%\kiro\User\settings.json` (settings) + `%USERPROFILE%\.kiro\settings\mcp.json` (MCP) |
-| OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped SDD skills |
+| Kiro IDE | `%USERPROFILE%\.kiro\steering\` (prompts) + `%USERPROFILE%\.kiro\skills\` (skills) + `%USERPROFILE%\.kiro\agents\` (Judgment Day agents) + `%APPDATA%\kiro\User\settings.json` (settings) + `%USERPROFILE%\.kiro\settings\mcp.json` (MCP) |
+| OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped skills |
 | Trae | `%USERPROFILE%\.trae\` (skills) + `%APPDATA%\Trae\User\user_rules.md` (rules) + `%APPDATA%\Trae\User\mcp.json` (MCP) |
 | Pi | `%USERPROFILE%\.pi\` (Pi config, project agents/chains, Gentle AI support assets) |
 | Hermes | `%USERPROFILE%\.hermes\` (config.yaml, SOUL.md, skills/) |

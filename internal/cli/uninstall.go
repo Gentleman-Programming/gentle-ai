@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type UninstallFlags struct {
@@ -26,7 +26,6 @@ func ParseUninstallFlags(args []string) (UninstallFlags, error) {
 	var opts UninstallFlags
 
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-	fs.SetOutput(ioDiscard{})
 	registerListFlag(fs, "agent", &opts.Agents)
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "component", &opts.Components)
@@ -35,7 +34,7 @@ func ParseUninstallFlags(args []string) (UninstallFlags, error) {
 	fs.BoolVar(&opts.Yes, "yes", false, "skip confirmation prompt")
 	fs.BoolVar(&opts.Yes, "y", false, "skip confirmation prompt")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args); err != nil {
 		return UninstallFlags{}, err
 	}
 	if fs.NArg() > 0 {
@@ -82,7 +81,17 @@ func RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir string, agentIDs
 func RenderUninstallReport(result componentuninstall.Result) string {
 	var b strings.Builder
 
-	_, _ = fmt.Fprintln(&b, "Managed uninstall complete")
+	// The header states what actually happened. A batch that failed for one
+	// agent still commits the agents that succeeded (see Result.FailedAgents),
+	// so "complete" would be a lie the user reads before the failure detail
+	// printed further down under manual cleanup.
+	if len(result.FailedAgents) > 0 {
+		_, _ = fmt.Fprintf(&b, "Managed uninstall partially complete: %s failed\n", strings.Join(agentLabels(result.FailedAgents), ", "))
+	} else if len(result.RetainedPiResources) > 0 {
+		_, _ = fmt.Fprintln(&b, "Managed uninstall finished; Pi resources retained for review")
+	} else {
+		_, _ = fmt.Fprintln(&b, "Managed uninstall complete")
+	}
 	if result.Manifest.ID != "" {
 		_, _ = fmt.Fprintf(&b, "Backup: %s (%s)\n", result.Manifest.ID, result.Manifest.DisplayLabel())
 		_, _ = fmt.Fprintf(&b, "Backup path: %s\n", result.BackupPath)
@@ -96,6 +105,8 @@ func RenderUninstallReport(result componentuninstall.Result) string {
 	appendPathSection(&b, "Rewritten files", result.ChangedFiles)
 	appendPathSection(&b, "Deleted files", result.RemovedFiles)
 	appendPathSection(&b, "Deleted directories", result.RemovedDirectories)
+	appendPathSection(&b, "Retained Pi resources (not deleted)", result.RetainedPiResources)
+	appendOptionalPiPackageCleanup(&b, result.OptionalPiPackageCleanupCommands)
 	appendPathSection(&b, "Manual cleanup required", result.ManualActions)
 
 	return strings.TrimRight(b.String(), "\n")
@@ -104,7 +115,9 @@ func RenderUninstallReport(result componentuninstall.Result) string {
 func runUninstallWithInput(args []string, stdout io.Writer, stdin io.Reader) (componentuninstall.Result, error) {
 	flags, err := ParseUninstallFlags(args)
 	if err != nil {
-		return componentuninstall.Result{}, err
+		// An explicit help request is answered here, where a writer exists;
+		// ParseUninstallFlags owns none of its own.
+		return componentuninstall.Result{}, writeHelpRequest(err, stdout)
 	}
 
 	homeDir, err := osUserHomeDir()
@@ -155,6 +168,18 @@ func promptUninstallConfirm(flags UninstallFlags, stdout io.Writer, stdin io.Rea
 		return false, fmt.Errorf("no confirmation provided (use --yes to skip prompt)")
 	}
 	return strings.EqualFold(strings.TrimSpace(scanner.Text()), "yes"), nil
+}
+
+func appendOptionalPiPackageCleanup(b *strings.Builder, commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintln(b, "\nOptional Pi package cleanup:")
+	_, _ = fmt.Fprintln(b, "  Review shared or user-modified packages/resources before removing them:")
+	for _, command := range commands {
+		_, _ = fmt.Fprintf(b, "  - %s\n", command)
+	}
 }
 
 func appendPathSection(b *strings.Builder, title string, paths []string) {

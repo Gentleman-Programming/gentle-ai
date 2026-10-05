@@ -17,7 +17,7 @@ Use it for:
 - Preparing commits before opening a PR.
 - Turning a large change into chained or stacked PRs.
 - Keeping reviewer cognitive load healthy.
-- Applying SDD tasks without accidentally producing a PR above 400 changed lines.
+- Closing an ODD task with a work-unit commit.
 
 ## Critical Rules
 
@@ -29,7 +29,7 @@ Use it for:
 | Keep docs with the user-visible change | Docs belong with the feature or workflow they explain. |
 | Tell a story | A reviewer should understand why each commit exists from its diff and message. |
 | Future PR-ready | Each commit should be a candidate chained PR when the change grows. |
-| SDD workload guard | If SDD tasks forecast a >400-line change, group commits into chained PR slices before implementation. |
+| Budget is not code-golf | Never shrink a diff by deleting comments, blank lines, docs, or tests, or by compressing code, to fit the review budget (400 by default, or the session `review_budget_lines`). Slice by work unit or report the overage. |
 
 ## Work Unit Checklist
 
@@ -62,28 +62,14 @@ Use work-unit commits as the foundation for chained PRs:
 3. Commit it with a Conventional Commit message.
 4. If the PR approaches 400 changed lines, promote commits or groups of commits into chained PRs.
 
-## SDD Relationship
+## ODD Relationship
 
-When `sdd-tasks` produces a Review Workload Forecast:
+Organic Driven Development (ODD) closes every substantial task with a work-unit commit on the feature branch:
 
-- Low risk: keep work-unit commits inside one PR.
-- Medium risk: commit by work unit and monitor changed lines before PR creation.
-- High risk: follow SDD `delivery_strategy` — ask on `ask-on-risk`, auto-slice on `auto-chain`, require `size:exception` on over-budget `single-pr`, or record accepted `size:exception` on `exception-ok`.
-- Count authored additions plus deletions for the `>400` threshold. Exclude generated goldens from that authored count, but include every generated file in complete snapshot identity and receipt validation.
-
-Each SDD work unit should map cleanly to a commit or PR with:
-
-- clear start state,
-- clear finished state,
-- verification in the same unit,
-- rollback that does not remove unrelated work.
-
-Its implementation evidence MUST include:
-
-- Focused test command and exact result.
-- Runtime harness command/scenario and exact result, or explicit `N/A` with reason.
-- Rollback boundary stated independently of commit creation; uncommitted work units still require it.
-- When fixing a bounded review ledger, group atomic work units inside the single correction transaction; work-unit count never creates another fix budget.
+- Every ODD task closes with at least one work-unit commit, branch first when on the default branch, with tests and docs alongside the behavior and a Conventional Commit message.
+- The native review candidate is that commit, or the PR slice it belongs to when review is deferred, against the previous reviewed boundary. It is never a TODO checkbox and never the accumulated feature branch.
+- The running authored line count from work-unit commits feeds the delivery-strategy vocabulary: `ask-on-risk`, `auto-chain`, `single-pr`, `exception-ok`.
+- The ODD feature document records the commit identity as evidence and, once a delivery strategy applies, the chosen chain strategy and slice boundaries (which commits each PR holds).
 
 ## Commands
 

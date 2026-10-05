@@ -1,0 +1,227 @@
+package main
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// journeySource is one journeys_*.go file and the journeys it contributes.
+// Journey IDs are hand-assigned across these files, so the collision check
+// must be able to name the two defining files: a failure that cannot say
+// where both definitions live sends the author on a repo-wide grep.
+type journeySource struct {
+	File     string
+	Journeys []Journey
+}
+
+// journeySources maps every journeys_*.go corpus file to its constructor.
+// Adding a new journeys_*.go file means registering its constructor here;
+// TestJourneySourcesCoverTheWholeCorpus fails until it is registered, so a
+// new file cannot bypass the collision check silently.
+func journeySources() []journeySource {
+	sources := []journeySource{
+		{"journeys.go", coreJourneys()},
+		{"journeys_edge.go", edgeJourneys()},
+		{"journeys_review_recovery.go", reviewRecoveryJourneys()},
+		{"journeys_issue_3065.go", issue3065Journeys()},
+		{"journeys_stop_hook.go", stopHookJourneys()},
+		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
+		{"journeys_scope_changed_fixture.go", scopeChangedFixtureJourneys()},
+		{"journeys_wave1.go", waveOneJourneys()},
+		{"journeys_wave3.go", waveThreeJourneys()},
+		{"journeys_atomic_review.go", atomicReviewJourneys()},
+		{"journeys_wave5.go", waveFiveJourneys()},
+		{"journeys_zero_delta.go", zeroDeltaJourneys()},
+		{"journeys_lens_context_budget.go", lensContextBudgetJourneys()},
+		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
+		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
+		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
+		{"journeys_issue_2031.go", issue2031Journeys()},
+		{"journeys_finding_id_prefix.go", findingIDPrefixJourneys()},
+		{"journeys_reviewed_superset.go", reviewedSupersetJourneys()},
+		{"journeys_staged_delivery.go", stagedDeliveryJourneys()},
+		{"journeys_frozen_lineage_resume.go", frozenLineageResumeJourneys()},
+		{"journeys_issue1800.go", issue1800Journeys()},
+		{"journeys_issue2879.go", issue2879Journeys()},
+		{"journeys_managed_assets.go", managedAssetJourneys()},
+		{"journeys_issue2906.go", issue2906Journeys()},
+		{"journeys_issue_2138.go", issue2138Journeys()},
+		{"journeys_issue_3500.go", issue3500Journeys()},
+		{"journeys_issue_3043.go", issue3043Journeys()},
+		{"journeys_issue_3557.go", issue3557Journeys()},
+		{"journeys_issue_3561.go", issue3561Journeys()},
+		{"journeys_repository_context.go", repositoryContextJourneys()},
+		{"journeys_provider_capture.go", providerCaptureRetryJourneys()},
+		{"journeys_captured_provider_validator.go", capturedProviderValidatorJourneys()},
+		{"journeys_issue3321.go", issue3321Journeys()},
+		{"journeys_issue3587.go", issue3587Journeys()},
+		{"journeys_issue3748.go", issue3748Journeys()},
+		{"journeys_issue3772.go", issue3772Journeys()},
+		{"journeys_issue3776.go", issue3776Journeys()},
+		{"journeys_issue3766.go", issue3766Journeys()},
+		{"journeys_issue4377.go", issue4377Journeys()},
+		{"journeys_issue4395.go", issue4395Journeys()},
+		{"journeys_issue3813.go", issue3813Journeys()},
+		{"journeys_issue2995.go", issue2995Journeys()},
+	}
+	for index := range sources {
+		sources[index].Journeys = removeRetiredAtomicJourneys(sources[index].Journeys)
+	}
+	return sources
+}
+
+func TestJourneyIDCollisionsNameBothOffenders(t *testing.T) {
+	tests := []struct {
+		name    string
+		sources []journeySource
+		want    string
+	}{
+		{
+			name: "same full ID",
+			sources: []journeySource{
+				{File: "journeys_alpha.go", Journeys: []Journey{{ID: "j110-alpha"}}},
+				{File: "journeys_beta.go", Journeys: []Journey{{ID: "j110-alpha"}}},
+			},
+			want: `journey ID "j110-alpha" is defined in both journeys_alpha.go and journeys_beta.go; pick an ID no journeys_*.go file uses yet`,
+		},
+		{
+			name: "same numeric prefix",
+			sources: []journeySource{
+				{File: "journeys_alpha.go", Journeys: []Journey{{ID: "j110-alpha"}}},
+				{File: "journeys_beta.go", Journeys: []Journey{{ID: "j110-beta"}}},
+			},
+			want: `journey numeric prefix "j110" is shared by "j110-alpha" in journeys_alpha.go and "j110-beta" in journeys_beta.go; pick a number no journeys_*.go file uses yet`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collisions := journeyIDCollisions(tt.sources)
+			if len(collisions) != 1 {
+				t.Fatalf("journeyIDCollisions() returned %d collisions, want 1: %v", len(collisions), collisions)
+			}
+			if collisions[0] != tt.want {
+				t.Fatalf("journeyIDCollisions() = %q, want %q", collisions[0], tt.want)
+			}
+		})
+	}
+}
+
+type journeyIDOwner struct {
+	ID   string
+	File string
+}
+
+func journeyIDCollisions(sources []journeySource) []string {
+	fullOwners := map[string]string{}
+	prefixOwners := map[string]journeyIDOwner{}
+	collisions := []string{}
+
+	for _, source := range sources {
+		for _, journey := range source.Journeys {
+			if owner, taken := fullOwners[journey.ID]; taken {
+				collisions = append(collisions, fmt.Sprintf(
+					"journey ID %q is defined in both %s and %s; pick an ID no journeys_*.go file uses yet",
+					journey.ID, owner, source.File))
+				continue
+			}
+			fullOwners[journey.ID] = source.File
+
+			prefix := journey.ID
+			if separator := strings.IndexByte(journey.ID, '-'); separator >= 0 {
+				prefix = journey.ID[:separator]
+			}
+			if owner, taken := prefixOwners[prefix]; taken {
+				collisions = append(collisions, fmt.Sprintf(
+					"journey numeric prefix %q is shared by %q in %s and %q in %s; pick a number no journeys_*.go file uses yet",
+					prefix, owner.ID, owner.File, journey.ID, source.File))
+				continue
+			}
+			prefixOwners[prefix] = journeyIDOwner{ID: journey.ID, File: source.File}
+		}
+	}
+
+	return collisions
+}
+
+// TestRetiredSDDJourneysAreAbsent keeps deleted native workflow IDs out of the core corpus.
+func TestRetiredSDDJourneysAreAbsent(t *testing.T) {
+	retired := map[string]bool{
+		"j41-kill-switch-versus-sdd-pre-verify":                              true,
+		"j42-kill-switch-versus-sdd-archive":                                 true,
+		"j44-sdd-historical-requirement-stale-pass":                          true,
+		"j52-sdd-stale-authority-does-not-shadow-approved-candidate":         true,
+		"j53-sdd-ambiguous-authorities-fail-closed":                          true,
+		"j54-sdd-missing-authority-receipt-fails-closed":                     true,
+		"j55-sdd-mismatched-authority-receipt-fails-closed":                  true,
+		"j56-sdd-non-allow-post-apply-gate-fails-closed":                     true,
+		"j58-sdd-foreign-openspec-path-fails-closed":                         true,
+		"j63-disabled-failed-verification-unmanaged-remediation":             true,
+		"j47-disabled-mode-archives-discovered-scope-changed-authority":      true,
+		"j49-status-without-cwd-honors-kill-switch":                          true,
+		"j96-sdd-same-parent-repository-edit-authority":                      true,
+		"j98-sdd-flat-root-spec-is-discovered":                               true,
+		"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding": true,
+		"j128-historical-verification-does-not-block-apply":                  true,
+		"j3336-opencode-sdd-fresh-default-preflight":                         true,
+		"j2138-opencode-native-fallback-boundary":                            true,
+	}
+	for _, journey := range Journeys() {
+		if retired[journey.ID] {
+			t.Errorf("retired SDD journey %q remains in the core corpus", journey.ID)
+		}
+	}
+}
+
+// TestCoreJourneysAvoidRetiredWorkflowCommands guards executable step declarations,
+// including composite capabilities, against deleted native SDD commands.
+func TestCoreJourneysAvoidRetiredWorkflowCommands(t *testing.T) {
+	for _, journey := range Journeys() {
+		for _, step := range journey.Steps {
+			if step.Requires != nil && len(step.Requires.Verb) > 0 && strings.HasPrefix(step.Requires.Verb[0], "sdd-") {
+				t.Errorf("journey %q requires retired command %q", journey.ID, step.Requires.Verb[0])
+			}
+		}
+	}
+}
+
+// TestJourneyIDsAreUniqueAcrossSourceFiles is the focused full-ID and numeric-prefix collision check.
+// Before it existed, a colliding ID was only caught downstream by the
+// registration test, whose seen[journey.ID] failure is generic and arrives
+// next to an unrelated count mismatch. This failure names both defining
+// files at the point of the mistake.
+func TestJourneyIDsAreUniqueAcrossSourceFiles(t *testing.T) {
+	for _, collision := range journeyIDCollisions(journeySources()) {
+		t.Error(collision)
+	}
+}
+
+// TestJourneySourcesCoverTheWholeCorpus pins journeySources to Journeys().
+// Without it, a new journeys_*.go file appended to Journeys() but not
+// registered above would sit outside the collision check, which would put
+// the corpus right back where it started: duplicates caught late, by a
+// message about something else.
+func TestJourneySourcesCoverTheWholeCorpus(t *testing.T) {
+	counted := map[string]int{}
+	for _, source := range journeySources() {
+		for _, journey := range source.Journeys {
+			counted[journey.ID]++
+		}
+	}
+	for _, journey := range Journeys() {
+		counted[journey.ID]--
+	}
+	disagreements := []string{}
+	for id, count := range counted {
+		if count != 0 {
+			disagreements = append(disagreements, fmt.Sprintf("%s (%+d)", id, -count))
+		}
+	}
+	sort.Strings(disagreements)
+	if len(disagreements) > 0 {
+		t.Fatalf("journeySources and Journeys() disagree on: %s\nEvery journeys_*.go file must be registered in journeySources so the ID-collision check covers it.",
+			strings.Join(disagreements, ", "))
+	}
+}

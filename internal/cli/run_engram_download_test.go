@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
 )
 
 // TestRunInstallLinuxEngramUsesDownloadNotGoInstall verifies that after the fix,
@@ -553,14 +554,20 @@ func TestRunInstallMacOSEngramStillUsesBrew(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreStat := osStat
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		osStat = restoreStat
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = missingBinaryLookPath
+	// Force resolveEngramInstalledPath's Homebrew-prefix fallback (#4020) to
+	// report "not found" regardless of the real machine running this test,
+	// so this test still exercises the genuinely-missing install path.
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
@@ -625,6 +632,9 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 		if name == "engram" {
 			return "/usr/local/bin/engram", nil
 		}
+		if name == "go" {
+			return "/usr/local/bin/go", nil
+		}
 		return missingBinaryLookPath(name)
 	}
 	goEnv = func(keys ...string) (map[string]string, error) {
@@ -679,3 +689,68 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 
 // Make sure the engram package's DownloadLatestBinary is accessible.
 var _ = engram.DownloadLatestBinary
+
+// Engram is user-owned: installing ordinary guidance does not attempt an implicit download.
+// The old SDD auto-added-dependency warning was retired with SDD selection.
+func TestRunInstallClaudeGuidanceDoesNotAutoInstallEngram(t *testing.T) {
+	home := t.TempDir()
+	restoreHome, restoreCommand, restoreLookPath, restoreDownload := osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn
+	t.Cleanup(func() {
+		osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn = restoreHome, restoreCommand, restoreLookPath, restoreDownload
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	engramDownloadFn = func(system.PlatformProfile) (string, error) {
+		t.Fatal("ordinary guidance must not download Engram")
+		return "", nil
+	}
+	result, err := RunInstall([]string{"--agent", "claude-code", "--components", "persona"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
+	if err != nil || !result.Verify.Ready {
+		t.Fatalf("install: %v, report: %#v", err, result.Verify)
+	}
+	path := filepath.Join(home, ".claude", "CLAUDE.md")
+	if !verifyReportRequiresFile(result.Verify, path) {
+		t.Fatalf("guidance not verified at %q: %#v", path, result.Verify)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("implicit Engram MCP config: %v", err)
+	}
+}
+
+func TestRunInstallOpenCodeGuidanceDoesNotAutoInstallEngram(t *testing.T) {
+	home := t.TempDir()
+	restoreHome, restoreCommand, restoreLookPath, restoreDownload := osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn
+	t.Cleanup(func() {
+		osUserHomeDir, runCommand, cmdLookPath, engramDownloadFn = restoreHome, restoreCommand, restoreLookPath, restoreDownload
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	engramDownloadFn = func(system.PlatformProfile) (string, error) {
+		t.Fatal("OpenCode guidance must not download Engram")
+		return "", nil
+	}
+	result, err := RunInstall([]string{"--agent", "opencode", "--components", "persona"}, linuxDetectionResult(system.LinuxDistroUbuntu, "apt"))
+	if err != nil || !result.Verify.Ready {
+		t.Fatalf("install: %v, report: %#v", err, result.Verify)
+	}
+	path := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("OpenCode guidance missing: %v", err)
+	}
+	if !verifyReportRequiresFile(result.Verify, path) {
+		t.Fatalf("guidance not verified at %q: %#v", path, result.Verify)
+	}
+}
+
+// verifyReportRequiresFile reports whether the post-apply verification listed
+// path as a required file, regardless of whether that check passed.
+func verifyReportRequiresFile(report verify.Report, path string) bool {
+	for _, check := range report.Checks {
+		if check.ID == "verify:file:"+path {
+			return true
+		}
+	}
+	return false
+}

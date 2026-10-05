@@ -4,8 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"path/filepath"
-	"sort"
 	"testing"
 )
 
@@ -150,53 +148,18 @@ func shadowMergeTree(ctx context.Context, repo, left, right string) ([]byte, err
 	}
 }
 
-// TestShadowReadOnlyGuardHoldsForProductionFiles runs the same scanner
-// against every real production shadow_*.go file in this package directory
-// and fails with the exact violation evidence if any is found.
-func TestShadowReadOnlyGuardHoldsForProductionFiles(t *testing.T) {
-	files, err := productionShadowFiles(t)
-	if err != nil {
-		t.Fatalf("productionShadowFiles: %v", err)
-	}
-	if len(files) == 0 {
-		t.Fatal("no production shadow_*.go files found — guard has nothing to prove")
-	}
-	for _, file := range files {
-		t.Run(filepath.Base(file), func(t *testing.T) {
-			violations, err := scanShadowReadOnlySourceFile(file)
-			if err != nil {
-				t.Fatalf("scanShadowReadOnlySourceFile(%s): %v", file, err)
-			}
-			if len(violations) > 0 {
-				t.Fatalf("%s references mutation shapes: %v", file, violations)
-			}
-		})
-	}
-}
-
-// productionShadowFiles globs shadow_*.go in the package directory and
-// excludes _test.go files, which legitimately build real repositories to
-// exercise the resolver.
-func productionShadowFiles(t *testing.T) ([]string, error) {
-	t.Helper()
-	matches, err := filepath.Glob(filepath.Join(".", "shadow_*.go"))
-	if err != nil {
-		return nil, err
-	}
-	production := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if filepath.Ext(match) != ".go" {
-			continue
-		}
-		base := filepath.Base(match)
-		if len(base) >= len("_test.go") && base[len(base)-len("_test.go"):] == "_test.go" {
-			continue
-		}
-		production = append(production, match)
-	}
-	sort.Strings(production)
-	return production, nil
-}
+// TestShadowReadOnlyGuardHoldsForProductionFiles used to glob every real
+// production shadow_*.go file in this package directory (productionShadowFiles)
+// and re-run the scanner against each. Wave 7 S2a retired the last two
+// production shadow_*.go files (shadow_observer.go, shadow_authority_health.go)
+// -- the glob-and-scan test is retired alongside them, since it would
+// otherwise fail with "no production shadow_*.go files found" for having
+// nothing left to prove. The scanner itself (scanShadowReadOnlyTree /
+// scanShadowReadOnlySourceFile below) is NOT retired: it is reused verbatim
+// by candidate_readonly_guard_test.go (explicit file list, not a glob) and
+// by derived_observation_write_guard_test.go's shadowCallExprName helper --
+// both cover LIVE, retained production files and stay in this package
+// indefinitely.
 
 func scanShadowReadOnlySourceFile(path string) ([]string, error) {
 	fileSet := token.NewFileSet()

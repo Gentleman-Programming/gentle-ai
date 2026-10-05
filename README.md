@@ -1,426 +1,335 @@
+<!-- markdownlint-disable-next-line MD041 -->
+<a id="top"></a>
+
 <div align="center">
 
-<img width="3276" height="1280" alt="Gentle-AI neon rose banner" src="docs/assets/brand/gentle-ai-banner.png" />
+<img width="100%" alt="Gentle-AI neon rose banner: the rose blooms in, the GENTLE-AI wordmark is written on, and the tagline Ecosystem, Framework, Workflows appears" src="docs/assets/brand/gentle-ai-banner.gif" />
 
-<h1>Gentle-AI</h1>
+<h1>Gentle-AI™</h1>
 
-<p><strong>Gentle-AI — Ecosystem, Frameworks, Workflows for AI coding agents.</strong></p>
+<p><strong>The deterministic engineering environment for the AI agent you already use.</strong></p>
 
 <p>
-<a href="https://github.com/Gentleman-Programming/gentle-ai/releases"><img src="https://img.shields.io/github/v/release/Gentleman-Programming/gentle-ai" alt="Release"></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-<img src="https://img.shields.io/badge/Go-1.25.10+-00ADD8?logo=go&logoColor=white" alt="Go 1.25.10+">
-<img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platform">
+<a href="https://github.com/Gentleman-Programming/gentle-ai/releases"><img src="https://img.shields.io/github/v/release/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Release"></a>
+<a href="https://github.com/Gentleman-Programming/gentle-ai/stargazers"><img src="https://img.shields.io/github/stars/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Stars"></a>
+<img src="https://img.shields.io/badge/agents-17-F095C8?style=for-the-badge&labelColor=1A1218" alt="17 agents">
+<img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform">
+<a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
 </p>
+
+<p>
+<a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
+<a href="docs/quickstart.md"><strong>Quickstart</strong></a> &bull;
+<a href="docs/intended-usage.md"><strong>Docs</strong></a> &bull;
+<a href="https://gentle-ai-wiki.gentlemanprogramming.com/"><strong>Wiki</strong></a>
+</p>
+
+<br/>
+
+<p>
+Your agent writes code, then forgets everything. It has no opinion about your project,
+and no way to prove what it did beyond asking you to read every line.
+<strong>Gentle-AI gives it memory, a workflow, and evidence.</strong>
+</p>
+
+<p>
+ <h3>See it in action</h3>
+
+   <p>
+   One prompt, from idea to reviewed commit: memory, workflow, and evidence in a real session.
+   </p>
+
+https://github.com/user-attachments/assets/fa5c0cfe-06e7-4c0d-bd6e-8ac7cb934339
+
+
+   <p>Prefer Spanish subtitles?</p>
+   
+
+https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
+
+
+</p>
+
+<br/>
+
+<!--
+  HERO SLOT — the only animation on this page. Features is all still: four
+  diagrams for the concepts, two captures as proof the thing runs. Motion is
+  spent once, here, right after the pitch lands.
+
+  Uncomment when docs/assets/features/hero-pi.gif exists. It is a real-time capture
+  of the complete Pi startup: banner, extensions, skills and startup output, never
+  trimmed. A stripped startup does not look like the real thing.
+
+<img width="100%" src="docs/assets/features/hero-pi.gif" alt="Gentle-AI starting up inside Pi" />
+
+<br/>
+-->
+
+<sub><strong>If Gentle-AI made your agent worth trusting, a star helps other people find it.</strong></sub>
+
+<!--
+  sealed_token is a GitHub fine-grained token encrypted against Star History's
+  public key, so only the encrypted value is published here. It is required
+  because GitHub restricted the stargazers API to a repository's admins and
+  collaborators on 2026-06-30; without it the chart renders an error placeholder.
+  Regenerate it at https://www.star-history.com/?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left
+-->
+
+<a href="https://www.star-history.com/?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Gentleman-Programming%2Fgentle-ai&type=date&theme=dark&legend=top-left&sealed_token=zwrd_DfwYZeJU7nhGYNtREEheKWYEslW_uzrqORlZ36v-JSMepdqGLkKExp1M-xbNq6t-ebVS5iM3WoPDO26tXbSGkjXC2Jo3kHQ3uNzlRkCrWoqRHkPVQXvosKciY109ObiwGV1z8aajyedcloppmekCGrvVKJb6KWxGLXW_mHcRAVIBZUOa4SzW75D" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left&sealed_token=zwrd_DfwYZeJU7nhGYNtREEheKWYEslW_uzrqORlZ36v-JSMepdqGLkKExp1M-xbNq6t-ebVS5iM3WoPDO26tXbSGkjXC2Jo3kHQ3uNzlRkCrWoqRHkPVQXvosKciY109ObiwGV1z8aajyedcloppmekCGrvVKJb6KWxGLXW_mHcRAVIBZUOa4SzW75D" />
+    <img width="620" alt="Star History Chart" src="https://api.star-history.com/chart?repos=Gentleman-Programming%2Fgentle-ai&type=date&legend=top-left&sealed_token=zwrd_DfwYZeJU7nhGYNtREEheKWYEslW_uzrqORlZ36v-JSMepdqGLkKExp1M-xbNq6t-ebVS5iM3WoPDO26tXbSGkjXC2Jo3kHQ3uNzlRkCrWoqRHkPVQXvosKciY109ObiwGV1z8aajyedcloppmekCGrvVKJb6KWxGLXW_mHcRAVIBZUOa4SzW75D" />
+  </picture>
+</a>
+
+<br/>
+
+<sub><strong>WORKS WITH THE AGENT YOU ALREADY HAVE</strong></sub>
+
+<strong><a href="docs/agents.md#pi">Pi</a></strong> ·
+<strong><a href="docs/agents.md#opencode">OpenCode</a></strong> ·
+<strong><a href="docs/agents.md#claude-code">Claude Code</a></strong> ·
+<strong><a href="docs/agents.md#codex">Codex</a></strong> ·
+<strong><a href="docs/agents.md#cursor">Cursor</a></strong> ·
+<strong><a href="docs/agents.md#vs-code-copilot">VS Code Copilot</a></strong> ·
+<strong><a href="docs/agents.md#gemini-cli">Gemini CLI</a></strong> ·
+<strong><a href="docs/agents.md#kilo-code">Kilo Code</a></strong><br/>
+<strong><a href="docs/agents.md#kimi-code">Kimi Code</a></strong> ·
+<strong><a href="docs/agents.md#kiro-ide">Kiro IDE</a></strong> ·
+<strong><a href="docs/agents.md#qwen-code">Qwen Code</a></strong> ·
+<strong><a href="docs/agents.md#hermes">Hermes</a></strong> ·
+<strong><a href="docs/agents.md#antigravity">Antigravity</a></strong> ·
+<strong><a href="docs/agents.md#windsurf">Windsurf</a></strong> ·
+<strong><a href="docs/agents.md#openclaw">OpenClaw</a></strong> ·
+<strong><a href="docs/agents.md#trae">Trae</a></strong> ·
+<strong><a href="docs/agents.md#conductor">Conductor</a></strong>
+
+<sub>17 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
 
 </div>
 
----
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
-> [!IMPORTANT]
-> **Receipt-Driven Development (RDD) is the supported stable path** as of `v2.2.0`. It started in `v1.47.0` and became stable once the outcome-first workflow was restored: small work stays direct, broader implementation is delegated, SDD stays optional, and every route converges on structural proof, bounded review, an exact receipt, and delivery authorization.
->
-> Install the latest release:
-> ```bash
-> go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-> ```
-> Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
->
-> Note the `/v2` suffix: Go requires it for major version 2 and above. Releases before `v2.0.0` use the unsuffixed import path.
-
-## What It Does
-
-Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is an **ecosystem configurator** that equips the AI coding agent(s) you already use with persistent memory, Spec-Driven Development (SDD), curated skills, MCP servers, model routing, a teaching-oriented persona, and bounded native review.
-
-**Before**: "I installed Claude Code / OpenCode / Cursor, but it's just a chatbot that writes code."
-
-**After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
-
-### Supported Agent Integrations
-
-| Agent               |         Delegation Model         | Key Feature                                                     |
-| ------------------- | :------------------------------: | --------------------------------------------------------------- |
-| **Claude Code**     |         Full (Task tool)         | Sub-agents, output styles                                       |
-| **OpenCode**        |    Full (multi-mode overlay)     | Per-phase model routing                                         |
-| **Kilo Code**       |    Full (multi-mode overlay)     | OpenCode-compatible config in `~/.config/kilo`                  |
-| **Gemini CLI**      |       Full (experimental)        | Custom agents in `~/.gemini/agents/`                            |
-| **Cursor**          |     Full (native subagents)      | 10 SDD agents in `~/.cursor/agents/`                            |
-| **VS Code Copilot** |        Full (runSubagent)        | Parallel execution                                              |
-| **Codex**           |            Solo-agent            | CLI-native, TOML config                                         |
-| **Windsurf**        |            Solo-agent            | Plan Mode, Code Mode, native workflows                          |
-| **Antigravity**     |   Solo-agent + Mission Control   | Built-in Browser/Terminal sub-agents                            |
-| **Kimi Code**       |   Full (native custom agents)    | Modular prompt templates in `~/.kimi`                           |
-| **Kiro IDE**        |     Full (native subagents)      | Native `~/.kiro/agents/` + steering orchestration               |
-| **Qwen Code**       |     Full (native sub-agents)     | Slash commands, `~/.qwen/commands/`, `auto_edit` mode           |
-| **OpenClaw**        |            Solo-agent            | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config  |
-| **Trae**            |            Solo-agent            | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
-| **Pi**              | Full (package-managed subagents) | First-class `gentle-pi` harness with Pi-native persona/models, SDD, and Engram memory |
-| **Hermes**          |         Detect-only              | YAML MCP config, SOUL.md persona; install manually first        |
-
-> **Pi is package-managed, not just configured.** Selecting Pi installs the first-class [`gentle-pi`](docs/pi.md) harness, which owns Pi-native persona and model controls, SDD assets, chains, and memory wiring.
-
-> **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
-
-### Organic Routing and Review Boundaries
-
-Every configured agent receives the same outcome-first routing, even when the optional SDD component is not selected. Ask for the outcome; the agent uses exactly one implementation route and reviews the candidate only after implementation.
-
-| Situation | Expected behavior |
-| --- | --- |
-| Understanding needs 1-3 files, or one mechanical file change is already understood | Keep the bounded action direct and inline. |
-| Understanding needs 4+ files, reading prepares a write, broad research is needed, or a writer changes 2+ non-trivial files | Delegate the narrow exploration or one focused writer without creating SDD state. |
-| Durable proposal, spec, design, and task artifacts would materially reduce substantial ambiguity | Offer optional SDD; select it only after an explicit request or an accepted proposal. |
-| A candidate is ready for review | Freeze the exact bytes and derive review effort from evidence, never size alone. Interactive starts ask once per clone before reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and report how to disable review mode. |
-| Commit, push, PR, or release | Validate the same content-bound receipt at the applicable delivery gate; never silently reopen review or create another budget. |
-| Scope changes or an operation is interrupted | Use provider-owned status, recovery, and reconciliation; do not infer authority or replay safety from narration. |
-
-Implementation routing does not decide review strength, and per-action test, build, install, or review workers do not change the selected route. Native commands own repository identity, candidate scope, lifecycle transitions, receipts, and safe continuations. See [Organic Implementation Routing](docs/trigger-rules.md), the [Organic RDD architecture](docs/architecture/organic-rdd.md), and the [review authority threat model](docs/review-authority-threat-model.md).
+## Features
 
 ---
 
-## Quick Start
+### Engram™ — Keep your project context
 
-### Install (recommended)
+<img width="100%" src="docs/assets/diagrams/engram-memory.svg" alt="Three work sessions separated by a restart and by context compaction. Each break cuts the session layer but stops at the memory layer underneath. The first session saves a decision, the next one asks memory before asking you, and weeks later the same question is answered from memory instead of by re-reading the repository." />
 
-> [!NOTE]
-> `gentle-ai install` requires Node.js 18+ and npm on every platform (it warns if either is missing). See [Prerequisites](docs/quickstart.md#prerequisites) for your distro's install hint.
+The cost of a fresh session is not the tokens — it is you, re-explaining the same decisions every morning. Engram removes that: your agent writes down what it learns as it goes and reaches for it before it reaches for you, so context accumulates instead of resetting.
 
-**macOS / Linux**
+**[Docs →](docs/engram.md)**
+
+---
+
+### ODD — Keep small work small
+
+<img width="100%" src="docs/assets/diagrams/odd-cycle.svg" alt="ODD authorizes and understands a request. Read-only work ends separately; authorized work stays lightweight when small or keeps a recoverable record when substantial, then is implemented, checked, and closed." />
+
+Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan.
+
+**[Docs →](docs/usage.md#organic-driven-development-odd)**
+
+---
+
+### Test-first by default — Prove each requested rule
+
+ODD applies test-first development by default when a relevant runnable test and a clear expected outcome exist: capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. Each requested rule gets one RED test, each touched existing command or option gets one test proving its previous behavior still holds, and nothing else is padded in. Without a meaningful runnable test, the agent explains the exception and runs applicable functional checks anyway.
+
+**[Docs →](docs/usage.md#organic-driven-development-odd)**
+
+---
+
+### RDD — Check finished work at the right depth
+
+<img width="100%" src="docs/assets/diagrams/rdd-review.svg" alt="How RDD checks a finished change. The exact change is frozen to a lineage, revision and target, then a read-only risk assessment picks the depth: passive gets a structural readback with zero reviewer lenses, medium gets one focused lens, high gets the canonical 4R — Risk, Resilience, Readability and Reliability. At most one bounded correction is allowed, and one exact acknowledgement closes the transaction. Delivery stays human-owned." />
+
+Receipt-Driven Development (RDD) is on by default and opt-out: run `gentle-ai review mode disable` to turn it off. Explicit global or clone-local OFF choices remain OFF. Its point is that a review cannot drift: the candidate is frozen before anything reads it, so the evidence belongs to the exact version you are about to rely on — not to whatever the worktree looked like a moment later. The depth comes from that frozen candidate rather than from the model's judgment, and the result is informational. Commit, push and release stay your call.
+
+**[Docs →](docs/review-integration.md)**
+
+---
+
+### Deterministic by design — Know the next valid step
+
+<img width="100%" src="docs/assets/diagrams/deterministic.svg" alt="A different agent, a different model and a brand-new session all converge on the gentle-ai binary. It reads the change state from files on disk and returns the only valid next transition, so no model votes on what comes next. The answer is always one of four public states: Working, Checking, Ready, or Needs your decision." />
+
+A model that guesses the next step guesses differently tomorrow, and differently again for your teammate. That is the gap between a workflow and a suggestion. The **`gentle-ai` binary** owns native RDD review transitions; ODD guidance keeps ordinary work proportional to the request. Review evidence is bound to the candidate rather than a model's recollection.
+
+**[Docs →](docs/trigger-rules.md)**
+
+---
+
+### Gentle Shell — A complete workspace for Pi
+
+<img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle Shell development workspace with the todo list and live context and spend information" />
+
+Gentle Shell is a separate Pi integration package. Gentle AI configures supported agents; Gentle Shell owns its own Pi runtime, agents, and interface. Installing or updating this binary does not itself establish Pi behavior parity.
+
+**[Docs →](docs/pi.md)**
+
+---
+
+### 17 agents — Keep the agent you already use
+
+<img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
+
+Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and thirteen more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
+
+**[Docs →](docs/agents.md)**
+
+---
+
+### Also in the box
+
+| Component | What it does |
+| :--- | :--- |
+| **Skills library** | Loaded automatically when the task matches |
+| **Context7 MCP** | Optional, selectable live framework and library documentation |
+| **CodeGraph** | Read-only symbol graph of your codebase |
+| **Security deny-list** | Blocks `~/.ssh`, `.env` and credential files |
+| **Config backups** | Snapshotted before every single write |
+| **Doctor** | `gentle-ai doctor` — read-only health report |
+| **Personas** | Optional personas; Gentleman is a caring but rigorous mentor who guides you toward your goal |
+| **Themes** | Gentleman and Gentleman-Cute |
+| **Model assignment** | Configure supported agent and review-role models where available |
+
+> **Every component, skill and preset: [Full breakdown →](docs/components.md)**
+
+<div align="right"><a href="#top">Back to top</a></div>
+
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+
+## Get started
 
 ```bash
+# macOS (Homebrew)
+brew install gentleman-programming/tap/gentle-ai
+
+# macOS / Linux (curl)
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
+
+# Windows (PowerShell) — source install of the latest release, needs Go 1.25.10+
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0
 ```
-
-**Windows (PowerShell)**
-
-```powershell
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-```
-
-> [!WARNING]
-> Windows source builds and CI/runtime tests remain supported, but official Windows binary distribution and Scoop are temporarily unavailable. Windows installation and upgrades require Go 1.25.10+ and fail closed to source-install guidance; they never download an unsigned Gentle AI executable or execute a remote update script.
-
-### Configure project context
-
-Once your agents are configured, open your AI agent in a project and run these two commands to register the project context:
-
-| Command                            | What it does                                                                | When to re-run                                                                 |
-| ---------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `/sdd-init`                        | Detects stack, testing capabilities, activates Strict TDD Mode if available | When your project adds/removes test frameworks, or first time in a new project |
-| `gentle-ai skill-registry refresh` | Scans installed skills and project conventions, builds the registry         | After installing/removing skills, or first time in a new project               |
-
-These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Codex, Claude Code, OpenCode, and Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
-
-Run `gentle-ai doctor` at any time for a read-only health check of your ecosystem (tool binaries, `state.json`, Engram reachability, disk space).
-
-<details>
-<summary><strong>Alternative install and scope options</strong></summary>
-
-**Homebrew (macOS / Linux)**
 
 ```bash
-brew tap Gentleman-Programming/homebrew-tap
-brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebrew tap trust
-brew install gentle-ai
+gentle-ai          # pick your agents, components and persona
+gentle-ai doctor   # verify — read-only, changes nothing
 ```
 
-**Go install (any platform with Go 1.25.10+)**
+Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
-```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-```
+> **Beta channel and per-distro prerequisites: [Quickstart →](docs/quickstart.md) · Signature verification: [Release signing →](docs/release-signing.md#user-verification)**
 
-Note the `/v2` in the module path: Go requires it for major version 2 and
-above. Releases before `v2.0.0` use the unsuffixed path.
+<div align="right"><a href="#top">Back to top</a></div>
 
-**Scoop (Windows)** — temporarily unavailable while official Windows binary distribution is held for public-trust Authenticode signing. Use the Windows `go install` command above.
-
-By default, `gentle-ai install` writes agent-scoped files to each selected agent's global config directory. To keep the Gentleman stack isolated to one project, run:
-
-```bash
-gentle-ai install --scope=workspace
-```
-
-Workspace scope applies to selected agents for agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations remain global by design.
-
-**Beta channel** — use only to test unreleased `main` builds. It requires Go 1.25.10+:
-
-```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
-
-# Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
-```
-
-### RDD version policy
-
-Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions, and became the supported stable path in `v2.2.0`. The negotiated public review contract was published in `v2.1.6`.
-
-Use `@latest` for the current release. Use `@main` only when you explicitly want unreleased development changes.
-
-**Latest release**
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-gentle-ai version
-```
-
-**Unreleased `main`**
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
-gentle-ai version
-```
-
-**Unreleased RDD development build (`main`)**
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
-gentle-ai version
-```
-
-The managed installer tracks the channel's latest version and does not accept an arbitrary release pin. Use `go install` when reproducibility requires an exact version.
-
-</details>
-
----
-
-## Core Workflow
-
-1. **Install and configure.** Run the installer, select the agents and components you want, then open your agent in a project.
-2. **Use the smallest implementation route.** Keep bounded work direct, delegate actions that need fresh context, and use SDD only after an explicit request or an accepted proposal. SDD artifacts can live in **Engram** for cross-session memory, **OpenSpec** for versioned files, or **hybrid** for both.
-3. **Build with discipline.** `/sdd-init` detects project testing capabilities; when Strict TDD is active, SDD apply works test-first. SDD verify audits RED/GREEN evidence and runs verification. Agents that support delegation use focused subagents instead of one growing conversation.
-4. **Review one candidate.** After implementation, bounded native review freezes the candidate and issues one content-bound receipt. Commit, push, and PR validate that same receipt. Releases validate native authority and its receipt, unless the protected-main fast path has the exact tag/current `origin/main` SHA, exact-SHA successful CI, a remote-head recheck, and no fresh risk.
-
-> **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native authority and delivery gates independently derive what may be trusted.
-
-5. **Upgrade, then sync.** Refresh the binary and the managed agent assets together:
-
-   ```bash
-   gentle-ai upgrade
-   gentle-ai sync
-   ```
-
-### The flow at a glance
-
-Both implementation routes converge on RDD: a bounded native review freezes the candidate and issues the one receipt that every delivery gate validates — review is never reopened for unchanged content.
-
-**Organic route (no SDD)** — the agent picks the smallest useful route and RDD enters at the end, over the frozen candidate:
-
-```mermaid
-flowchart TD
-    A["User requests a change<br/>(Claude Code · OpenCode · Codex...)"] --> B{"Implementation<br/>route"}
-    B -->|"decide/verify<br/>1–3 files"| C["Direct inline"]
-    B -->|"4+ file exploration<br/>or 2+ non-trivial writes"| D["Delegated direct<br/>(one bounded worker)"]
-    C --> E["Implementation + tests"]
-    D --> E
-    E --> F{"RDD enabled?<br/>(user-owned kill switch)"}
-    F -->|"off"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
-    F -->|"on"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
-    G --> H{"Risk frozen<br/>at START"}
-    H -->|"low"| I["Structural readback<br/>0 lenses · silent"]
-    H -->|"standard"| J["1 focus lens<br/>+ consent"]
-    H -->|"high"| K["Canonical 4R + consent + forecast<br/>Risk · Readability · Reliability · Resilience"]
-    J --> L["Reviewers inspect the immutable candidate<br/>(review inspect-candidate)"]
-    K --> L
-    L --> M{"Severe candidate-caused<br/>findings?"}
-    I --> N["Receipt: approved"]
-    M -->|"no"| N
-    M -->|"yes"| O["One bounded correction<br/>(frozen budget)"]
-    O --> P["Fix validator<br/>(read-only, immutable trees)"]
-    P -->|"passes"| N
-    P -->|"fails with evidence"| Q["Escalated"]
-    P -->|"no access to the diff"| R["Inconclusive: attempt not<br/>consumed, capture again"]
-    R --> P
-    Q --> S["review recover<br/>(authorized successor)"]
-    N --> T["Delivery gates<br/>pre-commit → pre-push → pre-pr<br/>validate the SAME receipt"]
-    T --> U["Commit → Push → PR"]
-    Z --> U
-
-    style N fill:#2D4F67,color:#fff
-    style Q fill:#B8860B,color:#fff
-    style U fill:#2D4F67,color:#fff
-```
-
-**SDD route** — durable planning artifacts first, then apply, with RDD reviewing the candidate before verify and archive requiring the receipt:
-
-```mermaid
-flowchart TD
-    A["User: sdd-new / sdd-explore<br/>(or sdd-ff to fast-forward planning)"] --> B["Explore<br/>investigate codebase and approaches"]
-    B --> C["Propose<br/>intent · scope · approach"]
-    C --> D{"User approves<br/>the proposal?"}
-    D -->|"no"| B
-    D -->|"yes"| E["Spec<br/>requirements + scenarios"]
-    E --> F["Design<br/>architecture decisions"]
-    F --> G["Tasks<br/>ordered deliverable checklist"]
-    G --> H["Apply<br/>sub-agent implements against specs<br/>(sdd-attempt acquire/settle · CAS · budgets)"]
-    H --> I["RDD over the frozen candidate"]
-
-    subgraph RDD["RDD — same machine as the organic route"]
-        I --> J{"Risk"}
-        J -->|"low"| K["Structural readback"]
-        J -->|"standard / high"| L["1 lens or 4R + consent"]
-        L --> M{"Severe findings?"}
-        M -->|"yes"| N["One bounded correction<br/>+ fix validator"]
-        M -->|"no"| O["Receipt: approved"]
-        K --> O
-        N -->|"validates"| O
-        N -->|"fails"| P["Escalated → recover"]
-    end
-
-    O --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
-    Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle<br/>(requires reviewGate allow or disabled)"]
-    Q -->|"fails"| H
-    R --> S["Delivery gates<br/>validate the same receipt"]
-    S --> T["Commit → Push → PR"]
-
-    style O fill:#2D4F67,color:#fff
-    style P fill:#B8860B,color:#fff
-    style T fill:#2D4F67,color:#fff
-```
-
-Size, file count, or perceived risk never select SDD on their own — only an explicit request or an accepted proposal does. Either way, one candidate gets one review, one possible correction, and one receipt.
-
-### Control receipt-driven development
-
-Review mode is user-owned and available independently of the review lifecycle:
-
-```bash
-gentle-ai review mode status --cwd .
-gentle-ai review mode disable --cwd .
-gentle-ai review mode enable --cwd .
-```
-
-`status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
-
-SDD closes cleanly under a disabled switch as of `v2.2.2`: pre-verify no longer routes to a review that `review start` would refuse, and archive accepts `reviewGate.delivery: disabled/unmanaged` instead of demanding a receipt that cannot be produced.
-
-### Release verification
-
-Official macOS and Linux release archives require an authenticated `checksums.txt`. The built-in upgrader verifies its Minisign signature, its exact `Gentleman-Programming/gentle-ai` + release-tag binding, and the selected archive checksum **before** replacing the installed binary. Release archives are capped at **128 MiB**, including chunked or unknown-length responses. Missing, oversized, malformed, untrusted, or placeholder key material fails closed without changing the installed binary.
-
-To verify a release manually, obtain the production public-key payload and fingerprint from a maintainer-controlled channel, then download `checksums.txt` and `checksums.txt.minisig` from the same release:
-
-```bash
-minisign -VQm checksums.txt -x checksums.txt.minisig -P "$GENTLE_AI_MINISIGN_PUBLIC_KEY"
-# Expected output: repo=Gentleman-Programming/gentle-ai;tag=vX.Y.Z
-sha256sum --check --strict --ignore-missing checksums.txt
-```
-
-Do not bootstrap trust from a public key downloaded only beside the artifacts it verifies. See [Release signing and key rotation](docs/release-signing.md) for the first-signed-release procedure, exact CI injection points, and rotation runbook.
-
-Windows archives and Scoop publication remain omitted until publicly trusted RSA Authenticode signing is provisioned (prefer managed OIDC with Azure Artifact Signing), both amd64 and arm64 executables are signed before archive and checksum generation, and release verification fails if either executable is unsigned.
-
-### Review a focused staged candidate
-
-For a monorepo or shared worktree, explicitly review exactly what is in the Git index:
-
-```bash
-git add apps/my-service
-git diff --cached
-gentle-ai review start --projection staged
-```
-
-The staged projection freezes the **complete existing index**, including all previously staged paths. It starts review but does not itself issue an approved receipt; unstaged and untracked worktree content is excluded. The default `workspace` projection remains the complete workspace review, and an existing authority is never auto-converted between projections. See the [review authority threat model](docs/review-authority-threat-model.md) for delivery and base-ref details.
-
-### Backups
-
-Every install, sync, and upgrade automatically snapshots your config files. Backups are **compressed** (tar.gz), **deduplicated** (identical configs are not re-backed up), and **auto-pruned** (keeps the 5 most recent). Pin important backups via the TUI (`p` key) to protect them from pruning.
-
-See [Backup & Rollback Guide](docs/rollback.md) for details.
-
----
-
-## Key Features You Should Know About
-
-### OpenCode SDD Profiles
-
-Assign different AI models to different SDD phases -- a powerful model for design, a fast one for implementation, a cheap one for exploration. OpenCode uses **`gentle-orchestrator`** as the base SDD conductor, and generated named profiles still appear as `sdd-orchestrator-{name}` entries.
-
-```bash
-# Via CLI
-gentle-ai sync --profile cheap:openrouter/qwen/qwen3-30b-a3b:free
-gentle-ai sync --profile-phase cheap:sdd-design:anthropic/claude-sonnet-4-20250514
-
-# Or via TUI: gentle-ai → "OpenCode SDD Profiles" → Create
-```
-
-After creating a profile, open OpenCode and press **Tab** to switch between `gentle-orchestrator` (default) and your custom profiles.
-
-| What you need         | Use this                                                        |
-| --------------------- | --------------------------------------------------------------- |
-| Default SDD conductor | `gentle-orchestrator`                                           |
-| Legacy configs        | `sdd-orchestrator` is migrated to `gentle-orchestrator` on sync |
-| Named model profiles  | `sdd-orchestrator-cheap`, `sdd-orchestrator-premium`, etc.      |
-
-**Full guide**: [OpenCode SDD Profiles](docs/opencode-profiles.md)
-
-### Engram (Persistent Memory)
-
-Your AI agent automatically remembers decisions, bugs, and context across sessions. You don't need to do anything -- but when you do:
-
-```bash
-engram projects list          # See all projects with memory counts
-engram projects consolidate   # Fix name drift ("my-app" vs "My-App")
-engram search "auth bug"      # Find a past decision from the terminal
-engram tui                    # Visual memory browser
-```
-
-**Full reference**: [Engram Commands](docs/engram.md)
-
----
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
 ## Documentation
 
-| Your task | Start here |
-| --- | --- |
-| Understand the Gentle-AI mental model | [Intended Usage](docs/intended-usage.md) |
-| Choose direct, delegated, or optional SDD routing | [Organic Implementation Routing](docs/trigger-rules.md) |
-| Plan substantial work with SDD | [Intended Usage](docs/intended-usage.md) and [OpenSpec Config](docs/openspec-config.md) |
-| Configure a supported agent | [Agents](docs/agents.md) for the feature matrix and per-agent notes |
-| Use the Pi package harness | [Pi Agent](docs/pi.md) for packages, Pi-native commands, models, and troubleshooting |
-| Configure OpenCode phase models | [OpenCode SDD Profiles](docs/opencode-profiles.md) |
-| Review or deliver a change safely | [Review Integration Contract](docs/review-integration.md) for provider consumers; [Review Authority Threat Model](docs/review-authority-threat-model.md) for technical boundaries; [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) for the mental model |
-| Find or share persistent context | [Engram Commands](docs/engram.md) |
-| Refresh or troubleshoot an installation | [Usage](docs/usage.md), [Backup & Rollback](docs/rollback.md), and [Platforms](docs/platforms.md) |
-| Extend or contribute to Gentle AI | [Codebase Guide](docs/CODEBASE-GUIDE.md), [Components, Skills & Presets](docs/components.md), [Skill Registry](docs/skill-registry.md), and [Architecture & Development](docs/architecture.md) |
-| Understand how agent behavior is tested | [Testing Agents Deterministically](docs/testing-agents-deterministically.md) for the real-agent E2E and its model fixture |
+| Where to go | What you'll find |
+| :--- | :--- |
+| **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
+| **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
+| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 17 |
+| **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct and delegated work |
+| **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
+| **[Engram](docs/engram.md)** · **[Components](docs/components.md)** | Memory commands, skills, presets and personas |
+| **[Contributing](CONTRIBUTING.md)** · **[Codebase Guide](docs/CODEBASE-GUIDE.md)** | Extend or contribute |
+| **[Telemetry](docs/telemetry.md)** | What we count, and how to turn it off |
 
----
+<div align="right"><a href="#top">Back to top</a></div>
 
-## Community Highlights
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
-This project gets better when the community builds on top of it.
+## Community
 
-### Community Integrations
+Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, approved and unclaimed — pick one and it's yours.
 
-- [sub-agent-statusline](https://github.com/Joaquinvesapa/sub-agent-statusline) — optional OpenCode TUI plugin that shows sub-agent activity, status, elapsed time, and token/context usage when OpenCode exposes it.
-- [sdd-engram-plugin](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin) — optional OpenCode TUI plugin to manage SDD profiles and browse Engram memories directly from OpenCode, with runtime profile activation and no restart required.
+<div align="center">
 
-When you select OpenCode in the installer, Gentle-AI asks whether to register each community plugin and offers a browser shortcut to review the repository first. Gentle-AI only ensures `~/.config/opencode/tui.json` exists and adds the plugin package names to its `plugin` array; OpenCode installs/loads those packages the next time it starts. Once OpenCode has materialized a plugin under `~/.config/opencode/node_modules/`, `gentle-ai update` can compare its local `package.json` version with the plugin's GitHub releases.
+<a href="docs/community-roadmap.md"><img src="https://img.shields.io/badge/Community%20Roadmap-F095C8?style=for-the-badge&labelColor=1A1218&logo=readthedocs&logoColor=F095C8" alt="Community Roadmap"></a>
+<a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributing%20Guide-F095C8?style=for-the-badge&labelColor=1A1218&logo=git&logoColor=F095C8" alt="Contributing Guide"></a>
+<a href="CONTRIBUTORS.md"><img src="https://img.shields.io/badge/Contributors-D7A0B8?style=for-the-badge&labelColor=1A1218&logo=github&logoColor=D7A0B8" alt="Contributors"></a>
 
-### Contributors
+<br/><br/>
 
-This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
-
-<a href="https://github.com/Gentleman-Programming/gentle-ai/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai" />
+<a href="CONTRIBUTORS.md">
+  <img width="100%" src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai&columns=16" alt="Gentle-AI contributors" />
 </a>
 
----
+<p><sub>This project exists because of these people.</sub></p>
 
-## Next Steps
+</div>
 
-- **Just installed?** Read [Intended Usage](docs/intended-usage.md) for the mental model, then run `gentle-ai doctor` if anything looks wrong.
-- **Starting work?** Read [Organic Implementation Routing](docs/trigger-rules.md) to understand direct, delegated, and optional SDD behavior.
-- **Reviewing a focused change?** Start with the [Organic RDD architecture](docs/architecture/organic-rdd.md) and [review authority threat model](docs/review-authority-threat-model.md).
-- **Maintaining Gentle AI?** Use the [Codebase Guide](docs/CODEBASE-GUIDE.md) to find package ownership and review boundaries.
-- **Using Pi?** Read [Pi Agent](docs/pi.md) for the `gentle-pi` harness, Pi commands, persona, and model assignments.
-- **Ready to contribute?** Start at the [Community Roadmap](docs/community-roadmap.md) — everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, approved and unclaimed. Then read [CONTRIBUTING.md](CONTRIBUTING.md).
+<div align="right"><a href="#top">Back to top</a></div>
+
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+
+## Built with Gentle-AI
+
+Shipped something with Gentle-AI? Wear the rose. Paste this into your README and the badge links back here:
+
+<div align="center">
+
+<a href="https://github.com/Gentleman-Programming/gentle-ai">
+  <img width="280" src="docs/assets/brand/built-with-gentle-ai.png" alt="Built with Gentle-AI" />
+</a>
+
+</div>
+
+```html
+<a href="https://github.com/Gentleman-Programming/gentle-ai">
+  <img width="220" src="https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png" alt="Built with Gentle-AI" />
+</a>
+```
+
+Prefer plain Markdown?
+
+```markdown
+[![Built with Gentle-AI](https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png)](https://github.com/Gentleman-Programming/gentle-ai)
+```
+
+Keep the image URL exactly as shown — it is how I find and feature the projects that carry the badge.
+
+<div align="right"><a href="#top">Back to top</a></div>
+
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+
+## About the author
+
+Built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming): 15 years of enterprise architecture, a community of thousands of developers testing these tools daily, and one rule for AI-assisted work — **verifying beats generating**.
+
+Teams adopting AI and finding it isn't working — resistance, everyone prompting their own way, no shared quality bar — can reach out about **[engagements built on these same open-source tools →](docs/consulting.md)**.
+
+<div align="center">
+
+<a href="https://gentlemanprogramming.com/"><img src="https://img.shields.io/badge/Website-F095C8?style=for-the-badge&labelColor=1A1218&logo=googlechrome&logoColor=F095C8" alt="Website"></a>
+<a href="https://www.youtube.com/@GentlemanProgramming"><img src="https://img.shields.io/badge/YouTube-F095C8?style=for-the-badge&labelColor=1A1218&logo=youtube&logoColor=F095C8" alt="YouTube"></a>
+<a href="https://github.com/Gentleman-Programming"><img src="https://img.shields.io/badge/GitHub-D7A0B8?style=for-the-badge&labelColor=1A1218&logo=github&logoColor=D7A0B8" alt="GitHub"></a>
+<a href="mailto:gentleman@ohmybitz.com"><img src="https://img.shields.io/badge/Email-D7A0B8?style=for-the-badge&labelColor=1A1218&logo=maildotru&logoColor=D7A0B8" alt="Email"></a>
+
+</div>
 
 ---
 
 <div align="center">
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+
+<img src="docs/assets/brand/rose.png" width="56" alt="" />
+
+<br/>
+
+<h3>Gentle-AI is crafted with Gentle-AI</h3>
+
+<br/><br/>
+
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-F095C8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
+
 </div>
+
+> **Trademark notice:** The Gentle AI™ and Engram™ names and logos are trademarks of Alan Buscaglia. Both marks are used throughout this document; the symbol appears on the first prominent mention of each, and this notice covers the rest. The MIT License applies to the code; it does not permit implying endorsement or official affiliation. See [TRADEMARKS.md](TRADEMARKS.md).

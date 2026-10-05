@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 )
 
 // RestoreFunc is the function signature for restoring a backup from its manifest.
@@ -18,39 +18,49 @@ type RestoreFunc func(manifest backup.Manifest) error
 // RunRestore is the top-level entry point for `gentle-ai restore [args]`.
 // It reads backups from the real home directory and uses the default restore function.
 func RunRestore(args []string, stdout io.Writer) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
 	restorer := defaultRestorer()
-	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, osUserHomeDir)
 }
 
 // RunRestoreWithFn is the testable variant of RunRestore. It uses the provided
 // RestoreFunc and reads backups from the HOME environment variable (set by tests).
 func RunRestoreWithFn(args []string, restorer RestoreFunc, stdout io.Writer) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, osUserHomeDir)
 }
 
 // RunRestoreWithFnAndInput is the fully injectable variant used in tests that
 // need to simulate stdin input (e.g. testing confirmation prompts).
 func RunRestoreWithFnAndInput(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	return runRestoreWithHomeDir(args, restorer, stdout, stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, stdin, osUserHomeDir)
 }
 
-// runRestoreWithHomeDir is the internal implementation.
-func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, homeDir string) error {
+// newRestoreFlagSet builds the flag set used to answer help requests and to
+// report unknown flags with the same derived usage. The custom Usage adds the
+// positional backup-selection syntax the flag package cannot derive from the
+// registrations; PrintDefaults keeps the flag descriptions derived from them.
+func newRestoreFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	// Descriptions are what the derived usage shows the operator,
+	// so they are the documentation rather than a placeholder.
+	_ = fs.Bool("list", false, "list available backups without restoring")
+	_ = fs.Bool("yes", false, "skip confirmation prompt")
+	fs.Usage = func() {
+		// Keep the "Usage of " prefix: derivedUsageText strips everything
+		// before it, so the flag package's duplicated error line is not
+		// reported twice alongside the custom block.
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fmt.Fprintln(fs.Output(), "  gentle-ai restore [--list | latest | <id>] [--yes]")
+		fs.PrintDefaults()
+	}
+	return fs
+}
+
+// runRestoreWithHomeDir is the internal implementation. The home directory is
+// resolved lazily via resolveHome, after the argument pre-scan: an explicit
+// help request or an unknown flag must be answered before any attempt to
+// resolve the home directory, so `restore --help` works even on hosts where
+// the home directory cannot be resolved.
+func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, resolveHome func() (string, error)) error {
 	// Pre-scan for --yes/-y and --list flags before standard flag parsing,
 	// because positional arguments (e.g. `restore backup-001 --yes`) appear
 	// before flags in the args slice and flag.FlagSet stops parsing at the
@@ -68,17 +78,27 @@ func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer
 		default:
 			if strings.HasPrefix(a, "-") {
 				// Unknown flag — surface error via flag.FlagSet for consistent messages.
-				fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-				fs.SetOutput(ioDiscard{})
-				_ = fs.Bool("list", false, "")
-				_ = fs.Bool("yes", false, "")
-				if err := fs.Parse(args); err != nil {
+				fs := newRestoreFlagSet()
+				// Parse only the flag actually detected. flag.Parse stops at
+				// the first non-flag token, so handing it the full args slice
+				// makes `restore <backup> --anything` return nil: the unknown
+				// flag is swallowed and the help request never seen.
+				if err := parseCommandFlags(fs, []string{a}); err != nil {
+					if writeHelpRequest(err, stdout) == nil {
+						return nil
+					}
 					return fmt.Errorf("parse restore flags: %w", err)
 				}
 				return nil
 			}
 			positional = append(positional, a)
 		}
+	}
+
+	// Resolve the home directory only once the request is known to need it.
+	homeDir, err := resolveHome()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
 	// Load backups from the real backup directory.

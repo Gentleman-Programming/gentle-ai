@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 func DependencyTreeOptions() []string {
@@ -97,12 +97,8 @@ func piInstallCommands() []string {
 	return []string{
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
 		"npm exec --yes --package gentle-engram@latest -- pi-engram init",
-		"pi install npm:pi-subagents-j0k3r",
-		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",
-		"pi install npm:@juicesharp/rpiv-todo",
 		"pi install npm:pi-btw",
 	}
 }

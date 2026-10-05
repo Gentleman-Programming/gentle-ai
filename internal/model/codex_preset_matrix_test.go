@@ -2,7 +2,7 @@ package model
 
 import "testing"
 
-// The maintainer's preset matrix. Sol reasons, Terra writes, Luna transcribes:
+// The maintainer's preset matrix. Astra/Sol reason, Sol/Luna write, Luna transcribes:
 // strong lanes receive blobs and reason over delivered context, mid lanes write
 // code in an agentic loop where effort dominates, cheap lanes do structured
 // transcription where cost per task dominates.
@@ -16,24 +16,24 @@ func TestCodexPresetMatrixMatchesTheMaintainerTable(t *testing.T) {
 	}{
 		{
 			preset:       CodexPresetLowCost,
-			orchestrator: CodexCarrilDefault{Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-			strong:       CodexCarrilDefault{Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-			mid:          CodexCarrilDefault{Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-			cheap:        CodexCarrilDefault{Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+			orchestrator: CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+			strong:       CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+			mid:          CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+			cheap:        CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 		},
 		{
 			preset:       CodexPresetRecommended,
-			orchestrator: CodexCarrilDefault{Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-			strong:       CodexCarrilDefault{Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-			mid:          CodexCarrilDefault{Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
-			cheap:        CodexCarrilDefault{Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+			orchestrator: CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+			strong:       CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+			mid:          CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+			cheap:        CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 		},
 		{
 			preset:       CodexPresetPowerful,
-			orchestrator: CodexCarrilDefault{Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-			strong:       CodexCarrilDefault{Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
-			mid:          CodexCarrilDefault{Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
-			cheap:        CodexCarrilDefault{Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+			orchestrator: CodexCarrilDefault{Model: "gpt-6.1-astra", Effort: CodexEffortMedium},
+			strong:       CodexCarrilDefault{Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
+			mid:          CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+			cheap:        CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 		},
 	} {
 		t.Run(string(testCase.preset), func(t *testing.T) {

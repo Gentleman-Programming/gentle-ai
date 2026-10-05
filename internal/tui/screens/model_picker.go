@@ -2,18 +2,19 @@ package screens
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // ModelPickerMode represents the current sub-mode of the model picker screen.
@@ -30,13 +31,24 @@ const (
 const maxVisibleItems = 10
 const maxVisiblePhaseRows = 16
 
-var fetchDynamicModels = opencode.FetchDynamicModels
-
-type LMStudioDiscoveryMsg struct {
-	BaseURL string
-	Models  []opencode.ConfigModel
-	Err     error
+// RuntimeCatalogDiscoveryMsg is delivered after OpenCode resolves project models.
+type RuntimeCatalogDiscoveryMsg struct {
+	RequestID  uint64
+	ProjectDir string
+	Providers  map[string]opencode.Provider
+	Err        error
 }
+
+type RuntimeCatalogStatus int
+
+const (
+	RuntimeCatalogLoading RuntimeCatalogStatus = iota
+	RuntimeCatalogReady
+	RuntimeCatalogEmpty
+	RuntimeCatalogFailed
+)
+
+type RuntimeCatalogDiscoverer func(context.Context, string) (map[string]opencode.Provider, error)
 
 // ProviderEntry holds a provider ID, display name, and model count for the provider list.
 type ProviderEntry struct {
@@ -45,16 +57,44 @@ type ProviderEntry struct {
 	ModelCount int
 }
 
+// ModelPickerRowKind identifies the behavior of a model-picker row independently
+// from its display label. Custom agent names are user-controlled and may match
+// synthetic row labels.
+type ModelPickerRowKind int
+
+const (
+	ModelPickerRowKindAgent ModelPickerRowKind = iota
+	ModelPickerRowKindSeparator
+	ModelPickerRowKindSetAllCustom
+)
+
+// ModelPickerRow carries the stable identity used by model-picker behavior.
+type ModelPickerRow struct {
+	Kind    ModelPickerRowKind
+	Label   string
+	AgentID string
+}
+
 // ModelPickerState holds the available providers and models for the picker screen,
 // plus navigation state for the two-step sub-selection modes.
 type ModelPickerState struct {
-	Providers     map[string]opencode.Provider
-	AvailableIDs  []string                    // provider IDs with tool_call-capable models
-	SDDModels     map[string][]opencode.Model // provider ID -> SDD-capable models
-	ConfigWarning string
+	Providers           map[string]opencode.Provider
+	ConfiguredProviders map[string]opencode.Provider
+	AvailableIDs        []string                    // provider IDs with tool_call-capable models
+	SDDModels           map[string][]opencode.Model // provider ID -> SDD-capable models
+	ConfigWarning       string
+	CatalogStatus       RuntimeCatalogStatus
+	// CatalogError retains the typed discovery failure from the last runtime
+	// catalog attempt so the failed-phase message can state the real cause
+	// (timeout, oversized output, malformed catalog) instead of always
+	// blaming a missing OpenCode binary. It is cleared after a successful
+	// refresh.
+	CatalogError      error
+	CatalogRequestID  uint64
+	CatalogProjectDir string
 
 	Mode             ModelPickerMode
-	SelectedPhaseIdx int    // which phase row was selected (0 = "Set all")
+	SelectedPhaseIdx int    // selected assignment row (0 = coordinator)
 	SelectedProvider string // provider ID chosen in ModeProviderSelect
 
 	ProviderCursor int
@@ -63,12 +103,11 @@ type ModelPickerState struct {
 	ModelScroll    int
 	ModelSearch    string
 
-	// AllPhasesModel tracks the assignment last set via the "Set all phases" row.
-	// It is only updated when the user selects row idx 1 ("Set all phases"), NOT
-	// when individual sub-agent phases are selected. This prevents the "Set all phases"
-	// label from changing when the user picks a model for a single phase.
-	// Issue #146.
-	AllPhasesModel model.ModelAssignment
+	// AllCustomAgentsModel tracks the assignment last set via the "Set all custom agents" row.
+	AllCustomAgentsModel model.ModelAssignment
+
+	// CustomAgents holds discovered non-reserved agents defined in opencode.json.
+	CustomAgents []string
 
 	// EffortCursor and EffortScroll manage navigation in ModeEffortSelect.
 	EffortCursor int
@@ -83,172 +122,168 @@ type ModelPickerState struct {
 	// selected model, populated when entering ModeEffortSelect.
 	SelectedModelEffortLevels []string
 
-	// ForProfile is true when the picker is used for profile creation/editing.
-	// When true, the row list still includes optional profile-scoped Judgment Day
-	// agents alongside SDD rows.
-	ForProfile bool
-
-	lmStudioURL       string
-	lmStudioConfig    opencode.ConfigProvider
-	lmStudioCatalog   opencode.Provider
-	customProviderIDs []string
+	catalogDiscover RuntimeCatalogDiscoverer
 }
 
-// NewModelPickerState initializes the picker state from cache and settings.
-func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState {
-	providers, cacheErr := opencode.LoadModelsOrEmpty(cachePath)
-	if cacheErr != nil {
-		providers = map[string]opencode.Provider{}
+// NewRuntimeModelPickerStateWithDiscoverer builds the picker state with a
+// runtime catalog discoverer, starting in the loading phase and seeding the
+// custom native agent list from the project's opencode.json.
+func NewRuntimeModelPickerStateWithDiscoverer(settingsPath string, discover RuntimeCatalogDiscoverer) ModelPickerState {
+	state := ModelPickerState{Providers: map[string]opencode.Provider{}, SDDModels: map[string][]opencode.Model{}, CatalogStatus: RuntimeCatalogLoading, Mode: ModePhaseList, catalogDiscover: discover}
+	if agents, err := opencodedefault.DiscoverCustomAgents(settingsPath); err != nil {
+		state.ConfigWarning = fmt.Sprintf("Could not discover custom agents from opencode.json: %v", err)
+	} else {
+		state.CustomAgents = agents
 	}
-
-	configProviders, configErr := opencode.LoadConfigProviders(settingsPath)
-	lmStudioCatalog := providers["lmstudio"]
-	lmStudioConfig := configProviders["lmstudio"]
-	lmStudioURL := lmStudioConfig.URL
-	if lmStudioURL == "" {
-		lmStudioURL = "http://127.0.0.1:1234/v1"
-	}
-
-	if len(configProviders) > 0 {
-		providers = opencode.MergeCustomProviders(providers, configProviders)
-	}
-
-	opencode.EnrichWithVariants(providers, opencode.DefaultVariantsCachePath())
-
-	customIDs := make([]string, 0, len(configProviders))
-	for id := range configProviders {
-		customIDs = append(customIDs, id)
-	}
-
-	var configWarning string
-	if cacheErr != nil {
-		configWarning = fmt.Sprintf("Could not load model cache: %v", cacheErr)
-	}
-	if configErr != nil {
-		configWarning = appendConfigWarning(configWarning, fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr))
-	}
-
-	state := ModelPickerState{
-		Providers:         providers,
-		ConfigWarning:     configWarning,
-		Mode:              ModePhaseList,
-		lmStudioURL:       lmStudioURL,
-		lmStudioConfig:    lmStudioConfig,
-		lmStudioCatalog:   lmStudioCatalog,
-		customProviderIDs: customIDs,
-	}
-	state.refreshAvailableModels()
 	return state
 }
 
-func (state ModelPickerState) DiscoverLMStudioCmd() tea.Cmd {
-	baseURL := state.lmStudioURL
+// StartRuntimeCatalogDiscovery launches the async OpenCode catalog discovery
+// for projectDir, tagging the request so late or stale discovery results can
+// be ignored by Update.
+func (state *ModelPickerState) StartRuntimeCatalogDiscovery(requestID uint64, projectDir string) tea.Cmd {
+	state.CatalogRequestID = requestID
+	state.CatalogProjectDir = projectDir
+	discover := state.catalogDiscover
+	if discover == nil {
+		discover = opencode.DiscoverCatalog
+	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		models, err := fetchDynamicModels(ctx, baseURL)
-		return LMStudioDiscoveryMsg{BaseURL: baseURL, Models: models, Err: err}
+		providers, err := discover(context.Background(), projectDir)
+		return RuntimeCatalogDiscoveryMsg{RequestID: requestID, ProjectDir: projectDir, Providers: providers, Err: err}
 	}
 }
 
+// Update applies runtime catalog discovery results to the picker state.
+// Stale requests (mismatched request ID or project dir) are ignored; a failed
+// discovery records the typed CatalogError for truthful diagnostics, while a
+// success clears it and transitions to ready (or empty when no provider offers
+// tool-capable models).
 func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
-	discovery, ok := msg.(LMStudioDiscoveryMsg)
-	if !ok {
+	if discovery, ok := msg.(RuntimeCatalogDiscoveryMsg); ok {
+		if discovery.RequestID != state.CatalogRequestID || discovery.ProjectDir != state.CatalogProjectDir {
+			return state
+		}
+		state.Providers = opencode.MergeConfiguredCatalog(discovery.Providers, state.ConfiguredProviders)
+		state.refreshRuntimeModels()
+		if discovery.Err != nil {
+			state.CatalogError = discovery.Err
+			state.CatalogStatus = RuntimeCatalogReady
+			if !state.hasSelectableConfiguredModels() {
+				state.CatalogStatus = RuntimeCatalogFailed
+			}
+			return state
+		}
+		state.CatalogError = nil
+		state.CatalogStatus = RuntimeCatalogReady
+		if len(state.AvailableIDs) == 0 {
+			state.CatalogStatus = RuntimeCatalogEmpty
+		}
 		return state
 	}
-	if discovery.BaseURL != state.lmStudioURL {
-		return state
-	}
-	if discovery.Err != nil {
-		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio discovery failed; using configured models.")
-		return state
-	}
+	return state
+}
 
-	provider := state.lmStudioCatalog
-	provider.ID = "lmstudio"
-	if provider.Name == "" {
-		provider.Name = "LM Studio"
+func (state ModelPickerState) hasSelectableConfiguredModels() bool {
+	for _, provider := range state.ConfiguredProviders {
+		if len(opencode.FilterModelsForSDD(provider)) > 0 {
+			return true
+		}
 	}
-	provider.Models = make(map[string]opencode.Model, len(discovery.Models))
-	for _, discovered := range discovery.Models {
-		id := discovered.Name
-		if id == "" {
+	return false
+}
+
+// refreshRuntimeModels recomputes the provider list and tool-capable models
+// from the discovered catalog, keeping only providers that offer tool_call
+// capable models.
+func (state *ModelPickerState) refreshRuntimeModels() {
+	state.AvailableIDs = state.AvailableIDs[:0]
+	state.SDDModels = make(map[string][]opencode.Model, len(state.Providers))
+	for id, provider := range state.Providers {
+		models := opencode.FilterModelsForSDD(provider)
+		if len(models) == 0 {
 			continue
 		}
-		metadata := state.lmStudioCatalog.Models[id]
-		if configured, ok := state.lmStudioConfig.Models[id]; ok {
-			metadata.ToolCall = configured.ToolCall
-			if configured.Name != "" {
-				metadata.Name = configured.Name
-			}
-		}
-		metadata.ID = id
-		if metadata.Name == "" {
-			metadata.Name = id
-		}
-		provider.Models[id] = metadata
+		state.AvailableIDs = append(state.AvailableIDs, id)
+		state.SDDModels[id] = models
 	}
-
-	state.Providers["lmstudio"] = provider
-	state.customProviderIDs = append(state.customProviderIDs, "lmstudio")
-	state.refreshAvailableModels()
-	if len(discovery.Models) > 0 && len(opencode.FilterModelsForSDD(provider)) == 0 {
-		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio models need tool_call: true in provider.lmstudio.models for SDD.")
-	}
-	return state
+	sort.Strings(state.AvailableIDs)
 }
 
-func (state *ModelPickerState) refreshAvailableModels() {
-	customIDs := append([]string(nil), state.customProviderIDs...)
-	state.AvailableIDs = opencode.DetectAvailableProviders(state.Providers, customIDs...)
-	state.SDDModels = make(map[string][]opencode.Model, len(state.AvailableIDs))
-	for _, id := range state.AvailableIDs {
-		state.SDDModels[id] = opencode.FilterModelsForSDD(state.Providers[id])
-	}
-}
-
-func appendConfigWarning(existing, warning string) string {
-	if existing == "" {
-		return warning
-	}
-	return existing + "\n" + warning
-}
-
-// SDDOrchestratorPhase is the key used for the base OpenCode SDD coordinator model assignment.
+// SDDOrchestratorPhase is the persisted key for the OpenCode coordinator.
+// The name is retained for compatibility with existing callers and assignments.
 const SDDOrchestratorPhase = "gentle-orchestrator"
 
-// ModelPickerRows returns the row labels for the model picker screen.
-// Row 0 is "gentle-orchestrator" (coordinator), row 1 is "Set all phases",
-// rows 2-11 are the 10 SDD sub-agent phases, followed by workflow agent sections.
+// ModelPickerRows returns the active OpenCode model assignment rows.
 func ModelPickerRows() []string {
-	return modelPickerRows(true)
+	return ModelPickerRowsForState(ModelPickerState{})
 }
 
-func modelPickerRows(includeReview bool) []string {
-	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases()))
-	rows = append(rows, SDDOrchestratorPhase)
-	rows = append(rows, "Set all SDD phases")
-	rows = append(rows, opencode.SDDPhases()...)
+func modelPickerRowsWithCustomIdentity(includeReview bool, customAgents []string) []ModelPickerRow {
+	rows := make([]ModelPickerRow, 0, 1+1+len(opencode.GentleAIODDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+3+len(customAgents)+2)
+	rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: SDDOrchestratorPhase, AgentID: SDDOrchestratorPhase})
+	if len(opencode.GentleAIODDPhases()) > 0 {
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Gentle AI agents ---"})
+		for _, phase := range opencode.GentleAIODDPhases() {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+		}
+	}
 	if len(opencode.JDPhases()) > 0 {
-		rows = append(rows, "--- Judgment Day ---")
-		rows = append(rows, opencode.JDPhases()...)
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Judgment Day ---"})
+		for _, phase := range opencode.JDPhases() {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+		}
 	}
 	if includeReview && len(opencode.ReviewPhases()) > 0 {
-		rows = append(rows, "--- Review agents ---")
-		rows = append(rows, opencode.ReviewPhases()...)
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Review agents ---"})
+		for _, phase := range opencode.ReviewPhases() {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+		}
+	}
+	if includeReview {
+		rows = append(rows,
+			ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- OpenCode native agents ---"},
+			ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: "general", AgentID: "general"},
+			ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: "explore", AgentID: "explore"},
+		)
+	}
+	if len(customAgents) > 0 {
+		rows = append(rows,
+			ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Custom / Native agents ---"},
+			ModelPickerRow{Kind: ModelPickerRowKindSetAllCustom, Label: "Set all custom agents"},
+		)
+		for _, agent := range customAgents {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: agent, AgentID: agent})
+		}
 	}
 	return rows
 }
 
-// ModelPickerRowsForProfile returns model picker rows for profile creation.
-// Profiles support both SDD phase assignments and optional Judgment Day agent
-// assignments. Native review agents remain unsuffixed global runtime agents.
-func ModelPickerRowsForProfile() []string {
-	return modelPickerRows(false)
+// ModelPickerRowsForState returns model picker rows for a given ModelPickerState,
+// incorporating discovered custom agents.
+func ModelPickerRowsForState(state ModelPickerState) []string {
+	identityRows := ModelPickerRowsForStateWithIdentity(state)
+	rows := make([]string, 0, len(identityRows))
+	for _, row := range identityRows {
+		rows = append(rows, row.Label)
+	}
+	return rows
 }
 
-func IsModelPickerSeparatorRow(row string) bool {
-	return strings.HasPrefix(row, "--- ")
+// ModelPickerRowsForStateWithIdentity returns rows with stable behavior kinds
+// for the current picker state. The identity is based on row position and
+// section construction, not on user-controlled display labels.
+func ModelPickerRowsForStateWithIdentity(state ModelPickerState) []ModelPickerRow {
+	return modelPickerRowsWithCustomIdentity(true, state.CustomAgents)
+}
+
+// ModelPickerRowAt returns the identity of the row at index, if it exists.
+func ModelPickerRowAt(state ModelPickerState, index int) (ModelPickerRow, bool) {
+	rows := ModelPickerRowsForStateWithIdentity(state)
+	if index < 0 || index >= len(rows) {
+		return ModelPickerRow{}, false
+	}
+	return rows[index], true
 }
 
 // SeparatorRowIdx returns the index of the "--- Judgment Day ---" separator
@@ -260,7 +295,11 @@ func SeparatorRowIdx() int {
 	if len(jd) == 0 {
 		return -1
 	}
-	return 2 + len(opencode.SDDPhases())
+	idx := 1
+	if odd := opencode.GentleAIODDPhases(); len(odd) > 0 {
+		idx += 1 + len(odd)
+	}
+	return idx
 }
 
 // ProviderEntries returns sorted provider entries with display names and model counts.
@@ -392,9 +431,10 @@ func handleModelNav(
 		// not support effort and must clear any stale value.
 		preserveEffort := selected.Reasoning
 		assignments = applyAssignmentPreservingMatchingEffort(*state, assignments, assignment, preserveEffort)
-		// Mirror the AllPhasesModel update on the pointer when "Set all phases" row.
-		if state.SelectedPhaseIdx == 1 {
-			state.AllPhasesModel = preserveMatchingEffort(state.AllPhasesModel, assignment, preserveEffort)
+		// Mirror the bulk-row state without using its display label as identity.
+		selectedRow, selectedRowOK := ModelPickerRowAt(*state, state.SelectedPhaseIdx)
+		if selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllCustom {
+			state.AllCustomAgentsModel = preserveMatchingEffort(state.AllCustomAgentsModel, assignment, preserveEffort)
 		}
 
 		// Return to phase list
@@ -527,38 +567,15 @@ func compareVersionKeys(left, right []int) int {
 }
 
 func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
-	phases := opencode.SDDPhases()
+	selectedRow, selectedRowOK := ModelPickerRowAt(state, state.SelectedPhaseIdx)
 	switch {
-	case state.SelectedPhaseIdx == 1:
-		for _, phase := range phases {
-			assignments[phase] = preserveMatchingEffort(assignments[phase], assignment, preserveEffort)
+	case selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllCustom:
+		for _, agent := range state.CustomAgents {
+			assignments[agent] = preserveMatchingEffort(assignments[agent], assignment, preserveEffort)
 		}
 	default:
 		if key := selectedModelPickerAgent(state); key != "" {
 			assignments[key] = preserveMatchingEffort(assignments[key], assignment, preserveEffort)
-		}
-	}
-	return assignments
-}
-
-// ClearModelPickerAssignment removes the assignment represented by the selected
-// row. Row 1 clears only SDD sub-agent assignments; Judgment Day assignments are
-// independent profile slots and must be cleared explicitly from their own rows.
-func ClearModelPickerAssignment(state *ModelPickerState, assignments map[string]model.ModelAssignment) map[string]model.ModelAssignment {
-	if state == nil || assignments == nil {
-		return assignments
-	}
-
-	phases := opencode.SDDPhases()
-	switch {
-	case state.SelectedPhaseIdx == 1:
-		for _, phase := range phases {
-			delete(assignments, phase)
-		}
-		state.AllPhasesModel = model.ModelAssignment{}
-	default:
-		if key := selectedModelPickerAgent(*state); key != "" {
-			delete(assignments, key)
 		}
 	}
 	return assignments
@@ -579,17 +596,17 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 }
 
 // applyAssignment applies the given assignment to the assignments map based on
-// the currently selected phase index in state. When SelectedPhaseIdx is 1 ("Set
-// all phases"), the assignment is applied to all 10 SDD sub-agent phases and
-// callers should mirror the assignment into state.AllPhasesModel if needed.
-// When SelectedPhaseIdx is 0, only the orchestrator phase is set. Otherwise,
-// the single sub-agent phase matching the index is set.
+// the currently selected row in state. The custom bulk row assigns only
+// discovered custom agents.
 func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
-	phases := opencode.SDDPhases()
+	selectedRow, selectedRowOK := ModelPickerRowAt(state, state.SelectedPhaseIdx)
+	if !selectedRowOK {
+		return assignments
+	}
 	switch {
-	case state.SelectedPhaseIdx == 1:
-		for _, phase := range phases {
-			assignments[phase] = assignment
+	case selectedRow.Kind == ModelPickerRowKindSetAllCustom:
+		for _, customAgent := range state.CustomAgents {
+			assignments[customAgent] = assignment
 		}
 	default:
 		if key := selectedModelPickerAgent(state); key != "" {
@@ -600,18 +617,11 @@ func applyAssignment(state ModelPickerState, assignments map[string]model.ModelA
 }
 
 func selectedModelPickerAgent(state ModelPickerState) string {
-	rows := ModelPickerRows()
-	if state.ForProfile {
-		rows = ModelPickerRowsForProfile()
-	}
-	if state.SelectedPhaseIdx < 0 || state.SelectedPhaseIdx >= len(rows) {
+	row, ok := ModelPickerRowAt(state, state.SelectedPhaseIdx)
+	if !ok || row.Kind != ModelPickerRowKindAgent {
 		return ""
 	}
-	row := rows[state.SelectedPhaseIdx]
-	if state.SelectedPhaseIdx == 1 || IsModelPickerSeparatorRow(row) {
-		return ""
-	}
-	return row
+	return row.AgentID
 }
 
 // effortOptionsFromLevels returns the effort picker options in display order.
@@ -663,9 +673,10 @@ func handleEffortNav(
 		assignment := state.PendingAssignment
 		assignment.Effort = effort
 		assignments = applyAssignment(state, assignments, assignment)
-		// Mirror the AllPhasesModel update when "Set all phases" row.
-		if state.SelectedPhaseIdx == 1 {
-			state.AllPhasesModel = assignment
+		// Mirror the bulk-row state without using its display label as identity.
+		selectedRow, selectedRowOK := ModelPickerRowAt(state, state.SelectedPhaseIdx)
+		if selectedRowOK && selectedRow.Kind == ModelPickerRowKindSetAllCustom {
+			state.AllCustomAgentsModel = assignment
 		}
 		state.Mode = ModePhaseList
 		state.EffortCursor = 0
@@ -749,11 +760,7 @@ func renderPhaseList(
 ) string {
 	var b strings.Builder
 
-	title := "Assign Models to SDD, JD & Review Agents"
-	if state.ForProfile {
-		title = "Assign Models to SDD Phases & JD Agents"
-	}
-	b.WriteString(styles.TitleStyle.Render(title))
+	b.WriteString(styles.TitleStyle.Render("Assign Models to Agents"))
 	b.WriteString("\n\n")
 	if state.ConfigWarning != "" {
 		b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))
@@ -761,17 +768,22 @@ func renderPhaseList(
 	}
 
 	if len(state.AvailableIDs) == 0 {
-		b.WriteString(styles.WarningStyle.Render("OpenCode has not been run yet — model cache not found."))
+		message := "OpenCode reported no tool-capable models for this project."
+		subtext := "Configure a tool-capable model in OpenCode, then return to this picker."
+		switch state.CatalogStatus {
+		case RuntimeCatalogLoading:
+			message = "Discovering models from OpenCode..."
+			subtext = "You can continue with default assignments while discovery runs."
+		case RuntimeCatalogFailed:
+			message, subtext = modelPickerCatalogFailureExplanation(state.CatalogError)
+		}
+		b.WriteString(styles.WarningStyle.Render(message))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("Run 'opencode' once, then re-run 'gentle-ai sync' to assign models."))
+		b.WriteString(styles.SubtextStyle.Render(subtext))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("Using default model assignments for now."))
 		b.WriteString("\n\n")
-		backLabel := "← Back to SDD mode"
-		if state.ForProfile {
-			backLabel = "← Back"
-		}
-		b.WriteString(renderOptions([]string{"Continue with defaults", backLabel}, cursor))
+		b.WriteString(renderOptions([]string{"Continue with defaults", "← Back"}, cursor))
 		b.WriteString("\n")
 		b.WriteString(styles.HelpStyle.Render("enter: confirm • esc: back"))
 		return b.String()
@@ -780,12 +792,8 @@ func renderPhaseList(
 	b.WriteString(styles.SubtextStyle.Render("Current assignments:"))
 	b.WriteString("\n\n")
 
-	var rows []string
-	if state.ForProfile {
-		rows = ModelPickerRowsForProfile()
-	} else {
-		rows = ModelPickerRows()
-	}
+	rows := ModelPickerRowsForState(state)
+	identityRows := ModelPickerRowsForStateWithIdentity(state)
 	start, end := 0, len(rows)
 	if len(rows) > maxVisiblePhaseRows {
 		start = max(0, min(cursor-maxVisiblePhaseRows+1, len(rows)-maxVisiblePhaseRows))
@@ -797,10 +805,11 @@ func renderPhaseList(
 	for offset, row := range rows[start:end] {
 		idx := start + offset
 		focused := idx == cursor
+		identity := identityRows[idx]
 
 		var label string
 		switch {
-		case idx == 0:
+		case identity.Kind == ModelPickerRowKindAgent && identity.AgentID == SDDOrchestratorPhase:
 			// "gentle-orchestrator" row — coordinator, individual assignment only
 			assignment, ok := assignments[SDDOrchestratorPhase]
 			if ok && assignment.ProviderID != "" {
@@ -809,17 +818,14 @@ func renderPhaseList(
 			} else {
 				label = fmt.Sprintf("%-20s (default)", row+" (coordinator)")
 			}
-		case idx == 1:
-			// "Set all phases" row — show AllPhasesModel (only updated when this row is used).
-			// Using AllPhasesModel instead of phases[0] prevents the label from changing
-			// when the user picks a model for an individual sub-agent phase (Issue #146).
-			if state.AllPhasesModel.ProviderID != "" {
-				provName, modelName := resolveNames(state.AllPhasesModel, state)
-				label = formatAssignmentLabel(row, provName, modelName, state.AllPhasesModel.Effort)
+		case identity.Kind == ModelPickerRowKindSetAllCustom:
+			if state.AllCustomAgentsModel.ProviderID != "" {
+				provName, modelName := resolveNames(state.AllCustomAgentsModel, state)
+				label = formatAssignmentLabel(row, provName, modelName, state.AllCustomAgentsModel.Effort)
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
-		case IsModelPickerSeparatorRow(row):
+		case identity.Kind == ModelPickerRowKindSeparator:
 			// Separator row — render as a visual divider with subtle indicator when focused.
 			if focused {
 				b.WriteString(styles.SubtextStyle.Render("▸ "+row) + "\n")
@@ -828,7 +834,7 @@ func renderPhaseList(
 			}
 			continue
 		default:
-			assignment, ok := assignments[row]
+			assignment, ok := assignments[identity.AgentID]
 			if ok && assignment.ProviderID != "" {
 				provName, modelName := resolveNames(assignment, state)
 				label = formatAssignmentLabel(row, provName, modelName, assignment.Effort)
@@ -851,11 +857,7 @@ func renderPhaseList(
 	actionIdx := cursor - len(rows)
 	b.WriteString(renderOptions([]string{"Continue", "← Back"}, actionIdx))
 	b.WriteString("\n")
-	help := "j/k: navigate • enter: change model / confirm • esc: back"
-	if state.ForProfile {
-		help = "j/k: navigate • enter: change model / confirm • backspace: clear • esc: back"
-	}
-	b.WriteString(styles.HelpStyle.Render(help))
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: change model / confirm • esc: back"))
 
 	return b.String()
 }
@@ -988,4 +990,28 @@ func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (pro
 	}
 
 	return provName, modelName
+}
+
+// modelPickerCatalogFailureExplanation renders the user-facing diagnostic for
+// a failed runtime catalog discovery. Each CatalogError kind maps to a truthful
+// headline and next step so the picker never blames a missing OpenCode binary
+// for failures caused by output size, timeouts, or malformed catalogs. Unknown
+// errors keep the generic installation guidance.
+func modelPickerCatalogFailureExplanation(err error) (string, string) {
+	var catalogErr *opencode.CatalogError
+	if errors.As(err, &catalogErr) {
+		switch catalogErr.Kind {
+		case opencode.CatalogErrorOutputTooLarge:
+			return "OpenCode model catalog is too large.", "OpenCode produced more model data than can be safely processed. Check your configured providers."
+		case opencode.CatalogErrorTimeout:
+			return "Model discovery timed out.", "OpenCode took too long to return models for this project. Check your OpenCode configuration."
+		case opencode.CatalogErrorCommandFailed:
+			return "Could not discover models from OpenCode.", "OpenCode command failed. Verify OpenCode can run in this project, then return to this picker."
+		case opencode.CatalogErrorMalformed, opencode.CatalogErrorUnsupportedSchema:
+			return "Could not parse models from OpenCode.", "OpenCode returned an unexpected model catalog format. Verify your OpenCode version."
+		case opencode.CatalogErrorMissingBinary:
+			return "Could not discover models from OpenCode.", "Verify OpenCode is installed and can run in this project, then return to this picker."
+		}
+	}
+	return "Could not discover models from OpenCode.", "Verify OpenCode is installed and can run in this project, then return to this picker."
 }

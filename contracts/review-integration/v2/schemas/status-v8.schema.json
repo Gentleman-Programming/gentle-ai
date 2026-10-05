@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v8.schema.json",
+  "title": "Gentle AI Review Integration native Git target status v8",
+  "type": "object", "additionalProperties": false,
+  "required": [
+    "schema", "contract", "operation", "applicability", "action", "replayability",
+    "target_identity", "projection", "repair", "candidates"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.status/v8"},
+    "contract": {"$ref": "status-v7.schema.json#/properties/contract"}, "operation": {"$ref": "status-v7.schema.json#/properties/operation"},
+    "applicability": {"$ref": "status-v7.schema.json#/properties/applicability"}, "authority": {"$ref": "status-v7.schema.json#/properties/authority"},
+    "action": {"$ref": "status-v7.schema.json#/properties/action"}, "action_disposition": {"$ref": "status-v7.schema.json#/properties/action_disposition"},
+    "replayability": {"$ref": "status-v7.schema.json#/properties/replayability"}, "frozen": {"$ref": "status-v7.schema.json#/properties/frozen"},
+    "target_identity": {"$ref": "status-v7.schema.json#/properties/target_identity"}, "authority_target_identity": {"$ref": "status-v7.schema.json#/properties/authority_target_identity"},
+    "projection": {"$ref": "status-v7.schema.json#/properties/projection"}, "repair": {"$ref": "status-v7.schema.json#/properties/repair"},
+    "candidates": {"$ref": "status-v7.schema.json#/properties/candidates"}, "reconciliation": {"$ref": "status-v7.schema.json#/properties/reconciliation"},
+    "eligibility": {"$ref": "status-v7.schema.json#/properties/eligibility"}, "forecast": {"$ref": "status-v7.schema.json#/properties/forecast"},
+    "next_transition": {"$ref": "#/$defs/next_transition"}, "validation_request": {"$ref": "status-v7.schema.json#/properties/validation_request"},
+    "repository_context": {"$ref": "status-v7.schema.json#/properties/repository_context"}, "disposition": {"$ref": "status-v7.schema.json#/properties/disposition"},
+    "eligible_untracked_inventory": {"$ref": "status-v7.schema.json#/properties/eligible_untracked_inventory"},
+    "escalation": {"$ref": "status-v7.schema.json#/properties/escalation"}
+  },
+  "dependentRequired": {"forecast": ["next_transition"]},
+  "$defs": {
+    "next_transition": {"oneOf": [
+      {"allOf": [
+        {"$ref": "status-v7.schema.json#/$defs/next_transition"},
+        {"not": {"properties": {"reason_code": {"const": "reviewer_results_required"}}, "required": ["reason_code"]}}
+      ]},
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
+        "properties": {
+          "kind": {"const": "collect"},
+          "reason_code": {"const": "reviewer_results_required"},
+          "collect": {
+            "type": "object", "additionalProperties": false, "required": ["inputs"],
+            "properties": {"inputs": {
+              "type": "array", "minItems": 1,
+              "items": {"oneOf": [
+                {"$ref": "status-v5.schema.json#/$defs/transition_input"},
+                {"$ref": "#/$defs/lens_provider_task_input"}
+              ]}
+            }}
+          }
+        }
+      }
+    ]},
+    "lens_provider_task_input": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "schema", "capture_operation", "arguments", "provider_task", "artifact_subject", "base_tree", "candidate_tree"],
+      "properties": {
+        "name": {"const": "reviewer_result"},
+        "schema": {"const": "https://gentle-ai.dev/schema/review/reviewer/v1"},
+        "capture_operation": {"const": "review.capture-result"},
+        "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "transition-execution.schema.json#/$defs/transition_argument"}},
+        "provider_task": {"$ref": "#/$defs/lens_provider_task"},
+        "artifact_subject": {"$ref": "artifact-subject.schema.json"},
+        "base_tree": {"$ref": "status-v5.schema.json#/$defs/git_tree"},
+        "candidate_tree": {"$ref": "status-v5.schema.json#/$defs/git_tree"},
+        "changed_path_manifest": {"type": "array", "uniqueItems": true, "items": {"$ref": "start.schema.json#/$defs/changed_path"}}
+      }
+    },
+    "lens_provider_task": {
+      "type": "object", "additionalProperties": false, "required": ["agent", "role", "prompt"],
+      "properties": {
+        "agent": {"enum": ["review-risk", "review-resilience", "review-readability", "review-reliability"]},
+        "role": {"const": "lens"},
+        "prompt": {"type": "string", "minLength": 1, "pattern": "^GENTLE_AI_REVIEW_BINDING \\{[^\\r\\n]+\\}$"}
+      }
+    }
+  },
+  "allOf": [
+    {"$ref": "status-v7.schema.json#/allOf/0"}, {"$ref": "status-v7.schema.json#/allOf/1"},
+    {"$ref": "status-v7.schema.json#/allOf/2"}, {"$ref": "status-v7.schema.json#/allOf/3"},
+    {"$ref": "status-v7.schema.json#/allOf/4"}, {"$ref": "status-v7.schema.json#/allOf/5"}
+  ]
+}

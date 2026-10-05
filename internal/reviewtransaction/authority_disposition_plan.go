@@ -16,10 +16,10 @@ const AuthorityDispositionPlanSchema = "gentle-ai.review-authority-disposition-p
 // disposition plan for a closed-classified authority graph anomaly
 // (rdd-authority-disposition-plan). It is the one reusable shape for every
 // future disposition wave: Wave 2's leaf-only executor
-// (authority_disposition_execute.go, Slice S2) admits only a cardinality-one
-// closure; a future wave (#2014, #1656) reuses this exact shape for a larger
-// closure by replacing admission only — never the plan shape or digest
-// domains (design decision 5).
+// (authority_disposition_execute.go, Slice S2) admitted only a cardinality-one
+// closure; Wave 6 (#2014, #1656) reuses this exact shape for a larger closure
+// by relaxing admission only (admitClosureDisposition) — never the plan shape
+// or digest domains (design decision 5).
 //
 // Schema is an explicitly-permitted eleventh serialization field beyond the
 // spec's ten (rdd-authority-disposition-plan / "Plan Field Set"). Authorization
@@ -36,17 +36,25 @@ const AuthorityDispositionPlanSchema = "gentle-ai.review-authority-disposition-p
 // exactly the digest a later execution (with the real actor/reason) validates
 // against, for the same graph state.
 type AuthorityDispositionPlan struct {
-	Schema                     string            `json:"schema"`
-	RepositoryBinding          string            `json:"repository_id"`
-	AuthorityInventoryRevision string            `json:"authority_inventory_revision"`
-	AnomalyClass               string            `json:"anomaly_class"`
-	SeedSet                    []string          `json:"ordered_seed_set"`
-	Closure                    []string          `json:"ordered_closure"`
-	ExpectedRevisions          map[string]string `json:"expected_revisions"`
-	PlanDigest                 string            `json:"plan_digest"`
-	Actor                      string            `json:"actor"`
-	Reason                     string            `json:"reason"`
-	Authorization              string            `json:"authorization"`
+	Schema                     string                        `json:"schema"`
+	RepositoryBinding          string                        `json:"repository_id"`
+	AuthorityInventoryRevision string                        `json:"authority_inventory_revision"`
+	AnomalyClass               string                        `json:"anomaly_class"`
+	Selector                   *AuthorityDispositionSelector `json:"selector,omitempty"`
+	SeedSet                    []string                      `json:"ordered_seed_set"`
+	Closure                    []string                      `json:"ordered_closure"`
+	ExpectedRevisions          map[string]string             `json:"expected_revisions"`
+	PlanDigest                 string                        `json:"plan_digest"`
+	Actor                      string                        `json:"actor"`
+	Reason                     string                        `json:"reason"`
+	Authorization              string                        `json:"authorization"`
+}
+
+type AuthorityDispositionSelector struct {
+	PredecessorLineageID        string `json:"predecessor_lineage_id"`
+	PredecessorExpectedRevision string `json:"predecessor_expected_revision"`
+	SuccessorLineageID          string `json:"successor_lineage_id"`
+	SuccessorExpectedRevision   string `json:"successor_expected_revision"`
 }
 
 // compactContentMismatchedRecoveryAuthorizationClass is the one closed
@@ -62,43 +70,214 @@ type AuthorityDispositionPlan struct {
 // — a dead end (design decision 2).
 const compactContentMismatchedRecoveryAuthorizationClass = "content_mismatched_recovery_authorization"
 
+const compactHistoricalSnapshotIdentityClass = "retired_compact_snapshot_identity"
+
 // errAuthorityDispositionPlanNotDerivable is returned, always wrapped with a
 // specific cause, whenever derivation refuses to produce a plan: an
-// unclassifiable shape, a mixed/ambiguous set of eligible edges, or an
-// incomplete inspection. There is never a generic fallback plan.
+// unclassifiable shape, a mixed/ambiguous set of eligible edges, or a
+// diagnostic affecting the selected closure. There is never a generic
+// fallback plan.
 var errAuthorityDispositionPlanNotDerivable = errors.New("authority disposition plan refused: anomaly classification is not closed") // refusal:by-design human-authority: an unclassifiable or ambiguous graph shape needs a maintainer's diagnosis before any plan can be derived, not a command this refusal can name
 
-// deriveAuthorityDispositionPlan derives a generic AuthorityDispositionPlan
-// deterministically from report and records — both of which MUST come from
-// the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
-// second, independent record-loading path ever feeds derivation (mandatory
-// obligation (a)). It refuses (no plan) unless the inspection that produced
-// report carried no entry diagnostics and exactly one report edge re-derives
-// into the one closed content_mismatched_recovery_authorization class.
-func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string) (AuthorityDispositionPlan, error) {
-	if !report.Complete || len(report.EntryDiagnostics) > 0 {
-		return AuthorityDispositionPlan{}, fmt.Errorf("%w: inspection carries %d entry diagnostic(s)", errAuthorityDispositionPlanNotDerivable, len(report.EntryDiagnostics))
-	}
-	seed, seedCount := "", 0
+func authorityDispositionSelectors(report CompactRecoveryInspectionReport, records map[string]CompactRecord) ([]AuthorityDispositionSelector, error) {
+	selectors := []AuthorityDispositionSelector{}
 	for _, edge := range report.Edges {
 		if edge.Valid {
 			continue
 		}
 		predecessor, foundPredecessor := records[edge.PredecessorLineageID]
 		successor, foundSuccessor := records[edge.SuccessorLineageID]
-		if !foundPredecessor || !foundSuccessor {
+		if !foundPredecessor || !foundSuccessor ||
+			classifyCompactRecoveryEdgeAnomalies(predecessor, successor).DispositionClass != compactContentMismatchedRecoveryAuthorizationClass {
 			continue
 		}
-		if classifyCompactRecoveryEdgeAnomalies(predecessor, successor).DispositionClass == "" {
-			continue
+		selectors = append(selectors, AuthorityDispositionSelector{
+			PredecessorLineageID: edge.PredecessorLineageID, PredecessorExpectedRevision: predecessor.Revision,
+			SuccessorLineageID: edge.SuccessorLineageID, SuccessorExpectedRevision: successor.Revision,
+		})
+	}
+	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
+		return cmp.Or(cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID), cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID))
+	})
+	return selectors, nil
+}
+
+// isHistoricalDispositionSelector reports whether selector carries the
+// successor-only shape historicalDispositionSelectors emits (#2995). A
+// historical entry is a forensic byte payload, not a graph node: it names no
+// predecessor whose revision a plan could bind, so its selector's
+// predecessor side stays empty and the entry's own raw-byte digest is the
+// expected revision. Any selector with a predecessor field set is an edge
+// selector; any selector with an empty successor is malformed and never
+// historical.
+func isHistoricalDispositionSelector(selector AuthorityDispositionSelector) bool {
+	return selector.PredecessorLineageID == "" && selector.PredecessorExpectedRevision == "" && selector.SuccessorLineageID != ""
+}
+
+// historicalDispositionSelectors enumerates one exact selector per historical
+// (outdated) authority entry, sorted by lineage — the per-entry analog of
+// authorityDispositionSelectors' per-edge enumeration. Enumeration is always
+// safe: a selector only ever NAMES an entry. Minting stays gated elsewhere —
+// derivation refuses unless the named entry is itself historical, and the
+// selectorless historical gate keeps refusing every multi-diagnostic store.
+func historicalDispositionSelectors(report CompactRecoveryInspectionReport) []AuthorityDispositionSelector {
+	selectors := make([]AuthorityDispositionSelector, 0, len(report.historical))
+	for lineage, historical := range report.historical {
+		selectors = append(selectors, AuthorityDispositionSelector{SuccessorLineageID: lineage, SuccessorExpectedRevision: historical.RawDigest})
+	}
+	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
+		return cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID)
+	})
+	return selectors
+}
+
+// historicalDispositionPlanForSelector mints the historical disposition plan
+// for exactly the entry an exact selector names, even when sibling authority
+// diagnostics exist (#2995): the selector — not diagnostic cardinality — is
+// the scoping device. The selectorless gate
+// (historicalAuthorityDispositionPlanRecord) keeps refusing every store whose
+// total diagnostics exceed one, so the j92 posture is unchanged; only a
+// named entry becomes individually reachable. The named entry MUST be
+// historical (outdated): a malformed, unreadable, missing, or still-loadable
+// entry refuses by name, a stale expected revision refuses as
+// concurrent-update drift, and an entry any retained report edge still
+// references refuses fail-closed (the per-entry plan assumes the forensic
+// entry is edge-detached and verifies that assumption instead of trusting
+// it), a reference reachable in real stores when a loaded successor names
+// the now-historical entry as its edge predecessor (#2995) — mirroring the
+// edge path's exact-selector
+// semantics. The plan binds the selector (Plan Field Set), so its digest
+// covers exactly the entry this derivation scoped — and the executor's
+// fresh re-derivation under lock re-passes the same selector and reproduces
+// the same digest.
+func historicalDispositionPlanForSelector(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, selector AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
+	lineage := selector.SuccessorLineageID
+	historical, found := report.historical[lineage]
+	if !found {
+		for _, diagnostic := range report.EntryDiagnostics {
+			if diagnostic.LineageID != lineage || diagnostic.Problem == compactInspectionEntryOutdated {
+				continue
+			}
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names %s entry %q; only an outdated historical entry admits this plan", errAuthorityDispositionPlanNotDerivable, diagnostic.Problem, lineage)
 		}
-		seed = edge.SuccessorLineageID
-		seedCount++
+		if _, loaded := records[lineage]; loaded {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names loadable operational authority %q; this plan is scoped to outdated historical entries", errAuthorityDispositionPlanNotDerivable, lineage)
+		}
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names lineage %q, which carries no authority entry in this store", errAuthorityDispositionPlanNotDerivable, lineage)
 	}
-	if seedCount != 1 {
-		return AuthorityDispositionPlan{}, fmt.Errorf("%w: found %d closed content-mismatch edge(s), want exactly 1", errAuthorityDispositionPlanNotDerivable, seedCount)
+	if selector.SuccessorExpectedRevision != historical.RawDigest {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector no longer matches the inspected entry %q", ErrConcurrentUpdate, lineage)
 	}
+	// Fail-closed edge-detachment check: a historical entry any retained
+	// report edge still names (on either side) must not be individually
+	// dispositioned while the graph still references it. The predecessor
+	// side of the reference is reachable in real stores — edges are built
+	// from loaded successors, so a loaded successor naming a now-historical
+	// predecessor produces it (#2995). The successor side stays drift
+	// hardening — a historical entry never loads and can never be an edge
+	// successor — and the guard verifies the derivation's edge-detached
+	// assumption instead of silently trusting it if a future caller ever
+	// desynchronizes the report.
+	for _, edge := range report.Edges {
+		if edge.PredecessorLineageID == lineage || edge.SuccessorLineageID == lineage {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact historical selector names entry %q, which retained recovery edge %s -> %s still references; resolve that edge before any per-entry disposition", errAuthorityDispositionPlanNotDerivable, lineage, edge.PredecessorLineageID, edge.SuccessorLineageID)
+		}
+	}
+	inventory, err := authorityInventoryRevision(records, report.historical)
+	if err != nil {
+		return AuthorityDispositionPlan{}, err
+	}
+	plan := AuthorityDispositionPlan{
+		Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding,
+		AuthorityInventoryRevision: inventory, AnomalyClass: compactHistoricalSnapshotIdentityClass,
+		Selector: &selector,
+		SeedSet:  []string{lineage}, Closure: []string{lineage},
+		ExpectedRevisions: map[string]string{lineage: historical.RawDigest},
+		Actor:             strings.TrimSpace(actor), Reason: strings.TrimSpace(reason),
+	}
+	plan.PlanDigest, err = authorityDispositionPlanDigest(plan)
+	return plan, err
+}
+
+// historicalAuthorityDispositionPlanRecord returns the one released authority
+// record that can be planned for quarantine. Its own outdated diagnostic is the
+// sole admissible diagnostic: any malformed, unreadable, missing, or unexpected
+// additional authority entry prevents a historical plan from being published.
+// So does a retained report edge still referencing the lineage (either side):
+// the selectorless plan is the per-entry plan without a selector, so it
+// inherits the exact-selector path's edge-detachment requirement — the
+// predecessor side of the reference is reachable in real stores through a
+// loaded successor naming a now-historical predecessor (#2995).
+func historicalAuthorityDispositionPlanRecord(report CompactRecoveryInspectionReport) (string, historicalCompactForensicRecord, bool) {
+	if len(report.historical) != 1 || len(report.EntryDiagnostics) != 1 {
+		return "", historicalCompactForensicRecord{}, false
+	}
+	for lineage, historical := range report.historical {
+		diagnostic := report.EntryDiagnostics[0]
+		if diagnostic.LineageID == lineage && diagnostic.Problem == compactInspectionEntryOutdated && !historicalLineageEdgeReferenced(report, lineage) {
+			return lineage, historical, true
+		}
+	}
+	return "", historicalCompactForensicRecord{}, false
+}
+
+// deriveAuthorityDispositionPlan derives a generic AuthorityDispositionPlan
+// deterministically from report and records — both of which MUST come from
+// the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
+// second, independent record-loading path ever feeds derivation (mandatory
+// obligation (a)). It refuses (no plan) unless the inspection that produced
+// selected closure carries no entry diagnostics and exactly one report edge
+// re-derives into the one closed content_mismatched_recovery_authorization
+// class, except one forensic historical entry whose only diagnostic is outdated.
+func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
+	if len(requested) > 1 {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
+	}
+	// A successor-only selector never names a content-mismatch edge: it names
+	// one historical entry (#2995), and is derived through its own gated path
+	// before edge enumeration can misread it as an unmatched edge selector.
+	if len(requested) == 1 && isHistoricalDispositionSelector(requested[0]) {
+		return historicalDispositionPlanForSelector(report, records, binding, actor, reason, requested[0])
+	}
+	selectors, err := authorityDispositionSelectors(report, records)
+	if err != nil {
+		return AuthorityDispositionPlan{}, err
+	}
+	if len(requested) == 0 && len(selectors) == 0 {
+		if lineage, historical, eligible := historicalAuthorityDispositionPlanRecord(report); eligible {
+			inventory, err := authorityInventoryRevision(records, report.historical)
+			if err != nil {
+				return AuthorityDispositionPlan{}, err
+			}
+			plan := AuthorityDispositionPlan{Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding, AuthorityInventoryRevision: inventory, AnomalyClass: compactHistoricalSnapshotIdentityClass, SeedSet: []string{lineage}, Closure: []string{lineage}, ExpectedRevisions: map[string]string{lineage: historical.RawDigest}, Actor: strings.TrimSpace(actor), Reason: strings.TrimSpace(reason)}
+			plan.PlanDigest, err = authorityDispositionPlanDigest(plan)
+			return plan, err
+		}
+	}
+	var selector *AuthorityDispositionSelector
+	if len(requested) == 1 {
+		if index := slices.Index(selectors, requested[0]); index >= 0 {
+			selector = &selectors[index]
+		}
+		if selector == nil {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact content-mismatch selector no longer matches the inspected graph", ErrConcurrentUpdate)
+		}
+	} else if len(selectors) == 1 {
+		selector = &selectors[0]
+	} else {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: found %d closed content-mismatch edge(s), want exactly 1 or an exact selector", errAuthorityDispositionPlanNotDerivable, len(selectors))
+	}
+	seed := selector.SuccessorLineageID
 	closure := authorityDispositionClosure(report, seed)
+	closureMembers := make(map[string]struct{}, len(closure))
+	for _, lineage := range closure {
+		closureMembers[lineage] = struct{}{}
+	}
+	for _, diagnostic := range report.EntryDiagnostics {
+		if _, found := closureMembers[diagnostic.LineageID]; found {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: inspection carries %q diagnostic for closure member %q", errAuthorityDispositionPlanNotDerivable, diagnostic.Problem, diagnostic.LineageID)
+		}
+	}
 	expectedRevisions := make(map[string]string, len(closure))
 	for _, lineage := range closure {
 		record, found := records[lineage]
@@ -107,7 +286,7 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 		}
 		expectedRevisions[lineage] = record.Revision
 	}
-	inventoryRevision, err := authorityInventoryRevision(records)
+	inventoryRevision, err := authorityInventoryRevision(records, report.historical)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
@@ -116,6 +295,9 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 		AuthorityInventoryRevision: inventoryRevision, AnomalyClass: compactContentMismatchedRecoveryAuthorizationClass,
 		SeedSet: []string{seed}, Closure: closure, ExpectedRevisions: expectedRevisions,
 		Actor: strings.TrimSpace(actor), Reason: strings.TrimSpace(reason),
+	}
+	if len(requested) == 1 {
+		plan.Selector = selector
 	}
 	digest, err := authorityDispositionPlanDigest(plan)
 	if err != nil {
@@ -133,7 +315,7 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 // has no CLI entrypoint of its own in this slice (rdd-authority-disposition-plan
 // / "No New Public Repair Verb") — Slice S3 wires it behind the existing
 // `review repair` verb.
-func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string) (AuthorityDispositionPlan, error) {
+func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
@@ -146,7 +328,7 @@ func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
-	return deriveAuthorityDispositionPlan(report, records, binding, actor, reason)
+	return deriveAuthorityDispositionPlan(report, records, binding, actor, reason, requested...)
 }
 
 // authorityDispositionClosure derives ordered_closure for one seed by
@@ -154,34 +336,46 @@ func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 // predicate already proved read-only (shadow_authority_health.go): a
 // lineage's descendants are every edge in the same report whose
 // PredecessorLineageID names it. It never re-reads authority state or
-// consults a cache — only the already-loaded report. A leaf seed (no report
-// edge names it as predecessor) derives closure = {seed} exactly, which is
-// Wave 2's whole disposition scope; a seed with descendants derives their
-// full transitive closure so a future wave can reuse this exact function
+// consults a cache — only the already-loaded report.
+//
+// As of Wave 6 (rdd-authority-disposition-plan / "Deterministic Closure
+// Derivation From the Graph Source of Record"), ordering is normative, not
+// just deterministic: entries emit deepest-descendant-first with the seed
+// last via a post-order depth-first walk over the same children map,
+// visiting each node's children in lexicographic order before appending the
+// node itself — so every prefix of the returned slice is a set of nodes with
+// no not-yet-emitted ancestor, which is exactly what makes each ordered
+// disposition prefix a valid retained graph (rdd-closure-disposition-execution
+// / "Descendant-First Ordered Disposition"). The visited guard doubles as
+// cycle protection, matching the old BFS's guarantee. A leaf seed (no report
+// edge names it as predecessor) derives closure = {seed} exactly — the
+// identity of the pre-Wave-6 lexicographic sort for N=1 — which was Wave 2's
+// whole disposition scope; a seed with descendants derives their full
+// transitive closure so Wave 6's executor can reuse this exact function
 // unchanged (design decision 5).
 func authorityDispositionClosure(report CompactRecoveryInspectionReport, seed string) []string {
 	children := make(map[string][]string, len(report.Edges))
 	for _, edge := range report.Edges {
 		children[edge.PredecessorLineageID] = append(children[edge.PredecessorLineageID], edge.SuccessorLineageID)
 	}
-	visited := map[string]bool{seed: true}
-	queue := []string{seed}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		for _, child := range children[current] {
-			if visited[child] {
-				continue
-			}
-			visited[child] = true
-			queue = append(queue, child)
+	for lineage := range children {
+		slices.SortFunc(children[lineage], func(left, right string) int { return cmp.Compare(left, right) })
+	}
+
+	closure := make([]string, 0, len(children)+1)
+	visited := make(map[string]bool, len(children)+1)
+	var visitDescendantsFirst func(node string)
+	visitDescendantsFirst = func(node string) {
+		if visited[node] {
+			return
 		}
+		visited[node] = true
+		for _, child := range children[node] {
+			visitDescendantsFirst(child)
+		}
+		closure = append(closure, node)
 	}
-	closure := make([]string, 0, len(visited))
-	for lineage := range visited {
-		closure = append(closure, lineage)
-	}
-	slices.SortFunc(closure, func(left, right string) int { return cmp.Compare(left, right) })
+	visitDescendantsFirst(seed)
 	return closure
 }
 
@@ -193,10 +387,13 @@ func authorityDispositionClosure(report CompactRecoveryInspectionReport, seed st
 // including outside the closure. encoding/json sorts map keys, so this is
 // already deterministic (the same idiom classifiedAuthorityRepairDigest's own
 // doc comment relies on).
-func authorityInventoryRevision(records map[string]CompactRecord) (string, error) {
-	revisions := make(map[string]string, len(records))
+func authorityInventoryRevision(records map[string]CompactRecord, historical map[string]historicalCompactForensicRecord) (string, error) {
+	revisions := make(map[string]string, len(records)+len(historical))
 	for lineage, record := range records {
 		revisions[lineage] = record.Revision
+	}
+	for lineage, record := range historical {
+		revisions[lineage] = record.RawDigest
 	}
 	return classifiedAuthorityRepairDigest("gentle-ai.review-authority-inventory-revision/v1", revisions)
 }
@@ -217,17 +414,18 @@ func authorityInventoryRevision(records map[string]CompactRecord) (string, error
 // Content").
 func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, error) {
 	canonical := struct {
-		Schema                     string            `json:"schema"`
-		RepositoryBinding          string            `json:"repository_id"`
-		AuthorityInventoryRevision string            `json:"authority_inventory_revision"`
-		AnomalyClass               string            `json:"anomaly_class"`
-		SeedSet                    []string          `json:"ordered_seed_set"`
-		Closure                    []string          `json:"ordered_closure"`
-		ExpectedRevisions          map[string]string `json:"expected_revisions"`
+		Schema                     string                        `json:"schema"`
+		RepositoryBinding          string                        `json:"repository_id"`
+		AuthorityInventoryRevision string                        `json:"authority_inventory_revision"`
+		AnomalyClass               string                        `json:"anomaly_class"`
+		Selector                   *AuthorityDispositionSelector `json:"selector,omitempty"`
+		SeedSet                    []string                      `json:"ordered_seed_set"`
+		Closure                    []string                      `json:"ordered_closure"`
+		ExpectedRevisions          map[string]string             `json:"expected_revisions"`
 	}{
 		Schema: plan.Schema, RepositoryBinding: plan.RepositoryBinding,
 		AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
-		SeedSet: plan.SeedSet, Closure: plan.Closure, ExpectedRevisions: plan.ExpectedRevisions,
+		Selector: plan.Selector, SeedSet: plan.SeedSet, Closure: plan.Closure, ExpectedRevisions: plan.ExpectedRevisions,
 	}
 	return classifiedAuthorityRepairDigest("gentle-ai.review-disposition-plan-digest/v1", canonical)
 }
@@ -238,6 +436,12 @@ func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, erro
 // "Authorization Binds to Digest and Revision, No Wall-Clock Expiry",
 // pending-confirmation assumption 1).
 const authorityDispositionAuthorizationSchema = "gentle-ai.review-disposition-authorization/v1"
+
+// AuthorityDispositionAuthorizationSchema is the exported form of
+// authorityDispositionAuthorizationSchema for Wave 6 Slice S4's negotiated-
+// transition wiring (internal/cli), which needs to publish the disposition
+// collect{}'s schema without duplicating the literal.
+const AuthorityDispositionAuthorizationSchema = authorityDispositionAuthorizationSchema
 
 // authorityDispositionAuthorizationBinding renders the exact authorization
 // text a maintainer must supply for plan to be admitted at execution time,
@@ -256,15 +460,30 @@ func authorityDispositionAuthorizationBinding(plan AuthorityDispositionPlan) str
 }
 
 // validateAuthorityDispositionAuthorization proves an authorized plan's
-// Authorization binds to its own plan_digest AND the CURRENT
-// authority_inventory_revision. No elapsed-time expiry check exists anywhere
-// in this function or its caller — CAS on ExpectedRevisions (Slice S2) plus
-// this revision comparison is the entire staleness guard (rdd-authority-
-// disposition-plan / "Authorization Binds to Digest and Revision, No
-// Wall-Clock Expiry", pending-confirmation assumption 1).
-func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, currentAuthorityInventoryRevision string) error {
-	if plan.AuthorityInventoryRevision != currentAuthorityInventoryRevision {
-		return fmt.Errorf("%w: authority inventory revision drifted from %q to %q", ErrConcurrentUpdate, plan.AuthorityInventoryRevision, currentAuthorityInventoryRevision)
+// Authorization binds to its own plan_digest AND the
+// authority_inventory_revision named by callerAuthorityInventoryRevision.
+//
+// Fix cycle 2 (WARNING-2, sdd-verify cycle-2): callerAuthorityInventoryRevision
+// is NOT always the live, freshly re-derived revision — its meaning is
+// caller-supplied and depends on the execution path. On a FRESH execution
+// (lockedAuthorityDispositionMutation, authority_disposition_execute.go) the
+// caller passes the just-re-derived current revision, so this genuinely
+// checks the plan against the live store. On a RESUME the caller passes
+// plan.AuthorityInventoryRevision — the plan's own FROZEN value, compared to
+// itself — which makes the drift half of this check a deliberate no-op
+// (a narrowing re-derivation mid-closure is exactly what forward-only resume
+// forbids); CAS-all-N is the live guard for the members a resume actually
+// disposes. Only the binding half (Authorization matching its own frozen
+// plan_digest/inventory_revision) is unconditional on every path — which is
+// what makes a forged or mismatched Authorization refuse regardless of
+// fresh-vs-resume. No elapsed-time expiry check exists anywhere in this
+// function or its caller — CAS on ExpectedRevisions (Slice S2) plus the
+// drift comparison (on the paths where it is live) is the entire staleness
+// guard (rdd-authority-disposition-plan / "Authorization Binds to Digest and
+// Revision, No Wall-Clock Expiry", pending-confirmation assumption 1).
+func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, callerAuthorityInventoryRevision string) error {
+	if plan.AuthorityInventoryRevision != callerAuthorityInventoryRevision {
+		return fmt.Errorf("%w: authority inventory revision drifted from %q to %q", ErrConcurrentUpdate, plan.AuthorityInventoryRevision, callerAuthorityInventoryRevision)
 	}
 	if plan.Authorization != authorityDispositionAuthorizationBinding(plan) {
 		// refusal:by-design human-authority: only a maintainer can supply a correct authorization binding; there is no command that fixes a forged one
@@ -273,35 +492,37 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 	return nil
 }
 
-// compactRepairCommandText renders the exact runnable `review repair`
-// invocation for one leaf authority disposition plan a caller already
-// confirmed derives and admits (deriveAuthorityDispositionPlanAtRepo +
-// admitLeafDisposition — the same read-only prediction `review repair
-// --preflight` runs), with the persisted plan_digest and
-// authority_inventory_revision preflight would publish and the authorization
-// template execution verifies. plan_digest is actor/reason-independent
-// (authorityDispositionPlanDigest excludes both from its pre-image), so the
-// value rendered here is exactly the value execution re-derives and compares
-// against, for whichever actor/reason a maintainer later supplies — the
-// command printed is the command that runs. Only a caller whose own
-// read-only prediction accepted the plan may render this, mirroring
-// compactAbandonCommandText and compactReconcileCommandText
-// (compact_reconcile.go).
-func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string {
-	template := plan
-	template.Actor, template.Reason = "<actor>", "<why-it-is-repaired>"
-	return fmt.Sprintf("`gentle-ai review repair --cwd %q --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
-		" (`gentle-ai review repair --preflight --cwd %q` re-confirms these are still current);"+
-		" the repair quarantines the entry whole and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
-		" --authorization is exactly these seven lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
-		repo, plan.PlanDigest, plan.AuthorityInventoryRevision, repo, authorityDispositionAuthorizationBinding(template))
-}
-
 // DeriveAuthorityDispositionPlanAtRepo is the exported form of
 // deriveAuthorityDispositionPlanAtRepo for Slice S3's `review repair` CLI
 // wiring — a read-only plan derivation with no CLI entrypoint of its own
 // (rdd-authority-disposition-plan / "No New Public Repair Verb": this is a Go
 // API surface behind the existing verb, not a new command).
-func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string) (AuthorityDispositionPlan, error) {
-	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason)
+func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
+	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason, requested...)
+}
+
+// ListAuthorityDispositionSelectorsAtRepo exposes exact choices for multi-edge
+// content mismatch (#2014) AND per-entry historical repair (#2995): every
+// closed content-mismatch edge and every historical (outdated) entry yields
+// one exact selector an operator can re-run `review repair --preflight`
+// with. Sorted by (predecessor, successor): historical selectors carry an
+// empty predecessor side, so they enumerate first.
+func ListAuthorityDispositionSelectorsAtRepo(ctx context.Context, repo string) ([]AuthorityDispositionSelector, error) {
+	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	report, records, err := loadCompactRecoveryRecords(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	edgeSelectors, err := authorityDispositionSelectors(report, records)
+	if err != nil {
+		return nil, err
+	}
+	selectors := append(edgeSelectors, historicalDispositionSelectors(report)...)
+	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
+		return cmp.Or(cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID), cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID))
+	})
+	return selectors, nil
 }

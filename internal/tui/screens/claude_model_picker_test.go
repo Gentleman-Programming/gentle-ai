@@ -4,8 +4,97 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
+
+func TestClaudeShortTerminalShowsFocusedRDDRowsAndConfirm(t *testing.T) {
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	picker.Mode = ClaudeModePhaseList
+	for _, role := range []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"} {
+		for row, phase := range claudePhases {
+			if phase != role {
+				continue
+			}
+			view := RenderClaudeModelPicker(picker, row, 12)
+			if !strings.Contains(view, claudePhaseLabels[role]) || len(strings.Split(view, "\n")) > 12 {
+				t.Errorf("role %s not visible within 12 lines: %q", role, view)
+			}
+		}
+	}
+	view := RenderClaudeModelPicker(picker, len(claudePhases), 12)
+	if !strings.Contains(view, "Confirm") || len(strings.Split(view, "\n")) > 12 {
+		t.Errorf("Confirm not visible within 12 lines: %q", view)
+	}
+}
+
+func TestClaudePickerPreservesLegacyAssignmentsWithoutShowingRows(t *testing.T) {
+	legacy := model.ClaudePhaseAssignment{Model: model.ClaudeModelFable, Effort: model.ClaudeEffortHigh}
+	picker := NewClaudeModelPickerStateFromPhaseAssignments(map[string]model.ClaudePhaseAssignment{"sdd-propose": legacy})
+	picker.InCustomMode = true
+	if strings.Contains(RenderClaudeModelPicker(picker, 0), "Propose") {
+		t.Fatal("legacy SDD role is visible")
+	}
+	_, saved := HandleClaudeModelPickerNav("enter", &picker, ClaudeModelPickerOptionCount(picker)-2)
+	if saved["sdd-propose"] != legacy {
+		t.Fatalf("legacy assignment changed: %+v", saved["sdd-propose"])
+	}
+}
+
+func TestClaudePickerOffersOnlyActiveRoles(t *testing.T) {
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	rows := RenderClaudeModelPicker(picker, 0)
+	for _, role := range []string{"ODD Explorer", "ODD Worker", "ODD Verify", "RDD Risk", "RDD Validator", "General delegation"} {
+		if !strings.Contains(rows, role) {
+			t.Errorf("missing active role %q: %s", role, rows)
+		}
+	}
+	for _, role := range []string{"sdd-", "SDD phase", "Explore   ", "Apply   "} {
+		if strings.Contains(rows, role) {
+			t.Errorf("retired SDD role %q visible: %s", role, rows)
+		}
+	}
+}
+
+func TestClaudePickerSavesAndReopensNativeReviewRoles(t *testing.T) {
+	roles := []string{"risk", "readability", "reliability", "resilience", "refuter", "validator"}
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	for _, role := range roles {
+		row := -1
+		for i, key := range claudePhases {
+			if key == role {
+				row = i
+				break
+			}
+		}
+		if row < 0 || claudePhaseLabels[role] == "" {
+			t.Fatalf("missing custom picker row for %s", role)
+		}
+		HandleClaudeModelPickerNav("enter", &picker, row)
+		if picker.SelectedPhase != role {
+			t.Fatalf("selected %q, want %q", picker.SelectedPhase, role)
+		}
+		HandleClaudeModelPickerNav("enter", &picker, 3) // haiku
+	}
+	_, saved := HandleClaudeModelPickerNav("enter", &picker, len(claudePhases))
+	if saved == nil {
+		t.Fatal("confirm did not return assignments")
+	}
+	reopened := NewClaudeModelPickerStateFromPhaseAssignments(saved)
+	if reopened.Preset != ClaudePresetCustom {
+		t.Fatalf("reopened preset = %s, want custom", reopened.Preset)
+	}
+	for _, role := range roles {
+		if reopened.CustomAssignments[role].Model != model.ClaudeModelHaiku {
+			t.Errorf("reopened %s = %v, want haiku", role, reopened.CustomAssignments[role])
+		}
+	}
+	if _, present := model.ClaudeModelPresetBalanced()["risk"]; present {
+		t.Fatal("named preset policy changed")
+	}
+}
 
 func TestNewClaudeModelPickerStateFromAssignments(t *testing.T) {
 	cases := []struct {
@@ -165,7 +254,7 @@ func TestHandleCustomEffortSelect_OnlyOffersSupportedEfforts(t *testing.T) {
 // explicit model/effort selection flow.
 func TestRenderClaudeModelPicker_CustomModeRendersFable(t *testing.T) {
 	state := NewClaudeModelPickerStateFromAssignments(map[string]model.ClaudeModelAlias{
-		"sdd-propose": model.ClaudeModelFable,
+		"odd-explorer": model.ClaudeModelFable,
 	})
 	state.InCustomMode = true
 

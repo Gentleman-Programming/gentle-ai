@@ -7,11 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	config "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -70,10 +71,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentOpenCode)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
 	resolver := a.resolver
 	if resolver == nil {
@@ -102,7 +99,17 @@ func (a *Adapter) SkillsDir(homeDir string) string {
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	configDir := ConfigPath(homeDir)
+	jsoncPath := filepath.Join(configDir, "opencode.jsonc")
+	if regularFileExists(jsoncPath) {
+		return jsoncPath
+	}
+	return filepath.Join(configDir, "opencode.json")
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // --- Config strategies ---
@@ -120,7 +127,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
 	// OpenCode merges into opencode.json, but this provides the path
 	// for components that use the separate-file strategy fallback.
-	return filepath.Join(ConfigPath(homeDir), "opencode.json")
+	return a.SettingsPath(homeDir)
 }
 
 // EffectiveCodeGraphWiring validates OpenCode's effective MCP entry while
@@ -141,8 +148,15 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 		if err != nil {
 			continue
 		}
-		mcp, ok := root["mcp"].(map[string]any)
-		if ok && isEffectiveCodeGraphEntry(mcp["codegraph"]) {
+		entry, native := config.MCPEntry(root, "codegraph")
+		if native {
+			if disabled, exists := entry["disabled"]; exists && disabled != false {
+				continue
+			}
+			// V2 does not interpret legacy enabled inside a native server.
+			entry = map[string]any{"type": entry["type"], "command": entry["command"]}
+		}
+		if isEffectiveCodeGraphEntry(entry) {
 			return path, true
 		}
 	}

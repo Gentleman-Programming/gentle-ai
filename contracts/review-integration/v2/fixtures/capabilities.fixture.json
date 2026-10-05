@@ -18,8 +18,7 @@
     "verification": "compare-with-published-manifest"
   },
   "operations": [
-    "review.bind_sdd", "review.capabilities", "review.finalize", "review.repair",
-    "review.retry_final_verification", "review.start", "review.status", "review.validate"
+    "review.capabilities", "review.repair", "review.start", "review.status", "review.validate"
   ],
   "gates": ["post-apply", "pre-commit", "pre-push", "pre-pr", "release"],
   "projections": ["staged", "workspace"],
@@ -31,32 +30,26 @@
     "gentle-ai.review-gate-request/v1",
     "gentle-ai.review-integration.capabilities/v2",
     "gentle-ai.review-integration.failure/v2",
-    "gentle-ai.review-final-verification-incident/v1",
     "gentle-ai.review-integration.operation/v2",
     "gentle-ai.review-integration.projection/v1",
     "gentle-ai.review-integration.repair/v2",
     "gentle-ai.review-integration.start/v3",
-    "gentle-ai.review-integration.status/v3",
+    "gentle-ai.review-integration.status/v5",
     "gentle-ai.review-receipt/v1",
-    "gentle-ai.review-receipt/v2",
     "gentle-ai.review-result-artifact/v2",
     "gentle-ai.review-targeted-validation-request/v1",
-    "gentle-ai.review-verification-evidence/v2",
     "https://gentle-ai.dev/schema/review/refuter/v1",
     "https://gentle-ai.dev/schema/review/reviewer/v1",
     "https://gentle-ai.dev/schema/review/validator/v1",
-    "gentle-ai.review-integration.consent/v2"
+    "gentle-ai.review-integration.consent/v3"
   ],
   "features": {
     "mandatory": [
       {"name": "compact_v2_authority", "supported": true, "requires": []},
-      {"name": "exact_receipt_replay", "supported": true, "requires": ["compact_v2_authority"]},
-      {"name": "five_delivery_gates", "supported": true, "requires": ["compact_v2_authority"]},
       {"name": "immutable_snapshot", "supported": true, "requires": []},
       {"name": "legacy_v1_target_scoped_read_only", "supported": true, "requires": ["target_scoped_status"]},
       {"name": "repository_independent_capabilities", "supported": true, "requires": []},
       {"name": "restart_safe_projection", "supported": true, "requires": ["target_scoped_status"]},
-      {"name": "sdd_receipt_binding", "supported": true, "requires": ["compact_v2_authority"]},
       {"name": "target_scoped_status", "supported": true, "requires": ["repository_independent_capabilities"]},
       {"name": "uniform_failure_envelope", "supported": true, "requires": ["repository_independent_capabilities"]}
     ],
@@ -64,20 +57,18 @@
       {"name": "base_ref_workspace_overlay", "supported": true, "requires": ["immutable_snapshot", "restart_safe_projection"]},
       {"name": "bounded_process_waits", "supported": true, "requires": ["uniform_failure_envelope"]},
       {"name": "classified_authority_repair", "supported": true, "requires": ["native_next_transition", "uniform_failure_envelope"]},
-      {"name": "exact_gate_receipt_discovery", "supported": true, "requires": ["five_delivery_gates"]},
       {"name": "native_frozen_candidate_context", "supported": true, "requires": ["immutable_snapshot"]},
       {"name": "native_low_risk_verification", "supported": true, "requires": ["compact_v2_authority"]},
       {"name": "native_next_transition", "supported": true, "requires": ["target_scoped_status"]},
-      {"name": "one_shot_final_verification_retry", "supported": true, "requires": ["compact_v2_authority", "exact_receipt_replay", "native_next_transition"]},
       {"name": "opaque_repository_context", "supported": true, "requires": ["compact_v2_authority", "native_next_transition"]},
-      {"name": "outcome_bound_verification_evidence", "supported": true, "requires": ["compact_v2_authority", "native_next_transition"]},
       {"name": "provider_artifact_admission", "supported": true, "requires": ["compact_v2_authority", "native_frozen_candidate_context", "opaque_repository_context"]},
       {"name": "provider_targeted_validation_request", "supported": true, "requires": ["compact_v2_authority", "native_next_transition"]},
       {"name": "recovered_correction_evidence", "supported": true, "requires": ["compact_v2_authority", "provider_targeted_validation_request"]},
       {"name": "risk_reasons", "supported": true, "requires": ["repository_independent_capabilities"]},
       {"name": "scope_change_diagnostics", "supported": true, "requires": ["uniform_failure_envelope"]},
       {"name": "validating_result_reopen", "supported": true, "requires": ["compact_v2_authority", "provider_artifact_admission"]},
-      {"name": "provider_bound_native_git_context", "supported": true, "requires": ["native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"]}
+      {"name": "provider_bound_native_git_context", "supported": true, "requires": ["native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"]},
+      {"name": "provider_submission_descriptors", "supported": true, "requires": ["native_next_transition", "opaque_repository_context", "provider_targeted_validation_request"]}
     ]
   },
   "bootstrap": {

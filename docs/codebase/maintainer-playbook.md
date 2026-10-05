@@ -1,5 +1,8 @@
 # Maintainer Playbook
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Use this page before reviewing or making a change. It turns the codebase map into practical guardrails.
@@ -10,7 +13,7 @@ Use this page before reviewing or making a change. It turns the codebase map int
 |---|---|
 | Agent setup | Does the selected adapter receive the right files without clobbering user content? |
 | Persistent memory wiring | Does Engram MCP setup stay stable across terminals and IDE-launched agents? |
-| SDD workflow | Do orchestrator, phase agents, skills, and model assignment files stay consistent? |
+| ODD workflow | Do shared guidance, feature-task tracking, delegated workers, and supported model assignments stay consistent across agents? |
 | Sync | Is repeated sync a no-op when assets are current? |
 | Backup/rollback | Can users recover from every managed mutation? |
 | TUI | Does the interactive path match CLI behavior where it should? |

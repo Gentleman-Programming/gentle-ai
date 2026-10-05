@@ -1,26 +1,92 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
+
+func TestContext7SelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		mode          os.FileMode
+	}{
+		{"nested comments", "{\"mcp\":{\"other\":{/* keep */\"type\":\"remote\"}}}\n", 0o600},
+		{"locked mode", "{\"mcp\":{}}\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && tc.mode != 0o600 {
+				t.Skip("file permission bits are not supported on Windows")
+			}
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := injectOpenCodeMergeIntoSettings(path, model.AgentOpenCode)
+			if err == nil || !strings.Contains(err.Error(), "refuse") {
+				t.Fatalf("want actionable refusal, got %v", err)
+			}
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != tc.mode {
+				t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != tc.content {
+				t.Fatalf("settings bytes changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestContext7SelectedSettingsPreservePrivateMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	if err := os.WriteFile(path, []byte("{\"mcp\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := injectOpenCodeMergeIntoSettings(path, model.AgentOpenCode); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return // POSIX permission bits are not preserved on Windows.
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode = %v, error = %v; want 0600", info, err)
+	}
+}
 
 func cursorAdapter(t *testing.T) agents.Adapter {
 	t.Helper()
@@ -416,6 +482,30 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 	}
 }
 
+func TestInjectOpenCodeRejectsMalformedJSONCSettingsWithoutReplacingBytes(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	original := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.jsonc) error = %v", err)
+	}
+
+	if _, err := Inject(home, home, adapter); err == nil {
+		t.Fatal("Inject() error = nil, want refusal for malformed opencode.jsonc")
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.jsonc) error = %v", err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("malformed opencode.jsonc was replaced:\n got: %q\nwant: %q", after, original)
+	}
+}
+
 func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.T) {
 	home := t.TempDir()
 	adapter := opencodeAdapter()
@@ -501,18 +591,30 @@ func TestInjectClaudeWritesUserConfigAndIsIdempotent(t *testing.T) {
 		t.Fatalf("ReadFile(user config after first) error = %v", err)
 	}
 
-	// Loosen the mode: the no-op run must still re-tighten 0600.
+	// Loosen the mode: the byte-identical run must still re-tighten 0600, and
+	// that mode-only repair is a change (#5022).
+	loosened := false
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(userConfigPath, 0o644); err != nil {
 			t.Fatalf("Chmod(loosen) error = %v", err)
 		}
+		loosened = true
 	}
 	second, err := Inject(home, home, claudeAdapter())
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
-	if second.Changed {
-		t.Fatalf("Inject() second changed = true")
+	if second.Changed != loosened {
+		t.Fatalf("Inject() second changed = %v; want %v (mode-only repair)", second.Changed, loosened)
+	}
+
+	// Same bytes and same mode: a true no-op.
+	third, err := Inject(home, home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() third error = %v", err)
+	}
+	if third.Changed {
+		t.Fatalf("Inject() third changed = true")
 	}
 
 	raw, err := os.ReadFile(userConfigPath)
@@ -551,6 +653,9 @@ func TestInjectClaudeWritesUserConfigAndIsIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".claude", "mcp", "context7.json")); !os.IsNotExist(err) {
 		t.Fatalf("Claude Context7 must not be written to ~/.claude/mcp/context7.json; stat err = %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(home, ".mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("user scope must not create <home>/.mcp.json; stat err = %v", err)
+	}
 }
 
 // TestInjectClaudeSettingsInertBlockCleanup: the inert settings.json block is
@@ -565,6 +670,7 @@ func TestInjectClaudeSettingsInertBlockCleanup(t *testing.T) {
 		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
 		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, false},
 		{"user-authored context7 is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"my-own-proxy"}}}`, false},
+		{"empty block is left alone", `{"theme":"dark","mcpServers":{}}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -600,6 +706,358 @@ func TestInjectClaudeSettingsInertBlockCleanup(t *testing.T) {
 			}
 			if settings["theme"] != "dark" {
 				t.Fatalf("settings.theme = %#v; want dark preserved", settings["theme"])
+			}
+		})
+	}
+}
+
+// TestInjectClaudeWorkspaceWritesMCPJSONAndIsIdempotent verifies that workspace
+// scope (home != workspace) writes Context7 into <project-root>/.mcp.json — the
+// file Claude Code loads project-scoped MCP servers from — rather than the
+// inert .claude/settings.json key Claude ignores (issue #2213).
+func TestInjectClaudeWorkspaceWritesMCPJSONAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+
+	first, err := Inject(home, workspace, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	context7 := readMCPServersContext7Entry(t, mcpPath)
+	if context7["command"] != "npx" {
+		t.Fatalf(".mcp.json mcpServers.context7.command = %#v; want npx", context7["command"])
+	}
+	if args := fmt.Sprintf("%v", context7["args"]); !strings.Contains(args, versions.Context7MCP) {
+		t.Fatalf(".mcp.json context7.args = %s; want pinned version %s", args, versions.Context7MCP)
+	}
+
+	second, err := Inject(home, workspace, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; want idempotent")
+	}
+
+	// The inert settings.json key must never be (re)written for workspace scope.
+	if _, err := os.Stat(filepath.Join(workspace, ".claude", "settings.json")); err == nil {
+		raw, readErr := os.ReadFile(filepath.Join(workspace, ".claude", "settings.json"))
+		if readErr != nil {
+			t.Fatalf("ReadFile(settings.json) error = %v", readErr)
+		}
+		if strings.Contains(string(raw), `"mcpServers"`) {
+			t.Fatalf("workspace .claude/settings.json must not carry mcpServers; got %s", raw)
+		}
+	}
+}
+
+// claudePendingApprovalReportingFloor is the first Claude Code CLI release
+// whose piped `claude mcp list`/`get` output reports unapproved project
+// .mcp.json servers as "Pending approval" (upstream v2.1.154; issue #3969).
+var claudePendingApprovalReportingFloor = [3]int{2, 1, 154}
+
+// claudeReportingGate classifies whether the ambient Claude Code CLI's piped
+// `mcp list` output can carry the pending-approval reporting contract.
+type claudeReportingGate int
+
+const (
+	// claudeReportingGateProceed runs the native discovery assertions.
+	claudeReportingGateProceed claudeReportingGate = iota
+	// claudeReportingGateBelowFloor marks a recognized CLI older than
+	// v2.1.154, whose piped output omits unapproved project servers.
+	claudeReportingGateBelowFloor
+	// claudeReportingGateUnrecognized marks malformed or unavailable
+	// `claude --version` output.
+	claudeReportingGateUnrecognized
+)
+
+func (gate claudeReportingGate) skipReason() string {
+	switch gate {
+	case claudeReportingGateBelowFloor:
+		return "claude CLI predates v2.1.154; piped `claude mcp list` omits unapproved project servers (unsupported reporting contract)"
+	case claudeReportingGateUnrecognized:
+		return "claude --version output not recognized; cannot confirm the pending-approval reporting contract"
+	}
+	return ""
+}
+
+// parseClaudeVersion extracts the first numeric x.y.z token from
+// `claude --version` output, e.g. "2.1.114 (Claude Code)".
+func parseClaudeVersion(versionOutput string) ([3]int, bool) {
+	for field := range strings.FieldsSeq(versionOutput) {
+		parts := strings.Split(field, ".")
+		if len(parts) != 3 {
+			continue
+		}
+		version := [3]int{}
+		ok := true
+		for i, part := range parts {
+			number, err := strconv.Atoi(part)
+			if err != nil {
+				ok = false
+				break
+			}
+			version[i] = number
+		}
+		if ok {
+			return version, true
+		}
+	}
+	return [3]int{}, false
+}
+
+// versionAtLeast compares two x.y.z tuples lexicographically.
+func versionAtLeast(version, floor [3]int) bool {
+	for i := range floor {
+		if version[i] != floor[i] {
+			return version[i] > floor[i]
+		}
+	}
+	return true
+}
+
+// classifyClaudeReportingGate decides from `claude --version` output whether
+// the CLI's piped mcp list output can report unapproved project .mcp.json
+// servers ("Pending approval", upstream v2.1.154+).
+func classifyClaudeReportingGate(versionOutput string) claudeReportingGate {
+	version, ok := parseClaudeVersion(versionOutput)
+	if !ok {
+		return claudeReportingGateUnrecognized
+	}
+	if !versionAtLeast(version, claudePendingApprovalReportingFloor) {
+		return claudeReportingGateBelowFloor
+	}
+	return claudeReportingGateProceed
+}
+
+// TestClassifyClaudeReportingGate proves the deterministic version gate for
+// the native discovery test: only Claude Code CLI v2.1.154 and newer report
+// unapproved project .mcp.json servers as "Pending approval" in piped
+// `claude mcp list` output (issue #3969).
+func TestClassifyClaudeReportingGate(t *testing.T) {
+	tests := []struct {
+		name        string
+		versionOut  string
+		want        claudeReportingGate
+		wantSkipMsg bool
+	}{
+		{
+			name:        "below floor omits unapproved project servers",
+			versionOut:  "2.1.114 (Claude Code)\n",
+			want:        claudeReportingGateBelowFloor,
+			wantSkipMsg: true,
+		},
+		{
+			name:        "older major below floor",
+			versionOut:  "1.0.87 (Claude Code)",
+			want:        claudeReportingGateBelowFloor,
+			wantSkipMsg: true,
+		},
+		{
+			name:       "exact floor reports pending approval",
+			versionOut: "2.1.154 (Claude Code)",
+			want:       claudeReportingGateProceed,
+		},
+		{
+			name:       "above floor reports pending approval",
+			versionOut: "2.2.0 (Claude Code)",
+			want:       claudeReportingGateProceed,
+		},
+		{
+			name:        "two-component version is unrecognized",
+			versionOut:  "2.1 (Claude Code)",
+			want:        claudeReportingGateUnrecognized,
+			wantSkipMsg: true,
+		},
+		{
+			name:        "malformed output has no version token",
+			versionOut:  "Claude Code (unknown)",
+			want:        claudeReportingGateUnrecognized,
+			wantSkipMsg: true,
+		},
+		{
+			name:        "unavailable output is unrecognized",
+			versionOut:  "",
+			want:        claudeReportingGateUnrecognized,
+			wantSkipMsg: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyClaudeReportingGate(tt.versionOut)
+			if got != tt.want {
+				t.Fatalf("classifyClaudeReportingGate(%q) = %v; want %v", tt.versionOut, got, tt.want)
+			}
+			if tt.wantSkipMsg && !strings.Contains(got.skipReason(), "reporting contract") {
+				t.Fatalf("skipReason() for %q must name the unsupported reporting contract; got %q", tt.versionOut, got.skipReason())
+			}
+		})
+	}
+}
+
+// TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList proves the
+// project-scope contract through Claude Code itself, without approving the
+// pending project server.
+func TestInjectClaudeWorkspaceIsDiscoveredByNativeClaudeMCPList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires the native Claude Code CLI")
+	}
+
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skip("native Claude Code CLI is not installed")
+		}
+		t.Fatalf("LookPath(claude) error = %v", err)
+	}
+
+	// The pending-approval reporting contract only exists since Claude Code
+	// v2.1.154 (issue #3969): older CLIs silently omit unapproved project
+	// servers from piped `claude mcp list` output.
+	versionOutput, versionErr := exec.Command(claudePath, "--version").CombinedOutput()
+	if versionErr != nil {
+		t.Skipf("claude --version error = %v; %s", versionErr, claudeReportingGateUnrecognized.skipReason())
+	}
+	if gate := classifyClaudeReportingGate(string(versionOutput)); gate != claudeReportingGateProceed {
+		t.Skipf("claude --version = %q: %s", strings.TrimSpace(string(versionOutput)), gate.skipReason())
+	}
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	cmd := exec.Command(claudePath, "mcp", "list")
+	cmd.Dir = workspace
+	env := os.Environ()
+	homeReplaced := false
+	for index, value := range env {
+		if strings.HasPrefix(value, "HOME=") {
+			env[index] = "HOME=" + home
+			homeReplaced = true
+			break
+		}
+	}
+	if !homeReplaced {
+		env = append(env, "HOME="+home)
+	}
+	cmd.Env = env
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude mcp list error = %v\noutput:\n%s", err, output)
+	}
+	t.Logf("native Claude project-scope discovery:\n%s", output)
+	lowerOutput := strings.ToLower(string(output))
+	if !strings.Contains(lowerOutput, "context7") {
+		t.Fatalf("claude mcp list did not discover context7 from %q\noutput:\n%s", filepath.Join(workspace, ".mcp.json"), output)
+	}
+	if !strings.Contains(lowerOutput, "pending") && !strings.Contains(lowerOutput, "approval") {
+		t.Fatalf("claude mcp list did not report the unapproved project server\noutput:\n%s", output)
+	}
+}
+
+func TestInjectClaudeWorkspacePreservesMCPReadErrors(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.Mkdir(mcpPath, 0o755); err != nil {
+		t.Fatalf("Mkdir(.mcp.json) error = %v", err)
+	}
+
+	_, err := Inject(home, workspace, claudeAdapter())
+	if err == nil {
+		t.Fatal("Inject() error = nil; want non-not-exist read error")
+	}
+	if !strings.Contains(err.Error(), mcpPath) {
+		t.Fatalf("Inject() error = %v; want path %q", err, mcpPath)
+	}
+}
+
+// TestInjectClaudeWorkspacePreservesUnrelatedServersAndConfig verifies that
+// merging context7 into <project-root>/.mcp.json preserves user-authored
+// servers and top-level config outside the managed entry (issue #2213).
+func TestInjectClaudeWorkspacePreservesUnrelatedServersAndConfig(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	existing := `{
+  "mcpServers": {
+    "codegraph": {
+      "command": "codegraph",
+      "args": ["serve", "--mcp"]
+    }
+  },
+  "enableAllProjectMcpServers": true
+}`
+	if err := os.WriteFile(mcpPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(.mcp.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(.mcp.json) error = %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("Unmarshal(.mcp.json) error = %v", err)
+	}
+	servers, _ := parsed["mcpServers"].(map[string]any)
+	if codegraph, _ := servers["codegraph"].(map[string]any); codegraph["command"] != "codegraph" {
+		t.Fatalf("unrelated codegraph server must be preserved; got %#v", servers["codegraph"])
+	}
+	if context7, _ := servers["context7"].(map[string]any); context7["command"] != "npx" {
+		t.Fatalf("context7 must be merged; got %#v", servers["context7"])
+	}
+	if parsed["enableAllProjectMcpServers"] != true {
+		t.Fatalf("unrelated top-level config must be preserved; got %#v", parsed["enableAllProjectMcpServers"])
+	}
+}
+
+// TestInjectClaudeWorkspaceCleansInertSettingsBlock verifies workspace cleanup.
+func TestInjectClaudeWorkspaceCleansInertSettingsBlock(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	settingsPath := filepath.Join(workspace, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	for _, tc := range []struct {
+		name, settings string
+		wantKey        bool
+	}{
+		{"managed-only", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, false},
+		{"foreign", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, true},
+		{"empty", `{"theme":"dark","mcpServers":{}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(settingsPath, []byte(tc.settings), 0o644); err != nil {
+				t.Fatalf("WriteFile(settings) error = %v", err)
+			}
+			if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			readMCPServersContext7Entry(t, filepath.Join(workspace, ".mcp.json"))
+			raw, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(settings) error = %v", err)
+			}
+			if got := strings.Contains(string(raw), `"mcpServers"`); got != tc.wantKey {
+				t.Fatalf("mcpServers presence = %t, want %t; got %s", got, tc.wantKey, raw)
 			}
 		})
 	}
@@ -816,6 +1274,49 @@ args = ["mcp", "--tools=agent"]
 	}
 	if !strings.Contains(text, "[mcp_servers.engram]") {
 		t.Fatalf("engram block was not preserved; got:\n%s", text)
+	}
+}
+
+func TestInjectCodexContext7PreservesHeaderInsideMultilineString(t *testing.T) {
+	home := t.TempDir()
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	instructions := `developer_instructions = '''
+Example config:
+[mcp_servers.context7]
+command = "fake"
+Keep this text.
+'''`
+	existing := instructions + `
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "context7-mcp"]
+`
+	if err := os.WriteFile(configTOML, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	if _, err := Inject(home, home, codex.NewAdapter()); err != nil {
+		t.Fatalf("Inject(codex) first error = %v", err)
+	}
+	second, err := Inject(home, home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(codex) second changed = true (should be idempotent)")
+	}
+
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	want := instructions + "\n\n[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n"
+	if got := string(content); got != want {
+		t.Fatalf("config.toml mismatch:\nwant:\n%s\ngot:\n%s", want, got)
 	}
 }
 
@@ -1128,5 +1629,63 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	text2 := string(content2)
 	if !strings.Contains(text2, "model: claude") {
 		t.Fatalf("config.yaml lost pre-existing key on second Inject:\n%s", text2)
+	}
+}
+
+// TestMergeJSONFilePreservesExistingModeOnRewrite is the representative
+// end-to-end regression test for gentle-ai#5006(F5): mergeJSONFile is the
+// settings-merge codepath shared by every non-OpenCode/OpenClaw MCP
+// injection, and rewriting a pre-seeded private settings file must never
+// widen it.
+func TestMergeJSONFilePreservesExistingModeOnRewrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"already":"set"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mergeJSONFile(path, DefaultContext7OverlayJSON()); err != nil {
+		t.Fatalf("mergeJSONFile() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode after mergeJSONFile = %v, want 0600 preserved", got)
+	}
+}
+
+func TestKilocodeSymlinkedContext7SettingsKeepBaseWriterBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := kilocodeAdapter()
+	settings := adapter.SettingsPath(home)
+	target := filepath.Join(home, "dotfiles", "opencode.json")
+	original := []byte("{\"mcp\":{}}\n")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, err := Inject(home, home, adapter)
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("Inject(kilocode) error = %v; want base writer symlink error, not the OpenCode refusal", err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != string(original) {
+		t.Fatalf("settings target changed: %q, %v", got, err)
 	}
 }

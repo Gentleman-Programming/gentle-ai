@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
 
 // resolveGitBashForTest derives the Git Bash path the same way the installcmd
@@ -110,10 +110,12 @@ func TestInstallCommandByProfile(t *testing.T) {
 			},
 		},
 		{
-			name: "unsupported package manager returns error",
+			// Issue #2499: the probe (#2493) accepts any Linux package manager
+			// on PATH; only a probe-rejected profile (no manager found) errors.
+			name: "linux without package manager returns error",
 			profile: system.PlatformProfile{
 				OS:             "linux",
-				PackageManager: "zypper",
+				PackageManager: "",
 			},
 			wantErr: true,
 		},

@@ -2,24 +2,799 @@ package uninstall
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 )
 
+func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(agent), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+			adapter, _ := svc.registry.Get(agent)
+			path := adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			prompt, err := assets.Read("opencode/agents/jd-judge-b.md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			agents := map[string]any{
+				"jd-judge-b":          map[string]any{"mode": "subagent", "hidden": true, "description": "Judgment Day blind adversarial reviewer B. Read-only; independently reports findings and does not fix code.", "prompt": prompt, "permission": map[string]any{"write": "deny", "edit": "deny", "task": "deny"}, "model": "custom"},
+				"jd-judge-a":          map[string]any{"prompt": "user modified"},
+				"my-agent":            map[string]any{"prompt": "mine"},
+				"gentle-orchestrator": map[string]any{"prompt": "<!-- gentle-ai:orchestrator -->\nmanaged\n<!-- /gentle-ai:orchestrator -->\n", "permission": map[string]any{"task": map[string]any{"jd-judge-b": "allow", "jd-judge-a": "allow", "my-agent": "allow"}}},
+			}
+			if agent == model.AgentKilocode {
+				agents["gentleman"] = map[string]any{"mode": "primary", "description": "Senior Architect mentor - helpful first, challenging when it matters", "prompt": "{file:./AGENTS.md}", "tools": map[string]any{"write": true, "edit": true}}
+			}
+			raw, err := json.Marshal(map[string]any{"agent": agents, "other": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := svc.PartialUninstall([]model.AgentID{agent}, allManagedComponents); err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var root map[string]any
+				if err := json.Unmarshal(body, &root); err != nil {
+					t.Fatal(err)
+				}
+				remaining := root["agent"].(map[string]any)
+				if _, ok := remaining["jd-judge-b"]; ok {
+					t.Fatalf("managed agent retained: %s", body)
+				}
+				if agent == model.AgentKilocode && remaining["gentleman"] != nil {
+					t.Fatalf("Kilo gentleman retained: %s", body)
+				}
+				if remaining["jd-judge-a"] == nil || remaining["my-agent"] == nil {
+					t.Fatalf("user agents lost: %s", body)
+				}
+				if orchestrator, ok := remaining["gentle-orchestrator"].(map[string]any); ok {
+					task := orchestrator["permission"].(map[string]any)["task"].(map[string]any)
+					if _, ok := task["jd-judge-b"]; ok {
+						t.Fatalf("managed task retained: %s", body)
+					}
+					if task["jd-judge-a"] != "allow" || task["my-agent"] != "allow" {
+						t.Fatalf("user tasks lost: %s", body)
+					}
+				}
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+					t.Fatalf("mode: %v", info.Mode().Perm())
+				}
+			}
+		})
+	}
+}
+
+func TestCompleteUninstallLegacyOpenCodeDefaultOwnership(t *testing.T) {
+	for _, tt := range []struct {
+		name, current, want string
+		removeRecord        bool
+	}{
+		{name: "owned default rolls back", current: opencodedefault.ManagedAgent, want: "build", removeRecord: true},
+		{name: "user modified default is preserved", current: "user-agent", want: "user-agent"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			settings := opencode.NewAdapter().SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(settings), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settings, []byte(`{"default_agent":"`+tt.current+`","unrelated":true}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			record := opencodedefault.OwnershipPath(settings)
+			metadata := `{"schema":"gentle-ai.opencode-default-agent","version":1,"state":"managed","previous_state":"value","previous_default":"build"}`
+			if err := os.WriteFile(record, []byte(metadata), 0600); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+			if _, err := svc.CompleteUninstall(); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(body, &root); err != nil {
+				t.Fatal(err)
+			}
+			if root["default_agent"] != tt.want || root["unrelated"] != true {
+				t.Fatalf("settings = %s, want default_agent %q and unrelated data", body, tt.want)
+			}
+			_, err = os.Stat(record)
+			if tt.removeRecord && !os.IsNotExist(err) || !tt.removeRecord && err != nil {
+				t.Fatalf("ownership record existence mismatch: %v", err)
+			}
+		})
+	}
+}
+
+func TestRetiredSDDDefaultUninstallSkipsLegacyCleanup(t *testing.T) {
+	for _, kind := range []string{"complete", "partial"} {
+		t.Run(kind, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			legacy := filepath.Join(home, ".claude", "commands", "sdd-custom.md")
+			if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(legacy, []byte("user customized"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+			if kind == "complete" {
+				_, err = svc.CompleteUninstall()
+			} else {
+				_, err = svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode}, nil)
+			}
+			if err != nil {
+				t.Fatalf("default uninstall dispatched retired SDD: %v", err)
+			}
+			if body, err := os.ReadFile(legacy); err != nil || string(body) != "user customized" {
+				t.Fatalf("custom legacy file changed: %q, %v", body, err)
+			}
+		})
+	}
+}
+
+func TestRetiredSDDExplicitUninstallFailsWithoutWrites(t *testing.T) {
+	for _, kind := range []string{"partial", "profile selection"} {
+		t.Run(kind, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			legacy := filepath.Join(home, ".claude", "commands", "sdd-custom.md")
+			if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(legacy, []byte("user customized"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := map[string]string{}
+			err = filepath.WalkDir(home, func(path string, entry fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if !entry.IsDir() {
+					data, readErr := os.ReadFile(path)
+					if readErr != nil {
+						return readErr
+					}
+					before[path] = string(data)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "partial" {
+				_, err = svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD})
+			} else {
+				_, err = svc.PartialUninstallWithProfiles([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD}, []string{"custom"}, model.EngramUninstallScopeGlobal)
+			}
+			if err == nil || !strings.Contains(err.Error(), "retired") {
+				t.Fatalf("expected retired component rejection, got %v", err)
+			}
+			after := map[string]string{}
+			err = filepath.WalkDir(home, func(path string, entry fs.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if !entry.IsDir() {
+					data, readErr := os.ReadFile(path)
+					if readErr != nil {
+						return readErr
+					}
+					after[path] = string(data)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(before, after) {
+				t.Fatalf("filesystem files changed: before=%v after=%v", before, after)
+			}
+		})
+	}
+}
+
+// TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents proves native
+// review and Judgment Day agent files survive uninstall without a dedicated
+// retention allowlist: nothing in the uninstall plan enumerates or removes
+// the sub-agents directory at all, so these permanently-installed native
+// agents (installed unconditionally by reviewassets.InstallNativeAgents,
+// independent of any removable component) are never touched.
+func TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	adapter := claude.NewAdapter()
+	agentsDir := adapter.SubAgentsDir(home)
+	if err := os.MkdirAll(agentsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"review-risk.md", "jd-judge-a.md"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, name), []byte("native agent"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc, err := NewService(home, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	if _, err := svc.CompleteUninstall(); err != nil {
+		t.Fatalf("CompleteUninstall: %v", err)
+	}
+	for _, name := range []string{"review-risk.md", "jd-judge-a.md"} {
+		if _, err := os.Stat(filepath.Join(agentsDir, name)); err != nil {
+			t.Fatalf("native agent %s removed by uninstall: %v", name, err)
+		}
+	}
+}
+
+func TestUninstallOpenCodeTelemetryOwnershipAndScope(t *testing.T) {
+	for _, kind := range []string{"owned", "modified", "modified-after-plan", "unowned", "other-agent", "component-only"} {
+		t.Run(kind, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			config := opencode.NewAdapter().GlobalConfigDir(home)
+			paths := telemetryruntime.ManagedPaths(config)
+			if kind != "unowned" {
+				if _, err := telemetryruntime.Reconcile(config); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "modified" || kind == "unowned" {
+				if err := os.MkdirAll(filepath.Dir(paths[0]), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(paths[0], []byte("user plugin"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sibling := filepath.Join(filepath.Dir(paths[0]), "community.ts")
+			if err := os.WriteFile(sibling, []byte("community"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			agent := model.AgentOpenCode
+			components := allManagedComponents
+			if kind == "other-agent" {
+				agent = model.AgentClaudeCode
+			}
+			if kind == "component-only" {
+				components = []model.ComponentID{model.ComponentPersona}
+			}
+			plan, err := svc.buildPlan([]model.AgentID{agent}, components)
+			var result Result
+			if kind == "modified-after-plan" {
+				if writeErr := os.WriteFile(paths[0], []byte("user plugin"), 0600); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+			if err == nil {
+				result, err = svc.executePlan(plan, nil)
+			}
+			if strings.HasPrefix(kind, "modified") || kind == "unowned" {
+				if err == nil {
+					t.Fatal("ownership conflict not reported")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "owned" {
+				for _, path := range paths {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Fatal("owned runtime remains", path)
+					}
+					if !slices.Contains(result.RemovedFiles, path) {
+						t.Fatal("removed file unreported", path)
+					}
+				}
+			} else {
+				if _, err := os.Stat(paths[0]); err != nil {
+					t.Fatal("unrelated/custom runtime removed", err)
+				}
+			}
+			if data, err := os.ReadFile(sibling); err != nil || string(data) != "community" {
+				t.Fatal("community plugin affected")
+			}
+		})
+	}
+}
+
 type stubSnapshotter struct{}
+
+func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)
+	ownedPath := paths[0]
+	userPath := filepath.Join(opencodeactivation.BinDir(homeDir), "user-opencode-launcher")
+	for index, path := range []string{ownedPath, userPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := []byte("user launcher")
+		if index == 0 {
+			content = ownedOpenCodeLauncher(path)
+		}
+		if err := os.WriteFile(path, content, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ownedPath); !os.IsNotExist(err) {
+		t.Fatalf("owned launcher stat error = %v, want absent", err)
+	}
+	if data, err := os.ReadFile(userPath); err != nil || string(data) != "user launcher" {
+		t.Fatalf("user launcher = %q, error = %v; want preserved", data, err)
+	}
+	if !slices.Contains(result.RemovedFiles, ownedPath) {
+		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, ownedPath)
+	}
+}
+
+// Issue #3451: a launcher that only mentions the ownership marker belongs to
+// the user and survives uninstall.
+func TestUninstallPreservesLauncherWithIncidentalMarker(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	content := []byte("user launcher mentions " + opencodeactivation.OwnershipMarker)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(content) {
+		t.Fatalf("user launcher after uninstall = %q, %v; want preserved", got, err)
+	}
+}
+
+// Issue #3451: uninstall never follows or removes a symlink at the launcher
+// path, even when its target holds managed launcher bytes.
+func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges not guaranteed on Windows")
+	}
+	homeDir := t.TempDir()
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	target := filepath.Join(t.TempDir(), "launcher-target")
+	targetContent := ownedOpenCodeLauncher(path)
+	if err := os.WriteFile(target, targetContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(path); err != nil || got != target {
+		t.Fatalf("launcher symlink after uninstall = %q, %v; want preserved", got, err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != string(targetContent) {
+		t.Fatalf("launcher target after uninstall = %q, %v; want preserved", data, err)
+	}
+}
+
+// Issue #3452: uninstall removes only the canonical managed PATH block from
+// login profiles and preserves every user line, edited blocks, and symlinks.
+func TestUninstallRemovesOnlyManagedOpenCodeProfileBlock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login profiles are not used on Windows")
+	}
+	homeDir := t.TempDir()
+	binDir := opencodeactivation.BinDir(homeDir)
+	block := "# >>> gentle-ai managed OpenCode launcher >>>\n" + opencodeactivation.ProfileExportLine(binDir) + "\n# <<< gentle-ai managed OpenCode launcher <<<\n"
+	managed := filepath.Join(homeDir, ".zprofile")
+	if err := os.WriteFile(managed, []byte("export BEFORE=1\n"+block+"export AFTER=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	edited := filepath.Join(homeDir, ".profile")
+	editedContent := strings.Replace(block, "export PATH=", "export PATH=/user:", 1)
+	if err := os.WriteFile(edited, []byte(editedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkTarget := filepath.Join(t.TempDir(), "dotfiles-bash_profile")
+	if err := os.WriteFile(linkTarget, []byte(block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(homeDir, ".bash_profile")
+	if err := os.Symlink(linkTarget, linked); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(plan.backupTargets, edited) || slices.Contains(plan.backupTargets, linked) {
+		t.Fatalf("backup targets = %v, want only profiles carrying the managed block", plan.backupTargets)
+	}
+	result, err := svc.executePlan(plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(managed); err != nil || string(data) != "export BEFORE=1\nexport AFTER=1\n" {
+		t.Fatalf("managed profile after uninstall = %q, %v", data, err)
+	}
+	if info, err := os.Stat(managed); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("managed profile mode after uninstall = %v, %v; want 0600", info, err)
+	}
+	if !slices.Contains(result.ChangedFiles, managed) {
+		t.Fatalf("changed files = %v, want %q", result.ChangedFiles, managed)
+	}
+	if data, err := os.ReadFile(edited); err != nil || string(data) != editedContent {
+		t.Fatalf("edited profile after uninstall = %q, %v; want preserved", data, err)
+	}
+	if got, err := os.Readlink(linked); err != nil || got != linkTarget {
+		t.Fatalf("profile symlink after uninstall = %q, %v; want preserved", got, err)
+	}
+	if data, err := os.ReadFile(linkTarget); err != nil || string(data) != block {
+		t.Fatalf("profile symlink target after uninstall = %q, %v; want preserved", data, err)
+	}
+}
+
+// ownedOpenCodeLauncher returns the exact bytes Gentle AI generates for the
+// launcher at path, targeting a fixed historical OpenCode location.
+func ownedOpenCodeLauncher(path string) []byte {
+	switch filepath.Ext(path) {
+	case ".cmd":
+		return []byte("@echo off\r\nrem " + opencodeactivation.OwnershipMarker + "\r\nsetlocal\r\nif not defined OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS set \"OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\"\r\n\"C:\\old\\opencode.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n")
+	case ".ps1":
+		return []byte("# " + opencodeactivation.OwnershipMarker + "\r\n$ErrorActionPreference = 'Stop'\r\nif (-not (Test-Path Env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS)) { $env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = 'true' }\r\n& 'C:\\old\\opencode.exe' @args\r\nexit $LASTEXITCODE\r\n")
+	default:
+		return []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n")
+	}
+}
+
+func TestUninstallOpenCodeClearsBackgroundIntent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents:  []string{"opencode"},
+		BackgroundIntent: model.OpenCodeBackgroundOn,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	if _, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, allManagedComponents); err != nil {
+		t.Fatal(err)
+	}
+	got, err := state.Read(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BackgroundIntent != "" || len(got.InstalledAgents) != 0 {
+		t.Fatalf("state after uninstall = %#v, want no OpenCode intent or installed agent", got)
+	}
+}
+
+// TestPartialUninstallKeepsSharedGGAWhileOtherAgentInstalled covers #3534:
+// uninstalling one agent must not wipe the shared GGA config that another
+// still-installed agent depends on, while agent-scoped assets (here,
+// OpenCode's gentle-logo TUI plugin) are still removed as before.
+func TestPartialUninstallKeepsSharedGGAWhileOtherAgentInstalled(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{"claude-code", "opencode"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := gga.ConfigPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("shared gga config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logoPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+	if err := os.MkdirAll(filepath.Dir(logoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logoPath, []byte("logo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("shared GGA config = %v, want it to survive because claude-code is still installed", err)
+	}
+	if _, err := os.Stat(logoPath); !os.IsNotExist(err) {
+		t.Fatalf("opencode gentle-logo stat error = %v, want removed", err)
+	}
+	if !slices.Contains(result.RemovedFiles, logoPath) {
+		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, logoPath)
+	}
+
+	foundNote := false
+	for _, action := range result.ManualActions {
+		if strings.Contains(action, "GGA") && strings.Contains(action, "claude-code") {
+			foundNote = true
+		}
+	}
+	if !foundNote {
+		t.Fatalf("manual actions = %v, want a note explaining the kept shared GGA config", result.ManualActions)
+	}
+
+	got, err := state.Read(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.InstalledAgents, []string{"claude-code"}) {
+		t.Fatalf("installed agents after uninstall = %v, want [claude-code]", got.InstalledAgents)
+	}
+}
+
+// TestPartialUninstallRemovesSharedGGAOnLastAgent covers the other half of
+// #3534: once the last agent that depends on GGA is uninstalled, the shared
+// config is removed like any other managed component.
+func TestPartialUninstallRemovesSharedGGAOnLastAgent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{"opencode"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := gga.ConfigPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("shared gga config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("shared GGA config stat error = %v, want removed once no agent needs it", err)
+	}
+	if !slices.Contains(result.RemovedFiles, configPath) {
+		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, configPath)
+	}
+	for _, action := range result.ManualActions {
+		if strings.Contains(action, "GGA") {
+			t.Fatalf("manual actions = %v, want no kept-GGA note on last-agent removal", result.ManualActions)
+		}
+	}
+}
+
+// TestPartialUninstallExplicitGGARequestSkippedWhileSharedWithAnotherAgent
+// covers requesting `--components gga` explicitly for one agent while
+// another installed agent still relies on it: the safer behavior is to skip
+// the shared removal (rather than fail the whole command) and say why,
+// instead of silently deleting a config another agent still needs.
+func TestPartialUninstallExplicitGGARequestSkippedWhileSharedWithAnotherAgent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents: []string{"claude-code", "opencode"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := gga.ConfigPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("shared gga config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, []model.ComponentID{model.ComponentGGA})
+	if err != nil {
+		t.Fatalf("explicit --components gga while shared should be skipped, not fail: %v", err)
+	}
+
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("shared GGA config = %v, want it to survive an explicit but unsafe removal request", err)
+	}
+	foundNote := false
+	for _, action := range result.ManualActions {
+		if strings.Contains(action, "GGA") && strings.Contains(action, "claude-code") {
+			foundNote = true
+		}
+	}
+	if !foundNote {
+		t.Fatalf("manual actions = %v, want a note explaining why the explicit gga removal was skipped", result.ManualActions)
+	}
+}
+
+// TestIsStateNotFoundUnwrapsWrappedError guards the classification used by
+// otherInstalledAgents: it must follow the error-wrap chain (via errors.Is)
+// rather than only recognizing a bare *fs.PathError the way os.IsNotExist
+// effectively does for a caller that wraps state.Read's error further.
+func TestIsStateNotFoundUnwrapsWrappedError(t *testing.T) {
+	wrapped := fmt.Errorf("read install state: %w", fs.ErrNotExist)
+	if !isStateNotFound(wrapped) {
+		t.Fatalf("isStateNotFound(%v) = false, want true for a wrapped not-exist error", wrapped)
+	}
+
+	other := fmt.Errorf("read install state: %w", os.ErrPermission)
+	if isStateNotFound(other) {
+		t.Fatalf("isStateNotFound(%v) = true, want false for a non-not-exist error", other)
+	}
+}
+
+// TestReconcileSharedComponentsWithUnreadableState covers a corrupt
+// state.json: reconcileSharedComponents cannot tell whether another agent
+// still needs GGA, so it fails closed toward preservation — GGA is dropped
+// from the returned component set and a note explains why — instead of
+// aborting the caller's partial uninstall, unless the caller explicitly
+// requested "--components gga", where there is nothing safe left to do for
+// that explicit request and the error is returned instead.
+func TestReconcileSharedComponentsWithUnreadableState(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(state.Path(homeDir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state.Path(homeDir), []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("default components keep GGA and continue", func(t *testing.T) {
+		components, note, err := svc.reconcileSharedComponents(
+			[]model.AgentID{model.AgentOpenCode}, slices.Clone(allManagedComponents), false)
+		if err != nil {
+			t.Fatalf("reconcileSharedComponents() error = %v, want nil (fail closed, don't abort)", err)
+		}
+		if slices.Contains(components, model.ComponentGGA) {
+			t.Fatalf("components = %v, want GGA dropped when state cannot be read", components)
+		}
+		if !slices.Contains(components, model.ComponentTheme) {
+			t.Fatalf("components = %v, want unrelated components preserved so the rest of the uninstall proceeds", components)
+		}
+		if !strings.Contains(note, "GGA") || !strings.Contains(note, "could not be read") {
+			t.Fatalf("note = %q, want it to explain the state could not be read", note)
+		}
+	})
+
+	t.Run("explicit gga request fails instead of silently skipping", func(t *testing.T) {
+		_, _, err := svc.reconcileSharedComponents(
+			[]model.AgentID{model.AgentOpenCode}, []model.ComponentID{model.ComponentGGA}, true)
+		if err == nil {
+			t.Fatal("reconcileSharedComponents() error = nil, want an error for an explicit --components gga request when state is unreadable")
+		}
+	})
+}
 
 func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 	homeDir := t.TempDir()
@@ -46,6 +821,47 @@ func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 		if !slices.Contains(plan.backupTargets, path) {
 			t.Fatalf("backup targets = %v, missing Pi artifact %q", plan.backupTargets, path)
 		}
+	}
+	promptPath := pi.NewAdapter().SystemPromptFile(homeDir)
+	if !slices.Contains(plan.backupTargets, promptPath) {
+		t.Fatalf("backup targets = %v, missing Pi system prompt file %q", plan.backupTargets, promptPath)
+	}
+}
+
+// TestExecutePlanRetiresStalePiSystemPromptBlocks covers issue #4057: a Pi
+// install made before SupportsSystemPrompt()==false for Pi left gentle-ai
+// managed blocks in ~/.pi/agent/APPEND_SYSTEM.md. Since adapter.SupportsSystemPrompt()
+// is false, componentOperations() never queues a rewrite op for that file, so
+// uninstall must retire the stale blocks directly.
+func TestExecutePlanRetiresStalePiSystemPromptBlocks(t *testing.T) {
+	home := t.TempDir()
+	svc, err := NewService(home, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	promptPath := pi.NewAdapter().SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := "user text\n\n<!-- gentle-ai:sdd-orchestrator -->\nSDD body\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	if err := os.WriteFile(promptPath, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.executePlan(plan{}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := string(mustReadServiceFile(t, promptPath))
+	want := "user text\n\n\n"
+	if got != want {
+		t.Fatalf("APPEND_SYSTEM.md = %q, want %q", got, want)
+	}
+	if !slices.Contains(result.ChangedFiles, promptPath) {
+		t.Fatalf("ChangedFiles = %v, want to contain %q", result.ChangedFiles, promptPath)
 	}
 }
 
@@ -178,6 +994,114 @@ func TestExecutePlanPiUninstallPreservesDriftedChildAndGentlePiSource(t *testing
 	}
 }
 
+func TestPartialUninstallPiReportsRetainedResourcesAndOptionalCleanup(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	retainedPaths := []string{
+		filepath.Join(homeDir, ".pi", "agent", "agents"),
+		filepath.Join(homeDir, ".pi", "agent", "chains"),
+		filepath.Join(homeDir, ".pi", "agent", "gentle-ai"),
+		filepath.Join(homeDir, ".pi", "agent", "subagents.json"),
+		filepath.Join(homeDir, ".pi", "gentle-ai"),
+		filepath.Join(workspaceDir, ".pi", "gentle-ai"),
+	}
+	for _, path := range retainedPaths {
+		if filepath.Ext(path) == ".json" {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(`{"user":"owned"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentPi}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.RetainedPiResources, retainedPaths) {
+		t.Fatalf("RetainedPiResources = %v, want %v", result.RetainedPiResources, retainedPaths)
+	}
+	wantCommands := []string{
+		"pi remove npm:gentle-pi",
+		"pi remove npm:gentle-engram",
+		"pi remove npm:pi-web-access",
+		"pi remove npm:pi-btw",
+		"pi remove npm:pi-mcp-adapter",
+	}
+	if !slices.Equal(result.OptionalPiPackageCleanupCommands, wantCommands) {
+		t.Fatalf("OptionalPiPackageCleanupCommands = %v, want %v", result.OptionalPiPackageCleanupCommands, wantCommands)
+	}
+	for _, path := range retainedPaths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("retained Pi resource %q was deleted: %v", path, err)
+		}
+		if slices.Contains(result.RemovedDirectories, path) || slices.Contains(result.RemovedFiles, path) {
+			t.Fatalf("retained Pi resource %q was reported as removed: %#v", path, result)
+		}
+	}
+}
+
+func TestPartialUninstallPiDoesNotReportAbsentRetainedResources(t *testing.T) {
+	svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentPi}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.RetainedPiResources) != 0 {
+		t.Fatalf("RetainedPiResources = %v, want none for absent paths", result.RetainedPiResources)
+	}
+	t.Run("dangling link", func(t *testing.T) {
+		path := filepath.Join(svc.homeDir, ".pi", "gentle-ai")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(svc.homeDir, "missing"), path); err != nil {
+			if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+				t.Skipf("symlink privilege unavailable: %v", err)
+			}
+			t.Fatal(err)
+		}
+		result, err := svc.PartialUninstall([]model.AgentID{model.AgentPi}, nil)
+		if target, linkErr := os.Readlink(path); err != nil || linkErr != nil || target != filepath.Join(svc.homeDir, "missing") || !slices.Contains(result.RetainedPiResources, path) {
+			t.Fatalf("dangling link must remain and be reported: result=%+v err=%v linkErr=%v", result, err, linkErr)
+		}
+	})
+}
+
+func TestCompleteUninstallKeepsExecutableRemovalAction(t *testing.T) {
+	svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	result, err := svc.CompleteUninstall()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "To completely remove gentle-ai from your system, delete the executable (e.g., rm -f $(which gentle-ai))"
+	if !slices.Contains(result.ManualActions, want) {
+		t.Fatalf("ManualActions = %v, want %q", result.ManualActions, want)
+	}
+}
+
 func piCodeGraphProbeForServiceTest(string) (communitytool.PiCodeGraphMCPProbeResult, error) {
 	return communitytool.PiCodeGraphMCPProbeResult{
 		AdapterAvailable: true,
@@ -198,24 +1122,23 @@ func piCodeGraphProbeForServiceTest(string) (communitytool.PiCodeGraphMCPProbeRe
 }
 
 func TestExpandVisualPolishUninstallComponents(t *testing.T) {
-	for _, trigger := range model.VisualPolishComponents() {
-		t.Run(string(trigger), func(t *testing.T) {
-			got := expandVisualPolishUninstallComponents([]model.ComponentID{trigger})
-			for _, want := range model.VisualPolishComponents() {
-				if !slices.Contains(got, want) {
-					t.Fatalf("expanded visual polish components missing %q: %v", want, got)
-				}
+	for _, trigger := range []model.ComponentID{model.ComponentTheme, model.ComponentOpenCodeGentleLogo} {
+		got := expandVisualPolishUninstallComponents([]model.ComponentID{trigger})
+		for _, want := range model.VisualPolishComponents() {
+			if !slices.Contains(got, want) {
+				t.Fatalf("%q expansion missing %q: %v", trigger, want, got)
 			}
-		})
+		}
 	}
-
-	unchanged := expandVisualPolishUninstallComponents([]model.ComponentID{model.ComponentPersona})
-	if !slices.Equal(unchanged, []model.ComponentID{model.ComponentPersona}) {
-		t.Fatalf("non-polish components should not expand: %v", unchanged)
+	for _, component := range []model.ComponentID{model.ComponentClaudeTheme, model.ComponentPersona} {
+		got := expandVisualPolishUninstallComponents([]model.ComponentID{component})
+		if !slices.Equal(got, []model.ComponentID{component}) {
+			t.Fatalf("%q should not expand: %v", component, got)
+		}
 	}
 }
 
-func TestPartialUninstallVisualPolishSelectionRemovesThemeLogoGroup(t *testing.T) {
+func TestPartialUninstallClaudeThemeRemovesOnlyThemeAssets(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 
@@ -230,48 +1153,123 @@ func TestPartialUninstallVisualPolishSelectionRemovesThemeLogoGroup(t *testing.T
 		t.Fatal("opencode adapter not found in registry")
 	}
 	settingsPath := opencodeAdapter.SettingsPath(homeDir)
+	settings := `{"theme":"active","keep":true,"agent":{"sdd-apply":{"model":"keep"}}}`
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(opencode settings dir) error = %v", err)
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(settingsPath, []byte(`{"theme":"gentleman","keep":true}`), 0o644); err != nil {
-		t.Fatalf("WriteFile(opencode settings) error = %v", err)
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	logoPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
 	if err := os.MkdirAll(filepath.Dir(logoPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(logo dir) error = %v", err)
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(logoPath, []byte("// managed logo"), 0o644); err != nil {
-		t.Fatalf("WriteFile(logo) error = %v", err)
+		t.Fatal(err)
 	}
 
-	claudeThemePath := filepath.Join(homeDir, ".claude", "themes", "gentleman.json")
-	if err := os.MkdirAll(filepath.Dir(claudeThemePath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(claude theme dir) error = %v", err)
+	managed := []string{
+		filepath.Join(homeDir, ".claude", "themes", "gentleman.json"),
+		filepath.Join(homeDir, ".claude", "themes", "gentleman-cute.json"),
+		filepath.Join(homeDir, ".config", "opencode", "themes", "gentleman.json"),
+		filepath.Join(homeDir, ".config", "opencode", "themes", "gentleman-cute.json"),
 	}
-	if err := os.WriteFile(claudeThemePath, []byte(`{"name":"gentleman"}`), 0o644); err != nil {
-		t.Fatalf("WriteFile(claude theme) error = %v", err)
+	for _, path := range managed {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"name":"managed"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	preserved := map[string]string{
+		filepath.Join(homeDir, ".claude", "settings.json"):                     `{"theme":"active","outputStyle":"gentleman"}`,
+		filepath.Join(homeDir, ".claude", "CLAUDE.md"):                         "# persona\n",
+		filepath.Join(homeDir, ".claude", "output-styles", "gentleman.md"):     "# output style\n",
+		filepath.Join(homeDir, ".claude", "commands", "gentle-sdd-apply.md"):   "# SDD asset\n",
+		filepath.Join(homeDir, ".config", "opencode", "tui.json"):              `{"plugins":["./tui-plugins/gentle-logo.tsx"]}`,
+		filepath.Join(homeDir, ".config", "opencode", "themes", "custom.json"): `{"theme":"custom"}`,
+	}
+	for path, content := range preserved {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if _, err := svc.PartialUninstall(
 		[]model.AgentID{model.AgentOpenCode, model.AgentClaudeCode},
-		[]model.ComponentID{model.ComponentTheme},
+		[]model.ComponentID{model.ComponentClaudeTheme},
 	); err != nil {
 		t.Fatalf("PartialUninstall() error = %v", err)
 	}
 
-	settings := readJSONFileForTest(t, settingsPath)
-	if _, exists := settings["theme"]; exists {
-		t.Fatalf("theme should be removed from OpenCode settings: %#v", settings)
+	for _, path := range managed {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("managed theme %q should be removed: %v", path, err)
+		}
 	}
-	if got := settings["keep"]; got != true {
-		t.Fatalf("user setting should be preserved, got %#v", got)
+	for path, want := range preserved {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Fatalf("preserved asset %q = %q, %v; want %q", path, got, err, want)
+		}
+	}
+	if got, err := os.ReadFile(settingsPath); err != nil || string(got) != settings {
+		t.Fatalf("OpenCode settings = %q, %v; want unchanged %q", got, err, settings)
+	}
+	if got, err := os.ReadFile(logoPath); err != nil || string(got) != "// managed logo" {
+		t.Fatalf("OpenCode logo = %q, %v", got, err)
+	}
+}
+
+func TestPartialUninstallOpenCodeLogoScopedToOpenCodeAgent(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+
+	logoPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+	if err := os.MkdirAll(filepath.Dir(logoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logoPath, []byte("// managed logo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Uninstalling an unrelated agent must not touch the OpenCode-owned logo —
+	// both when the logo component is named explicitly and, the issue's actual
+	// repro, when the default component list (nil) includes it (#4229).
+	for _, components := range [][]model.ComponentID{
+		{model.ComponentOpenCodeGentleLogo},
+		nil, // default: allManagedComponents
+	} {
+		if _, err := svc.PartialUninstall(
+			[]model.AgentID{model.AgentGeminiCLI},
+			components,
+		); err != nil {
+			t.Fatalf("PartialUninstall(gemini-cli, %v) error = %v", components, err)
+		}
+		if got, err := os.ReadFile(logoPath); err != nil || string(got) != "// managed logo" {
+			t.Fatalf("OpenCode logo removed by gemini-cli uninstall (components %v): got %q, %v; want preserved", components, got, err)
+		}
+	}
+
+	// Positive control: the OpenCode adapter itself still removes the logo.
+	if _, err := svc.PartialUninstall(
+		[]model.AgentID{model.AgentOpenCode},
+		[]model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	); err != nil {
+		t.Fatalf("PartialUninstall(opencode) error = %v", err)
 	}
 	if _, err := os.Stat(logoPath); !os.IsNotExist(err) {
-		t.Fatalf("OpenCode logo should be removed by visual polish group uninstall, err = %v", err)
-	}
-	if _, err := os.Stat(claudeThemePath); !os.IsNotExist(err) {
-		t.Fatalf("Claude theme should be removed by visual polish group uninstall, err = %v", err)
+		t.Fatalf("OpenCode logo should be removed by opencode uninstall: %v", err)
 	}
 }
 
@@ -558,8 +1556,9 @@ func TestComponentOperationsContext7ClaudePreservesCustomLegacyFile(t *testing.T
 	}
 }
 
-func TestComponentOperationsSDD_RemovesBaseAndProfileAgentsFromSettings(t *testing.T) {
+func TestPartialUninstallOpenCodePluginsAndModelVariantsWithoutSDD(t *testing.T) {
 	homeDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, "xdg"))
 	workspaceDir := t.TempDir()
 
 	svc, err := NewService(homeDir, workspaceDir, "dev")
@@ -567,234 +1566,7 @@ func TestComponentOperationsSDD_RemovesBaseAndProfileAgentsFromSettings(t *testi
 		t.Fatalf("NewService() error = %v", err)
 	}
 
-	adapter, ok := svc.registry.Get(model.AgentOpenCode)
-	if !ok {
-		t.Fatal("openCode adapter not found in registry")
-	}
-
-	settingsPath := adapter.SettingsPath(homeDir)
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(settings dir) error = %v", err)
-	}
-
-	initial := []byte(`{
-	  "agent": {
-	    "sdd-orchestrator": {"mode": "primary", "model": "anthropic:claude-sonnet-4"},
-	    "sdd-apply": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
-	    "sdd-onboard": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
-	    "sdd-verify": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
-	    "sdd-orchestrator-fast": {"mode": "primary", "model": "openai:gpt-4.1-mini"},
-	    "sdd-apply-fast": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
-	    "sdd-onboard-fast": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
-	    "sdd-verify-fast": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
-	    "my-custom-agent": {"mode": "subagent", "model": "custom:model"}
-	  },
-	  "theme": "my-user-theme"
-	}`)
-	if err := os.WriteFile(settingsPath, initial, 0o644); err != nil {
-		t.Fatalf("WriteFile(settings) error = %v", err)
-	}
-
-	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
-	if err != nil {
-		t.Fatalf("componentOperations() error = %v", err)
-	}
-
-	appliedSettingsRewrite := false
-	for _, op := range ops {
-		if op.typeID != opRewriteFile || op.path != settingsPath {
-			continue
-		}
-		appliedSettingsRewrite = true
-		_, _, err := op.apply(op.path)
-		if err != nil {
-			t.Fatalf("settings rewrite op.apply() error = %v", err)
-		}
-	}
-	if !appliedSettingsRewrite {
-		t.Fatalf("expected settings rewrite operation for %q", settingsPath)
-	}
-
-	raw, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(settings) error = %v", err)
-	}
-
-	var root map[string]any
-	if err := json.Unmarshal(raw, &root); err != nil {
-		t.Fatalf("json.Unmarshal(settings) error = %v", err)
-	}
-
-	agentMap, ok := root["agent"].(map[string]any)
-	if !ok {
-		t.Fatalf("agent object missing or invalid: %#v", root["agent"])
-	}
-
-	for _, removedKey := range []string{
-		"sdd-orchestrator",
-		"sdd-apply",
-		"sdd-onboard",
-		"sdd-verify",
-		"sdd-orchestrator-fast",
-		"sdd-apply-fast",
-		"sdd-onboard-fast",
-		"sdd-verify-fast",
-	} {
-		if _, exists := agentMap[removedKey]; exists {
-			t.Fatalf("managed SDD key %q should be removed, got agent map: %#v", removedKey, agentMap)
-		}
-	}
-
-	if _, exists := agentMap["my-custom-agent"]; !exists {
-		t.Fatalf("user-defined agent key should be preserved, got agent map: %#v", agentMap)
-	}
-	if gotTheme, ok := root["theme"].(string); !ok || gotTheme != "my-user-theme" {
-		t.Fatalf("theme should be preserved, got %#v", root["theme"])
-	}
-}
-
-func TestComponentOperationsSDD_RemovesOnlySelectedProfilesFromSettings(t *testing.T) {
-	homeDir := t.TempDir()
-	workspaceDir := t.TempDir()
-
-	svc, err := NewService(homeDir, workspaceDir, "dev")
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
-
-	adapter, ok := svc.registry.Get(model.AgentOpenCode)
-	if !ok {
-		t.Fatal("openCode adapter not found in registry")
-	}
-
-	settingsPath := adapter.SettingsPath(homeDir)
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(settings dir) error = %v", err)
-	}
-
-	initial := []byte(`{
-	  "agent": {
-	    "sdd-orchestrator": {"mode": "primary", "model": "anthropic:claude-sonnet-4"},
-	    "sdd-apply": {"mode": "subagent", "model": "anthropic:claude-sonnet-4"},
-	    "sdd-orchestrator-cheap": {"mode": "primary", "model": "openai:gpt-4.1-mini"},
-	    "sdd-apply-cheap": {"mode": "subagent", "model": "openai:gpt-4.1-mini"},
-	    "sdd-orchestrator-gemini": {"mode": "primary", "model": "google:gemini-2.5-pro"},
-	    "sdd-apply-gemini": {"mode": "subagent", "model": "google:gemini-2.5-pro"}
-	  }
-	}`)
-	if err := os.WriteFile(settingsPath, initial, 0o644); err != nil {
-		t.Fatalf("WriteFile(settings) error = %v", err)
-	}
-
-	svc.SetProfileNamesToRemove([]string{"cheap"})
-
-	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
-	if err != nil {
-		t.Fatalf("componentOperations() error = %v", err)
-	}
-
-	for _, op := range ops {
-		if op.typeID == opRewriteFile && op.path == settingsPath {
-			if _, _, err := op.apply(op.path); err != nil {
-				t.Fatalf("settings rewrite op.apply() error = %v", err)
-			}
-		}
-	}
-
-	raw, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(settings) error = %v", err)
-	}
-
-	var root map[string]any
-	if err := json.Unmarshal(raw, &root); err != nil {
-		t.Fatalf("json.Unmarshal(settings) error = %v", err)
-	}
-
-	agentMap := root["agent"].(map[string]any)
-
-	if _, exists := agentMap["sdd-orchestrator-cheap"]; exists {
-		t.Fatalf("selected profile orchestrator should be removed, got: %#v", agentMap)
-	}
-	if _, exists := agentMap["sdd-apply-cheap"]; exists {
-		t.Fatalf("selected profile sub-agent should be removed, got: %#v", agentMap)
-	}
-	if _, exists := agentMap["sdd-orchestrator-gemini"]; !exists {
-		t.Fatalf("unselected profile should be preserved, got: %#v", agentMap)
-	}
-	if _, exists := agentMap["sdd-apply-gemini"]; !exists {
-		t.Fatalf("unselected profile sub-agent should be preserved, got: %#v", agentMap)
-	}
-}
-
-func TestComponentOperationsSDD_ClaudeRemovesManagedCommandFiles(t *testing.T) {
-	homeDir := t.TempDir()
-	workspaceDir := t.TempDir()
-
-	svc, err := NewService(homeDir, workspaceDir, "dev")
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
-
-	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
-	if !ok {
-		t.Fatal("claude adapter not found in registry")
-	}
-
-	commandsDir := adapter.CommandsDir(homeDir)
-	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(commands dir) error = %v", err)
-	}
-
-	managed := []string{"sdd-init.md", "sdd-explore.md", "sdd-onboard.md"}
-	for _, name := range managed {
-		if err := os.WriteFile(filepath.Join(commandsDir, name), []byte(name), 0o644); err != nil {
-			t.Fatalf("WriteFile(%s) error = %v", name, err)
-		}
-	}
-	customPath := filepath.Join(commandsDir, "my-custom-command.md")
-	if err := os.WriteFile(customPath, []byte("keep"), 0o644); err != nil {
-		t.Fatalf("WriteFile(custom command) error = %v", err)
-	}
-
-	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
-	if err != nil {
-		t.Fatalf("componentOperations() error = %v", err)
-	}
-
-	for _, op := range ops {
-		if op.typeID == opRemoveFile {
-			if _, _, err := op.apply(op.path); err != nil {
-				t.Fatalf("remove file op.apply(%q) error = %v", op.path, err)
-			}
-		}
-	}
-
-	for _, name := range managed {
-		if _, err := os.Stat(filepath.Join(commandsDir, name)); !os.IsNotExist(err) {
-			t.Fatalf("managed command %q should be removed, stat err = %v", name, err)
-		}
-	}
-	if _, err := os.Stat(customPath); err != nil {
-		t.Fatalf("custom command should be preserved, stat err = %v", err)
-	}
-}
-
-func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVariantsCache(t *testing.T) {
-	homeDir := t.TempDir()
-	workspaceDir := t.TempDir()
-
-	svc, err := NewService(homeDir, workspaceDir, "dev")
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
-
-	adapter, ok := svc.registry.Get(model.AgentOpenCode)
-	if !ok {
-		t.Fatal("openCode adapter not found in registry")
-	}
-
-	pluginDir := filepath.Join(homeDir, ".config", "opencode", "plugins")
+	pluginDir := filepath.Join(opencode.NewAdapter().GlobalConfigDir(homeDir), "plugins")
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(pluginDir) error = %v", err)
 	}
@@ -802,10 +1574,21 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVaria
 	modelVariantsPluginPath := filepath.Join(pluginDir, "model-variants.ts")
 	skillRegistryPluginPath := filepath.Join(pluginDir, "skill-registry.ts")
 	thirdPartyPluginPath := filepath.Join(pluginDir, "third-party.ts")
-	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath, skillRegistryPluginPath} {
-		if err := os.WriteFile(path, []byte("managed"), 0o644); err != nil {
+	modifiedPluginPath := filepath.Join(pluginDir, "opencode-review-transport.ts")
+	for _, path := range []string{modelVariantsPluginPath, skillRegistryPluginPath} {
+		body, err := assets.Read("opencode/plugins/" + filepath.Base(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatalf("WriteFile(%q) error = %v", path, err)
 		}
+	}
+	if err := os.WriteFile(modifiedPluginPath, []byte("modified managed plugin"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backgroundAgentsPath, []byte("user background plugin"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(thirdPartyPluginPath, []byte("third-party"), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q) error = %v", thirdPartyPluginPath, err)
@@ -831,9 +1614,19 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVaria
 		}
 	}
 
-	applySDDOpenCodeOperations(t, svc, adapter)
+	svc.snapshotter = stubSnapshotter{}
+	components := withoutComponent(fullAgentRemovalComponents, model.ComponentSDD)
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, components)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{modelVariantsPluginPath, skillRegistryPluginPath} {
+		if !slices.Contains(result.RemovedFiles, path) {
+			t.Fatalf("removed files missing %s", path)
+		}
+	}
 
-	for _, path := range []string{backgroundAgentsPath, modelVariantsPluginPath, skillRegistryPluginPath, modelVariantsCachePath, modelVariantsTempPath, modelVariantsRandomTempPath} {
+	for _, path := range []string{modelVariantsPluginPath, skillRegistryPluginPath, modelVariantsCachePath, modelVariantsTempPath, modelVariantsRandomTempPath} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("managed file %q should be removed; stat err = %v", path, err)
 		}
@@ -849,77 +1642,44 @@ func TestComponentOperationsSDD_OpenCodeRemovesManagedPluginSourcesAndModelVaria
 			t.Fatalf("unrelated model variants temp-like file should be preserved, stat err = %v", err)
 		}
 	}
-	if _, err := os.Stat(thirdPartyPluginPath); err != nil {
-		t.Fatalf("third-party plugin should be preserved, stat err = %v", err)
-	}
-}
-
-func TestComponentOperationsSDD_OpenCodePreservesEmptyModelVariantsCacheDirectory(t *testing.T) {
-	homeDir := t.TempDir()
-	workspaceDir := t.TempDir()
-
-	svc, err := NewService(homeDir, workspaceDir, "dev")
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
-
-	adapter, ok := svc.registry.Get(model.AgentOpenCode)
-	if !ok {
-		t.Fatal("openCode adapter not found in registry")
-	}
-
-	cacheDir := filepath.Join(homeDir, ".gentle-ai", "cache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(cacheDir) error = %v", err)
-	}
-	for _, name := range []string{"model-variants.json", "model-variants.json.tmp", "model-variants.json.d4e5f6.tmp"} {
-		path := filepath.Join(cacheDir, name)
-		if err := os.WriteFile(path, []byte("cache"), 0o644); err != nil {
-			t.Fatalf("WriteFile(%q) error = %v", path, err)
+	for _, path := range []string{thirdPartyPluginPath, backgroundAgentsPath, modifiedPluginPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("unverified plugin should be preserved: %s: %v", path, err)
 		}
 	}
-
-	applySDDOpenCodeOperations(t, svc, adapter)
-
-	if _, err := os.Stat(cacheDir); err != nil {
-		t.Fatalf("empty cache directory should be preserved, stat err = %v", err)
-	}
-	entries, err := os.ReadDir(cacheDir)
-	if err != nil {
-		t.Fatalf("ReadDir(cacheDir) error = %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("cache directory should be empty after managed cleanup, got %d entries", len(entries))
-	}
 }
 
-func TestComponentOperationsSDD_OpenCodeMissingManagedModelVariantFilesAreNonFatal(t *testing.T) {
-	homeDir := t.TempDir()
-	workspaceDir := t.TempDir()
-
-	svc, err := NewService(homeDir, workspaceDir, "dev")
-	if err != nil {
-		t.Fatalf("NewService() error = %v", err)
-	}
-
-	adapter, ok := svc.registry.Get(model.AgentOpenCode)
-	if !ok {
-		t.Fatal("openCode adapter not found in registry")
-	}
-
-	applySDDOpenCodeOperations(t, svc, adapter)
-}
-
-func applySDDOpenCodeOperations(t *testing.T, svc *Service, adapter agents.Adapter) {
-	t.Helper()
-	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
-	if err != nil {
-		t.Fatalf("componentOperations() error = %v", err)
-	}
-	for _, op := range ops {
-		if _, _, err := op.apply(op.path); err != nil {
-			t.Fatalf("op.apply(%q) error = %v", op.path, err)
-		}
+func TestOpenCodePluginPreservationOutsideFullAgentRemoval(t *testing.T) {
+	for _, components := range [][]model.ComponentID{{model.ComponentPersona}, {model.ComponentSDD}} {
+		t.Run(string(components[0]), func(t *testing.T) {
+			home := t.TempDir()
+			plugin := filepath.Join(opencode.NewAdapter().GlobalConfigDir(home), "plugins", "model-variants.ts")
+			body, err := assets.Read("opencode/plugins/model-variants.ts")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(plugin), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(plugin, []byte(body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+			if components[0] == model.ComponentSDD {
+				if _, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, components); err == nil || !strings.Contains(err.Error(), "retired") {
+					t.Fatalf("SDD-only request must be rejected: %v", err)
+				}
+			} else if _, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, components); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := os.ReadFile(plugin); err != nil || string(got) != body {
+				t.Fatalf("retained plugin changed: %v", err)
+			}
+		})
 	}
 }
 
@@ -1111,7 +1871,7 @@ func TestComponentOperationsEngram_CodexRemovesConsolidatedProtocolAssetsWithNoO
 	}
 }
 
-func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
+func TestFullAgentClaudeRemovesSkillRegistryHook(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 
@@ -1143,6 +1903,22 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
         "matcher": "Bash",
         "hooks": [{"type": "command", "command": "echo pre"}]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime codex --json", "async": true},
+          {"type": "command", "command": "echo subagent keep"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "gentle-ai telemetry runtime codex --json", "async": true},
+          {"type": "command", "command": "echo stop keep"}
+        ]
+      }
     ]
   }
 }`
@@ -1150,7 +1926,8 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	built, err := svc.buildPlan([]model.AgentID{adapter.Agent()}, withoutComponent(fullAgentRemovalComponents, model.ComponentSDD))
+	ops := built.operations
 	if err != nil {
 		t.Fatalf("componentOperations() error = %v", err)
 	}
@@ -1166,15 +1943,143 @@ func TestComponentOperationsSDD_ClaudeRemovesSkillRegistryHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if strings.Contains(text, "gentle-ai skill-registry refresh") {
+	if strings.Contains(text, "gentle-ai skill-registry refresh") || strings.Contains(text, "gentle-ai telemetry runtime codex") {
 		t.Fatalf("managed hook should be removed:\n%s", text)
 	}
-	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") {
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") || !strings.Contains(text, "echo subagent keep") || !strings.Contains(text, "echo stop keep") {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
 	}
 }
 
-func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
+func TestFullAgentClaudeRemovesReviewAndPreflightHooks(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("claude adapter not found in registry")
+	}
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 60},
+          {"type": "command", "command": "echo keep"}
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai review stop-hook --agent claude-code", "timeout": 30},
+          {"type": "command", "command": "echo custom session-start"}
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "echo pre"}]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [{"type": "command", "command": "gentle-ai sdd-preflight-hook --agent claude-code"}]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai sdd-preflight-hook --agent claude-code"},
+          {"type": "command", "command": "echo post keep"}
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "gentle-ai sdd-preflight-hook --agent claude-code"}]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	built, err := svc.buildPlan([]model.AgentID{adapter.Agent()}, withoutComponent(fullAgentRemovalComponents, model.ComponentSDD))
+	ops := built.operations
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, op := range ops {
+		if op.typeID == opRewriteFile && op.path == settingsPath {
+			if _, _, err := op.apply(op.path); err != nil {
+				t.Fatalf("settings rewrite op.apply() error = %v", err)
+			}
+		}
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Contains(text, "gentle-ai review stop-hook") || strings.Count(text, "gentle-ai sdd-preflight-hook") != 3 {
+		t.Fatalf("review hooks should be removed; unmarked legacy hooks preserved:\n%s", text)
+	}
+	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") || !strings.Contains(text, "echo post keep") || !strings.Contains(text, "echo custom session-start") {
+		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
+	}
+}
+
+func TestFullAgentClaudeRemovesTelemetryHooks(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, _ := svc.registry.Get(model.AgentClaudeCode)
+	settingsPath := adapter.SettingsPath(homeDir)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"gentle-ai telemetry runtime claude --json","async":true},{"type":"command","command":"echo keep"}]}],"SubagentStop":[{"matcher":"","hooks":[{"type":"command","command":"gentle-ai telemetry runtime claude --json","async":true}]}]}}`
+	if err := os.WriteFile(settingsPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	built, err := svc.buildPlan([]model.AgentID{adapter.Agent()}, withoutComponent(fullAgentRemovalComponents, model.ComponentSDD))
+	ops := built.operations
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range ops {
+		if op.typeID == opRewriteFile && op.path == settingsPath {
+			if _, _, err := op.apply(op.path); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "telemetry runtime claude") || !strings.Contains(string(raw), "echo keep") {
+		t.Fatalf("managed telemetry hook removal failed:\n%s", raw)
+	}
+}
+
+func TestFullAgentCodexRemovesSkillRegistryHook(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 
@@ -1213,7 +2118,8 @@ func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	built, err := svc.buildPlan([]model.AgentID{adapter.Agent()}, withoutComponent(fullAgentRemovalComponents, model.ComponentSDD))
+	ops := built.operations
 	if err != nil {
 		t.Fatalf("componentOperations() error = %v", err)
 	}
@@ -1234,5 +2140,277 @@ func TestComponentOperationsSDD_CodexRemovesSkillRegistryHook(t *testing.T) {
 	}
 	if !strings.Contains(text, "echo keep") || !strings.Contains(text, "echo pre") {
 		t.Fatalf("unrelated hooks should be preserved:\n%s", text)
+	}
+}
+
+func TestRetainedHooksOutsideFullAgentRemoval(t *testing.T) {
+	for _, agentID := range []model.AgentID{model.AgentClaudeCode, model.AgentCodex} {
+		t.Run(string(agentID), func(t *testing.T) {
+			svc, err := NewService(t.TempDir(), t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter, _ := svc.registry.Get(agentID)
+			path := adapter.SettingsPath(svc.homeDir)
+			if agentID == model.AgentCodex {
+				path = filepath.Join(adapter.GlobalConfigDir(svc.homeDir), "hooks.json")
+			}
+			for _, components := range [][]model.ComponentID{{model.ComponentPersona}} {
+				p, err := svc.buildPlan([]model.AgentID{agentID}, components)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, op := range p.operations {
+					if op.path == path && op.typeID == opRewriteFile && agentID == model.AgentCodex {
+						t.Fatal("component-only removal must not rewrite retained Codex hooks")
+					}
+				}
+			}
+			p, err := svc.buildPlan([]model.AgentID{agentID}, withoutComponent(fullAgentRemovalComponents, model.ComponentSDD))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(p.backupTargets, path) {
+				t.Fatalf("missing rollback backup for %s", path)
+			}
+			found := false
+			for _, op := range p.operations {
+				if op.path == path && op.typeID == opRewriteFile {
+					found = true
+					if !slices.Contains(op.agents, agentID) {
+						t.Fatalf("missing failure owner %s", agentID)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("missing retained hook cleanup for %s", agentID)
+			}
+		})
+	}
+}
+
+// TestFullAgentOpenCodePluginsUnderXDGConfigHome pins #3219 for the retained
+// plugin owner: uninstall resolves the same OpenCode config dir as installation.
+func TestFullAgentOpenCodePluginsUnderXDGConfigHome(t *testing.T) {
+	homeDir := t.TempDir()
+	xdg := filepath.Join(homeDir, ".xdg")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("OpenCode adapter not found")
+	}
+	pluginDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+	name := "model-variants.ts"
+	body, err := assets.Read("opencode/plugins/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(pluginDir, name)
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan, []model.AgentID{model.AgentOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("managed XDG plugin remains: %v", err)
+	}
+	if !slices.Contains(result.RemovedFiles, path) {
+		t.Fatalf("XDG plugin removal not reported: %v", result.RemovedFiles)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".config", "opencode")); !os.IsNotExist(err) {
+		t.Fatalf("uninstall touched default config despite XDG_CONFIG_HOME: %v", err)
+	}
+}
+
+// TestUpdateStateAfterUninstallReReadsLatestStateAfterLockContention is the
+// #1809 preservation proof for updateStateAfterUninstall: the whole
+// read-modify-write must run inside the canonical install-state lock, so a
+// concurrent writer's RDDMode survives the agent removal. A contended lock
+// must fail fast without writing anything.
+func TestUpdateStateAfterUninstallReReadsLatestStateAfterLockContention(t *testing.T) {
+	home := t.TempDir()
+	lockPath, err := statecoord.LockPath(home)
+	if err != nil {
+		t.Fatalf("install state lock path: %v", err)
+	}
+	held, err := reviewtransaction.AcquireAuthorityFileLock(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentOpenCode), "claude-code"},
+		RDDMode:         string(reviewtransaction.RDDModeOn),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := updateStateAfterUninstall(home, []model.AgentID{model.AgentOpenCode}); err == nil || !strings.Contains(err.Error(), "acquire install state lock") {
+		t.Fatalf("contended uninstall state update error = %v", err)
+	}
+	contended, err := state.Read(home)
+	if err != nil || len(contended.InstalledAgents) != 2 || contended.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("state after contended run = %#v, err = %v", contended, err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := updateStateAfterUninstall(home, []model.AgentID{model.AgentOpenCode})
+	if err != nil {
+		t.Fatalf("updateStateAfterUninstall() error = %v", err)
+	}
+	if len(removed) != 1 || removed[0] != model.AgentOpenCode {
+		t.Fatalf("removed = %v, want [opencode]", removed)
+	}
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("re-read state: %v", err)
+	}
+	if len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != "claude-code" {
+		t.Fatalf("InstalledAgents = %v, want [claude-code]", got.InstalledAgents)
+	}
+	if got.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
+	}
+	if got.BackgroundIntent != "" {
+		t.Fatalf("BackgroundIntent = %q, want cleared after opencode removal", got.BackgroundIntent)
+	}
+}
+
+func TestUninstallSkillsRemovesLegacySharedMarkerAfterUpgrade(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		dirMarker     bool
+		wantMarker    bool
+		wantSharedDir bool
+	}{
+		{name: "generated regular marker is removed with emptied _shared"},
+		{name: "non-regular marker is preserved", dirMarker: true, wantMarker: true, wantSharedDir: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			skillDir := claude.NewAdapter().SkillsDir(home)
+			shared, err := skills.SharedReferencePaths(skillDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range shared {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("managed reference"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			marker := skills.LegacySharedMarkerPath(skillDir)
+			if tt.dirMarker {
+				if err := os.MkdirAll(marker, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(marker, []byte("legacy generated marker"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+			result, err := svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSkills})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := os.Lstat(marker); (err == nil) != tt.wantMarker {
+				t.Fatalf("legacy marker present = %v, want %v (err %v)", err == nil, tt.wantMarker, err)
+			}
+			if got := slices.Contains(result.RemovedFiles, marker); got == tt.wantMarker {
+				t.Fatalf("RemovedFiles contains marker = %v, want %v: %v", got, !tt.wantMarker, result.RemovedFiles)
+			}
+			if _, err := os.Stat(filepath.Dir(marker)); (err == nil) != tt.wantSharedDir {
+				t.Fatalf("_shared present = %v, want %v (err %v)", err == nil, tt.wantSharedDir, err)
+			}
+		})
+	}
+}
+
+// TestPartialUninstallLeavesNonJSONNativeSettingsUntouched covers #1828: Kimi
+// (TOML) and Hermes (YAML) native settings must never reach the generic JSON
+// cleaner, while managed persona text and Kimi's separate JSON MCP file are
+// still cleaned.
+func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
+	tests := []struct {
+		name     string
+		agent    model.AgentID
+		settings string
+		content  string
+		prompt   string
+		mcp      string
+	}{
+		{name: "kimi legacy", agent: model.AgentKimi, settings: ".kimi/config.toml", content: "default_model = \"k2\"\n[models.k2]\nprovider = \"moonshot\"\n", prompt: ".kimi/KIMI.md", mcp: ".kimi/mcp.json"},
+		{name: "kimi current", agent: model.AgentKimi, settings: ".kimi-code/config.toml", content: "default_model = \"k2\"\n", prompt: ".kimi-code/AGENTS.md", mcp: ".kimi-code/mcp.json"},
+		{name: "hermes", agent: model.AgentHermes, settings: ".hermes/config.yaml", content: "providers:\n  - name: hermes\n", prompt: ".hermes/SOUL.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settings)
+			promptPath := filepath.Join(home, tt.prompt)
+			writeBatchFile(t, settingsPath, tt.content)
+			if err := os.Chmod(settingsPath, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeBatchFile(t, promptPath, "My own rules.\n\n<!-- gentle-ai:persona -->\nmanaged\n<!-- /gentle-ai:persona -->\n")
+			if tt.mcp != "" {
+				writeBatchFile(t, filepath.Join(home, tt.mcp), `{"mcpServers":{"engram":{"command":"engram"},"context7":{"url":"x"},"mine":{"command":"mine"}}}`)
+			}
+			if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(tt.agent), "claude-code"}}); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+
+			result, err := svc.PartialUninstall([]model.AgentID{tt.agent}, nil)
+			if err != nil {
+				t.Fatalf("PartialUninstall() error = %v, want native %s left to its owner", err, filepath.Base(settingsPath))
+			}
+			if !slices.Equal(result.AgentsRemovedFromState, []model.AgentID{tt.agent}) || len(result.FailedAgents) != 0 {
+				t.Fatalf("removed = %v, failed = %v, want only %s removed", result.AgentsRemovedFromState, result.FailedAgents, tt.agent)
+			}
+			if got := string(mustReadServiceFile(t, settingsPath)); got != tt.content {
+				t.Fatalf("native settings = %q, want bytes preserved %q", got, tt.content)
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			}
+			prompt := string(mustReadServiceFile(t, promptPath))
+			if strings.Contains(prompt, "gentle-ai:persona") || !strings.Contains(prompt, "My own rules.") {
+				t.Fatalf("prompt = %q, want managed persona removed and user text kept", prompt)
+			}
+			if tt.mcp != "" {
+				servers, _ := readJSONFileForTest(t, filepath.Join(home, tt.mcp))["mcpServers"].(map[string]any)
+				if _, ok := servers["engram"]; ok || servers["mine"] == nil || servers["context7"] != nil {
+					t.Fatalf("mcpServers = %v, want owned servers removed and custom server kept", servers)
+				}
+			}
+		})
 	}
 }

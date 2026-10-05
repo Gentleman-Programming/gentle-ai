@@ -4,21 +4,402 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/cursor"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
+
+func TestSelectedPermissionsRefuseNestedCommentsAndLockedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		mode          os.FileMode
+	}{
+		{"nested comments", "{\"permission\":{\"bash\":{// keep\n\"*\":\"deny\"}}}\n", 0o600},
+		{"locked mode", "{\"permission\":{}}\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && tc.mode != 0o600 {
+				t.Skip("file permission bits are not supported on Windows")
+			}
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			original := []byte(tc.content)
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := InjectAtPath(path, opencode.NewAdapter())
+			if err == nil || !strings.Contains(err.Error(), "refuse") {
+				t.Fatalf("want actionable refusal, got %v", err)
+			}
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != tc.mode {
+				t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != tc.content {
+				t.Fatalf("settings bytes changed: %q", got)
+			}
+		})
+	}
+}
+
+// The selected-settings refusal is OpenCode-only; other agents keep the base
+// writer behavior for a dotfiles-managed (symlinked) settings file.
+func TestNonOpenCodeSymlinkedPermissionsKeepBaseWriterBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeAdapter()
+	settings := TargetPath(home, adapter)
+	target := filepath.Join(home, "dotfiles", "settings.json")
+	original := []byte("{\"permissions\":{}}\n")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, err := Inject(home, adapter)
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("Inject() error = %v; want base writer symlink error, not the OpenCode refusal", err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != string(original) {
+		t.Fatalf("settings target changed: %q, %v", got, err)
+	}
+}
+
+func TestSelectedPermissionsRefuseSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "user.jsonc")
+	selected := filepath.Join(dir, "opencode.jsonc")
+	if err := os.WriteFile(target, []byte("{\"permission\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, selected); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := InjectAtPath(selected, opencodeAdapter()); err == nil || !strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("InjectAtPath() error = %v; want OpenCode symlink refusal", err)
+	}
+}
+
+func TestSelectedPermissionsPreservePrivateMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	if err := os.WriteFile(path, []byte("{\"permission\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InjectAtPath(path, opencode.NewAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return // POSIX permission bits are not preserved on Windows.
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode = %v, error = %v; want 0600", info, err)
+	}
+}
+
+func TestSelectedPermissionsNeverWidenLockedMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not supported on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(path, []byte(`{"permission":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = InjectAtPath(path, opencode.NewAdapter()) // Refusal is safe when unreadable.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0 && mode != 0o600 {
+		t.Fatalf("locked settings widened: mode = %04o", mode)
+	}
+}
+
+// Fixture port of OpenCode v1.2.27 util/wildcard.ts and permission/service.ts:
+// anchored, case-sensitive POSIX matching, optional trailing " *", last match wins.
+// Inputs are strings only; this does not emulate bash.ts's tree-sitter extraction.
+func remoteAction(t *testing.T, raw []byte, command string) string {
+	t.Helper()
+	return permissionAction(t, raw, "bash", command)
+}
+
+// permissionAction resolves one OpenCode permission request the way OpenCode
+// does: rules are wildcard patterns (`*` spans any characters, `?` one), and
+// the last matching rule wins. A trailing " *" also matches the bare command.
+func permissionAction(t *testing.T, raw []byte, tool, input string) string {
+	t.Helper()
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	var scalar string
+	if json.Unmarshal(root["permission"], &scalar) == nil {
+		return scalar
+	}
+	var permission map[string]json.RawMessage
+	if err := json.Unmarshal(root["permission"], &permission); err != nil {
+		t.Fatal(err)
+	}
+	if json.Unmarshal(permission[tool], &scalar) == nil {
+		return scalar
+	}
+	if permission[tool] == nil {
+		return "allow"
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(permission[tool])))
+	_, _ = decoder.Token()
+	action := "ask"
+	for decoder.More() {
+		key, _ := decoder.Token()
+		var value string
+		if err := decoder.Decode(&value); err != nil {
+			t.Fatal(err)
+		}
+		pattern := regexp.QuoteMeta(strings.ReplaceAll(key.(string), `\`, "/"))
+		pattern = strings.ReplaceAll(strings.ReplaceAll(pattern, `\*`, ".*"), `\?`, ".")
+		if strings.HasSuffix(pattern, " .*") {
+			pattern = strings.TrimSuffix(pattern, " .*") + "( .*)?"
+		}
+		if regexp.MustCompile("(?s)^" + pattern + "$").MatchString(strings.ReplaceAll(input, `\`, "/")) {
+			action = value
+		}
+	}
+	return action
+}
+
+// TestOpenCodePermissionsMirrorPiSafetyModel pins the Pi safety model for
+// OpenCode and Kilocode: everything is allowed by design, recognized
+// destructive commands are denied (Pi hard deny) or confirmed (Pi confirm),
+// remote commands keep their approval (#4324), and secret-bearing paths cannot
+// be read, written, or edited.
+func TestOpenCodePermissionsMirrorPiSafetyModel(t *testing.T) {
+	cases := []struct {
+		tool, input, want string
+	}{
+		// Allowed by design.
+		{"bash", "git status", "allow"},
+		{"bash", "git commit -m fix", "allow"},
+		{"bash", "go test ./...", "allow"},
+		{"bash", "rm notes.txt", "allow"},
+		{"bash", "git reset HEAD~1", "allow"},
+		// Pi hard deny.
+		{"bash", "rm -rf /", "deny"},
+		{"bash", "rm -rf ~", "deny"},
+		{"bash", "rm -rf ~/projects", "deny"},
+		{"bash", "rm -rf $HOME", "deny"},
+		{"bash", "rm -rf $HOME/projects", "deny"},
+		{"bash", "rm -rf ${HOME}", "deny"},
+		{"bash", "rm -rf .", "deny"},
+		{"bash", "rm -rf ..", "deny"},
+		{"bash", "rm -fr /", "deny"},
+		{"bash", "rm -r ~", "deny"},
+		{"bash", "git reset --hard", "deny"},
+		{"bash", "git reset --hard HEAD~1", "deny"},
+		{"bash", "git clean -fd", "deny"},
+		{"bash", "git clean -fdx", "deny"},
+		{"bash", "git push --force", "deny"},
+		{"bash", "git push --force-with-lease origin main", "deny"},
+		{"bash", "git push origin main --force", "deny"},
+		{"bash", "git push -f origin main", "deny"},
+		{"bash", "chmod -R 777 .", "deny"},
+		{"bash", "chown -R me:me .", "deny"},
+		// Hard-deny forms found by independent verification.
+		{"bash", "git clean -f", "deny"},
+		{"bash", "git clean -fx", "deny"},
+		{"bash", "git clean -xf", "deny"},
+		{"bash", "git clean --force", "deny"},
+		{"bash", "git reset HEAD~1 --hard", "deny"},
+		{"bash", "git reset -q --hard", "deny"},
+		{"bash", "rm -Rf ./", "deny"},
+		{"bash", "rm -fR ../", "deny"},
+		{"bash", "rm -rfv ~", "deny"},
+		{"bash", "rm -vrf /", "deny"},
+		{"bash", "rm -Rfv .", "deny"},
+		{"bash", "rm -rf build /", "deny"},
+		{"bash", `rm -rf "$HOME"`, "deny"},
+		{"bash", "sudo rm -rf /", "deny"},
+		{"bash", "git -C repo push --force", "deny"},
+		{"bash", "git -C repo reset --hard", "deny"},
+		{"bash", "git push -uf origin main", "deny"},
+		{"bash", "git clean -xdf", "deny"},
+		{"bash", "git clean -x -f", "deny"},
+		{"bash", "sudo rm -R /", "deny"},
+		{"bash", "sudo rm -fR /", "deny"},
+		{"bash", "rm -frv ~", "deny"},
+		{"bash", "rm -rvf /", "deny"},
+		// Forms that must stay allowed.
+		{"bash", "git clean -n", "allow"},
+		{"bash", "git clean -n -- fixtures/", "allow"},
+		{"bash", "git clean -n -e '*.conf'", "allow"},
+		{"bash", "git clean -n src/foo", "allow"},
+		{"bash", "rm -f report.txt", "allow"},
+		// Pi confirm.
+		{"bash", "rm -rfv build", "ask"},
+		{"bash", "git -C repo push", "ask"},
+		{"bash", "git push --follow-tags", "ask"},
+		{"bash", `psql -c "DROP TABLE users"`, "ask"},
+		{"bash", "rm -rf build", "ask"},
+		{"bash", "rm -r dist", "ask"},
+		{"bash", "find . -name '*.tmp' -delete", "ask"},
+		{"bash", "git push", "ask"},
+		{"bash", "git push origin main", "ask"},
+		{"bash", "git rebase main", "ask"},
+		{"bash", "git branch -D feature", "ask"},
+		{"bash", "npm publish", "ask"},
+		// Remote commands keep approval (#4324).
+		{"bash", "ssh example.invalid", "ask"},
+		{"bash", "rsync source destination", "ask"},
+		// Ordinary files stay readable and editable.
+		{"read", "src/main.go", "allow"},
+		{"edit", "src/main.go", "allow"},
+		{"read", "go.mod", "allow"},
+	}
+	// Secret-bearing paths: read and edit (edit covers write and patch).
+	for _, path := range []string{".env", "app/.env", ".env.local", "app/.env.production", ".env_backup", "secrets/token", "app/secrets/db.json", "/home/u/.ssh/id_ed25519", ".ssh/config", "server.pem", "keys/tls.key", "cert.p12", "cert.pfx", "/home/u/.aws/credentials", "/home/u/.config/gh/hosts.yml", "/home/u/.config/gh/hosts.yaml", "/home/u/.credentials/token", "/Users/u/Library/Keychains/login.keychain-db", "/home/u/.ssh", "secrets", ".aws/credentials", ".config/gh/hosts.yml"} {
+		cases = append(cases, struct{ tool, input, want string }{"read", path, "deny"}, struct{ tool, input, want string }{"edit", path, "deny"})
+	}
+	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(id), func(t *testing.T) {
+			home := t.TempDir()
+			adapter, _ := agents.NewAdapter(id)
+			if _, err := Inject(home, adapter); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(adapter.SettingsPath(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range cases {
+				if got := permissionAction(t, raw, tc.tool, tc.input); got != tc.want {
+					t.Errorf("%s %q: got %s, want %s", tc.tool, tc.input, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// Upgrading a settings file written by the previous overlay keeps existing
+// rules authoritative (the writer never lets new rules override them), so a
+// legacy "git push *": "ask" still governs a force push. Nothing destructive
+// may resolve to allow, and secret-bearing paths become uneditable.
+func TestOpenCodePermissionsUpgradeFromPreviousOverlay(t *testing.T) {
+	previous := `{"permission":{"bash":{"*":"allow","git commit *":"ask","git push *":"ask","git push":"ask","git push --force *":"ask","git rebase *":"ask","git reset --hard *":"ask","ssh":"ask","ssh *":"ask"},"read":{"*":"allow","*.env":"deny","**/*.pem":"deny"}}}`
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentOpenCode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(previous), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"git push --force", "git push -f origin main", "git reset --hard HEAD~1", "rm -rf ~", "git clean -fd", "chown -R me:me ."} {
+		if got := permissionAction(t, raw, "bash", command); got == "allow" {
+			t.Errorf("upgraded bash %q resolved to allow", command)
+		}
+	}
+	for _, path := range []string{".env", "server.pem", "/home/u/.ssh/id_ed25519"} {
+		if got := permissionAction(t, raw, "edit", path); got != "deny" {
+			t.Errorf("upgraded edit %q = %s, want deny", path, got)
+		}
+	}
+}
+
+func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
+	// These are matcher inputs, not shell programs. bash.ts extracts command
+	// nodes separately; no claim is made about parsing arbitrary shell syntax.
+	for _, input := range []string{"/usr/bin/ssh example.invalid", "env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
+		if got := remoteAction(t, openCodeOverlayJSON, input); got != "allow" {
+			t.Errorf("unsupported matcher input %q unexpectedly intercepted: %s", input, got)
+		}
+	}
+}
+
+func TestRemoteCommandApprovalDefaults(t *testing.T) {
+	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		for _, seed := range []string{`{}`, `{"permission":{"bash":{"*":"allow"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"deny"}}}`, `{"permission":"deny"}`, `{"permission":{"bash":"ask"}}`, `{"permission":{"bash":"deny"}}`, `{"permission":{"bash":{"*":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh *":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"allow"}}}`} {
+			t.Run(string(id)+seed, func(t *testing.T) {
+				home := t.TempDir()
+				adapter, _ := agents.NewAdapter(id)
+				path := adapter.SettingsPath(home)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := Inject(home, adapter); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, command := range []string{"ssh", "ssh example.invalid", "scp", "scp file example.invalid:file", "sftp", "sftp example.invalid", "rsync", "rsync source destination"} {
+					want := "ask"
+					if seed == `{"permission":"deny"}` || seed == `{"permission":{"bash":"deny"}}` || strings.Contains(seed, `"*":"deny"`) || (strings.Contains(seed, `"deny"`) && strings.HasPrefix(command, "ssh")) {
+						want = "deny"
+					}
+					if strings.Contains(seed, `"ssh*":"allow"`) && strings.HasPrefix(command, "ssh") {
+						want = "allow" // Explicit personal allow is not silently rewritten.
+					}
+					if got := remoteAction(t, raw, command); got != want {
+						t.Errorf("%q: got %s, want %s", command, got, want)
+					}
+				}
+				if result, err := Inject(home, adapter); err != nil || result.Changed {
+					t.Fatalf("repeat injection = %+v, %v", result, err)
+				}
+			})
+		}
+	}
+}
 
 func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
@@ -698,5 +1079,32 @@ func TestInjectOpenCodePreservesExistingDenyRules(t *testing.T) {
 	// New sensitive-path rules must also be present
 	if readNode["**/.ssh/**"] != "deny" {
 		t.Errorf("default read deny rule '**/.ssh/**' was not added; got: %v", readNode)
+	}
+}
+
+func TestKilocodePermissionsKeepBaseDuplicateKeyBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := kilocode.NewAdapter()
+	settings := TargetPath(home, adapter)
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte("{\"permission\":{\"bash\":{\"ssh\":\"deny\",\"ssh\":\"allow\"}}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("Inject(kilocode) error = %v; want base merge, not the OpenCode duplicate-key refusal", err)
+	}
+	raw, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("settings not valid JSON after merge: %v\n%s", err, raw)
+	}
+	if _, ok := root["permission"].(map[string]any); !ok {
+		t.Fatalf("permission missing after merge: %s", raw)
 	}
 }

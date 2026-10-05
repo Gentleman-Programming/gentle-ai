@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type SchemaVersion string
@@ -19,6 +19,19 @@ const SchemaV1 SchemaVersion = "gentle-ai.agent-capability-manifest/v1"
 type ContractID string
 
 const ContractWorkRoutingV1 ContractID = "gentle-ai.work-routing/v1"
+
+// ContractReviewTransportV1 is Wave 4 S4's transport capability claim
+// (design.md decision 5): the adapter self-declares whether it can carry
+// the receipt-driven-development review protocol at all, checked before any
+// review authority, tier, lens, budget, or collection slot exists. The
+// provider never probes a live runtime for this — an absent or unrecognised
+// claim fails closed.
+const ContractReviewTransportV1 ContractID = "gentle-ai.review-transport/v1"
+
+// ContractImmutableReviewExecutorV1 is independent of host/orchestrator
+// support. It is advertised only when a provider can launch a fresh,
+// constrained reviewer and prove that boundary before review START.
+const ContractImmutableReviewExecutorV1 ContractID = "gentle-ai.immutable-review-executor/v1"
 
 type ContractExposure string
 
@@ -48,7 +61,6 @@ type AgentCapabilityManifest struct {
 // means the adapter consumes Gentle AI's file-based subagent projection; it
 // does not infer whether the runtime can perform some other form of delegation.
 type AgentFeatureClaims struct {
-	AutoInstall   bool `json:"autoInstall"`
 	OutputStyles  bool `json:"outputStyles"`
 	SlashCommands bool `json:"slashCommands"`
 	FileSubAgents bool `json:"fileSubAgents"`
@@ -68,19 +80,32 @@ type ImplementationRoutingFacts struct {
 }
 
 type DirectInlineFacts struct {
-	MinUnderstandingFiles                    uint8 `json:"minUnderstandingFiles"`
-	MaxUnderstandingFiles                    uint8 `json:"maxUnderstandingFiles"`
-	MaxMechanicalWriteFiles                  uint8 `json:"maxMechanicalWriteFiles"`
-	MechanicalWriteMustBeAlreadyUnderstood   bool  `json:"mechanicalWriteMustBeAlreadyUnderstood"`
-	MechanicalWriteMustNotRequireResearch    bool  `json:"mechanicalWriteMustNotRequireResearch"`
-	MechanicalWriteMustNotHaveOpenDesignWork bool  `json:"mechanicalWriteMustNotHaveOpenDesignWork"`
+	// Deprecated: file counts no longer route exploration. Canonical values are
+	// zero and omitted from JSON; nonzero legacy facts fail validation.
+	MinUnderstandingFiles                    uint8  `json:"minUnderstandingFiles,omitempty"`
+	MaxUnderstandingFiles                    uint8  `json:"maxUnderstandingFiles,omitempty"`
+	MaxEvidenceBatches                       uint8  `json:"maxEvidenceBatches"`
+	MaxEvidenceCalls                         uint8  `json:"maxEvidenceCalls"`
+	ApproxEvidenceTokens                     uint32 `json:"approxEvidenceTokens"`
+	EvidenceMustUseBoundedRanges             bool   `json:"evidenceMustUseBoundedRanges"`
+	MaxMechanicalWriteFiles                  uint8  `json:"maxMechanicalWriteFiles"`
+	MechanicalWriteMustBeAlreadyUnderstood   bool   `json:"mechanicalWriteMustBeAlreadyUnderstood"`
+	MechanicalWriteMustNotRequireResearch    bool   `json:"mechanicalWriteMustNotRequireResearch"`
+	MechanicalWriteMustNotHaveOpenDesignWork bool   `json:"mechanicalWriteMustNotHaveOpenDesignWork"`
 }
 
 type DelegatedDirectFacts struct {
-	MappingMinUnderstandingFiles  uint8 `json:"mappingMinUnderstandingFiles"`
-	WriterMinNonTrivialFiles      uint8 `json:"writerMinNonTrivialFiles"`
-	DelegateWhenReadPreparesWrite bool  `json:"delegateWhenReadPreparesWrite"`
-	DelegateWhenBroadResearch     bool  `json:"delegateWhenBroadResearch"`
+	// Deprecated: retained for source compatibility only; canonical zero.
+	MappingMinUnderstandingFiles   uint8  `json:"mappingMinUnderstandingFiles,omitempty"`
+	ApproxSequentialLookupLimit    uint8  `json:"approxSequentialLookupLimit"`
+	DelegateWhenLongSessionMapping bool   `json:"delegateWhenLongSessionMapping"`
+	ApproxHandoffTokens            uint32 `json:"approxHandoffTokens"`
+	MaxParentSpotChecks            uint8  `json:"maxParentSpotChecks"`
+	ApproxParentContextTokens      uint32 `json:"approxParentContextTokens"`
+	ContextBackstopIsAdvisory      bool   `json:"contextBackstopIsAdvisory"`
+	WriterMinNonTrivialFiles       uint8  `json:"writerMinNonTrivialFiles"`
+	DelegateWhenReadPreparesWrite  bool   `json:"delegateWhenReadPreparesWrite"`
+	DelegateWhenBroadResearch      bool   `json:"delegateWhenBroadResearch"`
 }
 
 type SDDProposalFacts struct {
@@ -90,7 +115,9 @@ type SDDProposalFacts struct {
 }
 
 type ContractClaims struct {
-	WorkRoutingV1 ContractClaim `json:"workRoutingV1"`
+	WorkRoutingV1             ContractClaim `json:"workRoutingV1"`
+	ReviewTransportV1         ContractClaim `json:"reviewTransportV1"`
+	ImmutableReviewExecutorV1 ContractClaim `json:"immutableReviewExecutorV1"`
 }
 
 type ContractClaim struct {
@@ -115,9 +142,62 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 				ID:       ContractWorkRoutingV1,
 				Exposure: ContractExposureDormant,
 			},
+			ReviewTransportV1: ContractClaim{
+				ID:       ContractReviewTransportV1,
+				Exposure: reviewTransportExposureByAgent[agent],
+			},
+			ImmutableReviewExecutorV1: ContractClaim{
+				ID:       ContractImmutableReviewExecutorV1,
+				Exposure: immutableReviewExecutorExposureByAgent[agent],
+			},
 		},
 	}, nil
 }
+
+// reviewTransportExposureByAgent is the closed set of runtimes that can
+// carry the review protocol. Every supported agent is explicitly dormant
+// first, then only the four runtimes with the required native transport and
+// immutable reviewer boundary advertise receipt-driven review. A map miss
+// (an unknown agent) remains fail-closed.
+var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
+	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
+	for agent := range featureClaimsByAgent {
+		exposure[agent] = ContractExposureDormant
+	}
+	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
+	exposure[model.AgentOpenCode] = ContractExposureAdvertised
+	exposure[model.AgentCodex] = ContractExposureAdvertised
+	exposure[model.AgentPi] = ContractExposureAdvertised
+	return exposure
+}()
+
+// immutableReviewExecutorExposureByAgent declares only providers with an
+// enforceable fresh-reviewer boundary. Claude launches a generated subagent
+// with no live tools and receives only the native prompt-carried evidence;
+// OpenCode relays one host Task through a Go-native transport process, which
+// materializes the bound prompt and captures matching raw output from an
+// ordinary already-running session -- no restart, child process, special
+// user-visible session, or `OPENCODE_DISABLE_*` variable (rdd-advisory-
+// transport SKILL.md). Capability advertisement records the provider contract
+// that can reach Go-owned admission; organic runtime proof is recorded by the
+// provider's own execution tests. Pi advertises through gentle-pi's host
+// relay: the launcher reads the negotiated collection input, spawns a
+// brand-new print-mode pi subprocess in an empty scratch directory with
+// every discovery surface disabled, forwards the Go-issued opaque prompt
+// untouched, and returns raw final bytes (gentle-pi#311, gentle-ai#3249).
+// Kilo and every other runtime remain explicitly dormant until they own an
+// equivalent native boundary.
+var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
+	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
+	for agent := range featureClaimsByAgent {
+		exposure[agent] = ContractExposureDormant
+	}
+	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
+	exposure[model.AgentOpenCode] = ContractExposureAdvertised
+	exposure[model.AgentCodex] = ContractExposureAdvertised
+	exposure[model.AgentPi] = ContractExposureAdvertised
+	return exposure
+}()
 
 // MustForAgent is for compile-time registered adapters. A panic means the
 // factory and the canonical ACI registry have drifted.
@@ -134,18 +214,25 @@ func MustForAgent(agent model.AgentID) AgentCapabilityManifest {
 func CanonicalImplementationRouting() ImplementationRoutingFacts {
 	return ImplementationRoutingFacts{
 		DirectInline: DirectInlineFacts{
-			MinUnderstandingFiles:                    1,
-			MaxUnderstandingFiles:                    3,
+			MaxEvidenceBatches:                       1,
+			MaxEvidenceCalls:                         3,
+			ApproxEvidenceTokens:                     10000,
+			EvidenceMustUseBoundedRanges:             true,
 			MaxMechanicalWriteFiles:                  1,
 			MechanicalWriteMustBeAlreadyUnderstood:   true,
 			MechanicalWriteMustNotRequireResearch:    true,
 			MechanicalWriteMustNotHaveOpenDesignWork: true,
 		},
 		DelegatedDirect: DelegatedDirectFacts{
-			MappingMinUnderstandingFiles:  4,
-			WriterMinNonTrivialFiles:      2,
-			DelegateWhenReadPreparesWrite: true,
-			DelegateWhenBroadResearch:     true,
+			ApproxSequentialLookupLimit:    5,
+			DelegateWhenLongSessionMapping: true,
+			ApproxHandoffTokens:            2000,
+			MaxParentSpotChecks:            1,
+			ApproxParentContextTokens:      150000,
+			ContextBackstopIsAdvisory:      true,
+			WriterMinNonTrivialFiles:       2,
+			DelegateWhenReadPreparesWrite:  true,
+			DelegateWhenBroadResearch:      true,
 		},
 		SDD: SDDProposalFacts{
 			ProposeWhenSubstantialOrAmbiguous:     true,
@@ -171,6 +258,12 @@ func (m AgentCapabilityManifest) Advertises(contract ContractID) bool {
 	case ContractWorkRoutingV1:
 		return m.Contracts.WorkRoutingV1.ID == contract &&
 			m.Contracts.WorkRoutingV1.Exposure == ContractExposureAdvertised
+	case ContractReviewTransportV1:
+		return m.Contracts.ReviewTransportV1.ID == contract &&
+			m.Contracts.ReviewTransportV1.Exposure == ContractExposureAdvertised
+	case ContractImmutableReviewExecutorV1:
+		return m.Contracts.ImmutableReviewExecutorV1.ID == contract &&
+			m.Contracts.ImmutableReviewExecutorV1.Exposure == ContractExposureAdvertised
 	default:
 		return false
 	}
@@ -218,27 +311,31 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 	model.AgentAntigravity: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
+	// Conductor inherits Claude Code configuration and is managed through Claude
+	// Code's own adapter surface, so Gentle AI claims no write capabilities for
+	// it: no skills, MCP, system prompt, or other managed file writes.
+	model.AgentConductor: {},
 	model.AgentClaudeCode: {
-		AutoInstall: true, OutputStyles: true, SlashCommands: true,
+		OutputStyles: true, SlashCommands: true,
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentCodex: {
-		AutoInstall: true, Skills: true, SystemPrompt: true, MCP: true,
+		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentCursor: {
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentGeminiCLI: {
-		AutoInstall: true, Skills: true, SystemPrompt: true, MCP: true,
+		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentHermes: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKilocode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKimi: {
-		AutoInstall: true, FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
+		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKiroIDE: {
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
@@ -247,13 +344,13 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentOpenCode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentPi: {
-		AutoInstall: true, SystemPrompt: true, MCP: true,
+		SystemPrompt: false, MCP: true,
 	},
 	model.AgentQwenCode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentTrae: {
 		Skills: true, SystemPrompt: true, MCP: true,

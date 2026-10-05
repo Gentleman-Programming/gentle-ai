@@ -1,175 +1,32 @@
 # Intended Usage
 
-<- [Back to README](../README.md)
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
 
----
+← [Back to README](../README.md)
 
-This page explains how gentle-ai is meant to be used. Not the flags, not the architecture -- just the mental model. If you read one page besides the README, make it this one.
+Gentle AI configures the AI agent you already use. After installation, open a project and describe the outcome; you do not need to invoke a planning command or hand-edit generated configuration.
 
----
+## Everyday work: ODD
 
-## After Installing -- You're Ready
+Organic Driven Development (ODD) starts by deciding whether your request authorizes a change. Explanations and investigations stay read-only. The agent explores existing code, asks only about decisions it cannot safely make, and implements authorized work with applicable checks.
 
-Once you run `gentle-ai` and select your agent(s), components, and preset, the ecosystem is configured for normal use. You do not need to memorize SDD phases, hand-edit generated config files, or manually wire the agent workflow.
+Small, understood changes need no persistent task artifact. For substantial work, the agent creates one `odd/tasks/<feature-name>.md` before source changes, with scope, tasks, evidence, and the next step. An Engram copy under `odd/<feature-name>/tasks` helps resume across sessions. The parent reconciles both copies before resuming; missing memory is reported rather than treated as success. Accepted scope changes update affected tasks; findings do not silently expand authorization. Each task closes with a work-unit commit on the feature branch under the ODD protocol; push, pull request, and merge remain separate decisions.
 
-Open your AI agent in a project and start working. For richer project context, the agent may run `/sdd-init` or refresh the skill registry automatically when SDD needs it. You can also run those manually, but they are not required for basic usage.
+Test-first development is the default when a relevant runnable deterministic test and a clear expected outcome exist: observe RED before implementation, GREEN after, then REFACTOR; otherwise explain the exception and still run functional checks. Write one RED test per requested rule, add one test per touched existing command or option proving its previous behavior still holds, and add no other cases. See [ODD details](usage.md#organic-driven-development-odd).
 
----
+## Review is a separate choice
 
-## Engram (Memory) -- Automatic, But You CAN Use It
+Receipt-Driven Development (RDD) checks an exact change candidate when enabled. The user controls the switch with `gentle-ai review mode status`, `gentle-ai review mode enable`, and `gentle-ai review mode disable`. Review risk, consent, and authority come from the native review contract, not task checkboxes or model guesses. Disabling RDD leaves ordinary checks and repository delivery policy intact; a review result does not authorize commit, push, or release. See [Review](review-integration.md).
 
-Engram is persistent memory for your AI agent. It saves decisions, discoveries, bug fixes, and context across sessions -- automatically. The agent manages all of it via MCP tools (`mem_save`, `mem_search`, etc.).
+## Delegation and skills
 
-**Day-to-day: you don't need to do anything.** The agent handles memory automatically.
+The parent works inline by default and delegates only for a named reason when the selected agent supports it: an exploration map it needs to decide or route, parallel writers on disjoint edit surfaces, the long-session context backstop, or independent verification of a high-risk change. File count never decides delegation. Workers receive a bounded mission and relevant exact skill paths; the parent verifies outcomes rather than treating self-report as proof. Native delegation capabilities differ by agent; see [Supported Agents](agents.md).
 
-**But engram has useful tools when you need them:**
+The skill registry catalogs project and installed skills. On supported clients, startup hooks refresh it with a cache; to refresh manually from a project use `gentle-ai skill-registry refresh --force`. Pi startup behavior belongs to the separately installed Gentle Shell package, not to this binary. See [Usage](usage.md#skill-registry-refresh) and [Pi integration](pi.md).
 
-| Command                       | When to use                                                                                 |
-| ----------------------------- | ------------------------------------------------------------------------------------------- |
-| `engram tui`                  | Browse your memories visually -- search, filter, drill into observations                    |
-| `engram sync`                 | Export project memories to `.engram/` for git tracking. Run after significant work sessions |
-| `engram sync --import`        | Import memories on another machine after cloning a repo with `.engram/`                     |
-| `engram projects list`        | See all projects with observation counts                                                    |
-| `engram projects consolidate` | Fix project name drift (e.g., "my-app" vs "My-App" vs "my-app-frontend")                    |
-| `engram search <query>`       | Quick memory search from the terminal                                                       |
+Engram™, when installed and active, saves project decisions and discoveries across sessions. The agent uses its memory tools automatically. To inspect or sync memories manually, use `engram tui` or `engram sync`; [Engram documentation](engram.md) explains the integration.
 
-Since v1.11.0, engram auto-detects the project name from git remote at startup, normalizes to lowercase, and warns if it finds similar existing project names. This prevents the name drift issue where the same project ends up with multiple name variants.
+## Maintain your installation
 
-For full documentation: [github.com/Gentleman-Programming/engram](https://github.com/Gentleman-Programming/engram)
-
----
-
-## SDD (Spec-Driven Development) -- It Happens Organically
-
-SDD is a structured planning workflow for substantial features. It has phases (explore, propose, spec, design, implement, verify), but you do NOT need to learn any of them.
-
-Here's how it actually works:
-
-- **Small request?** The agent just does it. No ceremony.
-- **Substantial feature?** The agent will suggest using SDD to plan it properly -- exploring the codebase, proposing an approach, designing the architecture, then implementing step by step.
-- **Want SDD explicitly?** Just say "use sdd" or "hazlo con sdd" and the agent starts the workflow.
-
-The agent handles all the phases internally. You just review and approve at key decision points.
-
-If you want the project-level OpenSpec config convention SDD phases use for conventions, strict TDD, and testing metadata, see [OpenSpec Config for SDD](openspec-config.md).
-
----
-
-## Multi-mode SDD -- Use It When Your Agent Supports It
-
-Multi-mode lets you assign different AI models to different SDD phases -- for example, a powerful model for design and a faster one for implementation.
-
-Support depends on the agent:
-
-| Agent | How multi-mode works |
-| ----- | -------------------- |
-| **OpenCode** | SDD Profiles generate `gentle-orchestrator` plus phase sub-agents in `opencode.json` |
-| **Kilo Code** | OpenCode-compatible SDD profile overlay in `~/.config/kilo` |
-| **Kiro IDE** | Native phase agents with per-agent `model:` frontmatter |
-| **Pi** | Owned by `gentle-pi` through Pi-managed agents, chains, and model overrides |
-| **Others** | Single-mode SDD; one active model handles all phases |
-
-Single-mode is not a downgrade. It is the simpler default and works well. Multi-mode is useful when you deliberately want cost, speed, or reasoning tradeoffs per phase.
-
-If you want OpenCode profiles:
-
-1. Connect your AI providers in OpenCode first
-2. Create a profile via gentle-ai TUI ("OpenCode SDD Profiles") or CLI (`--profile` flag)
-3. The base/default SDD conductor is `gentle-orchestrator`
-4. Named profiles generate `sdd-orchestrator-{name}` + suffixed sub-agents, each assigned to your chosen model
-5. In OpenCode, press **Tab** to switch between `gentle-orchestrator` and custom profiles
-
-You can create multiple profiles (e.g., "cheap" for experimentation, "premium" for production) and switch between them freely.
-
-If you prefer a **runtime profile manager** that keeps profiles outside `opencode.json`, gentle-ai supports that too. During sync, OpenCode can auto-detect external profile files under `~/.config/opencode/profiles/*.json` and switch to a safer compatibility path that preserves the active `gentle-orchestrator` prompt instead of overwriting it.
-
-**Full step-by-step guide**: [OpenCode SDD Profiles](opencode-profiles.md)
-
-For the complete support matrix, see [Supported Agents](agents.md).
-
----
-
-## Sub-Agents -- Smarter Than You Think
-
-When the orchestrator delegates work to a sub-agent (say, `sdd-explore` to investigate a codebase), that sub-agent is not a dumb executor running a single script. It's a full agent with its own session, tools, and context.
-
-What makes them "super sub-agents":
-
-1. **The orchestrator keeps them focused.** The parent/orchestrator resolves the skill registry once, passes the relevant `SKILL.md` paths into each sub-agent prompt, and gives the child one concrete role. Sub-agents read exact skill files instead of receiving generated summaries.
-
-2. **They adapt to your project.** A `sdd-apply` sub-agent working on a React project receives React patterns. The same sub-agent working on a Go project receives Go testing conventions. The rules depend on the registry and task context, not a hardcoded list.
-
-3. **They persist phase artifacts when the backend supports it.** In Engram-backed SDD flows, phase agents save artifacts before returning. The next phase can pick up from the stored proposal, spec, design, tasks, or apply progress -- even across sessions.
-
-This pattern works today in several delegation models:
-
-| Model | Agents | How it runs |
-| ----- | ------ | ----------- |
-| **Full sub-agents** | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi | Each SDD phase can run in a focused context through native delegation, package-managed subagents, or an OpenCode-compatible overlay |
-| **Hermes delegate_task** | Hermes | The orchestrator spawns ephemeral workers with self-contained missions and verifies their summaries before reporting success |
-| **Solo-agent** | Codex, Windsurf, Antigravity, OpenClaw, Trae | SDD phases run inline in one conversation; Engram still provides cross-phase persistence when available |
-
-You don't need to configure any of this. The installer sets up the right model for your agent, and the orchestrator manages delegation automatically.
-
-### Delegation Stop Rules
-
-The orchestrator must stop acting as a monolithic executor when complexity appears:
-
-- **4-file rule**: reading 4+ files to understand a flow means delegate exploration or run an exploration phase.
-- **Multi-file write rule**: touching 2+ non-trivial files means use one writer or require fresh review before completion.
-- **PR rule**: before commit, push, or PR after code changes, run fresh review unless the diff is trivial (tier 1).
-- **Incident rule**: after wrong cwd, worktree/git accident, merge recovery, confusing test command, or environment workaround, run a fresh audit before continuing.
-- **Long-session rule**: after roughly 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits with growing complexity, pause and delegate, re-plan, or justify why not.
-- **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents when the agent platform supports it.
-
----
-
-## Skills -- Two Layers
-
-gentle-ai installs **SDD skills** and **foundation skills** (workflow, testing patterns) directly into your agent's skills directory. These are embedded in the binary and always up to date.
-
-For **coding skills** (React 19, Angular, TypeScript, Tailwind, Zod, Playwright, etc.), the community maintains a separate repository: [Gentleman-Programming/Gentleman-Skills](https://github.com/Gentleman-Programming/Gentleman-Skills). You install those manually by cloning the repo and copying the skills you want:
-
-```bash
-git clone https://github.com/Gentleman-Programming/Gentleman-Skills.git
-cp -r Gentleman-Skills/curated/react-19 ~/.claude/skills/
-cp -r Gentleman-Skills/curated/typescript ~/.claude/skills/
-# ... or copy the entire curated/ directory
-```
-
-Once installed, your agent detects what you're working on and loads the relevant skills automatically. You don't need to activate or invoke them.
-
-**The skill registry.** The skill registry is a catalog of all available skills that the orchestrator reads once per session to know what's available and where. It needs to run **inside each project** you work on, because it also scans for project-level conventions (like `CLAUDE.md`, `agents.md`, `.cursorrules`, etc.).
-
-How it works:
-
-1. **The registry refreshes at startup where the agent supports hooks.** Normal Pi startup runs the `gentle-pi` session hook. Codex, Claude Code, and OpenCode run `gentle-ai skill-registry refresh --quiet` from their installed startup/plugin hooks.
-2. **The refresh is cached.** Gentle-AI fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
-3. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes exact matching `SKILL.md` paths to sub-agents. You don't interact with the registry after that.
-4. **Manual fallback stays available** -- run `gentle-ai skill-registry refresh --force` from a project if you want to regenerate immediately.
-
-There's also an automated side: `sdd-init` runs the same registry logic internally, so if you use SDD in a new project, the registry gets built as part of that flow.
-
-**Pro tip**: On Codex, Claude Code, OpenCode, and normal Pi startup you normally do not need to remember this. The startup hook refreshes the registry and the cache prevents unnecessary work. If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks, so run the manual refresh when you need the registry updated in that session.
-
----
-
-## The Golden Rule
-
-Gentle AI is an ecosystem **configurator**. It sets up your AI agent with memory, skills, workflows, and a persona -- then gets out of the way.
-
-The less you think about gentle-ai after installing, the better it's working.
-
----
-
-## Quick Reference
-
-| Do                                                         | Don't                                                                             |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Run the installer, pick your agents and preset             | Manually edit the generated config files                                          |
-| Just start coding with your AI agent                       | Memorize SDD phases or commands                                                   |
-| Let the agent suggest SDD when a task is big enough        | Force SDD on every small task                                                     |
-| Trust that engram is saving context when installed and active | Dig into engram's storage unless you need `engram sync` or `engram tui`           |
-| Let startup hooks or SDD init refresh the skill registry      | Manually rescan skills unless you need `gentle-ai skill-registry refresh --force` |
-| Say "use sdd" if you know you want structured planning     | Worry about which SDD phase comes next                                            |
-| Re-run the installer to update or change your setup        | Manually patch skill files or persona instructions                                |
+Run `gentle-ai doctor` for read-only diagnostics. After replacing or upgrading the binary, preview with `gentle-ai sync --dry-run` and run `gentle-ai sync` to refresh managed agent assets. Sync targets agents recorded as installed unless you explicitly select others. Uninstall removes managed configuration, not unrelated user data or external packages; inspect its scope before confirming. See [install, update, and uninstall](usage.md#cli-commands).

@@ -1,5 +1,8 @@
 # Organic RDD Recovery Plan
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 > **Decision:** Gentle AI remains an ecosystem configurator for existing coding
 > agents. Normal implementation stays inside the configured agent. Receipt-Driven
 > Development begins only after the agent has produced a candidate it considers

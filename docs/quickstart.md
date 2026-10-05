@@ -6,7 +6,8 @@
 
 - Homebrew installed and available in PATH.
 - `git` available.
-- If Homebrew requires tap trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once.
+- If Homebrew requires trust, run `brew trust --formula gentleman-programming/tap/gentle-ai` once for Gentle AI™ only.
+  - To install several tools from this tap, use `brew trust gentleman-programming/tap` instead. It trusts all current and future formulas, casks, and external commands published in the tap.
 
 ### Ubuntu/Debian (and derivatives like Linux Mint, Pop!\_OS)
 
@@ -32,8 +33,9 @@
 
 ### All platforms
 
-- Go 1.24+ (for building from source).
-- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you. They are strictly required if you select any agent or component installed via `npm install -g` (most agent integrations, plus the CodeGraph community tool).
+- Git.
+- Go 1.25.10+ (for building from source).
+- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with an install hint if either is missing (the Node.js hints for the distros above are listed there; npm's hint asks you to install Node.js first) — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: most selected agents are configured even when their runtime isn't detected, so install those yourself. Pi and OpenCode are the exceptions: `gentle-ai install` stops until `pi` is on `PATH` (for Pi) or `opencode --version` succeeds (for OpenCode). Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
 
 ### Windows
@@ -49,75 +51,86 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
-# Latest released RDD build (v2 line)
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-
-# Stable, pre-RDD pin (v1 line)
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+# Stable channel: the latest release (v4.0.0)
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0
 ```
 
-The two commands use different import paths on purpose. Go requires the `/vN`
-suffix in the module path for major version 2 and above, so every `v2.x` release
-is installed as `.../gentle-ai/v2/cmd/gentle-ai`. The `v1.46.0` pin predates that
-rule and must keep the unsuffixed path; adding `/v2` to it would make Go refuse
-the tag.
+Go requires a major-version suffix (`/v4`) in the module path for major
+version 2 and above. Installing the old `/v3` module path stays on the v3 line
+and never reaches v4.
 
 ## Version Policy
 
-Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, when the first bounded native review transactions were added. Every release from `v1.47.0` onward is part of the unstable RDD development line. New releases will continue improving RDD until the project declares the line stable. The stable version for normal use without RDD is the immediately preceding release, `v1.46.0`.
+The latest published stable release is [`v4.0.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v4.0.0). `@latest` on the `/v4` module path tracks the stable channel. Use `@main` only to test unreleased development changes.
 
-Use `@latest` to install the latest released RDD build for testing. The negotiated public review contract was published in `v2.1.6`. Builds from `main` may contain changes after the latest release and are intended for unreleased RDD development testing.
-
-### Import paths differ between the v1 and v2 lines
-
-Go requires the module path of a major version 2 or higher to end in `/vN`.
-Every `v2.x` install therefore uses `github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`,
-and the pre-RDD `v1.46.0` pin keeps the unsuffixed
-`github.com/gentleman-programming/gentle-ai/cmd/gentle-ai`. Each path resolves
-only its own major line; swapping them makes Go refuse the version.
-
-### Install the stable version
-
-Use an exact Go module version to keep the baseline reproducible on macOS, Linux, or Windows:
+### Install the stable channel
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
-### Install the latest released RDD build for testing
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
-gentle-ai version
-```
-
-### Install unreleased RDD changes
+### Install unreleased development changes
 
 Only use `main` when testing changes that are not part of a release yet:
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+# macOS / Linux
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
+gentle-ai version
+
+# Windows (PowerShell)
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
 gentle-ai version
 ```
 
-The managed install scripts select the latest released version for the chosen channel and do not accept arbitrary release pins. Because every release from `v1.47.0` onward is currently unstable RDD, use the exact `go install ...@v1.46.0` command above when you need the stable version.
+`go install` ignores `GENTLE_AI_CHANNEL`; `gentle-ai` reads it on later runs, where `beta` tracks `main` instead of the latest release. Tools that Homebrew manages keep updating through Homebrew. To update a beta installation later, preserve the beta channel:
+
+```bash
+# macOS / Linux
+GENTLE_AI_CHANNEL=beta gentle-ai upgrade
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
+```
+
+`gentle-ai upgrade` advances the `gentle-ai` binary from `main` and refreshes managed tools on macOS, Linux, and Windows with Go on `PATH`.
+
+If you re-run an installer, pass beta explicitly because both installers default to stable:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+
+# Windows (PowerShell)
+$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+```
+
+> **Go module proxy cache**: `proxy.golang.org` can lag behind new commits on `main` for up to several hours. If manual `go install ...@main` does not update to the newest commit, bypass the cache with `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main`).
+
+The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 
 ## Run
 
 ```bash
-go run ./cmd/gentle-ai install --dry-run
+gentle-ai install --dry-run
 ```
 
 Use `--dry-run` first to validate selections and execution plan without applying changes. The dry-run output includes a `Platform decision` line showing the detected OS, distro, package manager, and support status.
 
+From a source clone, run `go run ./cmd/gentle-ai install` (with or without `--dry-run`) instead.
+
 ## First real install
 
 ```bash
-go run ./cmd/gentle-ai install
+gentle-ai install
 ```
 
-The installer detects your platform automatically — no flags needed to select macOS vs Linux. Install commands are resolved through the appropriate package manager (brew, apt, pacman, or dnf) based on detection.
+The installer detects your platform automatically — no flags needed to select macOS vs Linux. On Linux, it uses the first supported package manager it finds on `PATH`; see [Supported Platforms](platforms.md) for the full list and detection order.
+
+For a beta install that selects Engram, Go must be on `PATH`. If it is missing, dependency preflight stops before the backup snapshot or component apply and prints a platform-specific installation hint.
+
+Stable Engram installs and beta plans without Engram do not gain a Go requirement.
 
 After completion, verify that agent configs and selected components were installed to their expected paths.
 
@@ -135,13 +148,17 @@ gentle-ai sync --agent claude-code --agent opencode
 
 ## Verification outcome
 
-When checks pass, installer reports:
+When checks pass, the installer prints a ready message that names the agent commands you installed, for example:
 
-`You're ready. Run 'claude' or 'opencode' and start building.`
+``You're ready. Run `claude` or `opencode` and start building.``
 
-If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
+If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram™ MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
 
-For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, and `pi-mcp-adapter`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `pi-subagents-j0k3r`, `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw`.
+For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi` and `gentle-engram`, runs `pi-engram init` through the pinned `gentle-engram` package, then installs `pi-web-access` and `pi-btw`. Pi's built-in MCP support (Pi >= 0.99.0) runs the Engram and CodeGraph MCP servers from `mcp.json`. Gentle AI removes a previously installed `pi-mcp-adapter`, because an extension that registers `/mcp` replaces Pi's built-in MCP support.
+
+## Start working with ODD
+
+Open your agent in the project and describe an outcome, for example: "Add CSV export using the existing report filters." [Organic Driven Development (ODD)](usage.md#organic-driven-development-odd) is the development workflow: explore, implement authorized work, and check it. Substantial work keeps one recoverable feature document; small/read-only work avoids durable artifacts.
 
 ## Hardening recommendations for users
 
@@ -163,4 +180,4 @@ Optional wrapper tools for extra defense:
 If you run the installer on an unsupported OS or Linux distro, it exits immediately with an error:
 
 - `unsupported operating system: only macOS, Linux, and Windows are supported (detected <os>)`
-- `unsupported linux distro: Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family (detected <distro>)`
+- `unsupported linux distro: no package manager found on PATH (detected distro <distro>).` The full error lists the package managers it searched, in order, and a command to check which ones your machine has.
