@@ -32,9 +32,9 @@ var codexPresetOrder = []CodexModelPreset{
 }
 
 var codexPresetDescriptions = map[CodexModelPreset]string{
-	CodexPresetLowCost:     "Lowest-cost GPT-6 mix — Sol for reasoning, Luna for code and light work",
-	CodexPresetRecommended: "Balanced GPT-6 mix — Sol for reasoning, Luna for code and light work",
-	CodexPresetPowerful:    "High-effort GPT-6 mix — Astra for reasoning, Sol for code, Luna for light work",
+	CodexPresetLowCost:     "Lowest-cost GPT-6.1 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetRecommended: "Balanced GPT-6.1 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetPowerful:    "High-effort GPT-6.1 mix — Astra for reasoning, Sol for code, Luna for light work",
 }
 
 var codexPresetConstructors = map[CodexModelPreset]func() map[string]model.CodexEffort{

@@ -1,5 +1,8 @@
 # Telemetry
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Gentle AI sends a small amount of anonymous usage telemetry so the project
 knows how many installs stay alive and how the review pipeline gets used,
 without collecting anything about you, your code, your machine, or your
@@ -24,7 +27,7 @@ never retry or retain failed input. The command itself runs synchronously for on
 bounded stdin read followed by one HTTP attempt and never spawns itself. No `ingest`, `flush`, or `capabilities` route
 remains. Unsupported older binaries must fail closed, not fall back to intake.
 
-The unreleased [aggregate schema](../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json)
+The [aggregate schema](../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json)
 requires exactly `schema`, `registry`, `host`, and `rows`. **Remove `batch_id` from
 Pi's mirrored schema and producer.** No source/session/task/install/user identity
 is accepted. Example single response observation:
@@ -111,7 +114,7 @@ private), and empty input becomes `unknown/unknown`.
 Canonical `agent_class` values are:
 
 - Fixed classes: `orchestrator`, `worker`, `explore`, `verify`, `unknown`
-- SDD agents: `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
+- Legacy SDD agents (SDD was retired in v4.0.0; the aggregate schema still accepts these values): `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
 - Judgment Day agents: `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`
 - Review agents: `review-risk`, `review-readability`, `review-reliability`, `review-resilience`, `review-refuter`, `review-validator`
 
@@ -258,7 +261,7 @@ and never blocks the send.
 
 Install/sync still reconcile the dedicated `plugins/telemetry-runtime.ts` and
 `.gentle-ai-telemetry-runtime.json` ownership manifest for selected OpenCode,
-independently of SDD and using the existing scope/XDG resolution. These are static
+independently of any workflow and using the existing scope/XDG resolution. These are static
 installation assets, **not metric state**. Managed byte/hash/mode checks, guarded
 rollback, unowned/edited-file preservation, and validated-pair uninstall remain
 unchanged. Each managed plugin asset change must append the immediately previous
@@ -490,7 +493,9 @@ Every event carries:
   another tool
 - the `gentle-ai` version, `os`, and `arch` (the same values `--version`
   effectively describes)
-- the agents and components you have installed (e.g. `claude-code`, `sdd`)
+- the agents and components you have installed (e.g. `claude-code`, `engram`;
+  a selection persisted before v4.0.0 can still report the legacy `sdd`
+  component)
 - whether receipt-driven development (RDD) is enabled
 - on `heartbeat` only, counters since the previous successful send: `syncs`,
   `sdd_phase_runs`, `reviews_approved`, `reviews_correction`,
@@ -536,7 +541,7 @@ first, and only then opportunistically check whether a heartbeat is due —
 the same 24-hour limit and failure backoff apply, so this adds at most one
 send per day even for a host that finishes many reviews in a
 row. This is what lets a host such as Gentle Pi, which drives gentle-ai only
-through `review ...` and `sdd-attempt ...` and never through
+through `review ...` and never through
 `install`/`update`/`sync`, still send a heartbeat.
 
 Historical `sdd_phase_runs` counters remain readable, but retired attempt commands no longer increment them.
@@ -578,7 +583,7 @@ gentle-ai telemetry trigger [--json]
   check `install`/`update`/`sync` already run internally (enrollment,
   install-once, the 24-hour heartbeat limit, the failure backoff, and every
   kill switch all apply). A host that only ever drives gentle-ai through
-  `review ...` or `sdd-attempt ...` — Gentle Pi, for example — can call this
+  `review ...` — Gentle Pi, for example — can call this
   once per session to still get a heartbeat instead of never sending one.
   Finishing a native review already
   triggers this internally too, so `trigger` mainly matters for a host that

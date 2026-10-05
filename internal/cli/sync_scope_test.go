@@ -11,12 +11,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
 )
 
 // ─── Parser: sync --scope ────────────────────────────────────────────────────
@@ -378,11 +378,13 @@ func TestRunSyncWorkspaceScopeUpdatesOpenCodeManagedComponentsWithoutGlobalMutat
 		t.Errorf("workspace sync did not materialize workspace OpenCode settings: %v", err)
 	}
 	var settingsVerified, skillsVerified bool
+	// Check IDs embed native paths, so match the skills segment with the OS separator.
+	skillsSegment := filepath.FromSlash("/skills/")
 	for _, check := range result.Verify.Checks {
 		if check.ID == "verify:sync:file:"+workspaceSettings {
 			settingsVerified = true
 		}
-		if strings.Contains(check.ID, "/skills/") && strings.Contains(check.ID, workspace) && check.Status == verify.CheckStatusPassed {
+		if strings.Contains(check.ID, skillsSegment) && strings.Contains(check.ID, workspace) && check.Status == verify.CheckStatusPassed {
 			skillsVerified = true
 		}
 	}

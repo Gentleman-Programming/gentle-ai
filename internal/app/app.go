@@ -13,7 +13,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeplugin"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
@@ -257,6 +256,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 		m := tui.NewModel(result, Version, installedState)
 		m.ExecuteFn = tuiExecuteWithBackground
+		m.ExecuteSDKFn = tuiExecuteWithSDK
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
 			return backup.DeleteBackup(manifest)
@@ -274,12 +274,6 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.SyncDetailedFn = tuiSyncDetailed(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
 		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
-		// Slice 3b — wire the 4-layer managed-uninstall runner used by the
-		// standalone "Uninstall OpenCode Plugin" TUI shortcut. The TUI
-		// model falls back to opencodeplugin.Uninstall when this field is
-		// nil; assigning it explicitly here keeps the production wiring
-		// visible at the same seam as the other injected functions.
-		m.OpenCodePluginUninstallFn = opencodeplugin.Uninstall
 		// The review store is clone-scoped, so the TUI acts on the repository
 		// the user launched it from. Both closures resolve the working
 		// directory at call time rather than at wiring time, so a survey and
@@ -318,12 +312,15 @@ func RunArgs(args []string, stdout io.Writer) error {
 		return nil
 	case "sync":
 		syncResult, err := cli.RunSync(args[1:])
-		if err != nil {
+		var partial *cli.PartialSyncError
+		if err != nil && !errors.As(err, &partial) {
 			return err
 		}
 
+		// A partial sync applied the other agents: print what changed, then
+		// fail so automation notices the skipped agent.
 		_, _ = fmt.Fprintln(stdout, cli.RenderSyncReport(syncResult))
-		return nil
+		return err
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	case "doctor":
@@ -618,6 +615,20 @@ func tuiExecuteWithBackground(
 	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult {
+	return tuiExecuteWithSDK(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress, nil)
+}
+
+func tuiExecuteWithSDK(
+	selection model.Selection,
+	resolved planner.ResolvedPlan,
+	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
+	onProgress pipeline.ProgressFunc,
+	consent *cli.OpenCodeSDKConsent,
+) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
 	defer restoreCommandOutput()
 
@@ -629,10 +640,12 @@ func tuiExecuteWithBackground(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
 	// The TUI settles asynchronously: keep its deduplicated rollback snapshot
 	// until state persistence succeeds or the failure has been compensated.
-	defer orchestrator.Finish()
+	if orchestrator != nil {
+		defer orchestrator.Finish()
+	}
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -718,39 +731,57 @@ func tuiUpgrade(profile system.PlatformProfile, homeDir string) tui.UpgradeFunc 
 //
 // When overrides is non-nil, model assignments are merged into the selection
 // so that the "Configure Models" TUI flow persists its choices to disk.
+// A partial sync is its error here: this plain seam has no manual actions.
 func tuiSync(homeDir string) tui.SyncFunc {
 	return func(overrides *model.SyncOverrides) ([]string, error) {
-		files, _, err := tuiSyncDetailed(homeDir)(overrides)
+		files, _, err := runTUISync(homeDir, overrides)
 		return files, err
 	}
 }
 
+// tuiSyncDetailed reports a skipped agent as a manual action next to the
+// files that were synced, the same channel as other non-fatal sync notes.
 func tuiSyncDetailed(homeDir string) tui.SyncDetailedFunc {
 	return func(overrides *model.SyncOverrides) ([]string, []string, error) {
-		agentIDs := syncAgentIDs(homeDir, overrides)
-		syncFlags := cli.SyncFlags{IncludePermissions: syncShouldIncludePermissions(agentIDs)}
-		selection := cli.BuildSyncSelection(syncFlags, agentIDs)
-
-		// Load persisted model assignments so a plain sync (no overrides)
-		// preserves the user's previous choices instead of falling back
-		// to the "balanced" preset.
-		loadPersistedAssignments(homeDir, &selection)
-
-		applyOverrides(&selection, overrides)
-
-		result, err := cli.RunSyncWithSelection(homeDir, selection)
-		if err != nil {
-			return nil, nil, err
+		files, actions, err := runTUISync(homeDir, overrides)
+		var partial *cli.PartialSyncError
+		if errors.As(err, &partial) {
+			for _, skipped := range partial.Skipped {
+				actions = append(actions, skipped.Action())
+			}
+			return files, actions, nil
 		}
-
-		// Persist model assignments that were actually used (from overrides
-		// or loaded from state) so the next sync preserves them too.
-		if err := persistAssignments(homeDir, selection); err != nil {
-			return nil, nil, fmt.Errorf("persist model assignments: %w", err)
-		}
-
-		return result.ChangedFiles, result.ManualActions, nil
+		return files, actions, err
 	}
+}
+
+// runTUISync returns a *cli.PartialSyncError together with the synced files
+// when some selected agent was skipped.
+func runTUISync(homeDir string, overrides *model.SyncOverrides) ([]string, []string, error) {
+	agentIDs := syncAgentIDs(homeDir, overrides)
+	syncFlags := cli.SyncFlags{IncludePermissions: syncShouldIncludePermissions(agentIDs)}
+	selection := cli.BuildSyncSelection(syncFlags, agentIDs)
+
+	// Load persisted model assignments so a plain sync (no overrides)
+	// preserves the user's previous choices instead of falling back
+	// to the "balanced" preset.
+	loadPersistedAssignments(homeDir, &selection)
+
+	applyOverrides(&selection, overrides)
+
+	result, err := cli.RunSyncWithSelection(homeDir, selection)
+	var partial *cli.PartialSyncError
+	if err != nil && !errors.As(err, &partial) {
+		return nil, nil, err
+	}
+
+	// Persist model assignments that were actually used (from overrides
+	// or loaded from state) so the next sync preserves them too.
+	if err := persistAssignments(homeDir, selection); err != nil {
+		return nil, nil, fmt.Errorf("persist model assignments: %w", err)
+	}
+
+	return result.ChangedFiles, result.ManualActions, err
 }
 
 // tuiUninstall returns a tui.UninstallFunc that mirrors the CLI uninstall path

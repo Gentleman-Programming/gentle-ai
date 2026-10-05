@@ -12,7 +12,7 @@ Before repository work:
 
 1. Read every exact path under `## Skills to load before work` in the parent task. Do not rediscover the skill registry.
 2. Consume the parent-provided task, acceptance criteria, relevant prior context, exact allowed edit surfaces, and validation commands. The parent supplies the edit surfaces under `## Allowed edit surfaces` in the parent task; treat that section as the authoritative list.
-   Read the parent's ODD feature document locator before edits when supplied; consume intent, checklist and relevant rationale. Preserve valid completed work; return proposed intent/task changes and their reasons to the parent, not a replacement partial checklist. Findings do not authorize scope expansion.
+   Read the parent's ODD feature document locator before edits when supplied: read it from the top until `## Log`. Its `## Specs` are authoritative over any summary in the handoff, and their quoted strings, error messages, and examples are exact. Report in `summary` which `S#` the change covers and any linked `S#` it could not satisfy. Preserve valid completed work; return proposed intent/task changes and their reasons to the parent, not a replacement partial checklist. Findings do not authorize scope expansion.
 3. Inspect the working tree and preserve pre-existing changes. Writes may include pre-existing untracked targets explicitly listed by the parent and new files required by the delegated task, but only when they are inside the exact allowed edit surfaces.
 4. Preserve every unrelated tracked or untracked file. Do not edit, move, delete, stage, or otherwise alter anything outside the allowed edit surfaces.
 5. If scope, ownership, allowed edit surfaces, acceptance criteria, or another human choice is ambiguous, stop with `status: interaction_required`; do not guess. Escalate in the answerable shape required by the Interaction contract below: a derived candidate set the human can approve or narrow, never an open request for the human to author paths or globs.
@@ -46,14 +46,14 @@ Never save secrets, credentials, personal data, tokens, private keys, raw untrus
 
 Apply the ODD test-first policy by default for behavior changes with applicable runnable deterministic tests and a clear expected outcome. Test presence alone does not establish applicability; no TUI toggle or per-task chat choice is needed. Use the parent's exact authorized runner and commands where available:
 
-1. RED — add the smallest behavior-level test and capture its intended observed failure before implementation.
+1. RED — add behavior-level tests for each requested rule and capture their intended observed failure before implementation. Each test asserts every observable effect of the rule it covers (exit code, exact stdout and stderr, and that rejected input leaves stored data and counters unchanged), covers the cases the rule itself names (its examples, boundaries, and errors), and checks through the public interface, never internal storage. When you add or change a command, option, or message, update the help text and docs that describe it.
 2. GREEN — implement the minimum change and capture the focused test passing.
-3. TRIANGULATE — exercise relevant negative or alternate cases that materially protect the contract.
+3. PRESERVE — For every existing command or option the change touches, add one test proving its previous behavior still holds; add no other cases. An existing behavior counts as touched when it shares the code you changed (options, parsers, helpers, validation). These are expected to pass, so they need no RED run.
 4. REFACTOR — improve clarity only while focused tests remain green.
 
 For passive documentation, non-testable changes, an unavailable runner, or no meaningful RED, state the specific exception and run proportionate ordinary functional or structural verification. Never claim RED/GREEN evidence that was not observed, or skip checks because test-first was inapplicable. If a necessary exact command is missing, report that limitation rather than inventing a runner or requesting a mode choice.
 
-Run focused tests first. Broad suites, builds, formatters, or linters may run only when explicitly authorized by the parent. Keep every command exact and verify its scope before execution. Do not claim completion while required validation is failing.
+Run focused tests first. Broad suites, builds, formatters, or linters may run only when explicitly authorized by the parent. Keep every command exact and verify its scope before execution. Do not claim completion while required validation is failing. Make one correction attempt per failing check, and a second only if the same check still fails after a real fix; then stop and return `status: partial` with the failing command and its output, never looping.
 
 ## Verification
 
@@ -87,7 +87,7 @@ files_changed:
 tdd_evidence:
   - RED: <observed failure or justified applicability exception>
   - GREEN: <observed pass or justified applicability exception>
-  - TRIANGULATE/REFACTOR: <observed evidence when applicable>
+  - PRESERVE/REFACTOR: <observed evidence when applicable>
 validation:
   - <exact command>: <observed result>
 risks:
