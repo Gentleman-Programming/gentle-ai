@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -239,6 +240,35 @@ func TestDiscoverCatalogOrdersKnownEffortVariantsSemantically(t *testing.T) {
 	}
 	if got := strings.Join(providers["custom"].Models["other"].Variants, ","); got != "alpha,zeta" {
 		t.Fatalf("unknown variants = %q, want sorted fallback", got)
+	}
+}
+
+func TestSortVariants_ExtendedEffortAndSpeedVariants(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "extended effort levels all ordered by rank",
+			input:    []string{"ultra", "max", "xhigh", "high", "medium", "low"},
+			expected: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		},
+		{
+			name:     "mixed effort and non-effort speed variants",
+			input:    []string{"fast", "high", "ultra", "beta", "low", "alpha"},
+			expected: []string{"low", "high", "ultra", "alpha", "beta", "fast"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			variants := append([]string(nil), tt.input...)
+			sortVariants(variants)
+			if !reflect.DeepEqual(variants, tt.expected) {
+				t.Fatalf("sortVariants(%v) = %v, want %v", tt.input, variants, tt.expected)
+			}
+		})
 	}
 }
 
@@ -510,6 +540,32 @@ func TestMergeConfiguredCatalogCopiesVariantsDefensively(t *testing.T) {
 	merged["p2"].Models["m2"].Variants[0] = "mutated"
 	if configuredCatalog["p2"].Models["m2"].Variants[0] != "medium" {
 		t.Fatalf("configured model variants was mutated via merged copy")
+	}
+}
+
+func TestMergeConfiguredCatalogMergesAndSortsVariants(t *testing.T) {
+	runtimeCatalog := map[string]Provider{
+		"openai": {
+			ID: "openai",
+			Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5", Name: "GPT-5", Variants: []string{"low", "high"}},
+			},
+		},
+	}
+	configuredCatalog := map[string]Provider{
+		"openai": {
+			ID: "openai",
+			Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5", Variants: []string{"fast", "medium", "low"}},
+			},
+		},
+	}
+
+	merged := MergeConfiguredCatalog(runtimeCatalog, configuredCatalog)
+	gotVariants := merged["openai"].Models["gpt-5"].Variants
+	wantVariants := []string{"low", "medium", "high", "fast"}
+	if !reflect.DeepEqual(gotVariants, wantVariants) {
+		t.Fatalf("merged variants = %v, want %v", gotVariants, wantVariants)
 	}
 }
 

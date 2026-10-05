@@ -331,6 +331,50 @@ func TestRctx2HandleRejectsMovedWorktree(t *testing.T) {
 	}
 }
 
+// A host routinely carries registered worktrees that no longer open as Git
+// repositories: an editor or agent tool recreated the directory, or a sandbox
+// pruned the checkout while leaving the registration behind. Such a candidate
+// is not a match and must simply be skipped. Aborting the whole resolution on
+// it instead lets one unrelated dead registration deny every review the host
+// could otherwise resolve.
+func TestRctx2HostResolutionSkipsADeadRegisteredWorktree(t *testing.T) {
+	host, target, store, binding, handle := registeredRctx2HostFixture(t, "rctx2-dead-worktree")
+	dead := deadRegisteredWorktree(t, host)
+
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, resolved, err := ResolveReviewRepositoryContextBindingFromHost(t.Context(), host, handle, binding)
+	if err != nil || root != target || resolved != binding {
+		t.Fatalf("rctx2 host resolution with dead worktree %q = root %q, binding %#v, error %v; want root %q", dead, root, resolved, err, target)
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("dead-worktree host resolution mutated compact authority")
+	}
+}
+
+// deadRegisteredWorktree leaves a worktree registered with the host while
+// removing its Git control file, reproducing the real shape of a stale editor
+// or agent worktree: still listed by `git worktree list`, no longer openable.
+// It is added first so the resolver meets it before the review target.
+func deadRegisteredWorktree(t *testing.T, host string) string {
+	t.Helper()
+	dead := filepath.Join(canonicalTempDir(t), "aaa-dead-worktree")
+	if err := runSnapshotGit(host, "worktree", "add", "-q", "-b", "dead-worktree-branch", dead, "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runSnapshotGit(host, "worktree", "remove", "--force", dead) })
+	if err := os.RemoveAll(filepath.Join(dead, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	return dead
+}
+
 func historicalReviewRepositoryContextFixture(t *testing.T, lineage string) (string, ReviewRepositoryContextBinding) {
 	t.Helper()
 	home := t.TempDir()
