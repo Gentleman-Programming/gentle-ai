@@ -116,7 +116,10 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 // between models and runs, while these conditions can be checked per finding.
 const SeverityRules = "Severity rules. A BLOCKER or CRITICAL finding must be caused by this change -- the behavior does not already happen at the baseline -- and must be reachable with realistic input. " +
 	"Behavior that already existed at the baseline and was not asked to change, and failures that need out-of-domain values, are at most WARNING. " +
-	"Silently ignoring an explicit option or argument while reporting success, and unrequested changes to existing command output or messages, are severe: report them as BLOCKER or CRITICAL."
+	"Silently ignoring an explicit option or argument while reporting success, and unrequested changes to existing command output or messages, are severe: report them as BLOCKER or CRITICAL. " +
+	"A BLOCKER or CRITICAL finding must also name its observable harm: a concrete violation of the requested behavior, or a regression on input or state that was valid at the baseline. " +
+	"Falling outside the scope the request names, or behaving differently only for input, state, or features the baseline did not support, is not harm by itself and is at most WARNING unless the finding also shows a concrete violation of the requested behavior or a regression on input or state that was valid at the baseline. " +
+	"An unrequested change that breaks valid baseline behavior is a regression even when nothing prohibited it, and a change the request asked for is not a regression merely because its results differ from the baseline."
 
 // RefuterProbeIsolated reports whether the runtime's compiled adapter can run
 // the S11 refuter probe in isolation: a fresh copy of the candidate tree under
@@ -177,7 +180,8 @@ var contracts = []Contract{
 		ResultSchemaID: "https://gentle-ai.dev/schema/review/refuter/v1", ResultSchema: []byte(RefuterResultSchema), StorageSlot: "transaction-refuter-batch",
 		RequiredCapabilities: []string{TransportCapability}, ResultLimit: 4 << 20,
 		PromptInstruction: "You are the detached read-only refuter for exactly ONE transaction-wide batch of deterministic and inferential severe claims. Return exactly one corroborated, refuted, or inconclusive outcome for every supplied claim. Add no findings, modify nothing, and return exactly one JSON object with no prose. Native Go alone applies the result to RDD authority.\n\n" +
-			SeverityRules + " Refute a BLOCKER or CRITICAL claim that fails these conditions: it is not caused by this change, it is not reachable with realistic input, or these rules cap it at WARNING.",
+			SeverityRules + " Refute a BLOCKER or CRITICAL claim that fails these conditions: it is not caused by this change, it is not reachable with realistic input, it demonstrates no observable harm, or these rules cap it at WARNING. " +
+			"Inconclusive is not a severity downgrade: it still opens a correction, so return it only when the supplied evidence cannot decide whether a claim meets these conditions.",
 	},
 	{
 		ID: string(RoleTargetedValidator), Role: RoleTargetedValidator, RequestSchemaID: "gentle-ai.review-targeted-validation-request/v1",

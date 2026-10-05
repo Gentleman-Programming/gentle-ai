@@ -84,6 +84,11 @@ func TestRenderedLensAssetsCarrySeverityRules(t *testing.T) {
 				"was not asked to change", "out-of-domain values", "at most WARNING",
 				"ignoring an explicit option or argument while reporting success",
 				"unrequested changes to existing command output or messages",
+				"must also name its observable harm", "a concrete violation of the requested behavior",
+				"a regression on input or state that was valid at the baseline", "is not harm by itself and is at most WARNING",
+				"at most WARNING unless the finding also shows a concrete violation of the requested behavior or a regression on input or state that was valid at the baseline.",
+				"is a regression even when nothing prohibited it",
+				"is not a regression merely because its results differ from the baseline",
 			} {
 				if !strings.Contains(severity, required) {
 					t.Errorf("severity section omits %q", required)

@@ -15,12 +15,13 @@ import (
 
 // Captured by actual sdd.Inject in the disposable af4ce122 worktree, TestParityCapture.
 // The four Claude review-* lens hashes were re-pinned deliberately when the
-// shared reviewerprovider.SeverityRules joined the rendered severity section.
+// shared reviewerprovider.SeverityRules joined the rendered severity section,
+// and again when those rules gained the observable-harm qualification.
 // Review agents ship only to receipt-driven development runtimes: Cursor
 // installs none, Kiro keeps Judgment Day, and Kimi keeps its main agent.
 var installedHashes = map[model.AgentID]map[string]string{
 	model.AgentClaudeCode: {
-		"jd-fix-agent.md": "a62bf9736226b81512cdedecbf5b6888714e6ae9dd6881b220504b859d35a218", "jd-judge-a.md": "76452ecee8bcf44b07a9ddc2d95b1adf0ada0c569f3d984d4858375528b6abf5", "jd-judge-b.md": "314dce8eda219f1336a824d5b8d2671fd982610107f52baaefa4ec6861b7fdf5", "review-readability.md": "72633bfd1b4d25133fb553f7b286b2636602f13656e057cea7b19f80f97316b4", "review-refuter.md": "fa58bacaa0af136963db25d25abe7fccad91a87f3454024f3d283339308976db", "review-reliability.md": "13d281903a54872fc2aad88c50e7c694c2b8f2f9f6360fcdf5d1bed2a1719aaf", "review-resilience.md": "08bdeeb9f63229da1e03cd8a34c5aa473b7cd5789457c5b84e17ee5bfd2fb5bb", "review-risk.md": "623c693f1becfc80f056eb99f73bb78b13ac512b0cddbbdb29c4ba7dfdf3cfc2",
+		"jd-fix-agent.md": "a62bf9736226b81512cdedecbf5b6888714e6ae9dd6881b220504b859d35a218", "jd-judge-a.md": "76452ecee8bcf44b07a9ddc2d95b1adf0ada0c569f3d984d4858375528b6abf5", "jd-judge-b.md": "314dce8eda219f1336a824d5b8d2671fd982610107f52baaefa4ec6861b7fdf5", "review-readability.md": "412fd47787837836131d8f1509264f70cebcfd6b769be9dd9fd8d12c8f42ab80", "review-refuter.md": "fa58bacaa0af136963db25d25abe7fccad91a87f3454024f3d283339308976db", "review-reliability.md": "69b837ddbac649009efd24d5db44b8c39587d11ab6e281fe80cd10e42b466958", "review-resilience.md": "702dc6e5d190e0ac77d796fdbb2b1174dea3bdde8c74ee91dca5ca0071c20824", "review-risk.md": "73ab3273f3a4c589d4ffc8e95a50381dc2e87f08fc047d05179490c383ac4b35",
 	},
 	model.AgentKimi: {
 		"gentleman.yaml": "4fd319f06d3381954556e7828c96bfc0901c428c1f00bacc407d1f63342349b1",

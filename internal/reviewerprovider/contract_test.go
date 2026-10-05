@@ -90,12 +90,44 @@ var severityRulePhrases = []string{
 	"unrequested changes to existing command output or messages",
 }
 
+// observableHarmRulePhrases are the S19 qualification: a severe finding names
+// observable harm, scope alone is not harm, unrequested regressions stay
+// severe without a prohibition, and requested changes are not regressions.
+var observableHarmRulePhrases = []string{
+	"must also name its observable harm",
+	"a concrete violation of the requested behavior",
+	"a regression on input or state that was valid at the baseline",
+	"is not harm by itself and is at most WARNING",
+	"at most WARNING unless the finding also shows a concrete violation of the requested behavior or a regression on input or state that was valid at the baseline.",
+	"is a regression even when nothing prohibited it",
+	"is not a regression merely because its results differ from the baseline",
+}
+
+// refuterHarmDecisionPhrases pin the refuter's S19 decision rule: refute a
+// claim with no observable harm, and keep inconclusive for undecidable
+// evidence because it still opens a correction rather than downgrading.
+var refuterHarmDecisionPhrases = []string{
+	"it demonstrates no observable harm",
+	"Inconclusive is not a severity downgrade: it still opens a correction",
+	"only when the supplied evidence cannot decide",
+}
+
+func TestSeverityRulesRequireObservableHarm(t *testing.T) {
+	for _, required := range append(slices.Clone(severityRulePhrases), observableHarmRulePhrases...) {
+		if !strings.Contains(SeverityRules, required) {
+			t.Fatalf("severity rules omit %q:\n%s", required, SeverityRules)
+		}
+	}
+}
+
 func TestRefuterPromptAppliesSeverityRules(t *testing.T) {
 	contract, err := ContractFor(RoleRefuter)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range append(slices.Clone(severityRulePhrases), "Refute a BLOCKER or CRITICAL claim that fails these conditions", "deterministic and inferential") {
+	requiredPhrases := append(slices.Clone(severityRulePhrases), observableHarmRulePhrases...)
+	requiredPhrases = append(requiredPhrases, refuterHarmDecisionPhrases...)
+	for _, required := range append(requiredPhrases, "Refute a BLOCKER or CRITICAL claim that fails these conditions", "deterministic and inferential") {
 		if !strings.Contains(contract.PromptInstruction, required) {
 			t.Fatalf("refuter prompt omits severity rule %q:\n%s", required, contract.PromptInstruction)
 		}
