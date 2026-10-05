@@ -159,6 +159,14 @@ func TestSelectedPermissionsNeverWidenLockedMode(t *testing.T) {
 // Inputs are strings only; this does not emulate bash.ts's tree-sitter extraction.
 func remoteAction(t *testing.T, raw []byte, command string) string {
 	t.Helper()
+	return permissionAction(t, raw, "bash", command)
+}
+
+// permissionAction resolves one OpenCode permission request the way OpenCode
+// does: rules are wildcard patterns (`*` spans any characters, `?` one), and
+// the last matching rule wins. A trailing " *" also matches the bare command.
+func permissionAction(t *testing.T, raw []byte, tool, input string) string {
+	t.Helper()
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &root); err != nil {
 		t.Fatal(err)
@@ -171,10 +179,13 @@ func remoteAction(t *testing.T, raw []byte, command string) string {
 	if err := json.Unmarshal(root["permission"], &permission); err != nil {
 		t.Fatal(err)
 	}
-	if json.Unmarshal(permission["bash"], &scalar) == nil {
+	if json.Unmarshal(permission[tool], &scalar) == nil {
 		return scalar
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(permission["bash"])))
+	if permission[tool] == nil {
+		return "allow"
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(permission[tool])))
 	_, _ = decoder.Token()
 	action := "ask"
 	for decoder.More() {
@@ -188,11 +199,122 @@ func remoteAction(t *testing.T, raw []byte, command string) string {
 		if strings.HasSuffix(pattern, " .*") {
 			pattern = strings.TrimSuffix(pattern, " .*") + "( .*)?"
 		}
-		if regexp.MustCompile("(?s)^" + pattern + "$").MatchString(strings.ReplaceAll(command, `\`, "/")) {
+		if regexp.MustCompile("(?s)^" + pattern + "$").MatchString(strings.ReplaceAll(input, `\`, "/")) {
 			action = value
 		}
 	}
 	return action
+}
+
+// TestOpenCodePermissionsMirrorPiSafetyModel pins the Pi safety model for
+// OpenCode and Kilocode: everything is allowed by design, recognized
+// destructive commands are denied (Pi hard deny) or confirmed (Pi confirm),
+// remote commands keep their approval (#4324), and secret-bearing paths cannot
+// be read, written, or edited.
+func TestOpenCodePermissionsMirrorPiSafetyModel(t *testing.T) {
+	cases := []struct {
+		tool, input, want string
+	}{
+		// Allowed by design.
+		{"bash", "git status", "allow"},
+		{"bash", "git commit -m fix", "allow"},
+		{"bash", "go test ./...", "allow"},
+		{"bash", "rm notes.txt", "allow"},
+		{"bash", "git reset HEAD~1", "allow"},
+		// Pi hard deny.
+		{"bash", "rm -rf /", "deny"},
+		{"bash", "rm -rf ~", "deny"},
+		{"bash", "rm -rf ~/projects", "deny"},
+		{"bash", "rm -rf $HOME", "deny"},
+		{"bash", "rm -rf $HOME/projects", "deny"},
+		{"bash", "rm -rf ${HOME}", "deny"},
+		{"bash", "rm -rf .", "deny"},
+		{"bash", "rm -rf ..", "deny"},
+		{"bash", "rm -fr /", "deny"},
+		{"bash", "rm -r ~", "deny"},
+		{"bash", "git reset --hard", "deny"},
+		{"bash", "git reset --hard HEAD~1", "deny"},
+		{"bash", "git clean -fd", "deny"},
+		{"bash", "git clean -fdx", "deny"},
+		{"bash", "git push --force", "deny"},
+		{"bash", "git push --force-with-lease origin main", "deny"},
+		{"bash", "git push origin main --force", "deny"},
+		{"bash", "git push -f origin main", "deny"},
+		{"bash", "chmod -R 777 .", "deny"},
+		{"bash", "chown -R me:me .", "deny"},
+		// Pi confirm.
+		{"bash", "rm -rf build", "ask"},
+		{"bash", "rm -r dist", "ask"},
+		{"bash", "find . -name '*.tmp' -delete", "ask"},
+		{"bash", "git push", "ask"},
+		{"bash", "git push origin main", "ask"},
+		{"bash", "git rebase main", "ask"},
+		{"bash", "git branch -D feature", "ask"},
+		{"bash", "npm publish", "ask"},
+		// Remote commands keep approval (#4324).
+		{"bash", "ssh example.invalid", "ask"},
+		{"bash", "rsync source destination", "ask"},
+		// Ordinary files stay readable and editable.
+		{"read", "src/main.go", "allow"},
+		{"edit", "src/main.go", "allow"},
+		{"read", "go.mod", "allow"},
+	}
+	// Secret-bearing paths: read and edit (edit covers write and patch).
+	for _, path := range []string{".env", "app/.env", ".env.local", "app/.env.production", ".env_backup", "secrets/token", "app/secrets/db.json", "/home/u/.ssh/id_ed25519", ".ssh/config", "server.pem", "keys/tls.key", "cert.p12", "cert.pfx", "/home/u/.aws/credentials", "/home/u/.config/gh/hosts.yml", "/home/u/.credentials/token", "/Users/u/Library/Keychains/login.keychain-db"} {
+		cases = append(cases, struct{ tool, input, want string }{"read", path, "deny"}, struct{ tool, input, want string }{"edit", path, "deny"})
+	}
+	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(id), func(t *testing.T) {
+			home := t.TempDir()
+			adapter, _ := agents.NewAdapter(id)
+			if _, err := Inject(home, adapter); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(adapter.SettingsPath(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range cases {
+				if got := permissionAction(t, raw, tc.tool, tc.input); got != tc.want {
+					t.Errorf("%s %q: got %s, want %s", tc.tool, tc.input, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// Upgrading a settings file written by the previous overlay keeps existing
+// rules authoritative (the writer never lets new rules override them), so a
+// legacy "git push *": "ask" still governs a force push. Nothing destructive
+// may resolve to allow, and secret-bearing paths become uneditable.
+func TestOpenCodePermissionsUpgradeFromPreviousOverlay(t *testing.T) {
+	previous := `{"permission":{"bash":{"*":"allow","git commit *":"ask","git push *":"ask","git push":"ask","git push --force *":"ask","git rebase *":"ask","git reset --hard *":"ask","ssh":"ask","ssh *":"ask"},"read":{"*":"allow","*.env":"deny","**/*.pem":"deny"}}}`
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentOpenCode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(previous), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"git push --force", "git push -f origin main", "git reset --hard HEAD~1", "rm -rf ~", "git clean -fd", "chown -R me:me ."} {
+		if got := permissionAction(t, raw, "bash", command); got == "allow" {
+			t.Errorf("upgraded bash %q resolved to allow", command)
+		}
+	}
+	for _, path := range []string{".env", "server.pem", "/home/u/.ssh/id_ed25519"} {
+		if got := permissionAction(t, raw, "edit", path); got != "deny" {
+			t.Errorf("upgraded edit %q = %s, want deny", path, got)
+		}
+	}
 }
 
 func TestRemoteMatcherBoundaryFixtures(t *testing.T) {

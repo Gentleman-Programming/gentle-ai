@@ -15,7 +15,7 @@
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
 | Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
-| Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode (the two adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx` |
+| Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode/Kilocode (the adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx`. OpenCode/Kilocode follow the Gentle Pi safety model: everything is allowed by design; recursive `rm` on `/`, `~`, `$HOME`, `.` or `..`, `git reset --hard`, `git clean -fd`, force push, `chmod -R 777` and `chown -R` are denied; other recursive `rm`, `find -delete`, `git push`, `git rebase`, `git branch -D` and `npm publish` ask; remote commands ask (#4324); and the sensitive paths are denied to `read` and `edit` (which covers write and patch). Like Pi, reading a secret through `bash` or the `grep` tool is not blocked. |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
 
