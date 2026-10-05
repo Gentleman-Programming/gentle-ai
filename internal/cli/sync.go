@@ -1930,6 +1930,18 @@ func RunSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	if _, err := parseInstallScope(string(scope)); err != nil {
 		return SyncResult{}, err
 	}
+	// An explicit persona is validated before the alias migration or any write;
+	// only an empty value means "resolve from persisted state" (#1677).
+	if selection.Persona != "" {
+		if strings.TrimSpace(string(selection.Persona)) == "" {
+			return SyncResult{Agents: selection.Agents, Selection: selection}, fmt.Errorf("validate selected persona: whitespace-only persona is not valid") // refusal:by-design operator-knowledge: only the caller can choose the intended persona
+		}
+		persona, _, err := normalizePersona(string(selection.Persona))
+		if err != nil {
+			return SyncResult{Agents: selection.Agents, Selection: selection}, fmt.Errorf("validate selected persona: %w", err)
+		}
+		selection.Persona = persona
+	}
 	skipped, err := skipUndetectableOpenCode(&selection)
 	if err != nil {
 		return SyncResult{Agents: selection.Agents, Selection: selection}, err
@@ -1960,18 +1972,17 @@ func runSyncWithSelectionScopeAfterSkip(homeDir string, selection model.Selectio
 	if scope == ScopeGlobal {
 		preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(selection.Agents, model.AgentPi))
 	}
-	return runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground)
+	return runSyncWithSelectionScope(homeDir, selection, scope, persistedState, persistedStateErr, background, piBackground)
 }
 
 var syncStagePlan = func(runtime *syncRuntime) pipeline.StagePlan { return runtime.stagePlan() }
 var compareChangedSyncFiles = changedSyncFiles
 
-func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
+func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope InstallScope, persistedState state.InstallState, persistedStateErr error, background OpenCodeBackgroundResolution, piBackground PiBackgroundResolution) (SyncResult, error) {
 	agentIDs := selection.Agents
-	// The read error is captured, not discarded: the persona alias migration
-	// below must not rewrite state it could not read. Managed-asset provenance
-	// re-reads under its own lock later (#2685), so this read stays advisory.
-	persistedState, persistedStateErr := state.Read(homeDir)
+	// The caller's preflight snapshot and its read error drive this sync, so
+	// background plans and persona resolve from one read (#1677). The alias
+	// migration and managed-asset provenance re-read under their own locks.
 	if err := validatePersistedSyncState(persistedState, persistedStateErr); err != nil {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
@@ -1981,7 +1992,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	// RunSync already resolves persona before delegating here, so on the CLI path
 	// selection.Persona is already set and applyResolvedPersona early-returns with
 	// no disk read. On the TUI path the Selection has an empty Persona field, so
-	// we read state once here and apply the persisted value (or neutral fallback).
+	// we apply the persisted snapshot value (or neutral fallback).
 	if selection.Persona == "" {
 		var persistedPersona string
 		persistedPersona = persistedState.Persona
@@ -2345,7 +2356,7 @@ func RunSync(args []string) (SyncResult, error) {
 		background.activationPlan = backgroundActivation
 		preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
 	}
-	result, err := runSyncWithSelectionScope(homeDir, selection, scope, background, piBackground)
+	result, err := runSyncWithSelectionScope(homeDir, selection, scope, persistedState, persistedStateErr, background, piBackground)
 	if err != nil {
 		return finishPartialSync(result, err, skipped)
 	}

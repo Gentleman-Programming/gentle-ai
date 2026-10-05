@@ -1,5 +1,8 @@
 # Maintainer Playbook
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Use this page before reviewing or making a change. It turns the codebase map into practical guardrails.

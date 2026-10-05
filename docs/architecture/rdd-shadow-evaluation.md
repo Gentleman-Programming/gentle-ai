@@ -1,5 +1,8 @@
 # RDD shadow evaluation
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. The shadow evaluation it describes has been removed: no code reads `GENTLE_AI_RDD_SHADOW`, and no production `internal/reviewtransaction/shadow_*.go` sources remain; only a read-only guard test is left.
+
 Shadow evaluation runs the target seven-value relation model (`internal/reviewtransaction/shadow_*.go`) alongside a live review-lifecycle decision so Wave 1 can measure agreement before anything in the target model becomes normative. It **observes**; it never alters or blocks anything. Its identity, relation, graph, agreement, and divergence outputs are review-context evidence only and never control ordinary delivery or SDD archive.
 
 ## Quick path

@@ -3,6 +3,8 @@ package agentguidance
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -117,9 +119,13 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 			// The rendered thresholds must come from the canonical manifest, not
 			// from prose invented by the renderer.
 			for _, want := range []string{
-				fmt.Sprintf("%d–%d files", routing.DirectInline.MinUnderstandingFiles, routing.DirectInline.MaxUnderstandingFiles),
-				fmt.Sprintf("%d+ files", routing.DelegatedDirect.MappingMinUnderstandingFiles),
-				fmt.Sprintf("%d+ non-trivial files", routing.DelegatedDirect.WriterMinNonTrivialFiles),
+				fmt.Sprintf("one parallel batch (%d maximum)", routing.DirectInline.MaxEvidenceBatches),
+				fmt.Sprintf("at most %d calls", routing.DirectInline.MaxEvidenceCalls),
+				fmt.Sprintf("approximately %dk tokens", routing.DirectInline.ApproxEvidenceTokens/1000),
+				fmt.Sprintf("more than approximately %d sequential lookups", routing.DelegatedDirect.ApproxSequentialLookupLimit),
+				fmt.Sprintf("at most approximately %dk tokens", routing.DelegatedDirect.ApproxHandoffTokens/1000),
+				fmt.Sprintf("one parent spot check (%d maximum)", routing.DelegatedDirect.MaxParentSpotChecks),
+				fmt.Sprintf("approximately %dk parent-context tokens", routing.DelegatedDirect.ApproxParentContextTokens/1000),
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing canonical threshold %q:\n%s", agent.ID, want, rendered)
@@ -138,11 +144,11 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 		name    string
 		clauses []string
 	}{
-		{"authorized substantial work", []string{
+		{"authorized large work", []string{
 			"Explore the existing code and requirements first",
-			"For substantial authorized implementation, automatically create",
+			"For large authorized implementation, automatically create",
 			"without a task or storage permission prompt",
-			"Small, understood work creates no durable task artifacts",
+			"small work creates no durable task artifacts",
 		}},
 		{"optional research within ODD", []string{
 			"Recommend optional research only for a named uncertainty",
@@ -172,20 +178,41 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"odd/<feature-name>/tasks",
 			"current project",
 			"full current document and repository-relative file locator",
-			"stable task IDs, authorized scope, acceptance criteria, and applicable checks",
+			"stable task IDs",
+			"authorized scope, acceptance criteria, and applicable checks",
 			"Reuse the same feature identity; never overwrite another feature",
 		}},
 		{"unified intent and implementation handoff", []string{
 			"one feature document, not a separate plan file or topic",
-			"objective, problem, why, scope, constraints",
-			"progress, verification evidence, and next step",
-			"concise rationale for meaningful accepted changes",
-			"Routine corrections stay with their tasks; no exhaustive decision journal",
+			"verification evidence, progress, and next step",
+			"rationale for meaningful accepted changes",
+			"Routine corrections stay brief; no exhaustive decision journal",
 			"Accepted user, review, or verification changes",
 			"add genuinely new tasks or reopen invalidated items with a reason",
 			"Findings alone never authorize scope expansion or automatic acceptance",
 			"Before implementation or resume, the parent reads both the actual file and full observation",
-			"passes the locator and relevant context; workers read the document before edits",
+			"passes the locator, task IDs, and linked `S#`; workers read the document until `## Log` before edits",
+		}},
+		// Gentleman-Programming/gentle-shell#1713: handoffs paraphrased the user's
+		// request and the feature document summarized it. The document is now the
+		// specification subagents read by reference, in a fixed order.
+		{"feature document is the verbatim specification read by reference", []string{
+			"specification subagents read by reference",
+			"stable content first and the growing log last",
+			"`## Specs`",
+			"`## Tasks`",
+			"`## Log`",
+			"exact strings, error messages, and examples verbatim",
+			"never summarize or reword those fragments",
+			"Do not add requirements the user never asked for",
+			"`L1` holds the user's original request verbatim",
+			"rewrites only the affected `S#`, and reopens only its linked task",
+			"Hand off by reference, never by paraphrase",
+			"read until `## Log`",
+			"Without a feature document, include the user's request verbatim",
+			"a verdict per `S#`",
+			"runs the spec's examples the parent authorized, against isolated state when they mutate data",
+			"reproduce it before deciding it already works",
 		}},
 		{"default applicable test-first policy", []string{
 			"relevant runnable deterministic test and clear expected outcome",
@@ -276,7 +303,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Medium/high relays the existing candidate consent",
 			"native review runs only on grant",
 			"a decline continues under ordinary policy",
-			"Do not substitute model judgment, task size, or defect severity for prospective candidate risk",
+			"Do not substitute model judgment, task size, or defect severity to lower prospective candidate risk",
 			"never infer low risk from a failed assessment",
 			"When RDD is disabled, do not start or prompt for RDD; ordinary checks remain",
 		}},
@@ -333,7 +360,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"tests and docs alongside the behavior",
 			"using a Conventional Commit message",
 			"record the commit identity in the feature document as evidence",
-			"Work-unit commits on the feature branch are part of authorized substantial ODD implementation",
+			"Work-unit commits on the feature branch are part of authorized large ODD implementation",
 			"push, pull request creation, and merge remain the user's decisions under ordinary repository policy",
 		}},
 		{"delivery strategy vocabulary and skill resolution", []string{
@@ -387,9 +414,9 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		{"verify each work unit by risk", []string{
 			"Verification covers a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch.",
 			"Verify each work-unit commit in proportion to its risk",
-			"an added independent verifier for high-risk or unclear changes",
+			"an added independent verifier for high-risk changes by the Task Size list",
 			"Record per task the risk tier you applied and the checks you observed",
-			"treat an unclear change as high risk",
+			"count an unclear change as high only when a bounded look cannot tell whether the list applies",
 		}},
 	}
 
@@ -559,6 +586,13 @@ func TestRenderRoutingObeysTheUserOnReviewMode(t *testing.T) {
 	}
 }
 
+func routingVocabularyForGuard(block, forbidden string) string {
+	if forbidden == "token" {
+		return routingBlockWithoutEvidenceSizes(block)
+	}
+	return block
+}
+
 func TestRenderRoutingOmitsRetiredRemoteControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
@@ -572,7 +606,9 @@ func TestRenderRoutingOmitsRetiredRemoteControlPlaneVocabulary(t *testing.T) {
 				if err != nil {
 					t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
 				}
-				if strings.Contains(strings.ToLower(rendered), needle) {
+				// Evidence sizes are not retired remote authorization tokens.
+				checked := routingVocabularyForGuard(rendered, forbidden)
+				if strings.Contains(strings.ToLower(checked), needle) {
 					t.Fatalf("RenderRouting(%q) leaks retired vocabulary %q:\n%s", agent.ID, forbidden, rendered)
 				}
 			}
@@ -679,7 +715,7 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 			}
 
 			for _, want := range []string{
-				"two or more meaningful implementation steps",
+				"Size the task by the Task Size section below",
 				"before the first source write",
 				"Tell the user in one line which feature document was created and how many tasks it holds",
 				"Never describe this workflow only when asked about it: run it.",
@@ -709,8 +745,6 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 	t.Parallel()
 
-	routing := capabilitymanifest.CanonicalImplementationRouting()
-
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			t.Parallel()
@@ -725,12 +759,12 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"These triggers are mandatory, not advisory",
 				"stop and delegate through the runtime's subagent mechanism",
 				"executing past a fired trigger inline is a routing defect",
-				fmt.Sprintf("**Mapping trigger:** when understanding the work requires %d or more files", routing.DelegatedDirect.MappingMinUnderstandingFiles),
-				fmt.Sprintf("**Writer trigger:** when implementation touches %d or more non-trivial files", routing.DelegatedDirect.WriterMinNonTrivialFiles),
-				"A mechanical second-file edit does not fire this trigger solely because an earlier file was touched; count non-trivial files in the current work",
+				"**Mapping trigger:** when understanding exceeds the inline batch budget",
+				"**Writer trigger:** a writer is delegated only for a named reason",
+				"file count never fires this trigger",
 				"**Preparation trigger:**",
 				"**Long-session backstop:**",
-				"pause and delegate the next bounded unit of work",
+				"pause and delegate the next bounded unit",
 				"**Route declaration:**",
 				"record the chosen route per task",
 				"so skipped delegation is observable instead of silent",
@@ -778,4 +812,186 @@ func routingSemantics(rendered string) []string {
 		}
 	}
 	return facts
+}
+
+// The user-facing usage guide describes the same spec-by-reference contract the
+// canonical routing renders, so it cannot drift silently (review follow-up).
+func TestUsageGuideDescribesTheSpecByReferenceFeatureDocument(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "usage.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"`## Specs`",
+		"`## Tasks`",
+		"`## Log`",
+		"exact strings, error messages, and examples verbatim",
+		"`L1` is your original request verbatim",
+		"A requirement change rewrites only the affected spec and reopens only its task",
+		"never a paraphrase of your request",
+		"runs the spec's examples you authorized, against isolated state when they mutate data",
+		"reproduced before anyone decides it already works",
+	} {
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("docs/usage.md is missing %q", clause)
+		}
+	}
+}
+
+// gentle-shell#1494: task size is decided by understanding, contained risk,
+// and whether the work can be resumed from the diff, never by counting files,
+// commands, fixes, or a requested todo list. Each mechanism turns on only by
+// its own trigger, and the agent may raise assess risk but never lower it.
+func TestRenderRoutingSizesTasksByUnderstandingRiskAndResumability(t *testing.T) {
+	t.Parallel()
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+			for _, want := range []string{
+				"### Task Size",
+				"**Understood**",
+				"no product or design decision is open",
+				"**Contained risk**",
+				"**Resumable from the diff**",
+				"the original request and `git diff` alone",
+				"A task is **large** only when the resume test fails",
+				"The number of files, commands or tests, fixes, or a requested todo list never decides size",
+				"run the focused test and the suite inline, once each",
+				"observe RED inline before the fix",
+				"No explore, worker, or verifier",
+				"**High risk**",
+				"(1) data or irreversible effects",
+				"(6) no test would catch a regression",
+				"only when a bounded look cannot tell whether (1)-(5) apply",
+				"**Ask trigger:**",
+				"**Verification trigger:**",
+				"**Tracking trigger:**",
+				"file count never fires this trigger",
+				"re-evaluate task size",
+			} {
+				if !strings.Contains(rendered, want) {
+					t.Fatalf("RenderRouting(%q) is missing task-size clause %q", agent.ID, want)
+				}
+			}
+			for _, retired := range []string{
+				"two or more meaningful implementation steps",
+				"non-trivial files",
+				"Substantial means coordinated steps",
+			} {
+				if strings.Contains(rendered, retired) {
+					t.Fatalf("RenderRouting(%q) keeps retired count-based sizing %q", agent.ID, retired)
+				}
+			}
+			if model.SupportsReceiptDrivenDevelopment(agent.ID) {
+				for _, want := range []string{
+					"--escalate-item <1-6> --escalate-reason",
+					"never lower it",
+				} {
+					if !strings.Contains(rendered, want) {
+						t.Fatalf("RenderRouting(%q) is missing agent escalation clause %q", agent.ID, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// gentle-shell#1731: a writer is delegated for a named reason, never for size;
+// parallel writers stay safe without a single-writer ban; every code change
+// closes with a risk line; a tracked task never pauses on hedged wording; and
+// exploration exists only to decide or route.
+func TestRenderRoutingDelegatesForReason(t *testing.T) {
+	t.Parallel()
+
+	specs := []struct {
+		name     string
+		required []string
+		retired  []string
+	}{
+		{"S1 writer by reason", []string{
+			"**Writer trigger:** a writer is delegated only for a named reason",
+			"(a) parallelism: two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent, launched together",
+			"(b) context: the long-session backstop below",
+			"Never delegate a writer for size, a large task alone, file count, or a price ratio",
+			"Without a reason, the parent works inline, following its logbook",
+			"large tasks without a Writer trigger reason, which follow their logbook",
+		}, []string{
+			"a large task delegates one writer per task",
+			"a large task delegates one bounded writer per task",
+		}},
+		{"S2 parallel writers", []string{
+			"**Parallel writers:** work in another repository goes in a fresh worktree based on that repository's main",
+			"Parallel units in the same local repository run in the same tree, each with declared disjoint edit surfaces",
+			"the parent owns git",
+			"writers run no repository-wide formatters, generators, or installs",
+			"a shared file has one owner or the parent edits it at the end",
+			"the parent checks each writer's diff against its surface before accepting it",
+			"one seam check runs at the end",
+			"Units that need the same file use isolated worktrees",
+		}, []string{
+			"single writer",
+			"single-threaded",
+		}},
+		{"S3 risk line", []string{
+			"**Risk line**: close every code change, small path or delegated, with `Risk: item N (reason)` or `Risk: none`",
+			"(1) data or irreversible effects: migrations, changing or deleting existing stored data, persisted format changes (not saving new records)",
+			"(3) contracts others consume: changing or removing public API, CLI flags, config formats, published exports, or mirrored prompts or contracts others already consume (not adding a flag, command, or optional field; requested changes are not high risk by themselves; unrequested breaks in shared code are)",
+			"Before writing `Risk: none`, check whether the diff changes code that existing behavior the request did not mention also uses",
+		}, []string{
+			"deleting or rewriting persisted data",
+		}},
+		{"S4 no self-pause", []string{
+			"Hedged wording is not a stop",
+			"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof",
+		}, nil},
+		{"S5 explore only to decide or route", []string{
+			"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline",
+			"when the Writer trigger delegates a write, reading that prepares it",
+			"Inline writes read inline",
+		}, []string{
+			"On a small task the parent reads and writes inline",
+		}},
+		{"S6 test discipline", []string{
+			"Write one RED test per requested rule",
+			"For every existing command or option the change touches, add one test proving its previous behavior still holds",
+			"add no other cases",
+			"An existing behavior counts as touched when it shares the code you changed (options, parsers, helpers, validation)",
+			"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface",
+			"When you add or change a command, option, or message, update the help text and docs",
+		}, []string{
+			"configured TDD mode",
+			"strict TDD is active",
+		}},
+	}
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+			for _, spec := range specs {
+				for _, want := range spec.required {
+					if !strings.Contains(rendered, want) {
+						t.Errorf("%s: RenderRouting(%q) is missing %q", spec.name, agent.ID, want)
+					}
+				}
+				for _, retired := range spec.retired {
+					if strings.Contains(rendered, retired) {
+						t.Errorf("%s: RenderRouting(%q) keeps retired %q", spec.name, agent.ID, retired)
+					}
+				}
+			}
+		})
+	}
 }

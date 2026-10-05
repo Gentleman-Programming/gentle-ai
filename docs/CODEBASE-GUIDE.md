@@ -1,5 +1,8 @@
 # Gentle-AI™ Codebase Guide
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 This guide helps maintainers find the right code path before changing Gentle-AI. It is an index, not a full API reference.
 
 ## Who this is for

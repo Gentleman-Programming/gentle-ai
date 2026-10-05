@@ -20,7 +20,6 @@ type Selection struct {
 	CodexCarrilModelAssignments      map[string]string                // key = carril profile (sdd-strong|sdd-mid|sdd-cheap); value = model id
 	CodexPhaseModelAssignments       map[string]string                // key = phase name; value = model id (Custom per-phase picker only)
 	Profiles                         []Profile                        // named SDD profiles to generate/update during sync
-	OpenCodePlugins                  []OpenCodeCommunityPluginID      // optional community OpenCode TUI plugins
 	CommunityTools                   []CommunityToolID                // optional cross-agent community tools/plugins
 }
 

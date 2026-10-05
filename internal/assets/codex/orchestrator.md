@@ -16,7 +16,7 @@ Bind this to the dedicated orchestrator agent or rule only. Do NOT apply it to d
 
 These rules apply to **all non-trivial work**. Delegation is context compression: keep the main conversation thin, delegate heavy reading/writing/testing/review work, and synthesize results for the user.
 
-Crossing a threshold selects **delegated direct** work under ODD. Implementation runs as **direct inline** or **delegated direct**; size, file count, or risk do not create another workflow.
+A fired mechanism trigger selects **delegated direct** work under ODD; task size comes from the Task Size section of the routing block. Implementation runs as **direct inline** or **delegated direct**; size, file count, or risk do not create another workflow.
 
 Core principle: **does this inflate my context without need?** If yes -> delegate. If no -> do it inline.
 
@@ -65,30 +65,35 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 | Action | Inline | Delegate |
 |--------|--------|----------|
-| Read to decide/verify (1-3 files) | Yes | No |
-| Read to explore/understand (4+ files) | No | Yes |
-| Read as preparation for writing | No | Yes, together with the write |
-| Write atomic (one file, mechanical, already understood) | Yes | No |
-| Write with analysis (multiple files, new logic) | No | Yes |
+| Decide/verify within the inline evidence budget | Yes, one bounded batch | No |
+| Understanding beyond the inline evidence budget, or long sequential exploration | No | Yes, one read-only explorer, then re-evaluate task size |
+| Read as preparation for a delegated write | No | Yes, together with the write |
+| Write a small task (one understood change, any number of files) | Yes | No |
+| Write a large (tracked) task with no Write rule reason | Yes, following its logbook | No |
+| Write a unit with a Write rule reason | No | Yes, one bounded writer per unit |
 | Bash for state (`git`, `gh`) | Yes | No |
-| Bash for execution (`test`, `build`, `install`, external tooling) | No | Yes |
+| Focused test and suite of the change being made | Yes, once each | No |
+| High-risk change, or long suites, builds, installs, or external tooling of a large task | No | Yes |
 
 Anti-patterns that always inflate context without need:
 
-- Reading 4+ files to understand the codebase inline -> delegate a narrow exploration.
-- Writing a feature across multiple files inline -> delegate a writer.
-- Running tests/builds/installers inline -> delegate verification when tooling permits.
-- Reading files as preparation for edits, then editing -> delegate the whole thing together.
+- Gathering evidence beyond the inline batch budget -> delegate one read-only explorer.
+- Delegating a writer without a Write rule reason -> write inline, following the logbook.
+- Delegating a small task's focused test or suite -> run it inline; delegate verification only for high-risk changes or a large task's long suites.
+- Delegating exploration of files you will read anyway before writing inline -> read them inline; reading that prepares a delegated write goes together with it.
 
 #### Mandatory Delegation Triggers
 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-1. **Bounded read rule**: read 1–3 files inline to decide or verify.
-2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
-3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
-4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
+1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
+2. **Mapping rule**: understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures.
+   - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
+3. **Write rule**: a small task's writes stay inline, even across files; delegate a writer only for a named reason: parallel units launched together (two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent) or the context backstop. Never for size, a large task alone, file count, or a price ratio; without a reason the parent writes inline, following its logbook. File count never fires this rule.
+4. **Context rule**: when the Write rule delegates a write, delegate reading that prepares a write together with it, plus broad research/context compression; an inline write reads inline, and never explore files you will read anyway before writing inline.
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route.
+6. **Verification rule**: a high-risk change (Task Size list) gets an independent verifier after the change's own checks; otherwise the change's own focused test and suite run inline.
 
 #### Delegated Verification Gate (MANDATORY)
 
@@ -113,7 +118,7 @@ The canonical native bounded-review contract is injected from the shared provide
 ### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
-- Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
+- Delegate a writer only for a named reason; parallel writers follow the **Parallel writers** rule under `## Implementation Routing`.
 - Let native review select its bounded checking plan; delivery remains human-owned under ordinary repository policy.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 - If Codex's sub-agent tool policy blocks automatic spawning, stop and tell the user that the hard gate requires delegation before continuing.
@@ -164,7 +169,7 @@ Give each bounded task a lowercase letters/digits/underscores `task_name` and a 
 ### Parallelism
 
 Independent read-only tasks MAY be spawned in parallel when the
-thread budget allows. Keep one writer. Parallel does not mean background: after launching the batch, call
+thread budget allows. Keep one writer per unit. Parallel does not mean background: after launching the batch, call
 `wait_agent` until every spawned agent has completed, using `list_agents()` to correlate
 updates, and only then summarize results or continue to the next dependent phase.
 
@@ -185,7 +190,7 @@ When a delegation-required gate fires and sub-agent tooling is unavailable:
 3. Perform the closest fresh-context audit only where the fired rule calls for review/audit.
 4. Ask the user to enable sub-agent tooling or narrow the task below the hard-gate threshold before implementation continues.
 
-Do not run delegation-required work inline as a fallback. Preserve existing work and report the blocked task. Forward the configured TDD mode and runner to any resumed delegated executor; when strict TDD is active, require observed RED → GREEN → REFACTOR.
+Do not run delegation-required work inline as a fallback. Preserve existing work and report the blocked task. Forward the applicable test-first policy and runner from `## Implementation Routing` to any resumed delegated executor; when that policy applies, require observed RED → GREEN → REFACTOR.
 
 ---
 

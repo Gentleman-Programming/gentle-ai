@@ -453,8 +453,17 @@ func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, ha
 	var matches []match
 	for _, worktree := range worktrees {
 		lease, err := OpenRepositoryIdentityLease(ctx, worktree)
+		// A registered worktree that no longer opens as a Git repository is not
+		// a match, so it is skipped. Refusing the whole resolution instead lets
+		// one stale registration -- an editor or agent sandbox that recreated or
+		// pruned a checkout while `git worktree list` still names it -- deny
+		// every review this host could otherwise resolve. Nothing is admitted by
+		// skipping: the host lease and the closing revalidation still gate the
+		// result, every surviving candidate must share the host's common
+		// directory and match the rctx2 digest and a live authority, and the
+		// single-match rule still fails closed.
 		if err != nil || lease.Validate(ctx) != nil {
-			return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+			continue
 		}
 		identity := lease.Identity()
 		if identity.GitCommonDir != hostIdentity.GitCommonDir {

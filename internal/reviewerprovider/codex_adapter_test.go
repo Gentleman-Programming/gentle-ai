@@ -90,7 +90,7 @@ func TestCodexAdapterModelArgumentPreservesIsolation(t *testing.T) {
 		model    string
 		assigned bool
 	}{
-		{"gpt-6-sol", true}, {"", false}, {"--unsafe", false}, {"bad model", false},
+		{"gpt-6.1-sol", true}, {"", false}, {"--unsafe", false}, {"bad model", false},
 	} {
 		var args []string
 		adapter := &CodexAdapter{Model: tc.model, LookPath: func(string) (string, error) { return "codex", nil },

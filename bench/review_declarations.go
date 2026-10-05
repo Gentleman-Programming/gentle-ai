@@ -29,6 +29,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,
 	"j15-linked-worktree":                                                       reviewOptedIn,
 	"j16-detached-head":                                                         reviewOptedIn,
+	"j1658-native-status-recovery-executes-without-authored-authorization":      reviewOptedIn,
 	"j17-bare-repository":                                                       reviewOptedIn,
 	"j18-space-and-non-ascii-path":                                              reviewOptedIn,
 	"j19-submodule-gitlink":                                                     reviewOptedIn,
