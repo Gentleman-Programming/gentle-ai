@@ -260,8 +260,17 @@ func TestOpenCodePermissionsMirrorPiSafetyModel(t *testing.T) {
 		{"bash", "git -C repo push --force", "deny"},
 		{"bash", "git -C repo reset --hard", "deny"},
 		{"bash", "git push -uf origin main", "deny"},
+		{"bash", "git clean -xdf", "deny"},
+		{"bash", "git clean -x -f", "deny"},
+		{"bash", "sudo rm -R /", "deny"},
+		{"bash", "sudo rm -fR /", "deny"},
+		{"bash", "rm -frv ~", "deny"},
+		{"bash", "rm -rvf /", "deny"},
 		// Forms that must stay allowed.
 		{"bash", "git clean -n", "allow"},
+		{"bash", "git clean -n -- fixtures/", "allow"},
+		{"bash", "git clean -n -e '*.conf'", "allow"},
+		{"bash", "git clean -n src/foo", "allow"},
 		{"bash", "rm -f report.txt", "allow"},
 		// Pi confirm.
 		{"bash", "rm -rfv build", "ask"},

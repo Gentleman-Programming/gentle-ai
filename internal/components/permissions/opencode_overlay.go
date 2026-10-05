@@ -27,11 +27,12 @@ var (
 	// openCodeRecursiveRMFlags are the recursive rm flag spellings guarded,
 	// including the common verbose permutations.
 	openCodeRecursiveRMFlags = []string{
-		"-r", "-R", "-rf", "-fr", "-Rf", "-fR", "-rfv", "-vrf", "-Rfv", "--recursive",
+		"-r", "-R", "-rf", "-fr", "-Rf", "-fR",
+		"-rfv", "-frv", "-rvf", "-vrf", "-Rfv", "--recursive",
 	}
 	// openCodeSudoRMFlags are the recursive rm spellings also guarded behind
 	// sudo; the full cross product would bloat the user's settings file.
-	openCodeSudoRMFlags = []string{"-r", "-rf", "-fr", "-Rf"}
+	openCodeSudoRMFlags = []string{"-r", "-R", "-rf", "-fr", "-Rf", "-fR"}
 	// openCodeProtectedRMTargets are the Pi root targets: filesystem root,
 	// home, and the current or parent directory.
 	openCodeProtectedRMTargets = []string{
@@ -102,9 +103,15 @@ func buildOpenCodeOverlayJSON() []byte {
 		deny(git + "reset --hard")
 		deny(git + "reset --hard *")
 		deny(git + "reset * --hard*")
-		deny(git + "clean -*f*")
-		deny(git + "clean --force*")
-		deny(git + "clean * --force*")
+		// Forced clean: an "f" inside the first flag cluster (up to three
+		// characters, which also covers --force) or a later "-f" / "-?f"
+		// cluster. A broader "-*f*" would deny dry runs whose paths contain
+		// an "f", such as `git clean -n -- fixtures/`.
+		deny(git + "clean -f*")
+		deny(git + "clean -?f*")
+		deny(git + "clean -??f*")
+		deny(git + "clean * -f*")
+		deny(git + "clean * -?f*")
 		deny(git + "push --force*")
 		deny(git + "push * --force*")
 		deny(git + "push -f*")
