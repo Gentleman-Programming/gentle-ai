@@ -216,6 +216,11 @@ func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSour
 		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
 	}
 
+	content, err = replaceKiloNativeDelegationRoute(content, agent)
+	if err != nil {
+		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
+	}
+
 	// v3.7.0 removed the section for runtimes that do not advertise the
 	// review transport instead of handing them a lifecycle they cannot run.
 	contract, reviews, err := reviewExecutionContract(agent, source)
@@ -408,6 +413,23 @@ func replaceOpenCodeConsentV3QuestionRoute(content string, agent model.AgentID) 
 	}
 	content = strings.Replace(content, openCodeNativeQuestionSourceRoute, openCodeConsentV3QuestionRoute, 1)
 	return strings.ReplaceAll(content, openCodeFallbackSourceClause, openCodeConsentV3FallbackClause), nil
+}
+
+const openCodeInstalledAgentRoute = "Route read-only mapping to the installed `gentle-ai-explore` agent, implementation or command execution to the installed `gentle-ai-worker` agent, and read-only technical verification to the installed `gentle-ai-verify` agent."
+
+const kiloNativeDelegationRoute = "Use Kilo's native subagent delegation for delegated-direct work. Summarize any needed handoff explicitly."
+
+// replaceKiloNativeDelegationRoute routes Kilo's delegated-direct work to its
+// native subagents: Kilo shares the OpenCode asset but never installs the
+// gentle-ai-* agents that asset names (#5254).
+func replaceKiloNativeDelegationRoute(content string, agent model.AgentID) (string, error) {
+	if agent != model.AgentKilocode {
+		return content, nil
+	}
+	if count := strings.Count(content, openCodeInstalledAgentRoute); count != 1 {
+		return "", fmt.Errorf("OpenCode installed-agent route clause count = %d, want 1", count)
+	}
+	return strings.Replace(content, openCodeInstalledAgentRoute, kiloNativeDelegationRoute, 1), nil
 }
 
 // injectOrchestratorSection merges the orchestrator block into existing
