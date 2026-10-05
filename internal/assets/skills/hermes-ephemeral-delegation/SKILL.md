@@ -1,6 +1,6 @@
 ---
 name: hermes-ephemeral-delegation
-description: "Trigger: broad exploration, multi-file reads, tests/builds, fresh review, or multi-step debug. Orchestrate complex work via delegate_task to protect context."
+description: "Trigger: a mapping need, parallel units, context backstop, high-risk verify, fresh review, or multi-step debug. Delegate via delegate_task for a named reason."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
@@ -9,19 +9,19 @@ metadata:
 
 ## Activation Contract
 
-Load this skill when you are acting as the parent orchestrator and the work ahead falls into any of these categories:
+Load this skill when you are acting as the parent orchestrator and the work ahead has a named reason to delegate:
 
-- Broad exploration (4+ files to understand, codebase mapping, approach comparison)
-- Multi-file implementation (touching 2+ non-trivial files)
-- Test or build execution
-- Fresh adversarial review (diffs, PR readiness, incident audit)
+- A map you need to decide or route that exceeds the inline evidence budget (codebase mapping, approach comparison); never to read files you will read anyway before writing inline
+- A writer reason: 2+ independent units launched together, or the context backstop; a large task alone is tracked, not delegated
+- A high-risk change that needs an independent verifier, or a large task's long suites and builds
+- Fresh adversarial review (diffs, PR readiness, incident audit); never restart it automatically for a candidate whose terminal `approved` authority was already burned and that is unchanged since, unless a new independent review is deliberately requested
 - Multi-step debugging that would flood the parent context
 
 Do NOT load this skill if you are already inside a delegated child task — you are the executor, not the orchestrator.
 
 ## Hard Rules
 
-- Use `delegate_task` for all complex work listed above. Do NOT execute it inline.
+- Use `delegate_task` only for a named reason listed above. Without one, work inline following your logbook; file count, size, or a large task alone is never a reason.
 - Workers are EPHEMERAL: each `delegate_task` call creates a fresh context. Do NOT request persistent agent files or profiles.
 - Pass a self-contained mission. Workers have no memory of the parent conversation.
 - Treat worker output as self-report: verify file writes, test pass/fail, URLs, and IDs before reporting success to the user.
@@ -31,12 +31,13 @@ Do NOT load this skill if you are already inside a delegated child task — you 
 
 | Situation | Action |
 |-----------|--------|
-| Need to read 4+ files to understand | Delegate a narrow exploration worker |
-| Need to write 2+ non-trivial files | Delegate a single writer with the full mission |
-| Need to run tests or builds | Delegate an executor; do not run inline |
+| Need a map to decide or route beyond the inline evidence budget | Delegate a narrow exploration worker |
+| A large (tracked) task | Track it; delegate a writer only for a reason (parallel units or context) with the full mission |
+| A small task's focused test and suite | Run inline, once each |
+| A high-risk change or a large task's long suites | Delegate an executor |
 | Need an adversarial review of a diff | Delegate a fresh-context reviewer |
 | Multi-step debug that grows the context | Delegate a debug worker; feed results back inline |
-| Simple 1-file edit you already understand | Do it inline; no delegation needed |
+| An understood change, even across files, with no named reason | Do it inline; no delegation needed |
 | Quick git/state check | Do it inline; no delegation needed |
 
 ## Execution Steps
@@ -46,7 +47,9 @@ Do NOT load this skill if you are already inside a delegated child task — you 
    - Exact goal (one sentence)
    - File paths or targets to act on
    - Relevant prior context the worker needs (decisions, conventions, prior findings)
-   - Constraints (style, test runner, budget)
+   - Constraints (style, budget)
+   - For a writer: the applicable test-first policy and runner from `## Implementation Routing`. Write one RED test per requested rule; for every existing command or option the change touches, add one test proving its previous behavior still holds; add no other cases; update help text and docs for any changed command, option, or message
+   - For a verifier: the **Verify handoff** from the Delegated Verification Gate (the whole feature document, the baseline commit, the probe command forms, first-launch probes in a `mktemp -d` scratch copy never inside the workspace, and its severity rules)
    - Expected evidence to return (e.g., file written, test output, URL found)
    - Allowed toolsets/MCP/skills the worker should use
    - Any `SKILL.md` paths to load before work

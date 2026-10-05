@@ -15,9 +15,9 @@ import (
 // availability probe; the Codex CLI remains the source of truth at execution
 // time. Order is intentional: newest/most-capable first.
 var codexModelCatalog = []string{
-	"gpt-6-astra",
-	"gpt-6-sol",
-	"gpt-6-luna",
+	"gpt-6.1-astra",
+	"gpt-6.1-sol",
+	"gpt-6.1-luna",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
@@ -183,19 +183,19 @@ const (
 
 var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
-		"sdd-strong": {Model: "gpt-6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-6-luna", Effort: CodexEffortMedium},
-		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetRecommended: {
-		"sdd-strong": {Model: "gpt-6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetPowerful: {
-		"sdd-strong": {Model: "gpt-6-astra", Effort: CodexEffortXHigh},
-		"sdd-mid":    {Model: "gpt-6-sol", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
+		"sdd-mid":    {Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 }
 
@@ -205,9 +205,9 @@ var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 // every strong lane, and the strong lanes are where reasoning actually pays.
 // Unknown keys fall back to Recommended, as the carril matrix does.
 var codexPresetOrchestrator = map[CodexPresetKey]CodexOrchestratorAssignment{
-	CodexPresetLowCost:     {Model: "gpt-6-luna", Effort: CodexEffortMedium},
-	CodexPresetRecommended: {Model: "gpt-6-sol", Effort: CodexEffortMedium},
-	CodexPresetPowerful:    {Model: "gpt-6-astra", Effort: CodexEffortMedium},
+	CodexPresetLowCost:     {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+	CodexPresetRecommended: {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+	CodexPresetPowerful:    {Model: "gpt-6.1-astra", Effort: CodexEffortMedium},
 }
 
 // CodexODDRoles maps ODD worker classes to legacy saved carril keys.
@@ -221,19 +221,19 @@ var codexODDRoles = []struct{ Role, Carril string }{
 
 var codexODDDefaults = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
-		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-worker":   {Model: "gpt-6-luna", Effort: CodexEffortMedium},
-		"odd-verify":   {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+		"odd-verify":   {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
 	},
 	CodexPresetRecommended: {
-		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-worker":   {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-verify":   {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
 	},
 	CodexPresetPowerful: {
-		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-worker":   {Model: "gpt-6-sol", Effort: CodexEffortHigh},
-		"odd-verify":   {Model: "gpt-6-astra", Effort: CodexEffortXHigh},
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
 	},
 }
 

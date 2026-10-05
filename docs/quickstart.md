@@ -33,9 +33,9 @@
 
 ### All platforms
 
-- Git 2.38+.
+- Git.
 - Go 1.25.10+ (for building from source).
-- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: if a selected agent isn't detected, `gentle-ai install` refuses and prints the exact `npm install -g` (or equivalent) command for you to run yourself. Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
+- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with an install hint if either is missing (the Node.js hints for the distros above are listed there; npm's hint asks you to install Node.js first) — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: most selected agents are configured even when their runtime isn't detected, so install those yourself. Pi and OpenCode are the exceptions: `gentle-ai install` stops until `pi` is on `PATH` (for Pi) or `opencode --version` succeeds (for OpenCode). Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
 
 ### Windows
@@ -51,20 +51,19 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
-# Stable channel (`@latest` after v4.0.0 is published)
-go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
+# Stable channel: the latest release (v4.0.0)
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0
 ```
 
-This command uses the `/v4` module path. Go requires that suffix for major
-version 2 and above. Before v4.0.0 is published, `@latest` on this path cannot resolve.
+Go requires a major-version suffix (`/v4`) in the module path for major
+version 2 and above. Installing the old `/v3` module path stays on the v3 line
+and never reaches v4.
 
 ## Version Policy
 
-Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` made it the supported stable path. Those are historical milestones. The negotiated public review contract was published in `v2.1.6`.
+The latest published stable release is [`v4.0.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v4.0.0). `@latest` on the `/v4` module path tracks the stable channel. Use `@main` only to test unreleased development changes.
 
-The latest published stable release before v4.0.0 is [`v3.7.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v3.7.0). After v4.0.0 is published, `@latest` on the `/v4` module path tracks that stable channel. Until then, use `@main` only to test unreleased development changes; do not assume an unpublished v4 tag resolves.
-
-### Install the stable channel (after v4.0.0 publication)
+### Install the stable channel
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest
@@ -81,11 +80,11 @@ go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
 gentle-ai version
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main
 gentle-ai version
 ```
 
-To update a beta installation later, preserve the beta channel:
+`go install` ignores `GENTLE_AI_CHANNEL`; `gentle-ai` reads it on later runs, where `beta` tracks `main` instead of the latest release. Tools that Homebrew manages keep updating through Homebrew. To update a beta installation later, preserve the beta channel:
 
 ```bash
 # macOS / Linux
@@ -114,18 +113,20 @@ The managed install scripts select the latest version for their chosen channel a
 ## Run
 
 ```bash
-go run ./cmd/gentle-ai install --dry-run
+gentle-ai install --dry-run
 ```
 
 Use `--dry-run` first to validate selections and execution plan without applying changes. The dry-run output includes a `Platform decision` line showing the detected OS, distro, package manager, and support status.
 
+From a source clone, run `go run ./cmd/gentle-ai install` (with or without `--dry-run`) instead.
+
 ## First real install
 
 ```bash
-go run ./cmd/gentle-ai install
+gentle-ai install
 ```
 
-The installer detects your platform automatically — no flags needed to select macOS vs Linux. Install commands are resolved through the appropriate package manager (brew, apt, pacman, or dnf) based on detection.
+The installer detects your platform automatically — no flags needed to select macOS vs Linux. On Linux, it uses the first supported package manager it finds on `PATH`; see [Supported Platforms](platforms.md) for the full list and detection order.
 
 After completion, verify that agent configs and selected components were installed to their expected paths.
 
@@ -143,9 +144,9 @@ gentle-ai sync --agent claude-code --agent opencode
 
 ## Verification outcome
 
-When checks pass, installer reports:
+When checks pass, the installer prints a ready message that names the agent commands you installed, for example:
 
-`You're ready. Run 'claude' or 'opencode' and start building.`
+``You're ready. Run `claude` or `opencode` and start building.``
 
 If something looks wrong after install, run `gentle-ai doctor` for a read-only health check. It verifies tool binaries, `state.json` validity, Engram™ MCP reachability, and disk space — each check reports pass/warn/fail with a remedy hint.
 
@@ -175,4 +176,4 @@ Optional wrapper tools for extra defense:
 If you run the installer on an unsupported OS or Linux distro, it exits immediately with an error:
 
 - `unsupported operating system: only macOS, Linux, and Windows are supported (detected <os>)`
-- `unsupported linux distro: Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family (detected <distro>)`
+- `unsupported linux distro: no package manager found on PATH (detected distro <distro>).` The full error lists the package managers it searched, in order, and a command to check which ones your machine has.

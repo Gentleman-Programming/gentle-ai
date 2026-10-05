@@ -46,13 +46,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"Upgrade + Sync",
 		"Configure models",
 		agentLabel,
-		"OpenCode Community Plugins",
 	}
-
-	// Slice 3b — standalone launcher for the 4-layer managed uninstall of
-	// OpenCode community plugins. Sits next to the install shortcut above
-	// so the menu pairs install + uninstall as mirror operations.
-	opts = append(opts, "Uninstall OpenCode Plugin")
 
 	opts = append(opts, "Manage backups")
 	opts = append(opts, "Reset review store")

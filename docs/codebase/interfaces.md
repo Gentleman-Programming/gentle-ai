@@ -1,5 +1,8 @@
 # Interfaces
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Gentle-AI exposes a CLI and TUI. It configures MCP for agents. It does not expose a local HTTP API in this repository.

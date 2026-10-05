@@ -1,5 +1,8 @@
 # OpenCode compatibility
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Gentle AI selects integrations from the detected OpenCode major version. It does
 not silently migrate an existing installation. Unknown, unsupported or ambiguous
 version evidence refuses incompatible writes rather than assuming V2.

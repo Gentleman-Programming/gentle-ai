@@ -366,6 +366,78 @@ func TestProvisionEngramMCPLeavesFilesWithoutAdapterUntouched(t *testing.T) {
 	}
 }
 
+// TestProvisionEngramMCPPreservesExactNumberTokens keeps unrelated number
+// tokens verbatim in every Pi file it rewrites (#1672).
+func TestProvisionEngramMCPPreservesExactNumberTokens(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	setRealHome(t, home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	agentDir := filepath.Join(home, ".pi", "agent")
+	numbers := `"big":9007199254740993,"neg":-9007199254740995,"max":9223372036854775807,` +
+		`"nested":{"list":[1.10,6.02214076e23,1E+2,{"min":-9223372036854775808}]},"huge":1e999`
+	files := map[string]string{
+		"settings.json":        `{"packages":["npm:pi-mcp-adapter"],` + numbers + `}`,
+		"npm/package.json":     `{"dependencies":{"pi-mcp-adapter":"^2.6.0"},` + numbers + `}`,
+		"mcp.json":             `{"mcpServers":{},` + numbers + `}`,
+		piMCPAdapterConfigFile: `{"mcpServers":{"context7":{"command":"npx",` + numbers + `}}}`,
+	}
+	for name, body := range files {
+		writeTestFile(t, filepath.Join(agentDir, name), body)
+	}
+
+	if _, _, err := a.ProvisionEngramMCP(home); err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	for _, name := range []string{"settings.json", "npm/package.json", "mcp.json"} {
+		body, err := os.ReadFile(filepath.Join(agentDir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", name, err)
+		}
+		if string(body) == files[name] {
+			t.Fatalf("%s was not rewritten; the test must exercise a re-encode", name)
+		}
+		var root map[string]any
+		decoder := json.NewDecoder(strings.NewReader(string(body)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&root); err != nil {
+			t.Fatalf("decode %s error = %v", name, err)
+		}
+		assertExactPiNumbers(t, name, root)
+		if name == "mcp.json" {
+			servers, _ := root["mcpServers"].(map[string]any)
+			migrated, _ := servers["context7"].(map[string]any)
+			assertExactPiNumbers(t, "mcp.json mcpServers.context7", migrated)
+		}
+	}
+
+	// Strict single-document JSON stays required: no trailing documents.
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+	writeTestFile(t, mcpPath, `{"mcpServers":{}}{"x":1}`)
+	if _, _, err := a.ProvisionEngramMCP(home); err == nil || !strings.Contains(err.Error(), "unmarshal pi json file") {
+		t.Fatalf("ProvisionEngramMCP() error = %v, want trailing document rejected", err)
+	}
+}
+
+// assertExactPiNumbers checks each number of the #1672 fixture at its path.
+func assertExactPiNumbers(t *testing.T, name string, object map[string]any) {
+	t.Helper()
+	nested, _ := object["nested"].(map[string]any)
+	list, _ := nested["list"].([]any)
+	if len(list) != 4 {
+		t.Fatalf("%s nested.list = %#v, want 4 entries", name, nested["list"])
+	}
+	last, _ := list[3].(map[string]any)
+	got := []any{object["big"], object["neg"], object["max"], list[0], list[1], list[2], last["min"], object["huge"]}
+	want := []string{"9007199254740993", "-9007199254740995", "9223372036854775807",
+		"1.10", "6.02214076e23", "1E+2", "-9223372036854775808", "1e999"}
+	for i := range want {
+		if number, ok := got[i].(json.Number); !ok || number.String() != want[i] {
+			t.Fatalf("%s number %d = %#v, want exact %s", name, i, got[i], want[i])
+		}
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

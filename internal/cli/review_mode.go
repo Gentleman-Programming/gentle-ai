@@ -273,9 +273,37 @@ func quotePOSIXShellToken(path string) string {
 	return "'" + strings.ReplaceAll(path, "'", `'"'"'`) + "'"
 }
 
+// reviewModePrivateModeIneffectiveError rewrites the unsafe-path refusal for
+// the #5112 mount class: a filesystem that cannot represent private POSIX
+// modes makes the printed chmod repair a loop the operator can never exit,
+// so the refusal names the capability and the two continuations that actually
+// change the outcome instead. It is only ever constructed on mounts where the
+// probe proved the capability missing, and it wraps the same generic
+// unsafe-path refusal, so nothing about the fail-closed decision changes.
+type reviewModePrivateModeIneffectiveError struct {
+	Path  string
+	Cause error
+}
+
+func (err *reviewModePrivateModeIneffectiveError) Unwrap() error { return err.Cause }
+
+func (err *reviewModePrivateModeIneffectiveError) Error() string {
+	return fmt.Sprintf(
+		"the clone-local review mode path %s cannot be made private: the filesystem hosting it does not "+
+			"persist POSIX permission modes (WSL DrvFS without the metadata option, exFAT, and SMB without "+
+			"POSIX extensions all behave this way), so chmod cannot repair it; remount the drive with POSIX "+
+			"metadata enabled or move the repository to a filesystem that does, then rerun the original command",
+		pathquote.Quote(err.Path),
+	)
+}
+
 func reviewModeUnsafePathRefusal(err error) error {
 	var unsafePath *reviewtransaction.UnsafeRARPathError
 	if errors.As(err, &unsafePath) {
+		var ineffective *reviewtransaction.PrivateModeIneffectiveError
+		if errors.As(err, &ineffective) {
+			return &reviewModePrivateModeIneffectiveError{Path: unsafePath.Path, Cause: err}
+		}
 		return &reviewModeUnsafePathError{Path: unsafePath.Path, Directory: unsafePath.Directory, Cause: err}
 	}
 	return nil

@@ -246,6 +246,18 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 		return Snapshot{}, err
 	}
 
+	// Defensive guard: no snapshot may ever have empty base or candidate tree.
+	// This protects against any future code path or target kind that might
+	// leave trees unresolved without an error. Agents and downstream code
+	// must never see "base_tree: None" or "candidate_tree: None" after a
+	// successful Build(). (issue start-candidate-context-failure)
+	if strings.TrimSpace(baseTree) == "" {
+		return Snapshot{}, fmt.Errorf("base tree empty after resolving target %s; review the repository state and rerun with a valid base_ref", target.Kind) // refusal:by-design world-action: repository base or candidate tree should never be empty after Build(); if encountered, the working tree or index is corrupted
+	}
+	if strings.TrimSpace(candidateTree) == "" {
+		return Snapshot{}, fmt.Errorf("candidate tree empty after building target %s; the working tree or staged index may be corrupted", target.Kind) // refusal:by-design world-action: repository base or candidate tree should never be empty after Build(); if encountered, the working tree or index is corrupted
+	}
+
 	paths, err := builder.changedPaths(ctx, baseTree, candidateTree)
 	if err != nil {
 		return Snapshot{}, err

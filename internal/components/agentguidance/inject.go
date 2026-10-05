@@ -64,6 +64,10 @@ type templateBootstrapper interface {
 // over the package-level fallback (SetReviewContractSource); installers must
 // always set it.
 type RoutingOptions struct {
+	// OrchestratorCapability selects only generic instruction text. "small"
+	// explicitly opts into the small variant; empty or unknown uses capable.
+	// Runtime-specific assets ignore this hint. It does not configure models.
+	OrchestratorCapability      string
 	SettingsPath                string
 	ReviewContract              ReviewContractSource
 	CodexPhaseModelAssignments  map[string]string
@@ -122,7 +126,7 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 	// half-applied. Pi is the only runtime without one: Gentle Shell owns it.
 	var orchestrator string
 	if agent != model.AgentPi {
-		orchestrator, err = RenderOrchestratorWithSource(agent, options.ReviewContract)
+		orchestrator, err = RenderOrchestratorWithSource(agent, options.ReviewContract, options.OrchestratorCapability)
 		if err != nil {
 			return Result{}, err
 		}

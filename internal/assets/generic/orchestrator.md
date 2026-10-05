@@ -56,33 +56,38 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 ### Delegation Rules
 
-These rules select execution topology, not the implementation method. Implementation runs as **direct inline** or **delegated direct** under ODD; size, file count, or risk alone never selects another workflow.
+These rules select execution topology, not the implementation method. Implementation runs as **direct inline** or **delegated direct** under ODD; the Task Size section in the routing block selects the topology, and file count never does.
 
 Core principle: **does this inflate the parent context without need?** If yes, use one bounded worker. If no, do it inline.
 
 | Action | Direct inline | Delegated direct worker |
 |--------|---------------|-------------------------|
-| Read to decide/verify (1–3 files) | ✅ | — |
-| Read to explore/understand (4+ files) | — | ✅ one narrow mapper |
-| Read as preparation for writing | — | ✅ together with the write |
-| Write one mechanical, already-understood file | ✅ | — |
-| Write 2+ non-trivial files | — | ✅ one writer |
+| Decide/verify within the inline evidence budget | ✅ one bounded batch | — |
+| Understanding beyond the inline evidence budget, or long sequential exploration | — | ✅ one read-only explorer, then re-evaluate task size |
+| Read as preparation for a delegated write | — | ✅ together with the write |
+| Write a small task (one understood change, any number of files) | ✅ | — |
+| Write a large (tracked) task with no Write rule reason | ✅ following its logbook | — |
+| Write a unit with a Write rule reason | — | ✅ one bounded writer per unit |
 | Bash for state (`git`, `gh`) | ✅ | — |
-| Tests, builds, installs, or native review actions | allowed as a bounded action | ✅ fresh per-action worker without changing route |
+| Focused test and suite of the change being made | ✅ once each | — |
+| High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
 Use the platform's native bounded worker for delegated-direct work.
 
-Keep one writer and a short synthesized handoff. Delegation is mandatory at the mapping, write, preparation, and broad-research boundaries.
+Keep each delegated writer bounded, with a short synthesized handoff. Delegation is mandatory only when a mechanism's own trigger fires.
 
 #### Mandatory Delegation Triggers
 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-1. **Bounded read rule**: read 1–3 files inline to decide or verify.
-2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
-3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
-4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
+1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
+2. **Mapping rule**: understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures.
+   - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
+3. **Write rule**: a small task's writes stay inline, even across files; delegate a writer only for a named reason: parallel units launched together (two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent) or the context backstop. Never for size, a large task alone, file count, or a price ratio; without a reason the parent writes inline, following its logbook. File count never fires this rule.
+4. **Context rule**: when the Write rule delegates a write, delegate reading that prepares a write together with it, plus broad research/context compression; an inline write reads inline, and never explore files you will read anyway before writing inline.
 5. **Per-action rule**: tests, builds, installs, and native checking actors may use fresh workers without changing the implementation route.
+6. **Verification rule**: a high-risk change (Task Size list) gets an independent verifier after the change's own checks; otherwise the change's own focused test and suite run inline.
 
 #### Delegated Verification Gate (MANDATORY)
 
@@ -107,7 +112,7 @@ Runtime-specific lifecycle content is dynamically injected only when the compile
 #### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
-- Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
+- Delegate a writer only for a named reason; parallel writers follow the **Parallel writers** rule under `## Implementation Routing`.
 - Let the user and ordinary repository policy decide delivery; do not infer authorization from checking output.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
@@ -118,13 +123,16 @@ Runtime-specific lifecycle content is dynamically injected only when the compile
 <!-- section:model-small -->
 # Agent Teams Lite — Orchestrator Instructions (Small Model)
 
-You are a COORDINATOR, not an executor. Keep responses short and structured. Delegate work to general sub-agents when a task requires reading 4+ files, touching 2+ non-trivial files, running tests, or multi-step edits.
+You work inline by default, following your logbook. Keep responses short and structured. Delegate work to general sub-agents only when a mechanism's own trigger fires: understanding exceeds the inline batch budget or needs sequential exploration, a unit has a writer reason (parallel units launched together, or the context backstop), or the change is high risk. Small tasks run inline, including their focused test and suite.
 
 Quick delegation rules:
 
-1. Read to decide/verify: up to 3 files inline. If 4+ files -> delegate one narrow mapping worker.
-2. Touching 2+ non-trivial files -> delegate one writer.
-3. Keep one writer; follow the configured TDD mode and exact test runner. Record observed checks, not assumed results.
+1. Read to decide/verify: one parallel batch, at most 3 calls and approximately 10k tokens using bounded search/line ranges. Understanding that needs more evidence or more than approximately 5 sequential lookups -> one read-only explorer with an approximately 2k-token path:line handoff and one parent spot check.
+2. Delegate a writer only for a named reason (parallel units launched together, or the context backstop); otherwise write inline, following the logbook. File count never fires this.
+3. Keep one writer per unit; follow the applicable test-first policy and runner from `## Implementation Routing`: write one RED test per requested rule, add one test per touched existing command or option proving its previous behavior still holds, and add no other cases. Record observed checks, not assumed results.
+4. Verify delegated work by this gate, including its verification timing, correction bounds, and verify handoff:
+
+{{GENTLE_AI_ODD_SECTION:Delegated Verification Gate (MANDATORY)}}
 
 Model hints:
 
@@ -185,4 +193,4 @@ Sub-agents get a fresh context with NO memory. The orchestrator controls context
 - Always add to sub-agent prompt: `"If you make important discoveries, decisions, or fix bugs, save them to engram via mem_save with project: '{project}'."`
 - Skills: orchestrator resolves matching paths from the registry and injects them as `## Skills to load before work` in the sub-agent prompt. Sub-agents read those exact `SKILL.md` files before work.
 
-Forward the configured TDD mode, its source, and exact runner to implementation workers. When strict TDD is active, require observed RED → GREEN → REFACTOR. For ODD recovery, read the full project-scoped Engram observation and the feature task document before resuming; do not treat a search preview as full context.
+Forward the applicable test-first policy and runner from `## Implementation Routing` to implementation workers. When that policy applies, require observed RED → GREEN → REFACTOR. For ODD recovery, read the full project-scoped Engram observation and the feature task document before resuming; do not treat a search preview as full context.
