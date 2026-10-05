@@ -357,14 +357,14 @@ func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
 	// overlay itself. Pattern-only rules are bypassable through these forms
 	// (the command token is not the bare utility name), so the deny entries
 	// enumerate them explicitly instead of relying on guidance alone.
-	for _, input := range []string{"/usr/bin/ssh example.invalid", "/bin/scp file example.invalid:file", "\\ssh example.invalid", "command ssh example.invalid", "exec rsync -a src dst"} {
+	for _, input := range []string{"/usr/bin/ssh example.invalid", "/bin/scp file example.invalid:file", "\\ssh example.invalid", "command ssh example.invalid", "exec rsync -a src dst", "env ssh example.invalid"} {
 		if got := remoteAction(t, openCodeOverlayJSON, input); got != "deny" {
 			t.Errorf("bypass invocation %q not denied: %s", input, got)
 		}
 	}
 	// These remain matcher inputs, not shell programs. bash.ts extracts command
 	// nodes separately; no claim is made about parsing arbitrary shell syntax.
-	for _, input := range []string{"env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
+	for _, input := range []string{"true && ssh example.invalid", `python -c 'import subprocess'`} {
 		if got := remoteAction(t, openCodeOverlayJSON, input); got != "allow" {
 			t.Errorf("unsupported matcher input %q unexpectedly intercepted: %s", input, got)
 		}
@@ -461,6 +461,7 @@ func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
 	for _, tool := range remoteShellTools {
 		openCode, _ := remoteShellEscapeForms(tool, " *", " *")
 		remoteDenyRules = append(remoteDenyRules, openCode...)
+		remoteDenyRules = append(remoteDenyRules, "env "+tool+" *")
 	}
 
 	tests := []struct {
@@ -538,6 +539,7 @@ func TestInjectClaudeCodeDeniesRemoteShellUtilities(t *testing.T) {
 	for _, tool := range remoteShellTools {
 		_, claudeCode := remoteShellEscapeForms(tool, " *", ":*")
 		remoteDenyRules = append(remoteDenyRules, claudeCode...)
+		remoteDenyRules = append(remoteDenyRules, "Bash(env "+tool+":*)")
 	}
 
 	home := t.TempDir()
@@ -548,8 +550,13 @@ func TestInjectClaudeCodeDeniesRemoteShellUtilities(t *testing.T) {
 
 	// Pre-existing settings with a sibling key under permissions (not deny),
 	// mirroring the default-deny test: the remote denials must land even when
-	// a permissions block is already present.
-	existing := `{\n  "permissions": {\n    "defaultMode": "default"\n  }\n}`
+	// a permissions block is already present. Real newlines, so the merge
+	// actually parses the existing block.
+	existing := `{
+  "permissions": {
+    "defaultMode": "default"
+  }
+}`
 	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}

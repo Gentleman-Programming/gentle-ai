@@ -32,7 +32,8 @@ func TargetPath(homeDir string, adapter agents.Adapter) string {
 // Claude Code prefix rules only match the literal start of the command string, so
 // an agent can otherwise sidestep Bash(ssh:*) by invoking the interpreter-free
 // utilities through an absolute path (/usr/bin/ssh ...), a backslash escape
-// (\ssh ...), or a shell resolution wrapper (command ssh ..., exec ssh ...).
+// (\ssh ...), a shell resolution wrapper (command ssh ..., exec ssh ...), or
+// direct env execution (env ssh ...).
 // The enumerated directories are the canonical install prefixes of the OpenSSH
 // client and rsync across the supported platforms (FHS Linux /bin and /usr/bin,
 // custom /usr/local/bin, Apple Silicon /opt/homebrew/bin, NixOS
@@ -76,6 +77,7 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(\\ssh:*)",
       "Bash(command ssh:*)",
       "Bash(exec ssh:*)",
+      "Bash(env ssh:*)",
       "Bash(scp)",
       "Bash(scp:*)",
       "Bash(/bin/scp:*)",
@@ -86,6 +88,7 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(\\scp:*)",
       "Bash(command scp:*)",
       "Bash(exec scp:*)",
+      "Bash(env scp:*)",
       "Bash(sftp)",
       "Bash(sftp:*)",
       "Bash(/bin/sftp:*)",
@@ -96,6 +99,7 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(\\sftp:*)",
       "Bash(command sftp:*)",
       "Bash(exec sftp:*)",
+      "Bash(env sftp:*)",
       "Bash(rsync)",
       "Bash(rsync:*)",
       "Bash(/bin/rsync:*)",
@@ -105,7 +109,8 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(/run/current-system/sw/bin/rsync:*)",
       "Bash(\\rsync:*)",
       "Bash(command rsync:*)",
-      "Bash(exec rsync:*)"
+      "Bash(exec rsync:*)",
+      "Bash(env rsync:*)"
     ]
   }
 }
