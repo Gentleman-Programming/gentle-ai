@@ -223,3 +223,30 @@ func TestInstallPreservesUserEditedPluginBytes(t *testing.T) {
 		}
 	}
 }
+
+// Released bytes authorize only the name they shipped under: the review
+// transport's shipped bytes placed at another managed name are user bytes.
+func TestInstallRefusesReleasedBytesUnderAnotherName(t *testing.T) {
+	for version := range runtimeAssetDirs {
+		t.Run(version, func(t *testing.T) {
+			useRuntime(t, version)
+			home := t.TempDir()
+			adapter := agent.NewAdapter()
+			dir := filepath.Join(adapter.GlobalConfigDir(home), "plugins")
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "skill-registry.ts")
+			shipped := releasedFixture(t, "v3.7.0/plugins/opencode-review-transport.ts")
+			if err := os.WriteFile(path, shipped, 0644); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := Install(home, adapter); err == nil || result.Changed {
+				t.Fatalf("cross-name released bytes accepted: %+v %v", result, err)
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != string(shipped) {
+				t.Fatalf("cross-name bytes changed: %v", err)
+			}
+		})
+	}
+}
