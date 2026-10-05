@@ -57,7 +57,7 @@ func backtickedCommands(message string) []string {
 // #5184: a newer SDK of the same major satisfies the 2.0.4 declarations and
 // must not be reported as missing or downgraded.
 func TestV2SDKPreflightAcceptsSameMajorAtOrAboveMinimum(t *testing.T) {
-	for _, version := range []string{"2.0.4", "2.0.16", "2.0.22", "2.1.0"} {
+	for _, version := range []string{"2.0.4", "2.0.10", "2.0.16", "2.0.22", "2.1.0", "2.10.0"} {
 		t.Run(version, func(t *testing.T) {
 			home, config := sdkRangeConfig(t, `{"packageManager":"npm@10.8.0"}`, version)
 			if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err != nil {
@@ -143,16 +143,23 @@ func TestV2SDKRefusalNamesV1PeerConflictRemedy(t *testing.T) {
 			}
 		}
 		commands := backtickedCommands(message)
+		// #5208: the reporter's --force run exited 0 and removed no packages;
+		// uninstalling the V1 SDK or --legacy-peer-deps prunes @opentui.
 		want := []string{
 			"cd " + quoted + " && npm install --save-exact --no-audit --no-fund @opencode/plugin@2.0.4",
-			"cd " + quoted + " && npm uninstall --no-audit --no-fund @opencode-ai/plugin",
+			"cd " + quoted + " && npm install --save-exact --force --no-audit --no-fund @opencode/plugin@2.0.4",
 		}
 		if strings.Join(commands, "\n") != strings.Join(want, "\n") {
 			t.Fatalf("peer-conflict commands = %q, want %q", commands, want)
 		}
 		for _, command := range commands {
-			if strings.Contains(command, "--legacy-peer-deps") || strings.Contains(command, "--force") {
-				t.Fatalf("remedy prescribes a destructive npm override: %s", command)
+			if strings.Contains(command, "--legacy-peer-deps") || strings.Contains(command, "uninstall") {
+				t.Fatalf("remedy prescribes a pruning npm command: %s", command)
+			}
+		}
+		for _, text := range []string{"removes no packages", "--legacy-peer-deps"} {
+			if !strings.Contains(message, text) {
+				t.Fatalf("peer-conflict refusal lacks %q: %v", text, err)
 			}
 		}
 	}
@@ -160,15 +167,53 @@ func TestV2SDKRefusalNamesV1PeerConflictRemedy(t *testing.T) {
 
 func TestV2SDKPeerConflictHintScope(t *testing.T) {
 	config := t.TempDir()
-	if hint := openCodeSDKPeerConflictHint("linux", config, "npm"); hint != "" {
+	if hint := openCodeSDKPeerConflictHint("linux", config, "npm", "@opencode/plugin@2.0.4"); hint != "" {
 		t.Fatalf("hint without a V1 SDK: %s", hint)
 	}
 	writeSDKRangeFile(t, filepath.Join(config, "node_modules", "@opencode-ai", "plugin", "package.json"), `{"version":"1.18.15"}`)
-	if hint := openCodeSDKPeerConflictHint("linux", config, "bun"); hint != "" {
+	if hint := openCodeSDKPeerConflictHint("linux", config, "bun", "@opencode/plugin@2.0.4"); hint != "" {
 		t.Fatalf("npm ERESOLVE hint for a Bun-owned directory: %s", hint)
 	}
-	hint := openCodeSDKPeerConflictHint("windows", config, "npm")
-	if !strings.Contains(hint, "PowerShell: Set-Location -LiteralPath") || !strings.Contains(hint, "npm uninstall --no-audit --no-fund @opencode-ai/plugin") || strings.Contains(hint, "`") {
+	hint := openCodeSDKPeerConflictHint("windows", config, "npm", "@opencode/plugin@2.0.4")
+	if !strings.Contains(hint, "PowerShell: Set-Location -LiteralPath") || !strings.Contains(hint, "npm install --save-exact --force --no-audit --no-fund @opencode/plugin@2.0.4") || strings.Contains(hint, "`") {
 		t.Fatalf("Windows peer-conflict remedy is not a PowerShell command: %s", hint)
+	}
+}
+
+// Build metadata and an unreadable manifest are not a qualifying release, and
+// a hostile version string is never echoed raw into the refusal.
+func TestV2SDKRefusesBuildMetadataCorruptManifestAndSanitizesVersion(t *testing.T) {
+	for _, tc := range []struct{ name, manifest string }{
+		{"build metadata", `{"version":"2.0.4+build.1"}`},
+		{"corrupt manifest", `{"version":`},
+		{"control characters", "{\"version\":\"2.0.3\\u001b[31m" + strings.Repeat("9", 200) + "\"}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, config := sdkRangeConfig(t, `{"packageManager":"npm@10.8.0"}`, "")
+			writeSDKRangeFile(t, filepath.Join(config, "node_modules", "@opencode", "plugin", "package.json"), tc.manifest)
+			err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run()
+			if err == nil {
+				t.Fatalf("%s accepted as an installed SDK", tc.name)
+			}
+			if strings.ContainsRune(err.Error(), '\x1b') || len(err.Error()) > 4096 {
+				t.Fatalf("refusal echoes an unsanitized version (%d bytes): %q", len(err.Error()), err.Error())
+			}
+		})
+	}
+}
+
+// A symlinked node_modules resolves to the real installed SDK.
+func TestV2SDKAcceptsSymlinkedNodeModules(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink fixture requires POSIX")
+	}
+	home, config := sdkRangeConfig(t, `{"packageManager":"npm@10.8.0"}`, "")
+	real := filepath.Join(t.TempDir(), "node_modules")
+	writeSDKRangeFile(t, filepath.Join(real, "@opencode", "plugin", "package.json"), `{"version":"2.0.22"}`)
+	if err := os.Symlink(real, filepath.Join(config, "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	if err := (openCodePluginDependencyPreflightStep{homeDir: home}).Run(); err != nil {
+		t.Fatalf("symlinked node_modules SDK refused: %v", err)
 	}
 }

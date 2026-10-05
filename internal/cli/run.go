@@ -1022,7 +1022,7 @@ func OpenCodeSDKInstallProposal(homeDir string) (*OpenCodeSDKConsent, error) {
 		} else if manager == "" {
 			manager = "npm"
 		}
-		return nil, fmt.Errorf("automatic OpenCode SDK install refused: %w; OpenCode V2 requires %s; run `%s` manually, then retry Gentle AI%s", err, openCodeSDKRequirement(config, dependency), openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency), openCodeSDKPeerConflictHint(runtime.GOOS, config, manager))
+		return nil, fmt.Errorf("automatic OpenCode SDK install refused: %w; OpenCode V2 requires %s; run `%s` manually, then retry Gentle AI%s", err, openCodeSDKRequirement(config, dependency), openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency), openCodeSDKPeerConflictHint(runtime.GOOS, config, manager, dependency))
 	}
 	executable, err := cmdLookPath("npm")
 	if err != nil {
@@ -1229,9 +1229,27 @@ func openCodeSDKRequirement(config, dependency string) string {
 		requirement += fmt.Sprintf(" or a newer %d.x release", minimum[0])
 	}
 	if version := openCodeSDKInstalledVersion(config); version != "" {
-		requirement += fmt.Sprintf(" (found @opencode/plugin@%s)", version)
+		requirement += fmt.Sprintf(" (found @opencode/plugin@%s)", openCodeSDKDisplayVersion(version))
 	}
 	return requirement
+}
+
+// openCodeSDKDisplayVersion keeps a package.json version safe to echo: only
+// printable ASCII, bounded, so a hostile manifest cannot inject terminal
+// escapes or flood the refusal.
+func openCodeSDKDisplayVersion(version string) string {
+	const limit = 32
+	var b strings.Builder
+	for _, r := range version {
+		if b.Len() == limit {
+			return b.String() + "..."
+		}
+		if r < 0x20 || r > 0x7e {
+			r = '?'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func (s openCodePluginDependencyPreflightStep) ID() string { return s.id }
@@ -1296,7 +1314,7 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 		return openCodeSDKManualBunError(config, dependency)
 	}
 	location := openCodeSDKInstallContinuation(runtime.GOOS, config, manager, dependency)
-	hint := openCodeSDKPeerConflictHint(runtime.GOOS, config, manager)
+	hint := openCodeSDKPeerConflictHint(runtime.GOOS, config, manager, dependency)
 	if runtime.GOOS == "windows" {
 		// refusal:by-design world-action: this command is generated for PowerShell, not cmd.exe
 		return fmt.Errorf("OpenCode V2 requires %s before managed plugins can be written; in PowerShell run: %s; then retry Gentle AI%s", requirement, location, hint)
@@ -1310,20 +1328,23 @@ func (s openCodePluginDependencyPreflightStep) Run() error {
 // V2 SDK, so the pinned npm install stops with ERESOLVE. --legacy-peer-deps
 // would prune that whole peer tree; removing the unused V1 SDK does not
 // touch anything the V2 managed plugins import.
-func openCodeSDKPeerConflictHint(goos, config, manager string) string {
+func openCodeSDKPeerConflictHint(goos, config, manager, dependency string) string {
 	if manager != "npm" {
 		return ""
 	}
 	if _, err := os.Stat(filepath.Join(config, "node_modules", "@opencode-ai", "plugin", "package.json")); err != nil {
 		return ""
 	}
-	remove := openCodeSDKCommandIn(goos, config, "npm uninstall --no-audit --no-fund @opencode-ai/plugin")
+	// #5208 evidence: --force accepts the optional @opentui/core peer
+	// mismatch and removed no packages, while --legacy-peer-deps and removing
+	// the V1 SDK both prune the @opentui tree that existing TUI plugins load.
+	force := openCodeSDKCommandIn(goos, config, "npm install --save-exact --force --no-audit --no-fund "+dependency)
 	if goos == "windows" {
-		remove = "PowerShell: " + remove
+		force = "PowerShell: " + force
 	} else {
-		remove = "`" + remove + "`"
+		force = "`" + force + "`"
 	}
-	return "; if npm stops with ERESOLVE, the cause is the OpenCode V1 SDK @opencode-ai/plugin still installed there: its peer-installed @opentui packages conflict with the optional @opentui/core peer of @opencode/plugin. V2 managed plugins do not use the V1 SDK, so remove it with " + remove + " and rerun the install. Do not use --legacy-peer-deps: it prunes every peer-installed package, including @opentui and solid-js"
+	return "; if npm stops with ERESOLVE, the cause is the OpenCode V1 SDK @opencode-ai/plugin still installed there: its peer-installed @opentui packages conflict with the optional @opentui/core peer of @opencode/plugin. Rerun the install with --force, which accepts that optional peer mismatch and removes no packages: " + force + ". Do not use --legacy-peer-deps or uninstall @opencode-ai/plugin: both prune the peer-installed @opentui and solid-js packages that existing OpenCode TUI plugins load"
 }
 
 // Bun ownership is a manual-only route even when Bun is unavailable on PATH.

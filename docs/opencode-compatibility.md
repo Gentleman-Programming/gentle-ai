@@ -92,10 +92,11 @@ are checked against 2.0.4 only.
 A config directory that predates V2 can still hold the V1 SDK
 `@opencode-ai/plugin` and its peer-installed `@opentui` packages. Those conflict
 with the optional `@opentui/core` peer of `@opencode/plugin`, so npm stops with
-`ERESOLVE`. When the V1 SDK is present, the npm refusal says so and prints
-`npm uninstall --no-audit --no-fund @opencode-ai/plugin` for that directory;
-the V2 managed plugins do not use the V1 SDK. Do not use `--legacy-peer-deps`:
-it prunes every peer-installed package, including `@opentui` and `solid-js`.
+`ERESOLVE`. When the V1 SDK is present, the npm refusal says so and prints the
+same exact install with `--force`, which accepts that optional peer mismatch
+and, in the #5208 report, removed no packages. Do not use `--legacy-peer-deps`
+or uninstall `@opencode-ai/plugin`: both prune the peer-installed `@opentui`
+and `solid-js` packages that existing OpenCode TUI plugins load.
 
 The local conformance harness uses disposable configuration, an allowlisted
 environment, fixture authentication and process cleanup. Its loopback mode requires
