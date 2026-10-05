@@ -1833,6 +1833,12 @@ func TestLegacyTriggerCleanupFailsClosedOnUnsafeJSONC(t *testing.T) {
 }
 
 func TestInstallPrepareRefusesUnsafeOpenCodeSettingsBeforeAnyMutation(t *testing.T) {
+	original := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = original })
+	cmdLookPath = func(string) (string, error) {
+		t.Fatal("dependency lookup before settings refusal")
+		return "", errNotFound{}
+	}
 	for _, tc := range []struct{ name, content string }{
 		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": {"prompt": "x"}}}`},
 		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`},
@@ -1847,8 +1853,9 @@ func TestInstallPrepareRefusesUnsafeOpenCodeSettingsBeforeAnyMutation(t *testing
 			settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
 			mustWriteFile(t, settingsPath, []byte(tc.content))
 
-			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentEngram}}
 			rt := newTestInstallRuntime(t, home, selection)
+			rt.channel = ChannelBeta
 			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(rt.stagePlan())
 
 			if result.Err == nil {
