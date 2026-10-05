@@ -446,46 +446,27 @@ func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, ha
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
 
-	// hostFamily distinguishes the two registered classes. A linked worktree of
-	// the host shares the host's common directory by construction, and the
-	// common-directory assertion below keeps proving that. A submodule the host
-	// registered is a different case: it is tracked as a gitlink and named in
-	// .gitmodules, yet it is never a linked worktree and its common directory is
-	// <host>/.git/modules/<name>, so it would otherwise be indistinguishable
-	// from a repository the host never registered.
-	type hostCandidate struct {
-		directory  string
-		hostFamily bool
-	}
-	candidates := make([]hostCandidate, 0, len(worktrees))
-	for _, worktree := range worktrees {
-		candidates = append(candidates, hostCandidate{directory: worktree, hostFamily: true})
-	}
-	for _, submodule := range registeredSubmoduleDirectories(ctx, hostIdentity.RepositoryRoot) {
-		candidates = append(candidates, hostCandidate{directory: submodule})
-	}
-
 	type match struct {
 		root    string
 		binding ReviewRepositoryContextBinding
 	}
 	var matches []match
-	for _, candidate := range candidates {
-		lease, err := OpenRepositoryIdentityLease(ctx, candidate.directory)
-		// A registered candidate that no longer opens as a Git repository is not
+	for _, worktree := range worktrees {
+		lease, err := OpenRepositoryIdentityLease(ctx, worktree)
+		// A registered worktree that no longer opens as a Git repository is not
 		// a match, so it is skipped. Refusing the whole resolution instead lets
-		// one stale registration -- an editor or agent sandbox that recreated
-		// or pruned a checkout while leaving `git worktree list` or
-		// .gitmodules intact -- deny every review this host could otherwise
-		// resolve. Nothing is admitted by skipping: the host lease above and the
-		// closing revalidation still gate the result, every surviving candidate
-		// still has to match the rctx2 digest and a live authority, and the
+		// one stale registration -- an editor or agent sandbox that recreated or
+		// pruned a checkout while `git worktree list` still names it -- deny
+		// every review this host could otherwise resolve. Nothing is admitted by
+		// skipping: the host lease and the closing revalidation still gate the
+		// result, every surviving candidate must share the host's common
+		// directory and match the rctx2 digest and a live authority, and the
 		// single-match rule still fails closed.
 		if err != nil || lease.Validate(ctx) != nil {
 			continue
 		}
 		identity := lease.Identity()
-		if candidate.hostFamily && identity.GitCommonDir != hostIdentity.GitCommonDir {
+		if identity.GitCommonDir != hostIdentity.GitCommonDir {
 			continue
 		}
 		root, resolved, err := ResolveReviewRepositoryContextBinding(ctx, identity.RepositoryRoot, handle, binding)
@@ -507,63 +488,6 @@ func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, ha
 		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
 	}
 	return matches[0].root, matches[0].binding, nil
-}
-
-// registeredSubmoduleDirectories returns the in-place working directories of the
-// submodules the host has registered with Git.
-//
-// A submodule is registered with the host -- tracked as a gitlink and named in
-// .gitmodules -- yet linkedWorktreeDirectories never returns it, so without this
-// a legitimately bound submodule target is indistinguishable from a repository
-// the host never registered, and the resolver refuses a live authority it holds
-// the correct opaque handle for.
-//
-// The candidates come from the host's own Git registry, never from a
-// host-authored path, and each one still has to survive the digest match and the
-// live-authority revalidation in ResolveReviewRepositoryContextBinding. A host
-// with no submodules, or with none of them checked out, contributes no
-// candidates and no error: that is the ordinary single-repository case and keeps
-// resolving exactly as before.
-func registeredSubmoduleDirectories(ctx context.Context, root string) []string {
-	output, err := runGit(ctx, root, nil, nil, "config", "--file", filepath.Join(root, ".gitmodules"), "--get-regexp", `^submodule\..*\.path$`)
-	if err != nil {
-		// No readable .gitmodules, or no submodule path entries: the ordinary
-		// case, never a resolution failure.
-		return nil
-	}
-	canonicalRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return nil
-	}
-	var directories []string
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		// The value is everything after the first space, so a submodule path
-		// containing spaces survives intact.
-		_, path, found := strings.Cut(line, " ")
-		if !found || path == "" || !filepath.IsLocal(filepath.FromSlash(path)) {
-			continue
-		}
-		directory := filepath.Join(root, filepath.FromSlash(path))
-		// Registered but not checked out has no in-place working tree, exactly
-		// like a pruned linked worktree.
-		if info, err := os.Stat(directory); err != nil || !info.IsDir() {
-			continue
-		}
-		// .gitmodules is repository content: a path that escapes the host
-		// checkout, lexically or through a symlink, never names a candidate.
-		resolved, err := filepath.EvalSymlinks(directory)
-		if err != nil {
-			continue
-		}
-		if rel, err := filepath.Rel(canonicalRoot, resolved); err != nil || !filepath.IsLocal(rel) {
-			continue
-		}
-		directories = append(directories, directory)
-	}
-	return directories
 }
 
 func resolveReviewRepositoryContext(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
