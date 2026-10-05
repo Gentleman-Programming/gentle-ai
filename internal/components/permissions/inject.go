@@ -27,6 +27,17 @@ func TargetPath(homeDir string, adapter agents.Adapter) string {
 
 // claudeCodeOverlayJSON sets Claude Code to bypassPermissions mode (auto-accept all).
 // Valid modes: "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan".
+//
+// The remote-shell deny entries (#4324) cover more than the bare command names:
+// Claude Code prefix rules only match the literal start of the command string, so
+// an agent can otherwise sidestep Bash(ssh:*) by invoking the interpreter-free
+// utilities through an absolute path (/usr/bin/ssh ...), a backslash escape
+// (\ssh ...), or a shell resolution wrapper (command ssh ..., exec ssh ...).
+// The enumerated directories are the canonical install prefixes of the OpenSSH
+// client and rsync across the supported platforms (FHS Linux /bin and /usr/bin,
+// custom /usr/local/bin, Apple Silicon /opt/homebrew/bin, NixOS
+// /run/current-system/sw/bin). Agents whose ssh lives elsewhere still hit the
+// always-on routing guidance "Remote execution boundary" section.
 var claudeCodeOverlayJSON = []byte(`{
   "permissions": {
     "defaultMode": "bypassPermissions",
@@ -54,7 +65,47 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(**/*.key)",
       "Edit(**/*.key)",
       "Read(**/secrets/*)",
-      "Edit(**/secrets/*)"
+      "Edit(**/secrets/*)",
+      "Bash(ssh)",
+      "Bash(ssh:*)",
+      "Bash(/bin/ssh:*)",
+      "Bash(/usr/bin/ssh:*)",
+      "Bash(/usr/local/bin/ssh:*)",
+      "Bash(/opt/homebrew/bin/ssh:*)",
+      "Bash(/run/current-system/sw/bin/ssh:*)",
+      "Bash(\\ssh:*)",
+      "Bash(command ssh:*)",
+      "Bash(exec ssh:*)",
+      "Bash(scp)",
+      "Bash(scp:*)",
+      "Bash(/bin/scp:*)",
+      "Bash(/usr/bin/scp:*)",
+      "Bash(/usr/local/bin/scp:*)",
+      "Bash(/opt/homebrew/bin/scp:*)",
+      "Bash(/run/current-system/sw/bin/scp:*)",
+      "Bash(\\scp:*)",
+      "Bash(command scp:*)",
+      "Bash(exec scp:*)",
+      "Bash(sftp)",
+      "Bash(sftp:*)",
+      "Bash(/bin/sftp:*)",
+      "Bash(/usr/bin/sftp:*)",
+      "Bash(/usr/local/bin/sftp:*)",
+      "Bash(/opt/homebrew/bin/sftp:*)",
+      "Bash(/run/current-system/sw/bin/sftp:*)",
+      "Bash(\\sftp:*)",
+      "Bash(command sftp:*)",
+      "Bash(exec sftp:*)",
+      "Bash(rsync)",
+      "Bash(rsync:*)",
+      "Bash(/bin/rsync:*)",
+      "Bash(/usr/bin/rsync:*)",
+      "Bash(/usr/local/bin/rsync:*)",
+      "Bash(/opt/homebrew/bin/rsync:*)",
+      "Bash(/run/current-system/sw/bin/rsync:*)",
+      "Bash(\\rsync:*)",
+      "Bash(command rsync:*)",
+      "Bash(exec rsync:*)"
     ]
   }
 }
