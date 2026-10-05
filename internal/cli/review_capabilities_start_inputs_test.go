@@ -19,6 +19,14 @@ var reviewStartInputCapabilityFeatures = []ReviewCapabilityFeature{
 	{Name: "start_request_context", Supported: true, Requires: []string{"compact_v2_authority"}},
 }
 
+// rdd-risk-gated S17: the STATUS preflight of those START inputs is its own
+// optional feature. The two START features above promise direct START only,
+// so a caller forwards the inputs through STATUS only when this one is listed.
+var reviewStartOptionsPreflightCapabilityFeature = ReviewCapabilityFeature{
+	Name: "start_options_preflight", Supported: true,
+	Requires: []string{"native_next_transition", "start_agent_escalation", "start_request_context"},
+}
+
 func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -48,7 +56,7 @@ func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.
 			}
 			var got ReviewCapabilitiesResult
 			decodeStrictReviewJSON(t, output.Bytes(), &got)
-			for _, want := range reviewStartInputCapabilityFeatures {
+			for _, want := range append(slices.Clone(reviewStartInputCapabilityFeatures), reviewStartOptionsPreflightCapabilityFeature) {
 				if !slices.ContainsFunc(got.Features.Optional, func(feature ReviewCapabilityFeature) bool {
 					return feature.Name == want.Name && feature.Supported == want.Supported && slices.Equal(feature.Requires, want.Requires)
 				}) {
@@ -61,21 +69,34 @@ func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.
 				t.Fatal(err)
 			}
 			features := document["features"].(map[string]any)
-			features["optional"] = slices.DeleteFunc(features["optional"].([]any), func(feature any) bool {
-				name := feature.(map[string]any)["name"]
-				return name == "start_request_context" || name == "start_agent_escalation"
-			})
+			current := features["optional"].([]any)
 			// Released binaries advertise the same contract version without
-			// these optional START inputs. Their advertisements remain valid.
+			// the STATUS preflight (A3, with the two START inputs) or without
+			// any of the three. Both historical advertisements remain valid.
 			wantHistoricalCount := 13
 			if tt.contract == ReviewIntegrationContractV2 {
 				wantHistoricalCount = 15
 			}
-			if got := len(features["optional"].([]any)); got != wantHistoricalCount {
-				t.Fatalf("%s historical optional count = %d, want %d", tt.name, got, wantHistoricalCount)
+			for _, historical := range []struct {
+				removed []string
+				count   int
+			}{
+				{removed: []string{"start_options_preflight"}, count: wantHistoricalCount + 2},
+				{removed: []string{"start_options_preflight", "start_request_context", "start_agent_escalation"}, count: wantHistoricalCount},
+			} {
+				features["optional"] = slices.DeleteFunc(slices.Clone(current), func(feature any) bool {
+					return slices.Contains(historical.removed, feature.(map[string]any)["name"].(string))
+				})
+				if got := len(features["optional"].([]any)); got != historical.count {
+					t.Fatalf("%s historical optional count without %v = %d, want %d", tt.name, historical.removed, got, historical.count)
+				}
+				if err := schema.Validate(document); err != nil {
+					t.Fatalf("%s schema rejected a historical advertisement without %v: %v", tt.name, historical.removed, err)
+				}
 			}
-			if err := schema.Validate(document); err != nil {
-				t.Fatalf("%s schema rejected a historical advertisement: %v", tt.name, err)
+			features["optional"] = append(slices.Clone(current), map[string]any{"name": "start_options_preflight_v2", "supported": true, "requires": []any{}})
+			if err := schema.Validate(document); err == nil {
+				t.Fatalf("%s schema accepted an unknown optional feature name", tt.name)
 			}
 		})
 	}
@@ -84,7 +105,8 @@ func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.
 // TestReviewCapabilitiesOlderV2AdvertisementsKeepTheirExactFeatureCount
 // proves the in-place schema edit stays additive: capabilities v2.3 through
 // v2.5 still pin exactly the 15 optional features their binaries emitted, and
-// v2.6 admits both historical advertisements and the two START input features.
+// v2.6 admits the historical advertisements, the two START input features,
+// and their STATUS preflight.
 func TestReviewCapabilitiesOlderV2AdvertisementsKeepTheirExactFeatureCount(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.3.fixture.json"))
 	if err != nil {
@@ -100,7 +122,7 @@ func TestReviewCapabilitiesOlderV2AdvertisementsKeepTheirExactFeatureCount(t *te
 	if len(optional) != 15 {
 		t.Fatalf("v2.3 fixture optional features = %d, want 15", len(optional))
 	}
-	for _, feature := range reviewStartInputCapabilityFeatures {
+	for _, feature := range append(slices.Clone(reviewStartInputCapabilityFeatures), reviewStartOptionsPreflightCapabilityFeature) {
 		features["optional"] = append(slices.Clone(optional), map[string]any{"name": feature.Name, "supported": true, "requires": []any{feature.Requires[0]}})
 		if err := schema.Validate(document); err == nil {
 			t.Fatalf("v2.3 schema accepted a 16th optional feature %q", feature.Name)

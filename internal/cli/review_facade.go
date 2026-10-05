@@ -801,6 +801,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
+	requestContextSource := flags.String("request-context", "", "preflight review start --request-context: validate the request file without creating authority and render it into the fresh START next transition")
+	escalateItem := flags.String("escalate-item", "", "preflight review start --escalate-item (1-6) and render it into the fresh START next transition")
+	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -825,6 +828,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *contract != "" {
 		if err := validateReviewIntegrationContract(*contract); err != nil {
 			return err
+		}
+		// rdd-risk-gated S17: the START options are validated before the
+		// repository is touched, so a refused preflight writes nothing.
+		startOptions, err := parseReviewStatusStartOptions(args, *nextTransition, *contract, *requestContextSource, *escalateItem, *escalateReason)
+		if err != nil {
+			return reviewPreflightError(err)
 		}
 		var runtime model.AgentID
 		// A declared runtime identity is validated exactly as before, so an
@@ -1153,6 +1162,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
 		result.committedRangeBaseRef = derivedBaseRef
+		result.startOptions = startOptions
 		// Issue #4040: publish the digest once, here, before every path that
 		// could suppress it — the compact-reviewing replacement immediately
 		// below (which deliberately zeros Digest for the #1972 fail-closed
@@ -1492,6 +1502,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if *contract == ReviewIntegrationContractV2 {
 			result.Action = reviewRootActionForTransition(result.Action, result.NextTransition)
 		}
+		if err := reviewStatusStartOptionsUnapplied(startOptions, result.NextTransition, *contract); err != nil {
+			return reviewPreflightError(err)
+		}
 		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
 			// The forecast is structural only: it rides the v2 envelope's
 			// `forecast` field and is never narrated to stderr, because a
@@ -1509,6 +1522,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return fmt.Errorf("validate negotiated review status: %w", validationErr)
 		}
 		return encodeReviewJSON(stdout, result)
+	}
+	if reviewStatusStartOptionsDeclared(args) {
+		return reviewPreflightError(errors.New("review status --request-context, --escalate-item, and --escalate-reason preflight a negotiated START, so they require --contract and --next-transition; rerun `gentle-ai review status --contract " + ReviewIntegrationContractV2 + " --next-transition` with them"))
 	}
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)

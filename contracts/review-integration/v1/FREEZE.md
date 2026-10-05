@@ -61,3 +61,11 @@ as it is.
   callers detect `review start --escalate-item/--escalate-reason` and
   `--request-context` without probing. Same in-place convention as the
   START schema edits in 746ebd84 and dda1aa14.
+- 2026-10-05, rdd-risk-gated S17, user decision "Sí, completar el puente
+  — recomendado": `schemas/capabilities-v1.5.schema.json` admits the
+  optional feature `start_options_preflight` (optional count 13 through
+  16, so released 13-feature and 15-feature advertisements stay valid),
+  and `fixtures/capabilities-v1.5.fixture.json` lists it, so callers
+  detect that `review status --next-transition` preflights
+  `--request-context` and `--escalate-item/--escalate-reason` into its
+  fresh START. Same in-place convention as the A3 edit above.

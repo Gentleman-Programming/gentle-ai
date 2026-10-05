@@ -208,6 +208,15 @@
         ]
       },
       {
+        "name": "start_options_preflight",
+        "supported": true,
+        "requires": [
+          "native_next_transition",
+          "start_agent_escalation",
+          "start_request_context"
+        ]
+      },
+      {
         "name": "start_request_context",
         "supported": true,
         "requires": [

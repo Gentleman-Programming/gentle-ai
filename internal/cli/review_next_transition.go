@@ -946,6 +946,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})
 	}
 	arguments = append(arguments, reviewStartIntendedUntrackedArguments(intended)...)
+	// rdd-risk-gated S17: preflighted START options ride last, so a STATUS
+	// without them renders the exact vector it always did.
+	arguments = append(arguments, status.startOptions.arguments()...)
 	return arguments
 }
 

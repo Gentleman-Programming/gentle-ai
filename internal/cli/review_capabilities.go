@@ -268,6 +268,11 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 				{Name: "risk_reasons", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 				{Name: "scope_change_diagnostics", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 				{Name: "start_agent_escalation", Supported: true, Requires: []string{"risk_reasons"}},
+				// The two START input features promise direct START only;
+				// this one promises that a --next-transition STATUS
+				// preflights both inputs and renders them into its fresh
+				// review.start (rdd-risk-gated S17).
+				{Name: "start_options_preflight", Supported: true, Requires: []string{"native_next_transition", "start_agent_escalation", "start_request_context"}},
 				{Name: "start_request_context", Supported: true, Requires: []string{"compact_v2_authority"}},
 				{Name: "validating_result_reopen", Supported: true, Requires: []string{"compact_v2_authority", "provider_artifact_admission"}},
 			},

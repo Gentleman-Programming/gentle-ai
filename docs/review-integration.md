@@ -50,6 +50,17 @@ This lifecycle is available only to Claude Code, Codex, OpenCode, and Pi. Unsupp
 
 Selectorless STATUS evaluates only the current worktree candidate and renders one exact START invocation. It does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. The parent runs only the returned `next_transition` and its ordered tokens.
 
+#### START options through STATUS (`start_options_preflight`)
+
+A parent that runs only provider-issued tokens passes the START options to the negotiated STATUS instead of appending them to the START it receives. `review status --contract <contract> --next-transition` accepts `--request-context <file>`, `--escalate-item <1-6>`, and `--escalate-reason <text>`:
+
+- STATUS validates them with START's own rules (see the two sections below) before it reads the repository, and creates no authority. A refusal is a `not_started` `invalid_request` failure, and nothing is written.
+- When the next transition is a fresh `review.start` (`fresh_target_ready`), its arguments end with the options: `request-context` (the absolute path of the file), then `escalate-item` and `escalate-reason`. The binding and every other argument are unchanged. START itself reads the file again and freezes the request and the escalation.
+- Any other next transition is refused instead of being returned without the options: an existing lineage already froze its own options at START, and the other routes run no START. Rerun STATUS without the options, follow its transition, and pass them again to the STATUS that offers `review.start`.
+- The options require `--contract` and `--next-transition`, and each may appear only once.
+
+Without the options, STATUS and its START vector are unchanged. Forward the options through STATUS only when `review capabilities` lists `start_options_preflight`; see "Detecting support" below.
+
 ### 2. START freezes an independent transaction
 
 START freezes the candidate in one compact transaction, explicitly bound to its lineage, worktree, and target. It selects risk and lenses natively. Capture the returned lineage, revision, and target tokens.
@@ -86,14 +97,15 @@ Without the flags, START and the persisted authority are unchanged. Authority th
 
 #### Detecting support (`review capabilities`)
 
-Callers detect both START inputs from `gentle-ai review capabilities` instead of probing START. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list two optional features:
+Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list three optional features:
 
-| Feature | START input | Requires |
+| Feature | Input | Requires |
 | --- | --- | --- |
-| `start_request_context` | `--request-context <file>` | `compact_v2_authority` |
-| `start_agent_escalation` | `--escalate-item <1-6> --escalate-reason <text>` | `risk_reasons` |
+| `start_request_context` | START `--request-context <file>` | `compact_v2_authority` |
+| `start_agent_escalation` | START `--escalate-item <1-6> --escalate-reason <text>` | `risk_reasons` |
+| `start_options_preflight` | STATUS `--next-transition` with the same three flags | `native_next_transition`, `start_agent_escalation`, `start_request_context` |
 
-When a feature is absent, omit its flags: released binaries without it reject them. The published v1.5 and v2.6 schemas accept historical optional-feature counts (13 and 15) as well as current counts (15 and 17); the contract version alone does not prove START input support. Older advertisements (`capabilities/v2.3` through `v2.5`) keep their exact feature lists.
+`start_request_context` and `start_agent_escalation` promise the flags on a direct START only. A binary that lists them without `start_options_preflight` rejects the flags on STATUS. When a feature is absent, omit its flags: released binaries without it reject them. The published v1.5 and v2.6 schemas accept historical optional-feature counts (13 and 15), advertisements with the two START features only (15 and 17), and current counts (16 and 18); the contract version alone does not prove support for any of the three. Older advertisements (`capabilities/v2.3` through `v2.5`) keep their exact feature lists.
 
 ### 3. Bound calls drive the transaction
 
