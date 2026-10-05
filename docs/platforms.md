@@ -29,9 +29,11 @@ Release archives are currently produced for macOS and Linux only. Windows source
 
 When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI™ writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
 
-Deactivation removes managed launcher files but may leave `~/.gentle-ai/bin/` in `PATH`; Gentle AI does not clean up shell profiles.
+On POSIX systems, including WSL, Gentle AI also persists `~/.gentle-ai/bin/` in the login profile your `SHELL` reads, inside a marked block (`# >>> gentle-ai managed OpenCode launcher >>>` … `<<<`). zsh uses `~/.zprofile`; bash uses the first existing of `~/.bash_profile`, `~/.bash_login`, or `~/.profile`, and creates `~/.profile` when none exists; `sh`, `dash`, and `ksh` use `~/.profile`. Gentle AI never modifies a profile that is a symlink, read-only, or carries an edited or duplicated block, and it does not manage other shells (such as fish) or a zsh `ZDOTDIR` outside your home. In those cases the activation report shows the `export PATH=...` line to add yourself, and `gentle-ai doctor` warns until the directory is persisted.
 
-Restart OpenCode after enabling managed activation. Restart the shell if the launcher directory has not entered PATH. OpenCode `serve`, `attach`, Desktop, or any session started outside the managed launcher uses foreground fallback rather than receiving an unsafe partial activation.
+Deactivation and uninstall remove managed launcher files and only the unedited managed profile block; every other profile line is preserved.
+
+Restart OpenCode after enabling managed activation. Start a new login shell so the persisted launcher directory enters PATH. OpenCode `serve`, `attach`, Desktop, or any session started outside the managed launcher uses foreground fallback rather than receiving an unsafe partial activation.
 
 ---
 

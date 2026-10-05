@@ -18,6 +18,13 @@ var closeManagedLauncherFile = func(file *os.File) error { return file.Close() }
 // launcher through its opened Windows handle. Deletion is requested on that
 // handle, never on a subsequently resolved path.
 func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
+	return removeOwnedFile(path, func(data []byte) bool { return IsManagedLauncher(path, data) })
+}
+
+// removeOwnedFile applies RemoveManagedLauncher's capture-and-validate removal
+// with a caller-supplied ownership predicate, so every Gentle-owned file is
+// deleted through the same guarded mechanism.
+func removeOwnedFile(path string, owned func([]byte) bool) (ManagedLauncherRemovalResult, error) {
 	initial, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalAbsent}, nil
@@ -85,7 +92,7 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 	if err != nil {
 		return ManagedLauncherRemovalResult{}, fmt.Errorf("read managed launcher %q: %w", path, err)
 	}
-	if !IsManagedLauncher(path, data) {
+	if !owned(data) {
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalNotOwned}, nil
 	}
 
@@ -108,7 +115,7 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 	if err != nil {
 		return ManagedLauncherRemovalResult{}, fmt.Errorf("re-read managed launcher %q: %w", path, err)
 	}
-	if !bytes.Equal(data, currentData) || !IsManagedLauncher(path, currentData) {
+	if !bytes.Equal(data, currentData) || !owned(currentData) {
 		return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil
 	}
 

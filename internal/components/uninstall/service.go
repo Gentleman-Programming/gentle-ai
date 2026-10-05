@@ -548,6 +548,15 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			backupTargets[path] = struct{}{}
 			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
 		}
+		// Only profiles that carry the canonical managed block are snapshotted
+		// and rewritten; every other profile byte belongs to the user.
+		for _, path := range opencodeactivation.ManagedProfilePaths(s.homeDir) {
+			if runtime.GOOS == "windows" || !opencodeactivation.HasManagedProfileBlock(path) {
+				continue
+			}
+			backupTargets[path] = struct{}{}
+			operationsByKey[operationKey(removeOwnedOpenCodeProfileBlock(path))] = removeOwnedOpenCodeProfileBlock(path)
+		}
 	}
 
 	orderedTargets := make([]string, 0, len(backupTargets))
@@ -1748,6 +1757,18 @@ func removeOwnedOpenCodeLauncher(path string) operation {
 				return false, false, err
 			}
 			return true, true, nil
+		},
+	}
+}
+
+func removeOwnedOpenCodeProfileBlock(path string) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   path,
+		agents: []model.AgentID{model.AgentOpenCode},
+		apply: func(path string) (bool, bool, error) {
+			changed, err := opencodeactivation.RemoveManagedProfileBlock(path)
+			return changed, false, err
 		},
 	}
 }

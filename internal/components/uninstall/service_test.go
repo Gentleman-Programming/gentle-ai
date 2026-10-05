@@ -477,6 +477,67 @@ func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
 	}
 }
 
+// Issue #3452: uninstall removes only the canonical managed PATH block from
+// login profiles and preserves every user line, edited blocks, and symlinks.
+func TestUninstallRemovesOnlyManagedOpenCodeProfileBlock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login profiles are not used on Windows")
+	}
+	homeDir := t.TempDir()
+	binDir := opencodeactivation.BinDir(homeDir)
+	block := "# >>> gentle-ai managed OpenCode launcher >>>\n" + opencodeactivation.ProfileExportLine(binDir) + "\n# <<< gentle-ai managed OpenCode launcher <<<\n"
+	managed := filepath.Join(homeDir, ".zprofile")
+	if err := os.WriteFile(managed, []byte("export BEFORE=1\n"+block+"export AFTER=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	edited := filepath.Join(homeDir, ".profile")
+	editedContent := strings.Replace(block, "export PATH=", "export PATH=/user:", 1)
+	if err := os.WriteFile(edited, []byte(editedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkTarget := filepath.Join(t.TempDir(), "dotfiles-bash_profile")
+	if err := os.WriteFile(linkTarget, []byte(block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(homeDir, ".bash_profile")
+	if err := os.Symlink(linkTarget, linked); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(plan.backupTargets, edited) || slices.Contains(plan.backupTargets, linked) {
+		t.Fatalf("backup targets = %v, want only profiles carrying the managed block", plan.backupTargets)
+	}
+	result, err := svc.executePlan(plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(managed); err != nil || string(data) != "export BEFORE=1\nexport AFTER=1\n" {
+		t.Fatalf("managed profile after uninstall = %q, %v", data, err)
+	}
+	if info, err := os.Stat(managed); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("managed profile mode after uninstall = %v, %v; want 0600", info, err)
+	}
+	if !slices.Contains(result.ChangedFiles, managed) {
+		t.Fatalf("changed files = %v, want %q", result.ChangedFiles, managed)
+	}
+	if data, err := os.ReadFile(edited); err != nil || string(data) != editedContent {
+		t.Fatalf("edited profile after uninstall = %q, %v; want preserved", data, err)
+	}
+	if got, err := os.Readlink(linked); err != nil || got != linkTarget {
+		t.Fatalf("profile symlink after uninstall = %q, %v; want preserved", got, err)
+	}
+	if data, err := os.ReadFile(linkTarget); err != nil || string(data) != block {
+		t.Fatalf("profile symlink target after uninstall = %q, %v; want preserved", data, err)
+	}
+}
+
 // ownedOpenCodeLauncher returns the exact bytes Gentle AI generates for the
 // launcher at path, targeting a fixed historical OpenCode location.
 func ownedOpenCodeLauncher(path string) []byte {

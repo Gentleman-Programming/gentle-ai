@@ -15,6 +15,8 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/storage"
 )
@@ -94,7 +96,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	installedAgents, _ := readDoctorInstalledAgents(homeDir)
+	installedState, _ := state.Read(homeDir)
+	installedAgents := installedState.InstalledAgents
 	// A state read failure (missing/malformed file) is surfaced separately by
 	// checkStateJSON. Here we fall back to an empty list so the doctor only
 	// reports the always-required core tools — preserving the first-time-install
@@ -115,22 +118,37 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
+	if installedState.BackgroundIntent == model.OpenCodeBackgroundOn && doctorGOOS != "windows" {
+		checks = append(checks, doctor.Check{ID: doctor.CheckOpenCodeProfile, Run: func(context.Context) doctor.Result {
+			return checkOpenCodeProfile(homeDir, pathDirs)
+		}})
+	}
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
 	return nil
 }
 
-// readDoctorInstalledAgents returns the agent IDs persisted in state.json.
-// An unreadable or absent state file yields a nil slice — callers must treat
-// nil/empty as "no agents selected" rather than a hard error so first-time
-// installs do not surface phantom agent-missing failures.
-func readDoctorInstalledAgents(homeDir string) ([]string, error) {
-	s, err := state.Read(homeDir)
-	if err != nil {
-		return nil, err
+// checkOpenCodeProfile reports whether new POSIX login shells will find the
+// managed OpenCode launcher directory: either a login profile carries the
+// managed PATH block, or the directory is already on PATH by other means.
+func checkOpenCodeProfile(homeDir string, pathDirs []string) CheckResult {
+	const id = doctor.CheckOpenCodeProfile
+	binDir := opencode.BinDir(homeDir)
+	if profile, ok := opencode.ManagedProfileWithBinDir(homeDir, binDir); ok {
+		return CheckResult{Name: id, Status: CheckStatusPass, Detail: "login profile " + profile + " persists " + binDir + " on PATH"}
 	}
-	return s.InstalledAgents, nil
+	for _, dir := range pathDirs {
+		if filepath.Clean(dir) == filepath.Clean(binDir) {
+			return CheckResult{Name: id, Status: CheckStatusPass, Detail: binDir + " is on PATH; no managed login profile block was found"}
+		}
+	}
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusWarn,
+		Detail: "OpenCode background subagents are on, but no login profile persists " + binDir + " on PATH, so new shells bypass the managed launcher",
+		Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' from a zsh or bash login shell, or add "+opencode.ProfileExportLine(binDir)+" to your login profile, then start a new login shell"),
+	}
 }
 
 // checkToolBinaries checks each required tool for PATH resolution and
