@@ -1017,7 +1017,7 @@ func TestOpenCodeODDOrchestratorDelegationVisibility(t *testing.T) {
 	for _, required := range []string{
 		"<!-- gentle-ai:opencode-desktop-delegation-progress -->",
 		"#### Delegation Visibility (OpenCode Desktop)",
-		"`delegate` or `task`",
+		"For every native subagent launch",
 		"assistant-visible status line immediately before the call",
 		"When the call returns",
 		"⏳ Delegating {phase} to {agent}...",
