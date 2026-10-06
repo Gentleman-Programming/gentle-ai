@@ -36,7 +36,7 @@ type ReviewStoreResetResult struct {
 // the user a second invocation is a much smaller price than the first mistake.
 func RunReviewStoreReset(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review store-reset", stdout,
-		"Remove this clone's accumulated review lineage state so reviews start from nothing. Previews by default and reports what it would remove per category; --confirm applies it. Removal is irreversible: nothing is copied aside. The receipt-driven-development kill switch, SDD runtime state, defect reports, the adapter-written reviews/ graph store, and any path this command does not recognize are preserved and reported. Reviews that have not reached a terminal state are refused unless --include-in-flight is given.")
+		"Remove this clone's accumulated review lineage state so reviews start from nothing. Previews by default and reports what it would remove per category; --confirm applies it. Removal is irreversible: nothing is copied aside. The receipt-driven-development kill switch, legacy attempt state, defect reports, the adapter-written reviews/ graph store, and any path this command does not recognize are preserved and reported. Reviews that have not reached a terminal state are refused unless --include-in-flight is given.")
 	cwd := flags.String("cwd", ".", "repository path")
 	confirm := flags.Bool("confirm", false, "apply the removal instead of previewing it")
 	includeInFlight := flags.Bool("include-in-flight", false, "also remove reviews that have not reached a terminal state")

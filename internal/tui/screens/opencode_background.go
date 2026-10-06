@@ -19,7 +19,7 @@ func RenderOpenCodeBackground(cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("OpenCode Background Subagents"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how OpenCode should run SDD subagents."))
+	b.WriteString(styles.SubtextStyle.Render("Choose how OpenCode should run delegated subagents."))
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render("Managed activation starts OpenCode with its background-subagent environment."))
 	b.WriteString("\n\n")

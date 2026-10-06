@@ -29,7 +29,8 @@ func TestStrictTDDOpenCodePrompt(t *testing.T) {
 				if strings.Contains(string(raw), "gentle-ai:strict-tdd-mode") != enabled {
 					t.Fatalf("enabled=%v: %s", enabled, raw)
 				}
-				if !strings.Contains(string(raw), "User note") || !strings.Contains(string(raw), "review-refuter") || !strings.Contains(string(raw), `"custom": true`) {
+				// The JSONC-preserving merge keeps untouched members byte for byte.
+				if !strings.Contains(string(raw), "User note") || !strings.Contains(string(raw), "review-refuter") || !strings.Contains(string(raw), `"custom":true`) {
 					t.Fatalf("unrelated settings lost: %s", raw)
 				}
 				if result.Changed != (enabled != strings.Contains(seed, "gentle-ai:strict-tdd-mode")) {

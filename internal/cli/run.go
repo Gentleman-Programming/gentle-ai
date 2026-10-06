@@ -826,7 +826,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			id:           "prepare:opencode-settings-validation",
 			settingsPath: openCodeLoadedSettingsPath(r.homeDir, r.workspaceDir, opencodeagent.NewAdapter()),
 			// Routing guidance is scheduled for every install agent.
-			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true),
+			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true, false),
 		}}, prepare...)
 	}
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
@@ -980,19 +980,29 @@ func (s nativeReviewAgentStep) Run() error {
 	return nil
 }
 
-// retiredSDDAssetsStep removes the SDD skills, slash commands, workflow, and
-// Claude Code preflight hook earlier releases installed for one runtime, and
-// reports what it cannot prove it wrote (#5157). The pipeline snapshot
-// captures the same inventory first (retiredSDDAssetBackupPaths).
+// retiredSDDAssetsStep removes the SDD skills, slash commands, workflow,
+// Codex profiles, Kimi module, and Claude Code preflight hook earlier
+// releases installed for one runtime, and the SDD text they left in prompt
+// files routing guidance does not migrate. It reports what it cannot prove it
+// wrote (#5157). The pipeline snapshot captures the same inventory first
+// (retiredSDDAssetBackupPaths).
 type retiredSDDAssetsStep struct {
 	id string
 	// agent is empty for the shared ~/.agents/skills root.
-	agent        model.AgentID
-	dirs         legacyassets.SDDAssetDirs
-	settings     string
+	agent    model.AgentID
+	dirs     legacyassets.SDDAssetDirs
+	settings string
+	// blocks are prompt files whose SDD orchestrator block is removed.
+	blocks       []sddPromptFile
+	kimiHub      sddPromptFile
 	changedFiles *[]string
 	state        *runtimeState
 }
+
+// sddPromptFile is a prompt file holding retired SDD text, edited only when
+// every directory from root down to it is a real directory, with the active
+// prompt routing guidance migrates instead (empty when none).
+type sddPromptFile struct{ root, path, active string }
 
 func (s retiredSDDAssetsStep) ID() string { return s.id }
 
@@ -1015,6 +1025,27 @@ func (s retiredSDDAssetsStep) Run() error {
 		}
 		actions = append(actions, hook.ManualActions()...)
 	}
+	texts := make([]legacyassets.TextRetireResult, 0, len(s.blocks)+1)
+	for _, block := range s.blocks {
+		res, err := legacyassets.RetireSDDOrchestratorBlock(block.root, block.path, block.active)
+		if err != nil {
+			return fmt.Errorf("retire SDD orchestrator block: %w", err)
+		}
+		texts = append(texts, res)
+	}
+	if s.kimiHub.path != "" {
+		res, err := legacyassets.RetireKimiSDDInclude(s.kimiHub.root, s.kimiHub.path)
+		if err != nil {
+			return fmt.Errorf("retire Kimi SDD include: %w", err)
+		}
+		texts = append(texts, res)
+	}
+	for _, res := range texts {
+		if res.Removed && s.changedFiles != nil {
+			*s.changedFiles = append(*s.changedFiles, res.Path)
+		}
+		actions = append(actions, res.ManualActions()...)
+	}
 	if s.state != nil {
 		s.state.retiredSDDActions = append(s.state.retiredSDDActions, actions...)
 	}
@@ -1022,11 +1053,12 @@ func (s retiredSDDAssetsStep) Run() error {
 }
 
 // retiredSDDAssetSteps resolves where releases installed retired SDD files
-// for the selected runtimes in this scope: skills, commands, and the Claude
-// Code hook under the scoped config root, the Windsurf workflow only in a
-// workspace-scoped run (releases wrote it into the project), and the shared
-// ~/.agents/skills root only in a global run on platforms where the generic
-// snapshot owns it. Pi is skipped: gentle-pi owns its home (#5219).
+// for the selected runtimes in this scope: skills, commands, Codex profiles,
+// the Kimi module, SDD prompt text, and the Claude Code hook under the
+// scoped config root, the Windsurf workflow only in a workspace-scoped run
+// (releases wrote it into the project), and the shared ~/.agents/skills root
+// only in a global run on platforms where the generic snapshot owns it. Pi is
+// skipped: gentle-pi owns its home (#5219).
 func retiredSDDAssetSteps(prefix, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string, state *runtimeState) []retiredSDDAssetsStep {
 	var steps []retiredSDDAssetsStep
 	for _, adapter := range resolveAdapters(agentIDs) {
@@ -1046,6 +1078,22 @@ func retiredSDDAssetSteps(prefix, homeDir, workspaceDir string, scope InstallSco
 		}
 		if adapter.Agent() == model.AgentClaudeCode {
 			step.settings = adapter.SettingsPath(root)
+		}
+		// A workspace-scoped install wrote these under the workspace too.
+		files := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), root)
+		step.dirs.CodexHome, step.dirs.KimiHome = files.Dirs.CodexHome, files.Dirs.KimiHome
+		if files.Hub != "" {
+			step.kimiHub = sddPromptFile{root: files.Dirs.KimiHome, path: files.Hub}
+		}
+		if files.Prompt != "" {
+			step.blocks = append(step.blocks, sddPromptFile{files.Dirs.CodexHome, files.Prompt, files.Active})
+		}
+		// A workspace sync delivers no routing guidance to these runtimes, so
+		// nothing migrates the v3.7.0 SDD block of their project prompt.
+		if scope == ScopeWorkspace && workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) &&
+			!agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) && adapter.SupportsSystemPrompt() {
+			prompt := adapter.SystemPromptFile(root)
+			step.blocks = append(step.blocks, sddPromptFile{root: filepath.Dir(prompt), path: prompt})
 		}
 		steps = append(steps, step)
 	}
@@ -1071,13 +1119,14 @@ func retiredSDDAssetStepList(steps []retiredSDDAssetsStep) []pipeline.Step {
 func retiredSDDAssetBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
 	var paths []string
 	for _, step := range retiredSDDAssetSteps("", homeDir, workspaceDir, scope, agentIDs, nil, nil) {
-		for _, path := range legacyassets.RetiredSDDAssetPaths(step.agent, step.dirs) {
-			if _, err := os.Lstat(path); err == nil {
-				paths = append(paths, path)
-			}
-		}
+		paths = append(paths, legacyassets.PresentRetiredSDDAssetPaths(step.agent, step.dirs)...)
 		if step.settings != "" {
 			paths = append(paths, step.settings)
+		}
+		for _, prompt := range append([]sddPromptFile{step.kimiHub}, step.blocks...) {
+			if prompt.path != "" && legacyassets.RetirablePromptFile(prompt.root, prompt.path) {
+				paths = append(paths, prompt.path)
+			}
 		}
 	}
 	return paths
@@ -2211,11 +2260,17 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 	if !changed {
 		return false, nil
 	}
-	encoded, err := filemerge.MarshalJSONPreservingPermissions(raw, root)
+	// Only the agent value is rewritten, through the same merge as the other
+	// OpenCode-family writers.
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": agents}})
 	if err != nil {
 		return false, err
 	}
-	result, err := filemerge.WriteFileAtomic(settingsPath, append(encoded, '\n'), filemerge.ExistingFileMode(settingsPath, 0o644))
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
+	if err != nil {
+		return false, err
+	}
+	result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	return result.Changed, err
 }
 
@@ -2709,15 +2764,19 @@ func (s openCodeSettingsValidationStep) Run() error {
 }
 
 // openCodeSettingsWriterKeys lists the top-level OpenCode settings keys the
-// planned JSONC-preserving writers touch: routing guidance and Persona write
-// agent, Engram and Context7 write mcp, and the Permission and Theme
-// components write permission and theme. The preflight refuses unsafe JSONC
-// only inside those values, so a key no selected writer touches never blocks
-// the run.
-func openCodeSettingsWriterKeys(components []model.ComponentID, routing bool) []string {
+// planned JSONC-preserving writers touch: the routing step writes agent and
+// default_agent, Persona and persisted model assignments write agent, Engram
+// and Context7 write mcp, and the Permission and Theme components write
+// permission and theme. The routing step writes share only while it is absent,
+// so it never refuses. The preflight refuses unsafe JSONC only inside those
+// values, so a key no selected writer touches never blocks the run.
+func openCodeSettingsWriterKeys(components []model.ComponentID, routing, modelAssignments bool) []string {
 	var keys []string
-	if routing || slices.Contains(components, model.ComponentPersona) {
+	if routing || modelAssignments || slices.Contains(components, model.ComponentPersona) {
 		keys = append(keys, "agent")
+	}
+	if routing {
+		keys = append(keys, "default_agent")
 	}
 	if slices.Contains(components, model.ComponentEngram) || slices.Contains(components, model.ComponentContext7) {
 		keys = append(keys, "mcp")
