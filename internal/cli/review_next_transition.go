@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -345,11 +346,15 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 		if artifactErr != nil {
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
+		openCodeBinding, err := reviewOpenCodeTransitionBinding(status.repositoryRoot, captureBinding, input.RuntimeAgent)
+		if err != nil {
+			return reviewStopTransition("captured_artifacts_unverifiable")
+		}
 		if len(artifacts) != len(selectedLenses) {
-			return reviewMissingCaptureTransition(captureBinding, selectedLenses, artifacts, input.CaptureContext, input.UnachievableLensAttempts, input.RuntimeAgent)
+			return reviewMissingCaptureTransition(openCodeBinding, selectedLenses, artifacts, input.CaptureContext, input.UnachievableLensAttempts, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
-			return reviewProviderRoleTransition("provider_refuter_required", captureBinding, input.ProviderRole, input.RuntimeAgent, nil)
+			return reviewProviderRoleTransition("provider_refuter_required", openCodeBinding, input.ProviderRole, input.RuntimeAgent, nil)
 		}
 		return reviewStopTransition("manual_intervention_required")
 	case reviewtransaction.StateCorrectionRequired:
@@ -371,7 +376,11 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				if input.CapturedProviderTargetedValidatorInconclusive {
 					reason = reviewInconclusiveTargetedValidationReason
 				}
-				return reviewProviderRoleTransition(reason, validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
+				openCodeBinding, err := reviewOpenCodeTransitionBinding(status.repositoryRoot, validationBinding, input.RuntimeAgent)
+				if err != nil {
+					return reviewStopTransition("captured_artifacts_unverifiable")
+				}
+				return reviewProviderRoleTransition(reason, openCodeBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
 			}
 			if input.CapturedProviderTargetedValidatorInconclusive || input.CapturedProviderTargetedValidator {
 				return reviewStopTransition("manual_intervention_required")
@@ -1254,6 +1263,27 @@ func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionA
 // before running it again". Both collect the same input through the same
 // capture operation and submission descriptor.
 const reviewInconclusiveTargetedValidationReason = "targeted_validation_inconclusive_recapture_required"
+
+// reviewOpenCodeTransitionBinding gives the inputs an OpenCode host collects
+// the sealed rctx3 handle its relay resolves. The relay runs in the host
+// session directory, which names nothing about the review (#5136, #4516), so
+// the handle has to carry its own root. The runtime is the one this STATUS
+// renders for -- the declared --agent, else the lineage's frozen runtime -- so
+// a lineage driven by another runtime is reissued in that runtime's format.
+// Every other runtime keeps the unchanged rctx2 digest.
+func reviewOpenCodeTransitionBinding(root string, binding ReviewTransitionBinding, runtime model.AgentID) (ReviewTransitionBinding, error) {
+	if runtime != model.AgentOpenCode || binding.RepositoryContext == "" {
+		return binding, nil
+	}
+	handle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(context.Background(), root, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+	})
+	if err != nil {
+		return ReviewTransitionBinding{}, err
+	}
+	binding.RepositoryContext = handle
+	return binding, nil
+}
 
 func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target, repositoryRoot string, repositoryContext ...string) ReviewTransitionBinding {
 	contextHandle := ""

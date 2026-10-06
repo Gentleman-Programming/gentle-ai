@@ -540,6 +540,17 @@ func rctx2ReviewRepositoryContextForTest(t *testing.T, repo string, binding revi
 	return handle
 }
 
+// openCodeReviewRepositoryContextForTest issues the sealed rctx3 handle OpenCode
+// collect inputs carry; the relay resolves it from any process cwd.
+func openCodeReviewRepositoryContextForTest(t *testing.T, repo string, binding reviewtransaction.ReviewRepositoryContextBinding) string {
+	t.Helper()
+	handle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(t.Context(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
+}
+
 func replaceReviewContextArgument(t *testing.T, args []string, handle string) []string {
 	t.Helper()
 	return replaceReviewArgument(t, args, "--repository-context", handle)

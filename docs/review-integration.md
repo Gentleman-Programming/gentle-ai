@@ -44,6 +44,17 @@ A session in repository A may review a nested target in unrelated repository B o
 
 This lifecycle is available only to Claude Code, Codex, OpenCode, and Pi. Unsupported runtimes fail before repository or authority mutation.
 
+### Repository context handles
+
+The provider-issued `repository_context` stays opaque (#3797). Its format depends on the runtime that STATUS renders for: the declared `--agent`, else the lineage's frozen runtime.
+
+| Handle | Issued to | Resolution |
+| --- | --- | --- |
+| `rctx2_` + sha256 hex | Claude Code, Codex, Pi, manual, and every START/STATUS envelope | A digest over repository identity, lineage, target, and revision, verified against the caller's repository (`--cwd`). |
+| `rctx3_` + unpadded base64url | OpenCode collect inputs and provider tasks only (#5136, #4516) | Seals B's canonical root and identity digest with AES-256-GCM under a private per-user key, `~/.gentle-ai/review-context.key` (32 bytes, mode `0600`, created on first use). Go opens the repository at the sealed root only, re-derives the digest, and requires live authority. Host cwd, worktree registries, and submodule lists never take part. |
+
+The OpenCode relay resolves `rctx3` only; given `rctx2`, it refuses and names the OpenCode STATUS that reissues the Task. Other commands dispatch by prefix, so an OpenCode host can run `capture-result`, `capture-unachievable`, or `lens-context` with its collect input from any cwd. A tampered handle, another user's handle, a moved or replaced root, or stale authority refuses without mutation. An unsafe key file refuses with its repair.
+
 ## Atomic lifecycle
 
 ### 1. Selectorless STATUS preflights only

@@ -165,6 +165,9 @@ func captureProviderValidatorSlotWithResult(r *journeyRun, lineage string, passe
 		input.ProviderTask == nil || input.ProviderTask.Role != "targeted-validator" || input.ProviderTask.Prompt == "" {
 		return fmt.Errorf("provider slot task = %+v", input)
 	}
+	if err := assertSealedOpenCodeRepositoryContext(input.ProviderTask.Prompt, r.sandbox.Repo, r.sandbox.Home); err != nil {
+		return err
+	}
 	originalEvidence := "original acceptance check passed"
 	if !passed {
 		originalEvidence = "the corrected candidate still fails the original criterion"

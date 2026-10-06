@@ -296,7 +296,13 @@ func reviewLensContextBudgetProbe(
 	}
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
-	repositoryContext, err := reviewtransaction.DeriveReviewRepositoryContextHandle(assemblyContext, repo, reviewtransaction.ReviewRepositoryContextBinding{
+	// Measure with the handle the lens block will really carry: an OpenCode
+	// lineage relays the sealed rctx3 handle, which is longer than rctx2.
+	deriveContext := reviewtransaction.DeriveReviewRepositoryContextHandle
+	if state.RuntimeAgent == string(model.AgentOpenCode) {
+		deriveContext = reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle
+	}
+	repositoryContext, err := deriveContext(assemblyContext, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: revision,
 	})
 	if err != nil {

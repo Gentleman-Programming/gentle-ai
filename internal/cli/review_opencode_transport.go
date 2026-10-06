@@ -99,6 +99,21 @@ func openCodeTransportBindingInvalid(detail string) error {
 	return &openCodeTransportBindingError{detail: detail}
 }
 
+// openCodeTransportContextRefusal names why a provider-issued repository
+// context did not resolve, without any path: an unsealed handle and an unsafe
+// sealing key each have their own remedy, and every other cause is a handle
+// that does not commit to this binding and live repository.
+func openCodeTransportContextRefusal(err error) error {
+	switch {
+	case errors.Is(err, reviewtransaction.ErrUnsealedReviewRepositoryContext):
+		return openCodeTransportStaleAuthority("Task repository context is not the sealed rctx3 handle OpenCode STATUS issues; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --next-transition` to obtain the current provider-issued Task")
+	case errors.Is(err, reviewtransaction.ErrReviewRepositoryContextKeyUnsafe):
+		return openCodeTransportBindingInvalid(reviewtransaction.ErrReviewRepositoryContextKeyUnsafe.Error())
+	default:
+		return openCodeTransportBindingInvalid("Task repository context does not match the repository and binding it commits to")
+	}
+}
+
 type openCodeTransportTaskBinding struct {
 	LineageID         string
 	Revision          string
@@ -398,12 +413,14 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt, agent string) 
 	requested := reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
 	}
-	// OpenCode exposes the host process cwd but not the Task target cwd. Resolve
-	// the opaque binding only through Git's registered sibling worktrees, then
-	// keep all authority, materialization, and capture operations on that root.
-	root, contextBinding, err := reviewtransaction.ResolveReviewRepositoryContextBindingFromHost(ctx, ".", binding.RepositoryContext, requested)
+	// The relay runs in the host session directory, which says nothing about
+	// the review: it may be a superproject, a git-less parent, or another
+	// repository. The OpenCode-issued rctx3 handle seals the root it was
+	// derived for, so it alone selects the repository; every authority,
+	// materialization, and capture operation below stays on that root.
+	root, contextBinding, err := reviewtransaction.ResolveOpenCodeReviewRepositoryContextBinding(ctx, binding.RepositoryContext, requested)
 	if err != nil {
-		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task repository context does not match the repository and binding it commits to")
+		return openCodeTransportSession{}, openCodeTransportContextRefusal(err)
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, binding.LineageID, false)
 	if err != nil {

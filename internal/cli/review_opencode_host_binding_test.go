@@ -28,16 +28,16 @@ func hostLensReviewFixture(t *testing.T) (repo string, store reviewtransaction.C
 	t.Helper()
 	repo, _, store, record = newArtifactReview(t, true)
 	lens = record.State.SelectedLenses[0]
-	contextHandle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+	contextHandle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	subject = mustArtifactSubject(t, repo, record, lens, 0)
-	// The relay runs in a host worktree, which may differ from the provider-bound
-	// repository. The rctx2 handle discovers exactly one common-directory
-	// registered target, whose compact authority admits review.
+	// The relay runs in the host session directory, which may differ from the
+	// provider-bound repository; the OpenCode-issued rctx3 handle names its
+	// own sealed root.
 	t.Chdir(repo)
 	return repo, store, record, lens, contextHandle, subject
 }

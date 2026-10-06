@@ -127,37 +127,6 @@ func TestOpenCodeReviewTransportResolvesARegisteredTargetWorktreeFromTheHost(t *
 	}
 }
 
-func TestOpenCodeReviewTransportRefusesAnUnrelatedHostAndReoffersTargetSlots(t *testing.T) {
-	if testing.Short() {
-		t.Skip("requires git worktrees and relay subprocesses")
-	}
-	reviewEnabledHome(t)
-	target, started, store, record := newArtifactReview(t, false)
-	host := initReviewCLIRepo(t)
-	t.Chdir(host)
-	start := openCodeLensTransportStart(t, target, record, record.State.SelectedLenses[0])
-	payload, err := json.Marshal(start)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	err = runReviewOpenCodeTransport(nil, bytes.NewReader(payload), &output)
-	var bindingErr *openCodeTransportBindingError
-	if !errors.As(err, &bindingErr) || output.Len() != 0 {
-		t.Fatalf("unrelated host transport = error %v, output %q", err, output.String())
-	}
-	assertOpenCodeRelayAuthorityUnchanged(t, target, started.LineageID, store, record)
-	var statusOutput bytes.Buffer
-	if err := RunReviewStatus([]string{"--cwd", target, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition"}, &statusOutput); err != nil {
-		t.Fatal(err)
-	}
-	var status ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
-	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != len(record.State.SelectedLenses) {
-		t.Fatalf("unrelated host did not reoffer B reviewer slots: %#v", status.NextTransition)
-	}
-}
-
 func TestOpenCodeReviewTransportRefusesStandaloneCompletionWithoutAuthorityMutation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires git worktrees and relay subprocesses")
@@ -542,7 +511,7 @@ func TestOpenCodeReviewTransportRefuterClosesThroughSharedGoReducer(t *testing.T
 		t.Fatal(err)
 	}
 	record = updated
-	contextHandle := rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+	contextHandle := openCodeReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	task, err := newReviewProviderTask(reviewerprovider.RoleRefuter, ReviewTransitionBinding{
@@ -890,9 +859,9 @@ type openCodeTransportRelay struct {
 
 func startOpenCodeTransportRelay(t *testing.T, repo string, start openCodeTransportEnvelope) openCodeTransportRelay {
 	t.Helper()
-	// The relay runs in OpenCode's host worktree, which may differ from the
-	// provider-bound repository. The rctx2 handle discovers exactly one
-	// common-directory registered target, whose compact authority admits review.
+	// The relay runs in OpenCode's host session directory, which may differ
+	// from the provider-bound repository; the OpenCode-issued rctx3 handle
+	// names its own sealed root, so the session directory never selects it.
 	t.Chdir(repo)
 	inputReader, input := io.Pipe()
 	outputReader, output := io.Pipe()
@@ -955,7 +924,7 @@ func (relay openCodeTransportRelay) closeWithoutCompletion() error {
 
 func openCodeLensTransportStart(t *testing.T, repo string, record reviewtransaction.CompactRecord, lens string) openCodeTransportEnvelope {
 	t.Helper()
-	contextHandle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+	contextHandle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil {
@@ -1312,7 +1281,7 @@ func TestOpenCodeReviewTransportRefusesHostAgentNotBoundToTheTaskRole(t *testing
 	if lens == otherLens {
 		otherLens = reviewtransaction.LensResilience
 	}
-	contextHandle := rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+	contextHandle := openCodeReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	roleTask := func(role reviewProviderRole) string {
