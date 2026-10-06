@@ -70,6 +70,11 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 				continue
 			}
 			if entry["__managed_by"] == "gentle-ai/sdd" {
+				if strings.HasPrefix(name, "sdd-") {
+					// Retired SDD agents belong to the settings retirement
+					// (retiredSDDOperation), as in sync.
+					continue
+				}
 				// Mirror the migration ownership rules without requiring a sync.
 				if opencodeagents.LegacyOwned(agentID, name) {
 					delete(agents, name)
