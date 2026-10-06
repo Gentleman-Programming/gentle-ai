@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
@@ -66,6 +67,19 @@ func TestFullAgentKilocodeUninstallRemovesReleasedPluginBytes(t *testing.T) {
 	plan, err := svc.buildPlan([]model.AgentID{model.AgentKilocode}, allManagedComponents)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A failed plugin removal must name Kilocode, so its uninstall stays
+	// incomplete and the rerun hint never removes OpenCode.
+	for name := range owned {
+		assertOperationAgents(t, plan, filepath.Join(pluginDir, name), []model.AgentID{model.AgentKilocode})
+	}
+	assertOperationAgents(t, plan, pluginDir, []model.AgentID{model.AgentKilocode})
+	// The model-variants cache is shared with OpenCode, which may stay
+	// installed; only an OpenCode removal clears it.
+	for _, op := range plan.operations {
+		if strings.Contains(op.path, "model-variants.json") {
+			t.Errorf("Kilocode-only uninstall plans shared cache removal: %s", op.path)
+		}
 	}
 	result, err := svc.executePlan(plan, []model.AgentID{model.AgentKilocode})
 	if err != nil {

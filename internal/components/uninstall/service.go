@@ -1376,13 +1376,17 @@ func retainedOpenCodePluginOperations(adapter agents.Adapter, homeDir string) []
 		return removeEmpty(path)
 	}
 	ops = append(ops, dirOp)
-	for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
-		op := removeFile(path)
-		op.agents = []model.AgentID{model.AgentOpenCode}
-		ops = append(ops, op)
+	// The model-variants cache is shared by the OpenCode family; only an
+	// OpenCode removal clears it, as before Kilocode plugins were removed.
+	if adapter.Agent() == model.AgentOpenCode {
+		for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
+			ops = append(ops, removeFile(path))
+		}
 	}
+	// Attribute every operation to the agent being removed, so a failure keeps
+	// that agent's uninstall incomplete and names it in the rerun hint.
 	for i := range ops {
-		ops[i].agents = []model.AgentID{model.AgentOpenCode}
+		ops[i].agents = []model.AgentID{adapter.Agent()}
 	}
 	return ops
 }
