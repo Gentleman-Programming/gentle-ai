@@ -2268,16 +2268,36 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 }
 
 // userDeniesQuestion reports a user deny that covers the question tool, either
-// global or on the orchestrator. An agent rule outranks it at runtime, so an
-// "allow" written beside it would override the user's policy.
+// global or on the orchestrator. Agent rules are evaluated after global ones
+// and the last match wins, so an "allow" written beside it would override the
+// user's policy. Besides the `permission` map, OpenCode 2.x reads the native
+// `permissions` rule list and the root `tools` map, and 1.x turns an agent's
+// `tools` into permissions its `permission` map overrides.
 func userDeniesQuestion(root, orchestrator map[string]any) bool {
-	for _, permission := range []any{root["permission"], orchestrator["permission"]} {
+	nativeAgents, _ := root["agents"].(map[string]any)
+	native, _ := nativeAgents["gentle-orchestrator"].(map[string]any)
+	for _, scope := range []map[string]any{root, orchestrator, native} {
+		permission := scope["permission"]
 		if permission == "deny" {
 			return true
 		}
 		rules, _ := permission.(map[string]any)
 		if rules["*"] == "deny" || rules["question"] == "deny" {
 			return true
+		}
+		if patterns, _ := rules["question"].(map[string]any); patterns["*"] == "deny" {
+			return true
+		}
+		if tools, _ := scope["tools"].(map[string]any); tools["question"] == false {
+			return true
+		}
+		list, _ := scope["permissions"].([]any)
+		for _, item := range list {
+			rule, _ := item.(map[string]any)
+			resource, set := rule["resource"]
+			if (rule["action"] == "*" || rule["action"] == "question") && rule["effect"] == "deny" && (!set || resource == "*") {
+				return true
+			}
 		}
 	}
 	return false

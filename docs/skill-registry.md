@@ -78,7 +78,7 @@ Read these exact files before reading, writing, reviewing, testing, or creating 
 
 The subagent then reads those files. This keeps the original `SKILL.md` as the source of truth and avoids breaking author intent through automatic summarization.
 
-OpenCode delegators list installed skills by the identifier the native `skill` tool takes instead of a path. Installed skills live in the OpenCode config directory, outside the workspace, where a delegated agent may be denied reads; the `skill` tool loads them by `<name>` on OpenCode 1.x and by `<id>`, the skill's directory name, on OpenCode 2.x, and `<available_skills>` lists the identifier each major expects. Skill files inside the workspace are still listed by their workspace-relative `SKILL.md` path.
+OpenCode delegators list installed skills by the identifier the native `skill` tool takes instead of a path. Installed skills live in the OpenCode config directory, outside the workspace, where a delegated agent may be denied reads; the `skill` tool loads them by `<name>` on OpenCode 1.x and by the skill's `<id>` as listed (its directory name for `<dir>/SKILL.md`) on OpenCode 2.x, and `<available_skills>` lists the identifier each major expects. Skill files inside the workspace are still listed by their workspace-relative `SKILL.md` path.
 
 ## Skill Authoring Flow
 
