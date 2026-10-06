@@ -365,6 +365,39 @@ func committedRangeReviewRepo(t *testing.T) string {
 	return repo
 }
 
+func TestNegotiatedStatusExplicitBaseRefPreservesCommitForStart(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := committedRangeReviewRepo(t)
+	baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/remotes/origin/main"))
+	baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", baseCommit+"^{tree}"))
+	if baseCommit == baseTree {
+		t.Fatal("fixture commit and tree must differ")
+	}
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--base-ref", baseCommit, "--committed-only"}, &output); err != nil {
+		t.Fatalf("explicit committed STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Projection.BaseTree != baseTree {
+		t.Fatalf("projection base_tree = %q, want tree %q", status.Projection.BaseTree, baseTree)
+	}
+	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("next_transition = %#v, want executable START", status.NextTransition)
+	}
+	arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arguments["base-ref"] != baseCommit || arguments["committed-only"] != "true" {
+		t.Fatalf("START selectors = %#v, want original commit %q and committed-only=true", arguments, baseCommit)
+	}
+	if arguments["base-ref"] == baseTree || strings.Contains(status.NextTransition.Execute.Command, "--base-ref="+baseTree) {
+		t.Fatalf("START emitted the base tree %q instead of the explicit commit", baseTree)
+	}
+}
+
 // TestNegotiatedStatusDerivedCommittedRangePayloadValidatesAgainstPublishedSchema
 // is the execution-based proof that the real selectorless STATUS payload for a
 // committed-range candidate still validates against the published status-v7
