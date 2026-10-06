@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
@@ -72,11 +74,85 @@ const reviewPiHostRelayContractEnvironment = "GENTLE_PI_REVIEW_RELAY_CONTRACT"
 type reviewImmutableRuntimePolicy struct {
 	Eligible  bool
 	Transport reviewImmutableTransport
+	// Refusal, when set, is the complete operator-facing reason a host
+	// condition refused an otherwise supported runtime.
+	Refusal error
+}
+
+// reviewOpenCodeRuntimeProbe memoizes the OpenCode runtime answer, failures
+// included, for the life of the process, keyed by the executable PATH
+// resolves. Every gate in one process (assess, STATUS, START, consent, relay,
+// capture) therefore reads the same answer and eligibility cannot flap
+// between them (#4984, #5058, #5117).
+var reviewOpenCodeRuntimeProbe struct {
+	sync.Mutex
+	answers map[string]reviewOpenCodeRuntimeAnswer
+}
+
+type reviewOpenCodeRuntimeAnswer struct {
+	major opencode.RuntimeMajor
+	err   error
+}
+
+func reviewOpenCodeRuntimeMajor() (opencode.RuntimeMajor, error) {
+	executable, err := exec.LookPath("opencode")
+	if err != nil {
+		executable = ""
+	}
+	reviewOpenCodeRuntimeProbe.Lock()
+	defer reviewOpenCodeRuntimeProbe.Unlock()
+	if answer, ok := reviewOpenCodeRuntimeProbe.answers[executable]; ok {
+		return answer.major, answer.err
+	}
+	major, err := opencode.DetectRuntimeMajor(context.Background())
+	if reviewOpenCodeRuntimeProbe.answers == nil {
+		reviewOpenCodeRuntimeProbe.answers = make(map[string]reviewOpenCodeRuntimeAnswer)
+	}
+	reviewOpenCodeRuntimeProbe.answers[executable] = reviewOpenCodeRuntimeAnswer{major: major, err: err}
+	return major, err
+}
+
+// reviewOpenCodeRuntimeRefusal checks the OpenCode host conditions. The relay
+// declaration and the detected runtime must agree: the V1 plugin declares
+// nothing and runs on V1; the managed V2 plugin declares exactly the V2 relay
+// contract and runs on V2. Any other declaration refuses before the PATH
+// probe, and a disagreeing pair refuses too, so a V2 host whose PATH resolves
+// a coexisting V1 binary (or the reverse) never inherits the other runtime's
+// capability. Neither the declaration nor version evidence alone can enable
+// the transport.
+func reviewOpenCodeRuntimeRefusal() error {
+	declaration := os.Getenv(openCodeRelayContractEnvironment)
+	if declaration != "" && declaration != openCodeRelayContractV2 {
+		return reviewOpenCodeRuntimeUnproven()
+	}
+	major, err := reviewOpenCodeRuntimeMajor()
+	if errors.Is(err, opencode.ErrRuntimeVersionTimeout) {
+		// refusal:by-design world-action: an unproven runtime cannot receive immutable review authority; the exit is re-running once the host answers the probe
+		return errors.New("OpenCode immutable receipt-review eligibility could not be proven because `opencode --version` timed out in this process; nothing was started, so re-run the same command once `opencode --version` answers promptly")
+	}
+	want := opencode.RuntimeV1
+	if declaration == openCodeRelayContractV2 {
+		want = opencode.RuntimeV2
+	}
+	if err != nil || major != want {
+		return reviewOpenCodeRuntimeUnproven()
+	}
+	return nil
+}
+
+// reviewOpenCodeRuntimeUnproven names the host condition OpenCode failed, so a
+// supported-runtime list that includes OpenCode does not contradict it.
+func reviewOpenCodeRuntimeUnproven() error {
+	return fmt.Errorf("the active runtime is not eligible for immutable receipt review: OpenCode qualifies only when `opencode --version` reports a stable 1.x runtime with no relay declaration, or a stable 2.x runtime under the managed V2 plugin's relay declaration%s", reviewTransportRefusalExitGuidance())
 }
 
 // reviewImmutableRuntimeCapability is the compiled receipt-review boundary.
 // Generic adapter features and caller-supplied claims cannot expand it.
 func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntimePolicy {
+	return reviewImmutableRuntimeCapabilityChecking(agent, reviewOpenCodeRuntimeRefusal)
+}
+
+func reviewImmutableRuntimeCapabilityChecking(agent model.AgentID, openCodeRuntimeRefusal func() error) reviewImmutableRuntimePolicy {
 	policy := reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
 	switch agent {
 	case model.AgentClaudeCode:
@@ -84,26 +160,8 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentCodex:
 		policy.Eligible = true
 	case model.AgentOpenCode:
-		// The relay declaration and the detected runtime must agree: the V1
-		// plugin declares nothing and runs on V1; the managed V2 plugin declares
-		// exactly the V2 relay contract and runs on V2. Any other declaration
-		// refuses before the PATH probe, and a disagreeing pair refuses too, so
-		// a V2 host whose PATH resolves a coexisting V1 binary (or the reverse)
-		// never inherits the other runtime's capability. Neither the
-		// declaration nor version evidence alone can enable the transport.
-		declaration := os.Getenv(openCodeRelayContractEnvironment)
-		if declaration != "" && declaration != openCodeRelayContractV2 {
-			return policy
-		}
-		major, err := opencode.DetectRuntimeMajor(context.Background())
-		if err != nil {
-			return policy
-		}
-		want := opencode.RuntimeV1
-		if declaration == openCodeRelayContractV2 {
-			want = opencode.RuntimeV2
-		}
-		if major != want {
+		if refusal := openCodeRuntimeRefusal(); refusal != nil {
+			policy.Refusal = refusal
 			return policy
 		}
 		policy.Eligible = true
@@ -145,10 +203,12 @@ func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() 
 
 // reviewTransportSupportedRuntimeIDs derives the actionable runtime list from
 // the compiled boundary. A refused runtime cannot appear as a substitute.
+// OpenCode's host conditions are never probed here: the list names what this
+// binary supports, and an OpenCode refusal names its own host condition.
 func reviewTransportSupportedRuntimeIDs() []string {
 	supported := make([]string, 0)
 	for _, agent := range catalog.AllAgents() {
-		if reviewImmutableRuntimeCapability(agent.ID).supportsImmutableReceiptReview() {
+		if reviewImmutableRuntimeCapabilityChecking(agent.ID, func() error { return nil }).supportsImmutableReceiptReview() {
 			supported = append(supported, string(agent.ID))
 		}
 	}
@@ -218,6 +278,9 @@ func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
 	}
 	identity := model.AgentID(agent)
 	capability := reviewImmutableRuntimeCapability(identity)
+	if capability.Refusal != nil {
+		return "", capability.Refusal
+	}
 	if !capability.Eligible {
 		// refusal:by-design world-action: runtimes outside the fixed RDD policy cannot receive immutable review authority
 		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalGuidanceFor(identity))
@@ -272,6 +335,9 @@ func reviewCaptureRuntimeWithBoundTransport(agent string) (model.AgentID, error)
 	}
 	identity := model.AgentID(agent)
 	capability := reviewCaptureBoundRuntimeCapability(identity)
+	if capability.Refusal != nil {
+		return "", capability.Refusal
+	}
 	if !capability.Eligible {
 		// refusal:by-design world-action: runtimes outside the fixed RDD policy cannot receive immutable review authority
 		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalGuidanceFor(identity))

@@ -32,6 +32,7 @@ func TestOpenCodeTransportCapabilityRequiresMatchingRuntimeAndDeclaration(t *tes
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv(openCodeRelayContractEnvironment, test.declaration)
+			freshOpenCodeRuntimeProbe(t)
 			probed := false
 			opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
 				probed = true
@@ -68,6 +69,7 @@ func TestOpenCodeV2TransportDeclarationCannotInheritV1(t *testing.T) {
 	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
 	old := opencode.VersionRunnerOverride
 	t.Cleanup(func() { opencode.VersionRunnerOverride = old })
+	freshOpenCodeRuntimeProbe(t)
 	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
 		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}

@@ -274,3 +274,17 @@ func TestPiHostRelayContractHandshakeGatesAdmission(t *testing.T) {
 		t.Fatalf("declared handshake refused: %#v", capability)
 	}
 }
+
+// freshOpenCodeRuntimeProbe forgets the process-wide OpenCode runtime answer
+// before and after a test that installs its own `opencode --version` stub, so
+// one test's memoized answer never decides another's.
+func freshOpenCodeRuntimeProbe(t *testing.T) {
+	t.Helper()
+	forget := func() {
+		reviewOpenCodeRuntimeProbe.Lock()
+		defer reviewOpenCodeRuntimeProbe.Unlock()
+		reviewOpenCodeRuntimeProbe.answers = nil
+	}
+	forget()
+	t.Cleanup(forget)
+}
