@@ -11,6 +11,8 @@
 // It also writes the OpenCode registry (see opencode.go): the settings values
 // and shared prompt files releases wrote for the retired SDD agents of the
 // OpenCode family, proven against every release's settings golden render.
+// And the asset registry (see assets.go): every retired SDD skill, slash
+// command, and Windsurf workflow render, proven against the golden renders.
 //
 // SDD was retired in v4.0.0, so the release set is closed at that tag and
 // later releases never change the registry. Fetch tags first:
@@ -105,10 +107,10 @@ func (r *registry) has(digest string) bool {
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		fail("usage: gen-sdd-agent-digests <native-agents.go> <opencode.go>")
+	if len(os.Args) != 4 {
+		fail("usage: gen-sdd-agent-digests <native-agents.go> <opencode.go> <assets.go>")
 	}
-	output, openCodeOutput := os.Args[1], os.Args[2]
+	output, openCodeOutput, assetOutput := os.Args[1], os.Args[2], os.Args[3]
 	root = strings.TrimSpace(git("rev-parse", "--show-toplevel"))
 	tags := strings.Fields(git("-c", "versionsort.suffix=-", "tag", "-l", "v*", "--sort=v:refname"))
 	for _, anchor := range anchors {
@@ -119,7 +121,8 @@ func main() {
 	tags = tags[:slices.Index(tags, closingTag)+1]
 	committedTags, committedDigests := readCommitted(output)
 	openCodeTags, openCodeDigests := readCommitted(openCodeOutput)
-	for file, recorded := range map[string][]string{output: committedTags, openCodeOutput: openCodeTags} {
+	assetTags, assetDigests := readCommitted(assetOutput)
+	for file, recorded := range map[string][]string{output: committedTags, openCodeOutput: openCodeTags, assetOutput: assetTags} {
 		for _, tag := range recorded {
 			if !slices.Contains(tags, tag) {
 				fail("release tag %s recorded in %s is missing locally; the local tag set is incomplete; run git fetch --tags", tag, file)
@@ -130,10 +133,11 @@ func main() {
 	blobDigest := map[string]string{}
 	agents, parents := newRegistry(), newRegistry()
 	openCode := newOpenCodeHarvest()
+	assets := newAssetHarvest()
 	for _, tag := range tags {
 		templates := map[string]string{}
 		files := map[string]string{}
-		for _, line := range strings.Split(git("ls-tree", "-r", tag, "--", "internal/assets", profilesFile, promptsFile, settingsGold), "\n") {
+		for _, line := range strings.Split(git("ls-tree", "-r", tag, "--", "internal/assets", profilesFile, promptsFile, goldenDir, sddInjectFile, sddCommandsFile), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) != 4 || fields[1] != "blob" {
 				continue
@@ -169,9 +173,10 @@ func main() {
 		}
 		verifyGoldens(tag, templates)
 		openCode.collect(tag, files)
+		assets.collect(tag, files)
 	}
 	settingsVerified := openCode.verifyGoldens()
-	fmt.Fprintf(os.Stderr, "gen-sdd-agent-digests: %d golden renders and %d OpenCode settings entries verified across %d releases\n", verifiedGoldens, settingsVerified, len(tags))
+	fmt.Fprintf(os.Stderr, "gen-sdd-agent-digests: %d golden renders and %d OpenCode settings entries verified across %d releases\n", verifiedGoldens+assets.verified, settingsVerified, len(tags))
 	if len(agents.order) == 0 {
 		fail("no SDD agent templates found in any release")
 	}
@@ -183,6 +188,11 @@ func main() {
 	for _, digest := range committedDigests {
 		if !agents.has(digest) && !parents.has(digest) {
 			fail("digest %s in %s was not regenerated; the local tag set is incomplete; run git fetch --tags", digest, output)
+		}
+	}
+	for _, digest := range assetDigests {
+		if !assets.assets.has(digest) {
+			fail("digest %s in %s was not regenerated; the local tag set is incomplete; run git fetch --tags", digest, assetOutput)
 		}
 	}
 	for _, digest := range openCodeDigests {
@@ -197,6 +207,7 @@ func main() {
 	parents.write(&b, "releasedPreLedgerNativeAgentDigests", "// releasedPreLedgerNativeAgentDigests maps <family>/<file> to the normalized\n// digest of every retained native agent file a release before "+closingTag+"\n// shipped that declared SDD subagents.\n")
 	writeSource(output, b.Bytes())
 	openCode.write(openCodeOutput, tags)
+	assets.write(assetOutput, tags)
 }
 
 func writeTags(b *bytes.Buffer, tags []string) {
