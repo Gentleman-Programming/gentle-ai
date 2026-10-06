@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -306,6 +307,79 @@ func TestRemoveOpenCodeOrchestratorQuestionPermission(t *testing.T) {
 				permission, _ := entry["permission"].(map[string]any)
 				if !reflect.DeepEqual(permission, map[string]any{"question": tc.question}) {
 					t.Fatalf("user question permission not preserved alone: %s", body)
+				}
+			})
+		}
+	}
+}
+
+// TestUninstallKeepsUnprovenOrchestratorQuestionAllow: question "allow" is
+// removed only inside the permission object install writes, where every other
+// rule is a Gentle AI delegation grant. Anywhere else the same value may be
+// the user's, so uninstall keeps it and reports it.
+func TestUninstallKeepsUnprovenOrchestratorQuestionAllow(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		for _, tc := range []struct {
+			name       string
+			permission map[string]any
+			owned      bool
+		}{
+			{name: "install shape", permission: map[string]any{"question": "allow", "task": map[string]any{"jd-judge-b": "allow", "*": "deny"}}, owned: true},
+			{name: "user rule beside it", permission: map[string]any{"question": "allow", "bash": "ask", "task": map[string]any{"jd-judge-b": "allow"}}},
+			{name: "user delegation target", permission: map[string]any{"question": "allow", "task": map[string]any{"my-agent": "allow"}}},
+			{name: "no delegation grants", permission: map[string]any{"question": "allow"}},
+		} {
+			t.Run(string(agent)+"/"+tc.name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+				svc, err := NewService(home, t.TempDir(), "dev")
+				if err != nil {
+					t.Fatal(err)
+				}
+				svc.snapshotter = stubSnapshotter{}
+				adapter, _ := svc.registry.Get(agent)
+				path := adapter.SettingsPath(home)
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := json.Marshal(map[string]any{"agent": map[string]any{"gentle-orchestrator": map[string]any{
+					"prompt":     "My orchestrator notes",
+					"permission": tc.permission,
+				}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				result, err := svc.PartialUninstall([]model.AgentID{agent}, allManagedComponents)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var after map[string]any
+				if err := json.Unmarshal(body, &after); err != nil {
+					t.Fatal(err)
+				}
+				permission, _ := after["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["permission"].(map[string]any)
+				reported := slices.ContainsFunc(result.ManualActions, func(action string) bool {
+					return strings.Contains(action, path) && strings.Contains(action, "question")
+				})
+				if tc.owned {
+					if _, kept := permission["question"]; kept || reported {
+						t.Fatalf("Gentle AI question rule kept=%v reported=%v: %s %v", kept, reported, body, result.ManualActions)
+					}
+					return
+				}
+				if permission["question"] != "allow" {
+					t.Fatalf("unproven question rule removed: %s", body)
+				}
+				if !reported {
+					t.Fatalf("kept question rule not reported: %v", result.ManualActions)
 				}
 			})
 		}
