@@ -149,10 +149,20 @@ native `agents` entry):
   and resource `"*"` or no resource.
 
 Agent rules are evaluated after global ones and the last match wins, so an
-agent-level `"allow"` would override that deny. Uninstall removes the `"allow"` only when the
+agent-level `"allow"` would override that deny. Uninstall removes the `"allow"`
+only when the
 orchestrator's permission object still has the shape install wrote, `question`
 beside a `task` map of Gentle AI delegation grants. Otherwise it keeps the
 value and lists it under manual actions.
+
+Every install and sync writer of `opencode.jsonc` rewrites only the top-level
+values it owns (the managed agents, `default_agent`, `share`, `mcp`,
+`permission`, `theme`), so comments and trailing commas elsewhere survive on
+both runtime majors. Before any file changes, install and sync refuse a document
+those writers cannot edit that way: malformed JSONC, duplicate keys, or an
+escaped key spelling or a comment inside a value a selected writer touches. Move
+the comment outside that value, or spell the key plainly, and retry. Kilocode
+goes through the same writers, but its `opencode.json` is strict JSON.
 
 Before writing V2 managed plugins, install and sync check the SDK installed in
 the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so

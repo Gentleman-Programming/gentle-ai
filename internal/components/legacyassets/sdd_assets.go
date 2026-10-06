@@ -19,6 +19,8 @@ const (
 	sddSkillKind    = "skills/"
 	sddCommandKind  = "commands/"
 	sddWorkflowKind = "workflows/"
+	sddProfileKind  = "profiles/"
+	sddModuleKind   = "modules/"
 	sddSharedDir    = "_shared/"
 )
 
@@ -45,19 +47,42 @@ func SDDAssetDigest(content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// RetiredSDDAssetDigest is the registry digest of content installed at key:
+// Codex profiles normalize only their substituted values, every other file
+// through NormalizeSDDAsset.
+func RetiredSDDAssetDigest(key, content string) string {
+	if strings.HasPrefix(key, sddProfileKind) {
+		sum := sha256.Sum256([]byte(NormalizeCodexProfile(content)))
+		return hex.EncodeToString(sum[:])
+	}
+	return SDDAssetDigest(content)
+}
+
 // SDDAssetDirs are the directories where one runtime received retired SDD
 // files. An empty field means the runtime has no such directory.
 type SDDAssetDirs struct {
 	Skills, Commands, Workflows string
+	// CodexHome received the sdd-{strong,mid,cheap} Codex profiles.
+	CodexHome string
+	// KimiHome is the legacy Kimi root (~/.kimi) that received the SDD
+	// orchestrator Jinja module.
+	KimiHome string
 }
 
-// RetiredSDDAssetPaths lists every retired SDD skill, slash command, and
-// workflow path under dirs, sorted. Install, sync, and upgrade snapshot these
-// paths and retirement inspects only them.
-func RetiredSDDAssetPaths(agent model.AgentID, dirs SDDAssetDirs) []string {
+// PresentRetiredSDDAssetPaths lists, sorted, the retired SDD skill, slash
+// command, workflow, Codex profile, and Kimi module paths under dirs that
+// exist and that retirement may touch: none behind a directory that is not a
+// real directory. Install, sync, and upgrade snapshot exactly these, and
+// retirement inspects only the same inventory.
+func PresentRetiredSDDAssetPaths(agent model.AgentID, dirs SDDAssetDirs) []string {
 	var paths []string
 	for _, item := range retiredSDDAssetItems(agent, dirs) {
-		paths = append(paths, item.path)
+		if unsupported, err := unsupportedAncestor(item.root, item.path); err != nil || unsupported != "" {
+			continue
+		}
+		if _, err := os.Lstat(item.path); err == nil {
+			paths = append(paths, item.path)
+		}
 	}
 	slices.Sort(paths)
 	return paths
@@ -90,6 +115,10 @@ func retiredSDDAssetItems(agent model.AgentID, dirs SDDAssetDirs) []sddAssetItem
 			add(dirs.Skills, key, sddSkillKind+strings.SplitN(rel, "/", 2)[0])
 		case dirs.Workflows != "" && strings.HasPrefix(key, sddWorkflowKind):
 			add(dirs.Workflows, key, key)
+		case dirs.CodexHome != "" && strings.HasPrefix(key, sddProfileKind):
+			add(dirs.CodexHome, key, key)
+		case dirs.KimiHome != "" && strings.HasPrefix(key, sddModuleKind):
+			add(dirs.KimiHome, key, key)
 		}
 	}
 	if agent == model.AgentClaudeCode && dirs.Skills != "" {
@@ -107,7 +136,7 @@ func retiredSDDAssetItems(agent model.AgentID, dirs SDDAssetDirs) []sddAssetItem
 // OwnsRetiredSDDAsset reports whether content is a render some release
 // installed at the registry key.
 func OwnsRetiredSDDAsset(key string, content []byte) bool {
-	return len(content) > 0 && slices.Contains(releasedSDDAssetDigests[key], SDDAssetDigest(string(content)))
+	return len(content) > 0 && slices.Contains(releasedSDDAssetDigests[key], RetiredSDDAssetDigest(key, string(content)))
 }
 
 // AssetRetireResult lists the retired SDD files a retirement removed, the
@@ -118,12 +147,12 @@ type AssetRetireResult struct {
 	Removed, Preserved, UnsupportedDirs []string
 }
 
-// RetireSDDAssets removes the retired SDD skills, slash commands, and
-// workflows under dirs whose bytes a release installed. A skill directory is
-// one unit: it is removed only when every inventory file present in it is
-// owned, so an edited skill keeps the references it ships with. Shared SDD
-// references stay while any edited SDD skill remains, since those skills read
-// them. Symlinks, non-regular files, and bytes no release wrote are preserved
+// RetireSDDAssets removes the retired SDD skills, slash commands, workflows,
+// Codex profiles, and Kimi module under dirs whose bytes a release installed.
+// A skill directory is one unit: it is removed only when every inventory file
+// present in it is owned, so an edited skill keeps the references it ships
+// with. Shared SDD references stay while any edited SDD skill remains, since
+// those skills read them. Symlinks, non-regular files, and bytes no release wrote are preserved
 // and reported; files outside the inventory are never inspected. Like the
 // OpenCode prompt retirement, it never enters a directory that is not a real
 // directory, from the runtime root down: the files behind it are the user's,
