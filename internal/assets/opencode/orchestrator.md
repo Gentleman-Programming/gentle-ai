@@ -118,7 +118,7 @@ The canonical native bounded-review contract is injected from the shared provide
 <!-- gentle-ai:opencode-desktop-delegation-progress -->
 #### Delegation Visibility (OpenCode Desktop)
 
-For every native `delegate` or `task` call, emit exactly one concise, assistant-visible status line immediately before the call:
+For every native subagent launch, emit exactly one concise, assistant-visible status line immediately before the call:
 
 `⏳ Delegating {phase} to {agent}...`
 
@@ -151,9 +151,9 @@ This prevents duplicate sub-agent launches that cause "File X has been modified 
 
 ### Sub-Agent Launch Pattern
 
-ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved skill paths from the skill registry. Follow the Skill Resolver Protocol (see `_shared/skill-resolver.md` in the skills directory).
+ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include the matching skills from the skill registry.
 
-The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent's prompt.
+The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching skills into each sub-agent's prompt.
 
 Orchestrator skill resolution (do once per session):
 
@@ -165,15 +165,15 @@ Orchestrator skill resolution (do once per session):
 For each sub-agent launch:
 
 1. Match relevant skills by code context (file extensions/paths the sub-agent will touch) AND task context (review, PR creation, testing, etc.)
-2. Copy matching `SKILL.md` paths into the sub-agent prompt as `## Skills to load before work`
-3. Instruct the sub-agent to read those exact files BEFORE task-specific work
+2. List matching skills in the sub-agent prompt under `## Skills to load before work`: an installed skill (one listed in `<available_skills>`) by its name, and a skill file inside the workspace by its workspace-relative `SKILL.md` path. Never pass an absolute path outside the workspace: a delegated agent may be denied reads there, while the native `skill` tool loads installed skills by name.
+3. Instruct the sub-agent to load each listed skill BEFORE task-specific work: a name with the native `skill` tool, a path with `read`
 
 ### Skill Resolution Feedback
 
 After every delegation that returns a result, check the `skill_resolution` field:
 
-- `paths-injected` -> all good; exact skill paths were passed and loaded
-- `fallback-registry`, `fallback-path`, or `none` -> skill cache was lost; re-read the registry immediately and pass skill paths in subsequent delegations
+- `paths-injected` -> all good; the listed skills were passed and loaded
+- `fallback-registry`, `fallback-path`, or `none` -> skill cache was lost; re-read the registry immediately and pass skills in subsequent delegations
 
 ### Sub-Agent Context Protocol
 

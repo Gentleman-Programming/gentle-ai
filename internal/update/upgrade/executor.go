@@ -246,6 +246,8 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		for _, name := range embeddedFileNames(adapter.EmbeddedSubAgentsDir(), diagnostics) {
 			add(filepath.Join(adapter.SubAgentsDir(homeDir), name))
 		}
+		// The upgraded binary's sync retires native SDD agents (#5157).
+		add(legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir))...)
 	}
 
 	if adapter.SupportsSkills() {

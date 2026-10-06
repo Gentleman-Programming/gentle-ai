@@ -110,6 +110,12 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 			if len(task) == 0 && task != nil {
 				delete(permission, "task")
 			}
+			// The routing owner writes exactly "allow" (#4816); any other
+			// question rule is the user's.
+			if permission["question"] == "allow" {
+				delete(permission, "question")
+				changed = true
+			}
 			if len(permission) == 0 && permission != nil {
 				delete(orchestrator, "permission")
 			}

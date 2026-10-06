@@ -590,6 +590,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			apply = append(apply, nativeReviewAgentStep{id: "sync:agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, changedFiles: &r.changedFiles, state: r.state})
 		}
 	}
+	// After the native installer: it rewrites a Gentle-owned v3 Kimi
+	// gentleman.yaml, so the SDD subagents it declared can be retired now.
+	apply = append(apply, retiredSDDAgentSteps("sync:agent:retire-sdd:", r.homeDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
 
 	// Routing guidance is refreshed per agent and outside the component loop, for
 	// the same reason install schedules it there: a persisted selection without
@@ -784,6 +787,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		}
 	}
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, guidanceAdapters) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, adapters) {
 		paths[path] = struct{}{}
 	}
 	for _, adapter := range adapters {
@@ -2056,6 +2062,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
 	}
 	result.ManualActions = append(result.ManualActions, rt.state.nativeReviewActions...)
+	result.ManualActions = append(result.ManualActions, rt.state.retiredSDDActions...)
 	result.ManualActions = append(result.ManualActions, rt.skippedActions...)
 
 	// Capture how many managed assets were actually changed.
