@@ -543,7 +543,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			settingsPath: syncOpenCodeSettingsPath(r.homeDir, r.workspaceDir, r.scope, opencodeagent.NewAdapter()),
 			// A workspace sync skips OpenCode routing guidance (global only), but
 			// persisted model assignments still write agent in every scope.
-			touchedKeys: openCodeSettingsWriterKeys(installOrderedComponents(r.selection.Components), r.scope != ScopeWorkspace || len(r.selection.ModelAssignments) > 0),
+			touchedKeys: openCodeSettingsWriterKeys(installOrderedComponents(r.selection.Components), r.scope != ScopeWorkspace, len(r.selection.ModelAssignments) > 0),
 		}}, prepare...)
 	}
 	apply := []pipeline.Step{

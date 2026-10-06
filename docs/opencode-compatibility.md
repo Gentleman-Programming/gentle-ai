@@ -135,6 +135,15 @@ removed by a later sync. A workspace sync edits only the project settings
 file. The settings file and prompts are in the install, sync, and upgrade
 snapshots.
 
+Every install and sync writer of `opencode.jsonc` rewrites only the top-level
+values it owns (the managed agents, `default_agent`, `share`, `mcp`,
+`permission`, `theme`), so comments and trailing commas elsewhere survive on
+both runtime majors. Before any file changes, install and sync refuse a document
+those writers cannot edit that way: malformed JSONC, duplicate keys, or an
+escaped key spelling or a comment inside a value a selected writer touches. Move
+the comment outside that value, or spell the key plainly, and retry. Kilocode
+goes through the same writers, but its `opencode.json` is strict JSON.
+
 Before writing V2 managed plugins, install and sync check the SDK installed in
 the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so
 an SDK that matches a newer OpenCode runtime is kept as is. A missing SDK, an older

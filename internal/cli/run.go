@@ -826,7 +826,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			id:           "prepare:opencode-settings-validation",
 			settingsPath: openCodeLoadedSettingsPath(r.homeDir, r.workspaceDir, opencodeagent.NewAdapter()),
 			// Routing guidance is scheduled for every install agent.
-			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true),
+			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true, false),
 		}}, prepare...)
 	}
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
@@ -2211,11 +2211,17 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 	if !changed {
 		return false, nil
 	}
-	encoded, err := filemerge.MarshalJSONPreservingPermissions(raw, root)
+	// Only the agent value is rewritten, through the same merge as the other
+	// OpenCode-family writers.
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": agents}})
 	if err != nil {
 		return false, err
 	}
-	result, err := filemerge.WriteFileAtomic(settingsPath, append(encoded, '\n'), filemerge.ExistingFileMode(settingsPath, 0o644))
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
+	if err != nil {
+		return false, err
+	}
+	result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	return result.Changed, err
 }
 
@@ -2709,15 +2715,19 @@ func (s openCodeSettingsValidationStep) Run() error {
 }
 
 // openCodeSettingsWriterKeys lists the top-level OpenCode settings keys the
-// planned JSONC-preserving writers touch: routing guidance and Persona write
-// agent, Engram and Context7 write mcp, and the Permission and Theme
-// components write permission and theme. The preflight refuses unsafe JSONC
-// only inside those values, so a key no selected writer touches never blocks
-// the run.
-func openCodeSettingsWriterKeys(components []model.ComponentID, routing bool) []string {
+// planned JSONC-preserving writers touch: the routing step writes agent and
+// default_agent, Persona and persisted model assignments write agent, Engram
+// and Context7 write mcp, and the Permission and Theme components write
+// permission and theme. The routing step writes share only while it is absent,
+// so it never refuses. The preflight refuses unsafe JSONC only inside those
+// values, so a key no selected writer touches never blocks the run.
+func openCodeSettingsWriterKeys(components []model.ComponentID, routing, modelAssignments bool) []string {
 	var keys []string
-	if routing || slices.Contains(components, model.ComponentPersona) {
+	if routing || modelAssignments || slices.Contains(components, model.ComponentPersona) {
 		keys = append(keys, "agent")
+	}
+	if routing {
+		keys = append(keys, "default_agent")
 	}
 	if slices.Contains(components, model.ComponentEngram) || slices.Contains(components, model.ComponentContext7) {
 		keys = append(keys, "mcp")
