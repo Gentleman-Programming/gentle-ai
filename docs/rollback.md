@@ -59,8 +59,38 @@ Pinned backups are never automatically deleted, even when the retention limit is
 
 - If `existed=true`: restores the file from the snapshot to its original path
 - If `existed=false`: removes the file (reverting files created during install)
-- Restore is atomic per file write — no partial restores
+- Each restored regular file is written atomically (temporary file, then rename), so its contents are never left half-written
+- A restore as a whole is not atomic: if one entry fails, files restored before it stay restored and later ones are not
 - Works with both compressed (tar.gz) and legacy (plain file) backups
+
+### Automatic rollback during install and sync
+
+When an install or sync step fails, `gentle-ai` restores the snapshot it took before the run. That restore does not check what changed in between:
+
+- an edit you make to a backed-up file while the command runs can be overwritten
+- a file created during the run at a backed-up path that did not exist before can be removed
+
+There is no locking or concurrency protection. Avoid editing agent configuration while install or sync runs.
+
+## Claude Code orchestrator modules (pilot)
+
+The user-global Claude Code install can split the orchestrator into an always-loaded core in `~/.claude/CLAUDE.md` and on-demand modules in `~/.claude/gentle-ai/orchestrator/`, tracked by the ownership ledger `.gentle-ai-orchestrator-module-ownership.json` in that directory. The default is still the single monolithic orchestrator. Opt in with `gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules`; the flag is install-only and is rejected with `--scope workspace` or a selection without Claude Code before anything is written.
+
+| Operation | What happens |
+|-----------|--------------|
+| Install / sync, global scope | `--claude-orchestrator-modules` creates the modular layout. While the ledger exists, install and sync keep it without the flag and refresh the core, its modules and the ledger. A modified module the core references, or a malformed ledger, stops the run before any pilot file changes; earlier steps of the same run may already have written other files, which automatic rollback restores. Workspace scope and other agents keep the monolith. |
+| Uninstall, complete Claude Code removal | `CLAUDE.md` returns to the monolithic orchestrator first. Then only modules whose bytes match the ledger, and the ledger itself, are removed. Modified or unowned known files stay and are listed as manual actions. Unknown files stay without being enumerated. A component-only uninstall does not touch the pilot. |
+| Failed uninstall | Uninstall has no automatic rollback. If retirement fails after changing files, the CLI and TUI reports ask you to inspect `CLAUDE.md` and the module directory before rerunning, and Claude Code stays recorded as installed. |
+
+### Snapshots and manual restore
+
+Pre-upgrade Claude Code snapshots, and install, sync and complete-uninstall snapshots while the pilot is in use, record nine fixed paths: `CLAUDE.md`, all seven known module filenames (delegation, verification, tracking, memory, writer, prompts, skills) and the ledger, including the ones that do not exist yet. This is the snapshot scope, not a list of installed or owned files: the pilot installs only the modules it needs, and the ledger owns only what it installed.
+
+Restoring one of these snapshots with `gentle-ai restore` or the **Backups** screen puts each of the nine paths back as it was:
+
+- **A path recorded as absent is deleted, even if you created or modified that file later and Gentle AI never owned it.**
+- Other files in the module directory are kept.
+- Snapshots taken before this layout existed do not record module or ledger paths. Of the nine paths, restoring them changes only `CLAUDE.md` (other files they recorded, such as settings, are restored as usual); module files and the ledger stay, and a remaining ledger keeps the pilot on the next global sync.
 
 ## If verification fails
 

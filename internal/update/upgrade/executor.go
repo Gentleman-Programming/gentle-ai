@@ -24,6 +24,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
@@ -275,6 +276,19 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
 		add(theme.VisualThemePaths(homeDir, adapter)...)
+		// The opt-in global module pilot rewrites the core and may write any
+		// known module name plus its ledger, which records only the modules it
+		// installed. Plan all of these paths, present or not, so a
+		// manual restore of a pre-pilot snapshot brings back the monolithic core
+		// without leaving the pilot behind. That restore deletes whatever exists
+		// at those paths, including module files the user created or edited
+		// after the snapshot; it is not atomic, and snapshots taken before this
+		// list existed stay partial (#5256 S27).
+		modulePaths, err := agentguidance.RoutingPathsWithOptions(homeDir, model.AgentClaudeCode, agentguidance.RoutingOptions{ClaudeGlobalModules: true})
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Claude module paths: %v", err)
+		}
+		add(modulePaths...)
 	case model.AgentOpenCode:
 		add(theme.VisualThemePaths(homeDir, adapter)...)
 		// The routing step records default-agent ownership beside the effective

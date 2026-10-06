@@ -804,6 +804,16 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 			paths[path] = struct{}{}
 		}
 	}
+	for _, adapter := range guidanceAdapters {
+		// The routing step installs the retained review/telemetry and
+		// skill-registry hooks into the home Claude settings, whatever
+		// optional components were selected.
+		if adapter.Agent() == model.AgentClaudeCode {
+			if path := adapter.SettingsPath(homeDir); path != "" {
+				paths[path] = struct{}{}
+			}
+		}
+	}
 	for _, adapter := range adapters {
 		if names := reviewassets.NativeAgentFileNames(adapter.Agent()); len(names) > 0 {
 			dir := adapter.SubAgentsDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))

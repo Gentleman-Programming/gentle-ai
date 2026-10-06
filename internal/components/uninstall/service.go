@@ -24,6 +24,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
@@ -511,6 +512,18 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			}
 		}
 	}
+	if slices.Contains(agentIDs, model.AgentClaudeCode) && removesAllAgentComponents(componentIDs) {
+		// Only a complete Claude removal retires the module pilot (see
+		// retireClaudeGlobalModules); snapshot every file it may change. An
+		// unreadable ledger path fails the plan before any write.
+		paths, err := agentguidance.ClaudeGlobalModulePaths(s.homeDir)
+		if err != nil {
+			return plan{}, err
+		}
+		for _, path := range paths {
+			backupTargets[path] = struct{}{}
+		}
+	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
 		adapter, _ := s.registry.Get(model.AgentOpenCode)
 		// Only a complete OpenCode removal rolls back defaults owned by an
@@ -665,6 +678,16 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
+	if slices.Contains(agentsToRemove, model.AgentClaudeCode) {
+		if err := s.retireClaudeGlobalModules(&result); err != nil {
+			failures = append(failures, operationFailure{
+				path:   claude.NewAdapter().GlobalConfigDir(s.homeDir),
+				agents: []model.AgentID{model.AgentClaudeCode},
+				err:    fmt.Errorf("retire Claude orchestrator modules: %w", err),
+			})
+		}
+	}
+
 	if slices.Contains(agentsToRemove, model.AgentPi) {
 		result.RetainedPiResources = retainedPiResources(s.homeDir, s.workspaceDir)
 		result.OptionalPiPackageCleanupCommands = optionalPiPackageCleanupCommands()
@@ -695,6 +718,51 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, errors.Join(errs...)
 	}
 	return result, nil
+}
+
+// retireClaudeGlobalModules returns a complete Claude removal from the module
+// pilot to the monolithic orchestrator, and does nothing without a module
+// ledger. Each known path is reported as it is on disk afterwards: removed or
+// changed when retirement touched it, and kept for manual review otherwise.
+// Nothing else in the module directory is enumerated.
+func (s *Service) retireClaudeGlobalModules(result *Result) error {
+	paths, err := agentguidance.ClaudeGlobalModulePaths(s.homeDir)
+	if err != nil || paths == nil {
+		return err
+	}
+	retired, err := agentguidance.RetireClaudeGlobalModules(s.homeDir, reviewassets.ReviewExecutionContractFor)
+	return reportClaudeModuleRetirement(result, paths, retired, err)
+}
+
+// reportClaudeModuleRetirement records in result what retiring the module
+// pilot did to paths, the files ClaudeGlobalModulePaths planned. A failed
+// retirement that still reports Changed did not finish its rollback, so which
+// files it left changed is unknown: none is reported as removed or changed,
+// and the user is asked to inspect the core and the module directory.
+func reportClaudeModuleRetirement(result *Result, paths []string, retired agentguidance.Result, err error) error {
+	if err != nil {
+		if retired.Changed {
+			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+				"Inspect %s and %s before rerunning the uninstall: the failed Claude orchestrator module retirement did not finish its rollback, so they may be partially changed",
+				paths[0], filepath.Dir(paths[len(paths)-1])))
+		}
+		return err
+	}
+	for _, path := range paths {
+		_, statErr := os.Lstat(path)
+		switch {
+		case slices.Contains(retired.Files, path) && os.IsNotExist(statErr):
+			result.RemovedFiles = append(result.RemovedFiles, path)
+		case slices.Contains(retired.Files, path):
+			if !slices.Contains(result.ChangedFiles, path) {
+				result.ChangedFiles = append(result.ChangedFiles, path)
+			}
+		case statErr == nil:
+			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+				"Remove manually if no longer needed: %s (orchestrator module modified or not owned by Gentle AI, kept)", path))
+		}
+	}
+	return nil
 }
 
 // failedAgents reports which agents cannot claim a completed uninstall. A

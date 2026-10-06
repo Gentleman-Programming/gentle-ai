@@ -15,8 +15,10 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
@@ -2003,5 +2005,81 @@ func TestManagedAgentBackupPathsOmitPromptsBehindSymlinkedRuntimeDirs(t *testing
 		if slices.Contains(managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{}), path) {
 			t.Errorf("%s snapshot declares %s behind a symlinked directory", agent, path)
 		}
+	}
+}
+
+// TestClaudePilotSnapshotRestoreRemovesModulePilot pins the #5256 S27 contract:
+// an upgrade snapshot taken before the Claude module pilot existed records its
+// nine known paths as absent, so manually restoring it after a later pilot
+// install brings back the monolithic core and deletes every file at those
+// paths, including a module the user edited and a known module name the user
+// created. Files outside the known paths are not part of the snapshot and stay.
+func TestClaudePilotSnapshotRestoreRemovesModulePilot(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentClaudeCode)}}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+	options := agentguidance.RoutingOptions{ReviewContract: reviewassets.ReviewExecutionContractFor}
+	if _, err := agentguidance.InjectRoutingWithOptions(home, model.AgentClaudeCode, options); err != nil {
+		t.Fatalf("install monolithic core: %v", err)
+	}
+	corePath := filepath.Join(home, ".claude", "CLAUDE.md")
+	original, err := os.ReadFile(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), configPathsForBackup(home))
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	options.ClaudeGlobalModules = true
+	installed, err := agentguidance.InjectRoutingWithOptions(home, model.AgentClaudeCode, options)
+	if err != nil {
+		t.Fatalf("install pilot: %v", err)
+	}
+	known, err := agentguidance.RoutingPathsWithOptions(home, model.AgentClaudeCode, options)
+	if err != nil || len(known) != 9 || known[0] != corePath {
+		t.Fatalf("pilot paths = %v, %v; want the core and eight module paths", known, err)
+	}
+	moduleDir := filepath.Dir(known[1])
+	written := make(map[string]bool, len(installed.Files))
+	for _, path := range installed.Files {
+		written[path] = true
+	}
+	var userModified, userCreated string
+	for _, path := range known[1 : len(known)-1] {
+		switch {
+		case written[path] && userModified == "":
+			userModified = path
+		case !written[path] && userCreated == "":
+			userCreated = path
+		}
+	}
+	if userModified == "" || userCreated == "" || !written[known[len(known)-1]] {
+		t.Fatalf("pilot wrote %v; want a module, an unused known module name and the ledger", installed.Files)
+	}
+	unknown := filepath.Join(moduleDir, "notes.md")
+	for path, body := range map[string]string{userModified: "user edit\n", userCreated: "user module\n", unknown: "user notes\n"} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := (backup.RestoreService{Roots: []string{home}}).Restore(manifest); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	if got, err := os.ReadFile(corePath); err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("restored core differs from the monolithic snapshot (err %v)", err)
+	}
+	for _, path := range known[1:] {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("%s survived the restore (lstat err %v); the snapshot recorded it absent", path, err)
+		}
+	}
+	if got, err := os.ReadFile(unknown); err != nil || string(got) != "user notes\n" {
+		t.Errorf("unknown file outside the known paths = %q, %v; want it preserved", got, err)
 	}
 }

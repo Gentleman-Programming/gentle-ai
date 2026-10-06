@@ -17,6 +17,10 @@ type InstallInput struct {
 	Scope     InstallScope
 	Channel   InstallChannel
 	DryRun    bool
+
+	// ClaudeOrchestratorModules opts a global install that selects Claude into
+	// the user-global module pilot (#5256).
+	ClaudeOrchestratorModules bool
 }
 
 func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
@@ -73,13 +77,22 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	if err != nil {
 		return InstallInput{}, err
 	}
+	// Rejected here, before the runtime is created or anything is written.
+	if flags.ClaudeOrchestratorModules {
+		if scope != ScopeGlobal {
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q", scope)
+		}
+		if !containsAgent(selection.Agents, model.AgentClaudeCode) {
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the %s agent in the selection", model.AgentClaudeCode)
+		}
+	}
 
 	channel, err := ResolveInstallChannel(flags.Channel)
 	if err != nil {
 		return InstallInput{}, err
 	}
 
-	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
+	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun, ClaudeOrchestratorModules: flags.ClaudeOrchestratorModules}, nil
 }
 
 // personaAliasRemapNotice is printed whenever the legacy

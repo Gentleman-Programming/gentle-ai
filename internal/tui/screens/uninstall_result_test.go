@@ -26,6 +26,23 @@ func TestRenderUninstallResultIncludesManualCleanup(t *testing.T) {
 	}
 }
 
+func TestRenderUninstallResultFailureShowsManualActions(t *testing.T) {
+	const action = "Inspect /home/u/.claude/CLAUDE.md and /home/u/.claude/gentle-ai/orchestrator before rerunning the uninstall"
+	for _, actions := range [][]string{{action}, nil} {
+		result := componentuninstall.Result{FailedAgents: []model.AgentID{model.AgentClaudeCode}, ManualActions: actions}
+		result.Manifest.ID = "backup-test"
+		out := RenderUninstallResult(result, errors.New("retire Claude orchestrator modules"), "", nil, "", false, nil, nil)
+		for _, want := range []string{"✗ Uninstall failed", "retire Claude orchestrator modules", "Backup created before failure", "backup-test"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("RenderUninstallResult() missing %q:\n%s", want, out)
+			}
+		}
+		if strings.Contains(out, "Manual cleanup required") != (actions != nil) || strings.Contains(out, action) != (actions != nil) {
+			t.Fatalf("RenderUninstallResult() manual actions %v rendered incorrectly:\n%s", actions, out)
+		}
+	}
+}
+
 func TestRenderUninstallConfirmIncludesSelectedProfiles(t *testing.T) {
 	out := RenderUninstallConfirm(
 		model.UninstallModePartial,

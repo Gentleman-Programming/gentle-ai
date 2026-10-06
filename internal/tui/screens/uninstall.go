@@ -380,6 +380,8 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 			b.WriteString("\n")
 			b.WriteString(styles.SubtextStyle.Render(result.Manifest.DisplayLabel()))
 		}
+		// A failed uninstall can still leave files to inspect before a retry.
+		writeManualActions(&b, result.ManualActions)
 	} else {
 		if len(result.RetainedPiResources) > 0 {
 			b.WriteString(styles.SuccessStyle.Render("✓ Managed uninstall finished; Pi resources retained for review"))
@@ -403,14 +405,7 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 			b.WriteString("\n")
 			b.WriteString(styles.UnselectedStyle.Render("Updated state.json: " + strings.Join(uninstallAgentLabels(result.AgentsRemovedFromState), ", ")))
 		}
-		if len(result.ManualActions) > 0 {
-			b.WriteString("\n\n")
-			b.WriteString(styles.WarningStyle.Render("Manual cleanup required:"))
-			for _, item := range result.ManualActions {
-				b.WriteString("\n")
-				b.WriteString(styles.UnselectedStyle.Render("  • " + item))
-			}
-		}
+		writeManualActions(&b, result.ManualActions)
 
 		if len(selectedProfiles) > 0 {
 			b.WriteString("\n\n")
@@ -464,6 +459,18 @@ func RenderUninstallResult(result componentuninstall.Result, err error, mode mod
 	}
 	b.WriteString(styles.HelpStyle.Render("enter: return • esc: back • q: quit"))
 	return b.String()
+}
+
+func writeManualActions(b *strings.Builder, actions []string) {
+	if len(actions) == 0 {
+		return
+	}
+	b.WriteString("\n\n")
+	b.WriteString(styles.WarningStyle.Render("Manual cleanup required:"))
+	for _, item := range actions {
+		b.WriteString("\n")
+		b.WriteString(styles.UnselectedStyle.Render("  • " + item))
+	}
 }
 
 func hasEngramArtifacts(result componentuninstall.Result) bool {

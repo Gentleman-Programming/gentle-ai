@@ -252,6 +252,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	runtime.backgroundActivation = backgroundActivation
 	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
 	runtime.piBackgroundProjection = piBackgroundProjection
+	runtime.claudeOrchestratorModules = input.ClaudeOrchestratorModules
 
 	stagePlan = installStagePlan(runtime)
 	result.Plan = stagePlan
@@ -709,6 +710,11 @@ type installRuntime struct {
 
 	piBackgroundProjection *piBackgroundProjectionPlan
 	progress               pipeline.ProgressFunc
+
+	// claudeOrchestratorModules is the explicit install opt-in for the
+	// user-global Claude module pilot. stagePlan hands it to both the backup
+	// planner and the routing step, so it must be set before the plan is built.
+	claudeOrchestratorModules bool
 }
 
 type runtimeState struct {
@@ -791,7 +797,7 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 }
 
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
-	targets, targetErr := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
+	targets, targetErr := installBackupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved, r.claudeOrchestratorModules)
 	prepare := []pipeline.Step{
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
@@ -910,6 +916,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			homeDir:          r.homeDir,
 			workspaceDir:     r.workspaceDir,
 			scope:            r.scope,
+			claudeModules:    r.claudeOrchestratorModules,
 		})
 	}
 
@@ -1931,6 +1938,10 @@ type agentRoutingGuidanceStep struct {
 	workspaceDir     string
 	scope            InstallScope
 
+	// claudeModules is install's explicit opt-in for the user-global Claude
+	// module pilot. Sync leaves it false and only continues an installed pilot.
+	claudeModules bool
+
 	// changedFiles is the shared sync accumulator. Install leaves it nil and
 	// reports progress through the pipeline instead.
 	changedFiles *[]string
@@ -1942,6 +1953,12 @@ func (s agentRoutingGuidanceStep) Run() error {
 	adapter, err := agents.NewAdapter(s.agent)
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
+	}
+	// Resolve delivery before any write, so a Claude module pilot that cannot
+	// be inspected fails this step with nothing changed.
+	options, err := scopedRoutingGuidanceOptions(s.homeDir, s.workspaceDir, s.scope, adapter, s.claudeModules)
+	if err != nil {
+		return err
 	}
 
 	retainedHooks, err := agenthooks.InstallRetainedClaudeHooks(s.homeDir, adapter)
@@ -2018,8 +2035,6 @@ func (s agentRoutingGuidanceStep) Run() error {
 			return fmt.Errorf("migrate legacy Kilo agents: %w", err)
 		}
 	}
-
-	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
 
 	// Strip first: an installation upgraded from an older release still carries
 	// the retired block, and leaving it beside fresh guidance would hand the
@@ -3692,6 +3707,12 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 }
 
 func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
+	return installBackupTargets(homeDir, workspaceDir, scope, selection, resolved, false)
+}
+
+// installBackupTargets is backupTargets for an install that may carry the
+// explicit Claude module opt-in, so the snapshot plans every pilot path.
+func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, claudeModules bool) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
 	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, scope, resolved.Agents); configDir != "" {
@@ -3749,7 +3770,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	// Routing guidance is delivered per agent outside the component loop, so a
 	// selection whose components do not happen to cover the same file would be
 	// rewritten without ever having been snapshotted (issue #1794).
-	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
+	for _, path := range routingGuidancePathsWithClaudeModules(homeDir, workspaceDir, scope, adapters, claudeModules) {
 		paths[path] = struct{}{}
 	}
 	for _, path := range retiredSDDAssetBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
@@ -3769,6 +3790,14 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 		for _, path := range retiredOpenCodeSDDBackupPaths(homeDir, workspaceDir, scope, []model.AgentID{adapter.Agent()}) {
 			paths[path] = struct{}{}
+		}
+		// The routing step installs the retained review/telemetry and
+		// skill-registry hooks into the home Claude settings in every scope,
+		// whatever optional components were selected.
+		if adapter.Agent() == model.AgentClaudeCode {
+			if path := adapter.SettingsPath(homeDir); path != "" {
+				paths[path] = struct{}{}
+			}
 		}
 		// Native review and Judgment Day agents are installed independently of SDD.
 		// Retired review agents are listed too: the installer may remove them.
@@ -3902,6 +3931,12 @@ func claudeMCPSettingsCleanupPaths(homeDir, workspaceDir string, scope InstallSc
 // the paths themselves come from the injector's own delivery dispatch, so the
 // backup contract cannot drift from what is actually written.
 func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	return routingGuidancePathsWithClaudeModules(homeDir, workspaceDir, scope, adapters, false)
+}
+
+// routingGuidancePathsWithClaudeModules also takes install's explicit Claude
+// module opt-in, which the routing step receives too.
+func routingGuidancePathsWithClaudeModules(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter, claudeModules bool) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
 		// Mirrors the same skip agentRoutingGuidanceStep.Run() applies: an
@@ -3911,14 +3946,15 @@ func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adap
 			continue
 		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
-		options := routingGuidanceOptions(homeDir, workspaceDir, adapter)
-		var routing []string
-		var err error
-		if options.SettingsPath == "" {
-			routing, err = agentguidance.RoutingPaths(targetDir, adapter.Agent())
-		} else {
-			routing, err = agentguidance.RoutingPathsWithOptions(targetDir, adapter.Agent(), options)
+		options, err := scopedRoutingGuidanceOptions(homeDir, workspaceDir, scope, adapter, claudeModules)
+		if err != nil {
+			// The guidance step runs the same detection before any write and
+			// fails loudly, so there is nothing of this agent to snapshot.
+			continue
 		}
+		// Always with options: an empty SettingsPath must not drop the Claude
+		// module delivery the step will use.
+		routing, err := agentguidance.RoutingPathsWithOptions(targetDir, adapter.Agent(), options)
 		if err != nil {
 			// The guidance step resolves the same delivery and fails loudly when
 			// it runs. Declaring a target we could not resolve would only add a
@@ -4174,6 +4210,33 @@ func routingGuidanceOptions(homeDir, workspaceDir string, adapter agents.Adapter
 		options.SettingsPath = effectiveOpenCodeSettingsPath(homeDir, workspaceDir, ScopeGlobal, adapter)
 	}
 	return options
+}
+
+// scopedRoutingGuidanceOptions extends routingGuidanceOptions with the one
+// scope-dependent choice: a global Claude install continues the module pilot
+// whose ledger is already installed under homeDir (#5256), and creates it only
+// when claudeModules carries install's explicit opt-in. Otherwise, in the
+// workspace scope and for every other agent the options are unchanged. The
+// ledger is always looked up, so a ledger that cannot be inspected is an error
+// with or without the opt-in.
+//
+// The routing step and the install/sync snapshot planner both resolve through
+// here, so the snapshot covers the core, every module and the ledger. After a
+// failure, install and sync restore those files from that snapshot like any
+// other: an edit made while the run was in progress can be overwritten and a
+// file created meanwhile removed. Nothing here makes that restore concurrency
+// safe or atomic.
+func scopedRoutingGuidanceOptions(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter, claudeModules bool) (agentguidance.RoutingOptions, error) {
+	options := routingGuidanceOptions(homeDir, workspaceDir, adapter)
+	if scope != ScopeGlobal || adapter.Agent() != model.AgentClaudeCode {
+		return options, nil
+	}
+	pilot, err := agentguidance.ClaudeGlobalModulePaths(homeDir)
+	if err != nil {
+		return agentguidance.RoutingOptions{}, fmt.Errorf("detect installed Claude module pilot: %w", err)
+	}
+	options.ClaudeGlobalModules = claudeModules || len(pilot) > 0
+	return options, nil
 }
 
 // routingGuidanceDir resolves the installation root routing guidance is

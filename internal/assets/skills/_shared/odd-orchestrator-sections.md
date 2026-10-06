@@ -135,6 +135,7 @@ stop writes → parent captures git status → diagnose affected repositories/wo
 
 ### Allowed edit surfaces (MANDATORY)
 
+<!-- odd-orchestrator-fragment:writer.edit-surfaces:start -->
 A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input. Deriving it is part of planning the delegation, not something the writer or the human can be left to supply.
 
 Before launching a bounded writer through the runtime's delegation mechanism, derive the allowed edit surface from the task being delegated — the files the planned change must touch, plus the directories where the task authorizes new files — and pass it in the delegated prompt under an `## Allowed edit surfaces` heading, in the same exact-path form as `## Skills to load before work`:
@@ -148,10 +149,13 @@ Before launching a bounded writer through the runtime's delegation mechanism, de
 If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths. Derive a candidate set first — the exact paths this task would touch — and present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules. A free-text question asking which paths or globs to authorize is never a valid escalation.
 
 Relay a writer's interaction request about edit surfaces the same way: present its derived candidate paths as the choice, and add or drop paths only on the human's explicit instruction.
+<!-- odd-orchestrator-fragment:writer.edit-surfaces:end -->
 
 ### Key Learnings closing block
 
+<!-- odd-orchestrator-fragment:delegation.key-learnings:start -->
 When delegating to a generic exploration, writer, or verification worker, include the same `## Key Learnings` closing instruction in the delegated prompt: after the worker returns its normal result envelope or handoff, it closes its final response text with a `## Key Learnings` block of 1–5 numbered items, each a standalone factual sentence of at least 20 characters and at least 4 words, omitting the block when there is genuinely no reusable learning. The block layers on after the structured return contract and does not alter its fields. This applies to final response text only — not intermediate tool output. The Engram memory provider extracts and persists these items as passive capture; the worker does not parse the block or invoke passive-capture tools itself. This is separate from explicit `mem_save` persistence. Agents that must return strict JSON never receive this closing instruction; their required output shape remains unchanged.
+<!-- odd-orchestrator-fragment:delegation.key-learnings:end -->
 
 ### Delivery strategy
 
@@ -159,6 +163,7 @@ Use the ODD delivery strategy and work-unit boundaries under `## Implementation 
 
 ### Intent-Driven Skill Discovery
 
+<!-- odd-orchestrator-fragment:skills.discovery:start -->
 For skill-shaped requests, do not treat the injected skill list as complete. Use the skill registry and filesystem only as a discovery aid; do not let a trigger table override the user's concrete request or turn a small request into a larger workflow.
 
 Discovery order:
@@ -179,6 +184,7 @@ Common intent hints, not hard routing:
 | Split/stack/large PR       | `chained-pr`                           |
 
 Keep this lightweight: loading a skill should improve the immediate task, not force extra ceremony.
+<!-- odd-orchestrator-fragment:skills.discovery:end -->
 
 ### Safety
 
@@ -189,6 +195,7 @@ Keep this lightweight: loading a skill should improve the immediate task, not fo
 <!-- odd-orchestrator-section:Orchestrator Routing and Delivery:end -->
 
 <!-- odd-orchestrator-section:Skill Registry Protocol:start -->
+<!-- odd-orchestrator-fragment:skills.registry:start -->
 The parent resolves skills once per session or before first delegation:
 
 1. Read `.atl/skill-registry.md` if present.
@@ -207,4 +214,5 @@ If a subagent reports `skill_resolution`, interpret it as project/user skill res
 - `none`: no project/user skills were loaded.
 
 If any subagent reports a fallback instead of `paths-injected`, treat it as an orchestration gap and correct future delegations by passing exact indexed paths directly.
+<!-- odd-orchestrator-fragment:skills.registry:end -->
 <!-- odd-orchestrator-section:Skill Registry Protocol:end -->
