@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1145,6 +1147,128 @@ func TestOpenCodeReviewTransportRefusalNamesTypedValidatorCause(t *testing.T) {
 	})
 }
 
+// A lens result admission refuses must name its scrubbed cause the way the
+// provider-role path does, and keep the refused bytes for the report, instead
+// of collapsing into the bare primary code (#5247, #5222, #4873). The rendered
+// refusal still never re-renders the payload or the admission prose.
+func TestOpenCodeReviewTransportLensRefusalNamesScrubbedAdmissionCause(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees")
+	}
+	reviewEnabledHome(t)
+	repo, _, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	t.Chdir(repo)
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	prefixedProof := result
+	prefixedProof.Findings = []facadeFinding{{
+		Location: result.Inspection.Paths[0] + ":1", Severity: "WARNING", Claim: "Concrete user-impact claim.",
+		ProofRefs: []string{"changed-hunk:" + result.Inspection.Paths[0] + ":1"},
+	}}
+	encoded, err := json.Marshal(prefixedProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, payload, cause string }{
+		{name: "retired role envelope", payload: `{"review_result":{"lens_results":[{"lens":"` + lens + `","findings":[],"evidence":["reviewed"]}]}}`, cause: "reviewer_result_not_admissible"},
+		{name: "prefixed proof ref", payload: string(encoded), cause: "proof_path_out_of_scope"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session, err := openCodeTransportStart(t.Context(), openCodeLensTransportStart(t, repo, record, lens))
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := "<task id=\"t1\" state=\"completed\">\n<task_result>\n" + test.payload + "\n</task_result>\n</task>"
+			_, err = openCodeTransportComplete(t.Context(), session, openCodeTransportEnvelope{
+				Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: session.nonce, Output: &output,
+			})
+			assertOpenCodeTransportRefusal(t, err, []string{
+				"opencode_reviewer_result_refused", "cause: " + test.cause, "--next-transition", "the rejected reviewer payload was preserved at ",
+			})
+			for _, leaked := range []string{"changed-hunk", "review_result", "admission_diagnostic", "unknown field"} {
+				if strings.Contains(err.Error(), leaked) {
+					t.Fatalf("lens refusal re-rendered payload or admission prose %q: %v", leaked, err)
+				}
+			}
+			if reason := openCodeTransportRefusalReason(err); reason != openCodeRefusalOutputRefused {
+				t.Fatalf("bounded refusal reason = %q, want %q", reason, openCodeRefusalOutputRefused)
+			}
+			assertOpenCodeTransportPreservedRejectedPayload(t, repo, record.State.LineageID, lens, test.payload)
+			assertOpenCodeRelayLensUncaptured(t, repo, store, record, lens)
+		})
+	}
+}
+
+// A relayed lens prompt padded with orchestrator prose after the binding line
+// materializes exactly the bytes the bare binding does, and prose before it
+// refuses before any reviewer launches. Padding therefore can neither reach a
+// reviewer nor cause a post-run admission refusal (#5222).
+func TestOpenCodeReviewTransportPaddedLensPromptMaterializesTheBareBinding(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees")
+	}
+	reviewEnabledHome(t)
+	repo, _, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	t.Chdir(repo)
+	bare := openCodeLensTransportStart(t, repo, record, lens)
+	want, err := openCodeTransportStart(t.Context(), bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padded := bare
+	padded.Prompt = bare.Prompt + "\n\nOrchestrator context: focus on the retry path and return review_result.lens_results."
+	got, err := openCodeTransportStart(t.Context(), padded)
+	if err != nil {
+		t.Fatalf("trailing-padded lens prompt refused: %v", err)
+	}
+	if !bytes.Equal(got.providerPrompt, want.providerPrompt) {
+		t.Fatal("trailing orchestrator prose changed the Go-materialized reviewer prompt")
+	}
+	leading := bare
+	leading.Prompt = "Orchestrator context first.\n" + bare.Prompt
+	if _, err := openCodeTransportStart(t.Context(), leading); openCodeTransportRefusalReason(err) != openCodeRefusalBindingMismatch {
+		t.Fatalf("leading-padded lens prompt = %v, want a pre-launch binding_mismatch refusal", err)
+	}
+}
+
+// The provider-role path names its cause already; it must also keep the
+// refused bytes, as the lens path does, so a role_capture_failed refusal of a
+// schema-valid result can be diagnosed from the preserved reason (#4972).
+func TestOpenCodeReviewTransportRoleRefusalPreservesRejectedPayload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees and relay subprocesses")
+	}
+	reviewEnabledHome(t)
+	repo, lineage, _ := providerCorrectionReadyWithoutVerificationEvidence(t)
+	task := openCodeTargetedValidatorTask(t, repo, lineage)
+	issued, err := openCodeTransportStart(t.Context(), openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: task.Prompt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"hello":"world"}`
+	output := "<task id=\"t1\" state=\"completed\">\n<task_result>\n" + payload + "\n</task_result>\n</task>"
+	_, err = openCodeTransportComplete(t.Context(), issued, openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: issued.nonce, Output: &output,
+	})
+	assertOpenCodeTransportRefusal(t, err, []string{
+		"opencode_provider_role_result_refused", "cause: validator_result_not_admissible", "the rejected reviewer payload was preserved at ",
+	})
+	assertOpenCodeTransportPreservedRejectedPayload(t, repo, lineage, reviewProviderRoleTargetedValidator, payload)
+}
+
+func assertOpenCodeTransportPreservedRejectedPayload(t *testing.T, repo, lineage, lens, payload string) {
+	t.Helper()
+	for _, envelope := range readRejectedResults(t, rejectedResultsDir(t, repo, lineage)) {
+		if envelope.Lens == lens && envelope.Raw == payload && envelope.Reason != "" {
+			return
+		}
+	}
+	t.Fatalf("no preserved rejected %s payload %q for lineage %s", lens, payload, lineage)
+}
+
 func TestOpenCodeTransportCaptureRefusalCause(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -1164,7 +1288,7 @@ func TestOpenCodeTransportCaptureRefusalCause(t *testing.T) {
 			if got := openCodeTransportCaptureRefusalCause(test.err); got != test.want {
 				t.Fatalf("cause = %q, want %q", got, test.want)
 			}
-			refusal := openCodeTransportCaptureRefusal(test.err)
+			refusal := openCodeTransportCaptureRefusal(test.err, "")
 			for _, fragment := range []string{"opencode_provider_role_result_refused", "cause: " + test.want, "--next-transition"} {
 				if !strings.Contains(refusal.Error(), fragment) {
 					t.Fatalf("refusal = %v, want fragment %q", refusal, fragment)
@@ -1307,7 +1431,7 @@ func TestOpenCodeTransportRefusalReasonClassifiesEveryRefusal(t *testing.T) {
 		{"truncated output", outputError("<task id=\"x\" state=\"completed\">\n<task_result>\n{\"findings\""), openCodeRefusalOutputRefused},
 		{"malformed output", outputError("<task"), openCodeRefusalOutputRefused},
 		{"reviewer result refused", openCodeTransportFailure("opencode_reviewer_result_refused"), openCodeRefusalOutputRefused},
-		{"role result refused", openCodeTransportCaptureRefusal(errors.New("RAW CHILD OUTPUT")), openCodeRefusalOutputRefused},
+		{"role result refused", openCodeTransportCaptureRefusal(errors.New("RAW CHILD OUTPUT"), ""), openCodeRefusalOutputRefused},
 		{"child task error", outputError("<task id=\"x\" state=\"error\">\n<task_error>\nprovider 400\n</task_error>\n</task>"), openCodeRefusalProviderFailed},
 		{"host output unavailable", openCodeTransportFailure("opencode_task_transport_failed"), openCodeRefusalProviderFailed},
 		{"provider result missing", openCodeTransportFailure("opencode_review_transport_provider_result_missing"), openCodeRefusalProviderFailed},
@@ -1375,6 +1499,29 @@ func TestOpenCodeTransportRefusalFrameIsEmittedOnlyUnderTheV2Declaration(t *test
 	}
 }
 
+// The plugin's cause allow-list is exactly Go's closed vocabulary: a cause Go
+// emits always reaches the parent, and the plugin forwards nothing else.
+func TestOpenCodeV2PluginRefusalCauseAllowListMatchesGo(t *testing.T) {
+	source, err := assets.Read("opencode/plugins-v2/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?s)const REFUSAL_CAUSES: ReadonlySet<string> = new Set\(\[(.*?)\]\)`).FindStringSubmatch(source)
+	if block == nil {
+		t.Fatal("V2 plugin declares no REFUSAL_CAUSES allow-list")
+	}
+	var plugin []string
+	for _, match := range regexp.MustCompile(`"([^"]*)"`).FindAllStringSubmatch(block[1], -1) {
+		plugin = append(plugin, match[1])
+	}
+	want := slices.Clone(openCodeRefusalCauses)
+	slices.Sort(plugin)
+	slices.Sort(want)
+	if !slices.Equal(plugin, want) {
+		t.Fatalf("V2 plugin cause allow-list = %v, want exactly Go's %v", plugin, want)
+	}
+}
+
 // The plugin keeps its own copy of the allow-list so arbitrary relay text can
 // never reach the parent; it must name exactly the reasons Go can emit.
 func TestOpenCodeV2PluginRefusalAllowListMatchesGo(t *testing.T) {
@@ -1398,6 +1545,131 @@ func openCodeV2RuntimeForTest(t *testing.T) {
 	t.Cleanup(func() { runtimeopencode.VersionRunnerOverride = old })
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("opencode v2.0.19")}, nil
+	}
+}
+
+// Under V2 only the refused frame reaches the parent, so a refused lens result
+// names its scrubbed admission cause there beside output_refused (#5247,
+// #5222): the frame stays closed-vocabulary and carries no payload byte.
+func TestOpenCodeV2RelayRefusedFrameNamesTheAdmissionCause(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires git worktrees")
+	}
+	reviewEnabledHome(t)
+	openCodeV2RuntimeForTest(t)
+	repo, _, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	start := openCodeLensTransportStart(t, repo, record, lens)
+	start.Agent = lens
+	originalRandom := openCodeTransportRandom
+	t.Cleanup(func() { openCodeTransportRandom = originalRandom })
+	openCodeTransportRandom = func(nonce []byte) (int, error) { clear(nonce); return len(nonce), nil }
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	result.Findings = []facadeFinding{{
+		Location: result.Inspection.Paths[0] + ":1", Severity: "WARNING", Claim: "Concrete user-impact claim.",
+		ProofRefs: []string{"changed-hunk:" + result.Inspection.Paths[0] + ":1"},
+	}}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(payload)
+	var input bytes.Buffer
+	encoder := json.NewEncoder(&input)
+	for _, frame := range []openCodeTransportEnvelope{start, {
+		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: strings.Repeat("0", 32), Output: &output,
+	}} {
+		if err := encoder.Encode(frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(repo)
+	var relayed bytes.Buffer
+	if err := runReviewOpenCodeTransport(nil, &input, &relayed); err == nil {
+		t.Fatal("V2 relay admitted a prefixed proof ref")
+	}
+	lines := strings.Split(strings.TrimSuffix(relayed.String(), "\n"), "\n")
+	want := `{"schema":"` + openCodeReviewTransportSchema + `","operation":"refused","error":"output_refused","cause":"proof_path_out_of_scope"}`
+	if len(lines) != 2 || lines[1] != want {
+		t.Fatalf("V2 relay emitted %d frames ending in %q, want the prompt frame then %q", len(lines), lines[len(lines)-1], want)
+	}
+	assertOpenCodeRelayLensUncaptured(t, repo, store, record, lens)
+}
+
+// The V2 refused frame may only ever name a closed-vocabulary cause: every
+// member reaches the frame verbatim, and any other value -- free text, a path,
+// an untyped error that merely mentions a cause -- emits no cause field.
+func TestOpenCodeTransportRefusedFrameCauseIsClosedVocabulary(t *testing.T) {
+	seen := map[string]bool{}
+	for _, cause := range openCodeRefusalCauses {
+		if seen[cause] || !regexp.MustCompile(`^[a-z][a-z0-9_]*$`).MatchString(cause) {
+			t.Fatalf("cause vocabulary member %q is duplicated or not a bounded code", cause)
+		}
+		seen[cause] = true
+		for _, code := range []string{"opencode_reviewer_result_refused", "opencode_provider_role_result_refused"} {
+			frame := openCodeTransportRefusedFrameFor(&openCodeTransportRefusal{code: code, cause: cause, preserved: "; the rejected reviewer payload was preserved at /private/path"})
+			encoded, err := json.Marshal(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `{"schema":"` + openCodeReviewTransportSchema + `","operation":"refused","error":"output_refused","cause":"` + cause + `"}`
+			if string(encoded) != want {
+				t.Fatalf("refused frame = %s, want %s", encoded, want)
+			}
+		}
+	}
+	for name, err := range map[string]error{
+		"out-of-vocabulary cause":        &openCodeTransportRefusal{code: "opencode_reviewer_result_refused", cause: "RAW CHILD OUTPUT at /Users/someone/repo"},
+		"empty cause":                    &openCodeTransportRefusal{code: "opencode_reviewer_result_refused"},
+		"untyped refusal naming a cause": errors.New("opencode_reviewer_result_refused (cause: proof_path_out_of_scope): text"),
+		"bare primary code":              openCodeTransportFailure("opencode_reviewer_result_refused"),
+		"binding refusal":                openCodeTransportBindingInvalid("Task target does not match"),
+	} {
+		encoded, marshalErr := json.Marshal(openCodeTransportRefusedFrameFor(err))
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if strings.Contains(string(encoded), `"cause"`) {
+			t.Fatalf("%s emitted a cause: %s", name, encoded)
+		}
+	}
+	// Every cause a classifier can produce is a vocabulary member.
+	classified := []string{
+		openCodeTransportCaptureRefusalCause(errReviewTargetedValidationInconclusive),
+		openCodeTransportCaptureRefusalCause(&reviewProviderAdmissionError{err: errors.New("refused")}),
+		openCodeTransportCaptureRefusalCause(errors.New("store write failed")),
+		openCodeTransportLensRefusalCause(errors.New("decode reviewer result: json: unknown field \"review_result\"")),
+		openCodeTransportLensRefusalCause(&reviewtransaction.ArtifactAdmissionError{}),
+		openCodeTransportLensRefusalCause(&reviewtransaction.ArtifactAdmissionError{Diagnostic: &reviewtransaction.ArtifactAdmissionDiagnostic{Code: "a_future_code"}}),
+	}
+	for _, code := range openCodeTransportAdmissionDiagnosticCauses {
+		classified = append(classified, openCodeTransportLensRefusalCause(fmt.Errorf("wrapped: %w", &reviewtransaction.ArtifactAdmissionError{Diagnostic: &reviewtransaction.ArtifactAdmissionDiagnostic{Code: code}})))
+	}
+	for _, cause := range classified {
+		if !seen[cause] {
+			t.Fatalf("classifier produced cause %q outside the closed vocabulary", cause)
+		}
+	}
+}
+
+// The diagnostic causes are exactly the codes native artifact admission emits:
+// a new admission code is a conscious vocabulary decision, and a retired one
+// leaves no dead member behind.
+func TestOpenCodeTransportAdmissionDiagnosticCausesMatchNativeAdmission(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "reviewtransaction", "artifact_admission.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	emitted := map[string]bool{}
+	for _, match := range regexp.MustCompile(`(?:findingAdmissionDiagnostic\(|Code:\s+)"([a-z_]+)"`).FindAllSubmatch(source, -1) {
+		emitted[string(match[1])] = true
+	}
+	declared := map[string]bool{}
+	for _, code := range openCodeTransportAdmissionDiagnosticCauses {
+		declared[code] = true
+	}
+	if !reflect.DeepEqual(emitted, declared) {
+		t.Fatalf("native admission emits diagnostic codes %v, transport cause vocabulary declares %v", emitted, declared)
 	}
 }
 
