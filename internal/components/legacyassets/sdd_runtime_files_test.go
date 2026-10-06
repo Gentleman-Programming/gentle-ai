@@ -394,3 +394,24 @@ func TestRetiredSDDPromptTextBehindSymlinkedDirectoryIsReported(t *testing.T) {
 		t.Error("a regular prompt in a real directory is not retirable")
 	}
 }
+
+// A runtime home that is a regular file holds no prompt to retire; sync must
+// not abort on the ENOTDIR its children report.
+func TestRetiredSDDPromptTextUnderAFileRuntimeHomeIsAbsent(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{".codex", ".kimi"} {
+		dir := filepath.Join(home, name)
+		if err := os.WriteFile(dir, []byte("not a directory\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if res, err := RetireSDDOrchestratorBlock(dir, filepath.Join(dir, "agents.md"), ""); err != nil || res.Removed {
+			t.Errorf("%s/agents.md: result %+v, error %v", name, res, err)
+		}
+		if res, err := RetireKimiSDDInclude(dir, filepath.Join(dir, "KIMI.md")); err != nil || res.Removed {
+			t.Errorf("%s/KIMI.md: result %+v, error %v", name, res, err)
+		}
+		if got, err := os.ReadFile(dir); err != nil || string(got) != "not a directory\n" {
+			t.Errorf("%s changed: %q, %v", name, got, err)
+		}
+	}
+}
