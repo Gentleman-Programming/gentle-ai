@@ -49,12 +49,8 @@ func TestCLIHelpShowsNoRetiredWorkflowText(t *testing.T) {
 var retiredWorkflowLiteralAllowlist = map[string]map[string]string{
 	"internal/cli/run.go": {
 		"agent:retire-sdd-assets:":             "retirement step ID",
-		"retire SDD orchestrator block: %w":    "retirement error",
-		"retire Kimi SDD include: %w":          "retirement error",
 		"agent:retire-sdd:":                    "retirement step ID",
 		"agent:retire-sdd-settings:":           "retirement step ID",
-		"retire SDD files for %q: %w":          "retirement failure naming legacy files",
-		"retire SDD preflight hook: %w":        "retirement failure naming a legacy hook",
 		"retire SDD agents for %q: %w":         "retirement failure naming legacy agents",
 		"retire SDD agents in %q settings: %w": "retirement failure naming legacy settings",
 		"retire SDD prompts for %q: %w":        "retirement failure naming legacy prompts",
