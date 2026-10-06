@@ -184,6 +184,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	} else if stateErr != nil {
 		return InstallResult{}, fmt.Errorf("persist install state preflight: %w", stateErr)
 	}
+	restoreCodexServiceTier(&input.Selection, persistedState)
 	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
 	if err != nil {
 		return InstallResult{}, err
@@ -262,6 +263,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 	result.PiCodeGraph = runtime.state.piCodeGraph
 	result.ManualActions = append(result.ManualActions, runtime.state.nativeReviewActions...)
+	result.ManualActions = append(result.ManualActions, runtime.state.retiredSDDActions...)
 	result.Verify = runPostApplyVerification(postApplyVerificationInput{
 		HomeDir:      homeDir,
 		WorkspaceDir: runtime.workspaceDir,
@@ -331,7 +333,11 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return result, rollbackPostApplyError(orchestrator, result.Execution, fmt.Errorf("derive managed asset writer identity: %w", err))
 	}
-	if err := persistInstallState(homeDir, newState, agentIDs, flags, writer); err != nil {
+	err = persistInstallState(homeDir, newState, agentIDs, flags, writer)
+	if err == nil {
+		err = recordCodexServiceTier(homeDir, runtime.state.codexServiceTier)
+	}
+	if err != nil {
 		persistErr := fmt.Errorf("persist install state: %w", err)
 		rollback := orchestrator.Rollback(result.Execution)
 		if rollback.Err != nil {
@@ -711,6 +717,7 @@ type runtimeState struct {
 	rollbackSnapshotDir      string
 	piCodeGraph              *communitytool.PiCodeGraphResult
 	nativeReviewActions      []string
+	retiredSDDActions        []string
 	compatibilityTransaction compatibilityRefreshTransaction
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
@@ -721,6 +728,10 @@ type runtimeState struct {
 	engramVersionResolved bool
 	engramVersion         string
 	engramVersionErr      error
+
+	// codexServiceTier is the tier the global engram injection left in Codex's
+	// config.toml (nil = not written); state records it as the managed tier.
+	codexServiceTier *string
 }
 
 func (s *runtimeState) cleanupRollbackSnapshot() {
@@ -877,6 +888,9 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			apply = append(apply, nativeReviewAgentStep{id: "agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, state: r.state})
 		}
 	}
+	// After the native installer: it rewrites a Gentle-owned v3 Kimi
+	// gentleman.yaml, so the SDD subagents it declared can be retired now.
+	apply = append(apply, retiredSDDAgentSteps("agent:retire-sdd:", r.homeDir, r.scope, r.resolved.Agents, nil, r.state)...)
 
 	// Routing guidance is scheduled per agent and outside the component loop:
 	// an agent that cannot choose between direct and delegated work is unusable,
@@ -962,6 +976,61 @@ func (s nativeReviewAgentStep) Run() error {
 		}
 	}
 	return nil
+}
+
+// retiredSDDAgentsStep removes the native SDD sub-agents earlier releases
+// rendered and reports the ones whose ownership cannot be proven (#5157,
+// #5253). The pipeline snapshot captures every inventory path first.
+type retiredSDDAgentsStep struct {
+	id, homeDir  string
+	agent        model.AgentID
+	changedFiles *[]string
+	state        *runtimeState
+}
+
+func (s retiredSDDAgentsStep) ID() string { return s.id }
+
+func (s retiredSDDAgentsStep) Run() error {
+	adapter := resolveAdapters([]model.AgentID{s.agent})[0]
+	res, err := legacyassets.RetireSDDAgents(s.agent, adapter.SubAgentsDir(s.homeDir))
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, res.Removed...)
+	}
+	if err != nil {
+		return fmt.Errorf("retire SDD agents for %q: %w", s.agent, err)
+	}
+	if s.state != nil {
+		s.state.retiredSDDActions = append(s.state.retiredSDDActions, res.ManualActions()...)
+	}
+	return nil
+}
+
+// retiredSDDAgentSteps schedules retirement for every selected runtime that
+// received native SDD agents. Releases installed them in the home directory,
+// so a workspace-scoped run never touches them (#1074).
+func retiredSDDAgentSteps(prefix, homeDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string, state *runtimeState) []pipeline.Step {
+	if scope == ScopeWorkspace {
+		return nil
+	}
+	var steps []pipeline.Step
+	for _, agent := range agentIDs {
+		if len(legacyassets.RetiredSDDAgentFiles(agent)) > 0 {
+			steps = append(steps, retiredSDDAgentsStep{id: prefix + string(agent), homeDir: homeDir, agent: agent, changedFiles: changedFiles, state: state})
+		}
+	}
+	return steps
+}
+
+// retiredSDDAgentBackupPaths is the snapshot half of retiredSDDAgentSteps.
+func retiredSDDAgentBackupPaths(homeDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	if scope == ScopeWorkspace {
+		return nil
+	}
+	var paths []string
+	for _, adapter := range adapters {
+		paths = append(paths, legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir))...)
+	}
+	return paths
 }
 
 func nativeReviewPreservedAction(path string) string {
@@ -2836,6 +2905,8 @@ func (s componentApplyStep) Run() error {
 			engramOpts := engram.InjectOptions{
 				OpenCodeSettingsPath:        openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter),
 				CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
+				CodexServiceTier:            s.selection.CodexServiceTier,
+				CodexManagedServiceTier:     s.selection.CodexManagedServiceTier,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
 				Version:                     engramVersion,
@@ -2848,7 +2919,9 @@ func (s componentApplyStep) Run() error {
 				if s.scope == ScopeWorkspace {
 					_, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
 				} else {
-					_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+					var injected engram.InjectionResult
+					injected, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+					s.state.noteCodexServiceTier(injected)
 				}
 			}
 			if err != nil {
@@ -3044,18 +3117,17 @@ var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
 }
 
-// ExecuteTUIInstallWithBackgroundAndOrchestrator runs a TUI install and returns
-// the orchestrator so downstream persistence failures can be compensated.
-// After successful persistence, callers must call orchestrator.Finish() to
-// release a deduplicated temporary rollback snapshot.
-func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
-	return executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
+// ExecuteTUIInstallRecordingCodexServiceTier runs a TUI install and returns
+// its orchestrator plus the service tier engram left in Codex's config.toml
+// (nil = not written), for state to record.
+func ExecuteTUIInstallRecordingCodexServiceTier(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
+	return executeTUIInstall(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
 }
 
-func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
+func executeTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
-		return pipeline.ExecutionResult{Err: err}, nil
+		return pipeline.ExecutionResult{Err: err}, nil, nil
 	}
 	defer runtime.state.cleanupCompatibilityTransaction()
 	backgroundResolution := OpenCodeBackgroundResolution{
@@ -3064,14 +3136,14 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	}
 	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &backgroundResolution, containsAgent(resolved.Agents, model.AgentOpenCode))
 	if err != nil {
-		return pipeline.ExecutionResult{Err: fmt.Errorf("prepare OpenCode background activation: %w", err)}, nil
+		return pipeline.ExecutionResult{Err: fmt.Errorf("prepare OpenCode background activation: %w", err)}, nil, nil
 	}
 	runtime.background = backgroundResolution
 	runtime.progress = onProgress
 	if len(consent) > 0 && consent[0] != nil {
 		if !containsAgent(resolved.Agents, model.AgentOpenCode) {
 			// refusal:by-design human-authority: invocation consent cannot apply to a different selection
-			return pipeline.ExecutionResult{Err: fmt.Errorf("OpenCode SDK consent does not match selected agents")}, nil
+			return pipeline.ExecutionResult{Err: fmt.Errorf("OpenCode SDK consent does not match selected agents")}, nil, nil
 		}
 		runtime.sdkConsent = consent[0]
 	}
@@ -3089,7 +3161,8 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
 	result.ManualActions = append(result.ManualActions, runtime.state.nativeReviewActions...)
-	return result, orchestrator
+	result.ManualActions = append(result.ManualActions, runtime.state.retiredSDDActions...)
+	return result, orchestrator, runtime.state.codexServiceTier
 }
 
 // RenderInstallManualActions renders non-fatal completion actions after the
@@ -3418,6 +3491,9 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentCodex {
 			paths[filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")] = struct{}{}
+		}
+		for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, []agents.Adapter{adapter}) {
+			paths[path] = struct{}{}
 		}
 		// Native review and Judgment Day agents are installed independently of SDD.
 		// Retired review agents are listed too: the installer may remove them.

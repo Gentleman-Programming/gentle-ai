@@ -41,7 +41,7 @@ Engram on Pi uses the native tools `gentle-engram` registers, not MCP, so Gentle
 
 ## Optional CodeGraph
 
-CodeGraph is an optional Gentle AI integration. When selected, Gentle AI merges its MCP entry without overwriting a conflicting user entry. Compatible Pi children receive tools or lazy-init guidance through managed overlays, not edits to package-owned child files. Guidance resolves a safe project root and initializes a missing index once; a stale index requires upstream recovery, not a claim that old graph results reflect current source. `gentle-ai sync` reconciles managed configuration, which is distinct from index freshness. Uninstall removes only manifest-owned entries and reports drifted child files instead of deleting them.
+CodeGraph is an optional Gentle AI integration. When selected, Gentle AI merges its MCP entry without overwriting a conflicting user entry. Compatible Pi children receive tools or lazy-init guidance through managed overlays, not edits to package-owned child files. Guidance resolves a safe project root and initializes a missing index once; a stale index requires upstream recovery, not a claim that old graph results reflect current source. `gentle-ai sync` reconciles managed configuration, which is distinct from index freshness. Sync never recreates a child file that was deleted; it drops that file from its ownership record. Gentle AI also stops managing the retired SDD agents (`sdd-*.md`) in the Pi agent home: when one still holds exactly Gentle AI's recorded overlay, sync restores the bytes it had before the overlay so the Pi package can retire it, and leaves any edited copy untouched. Uninstall removes only manifest-owned entries and reports drifted child files instead of deleting them.
 
 ## Review and checks
 

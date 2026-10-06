@@ -159,7 +159,7 @@ func TestCodeGraphInstallThenSyncConverges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			execution, _ := executeTUIInstallWithBackground(home, selection, resolved, ResolveInstallProfile(system.DetectionResult{}), "", "", nil)
+			execution, _, _ := executeTUIInstall(home, selection, resolved, ResolveInstallProfile(system.DetectionResult{}), "", "", nil)
 			if execution.Err != nil {
 				t.Fatalf("TUI install error = %v", execution.Err)
 			}

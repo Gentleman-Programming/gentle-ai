@@ -570,6 +570,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			selection:        r.selection,
 			changedFiles:     &r.changedFiles,
 			skipped:          &r.skippedActions,
+			state:            r.state,
 			backgroundPolicy: r.backgroundPolicy,
 		})
 	}
@@ -590,6 +591,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			apply = append(apply, nativeReviewAgentStep{id: "sync:agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, changedFiles: &r.changedFiles, state: r.state})
 		}
 	}
+	// After the native installer: it rewrites a Gentle-owned v3 Kimi
+	// gentleman.yaml, so the SDD subagents it declared can be retired now.
+	apply = append(apply, retiredSDDAgentSteps("sync:agent:retire-sdd:", r.homeDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
 
 	// Routing guidance is refreshed per agent and outside the component loop, for
 	// the same reason install schedules it there: a persisted selection without
@@ -784,6 +788,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		}
 	}
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, guidanceAdapters) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, adapters) {
 		paths[path] = struct{}{}
 	}
 	for _, adapter := range adapters {
@@ -1207,6 +1214,7 @@ type componentSyncStep struct {
 	selection    model.Selection
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
 	skipped      *[]string // accumulates workspace-scope skip notices for global-only operations
+	state        *runtimeState
 
 	backgroundPolicy bool
 }
@@ -1426,6 +1434,8 @@ func (s componentSyncStep) Run() error {
 		engramVersion, _ := resolveEngramVersion("engram")
 		engramOpts := engram.InjectOptions{
 			CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
+			CodexServiceTier:            s.selection.CodexServiceTier,
+			CodexManagedServiceTier:     s.selection.CodexManagedServiceTier,
 			CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 			CodexModelAssignments:       s.selection.CodexModelAssignments,
 			Version:                     engramVersion,
@@ -1447,6 +1457,7 @@ func (s componentSyncStep) Run() error {
 					res, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
 				} else {
 					res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+					s.state.noteCodexServiceTier(res)
 				}
 			}
 			if err != nil {
@@ -2054,6 +2065,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
 	}
 	result.ManualActions = append(result.ManualActions, rt.state.nativeReviewActions...)
+	result.ManualActions = append(result.ManualActions, rt.state.retiredSDDActions...)
 	result.ManualActions = append(result.ManualActions, rt.skippedActions...)
 
 	// Capture how many managed assets were actually changed.
@@ -2107,7 +2119,11 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	// global state file with provenance, community tools, or background
 	// intents (issue #1074).
 	if scope == ScopeGlobal {
-		if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist); err != nil {
+		err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist)
+		if err == nil {
+			err = recordCodexServiceTier(homeDir, rt.state.codexServiceTier)
+		}
+		if err != nil {
 			persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
 			rollback := orchestrator.Rollback(result.Execution)
 			if rollback.Err != nil {
@@ -2221,6 +2237,7 @@ func RunSync(args []string) (SyncResult, error) {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
 	RestorePersistedSelection(&selection, persistedState, flags)
+	restoreCodexServiceTier(&selection, persistedState)
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
 
 	// Load persisted model assignments from state when not provided via flags.

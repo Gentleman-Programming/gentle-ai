@@ -640,7 +640,7 @@ func tuiExecuteWithSDK(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
+	execResult, orchestrator, codexServiceTier := cli.ExecuteTUIInstallRecordingCodexServiceTier(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
 	// The TUI settles asynchronously: keep its deduplicated rollback snapshot
 	// until state persistence succeeds or the failure has been compensated.
 	if orchestrator != nil {
@@ -669,6 +669,9 @@ func tuiExecuteWithSDK(
 			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
 			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
 			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+			if codexServiceTier != nil { // only what engram actually left in config.toml
+				installState.CodexServiceTier = *codexServiceTier
+			}
 			installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
 			installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
 			installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
@@ -871,6 +874,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 		selection.CodexOrchestratorAssignment = overrides.CodexOrchestratorAssignment
 		selection.ClearCodexOrchestratorAssignment = false
 	}
+	if overrides.CodexServiceTier != nil {
+		selection.CodexServiceTier = *overrides.CodexServiceTier
+	}
 	if overrides.CodexModelAssignments != nil {
 		selection.CodexModelAssignments = overrides.CodexModelAssignments
 	}
@@ -968,6 +974,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	}
 	if !selection.ClearCodexOrchestratorAssignment && selection.CodexOrchestratorAssignment == nil && s.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(s.CodexOrchestratorAssignment)
+	}
+	if model.ValidCodexServiceTier(s.CodexServiceTier) {
+		selection.CodexServiceTier, selection.CodexManagedServiceTier = s.CodexServiceTier, s.CodexServiceTier
 	}
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
