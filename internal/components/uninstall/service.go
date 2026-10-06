@@ -505,6 +505,10 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 				}
 				operationsByKey[key] = op
 			}
+			for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
+				backupTargets[op.path] = struct{}{}
+				operationsByKey[operationKey(op)] = op
+			}
 		}
 	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
@@ -536,10 +540,6 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			return plan{}, err
 		}
 		for _, op := range removeOwnedTelemetryRuntime(configDir) {
-			backupTargets[op.path] = struct{}{}
-			operationsByKey[operationKey(op)] = op
-		}
-		for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
 			backupTargets[op.path] = struct{}{}
 			operationsByKey[operationKey(op)] = op
 		}
