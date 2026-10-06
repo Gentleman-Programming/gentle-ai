@@ -20,6 +20,9 @@ import (
 // every other runtime -- whatever runtime the lineage froze at START.
 
 func TestPiDrivenStatusOnAnOpenCodeLineageNeverCreatesTheSealingKey(t *testing.T) {
+	// Pi is admitted only through its relay handshake; declare it so the test
+	// does not depend on running inside a Pi host.
+	t.Setenv("GENTLE_PI_REVIEW_RELAY_CONTRACT", "gentle-pi.review-relay/v1")
 	if testing.Short() {
 		t.Skip("requires git fixtures")
 	}
@@ -39,6 +42,9 @@ func TestPiDrivenStatusOnAnOpenCodeLineageNeverCreatesTheSealingKey(t *testing.T
 }
 
 func TestOpenCodeDrivenStatusOnAPiLineageMeasuresTheSealedHandle(t *testing.T) {
+	// Pi is admitted only through its relay handshake; declare it so the test
+	// does not depend on running inside a Pi host.
+	t.Setenv("GENTLE_PI_REVIEW_RELAY_CONTRACT", "gentle-pi.review-relay/v1")
 	if testing.Short() {
 		t.Skip("requires git fixtures")
 	}
@@ -157,6 +163,9 @@ func sealedBudgetSlack(t *testing.T, repo string, record reviewtransaction.Compa
 // OpenCode-driven STATUS that has to seal refuses with the key's repair and
 // mutates nothing, while every other runtime never consults the key.
 func TestOpenCodeStatusWithAnUnsafeSealingKeyRefusesWithItsRepair(t *testing.T) {
+	// Pi is admitted only through its relay handshake; declare it so the test
+	// does not depend on running inside a Pi host.
+	t.Setenv("GENTLE_PI_REVIEW_RELAY_CONTRACT", "gentle-pi.review-relay/v1")
 	if testing.Short() {
 		t.Skip("requires git fixtures")
 	}

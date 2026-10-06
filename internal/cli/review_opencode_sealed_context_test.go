@@ -166,6 +166,9 @@ func TestSharedResolverRefusesATamperedSealedHandleWithoutAuthorityMutation(t *t
 // reissued in that runtime's format, so a Pi host never sees rctx3 and an
 // OpenCode host never receives a digest its relay cannot resolve.
 func TestCrossRuntimeStatusReissuesTheHandleInTheDrivingRuntimesFormat(t *testing.T) {
+	// Pi is admitted only through its relay handshake; declare it so the test
+	// does not depend on running inside a Pi host.
+	t.Setenv("GENTLE_PI_REVIEW_RELAY_CONTRACT", "gentle-pi.review-relay/v1")
 	if testing.Short() {
 		t.Skip("requires relay subprocesses")
 	}
@@ -216,6 +219,9 @@ func TestCrossRuntimeStatusReissuesTheHandleInTheDrivingRuntimesFormat(t *testin
 // Every non-OpenCode runtime keeps the rctx2 digest everywhere STATUS renders
 // a handle, and that digest is exactly the unchanged derivation.
 func TestNonOpenCodeStatusKeepsTheUnchangedRctx2Digest(t *testing.T) {
+	// Pi is admitted only through its relay handshake; declare it so the test
+	// does not depend on running inside a Pi host.
+	t.Setenv("GENTLE_PI_REVIEW_RELAY_CONTRACT", "gentle-pi.review-relay/v1")
 	if testing.Short() {
 		t.Skip("requires git fixtures")
 	}
