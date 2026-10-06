@@ -79,11 +79,22 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	}
 	// Rejected here, before the runtime is created or anything is written.
 	if flags.ClaudeOrchestratorModules {
-		if scope != ScopeGlobal {
-			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q; rerun gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules", scope)
-		}
-		if !containsAgent(selection.Agents, model.AgentClaudeCode) {
-			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the %s agent in the selection; rerun gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules", model.AgentClaudeCode)
+		hasClaude := containsAgent(selection.Agents, model.AgentClaudeCode)
+		if scope != ScopeGlobal || !hasClaude {
+			// --agent selects installation targets here, not the runtime calling
+			// review. Preserve the caller's selection in the corrected command.
+			agentNames := make([]string, 0, len(selection.Agents)+1)
+			for _, agent := range selection.Agents {
+				agentNames = append(agentNames, string(agent))
+			}
+			if !hasClaude {
+				agentNames = append(agentNames, string(model.AgentClaudeCode))
+			}
+			continuation := fmt.Sprintf("gentle-ai install --agent %s --scope global --claude-orchestrator-modules", strings.Join(agentNames, ","))
+			if scope != ScopeGlobal {
+				return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q; rerun %s", scope, continuation)
+			}
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the %s agent in the selection; rerun %s", model.AgentClaudeCode, continuation)
 		}
 	}
 

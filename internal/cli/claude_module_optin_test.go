@@ -81,12 +81,13 @@ func TestClaudeModuleOptInIsADocumentedInstallFlag(t *testing.T) {
 
 func TestClaudeModuleOptInRejectsWorkspaceAndNonClaudeBeforeWriting(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		args []string
-		want string
+		name   string
+		args   []string
+		want   string
+		agents string
 	}{
-		{name: "workspace scope", args: claudeInstallArgs("--scope", "workspace", claudeModulesFlag), want: "--scope global"},
-		{name: "selection without Claude", args: []string{"--agent", "opencode", "--components", "persona", claudeModulesFlag}, want: string(model.AgentClaudeCode)},
+		{name: "workspace scope", args: claudeInstallArgs("--scope", "workspace", claudeModulesFlag), want: "--scope global", agents: "claude-code"},
+		{name: "selection without Claude", args: []string{"--agent", "opencode", "--components", "persona", claudeModulesFlag}, want: string(model.AgentClaudeCode), agents: "opencode,claude-code"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := installTestHome(t)
@@ -95,8 +96,17 @@ func TestClaudeModuleOptInRejectsWorkspaceAndNonClaudeBeforeWriting(t *testing.T
 			if err == nil || !strings.Contains(err.Error(), claudeModulesFlag) || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("RunInstall(%q) error = %v, want a %s rejection naming %q", tt.args, err, claudeModulesFlag, tt.want)
 			}
-			if !strings.Contains(err.Error(), "gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules") {
-				t.Errorf("rejection must name a runnable corrected install command: %v", err)
+			wantCommand := "gentle-ai install --agent " + tt.agents + " --scope global --claude-orchestrator-modules"
+			if !strings.Contains(err.Error(), wantCommand) {
+				t.Errorf("rejection must preserve selected installation targets in %q: %v", wantCommand, err)
+			}
+			flags, parseErr := ParseInstallFlags(strings.Fields(strings.TrimPrefix(wantCommand, "gentle-ai install ")))
+			if parseErr != nil {
+				t.Fatalf("parse corrected install command: %v", parseErr)
+			}
+			corrected, normalizeErr := NormalizeInstallFlags(flags, system.DetectionResult{})
+			if normalizeErr != nil || corrected.Scope != ScopeGlobal || !corrected.ClaudeOrchestratorModules {
+				t.Errorf("corrected install command is not valid: %+v, %v", corrected, normalizeErr)
 			}
 			requireEmptyHome(t, home)
 		})
