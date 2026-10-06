@@ -69,6 +69,50 @@ func TestCodexODDRoutingInjectionPreservesUserTextAndResync(t *testing.T) {
 	}
 }
 
+func TestClaudeODDRoutingRendersRoleModelTable(t *testing.T) {
+	home := t.TempDir()
+	options := RoutingOptions{ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{
+		"odd-worker": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh},
+	}}
+	if _, err := InjectRoutingWithOptions(home, model.AgentClaudeCode, options); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := RoutingPaths(home, model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"### Claude ODD worker assignments",
+		"Agent tool `model` parameter",
+		"| `odd-explorer` | `sonnet` |",
+		"| `odd-worker` | `opus` |",
+		"| `odd-verify` | `sonnet` |",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("Claude routing missing %q", want)
+		}
+	}
+	if strings.Contains(string(body), "reasoning_effort") || strings.Contains(string(body), "Codex ODD worker assignments") {
+		t.Error("Claude routing must not carry the Codex effort table")
+	}
+
+	codex, err := InjectRoutingWithOptions(t.TempDir(), model.AgentCodex, options)
+	if err != nil || len(codex.Files) == 0 {
+		t.Fatalf("codex injection: %+v %v", codex, err)
+	}
+	codexBody, err := os.ReadFile(codex.Files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(codexBody), "Claude ODD worker assignments") {
+		t.Error("Codex routing gained the Claude table")
+	}
+}
+
 func TestRemoteAuthorizationSectionPreservesUserText(t *testing.T) {
 	const personal = "Personal instructions: do not deploy.\n"
 	first := InjectRemoteAuthorization(personal)

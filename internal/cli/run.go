@@ -902,6 +902,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			codexPhaseModels: r.selection.CodexPhaseModelAssignments,
 			codexEfforts:     r.selection.CodexModelAssignments,
 			codexCarrils:     r.selection.CodexCarrilModelAssignments,
+			claudeModels:     r.selection.ClaudeModelAssignments,
+			claudePhases:     r.selection.ClaudePhaseAssignments,
 			backgroundPolicy: r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn,
 			legacySDD:        false,
 			id:               "agent-guidance:" + string(agent),
@@ -1770,6 +1772,8 @@ type agentRoutingGuidanceStep struct {
 	codexPhaseModels map[string]string
 	codexEfforts     map[string]model.CodexEffort
 	codexCarrils     map[string]string
+	claudeModels     map[string]model.ClaudeModelAlias
+	claudePhases     map[string]model.ClaudePhaseAssignment
 	backgroundPolicy bool
 	legacySDD        bool
 	id               string
@@ -1880,6 +1884,10 @@ func (s agentRoutingGuidanceStep) Run() error {
 		options.CodexPhaseModelAssignments = s.codexPhaseModels
 		options.CodexModelAssignments = s.codexEfforts
 		options.CodexCarrilModelAssignments = s.codexCarrils
+	}
+	if s.agent == model.AgentClaudeCode {
+		options.ClaudeModelAssignments = s.claudeModels
+		options.ClaudePhaseAssignments = s.claudePhases
 	}
 	injected, err := agentguidance.InjectRoutingWithOptions(targetDir, s.agent, options)
 	if err != nil {

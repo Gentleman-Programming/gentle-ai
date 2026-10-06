@@ -185,13 +185,13 @@ func TestHandleCustomModelSelect_SelectsModelThenEffort(t *testing.T) {
 	state := NewClaudeModelPickerState()
 	state.InCustomMode = true
 	state.Mode = ClaudeModeModelSelect
-	state.SelectedPhase = claudePhases[0]
+	state.SelectedPhase = "jd-judge-a" // ODD rows are model only; review roles keep effort.
 
 	handled, assignments := HandleClaudeModelPickerNav("enter", &state, 1) // opus
 	if !handled || assignments != nil {
 		t.Fatalf("enter on model row = handled %v assignments %v, want handled with nil assignments", handled, assignments)
 	}
-	if got := state.CustomAssignments[claudePhases[0]].Model; got != model.ClaudeModelOpus {
+	if got := state.CustomAssignments["jd-judge-a"].Model; got != model.ClaudeModelOpus {
 		t.Fatalf("selected model = %q, want opus", got)
 	}
 	if state.Mode != ClaudeModeEffortSelect {
@@ -303,5 +303,31 @@ func TestRenderClaudeModelPicker_ShowsCurrentPreset(t *testing.T) {
 				t.Errorf("expected %q in render output, got:\n%s", tc.wantLabel, out)
 			}
 		})
+	}
+}
+
+func TestClaudeODDRowsAreModelOnly(t *testing.T) {
+	state := NewClaudeModelPickerState()
+	state.CustomAssignments["odd-worker"] = model.ClaudePhaseAssignment{Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}
+	HandleClaudeModelPickerNav("enter", &state, len(claudePresetOrder)-1)
+	cursor := -1
+	for idx, phase := range claudePhases {
+		if phase == "odd-worker" {
+			cursor = idx
+		}
+	}
+	out := RenderClaudeModelPicker(state, cursor)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "ODD Worker") && (strings.Contains(line, "[high]") || strings.Contains(line, "[default]")) {
+			t.Errorf("ODD row shows an effort the Agent tool cannot take: %q", line)
+		}
+	}
+	HandleClaudeModelPickerNav("enter", &state, cursor)
+	HandleClaudeModelPickerNav("enter", &state, 1) // opus
+	if state.Mode != ClaudeModePhaseList {
+		t.Fatalf("ODD role offered effort selection, mode = %v", state.Mode)
+	}
+	if got := state.CustomAssignments["odd-worker"]; got != (model.ClaudePhaseAssignment{Model: model.ClaudeModelOpus}) {
+		t.Fatalf("ODD assignment = %+v, want opus with no effort", got)
 	}
 }
