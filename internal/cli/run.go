@@ -2285,8 +2285,10 @@ func userDeniesQuestion(root, orchestrator map[string]any) bool {
 		if rules["*"] == "deny" || rules["question"] == "deny" {
 			return true
 		}
-		if patterns, _ := rules["question"].(map[string]any); patterns["*"] == "deny" {
-			return true
+		for _, key := range []string{"*", "question"} {
+			if patterns, _ := rules[key].(map[string]any); patterns["*"] == "deny" {
+				return true
+			}
 		}
 		if tools, _ := scope["tools"].(map[string]any); tools["question"] == false {
 			return true

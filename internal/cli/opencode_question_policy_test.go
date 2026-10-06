@@ -39,6 +39,7 @@ func TestOpenCodeFamilyInstallHonorsUserQuestionDeny(t *testing.T) {
 			{"global wildcard deny", `{"permission":{"*":"deny"}}`, openCodeRuntimeVersions},
 			{"global question deny", `{"permission":{"question":"deny"}}`, openCodeRuntimeVersions},
 			{"global question pattern deny", `{"permission":{"question":{"*":"deny"}}}`, openCodeRuntimeVersions},
+			{"global wildcard pattern deny", `{"permission":{"*":{"*":"deny"}}}`, openCodeRuntimeVersions},
 			{"global tools question off", `{"tools":{"question":false}}`, openCodeRuntimeVersions},
 			{"global native wildcard deny", `{"permissions":[{"action":"*","resource":"*","effect":"deny"}]}`, v2Only},
 			{"global native question deny", `{"permissions":[{"action":"question","effect":"deny"}]}`, v2Only},
