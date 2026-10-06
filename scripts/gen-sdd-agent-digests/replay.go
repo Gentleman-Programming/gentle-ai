@@ -17,13 +17,18 @@ import (
 	"sync"
 )
 
-// Two retired SDD files were rendered by Go code, with no golden of either:
+// Three retired SDD files were rendered by Go code, with no golden of any:
 //   - Codex's sdd-{strong,mid,cheap}.config.toml profiles (v1.36.0 to
 //     v3.7.0), upserted by codex.WriteCodexProfiles into whatever the file
 //     held, so a render depends on the state the previous release left;
 //   - Kimi's sdd-orchestrator.md Jinja module (v1.21.0 to v3.7.0), the
 //     embedded asset verbatim until v1.46.0 and rendered by the SDD
-//     component afterwards.
+//     component afterwards;
+//   - Claude Code's lazy skills/_shared/sdd-orchestrator-workflow.md
+//     (v1.43.3 to v3.7.0), written by writeClaudeLazySDDWorkflow. Until
+//     v2.6.0 it carried the user's model assignments: it is replayed with
+//     none and with every model preset the release offered, so a table the
+//     user customized stays unproven.
 //
 // The generator replays each release's own writer: it extracts the release's
 // internal tree, adds a test that calls the exact expression the release used,
@@ -38,6 +43,8 @@ const (
 	codexProfilesFile = "internal/agents/codex/profiles.go"
 	kimiModuleAsset   = "internal/assets/kimi/sdd-orchestrator.md"
 	kimiModuleKey     = "modules/sdd-orchestrator.md"
+	claudeModelFile   = "internal/model/claude_model.go"
+	claudeWorkflowKey = "skills/_shared/sdd-orchestrator-workflow.md"
 	replayTestFile    = "zz_gentle_ai_replay_test.go"
 	// replayUnavailableExit is the exit code for a replay whose modules are
 	// missing from the local cache, distinct from a generation failure.
@@ -54,10 +61,22 @@ var (
 	codexProfilePaths   = "func SddProfilePaths(codexHomeDir string) []string"
 	modulePath          = regexp.MustCompile(`(?m)^module (\S+)$`)
 	maxCodexReplayRound = 5
+
+	claudeWriter           = "func writeClaudeLazySDDWorkflow("
+	claudeAssignmentWriter = "func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, legacyAssignments map[string]model.ClaudeModelAlias, phaseAssignments map[string]model.ClaudePhaseAssignment) (InjectionResult, error) {"
+	claudePlainWriter      = "func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter) (InjectionResult, error) {"
+	claudePreparedWriter   = "func writeClaudeLazySDDWorkflow(homeDir string, adapter agents.Adapter, prepared ...string) (InjectionResult, error) {"
+	// Releases with the prepared writer passed it the lazy workflow their
+	// session preflight rendered with no options.
+	claudePreparedCall = "writeClaudeLazySDDWorkflow(homeDir, adapter, lazyWorkflow)"
+	claudeLazyRender   = "lazy, err = renderClaudeSessionPreflight()"
+	claudePreset       = regexp.MustCompile(`(?m)^func (ClaudeModelPreset[A-Za-z0-9]+)\(\) map\[string\]ClaudeModelAlias \{$`)
 )
 
 type replayGroup struct {
 	tags []string
+	// kind is the render a group replays: kimi, claude, or codex.
+	kind string
 	pkg  string
 	// test is the replay test source with the module path still to fill in.
 	test string
@@ -67,8 +86,8 @@ type replayGroup struct {
 }
 
 type replayHarvest struct {
-	kimi, codex []*replayGroup
-	byKey       map[string]*replayGroup
+	kimi, claude, codex []*replayGroup
+	byKey               map[string]*replayGroup
 	// verbatim maps a tag to the Kimi asset it installed unchanged.
 	verbatim map[string]string
 	tmp      string
@@ -78,10 +97,14 @@ func newReplayHarvest() *replayHarvest {
 	return &replayHarvest{byKey: map[string]*replayGroup{}, verbatim: map[string]string{}}
 }
 
-// collect classifies one release's Kimi module and Codex profile writers.
+// collect classifies one release's Kimi module, Claude Code workflow, and
+// Codex profile writers.
 func (h *replayHarvest) collect(tag string, files map[string]string) {
 	if blob, ok := files[kimiModuleAsset]; ok {
 		h.collectKimi(tag, files, cachedBlob(blob))
+	}
+	if blob, ok := files[sddInjectFile]; ok && strings.Contains(cachedBlob(blob), claudeWriter) {
+		h.collectClaude(tag, files, cachedBlob(blob))
 	}
 	if blob, ok := files[codexProfilesFile]; ok {
 		h.collectCodex(tag, cachedBlob(blob))
@@ -119,7 +142,41 @@ func (h *replayHarvest) collectKimi(tag string, files map[string]string, asset s
 		options = kimiReplayPolicyOptions
 	}
 	test := fmt.Sprintf(kimiReplayTest, options, render)
-	h.group(tag, "./internal/components/sdd", test, "internal/components", "internal/assets", "internal/model", "internal/agents")
+	h.group("kimi", tag, "./internal/components/sdd", test, "internal/components", "internal/assets", "internal/model", "internal/agents")
+}
+
+// collectClaude replays the release's writeClaudeLazySDDWorkflow with every
+// argument its installer passed for an install without custom assignments.
+func (h *replayHarvest) collectClaude(tag string, files map[string]string, inject string) {
+	var calls []string
+	helper := ""
+	switch {
+	case strings.Contains(inject, claudeAssignmentWriter):
+		blob, ok := files[claudeModelFile]
+		presets := claudePreset.FindAllStringSubmatch(cachedBlob(blob), -1)
+		if !ok || len(presets) == 0 {
+			fail("%s: no Claude model presets in %s; update the generator", tag, claudeModelFile)
+		}
+		calls = append(calls, "writeClaudeLazySDDWorkflow(home, adapter, nil, nil)")
+		for _, preset := range presets {
+			calls = append(calls, "writeClaudeLazySDDWorkflow(home, adapter, model."+preset[1]+"(), nil)")
+		}
+	case strings.Contains(inject, claudePlainWriter):
+		calls = append(calls, "writeClaudeLazySDDWorkflow(home, adapter)")
+	case strings.Contains(inject, claudePreparedWriter):
+		if strings.Count(inject, claudePreparedCall) != 1 || strings.Count(inject, sessionPreflight) != 1 || strings.Count(inject, claudeLazyRender) != 1 {
+			fail("%s: the Claude Code workflow is not the session preflight render; update the generator", tag)
+		}
+		calls = append(calls, "gentleAIReplayPrepared(home, adapter)")
+		helper = claudeReplayPrepared
+	default:
+		fail("%s: the Claude Code workflow writer is not recognized; update the generator", tag)
+	}
+	var b strings.Builder
+	for _, call := range calls {
+		fmt.Fprintf(&b, "\t\tfunc(home string) (InjectionResult, error) { return %s },\n", call)
+	}
+	h.group("claude", tag, "./internal/components/sdd", fmt.Sprintf(claudeReplayTest, b.String(), helper), "internal/components", "internal/assets", "internal/model", "internal/agents")
 }
 
 func (h *replayHarvest) collectCodex(tag, source string) {
@@ -135,32 +192,40 @@ func (h *replayHarvest) collectCodex(tag, source string) {
 	if !found || !strings.Contains(source, codexProfilePaths) {
 		fail("%s: the Codex profile writer is not recognized; update the generator", tag)
 	}
-	h.group(tag, "./internal/agents/codex", fmt.Sprintf(codexReplayTest, args), "internal/agents/codex", "internal/components/filemerge", "internal/model")
+	h.group("codex", tag, "./internal/agents/codex", fmt.Sprintf(codexReplayTest, args), "internal/agents/codex", "internal/components/filemerge", "internal/model")
 }
 
 // group files tag under the replay of its render inputs: the test and every
 // tree the writer reads.
-func (h *replayHarvest) group(tag, pkg, test string, trees ...string) {
+func (h *replayHarvest) group(kind, tag, pkg, test string, trees ...string) {
 	args := []string{"rev-parse", tag + ":go.mod"}
 	for _, tree := range trees {
 		args = append(args, tag+":"+tree)
 	}
-	key := pkg + "\n" + test + "\n" + git(args...)
+	key := kind + "\n" + pkg + "\n" + test + "\n" + git(args...)
 	if g := h.byKey[key]; g != nil {
 		g.tags = append(g.tags, tag)
 		return
 	}
-	g := &replayGroup{tags: []string{tag}, pkg: pkg, test: test}
+	g := &replayGroup{tags: []string{tag}, kind: kind, pkg: pkg, test: test}
 	h.byKey[key] = g
-	if pkg == "./internal/agents/codex" {
-		h.codex = append(h.codex, g)
-	} else {
+	switch kind {
+	case "kimi":
 		h.kimi = append(h.kimi, g)
+	case "claude":
+		h.claude = append(h.claude, g)
+	default:
+		h.codex = append(h.codex, g)
 	}
 }
 
-// run replays every group: Kimi once, Codex until its renders are closed
-// under every upgrade.
+// groups lists every replay group: Kimi, Claude Code, then Codex.
+func (h *replayHarvest) groups() []*replayGroup {
+	return slices.Concat(h.kimi, h.claude, h.codex)
+}
+
+// run replays every group: Kimi and Claude Code once, Codex until its
+// renders are closed under every upgrade.
 func (h *replayHarvest) run() {
 	var err error
 	if h.tmp, err = os.MkdirTemp("", "gen-sdd-replay-"); err != nil {
@@ -169,10 +234,10 @@ func (h *replayHarvest) run() {
 	cleanups = append(cleanups, func() { _ = os.RemoveAll(h.tmp) })
 	// A stable directory per group keeps the Go build cache warm across
 	// Codex rounds; each run extracts it and removes it again.
-	for i, g := range append(append([]*replayGroup(nil), h.kimi...), h.codex...) {
+	for i, g := range h.groups() {
 		g.dir = filepath.Join(h.tmp, strconv.Itoa(i))
 	}
-	parallel(h.kimi, func(g *replayGroup) { g.replay(nil) })
+	parallel(slices.Concat(h.kimi, h.claude), func(g *replayGroup) { g.replay(nil) })
 	// Groups are in first-release order. Each writer rewrites absence, every
 	// render an earlier release left, and its own renders until they are
 	// stable. Downgrades are not modeled: a v1.36.0 writer appends a blank
@@ -265,21 +330,26 @@ func (g *replayGroup) replay(inputs []string) {
 // register adds every render to the asset registry in release order.
 func (h *replayHarvest) register(tags []string, assets *assetHarvest) {
 	groupOf := map[string]*replayGroup{}
-	for _, g := range append(append([]*replayGroup(nil), h.kimi...), h.codex...) {
+	for _, g := range h.groups() {
 		for _, tag := range g.tags {
-			groupOf[g.pkg+tag] = g
+			groupOf[g.kind+tag] = g
 		}
 	}
 	for _, tag := range tags {
 		if asset, ok := h.verbatim[tag]; ok {
 			assets.add(kimiModuleKey, asset, tag)
 		}
-		if g := groupOf["./internal/components/sdd"+tag]; g != nil {
+		if g := groupOf["kimi"+tag]; g != nil {
 			for _, render := range g.outputs["kimi"] {
 				assets.add(kimiModuleKey, render, tag)
 			}
 		}
-		if g := groupOf["./internal/agents/codex"+tag]; g != nil {
+		if g := groupOf["claude"+tag]; g != nil {
+			for _, render := range g.outputs["claude"] {
+				assets.add(claudeWorkflowKey, render, tag)
+			}
+		}
+		if g := groupOf["codex"+tag]; g != nil {
 			for _, name := range sortedKeys(g.outputs) {
 				if !strings.HasPrefix(name, "sdd-") || !strings.HasSuffix(name, ".config.toml") {
 					fail("%s: unexpected Codex profile %s", tag, name)
@@ -290,7 +360,7 @@ func (h *replayHarvest) register(tags []string, assets *assetHarvest) {
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "gen-sdd-agent-digests: replayed %d Kimi module and %d Codex profile writers\n", len(h.kimi), len(h.codex))
+	fmt.Fprintf(os.Stderr, "gen-sdd-agent-digests: replayed %d Kimi module, %d Claude Code workflow, and %d Codex profile writers\n", len(h.kimi), len(h.claude), len(h.codex))
 }
 
 func sortedKeys(m map[string][]string) []string {
@@ -407,6 +477,58 @@ const kimiReplayPolicyOptions = `	policy := reflect.TypeOf(OrchestratorRenderOpt
 	}
 	field.SetBool(true)
 	return []InjectOptions{{}, on}
+`
+
+const claudeReplayTest = `package sdd
+
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+
+	"{{MODULE}}/internal/agents/claude"
+	"{{MODULE}}/internal/model"
+)
+
+var _ model.AgentID
+
+// TestGentleAIReplay runs every writer call in a fresh home and records the
+// lazy SDD workflow it wrote.
+func TestGentleAIReplay(t *testing.T) {
+	out := os.Getenv("GENTLE_AI_REPLAY_OUT")
+	adapter := claude.NewAdapter()
+	for i, write := range []func(home string) (InjectionResult, error){
+%s	} {
+		home := t.TempDir()
+		if _, err := write(home); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(adapter.SkillsDir(home), "_shared", "sdd-orchestrator-workflow.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(out, strconv.Itoa(i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "claude"), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+%s`
+
+const claudeReplayPrepared = `
+// gentleAIReplayPrepared passes the writer the workflow the session
+// preflight rendered, as Inject did.
+func gentleAIReplayPrepared(home string, adapter *claude.Adapter) (InjectionResult, error) {
+	_, lazy, _, err := prepareSessionPreflight(home, adapter, InjectOptions{})
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	return writeClaudeLazySDDWorkflow(home, adapter, lazy)
+}
 `
 
 const codexReplayTest = `package codex

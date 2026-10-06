@@ -13,8 +13,8 @@
 // OpenCode family, proven against every release's settings golden render.
 // And the asset registry (see assets.go): every retired SDD skill, slash
 // command, and Windsurf workflow render, proven against the golden renders,
-// plus Codex's SDD profiles and Kimi's SDD module, proven by replaying each
-// release's own writer (see replay.go).
+// plus Codex's SDD profiles, Kimi's SDD module, and Claude Code's lazy SDD
+// workflow, proven by replaying each release's own writer (see replay.go).
 //
 // SDD was retired in v4.0.0, so the release set is closed at that tag and
 // later releases never change the registry. Fetch tags first:
@@ -141,7 +141,7 @@ func main() {
 	for _, tag := range tags {
 		templates := map[string]string{}
 		files := map[string]string{}
-		for _, line := range strings.Split(git("ls-tree", "-r", tag, "--", "internal/assets", profilesFile, promptsFile, goldenDir, sddInjectFile, sddCommandsFile, codexProfilesFile), "\n") {
+		for _, line := range strings.Split(git("ls-tree", "-r", tag, "--", "internal/assets", profilesFile, promptsFile, goldenDir, sddInjectFile, sddCommandsFile, codexProfilesFile, claudeModelFile), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) != 4 || fields[1] != "blob" {
 				continue
