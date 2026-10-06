@@ -135,6 +135,17 @@ removed by a later sync. A workspace sync edits only the project settings
 file. The settings file and prompts are in the install, sync, and upgrade
 snapshots.
 
+The managed `gentle-orchestrator` relays blocking prompts through the native
+`question` tool, which OpenCode 1.x denies to custom agents, so install and sync
+set its `permission.question` to `"allow"` on both majors (OpenCode and Kilo,
+#4816). They write nothing when the user already set a question rule for it, or
+has a deny that covers the tool: `permission` set to `"deny"`, or a `"*"` or
+`question` rule of `"deny"`, globally or on the orchestrator. An agent rule
+would override that deny. Uninstall removes the `"allow"` only when the
+orchestrator's permission object still has the shape install wrote, `question`
+beside a `task` map of Gentle AI delegation grants. Otherwise it keeps the
+value and lists it under manual actions.
+
 Before writing V2 managed plugins, install and sync check the SDK installed in
 the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so
 an SDK that matches a newer OpenCode runtime is kept as is. A missing SDK, an older

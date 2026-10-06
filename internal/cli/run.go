@@ -2225,7 +2225,7 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 // The orchestrator prompt relays blocking prompts through the native question
 // tool, which OpenCode denies to custom agents unless their own permission
 // allows it (#4816); v3.7.0 shipped the same rule. A question rule the user
-// already set is kept.
+// already set is kept, and none is written over a user deny policy.
 func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID) (bool, error) {
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -2243,7 +2243,7 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	agents, _ := root["agent"].(map[string]any)
 	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
 	current, _ := orchestrator["permission"].(map[string]any)
-	if _, set := current["question"]; !set {
+	if _, set := current["question"]; !set && !userDeniesQuestion(root, orchestrator) {
 		permission["question"] = "allow"
 	}
 	roles := map[string]any{
@@ -2265,6 +2265,22 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	}
 	result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	return result.Changed, err
+}
+
+// userDeniesQuestion reports a user deny that covers the question tool, either
+// global or on the orchestrator. An agent rule outranks it at runtime, so an
+// "allow" written beside it would override the user's policy.
+func userDeniesQuestion(root, orchestrator map[string]any) bool {
+	for _, permission := range []any{root["permission"], orchestrator["permission"]} {
+		if permission == "deny" {
+			return true
+		}
+		rules, _ := permission.(map[string]any)
+		if rules["*"] == "deny" || rules["question"] == "deny" {
+			return true
+		}
+	}
+	return false
 }
 
 // installOpenCodeODDParityAgents installs the ODD/JD/review-lens subagents at

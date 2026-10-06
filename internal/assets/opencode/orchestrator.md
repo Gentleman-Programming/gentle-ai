@@ -165,8 +165,8 @@ Orchestrator skill resolution (do once per session):
 For each sub-agent launch:
 
 1. Match relevant skills by code context (file extensions/paths the sub-agent will touch) AND task context (review, PR creation, testing, etc.)
-2. List matching skills in the sub-agent prompt under `## Skills to load before work`: an installed skill (one listed in `<available_skills>`) by its name, and a skill file inside the workspace by its workspace-relative `SKILL.md` path. Never pass an absolute path outside the workspace: a delegated agent may be denied reads there, while the native `skill` tool loads installed skills by name.
-3. Instruct the sub-agent to load each listed skill BEFORE task-specific work: a name with the native `skill` tool, a path with `read`
+2. List matching skills in the sub-agent prompt under `## Skills to load before work`: an installed skill (one listed in `<available_skills>`) by the identifier the native `skill` tool takes: its `<id>` when `<available_skills>` lists one (OpenCode 2.x), otherwise its `<name>` (OpenCode 1.x); and a skill file inside the workspace by its workspace-relative `SKILL.md` path. Never pass an absolute path outside the workspace: a delegated agent may be denied reads there, while the native `skill` tool loads installed skills by that identifier.
+3. Instruct the sub-agent to load each listed skill BEFORE task-specific work: a skill identifier with the native `skill` tool, a path with `read`
 
 ### Skill Resolution Feedback
 
