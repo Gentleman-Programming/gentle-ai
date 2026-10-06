@@ -125,9 +125,8 @@ func TestSharedReferencesDoNotAdvertiseSDD(t *testing.T) {
 
 func sharedReferenceInvitesSDD(line string) bool {
 	lower := strings.ToLower(line)
-	// Historical negative controls are evidence, not instructions. Section
-	// markers are stable composer bindings, not prose offered to the agent.
-	if strings.Contains(lower, "historical negative control:") || strings.HasPrefix(strings.TrimSpace(lower), "<!-- sdd-orchestrator-section:") {
+	// Historical negative controls are evidence, not instructions.
+	if strings.Contains(lower, "historical negative control:") {
 		return false
 	}
 	return regexp.MustCompile(`\bsdd\b|sdd[-/]|openspec|spec-driven`).MatchString(lower)
@@ -139,7 +138,8 @@ func TestSharedReferenceNegativeControls(t *testing.T) {
 		want bool
 	}{
 		{"Historical negative control: do not run sdd-apply or create OpenSpec files.", false},
-		{"<!-- sdd-orchestrator-section:Language Domain Contract:start -->", false},
+		{"<!-- odd-orchestrator-section:Language Domain Contract:start -->", false},
+		{"<!-- sdd-orchestrator-section:Language Domain Contract:start -->", true},
 		{"Run sdd-apply and persist in openspec/.", true},
 		{"Use spec-driven development for this task.", true},
 	} {

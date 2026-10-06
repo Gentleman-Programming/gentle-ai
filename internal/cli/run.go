@@ -891,6 +891,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	// After the native installer: it rewrites a Gentle-owned v3 Kimi
 	// gentleman.yaml, so the SDD subagents it declared can be retired now.
 	apply = append(apply, retiredSDDAgentSteps("agent:retire-sdd:", r.homeDir, r.scope, r.resolved.Agents, nil, r.state)...)
+	apply = append(apply, retiredOpenCodeSDDSettingsSteps("agent:retire-sdd-settings:", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil, r.state)...)
 
 	// Routing guidance is scheduled per agent and outside the component loop:
 	// an agent that cannot choose between direct and delegated work is unusable,
@@ -1031,6 +1032,115 @@ func retiredSDDAgentBackupPaths(homeDir string, scope InstallScope, adapters []a
 		paths = append(paths, legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir))...)
 	}
 	return paths
+}
+
+// retiredOpenCodeSDDTarget is one OpenCode-family settings file that may hold
+// retired SDD agents, with the shared prompt directory retired beside it.
+type retiredOpenCodeSDDTarget struct {
+	agent    model.AgentID
+	settings string
+	prompts  string
+	// agentDirs are markdown agent directories the runtime also loads,
+	// beyond the ones beside settings; they hold the `sdd-*` allow.
+	agentDirs []string
+}
+
+// retiredOpenCodeSDDTargets resolves where releases wrote the OpenCode
+// family's SDD agents: OpenCode's selected settings document in either scope
+// and, in the global scope only, Kilocode's settings and the shared prompt
+// directory, so a workspace-scoped run never reaches the global config.
+func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []retiredOpenCodeSDDTarget {
+	var targets []retiredOpenCodeSDDTarget
+	for _, agent := range agentIDs {
+		switch {
+		case agent == model.AgentOpenCode:
+			// The selected settings may be a project file; OpenCode still loads
+			// the global markdown agents beside it.
+			config := opencodeagent.ConfigPath(homeDir)
+			target := retiredOpenCodeSDDTarget{
+				agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
+				agentDirs: []string{filepath.Join(config, "agent"), filepath.Join(config, "agents")},
+			}
+			if scope != ScopeWorkspace {
+				target.prompts = legacyassets.SharedPromptDir(homeDir)
+			}
+			targets = append(targets, target)
+		case agent == model.AgentKilocode && scope != ScopeWorkspace:
+			targets = append(targets, retiredOpenCodeSDDTarget{agent: agent, settings: resolveAdapters([]model.AgentID{agent})[0].SettingsPath(homeDir)})
+		}
+	}
+	return targets
+}
+
+// retiredOpenCodeSDDSettingsSteps schedules the settings retirement for every
+// selected OpenCode-family runtime, before routing guidance writes settings.
+func retiredOpenCodeSDDSettingsSteps(prefix, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string, state *runtimeState) []pipeline.Step {
+	var steps []pipeline.Step
+	for _, target := range retiredOpenCodeSDDTargets(homeDir, workspaceDir, scope, agentIDs) {
+		steps = append(steps, retiredOpenCodeSDDSettingsStep{id: prefix + string(target.agent), target: target, changedFiles: changedFiles, state: state})
+	}
+	return steps
+}
+
+// retiredOpenCodeSDDBackupPaths is the snapshot half of
+// retiredOpenCodeSDDSettingsSteps.
+func retiredOpenCodeSDDBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
+	var paths []string
+	for _, target := range retiredOpenCodeSDDTargets(homeDir, workspaceDir, scope, agentIDs) {
+		paths = append(paths, target.settings)
+		if target.prompts == "" {
+			continue
+		}
+		// Retirement never enters a prompts directory that is not a real
+		// directory (e.g. a symlink), so the snapshot must not declare paths
+		// through it either; a link outside the home would make rollback
+		// refuse paths it never needed to restore.
+		if info, err := os.Lstat(target.prompts); err == nil && !info.IsDir() {
+			continue
+		}
+		for _, phase := range legacyassets.SharedPromptPhases() {
+			paths = append(paths, filepath.Join(target.prompts, phase+".md"))
+		}
+	}
+	return paths
+}
+
+// retiredOpenCodeSDDSettingsStep removes the retired SDD agents Gentle AI
+// wrote to an OpenCode-family settings file, in the V1 and native shapes, and
+// the shared prompts it rendered for them (#5157, #5182). Entries and prompts
+// whose ownership cannot be proven are preserved and reported.
+type retiredOpenCodeSDDSettingsStep struct {
+	id           string
+	target       retiredOpenCodeSDDTarget
+	changedFiles *[]string
+	state        *runtimeState
+}
+
+func (s retiredOpenCodeSDDSettingsStep) ID() string { return s.id }
+
+func (s retiredOpenCodeSDDSettingsStep) Run() error {
+	settings, err := legacyassets.RetireOpenCodeSDDSettings(s.target.settings, s.target.agentDirs...)
+	if settings.Changed && s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, s.target.settings)
+	}
+	if err != nil {
+		return fmt.Errorf("retire SDD agents in %q settings: %w", s.target.agent, err)
+	}
+	actions := settings.ManualActions()
+	if s.target.prompts != "" {
+		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts)
+		if s.changedFiles != nil {
+			*s.changedFiles = append(*s.changedFiles, prompts.Removed...)
+		}
+		if err != nil {
+			return fmt.Errorf("retire SDD prompts for %q: %w", s.target.agent, err)
+		}
+		actions = append(actions, prompts.ManualActions()...)
+	}
+	if s.state != nil {
+		s.state.retiredSDDActions = append(s.state.retiredSDDActions, actions...)
+	}
+	return nil
 }
 
 func nativeReviewPreservedAction(path string) string {
@@ -1886,12 +1996,15 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 	var removedReview []string
 	for name, value := range agents {
 		entry, ok := value.(map[string]any)
-		if !ok || entry["__managed_by"] != "gentle-ai/sdd" {
+		// Retired SDD agents belong to the settings retirement, which removes
+		// them without discarding comments; a marked one left here was kept
+		// for its comments and must keep its marker.
+		if !ok || entry["__managed_by"] != "gentle-ai/sdd" || strings.HasPrefix(name, "sdd-") {
 			continue
 		}
 		changed = true
 		switch {
-		case name == "general", name == "explore", strings.HasPrefix(name, "sdd-"):
+		case name == "general", name == "explore":
 			delete(agents, name)
 		case !rdd && opencodeagents.IsReview(name):
 			// The v3.7.0 marker proves ownership of a review agent this
@@ -1913,14 +2026,17 @@ func migrateLegacyOpenCodeAgents(settingsPath string, agent model.AgentID) (bool
 	if !changed {
 		return false, nil, nil
 	}
-	// Match the existing OpenCode writers: JSONC input is accepted and the
-	// settings document is normalized to JSON on write, retaining permission
-	// rule order and all unrelated top-level values.
-	encoded, err := filemerge.MarshalJSONPreservingPermissions(raw, root)
+	// Only the agent value is rewritten, so JSONC comments and formatting
+	// elsewhere in the document survive, as with the other OpenCode writers.
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": agents}})
 	if err != nil {
 		return false, nil, err
 	}
-	result, err := filemerge.WriteFileAtomic(settingsPath, append(encoded, '\n'), filemerge.ExistingFileMode(settingsPath, 0o644))
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
+	if err != nil {
+		return false, nil, err
+	}
+	result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	// WriteFileAtomic may publish the replacement and still report an error;
 	// keep its Changed state so the caller records the file either way.
 	return result.Changed, removedReview, err
@@ -2039,7 +2155,7 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	if err != nil {
 		return false, err
 	}
-	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
 	if err != nil {
 		return false, err
 	}
@@ -2074,7 +2190,7 @@ func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID)
 	if err != nil {
 		return false, err
 	}
-	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
 	if err != nil {
 		return false, err
 	}
@@ -3493,6 +3609,9 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 			paths[filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")] = struct{}{}
 		}
 		for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, []agents.Adapter{adapter}) {
+			paths[path] = struct{}{}
+		}
+		for _, path := range retiredOpenCodeSDDBackupPaths(homeDir, workspaceDir, scope, []model.AgentID{adapter.Agent()}) {
 			paths[path] = struct{}{}
 		}
 		// Native review and Judgment Day agents are installed independently of SDD.

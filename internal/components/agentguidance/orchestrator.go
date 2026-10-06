@@ -299,8 +299,8 @@ func expandSharedOrchestratorSections(content string, rdd bool) (string, error) 
 }
 
 func sharedOrchestratorSection(shared, name string) string {
-	open := "<!-- sdd-orchestrator-section:" + name + ":start -->"
-	closing := "<!-- sdd-orchestrator-section:" + name + ":end -->"
+	open := "<!-- odd-orchestrator-section:" + name + ":start -->"
+	closing := "<!-- odd-orchestrator-section:" + name + ":end -->"
 	start := strings.Index(shared, open)
 	end := strings.Index(shared, closing)
 	if start < 0 || end < start {
