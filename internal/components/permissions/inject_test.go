@@ -1108,3 +1108,142 @@ func TestKilocodePermissionsKeepBaseDuplicateKeyBehavior(t *testing.T) {
 		t.Fatalf("permission missing after merge: %s", raw)
 	}
 }
+
+// A user running deny-by-default keeps it: no overlay rule looser than the
+// root "*" lands inside a tool map the user scoped, where it would follow the
+// root rule and win as the last match.
+func TestInjectKeepsUserDenyByDefault(t *testing.T) {
+	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(id), func(t *testing.T) {
+			home := t.TempDir()
+			adapter, _ := agents.NewAdapter(id)
+			path := adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := `{"permission":{"*":"deny","bash":{"git status":"allow"}}}`
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Inject(home, adapter); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root struct {
+				Permission map[string]json.RawMessage `json:"permission"`
+			}
+			if err := json.Unmarshal(raw, &root); err != nil {
+				t.Fatal(err)
+			}
+			if string(root.Permission["*"]) != `"deny"` {
+				t.Errorf("root deny changed: %s", root.Permission["*"])
+			}
+			// An unlisted command must fall through to the root deny: no tool
+			// map may carry its own "*" rule the user did not write.
+			for tool, value := range root.Permission {
+				var patterns map[string]string
+				if json.Unmarshal(value, &patterns) == nil {
+					if action, ok := patterns["*"]; ok {
+						t.Errorf("%s gained \"*\": %q over the user's deny-by-default", tool, action)
+					}
+				}
+			}
+			if result, err := Inject(home, adapter); err != nil || result.Changed {
+				t.Fatalf("repeat injection = %+v, %v", result, err)
+			}
+			if got := remoteAction(t, raw, "rm -rf /"); got != "deny" {
+				t.Errorf("overlay deny lost: got %s", got)
+			}
+			// Overlay rules follow the root deny, so any ask or allow the
+			// overlay added would loosen it; only the user's allow may remain.
+			for tool, value := range root.Permission {
+				var patterns map[string]string
+				if json.Unmarshal(value, &patterns) != nil {
+					continue
+				}
+				for pattern, action := range patterns {
+					if action != "deny" && !(tool == "bash" && pattern == "git status") {
+						t.Errorf("%s %q: %s loosens the user's deny-by-default", tool, pattern, action)
+					}
+				}
+			}
+			if got := remoteAction(t, raw, "git status"); got != "allow" {
+				t.Errorf("user's own allow: got %s, want allow", got)
+			}
+		})
+	}
+}
+
+// Under a root "*" of ask, the overlay keeps its asks and denies but adds no
+// allow that would follow the root rule.
+func TestInjectKeepsUserAskByDefault(t *testing.T) {
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentOpenCode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permission":{"*":"ask","bash":{"ls":"allow"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Permission map[string]map[string]string `json:"permission"`
+	}
+	_ = json.Unmarshal(raw, &root)
+	for pattern, action := range root.Permission["bash"] {
+		if action == "allow" && pattern != "ls" {
+			t.Errorf("bash %q: allow loosens the user's ask-by-default", pattern)
+		}
+	}
+	if got := remoteAction(t, raw, "git push"); got != "ask" {
+		t.Errorf("overlay ask lost: got %s", got)
+	}
+}
+
+// A root "*" pattern map of deny is deny-by-default too: the overlay adds no
+// looser rule, and the filter must not panic on the map form.
+func TestInjectToleratesPatternMapRootDefault(t *testing.T) {
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentKilocode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permission":{"*":{"*":"deny"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Permission map[string]json.RawMessage `json:"permission"`
+	}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	for tool, value := range root.Permission {
+		var patterns map[string]string
+		if tool == "*" || json.Unmarshal(value, &patterns) != nil {
+			continue
+		}
+		for pattern, action := range patterns {
+			if action != "deny" {
+				t.Errorf("%s %q: %s loosens the user's deny-by-default", tool, pattern, action)
+			}
+		}
+	}
+}
