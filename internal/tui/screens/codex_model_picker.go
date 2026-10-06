@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"strings"
@@ -67,6 +68,9 @@ const (
 	CodexCustomModeModelSelect
 	// CodexCustomModeEffortSelect shows the effort level list for the selected model.
 	CodexCustomModeEffortSelect
+	// CodexCustomModeServiceTier shows the global speed (service tier) choice
+	// after a preset is chosen. Fast is a service tier, never an effort.
+	CodexCustomModeServiceTier
 )
 
 // CodexCustomAssignment holds the model id + reasoning effort for one phase in
@@ -91,6 +95,15 @@ type CodexModelPickerState struct {
 	AvailableModels    []string                         // discovered model IDs for Custom mode
 	CustomAssignments  map[string]CodexCustomAssignment // phase → assignment
 	CustomConfirmed    bool                             // true after user presses Confirm
+
+	// ModelCapabilities holds runtime-advertised efforts and service tiers per
+	// model; models absent here use the curated effort list.
+	ModelCapabilities map[string]model.CodexModelCapabilities
+	// ServiceTier is the one global Codex service tier ("" = standard). Codex
+	// children inherit the session tier, so it is not a per-role choice.
+	ServiceTier       string
+	ServiceTierCursor int
+	PendingPreset     CodexModelPreset // preset awaiting its service tier choice
 }
 
 // NewCodexModelPickerState returns the initial picker state: Recommended preset.
@@ -190,7 +203,9 @@ func CodexModelPickerOptionCount(state CodexModelPickerState) int {
 		}
 		return len(models)
 	case CodexCustomModeEffortSelect:
-		return len(codexEffortOptions)
+		return len(codexEffortOptions(state))
+	case CodexCustomModeServiceTier:
+		return len(codexServiceTierOptions(state))
 	}
 	return len(codexPresetOrder) + 1 + 1 // presets + Custom + Back
 }
@@ -234,6 +249,7 @@ func HandleCodexModelPickerNav(
 	// Custom row: index len(codexPresetOrder) = 3.
 	if cursor == len(codexPresetOrder) {
 		state.AvailableModels = model.CodexAvailableModels()
+		state.ModelCapabilities = nil
 		state.CustomMode = CodexCustomModePhaseList
 		state.CustomPhaseIdx = 0
 		state.CustomModelSearch = ""
@@ -248,13 +264,59 @@ func HandleCodexModelPickerNav(
 	// Preset rows.
 	if cursor < len(codexPresetOrder) {
 		selected := codexPresetOrder[cursor]
-		state.Preset = selected
-		// Clear Custom state so a later re-entry to Custom starts fresh.
-		state.CustomConfirmed = false
-		a := maps.Clone(codexPresetConstructors[selected]())
-		return true, a
+		orchestrator := model.CodexPresetOrchestratorAssignment(string(selected)).Model
+		if capabilities, known := state.ModelCapabilities[orchestrator]; known {
+			if len(capabilities.ServiceTiers) > 0 {
+				state.PendingPreset = selected
+				state.CustomMode = CodexCustomModeServiceTier
+				state.ServiceTierCursor = 0
+				for i, tier := range capabilities.ServiceTiers {
+					if tier.ID == state.ServiceTier {
+						state.ServiceTierCursor = i + 1
+					}
+				}
+				return true, nil
+			}
+			// The runtime offers no tier for this orchestrator model.
+			state.ServiceTier = ""
+		}
+		return true, confirmCodexPreset(state, selected)
 	}
 
+	return false, nil
+}
+
+func confirmCodexPreset(state *CodexModelPickerState, selected CodexModelPreset) map[string]model.CodexEffort {
+	state.Preset = selected
+	// Clear Custom state so a later re-entry to Custom starts fresh.
+	state.CustomConfirmed = false
+	return maps.Clone(codexPresetConstructors[selected]())
+}
+
+// codexServiceTierOptions lists Standard ("" — no service_tier) followed by
+// the tiers the runtime advertises for the pending preset's orchestrator.
+func codexServiceTierOptions(state CodexModelPickerState) []model.CodexServiceTier {
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(state.PendingPreset)).Model
+	return append([]model.CodexServiceTier{{Name: "Standard"}}, state.ModelCapabilities[orchestrator].ServiceTiers...)
+}
+
+func handleServiceTierNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
+	options := codexServiceTierOptions(*state)
+	switch key {
+	case "up", "k":
+		state.ServiceTierCursor = max(0, state.ServiceTierCursor-1)
+		return true, nil
+	case "down", "j":
+		state.ServiceTierCursor = min(len(options)-1, state.ServiceTierCursor+1)
+		return true, nil
+	case "enter":
+		state.ServiceTier = options[min(state.ServiceTierCursor, len(options)-1)].ID
+		state.CustomMode = CodexCustomModeNone
+		return true, confirmCodexPreset(state, state.PendingPreset)
+	case "esc":
+		state.CustomMode = CodexCustomModeNone
+		return true, nil
+	}
 	return false, nil
 }
 
@@ -281,6 +343,8 @@ func handleCodexCustomNav(key string, state *CodexModelPickerState, cursor int) 
 		// Same rationale as ModelSelect: CustomEffortCursor is the single source
 		// of truth. Do NOT sync from the outer cursor.
 		return handleCustomEffortSelectNav(key, state)
+	case CodexCustomModeServiceTier:
+		return handleServiceTierNav(key, state)
 	}
 	return false, nil
 }
@@ -376,14 +440,24 @@ func handleCustomModelSelectNav(key string, state *CodexModelPickerState) (bool,
 	return false, nil
 }
 
-var codexEffortOptions = []model.CodexEffort{
+// codexCuratedEffortOptions applies when the runtime did not report a model's
+// efforts; max and ultra are offered only when the runtime advertises them.
+var codexCuratedEffortOptions = []model.CodexEffort{
 	model.CodexEffortLow,
 	model.CodexEffortMedium,
 	model.CodexEffortHigh,
 	model.CodexEffortXHigh,
 }
 
+func codexEffortOptions(state CodexModelPickerState) []model.CodexEffort {
+	if efforts := state.ModelCapabilities[state.CustomPendingModel].Efforts; len(efforts) > 0 {
+		return efforts
+	}
+	return codexCuratedEffortOptions
+}
+
 func handleCustomEffortSelectNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
+	codexEffortOptions := codexEffortOptions(*state)
 	switch key {
 	case "up", "k":
 		if state.CustomEffortCursor > 0 {
@@ -441,6 +515,8 @@ func RenderCodexModelPicker(state CodexModelPickerState, cursor int, height ...i
 		return renderCodexCustomModelSelect(state)
 	case CodexCustomModeEffortSelect:
 		return renderCodexCustomEffortSelect(state)
+	case CodexCustomModeServiceTier:
+		return renderCodexServiceTierSelect(state)
 	}
 	return renderCodexMainPicker(state, cursor)
 }
@@ -580,10 +656,37 @@ func renderCodexCustomEffortSelect(state CodexModelPickerState) string {
 	b.WriteString(styles.TitleStyle.Render(fmt.Sprintf("Select effort for %s:", state.CustomPendingModel)))
 	b.WriteString("\n\n")
 
-	for i, effort := range codexEffortOptions {
+	for i, effort := range codexEffortOptions(state) {
 		focused := i == state.CustomEffortCursor
 		label := string(effort)
 		if focused {
+			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
+		} else {
+			b.WriteString(styles.UnselectedStyle.Render("  "+label) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+
+	return b.String()
+}
+
+func renderCodexServiceTierSelect(state CodexModelPickerState) string {
+	var b strings.Builder
+
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(state.PendingPreset)).Model
+	b.WriteString(styles.TitleStyle.Render(fmt.Sprintf("Select speed for %s:", orchestrator)))
+	b.WriteString("\n\n")
+	b.WriteString(styles.SubtextStyle.Render("Applies to the whole Codex session; workers inherit it when their model supports it."))
+	b.WriteString("\n\n")
+
+	for i, tier := range codexServiceTierOptions(state) {
+		label := tier.Name + " — no service_tier"
+		if tier.ID != "" {
+			label = fmt.Sprintf("%s — service_tier = %q", cmp.Or(tier.Name, tier.ID), tier.ID)
+		}
+		if i == state.ServiceTierCursor {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
 		} else {
 			b.WriteString(styles.UnselectedStyle.Render("  "+label) + "\n")

@@ -71,6 +71,7 @@ func fullyPopulatedInstallState() InstallState {
 			"sdd-verify": "high",
 		},
 		CodexOrchestratorAssignment: &CodexOrchestratorAssignmentState{Model: "gpt-5.6-luna", Effort: "high"},
+		CodexServiceTier:            "priority",
 		CodexCarrilModelAssignments: map[string]string{
 			"sdd-strong": "gpt-5.6-luna",
 			"sdd-cheap":  "gpt-5.4-mini",

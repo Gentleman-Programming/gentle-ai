@@ -316,6 +316,12 @@ If you choose to install several tools from this tap, run `brew trust gentleman-
 
 The TUI **Configure Models** screen lets you assign models to supported agents, including Judgment Day roles (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`). Configure the available slots for your selected agent.
 
+For Codex, efforts and speed come from the installed runtime (`codex debug models`):
+
+- **Effort.** The Custom picker offers only the reasoning efforts each model advertises. `max` and `ultra` appear only on models that list them. Without discovery, the picker falls back to `low`–`xhigh`.
+- **Speed.** After you choose a preset, the picker asks for speed only when the runtime advertises a service tier for that preset's orchestrator model. Fast is a service tier, not a reasoning effort. Gentle AI writes it once as the top-level `service_tier` in `~/.codex/config.toml`, and Codex workers inherit it.
+- **Standard.** Choosing Standard removes only the `service_tier` value Gentle AI wrote, and only while the config still holds that exact value. A `service_tier` you set yourself is never changed.
+
 ### doctor
 
 Read-only ecosystem health diagnostics — no changes made to your configuration:

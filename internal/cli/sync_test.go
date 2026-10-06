@@ -6412,6 +6412,7 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 			"sdd-apply": "medium",
 		},
 		CodexOrchestratorAssignment: &state.CodexOrchestratorAssignmentState{Model: "gpt-5.6-sol", Effort: "low"},
+		CodexServiceTier:            "priority",
 		CodexCarrilModelAssignments: map[string]string{"sdd-strong": "gpt-5.5", "sdd-mid": "gpt-5.5", "sdd-cheap": "gpt-5.4-mini"},
 		CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-terra"},
 		ModelAssignments: map[string]state.ModelAssignmentState{

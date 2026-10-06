@@ -186,9 +186,9 @@ func TestCodexCustomDiscoveryStartsAsCommandWithFallback(t *testing.T) {
 	t.Cleanup(func() { discoverCodexModels = originalDiscover })
 
 	called := false
-	discoverCodexModels = func(context.Context) []string {
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
 		called = true
-		return []string{"discovered-model"}
+		return model.CodexModelCatalog{Models: []string{"discovered-model"}}
 	}
 
 	m := NewModel(system.DetectionResult{}, "dev")
@@ -230,11 +230,14 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 		wantApplied bool
 	}{
 		{
+			// Presets read discovered service tiers, so the newest result
+			// applies on the main picker too.
 			name: "after leaving Custom",
 			setup: func(m *Model) {
 				m.CodexModelPicker.CustomMode = screens.CodexCustomModeNone
 			},
-			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			msg:         CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			wantApplied: true,
 		},
 		{
 			name: "after leaving picker",
@@ -282,6 +285,57 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 				t.Fatalf("AvailableModels = %v, want unchanged %v", state.CodexModelPicker.AvailableModels, fallback)
 			}
 		})
+	}
+}
+
+func TestCodexServiceTierPreselectsDiscoversAndFeedsSyncOverride(t *testing.T) {
+	originalDiscover := discoverCodexModels
+	t.Cleanup(func() { discoverCodexModels = originalDiscover })
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(screens.CodexPresetRecommended)).Model
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
+		return model.CodexModelCatalog{
+			Models: []string{orchestrator},
+			Capabilities: map[string]model.CodexModelCapabilities{
+				orchestrator: {ServiceTiers: []model.CodexServiceTier{{ID: "priority", Name: "Fast"}}},
+			},
+		}
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{CodexServiceTier: "priority"})
+	if m.Selection.CodexServiceTier != "priority" || m.Selection.CodexManagedServiceTier != "priority" {
+		t.Fatalf("NewModel tier = %q managed = %q, want persisted priority", m.Selection.CodexServiceTier, m.Selection.CodexManagedServiceTier)
+	}
+	m.Screen = ScreenModelConfig
+	m.Cursor = 3 // Configure Codex models
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenCodexModelPicker || state.CodexModelPicker.ServiceTier != "priority" {
+		t.Fatalf("screen = %v tier = %q, want Codex picker pre-selecting priority", state.Screen, state.CodexModelPicker.ServiceTier)
+	}
+	if cmd == nil {
+		t.Fatal("opening the Codex picker did not start runtime discovery")
+	}
+	updated, _ = state.Update(cmd())
+	state = updated.(Model)
+
+	state.Cursor = 1 // Recommended
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModeServiceTier || state.CodexModelPicker.ServiceTierCursor != 1 {
+		t.Fatalf("mode = %v cursor = %d, want tier step with priority pre-selected", state.CodexModelPicker.CustomMode, state.CodexModelPicker.ServiceTierCursor)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyUp})
+	state = updated.(Model)
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Selection.CodexServiceTier != "" {
+		t.Fatalf("Selection.CodexServiceTier = %q, want standard", state.Selection.CodexServiceTier)
+	}
+	overrides := state.PendingSyncOverrides
+	if overrides == nil || overrides.CodexServiceTier == nil || *overrides.CodexServiceTier != "" {
+		t.Fatalf("PendingSyncOverrides.CodexServiceTier = %#v, want explicit standard", overrides)
 	}
 }
 

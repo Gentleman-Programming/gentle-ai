@@ -2635,6 +2635,44 @@ func TestCustomClearRoundTripLeavesFutureSyncInPreserveMode(t *testing.T) {
 	}
 }
 
+func TestCodexServiceTierRoundTripsThroughTUISync(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"codex"}, CodexServiceTier: "priority"}); err != nil {
+		t.Fatalf("state.Write (seed): %v", err)
+	}
+
+	unchanged := model.Selection{}
+	loadPersistedAssignments(home, &unchanged)
+	if unchanged.CodexServiceTier != "priority" || unchanged.CodexManagedServiceTier != "priority" {
+		t.Fatalf("restored tier = %q managed = %q, want priority/priority", unchanged.CodexServiceTier, unchanged.CodexManagedServiceTier)
+	}
+
+	standard := ""
+	cleared := model.Selection{}
+	loadPersistedAssignments(home, &cleared)
+	applyOverrides(&cleared, &model.SyncOverrides{CodexServiceTier: &standard})
+	if cleared.CodexServiceTier != "" || cleared.CodexManagedServiceTier != "priority" {
+		t.Fatalf("standard override: tier = %q managed = %q, want empty/priority", cleared.CodexServiceTier, cleared.CodexManagedServiceTier)
+	}
+	if err := persistAssignments(home, cleared); err != nil {
+		t.Fatal(err)
+	}
+	if persisted, err := state.Read(home); err != nil || persisted.CodexServiceTier != "" {
+		t.Fatalf("persisted tier after standard = %q, err = %v; want empty", persisted.CodexServiceTier, err)
+	}
+
+	fast := "priority"
+	selected := model.Selection{}
+	loadPersistedAssignments(home, &selected)
+	applyOverrides(&selected, &model.SyncOverrides{CodexServiceTier: &fast})
+	if err := persistAssignments(home, selected); err != nil {
+		t.Fatal(err)
+	}
+	if persisted, err := state.Read(home); err != nil || persisted.CodexServiceTier != "priority" {
+		t.Fatalf("persisted tier after Fast = %q, err = %v; want priority", persisted.CodexServiceTier, err)
+	}
+}
+
 // ─── Issue #535: upgrade argument validation pre-effect gate ───────────────
 
 // installUpgradeSentinels replaces every effect that the upgrade preflight

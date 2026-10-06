@@ -215,6 +215,16 @@ func (m *Model) restoreCodexCustomAssignments() {
 	}
 }
 
+// enterCodexModelPicker restores the picker from the selection and starts
+// runtime discovery so presets can offer the orchestrator's service tiers.
+func (m *Model) enterCodexModelPicker() tea.Cmd {
+	m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
+	m.CodexModelPicker.ServiceTier = m.Selection.CodexServiceTier
+	m.restoreCodexCustomAssignments()
+	m.codexModelDiscoveryRequest++
+	return m.codexModelDiscoveryCmd(m.codexModelDiscoveryRequest)
+}
+
 func codexPhaseModelsFromCustomAssignments(assignments map[string]screens.CodexCustomAssignment) map[string]string {
 	if len(assignments) == 0 {
 		return nil
@@ -249,10 +259,11 @@ func tuiAnimationsDisabled() bool {
 	return os.Getenv(noAnimationEnv) == "1"
 }
 
-// CodexModelsDiscoveredMsg delivers one Custom picker catalog discovery result.
+// CodexModelsDiscoveredMsg delivers one Codex picker catalog discovery result.
 type CodexModelsDiscoveredMsg struct {
-	RequestID uint64
-	Models    []string
+	RequestID    uint64
+	Models       []string
+	Capabilities map[string]model.CodexModelCapabilities
 }
 
 func tickCmd() tea.Cmd {
@@ -838,6 +849,9 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		ClaudePhaseAssignments: installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
 		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
 		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
+		// The persisted tier is both the pre-selection and what Gentle manages.
+		CodexServiceTier:        s.CodexServiceTier,
+		CodexManagedServiceTier: s.CodexServiceTier,
 	}
 
 	return Model{
@@ -1158,12 +1172,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ModelPicker = m.ModelPicker.Update(msg)
 		return m, nil
 	case CodexModelsDiscoveredMsg:
-		if m.Screen != ScreenCodexModelPicker ||
-			m.CodexModelPicker.CustomMode == screens.CodexCustomModeNone ||
-			msg.RequestID != m.codexModelDiscoveryRequest {
+		if m.Screen != ScreenCodexModelPicker || msg.RequestID != m.codexModelDiscoveryRequest {
 			return m, nil
 		}
 		m.CodexModelPicker.AvailableModels = msg.Models
+		m.CodexModelPicker.ModelCapabilities = msg.Capabilities
 		return m, nil
 	case UpgradeDoneMsg:
 		if m.Screen != ScreenUpgrade && m.Screen != ScreenUpdatePrompt {
@@ -1618,6 +1631,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.Selection.CodexModelAssignments = assignments
+				m.Selection.CodexServiceTier = m.CodexModelPicker.ServiceTier
 				// Derive carril model assignments from the selected preset so each
 				// preset writes the same model matrix the UI displayed.
 				presetCarrilModels := model.CodexCarrilModelsForPreset(string(m.CodexModelPicker.Preset))
@@ -1666,6 +1680,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					if phaseOverride == nil {
 						phaseOverride = map[string]string{} // explicit clear signal for the preset path
 					}
+					serviceTier := m.Selection.CodexServiceTier // "" is an explicit standard choice
 					m.PendingSyncOverrides = &model.SyncOverrides{
 						TargetAgents:                     []model.AgentID{model.AgentCodex},
 						CodexModelAssignments:            assignments,
@@ -1673,6 +1688,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						ClearCodexOrchestratorAssignment: m.Selection.ClearCodexOrchestratorAssignment,
 						CodexCarrilModelAssignments:      presetCarrilModels,
 						CodexPhaseModelAssignments:       phaseOverride,
+						CodexServiceTier:                 &serviceTier,
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
@@ -1881,9 +1897,11 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) codexModelDiscoveryCmd(requestID uint64) tea.Cmd {
 	return func() tea.Msg {
+		catalog := discoverCodexModels(context.Background())
 		return CodexModelsDiscoveredMsg{
-			RequestID: requestID,
-			Models:    discoverCodexModels(context.Background()),
+			RequestID:    requestID,
+			Models:       catalog.Models,
+			Capabilities: catalog.Capabilities,
 		}
 	}
 }
@@ -2193,9 +2211,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenKiroModelPicker)
 		case 3: // Configure Codex models
 			m.ModelConfigMode = true
-			m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
-			m.restoreCodexCustomAssignments()
+			discoveryCmd := m.enterCodexModelPicker()
 			m.setScreen(ScreenCodexModelPicker)
+			return m, discoveryCmd
 		case 4: // Back
 			m.setScreen(ScreenWelcome)
 		}
@@ -4368,8 +4386,7 @@ func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
 	case ScreenKiroModelPicker:
 		m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
 	case ScreenCodexModelPicker:
-		m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
-		m.restoreCodexCustomAssignments()
+		discoveryCmd = m.enterCodexModelPicker()
 	case ScreenModelPicker:
 		discoveryCmd = m.initializeModelPicker()
 	}

@@ -173,6 +173,14 @@ type InjectOptions struct {
 	// nil preserves the user's existing main-session configuration.
 	CodexOrchestratorAssignment *model.CodexOrchestratorAssignment
 
+	// CodexServiceTier writes the top-level service_tier when it is a new,
+	// non-empty selection (different from CodexManagedServiceTier).
+	CodexServiceTier string
+	// CodexManagedServiceTier is the service_tier Gentle AI previously wrote.
+	// With no CodexServiceTier selected it is removed only while config.toml
+	// still holds exactly that value; any other user value is left untouched.
+	CodexManagedServiceTier string
+
 	// CodexCarrilModelAssignments retains saved model choices for ODD workers.
 	// Existing legacy carril keys remain readable, but no SDD profiles are written.
 	CodexCarrilModelAssignments map[string]string
@@ -877,6 +885,14 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if opts.CodexOrchestratorAssignment != nil {
 			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model", opts.CodexOrchestratorAssignment.Model)
 			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model_reasoning_effort", string(opts.CodexOrchestratorAssignment.Effort))
+		}
+		// An unchanged selection leaves service_tier exactly as the user keeps it.
+		if opts.CodexServiceTier != opts.CodexManagedServiceTier {
+			if opts.CodexServiceTier != "" {
+				withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "service_tier", opts.CodexServiceTier)
+			} else {
+				withCompact = removeManagedCodexServiceTier(withCompact, opts.CodexManagedServiceTier)
+			}
 		}
 
 		// Step 3 — [mcp_servers.engram] block (always last; strip+re-append at EOF).
@@ -1586,4 +1602,21 @@ func nativeOpenCodeEngramOverlay(path string, overlay []byte) ([]byte, error) {
 	}
 	patch["mcp"] = map[string]any{"servers": map[string]any{"engram": server}}
 	return json.Marshal(patch)
+}
+
+// removeManagedCodexServiceTier drops the root-scope service_tier line only
+// when it is byte-for-byte the assignment Gentle AI writes for managed.
+func removeManagedCodexServiceTier(content, managed string) string {
+	managedLine := fmt.Sprintf("service_tier = %q", managed)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			break
+		}
+		if trimmed == managedLine {
+			return strings.Join(append(lines[:i], lines[i+1:]...), "\n")
+		}
+	}
+	return content
 }

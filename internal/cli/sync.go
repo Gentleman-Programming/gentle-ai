@@ -1426,6 +1426,8 @@ func (s componentSyncStep) Run() error {
 		engramVersion, _ := resolveEngramVersion("engram")
 		engramOpts := engram.InjectOptions{
 			CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
+			CodexServiceTier:            s.selection.CodexServiceTier,
+			CodexManagedServiceTier:     s.selection.CodexManagedServiceTier,
 			CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 			CodexModelAssignments:       s.selection.CodexModelAssignments,
 			Version:                     engramVersion,

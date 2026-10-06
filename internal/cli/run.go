@@ -2820,6 +2820,8 @@ func (s componentApplyStep) Run() error {
 			engramOpts := engram.InjectOptions{
 				OpenCodeSettingsPath:        openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter),
 				CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
+				CodexServiceTier:            s.selection.CodexServiceTier,
+				CodexManagedServiceTier:     s.selection.CodexManagedServiceTier,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
 				Version:                     engramVersion,
