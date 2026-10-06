@@ -90,7 +90,10 @@ func TestFreshSyncWritesNoRetiredWorkflowReferences(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				scanned++
+				// The state file this test seeded proves nothing about what sync wrote.
+				if path != state.Path(home) {
+					scanned++
+				}
 				for index, line := range strings.Split(string(data), "\n") {
 					if retiredWorkflowText.MatchString(line) {
 						t.Errorf("%s:%d: sync wrote a retired workflow reference: %s", path, index+1, strings.TrimSpace(line))

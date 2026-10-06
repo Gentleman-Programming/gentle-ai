@@ -65,7 +65,7 @@ var retiredWorkflowLiteralAllowlist = map[string]map[string]string{
 		"sync:agent:retire-sdd-settings:": "retirement step ID",
 	},
 	"internal/cli/validate.go": {
-		"unsupported sdd-mode %q (valid: single, multi)": "legacy state field; no CLI flag sets it",
+		"unsupported sdd-mode %q (valid: single, multi)": "unreachable validation of an install flag field nothing assigns",
 	},
 	"internal/tui/model.go": {
 		"sdd-orchestrator": "legacy OpenCode coordinator key",
@@ -75,9 +75,9 @@ var retiredWorkflowLiteralAllowlist = map[string]map[string]string{
 		"sdd-": "legacy Claude model-assignment key prefix",
 	},
 	"internal/tui/screens/codex_model_picker.go": {
-		"sdd-strong": "legacy Codex carril key",
-		"sdd-mid":    "legacy Codex carril key",
-		"sdd-cheap":  "legacy Codex carril key",
+		"sdd-strong": "current Codex preset-matrix key persisted in gentle-ai state; never rendered",
+		"sdd-mid":    "current Codex preset-matrix key persisted in gentle-ai state; never rendered",
+		"sdd-cheap":  "current Codex preset-matrix key persisted in gentle-ai state; never rendered",
 	},
 }
 
