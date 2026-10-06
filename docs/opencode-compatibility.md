@@ -119,14 +119,19 @@ settings file, on both runtime majors: `sdd-orchestrator` and `sdd-<phase>`
 entries, their profile-suffixed copies (`sdd-apply-fallback`), every entry of
 the plural `agents` map 3.7.0 left in some configs (OpenCode 1.x refuses that
 map, #5182), and the orchestrator `task` permissions that named a removed
-agent. An entry counts as Gentle AI's when it carries the 3.x
+agent. The old `sdd-*` wildcard permission stays while any agent it matches
+remains, in the settings or as a markdown agent in an `agent/` or `agents/`
+directory OpenCode loads. An entry counts as Gentle AI's when it carries the 3.x
 `__managed_by: gentle-ai/sdd` marker or every field holds a value some release
 wrote (the registry in `internal/components/legacyassets/`, generated with the
 native agent registry). Global runs also remove the `prompts/sdd/*.md` files
-those agents loaded when their bytes match a release. Only the removed members
-are edited, so JSONC comments elsewhere survive; an entry with attached
-comments, any other same-name entry, and an edited prompt are preserved and
-listed under manual actions. A workspace sync edits only the project settings
+those agents loaded when their bytes match a release; a `prompts/sdd` that is
+a symlink is left untouched, like a symlinked `plugins` directory. Only the
+removed members are edited, so JSONC comments elsewhere survive; an entry with
+a comment inside it or directly above it, any other same-name entry, and an
+edited prompt are preserved and listed under manual actions. In a plain
+`.json` file Gentle AI's writers do not keep comments, so a commented entry is
+removed by a later sync. A workspace sync edits only the project settings
 file. The settings file and prompts are in the install, sync, and upgrade
 snapshots.
 

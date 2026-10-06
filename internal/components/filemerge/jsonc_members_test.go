@@ -143,3 +143,47 @@ func TestRemoveJSONCMembersKeepsCommentedMembersAndRefusesDuplicates(t *testing.
 		t.Fatalf("duplicate keys accepted: %s, %v", out, err)
 	}
 }
+
+// A line comment directly above a member is attached to it even when the
+// comment text ends in a separator a backward scan would take for JSON.
+func TestRemoveJSONCMembersKeepsMemberUnderCommentEndingInSeparator(t *testing.T) {
+	for _, tc := range []struct{ name, raw string }{
+		{"comma, middle member", "{\n  \"agent\": {\n    \"mine\": {},\n    // tuned: model, variant,\n    \"sdd-apply\": {\"mode\": \"subagent\"},\n    \"other\": {}\n  }\n}\n"},
+		{"brace, middle member", "{\n  \"agent\": {\n    \"mine\": {},\n    // see {\n    \"sdd-apply\": {\"mode\": \"subagent\"},\n    \"other\": {}\n  }\n}\n"},
+		{"comma, last member", "{\n  \"agent\": {\n    \"mine\": {},\n    // keep this one,\n    \"sdd-apply\": {\"mode\": \"subagent\"}\n  }\n}\n"},
+		{"brace, last member", "{\n  \"agent\": {\n    \"mine\": {},\n    // old config {\n    \"sdd-apply\": {\"mode\": \"subagent\"}\n  }\n}\n"},
+		{"block comment on the same line", "{\n  \"agent\": {\"mine\": {}, /* why, */ \"sdd-apply\": {}}\n}\n"},
+		{"first member", "{\n  \"agent\": {\n    // note {\n    \"sdd-apply\": {},\n    \"mine\": {}\n  }\n}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, kept, err := RemoveJSONCMembers([]byte(tc.raw), []string{"agent"}, []string{"sdd-apply"}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(kept, []string{"sdd-apply"}) || string(got) != tc.raw {
+				t.Fatalf("kept = %v, document:\n%s", kept, got)
+			}
+		})
+	}
+}
+
+// Removing a last member after commented members leaves valid JSONC with
+// every comment and its own separators intact.
+func TestRemoveJSONCMembersLastMemberAfterCommentedMembersStaysValid(t *testing.T) {
+	raw := "{\n  \"agent\": {\n    \"a\": 1, // first, with a comma,\n    // about b {\n    \"b\": 2,\n    \"sdd-apply\": {}\n  }\n}\n"
+	got, kept, err := RemoveJSONCMembers([]byte(raw), []string{"agent"}, []string{"sdd-apply"}, false)
+	if err != nil || len(kept) != 0 {
+		t.Fatalf("kept = %v, err = %v", kept, err)
+	}
+	want := "{\n  \"agent\": {\n    \"a\": 1, // first, with a comma,\n    // about b {\n    \"b\": 2\n  }\n}\n"
+	if string(got) != want {
+		t.Fatalf("removal = %q, want %q", got, want)
+	}
+	root, err := UnmarshalJSONObject(got)
+	if err != nil {
+		t.Fatalf("result does not parse: %v", err)
+	}
+	if agent := root["agent"].(map[string]any); len(agent) != 2 {
+		t.Fatalf("remaining = %v", agent)
+	}
+}

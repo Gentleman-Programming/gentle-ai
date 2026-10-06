@@ -180,8 +180,9 @@ func TestRetireOpenCodeSDDSettingsBothShapes(t *testing.T) {
 		t.Error("user-shaped agent.sdd-spec removed")
 	}
 	task := got["gentle-orchestrator"].(map[string]any)["permission"].(map[string]any)["task"].(map[string]any)
-	// Allowlist entries go only with the retired agent they named.
-	for target, want := range map[string]bool{"sdd-apply": false, "sdd-verify": false, "sdd-*": false, "sdd-init": true, "jd-judge-a": true, "*": true} {
+	// Allowlist entries go only with the retired agent they named; the
+	// wildcard stays because the user's sdd-init and sdd-spec remain.
+	for target, want := range map[string]bool{"sdd-apply": false, "sdd-verify": false, "sdd-*": true, "sdd-init": true, "jd-judge-a": true, "*": true} {
 		if _, ok := task[target]; ok != want {
 			t.Errorf("task[%s] present = %v, want %v", target, ok, want)
 		}
@@ -206,7 +207,7 @@ func TestRetireOpenCodeSDDSettingsKeepsCommentedOwnedEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	document := "{\n  \"agent\": {\n    // tuned for my repo\n    \"sdd-apply\": " + string(entry) + "\n  }\n}\n"
-	path := filepath.Join(t.TempDir(), "opencode.json")
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
 	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -321,4 +322,134 @@ func hasAction(actions []string, parts ...string) bool {
 		}
 		return true
 	})
+}
+
+// A symlinked prompts directory belongs to the user (dotfiles): nothing in its
+// target is removed and the link itself survives, like a symlinked plugins
+// directory (#5281).
+func TestRetireOpenCodeSDDPromptsLeavesSymlinkedDirectory(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "dotfiles", "sdd-prompts")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	released, err := os.ReadFile(filepath.Join("testdata", "v3.7.0", "opencode-prompt-sdd-apply.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "sdd-apply.md"), released, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "opencode", "prompts", "sdd")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	result, err := RetireOpenCodeSDDPrompts(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Removed) != 0 {
+		t.Fatalf("removed through a symlinked directory: %v", result.Removed)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "sdd-apply.md")); err != nil || string(data) != string(released) {
+		t.Fatalf("symlink target changed: %v", err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlinked prompts directory unlinked: %v", err)
+	}
+	if !hasAction(result.ManualActions(), link, "not a real directory", "move or delete") {
+		t.Fatalf("symlinked prompts directory not reported: %v", result.ManualActions())
+	}
+}
+
+// The released `sdd-*` task allow also reaches agents the user named sdd-<x>
+// themselves, in the settings or in agent markdown files, so it stays while
+// any of them remains.
+func TestRetireOpenCodeSDDSettingsKeepsWildcardWhileUserSDDAgentsRemain(t *testing.T) {
+	apply, err := json.Marshal(releasedOpenCodeAgents(t, "v1")["sdd-apply"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsWith := func(extra string) string {
+		return `{"agent":{"sdd-apply":` + string(apply) + extra + `,"gentle-orchestrator":{"permission":{"task":{"*":"deny","sdd-*":"allow","sdd-apply":"allow"}}}}}`
+	}
+	for _, tc := range []struct {
+		name, settings, agentFile string
+		keep                      bool
+	}{
+		{name: "no other sdd agent", settings: settingsWith("")},
+		{name: "user settings agent", settings: settingsWith(`,"sdd-mine":{"mode":"subagent","prompt":"Mine."}`), keep: true},
+		{name: "agent markdown", settings: settingsWith(""), agentFile: filepath.Join("agent", "sdd-review.md"), keep: true},
+		{name: "agents markdown", settings: settingsWith(""), agentFile: filepath.Join("agents", "sdd-notes.md"), keep: true},
+		{name: "unrelated markdown", settings: settingsWith(""), agentFile: filepath.Join("agents", "reviewer.md")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "opencode.json")
+			if err := os.WriteFile(path, []byte(tc.settings), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.agentFile != "" {
+				file := filepath.Join(dir, tc.agentFile)
+				if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(file, []byte("---\nmode: subagent\n---\nMine.\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := RetireOpenCodeSDDSettings(path); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := filemerge.UnmarshalJSONObject(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			task := root["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["permission"].(map[string]any)["task"].(map[string]any)
+			if _, kept := task["sdd-*"]; kept != tc.keep {
+				t.Fatalf("task[sdd-*] kept = %v, want %v: %v", kept, tc.keep, task)
+			}
+			if _, kept := task["sdd-apply"]; kept {
+				t.Fatal("allow for the removed sdd-apply kept")
+			}
+		})
+	}
+}
+
+// Gentle AI's settings writers do not preserve comments in plain JSON, so the
+// report must not promise the entry is kept for the user's notes.
+func TestRetireOpenCodeSDDSettingsCommentedEntryInPlainJSON(t *testing.T) {
+	entry, err := json.Marshal(releasedOpenCodeAgents(t, "v1")["sdd-apply"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := "{\n  \"agent\": {\n    // tuned for my repo\n    \"sdd-apply\": " + string(entry) + "\n  }\n}\n"
+	for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := RetireOpenCodeSDDSettings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actions := result.ManualActions()
+		if len(actions) != 1 {
+			t.Fatalf("%s: actions = %v", name, actions)
+		}
+		promisesNotes := strings.Contains(actions[0], "would discard your notes")
+		if plain := name == "opencode.json"; plain == promisesNotes {
+			t.Errorf("%s: action = %q", name, actions[0])
+		}
+		if name == "opencode.json" && !strings.Contains(actions[0], "plain JSON") {
+			t.Errorf("%s: action does not explain plain JSON drops comments: %q", name, actions[0])
+		}
+	}
 }

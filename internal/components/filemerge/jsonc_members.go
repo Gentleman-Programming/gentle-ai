@@ -97,11 +97,10 @@ func removeJSONCMember(object, name string) (string, bool) {
 	if !bytes.Equal(member, stripJSONComments(member)) {
 		return object, false
 	}
-	previous := key - 1
-	for previous >= 0 && isJSONWhitespace(object[previous]) {
-		previous--
-	}
-	if previous < 0 || (object[previous] != ',' && object[previous] != '{') {
+	// A comment between the previous separator and the key is attached to
+	// the member, wherever its own text ends.
+	previous, commentedBefore := precedingJSONCToken(object, key)
+	if commentedBefore || previous < 0 || (object[previous] != ',' && object[previous] != '{') {
 		return object, false
 	}
 	next, sameLine := end, true
@@ -164,6 +163,31 @@ func removeJSONCMember(object, name string) (string, bool) {
 		return object[:cut] + object[end:], true
 	}
 	return object, false
+}
+
+// precedingJSONCToken returns the index of the last character before limit
+// that is neither whitespace nor inside a comment or string, or -1, and
+// whether a comment lies between that character and limit. Scanning forward
+// keeps a comment ending in "," or "{" from passing for a separator.
+func precedingJSONCToken(content string, limit int) (int, bool) {
+	last, commented := -1, false
+	for i := 0; i < limit; i++ {
+		switch ch := content[i]; {
+		case ch == '"':
+			last, commented = i, false
+			i = jsonValueEnd(content, i) - 1
+			if i >= limit {
+				return last, false
+			}
+			last = i
+		case ch == '/' && i+1 < len(content) && (content[i+1] == '/' || content[i+1] == '*'):
+			commented = true
+			i = scanJSONCWhitespaceAndComments(content, i) - 1
+		case !isJSONWhitespace(ch):
+			last, commented = i, false
+		}
+	}
+	return last, commented
 }
 
 // jsonValueEnd returns the index just past the JSON value starting at start.

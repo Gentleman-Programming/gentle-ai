@@ -1040,6 +1040,9 @@ type retiredOpenCodeSDDTarget struct {
 	agent    model.AgentID
 	settings string
 	prompts  string
+	// agentDirs are markdown agent directories the runtime also loads,
+	// beyond the ones beside settings; they hold the `sdd-*` allow.
+	agentDirs []string
 }
 
 // retiredOpenCodeSDDTargets resolves where releases wrote the OpenCode
@@ -1051,7 +1054,13 @@ func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope,
 	for _, agent := range agentIDs {
 		switch {
 		case agent == model.AgentOpenCode:
-			target := retiredOpenCodeSDDTarget{agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter())}
+			// The selected settings may be a project file; OpenCode still loads
+			// the global markdown agents beside it.
+			config := opencodeagent.ConfigPath(homeDir)
+			target := retiredOpenCodeSDDTarget{
+				agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
+				agentDirs: []string{filepath.Join(config, "agent"), filepath.Join(config, "agents")},
+			}
 			if scope != ScopeWorkspace {
 				target.prompts = legacyassets.SharedPromptDir(homeDir)
 			}
@@ -1103,7 +1112,7 @@ type retiredOpenCodeSDDSettingsStep struct {
 func (s retiredOpenCodeSDDSettingsStep) ID() string { return s.id }
 
 func (s retiredOpenCodeSDDSettingsStep) Run() error {
-	settings, err := legacyassets.RetireOpenCodeSDDSettings(s.target.settings)
+	settings, err := legacyassets.RetireOpenCodeSDDSettings(s.target.settings, s.target.agentDirs...)
 	if settings.Changed && s.changedFiles != nil {
 		*s.changedFiles = append(*s.changedFiles, s.target.settings)
 	}

@@ -299,7 +299,12 @@ type OpenCodeSettingsResult struct {
 // retired agent no longer present. Edits are local to the removed members, so
 // comments and formatting elsewhere survive; a member with comments attached
 // is kept and reported. A missing file is not an error.
-func RetireOpenCodeSDDSettings(settingsPath string) (OpenCodeSettingsResult, error) {
+//
+// The released `sdd-*` task allow is removed only while no agent it matches
+// remains: in the settings, or as a markdown agent in agentDirs or in the
+// agent directories beside the settings file (agent/, agents/, and their
+// .opencode/ project spelling), all of which the runtime loads.
+func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCodeSettingsResult, error) {
 	result := OpenCodeSettingsResult{Path: settingsPath}
 	info, err := os.Lstat(settingsPath)
 	if os.IsNotExist(err) {
@@ -361,9 +366,21 @@ func RetireOpenCodeSDDSettings(settingsPath string) (OpenCodeSettingsResult, err
 	task, _ := permission["task"].(map[string]any)
 	var stale []string
 	for _, target := range sortedKeys(task) {
+		if task[target] != "allow" {
+			continue
+		}
 		_, _, retired := RetiredOpenCodeSDDAgent(target)
-		if (retired || target == "sdd-*") && task[target] == "allow" && !remaining[target] {
+		switch {
+		case retired && !remaining[target]:
 			stale = append(stale, target)
+		case target == openCodeSDDWildcard:
+			loaded, err := sddAgentRemains(remaining, settingsPath, agentDirs)
+			if err != nil {
+				return result, err
+			}
+			if !loaded {
+				stale = append(stale, target)
+			}
 		}
 	}
 	// A stale allowlist entry kept for its comments is harmless: its agent
@@ -381,6 +398,34 @@ func RetireOpenCodeSDDSettings(settingsPath string) (OpenCodeSettingsResult, err
 		return result, fmt.Errorf("write settings %s: %w", settingsPath, err)
 	}
 	return result, nil
+}
+
+// openCodeSDDWildcard is the task allow pre-v2 orchestrators delegated with.
+const openCodeSDDWildcard = "sdd-*"
+
+// sddAgentRemains reports whether any agent the `sdd-*` allow matches is still
+// defined: a remaining settings entry or a markdown agent file.
+func sddAgentRemains(remaining map[string]bool, settingsPath string, agentDirs []string) (bool, error) {
+	for name := range remaining {
+		if strings.HasPrefix(name, "sdd-") {
+			return true, nil
+		}
+	}
+	base := filepath.Dir(settingsPath)
+	dirs := append([]string{
+		filepath.Join(base, "agent"), filepath.Join(base, "agents"),
+		filepath.Join(base, ".opencode", "agent"), filepath.Join(base, ".opencode", "agents"),
+	}, agentDirs...)
+	for _, dir := range dirs {
+		matches, err := filepath.Glob(filepath.Join(dir, "sdd-*.md"))
+		if err != nil {
+			return false, fmt.Errorf("list agents in %s: %w", dir, err)
+		}
+		if len(matches) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func sortedKeys(values map[string]any) []string {
@@ -402,6 +447,12 @@ func (r OpenCodeSettingsResult) ManualActions() []string {
 		actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s was preserved: Gentle AI cannot prove it wrote this entry (its fields differ from every released version), so it may contain your changes. SDD was retired in v4.0.0 and this agent is no longer maintained; if you no longer need it, move or delete it.", entry, r.Path))
 	}
 	for _, entry := range r.Commented {
+		if !strings.HasSuffix(r.Path, ".jsonc") {
+			// Gentle AI's writers re-encode plain JSON, so its comments do not
+			// survive them; promising to keep the notes would be false.
+			actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s was not removed in this run because comments are attached to it. %s is plain JSON, whose comments Gentle AI's settings writers do not preserve, so a later `gentle-ai sync` removes this entry once they are gone. SDD was retired in v4.0.0: copy any notes you want to keep elsewhere, then move or delete the entry.", entry, r.Path, filepath.Base(r.Path)))
+			continue
+		}
 		actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s was kept because comments are attached to it: Gentle AI wrote this entry, but removing it would discard your notes. SDD was retired in v4.0.0: move your comments and then move or delete it, or rerun `gentle-ai sync` to retire it.", entry, r.Path))
 	}
 	return actions
@@ -409,16 +460,32 @@ func (r OpenCodeSettingsResult) ManualActions() []string {
 
 // PromptRetireResult lists the shared SDD prompt files a retirement removed
 // and the ones it preserved because no release rendered their bytes.
+// UnsupportedDir is set when the prompt directory is not a real directory.
 type PromptRetireResult struct {
-	Removed   []string
-	Preserved []string
+	Dir            string
+	Removed        []string
+	Preserved      []string
+	UnsupportedDir bool
 }
 
 // RetireOpenCodeSDDPrompts removes the shared SDD prompt files in dir whose
 // normalized bytes some release rendered, then the directory once empty.
 // Symlinks, non-regular files, and edited files are preserved and reported.
+// A dir that is itself a symlink (or not a directory) is the user's: nothing
+// in or through it is touched, as with a symlinked plugins directory.
 func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
-	var result PromptRetireResult
+	result := PromptRetireResult{Dir: dir}
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return result, nil
+	}
+	if err != nil {
+		return result, fmt.Errorf("inspect retired SDD prompt directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		result.UnsupportedDir = true
+		return result, nil
+	}
 	for _, phase := range promptPhases {
 		file := filepath.Join(dir, phase+".md")
 		info, err := os.Lstat(file)
@@ -454,7 +521,10 @@ func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
 
 // ManualActions tells the user what to do with every prompt retirement kept.
 func (r PromptRetireResult) ManualActions() []string {
-	actions := make([]string, 0, len(r.Preserved))
+	actions := make([]string, 0, len(r.Preserved)+1)
+	if r.UnsupportedDir {
+		actions = append(actions, fmt.Sprintf("%s is not a real directory (for example a symlink), so Gentle AI did not inspect or remove the retired SDD prompts in it. SDD was retired in v4.0.0 and no agent loads them anymore; if you no longer need them, move or delete them yourself.", r.Dir))
+	}
 	for _, file := range r.Preserved {
 		actions = append(actions, fmt.Sprintf("Retired SDD prompt %s was preserved: Gentle AI cannot prove it wrote this file (its content differs from every released version, or it is not a regular file), so it may contain your changes. SDD was retired in v4.0.0 and no agent loads it anymore; if you no longer need it, move or delete it.", file))
 	}

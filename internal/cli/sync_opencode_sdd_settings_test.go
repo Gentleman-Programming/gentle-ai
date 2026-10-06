@@ -385,3 +385,81 @@ func TestRunInstallRetiresOwnedOpenCodeSDDSettingsOnlyInGlobalScope(t *testing.T
 		}
 	}
 }
+
+// A workspace sync keeps the released `sdd-*` task allow while OpenCode still
+// loads a user agent it matches, from the global or the project agent dirs.
+func TestWorkspaceSyncKeepsSDDWildcardForLoadedUserAgents(t *testing.T) {
+	for _, dir := range []string{"global", "project"} {
+		t.Run(dir, func(t *testing.T) {
+			home, workspace := t.TempDir(), t.TempDir()
+			setSyncTestHome(t, home)
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+			stubOpenCodeRuntimeVersion(t, home, "1.18.30")
+			agentFile := filepath.Join(opencodeagent.ConfigPath(home), "agents", "sdd-mine.md")
+			if dir == "project" {
+				agentFile = filepath.Join(workspace, ".opencode", "agent", "sdd-mine.md")
+			}
+			mustWriteFile(t, agentFile, []byte("---\nmode: subagent\n---\nMine.\n"))
+			agent := releasedOpenCodeSDDAgents(t, "v1", "sdd-apply")
+			agent["gentle-orchestrator"] = map[string]any{"permission": map[string]any{"task": map[string]any{"*": "deny", "sdd-*": "allow", "sdd-apply": "allow"}}}
+			project := filepath.Join(workspace, "opencode.json")
+			mustWriteFile(t, project, []byte(`{"agent":`+indentedJSON(t, agent)+`}`))
+			if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(workspace)
+
+			if _, err := RunSyncWithSelectionScope(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}, ScopeWorkspace); err != nil {
+				t.Fatalf("workspace sync error = %v", err)
+			}
+			got, _ := openCodeSettingsAgents(t, project)
+			if _, ok := got["sdd-apply"]; ok {
+				t.Fatal("Gentle-owned agent.sdd-apply kept")
+			}
+			orchestrator, _ := got["gentle-orchestrator"].(map[string]any)
+			permission, _ := orchestrator["permission"].(map[string]any)
+			task, _ := permission["task"].(map[string]any)
+			if _, ok := task["sdd-*"]; !ok {
+				t.Fatalf("task[sdd-*] removed while %s is loaded: %v", agentFile, task)
+			}
+		})
+	}
+}
+
+// A global sync leaves a symlinked prompts/sdd directory and its target alone
+// and reports it, instead of deleting released bytes through the link.
+func TestSyncLeavesSymlinkedOpenCodeSDDPromptDirectory(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	stubOpenCodeRuntimeVersion(t, home, "1.18.30")
+	target := filepath.Join(home, "dotfiles", "sdd")
+	released := releasedSDDRender(t, "opencode-prompt-sdd-apply.md")
+	mustWriteFile(t, filepath.Join(target, "sdd-apply.md"), released)
+	link := filepath.Join(opencodeagent.ConfigPath(home), "prompts", "sdd")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Chdir(t.TempDir())
+
+	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlinked prompts directory replaced or unlinked: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(target, "sdd-apply.md")); err != nil || string(got) != string(released) {
+		t.Fatalf("prompt removed through the symlink: %v", err)
+	}
+	if !hasManualAction(result.ManualActions, link, "not a real directory") {
+		t.Errorf("symlinked prompts directory not reported: %v", result.ManualActions)
+	}
+}
