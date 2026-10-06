@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -241,5 +242,72 @@ func TestRemoveOpenCodeOrchestratorOnlyWhenEntireEntryIsManaged(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRemoveOpenCodeOrchestratorQuestionPermission covers the question rule the
+// routing owner writes (#4816): the exact "allow" is Gentle AI's and leaves no
+// residue, while any other user value keeps the orchestrator alive.
+func TestRemoveOpenCodeOrchestratorQuestionPermission(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		for _, tc := range []struct {
+			name     string
+			question any
+			keep     bool
+		}{
+			{name: "managed allow", question: "allow"},
+			{name: "user ask", question: "ask", keep: true},
+			{name: "user deny", question: "deny", keep: true},
+			{name: "user rules", question: map[string]any{"*": "allow"}, keep: true},
+		} {
+			t.Run(string(agent)+"/"+tc.name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "opencode.json")
+				prompt := filemerge.InjectMarkdownSection("", "orchestrator", "Managed instructions")
+				prompt = filemerge.InjectMarkdownSection(prompt, "agent-routing", "Managed routing")
+				orchestrator := map[string]any{"prompt": prompt, "permission": map[string]any{
+					"question": tc.question,
+					"task":     map[string]any{"jd-judge-b": "allow"},
+				}}
+				var judge map[string]any
+				for _, spec := range opencodeagents.Parity(agent) {
+					if spec.Name == "jd-judge-b" {
+						var entryErr error
+						judge, entryErr = opencodeagents.Entry(spec)
+						if entryErr != nil {
+							t.Fatal(entryErr)
+						}
+					}
+				}
+				raw, err := json.Marshal(map[string]any{"agent": map[string]any{"gentle-orchestrator": orchestrator, "jd-judge-b": judge}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := removeOpenCodeFamilyAgents(path, agent).apply(path); err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var after map[string]any
+				if err := json.Unmarshal(body, &after); err != nil {
+					t.Fatal(err)
+				}
+				entry, exists := after["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)
+				if exists != tc.keep {
+					t.Fatalf("orchestrator existence=%v, want %v: %s", exists, tc.keep, body)
+				}
+				if !exists {
+					return
+				}
+				permission, _ := entry["permission"].(map[string]any)
+				if !reflect.DeepEqual(permission, map[string]any{"question": tc.question}) {
+					t.Fatalf("user question permission not preserved alone: %s", body)
+				}
+			})
+		}
 	}
 }
