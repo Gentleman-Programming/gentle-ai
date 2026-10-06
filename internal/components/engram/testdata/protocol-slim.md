@@ -18,7 +18,7 @@ MCP server instructions and the SessionStart hook. Always-on rules:
   projects or from a named other project.
 - Call `mem_save` PROACTIVELY after any decision, bugfix, discovery, convention,
   or config change — do not wait to be asked. Use `capture_prompt: false` for
-  automated/SDD artifacts.
+  automated artifacts.
 - On any reference to past work: `mem_context` → `mem_search` → `mem_get_observation`.
 - Before saying "done", call `mem_session_summary`.
 - Saving to memory is bookkeeping, never the reply: it NEVER counts as answering.

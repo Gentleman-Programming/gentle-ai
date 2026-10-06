@@ -182,7 +182,7 @@ Type-to-label mapping:
 Examples:
 ```
 feat(scripts): add Codex support to setup.sh
-fix(skills): correct topic key format in sdd-apply
+fix(skills): correct topic key format in judgment-day
 docs(readme): update multi-model configuration guide
 refactor(skills): extract shared persistence logic
 chore(ci): add shellcheck to PR validation workflow

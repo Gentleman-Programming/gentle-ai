@@ -5,7 +5,7 @@ Use OpenCode's Task tool with `background: true` only for independent, read-only
 
 At the parent level, allow no more than 2 concurrent background tasks. Completion notifications only: do not poll, sleep, run status checks, or proactively read for completion.
 
-Use foreground tasks when the result is needed before the next action, for user decisions, SDD apply or other writers, dependent verify evidence, archive, formal RDD/4R lenses, refuters, fix validators, Judgment Day actors, or dependent phases.
+Use foreground tasks when the result is needed before the next action, for user decisions, writers, dependent verify evidence, archive, formal RDD/4R lenses, refuters, fix validators, Judgment Day actors, or dependent phases.
 
 Do not duplicate launches or work, and do not overlap files or topics. Never run parallel writers in one worktree.
 

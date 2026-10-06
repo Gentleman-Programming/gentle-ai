@@ -1668,6 +1668,51 @@ func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {
 	}
 }
 
+// TestInjectVSCodeReplacesRetiredSDDFrontmatter covers upgrades from releases
+// whose instructions frontmatter advertised SDD orchestration: sync rewrites
+// the Gentle-owned frontmatter for both personas and keeps managed sections.
+func TestInjectVSCodeReplacesRetiredSDDFrontmatter(t *testing.T) {
+	const legacyFrontmatter = "---\nname: Gentle AI Persona\ndescription: Teaching-oriented persona with SDD orchestration and Engram protocol\napplyTo: \"**\"\n---\n\n"
+	const managed = "<!-- gentle-ai:engram-protocol -->\nMemory protocol.\n<!-- /gentle-ai:engram-protocol -->\n"
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		t.Run(string(persona), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+			if err != nil {
+				t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+			}
+			path := vscodeAdapter.SystemPromptFile(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := legacyFrontmatter + "## Personality\n\nSenior Architect mentor persona.\n\n" + managed
+			if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, vscodeAdapter, persona); err != nil {
+				t.Fatalf("Inject(%s) error = %v", persona, err)
+			}
+
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(content)
+			if strings.Contains(strings.ToLower(text), "sdd") {
+				t.Fatalf("upgraded instructions file still mentions SDD:\n%s", text)
+			}
+			if !strings.HasPrefix(text, "---\nname: Gentle AI Persona\ndescription: Teaching-oriented persona with ODD orchestration and Engram protocol\n") {
+				t.Fatalf("upgraded instructions file lacks current frontmatter:\n%s", text)
+			}
+			if persona == model.PersonaNeutral && !strings.Contains(text, managed) {
+				t.Fatalf("neutral upgrade lost managed section:\n%s", text)
+			}
+		})
+	}
+}
+
 // --- Auto-heal tests: Claude Code stale free-text persona ---
 
 // legacyClaudePersonaBlock simulates a Gentleman persona block that was written
@@ -2895,6 +2940,13 @@ var legacyKimiOutputStyleNeutralLines = []string{
 	"- AGAINST IMMEDIACY: do not trade correctness or learning for speed theater.",
 }
 
+// retiredKimiOutputStyleNeutralLines maps a frozen legacy line to the wording
+// that intentionally replaced it after the snapshot. SDD was retired in v4.0.0,
+// so the artifact list no longer names SDD artifacts.
+var retiredKimiOutputStyleNeutralLines = map[string]string{
+	"Generated technical artifacts default to English and neutral professional wording unless the user explicitly requests another artifact language or the existing project convention requires it. This includes code, identifiers, comments, UI copy, docs, tests, commit messages, PR descriptions, and SDD artifacts.": "Generated technical artifacts default to English and neutral professional wording unless the user explicitly requests another artifact language or the existing project convention requires it. This includes code, identifiers, comments, UI copy, docs, tests, commit messages, and PR descriptions.",
+}
+
 // TestKimiOutputStyleSupersetOfLegacyKimiCopy verifies Decision 4's "strict
 // subset" claim: every line Kimi's output-style asset had before reconciliation
 // still exists in the reconciled text, and the reconciled Kimi asset is
@@ -2926,6 +2978,9 @@ func TestKimiOutputStyleSupersetOfLegacyKimiCopy(t *testing.T) {
 	t.Run("neutral", func(t *testing.T) {
 		reconciled := assets.MustRead("kimi/output-style-neutral.md")
 		for _, line := range legacyKimiOutputStyleNeutralLines {
+			if replacement, retired := retiredKimiOutputStyleNeutralLines[line]; retired {
+				line = replacement
+			}
 			if !strings.Contains(reconciled, line) {
 				t.Fatalf("reconciled kimi/output-style-neutral.md lost legacy line %q", line)
 			}
