@@ -32,7 +32,7 @@ Use this skill after installing, removing, creating, moving, or renaming skills,
 
 ## Execution Steps
 
-1. Run `gentle-ai skill-registry refresh --cwd <project>` (add `--force` after skill changes); it writes `.atl/skill-registry.md`. If it succeeds, go to step 4.
+1. Run `gentle-ai skill-registry refresh --cwd <project>` (add `--force` after skill changes); it writes `.atl/skill-registry.md`. If it reports the refresh was skipped (not a project), stop: there is no registry to persist. If it succeeds, go to step 4. If it fails, report the error instead of scanning by hand.
 2. Only if the command is unavailable: scan all known user and project skill directories for `*/SKILL.md`, reading frontmatter only as needed to extract `name` and `description` trigger text.
 3. Render `.atl/skill-registry.md` with scanned sources, registry contract, skill name, trigger/description, scope, and exact path.
 4. Persist to Engram when available using `title: skill-registry`, `topic_key: skill-registry`, `type: config`, and `capture_prompt: false`.
