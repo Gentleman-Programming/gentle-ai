@@ -19,6 +19,7 @@ import (
 
 	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
@@ -146,7 +147,7 @@ type piCodeGraphManifest struct {
 }
 
 // piCodeGraphOwnedFile is a bounded before-image. It lets removal restore a
-// user file exactly and lets sync recreate an owned artifact that was removed.
+// user file exactly.
 type piCodeGraphOwnedFile struct {
 	Before    *string `json:"before,omitempty"`
 	After     string  `json:"after"`
@@ -183,7 +184,7 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	if manifest.MCP, err = reconcilePiMCP(paths.MCPConfig, journal, changed, manifest.MCP); err != nil {
 		return result, err
 	}
-	if err = restoreMissingPiChildren(manifest.Children, journal, changed); err != nil {
+	if err = releaseStalePiChildren(paths.AgentDir, manifest.Children, journal, changed); err != nil {
 		return result, err
 	}
 	children, err := piagent.DiscoverCodeGraphChildren(options.HomeDir, options.WorkspaceDir)
@@ -192,6 +193,9 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	}
 	manifest.MCPPath = paths.MCPConfig
 	for _, discovered := range children {
+		if legacyassets.IsRetiredPiAgentPath(paths.AgentDir, discovered.Target) {
+			continue
+		}
 		if safeErr := journal.validate(discovered.Source); safeErr != nil {
 			return result, safeErr
 		}
@@ -674,6 +678,9 @@ func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGra
 	}
 	reports := make([]PiCodeGraphChild, 0, len(children))
 	for _, child := range children {
+		if legacyassets.IsRetiredPiAgentPath(paths.AgentDir, child.Target) {
+			continue
+		}
 		body, err := os.ReadFile(child.Target)
 		if err != nil {
 			return false, fmt.Sprintf("cannot read Pi child %q: %v", child.Name, err), reports
@@ -875,7 +882,12 @@ func piCodeGraphManifestPermissionsSafe(goos string, mode os.FileMode) bool {
 	return goos == "windows" || mode.Perm()&0o077 == 0
 }
 
-func restoreMissingPiChildren(children map[string]piCodeGraphOwnedFile, journal *piJournal, changed map[string]struct{}) error {
+// releaseStalePiChildren drops ownership of children that no longer exist, so
+// a deleted child is never recreated. Retired SDD agents are released too: when
+// one still holds exactly the recorded overlay, its before-image is restored so
+// the Pi package that installed it can prove ownership and retire it. Any other
+// retired file is left untouched.
+func releaseStalePiChildren(agentDir string, children map[string]piCodeGraphOwnedFile, journal *piJournal, changed map[string]struct{}) error {
 	paths := make([]string, 0, len(children))
 	for path := range children {
 		paths = append(paths, path)
@@ -883,12 +895,27 @@ func restoreMissingPiChildren(children map[string]piCodeGraphOwnedFile, journal 
 	slices.Sort(paths)
 	for _, path := range paths {
 		owned := children[path]
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			delete(children, path)
 			continue
-		} else if !os.IsNotExist(err) {
+		} else if err != nil {
 			return err
 		}
-		if err := journal.writeWithMode(path, []byte(owned.After), os.FileMode(owned.Mode)); err != nil {
+		if !legacyassets.IsRetiredPiAgentPath(agentDir, path) {
+			continue
+		}
+		delete(children, path)
+		if owned.Before == nil || journal.validate(path) != nil {
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if hashPiBytes(body) != owned.AfterHash {
+			continue
+		}
+		if err := journal.write(path, []byte(*owned.Before)); err != nil {
 			return err
 		}
 		changed[path] = struct{}{}
@@ -917,9 +944,6 @@ func newPiJournal(roots ...string) *piJournal {
 	return &piJournal{before: map[string]*piJournalFile{}, roots: roots}
 }
 func (j *piJournal) write(path string, data []byte) error {
-	return j.writeWithMode(path, data, 0)
-}
-func (j *piJournal) writeWithMode(path string, data []byte, mode os.FileMode) error {
 	if err := j.validate(path); err != nil {
 		return err
 	}
@@ -937,9 +961,7 @@ func (j *piJournal) writeWithMode(path string, data []byte, mode os.FileMode) er
 			return err
 		}
 	}
-	if mode == 0 {
-		mode = 0o600
-	}
+	mode := os.FileMode(0o600)
 	if previous := j.before[path]; previous != nil {
 		mode = previous.mode
 	}

@@ -143,7 +143,7 @@ func TestBetaEngramPreflightPublicInstallConsumers(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				result, orchestrator := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, windowsProfile, model.OpenCodeBackgroundAuto, model.PiBackgroundAuto, nil)
+				result, orchestrator, _ := ExecuteTUIInstallRecordingCodexServiceTier(home, selection, resolved, windowsProfile, model.OpenCodeBackgroundAuto, model.PiBackgroundAuto, nil)
 				if orchestrator != nil {
 					defer orchestrator.Finish()
 				}

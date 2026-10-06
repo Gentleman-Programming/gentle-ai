@@ -570,6 +570,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			selection:        r.selection,
 			changedFiles:     &r.changedFiles,
 			skipped:          &r.skippedActions,
+			state:            r.state,
 			backgroundPolicy: r.backgroundPolicy,
 		})
 	}
@@ -1219,6 +1220,7 @@ type componentSyncStep struct {
 	selection    model.Selection
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
 	skipped      *[]string // accumulates workspace-scope skip notices for global-only operations
+	state        *runtimeState
 
 	backgroundPolicy bool
 }
@@ -1438,6 +1440,8 @@ func (s componentSyncStep) Run() error {
 		engramVersion, _ := resolveEngramVersion("engram")
 		engramOpts := engram.InjectOptions{
 			CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
+			CodexServiceTier:            s.selection.CodexServiceTier,
+			CodexManagedServiceTier:     s.selection.CodexManagedServiceTier,
 			CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 			CodexModelAssignments:       s.selection.CodexModelAssignments,
 			Version:                     engramVersion,
@@ -1459,6 +1463,7 @@ func (s componentSyncStep) Run() error {
 					res, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
 				} else {
 					res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+					s.state.noteCodexServiceTier(res)
 				}
 			}
 			if err != nil {
@@ -2120,7 +2125,11 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	// global state file with provenance, community tools, or background
 	// intents (issue #1074).
 	if scope == ScopeGlobal {
-		if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist); err != nil {
+		err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist, piBackground.Persist)
+		if err == nil {
+			err = recordCodexServiceTier(homeDir, rt.state.codexServiceTier)
+		}
+		if err != nil {
 			persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
 			rollback := orchestrator.Rollback(result.Execution)
 			if rollback.Err != nil {
@@ -2234,6 +2243,7 @@ func RunSync(args []string) (SyncResult, error) {
 		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
 	RestorePersistedSelection(&selection, persistedState, flags)
+	restoreCodexServiceTier(&selection, persistedState)
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
 
 	// Load persisted model assignments from state when not provided via flags.

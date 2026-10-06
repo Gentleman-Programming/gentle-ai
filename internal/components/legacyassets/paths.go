@@ -5,6 +5,7 @@ package legacyassets
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
@@ -20,6 +21,14 @@ var commandNames = [...]string{
 var promptPhases = [...]string{
 	"sdd-init", "sdd-explore", "sdd-research", "sdd-propose", "sdd-spec",
 	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+}
+
+// piAgentNames are the SDD agents the Pi package installed in the Pi agent
+// home before retiring them (gentle-pi RETIRED_MANAGED_ASSETS).
+var piAgentNames = [...]string{
+	"sdd-apply", "sdd-archive", "sdd-design", "sdd-explore", "sdd-init",
+	"sdd-onboard", "sdd-proposal", "sdd-remediate", "sdd-research", "sdd-spec",
+	"sdd-status", "sdd-sync", "sdd-tasks", "sdd-verify",
 }
 
 // SlashCommandPaths inventories historical commands; Claude has both namespaced
@@ -43,6 +52,18 @@ func SharedPromptDir(homeDir string) string {
 // SharedPromptPhases returns an independent copy of historical prompt names.
 func SharedPromptPhases() []string {
 	return append([]string(nil), promptPhases[:]...)
+}
+
+// IsRetiredPiAgentPath matches exactly the retired SDD agent files directly
+// inside the Pi agent home's agents or subagents directory.
+func IsRetiredPiAgentPath(agentDir, path string) bool {
+	path = filepath.Clean(path)
+	dir := filepath.Dir(path)
+	if dir != filepath.Join(agentDir, "agents") && dir != filepath.Join(agentDir, "subagents") {
+		return false
+	}
+	name, ok := strings.CutSuffix(filepath.Base(path), ".md")
+	return ok && slices.Contains(piAgentNames[:], name)
 }
 
 // IsLegacyClaudeCommandPath matches exactly the retired unprefixed Claude files.

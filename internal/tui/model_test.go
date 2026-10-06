@@ -186,9 +186,9 @@ func TestCodexCustomDiscoveryStartsAsCommandWithFallback(t *testing.T) {
 	t.Cleanup(func() { discoverCodexModels = originalDiscover })
 
 	called := false
-	discoverCodexModels = func(context.Context) []string {
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
 		called = true
-		return []string{"discovered-model"}
+		return model.CodexModelCatalog{Models: []string{"discovered-model"}}
 	}
 
 	m := NewModel(system.DetectionResult{}, "dev")
@@ -230,11 +230,14 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 		wantApplied bool
 	}{
 		{
+			// Presets read discovered service tiers, so the newest result
+			// applies on the main picker too.
 			name: "after leaving Custom",
 			setup: func(m *Model) {
 				m.CodexModelPicker.CustomMode = screens.CodexCustomModeNone
 			},
-			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			msg:         CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			wantApplied: true,
 		},
 		{
 			name: "after leaving picker",
@@ -282,6 +285,57 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 				t.Fatalf("AvailableModels = %v, want unchanged %v", state.CodexModelPicker.AvailableModels, fallback)
 			}
 		})
+	}
+}
+
+func TestCodexServiceTierPreselectsDiscoversAndFeedsSyncOverride(t *testing.T) {
+	originalDiscover := discoverCodexModels
+	t.Cleanup(func() { discoverCodexModels = originalDiscover })
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(screens.CodexPresetRecommended)).Model
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
+		return model.CodexModelCatalog{
+			Models: []string{orchestrator},
+			Capabilities: map[string]model.CodexModelCapabilities{
+				orchestrator: {ServiceTiers: []model.CodexServiceTier{{ID: "priority", Name: "Fast"}}, ServiceTiersReported: true},
+			},
+		}
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{CodexServiceTier: "priority"})
+	if m.Selection.CodexServiceTier != "priority" || m.Selection.CodexManagedServiceTier != "priority" {
+		t.Fatalf("NewModel tier = %q managed = %q, want persisted priority", m.Selection.CodexServiceTier, m.Selection.CodexManagedServiceTier)
+	}
+	m.Screen = ScreenModelConfig
+	m.Cursor = 3 // Configure Codex models
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenCodexModelPicker || state.CodexModelPicker.ServiceTier != "priority" {
+		t.Fatalf("screen = %v tier = %q, want Codex picker pre-selecting priority", state.Screen, state.CodexModelPicker.ServiceTier)
+	}
+	if cmd == nil {
+		t.Fatal("opening the Codex picker did not start runtime discovery")
+	}
+	updated, _ = state.Update(cmd())
+	state = updated.(Model)
+
+	state.Cursor = 1 // Recommended
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModeServiceTier || state.CodexModelPicker.ServiceTierCursor != 1 {
+		t.Fatalf("mode = %v cursor = %d, want tier step with priority pre-selected", state.CodexModelPicker.CustomMode, state.CodexModelPicker.ServiceTierCursor)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyUp})
+	state = updated.(Model)
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Selection.CodexServiceTier != "" {
+		t.Fatalf("Selection.CodexServiceTier = %q, want standard", state.Selection.CodexServiceTier)
+	}
+	overrides := state.PendingSyncOverrides
+	if overrides == nil || overrides.CodexServiceTier == nil || *overrides.CodexServiceTier != "" {
+		t.Fatalf("PendingSyncOverrides.CodexServiceTier = %#v, want explicit standard", overrides)
 	}
 }
 
@@ -350,6 +404,74 @@ func TestCodexCustomDiscoveryClampsModelSelectCursorBeforeEnter(t *testing.T) {
 	}
 	if state.CodexModelPicker.CustomPendingModel != "discovered-model-2" {
 		t.Fatalf("CustomPendingModel = %q, want %q", state.CodexModelPicker.CustomPendingModel, "discovered-model-2")
+	}
+}
+
+func TestCodexCustomDiscoveryClampsEffortSelectCursorBeforeEnter(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.CodexModelPicker.CustomMode = screens.CodexCustomModeEffortSelect
+	m.CodexModelPicker.CustomPendingModel = "gpt-5.6-luna"
+	m.CodexModelPicker.CustomEffortCursor = 3 // curated xhigh, before discovery
+	m.codexModelDiscoveryRequest = 1
+
+	updated, _ := m.Update(CodexModelsDiscoveredMsg{
+		RequestID: 1,
+		Models:    []string{"gpt-5.6-luna"},
+		Capabilities: map[string]model.CodexModelCapabilities{
+			"gpt-5.6-luna": {Efforts: []model.CodexEffort{model.CodexEffortLow, model.CodexEffortMedium}},
+		},
+	})
+	state := updated.(Model)
+	if state.CodexModelPicker.CustomEffortCursor != 1 {
+		t.Fatalf("CustomEffortCursor = %d, want clamped to 1 on capability arrival", state.CodexModelPicker.CustomEffortCursor)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if got := state.CodexModelPicker.CustomAssignments["jd-judge-a"]; got.ModelID != "gpt-5.6-luna" || got.Effort != model.CodexEffortMedium {
+		t.Fatalf("assignment = %+v, want gpt-5.6-luna/medium", got)
+	}
+}
+
+// TestCodexManagedServiceTierRefreshesFromStateAfterSyncAndInstall keeps the
+// session's managed tier equal to what state recorded as written, so a later
+// Standard choice in the same session retires exactly that value.
+func TestCodexManagedServiceTierRefreshesFromStateAfterSyncAndInstall(t *testing.T) {
+	original := readPersistedCodexServiceTier
+	t.Cleanup(func() { readPersistedCodexServiceTier = original })
+	readPersistedCodexServiceTier = func() *string { tier := "priority"; return &tier }
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.SyncFn = func(*model.SyncOverrides) ([]string, error) { return nil, nil }
+	msg, ok := m.startSync(nil)().(SyncDoneMsg)
+	if !ok || msg.CodexServiceTier == nil || *msg.CodexServiceTier != "priority" {
+		t.Fatalf("sync completion did not carry the recorded tier: %#v", msg)
+	}
+	m.Screen = ScreenSync
+	updated, _ := m.Update(msg)
+	state := updated.(Model)
+	if state.Selection.CodexManagedServiceTier != "priority" {
+		t.Fatalf("managed tier after sync = %q, want priority recorded in state", state.Selection.CodexManagedServiceTier)
+	}
+
+	standard := ""
+	updated, _ = state.Update(PipelineDoneMsg{CodexServiceTier: &standard})
+	state = updated.(Model)
+	if state.Selection.CodexManagedServiceTier != "" {
+		t.Fatalf("managed tier after install = %q, want empty recorded in state", state.Selection.CodexManagedServiceTier)
+	}
+	updated, _ = state.Update(PipelineDoneMsg{}) // unreadable state keeps the session value
+	if got := updated.(Model).Selection.CodexManagedServiceTier; got != "" {
+		t.Fatalf("managed tier changed without a recorded value: %q", got)
+	}
+}
+
+func TestNewModelDropsInvalidPersistedCodexServiceTier(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{CodexServiceTier: "priority\nmodel = \"x\""})
+	if m.Selection.CodexServiceTier != "" || m.Selection.CodexManagedServiceTier != "" {
+		t.Fatalf("tier = %q managed = %q, want invalid state value dropped", m.Selection.CodexServiceTier, m.Selection.CodexManagedServiceTier)
 	}
 }
 

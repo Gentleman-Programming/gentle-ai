@@ -2635,6 +2635,91 @@ func TestCustomClearRoundTripLeavesFutureSyncInPreserveMode(t *testing.T) {
 	}
 }
 
+func TestLoadPersistedCodexServiceTierRestoresOnlyValidValues(t *testing.T) {
+	for _, tt := range []struct{ persisted, want string }{
+		{"priority", "priority"},
+		{"priority\nmodel = \"x\"", ""},
+	} {
+		home := t.TempDir()
+		if err := state.Write(home, state.InstallState{InstalledAgents: []string{"codex"}, CodexServiceTier: tt.persisted}); err != nil {
+			t.Fatalf("state.Write (seed): %v", err)
+		}
+		selection := model.Selection{}
+		loadPersistedAssignments(home, &selection)
+		if selection.CodexServiceTier != tt.want || selection.CodexManagedServiceTier != tt.want {
+			t.Fatalf("restored %q: tier = %q managed = %q, want %q", tt.persisted, selection.CodexServiceTier, selection.CodexManagedServiceTier, tt.want)
+		}
+	}
+}
+
+func TestPersistAssignmentsNeverRecordsTheSelectedCodexServiceTier(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"codex"}, CodexServiceTier: "flex"}); err != nil {
+		t.Fatalf("state.Write (seed): %v", err)
+	}
+	if err := persistAssignments(home, model.Selection{CodexServiceTier: "priority", CodexManagedServiceTier: "flex"}); err != nil {
+		t.Fatal(err)
+	}
+	if persisted, err := state.Read(home); err != nil || persisted.CodexServiceTier != "flex" {
+		t.Fatalf("persisted tier = %q, err = %v; want flex (only engram's write result is recorded)", persisted.CodexServiceTier, err)
+	}
+}
+
+func codexServiceTierInstall(t *testing.T, home string, components []model.ComponentID, desired, managed string) {
+	t.Helper()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}, Components: components, CodexServiceTier: desired, CodexManagedServiceTier: managed}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: components}
+	if result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, "", "", "", "", nil); result.Err != nil {
+		t.Fatalf("TUI install error = %v", result.Err)
+	}
+}
+
+func codexConfigAndStateTier(t *testing.T, home string) (string, string) {
+	t.Helper()
+	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	return string(config), persisted.CodexServiceTier
+}
+
+// TestTUIInstallRecordsOnlyTheCodexServiceTierEngramWrote covers both halves
+// of the managed-tier contract: a tier no engram run wrote is never recorded,
+// and a Standard install in the session that wrote Fast retires exactly it.
+func TestTUIInstallRecordsOnlyTheCodexServiceTierEngramWrote(t *testing.T) {
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
+	if runtime.GOOS == "windows" {
+		t.Skip("fake engram runtime is a POSIX shell script")
+	}
+	home := t.TempDir()
+	previousUserHomeDir := appUserHomeDir
+	appUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { appUserHomeDir = previousUserHomeDir })
+	// A fake engram on PATH keeps the engram component from installing anything.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "engram"), []byte("#!/bin/sh\nprintf 'engram 1.18.0\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	codexServiceTierInstall(t, home, []model.ComponentID{model.ComponentPersona}, "priority", "")
+	if config, recorded := codexConfigAndStateTier(t, home); recorded != "" || strings.Contains(config, "service_tier") {
+		t.Fatalf("unwritten tier recorded: state = %q config:\n%s", recorded, config)
+	}
+
+	codexServiceTierInstall(t, home, []model.ComponentID{model.ComponentEngram}, "priority", "")
+	if config, recorded := codexConfigAndStateTier(t, home); recorded != "priority" || !strings.Contains(config, `service_tier = "priority"`) {
+		t.Fatalf("written tier not recorded: state = %q config:\n%s", recorded, config)
+	}
+
+	// Same session, now Standard: the managed value is what state recorded.
+	codexServiceTierInstall(t, home, []model.ComponentID{model.ComponentEngram}, "", "priority")
+	if config, recorded := codexConfigAndStateTier(t, home); recorded != "" || strings.Contains(config, "service_tier") {
+		t.Fatalf("Standard left an orphan: state = %q config:\n%s", recorded, config)
+	}
+}
+
 // ─── Issue #535: upgrade argument validation pre-effect gate ───────────────
 
 // installUpgradeSentinels replaces every effect that the upgrade preflight

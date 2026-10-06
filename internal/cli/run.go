@@ -184,6 +184,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	} else if stateErr != nil {
 		return InstallResult{}, fmt.Errorf("persist install state preflight: %w", stateErr)
 	}
+	restoreCodexServiceTier(&input.Selection, persistedState)
 	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
 	if err != nil {
 		return InstallResult{}, err
@@ -332,7 +333,11 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return result, rollbackPostApplyError(orchestrator, result.Execution, fmt.Errorf("derive managed asset writer identity: %w", err))
 	}
-	if err := persistInstallState(homeDir, newState, agentIDs, flags, writer); err != nil {
+	err = persistInstallState(homeDir, newState, agentIDs, flags, writer)
+	if err == nil {
+		err = recordCodexServiceTier(homeDir, runtime.state.codexServiceTier)
+	}
+	if err != nil {
 		persistErr := fmt.Errorf("persist install state: %w", err)
 		rollback := orchestrator.Rollback(result.Execution)
 		if rollback.Err != nil {
@@ -723,6 +728,10 @@ type runtimeState struct {
 	engramVersionResolved bool
 	engramVersion         string
 	engramVersionErr      error
+
+	// codexServiceTier is the tier the global engram injection left in Codex's
+	// config.toml (nil = not written); state records it as the managed tier.
+	codexServiceTier *string
 }
 
 func (s *runtimeState) cleanupRollbackSnapshot() {
@@ -2996,6 +3005,8 @@ func (s componentApplyStep) Run() error {
 			engramOpts := engram.InjectOptions{
 				OpenCodeSettingsPath:        openCodeLoadedSettingsPath(s.homeDir, s.workspaceDir, adapter),
 				CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
+				CodexServiceTier:            s.selection.CodexServiceTier,
+				CodexManagedServiceTier:     s.selection.CodexManagedServiceTier,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
 				Version:                     engramVersion,
@@ -3008,7 +3019,9 @@ func (s componentApplyStep) Run() error {
 				if s.scope == ScopeWorkspace {
 					_, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
 				} else {
-					_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+					var injected engram.InjectionResult
+					injected, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+					s.state.noteCodexServiceTier(injected)
 				}
 			}
 			if err != nil {
@@ -3204,18 +3217,17 @@ var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
 }
 
-// ExecuteTUIInstallWithBackgroundAndOrchestrator runs a TUI install and returns
-// the orchestrator so downstream persistence failures can be compensated.
-// After successful persistence, callers must call orchestrator.Finish() to
-// release a deduplicated temporary rollback snapshot.
-func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
-	return executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
+// ExecuteTUIInstallRecordingCodexServiceTier runs a TUI install and returns
+// its orchestrator plus the service tier engram left in Codex's config.toml
+// (nil = not written), for state to record.
+func ExecuteTUIInstallRecordingCodexServiceTier(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
+	return executeTUIInstall(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
 }
 
-func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
+func executeTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
-		return pipeline.ExecutionResult{Err: err}, nil
+		return pipeline.ExecutionResult{Err: err}, nil, nil
 	}
 	defer runtime.state.cleanupCompatibilityTransaction()
 	backgroundResolution := OpenCodeBackgroundResolution{
@@ -3224,14 +3236,14 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	}
 	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &backgroundResolution, containsAgent(resolved.Agents, model.AgentOpenCode))
 	if err != nil {
-		return pipeline.ExecutionResult{Err: fmt.Errorf("prepare OpenCode background activation: %w", err)}, nil
+		return pipeline.ExecutionResult{Err: fmt.Errorf("prepare OpenCode background activation: %w", err)}, nil, nil
 	}
 	runtime.background = backgroundResolution
 	runtime.progress = onProgress
 	if len(consent) > 0 && consent[0] != nil {
 		if !containsAgent(resolved.Agents, model.AgentOpenCode) {
 			// refusal:by-design human-authority: invocation consent cannot apply to a different selection
-			return pipeline.ExecutionResult{Err: fmt.Errorf("OpenCode SDK consent does not match selected agents")}, nil
+			return pipeline.ExecutionResult{Err: fmt.Errorf("OpenCode SDK consent does not match selected agents")}, nil, nil
 		}
 		runtime.sdkConsent = consent[0]
 	}
@@ -3250,7 +3262,7 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	}
 	result.ManualActions = append(result.ManualActions, runtime.state.nativeReviewActions...)
 	result.ManualActions = append(result.ManualActions, runtime.state.retiredSDDActions...)
-	return result, orchestrator
+	return result, orchestrator, runtime.state.codexServiceTier
 }
 
 // RenderInstallManualActions renders non-fatal completion actions after the
