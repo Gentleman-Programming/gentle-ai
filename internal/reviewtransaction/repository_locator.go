@@ -123,21 +123,29 @@ type reviewRepositoryContextV2Token struct {
 	CapturePhaseRevision string `json:"capture_phase_revision"`
 }
 
-var errInvalidReviewRepositoryContextV2 = errors.New("invalid rctx2 repository context") // refusal:by-design operator-knowledge: callers must refresh the provider-issued repository context instead of attempting to repair an untrusted token
+// ErrReviewRepositoryContextV2BindingUnusable reports an invalid transport or
+// unmatched repository/binding tuple. An opaque digest cannot identify which
+// preimage field differs, nor prove that the binding was ever active.
+var ErrReviewRepositoryContextV2BindingUnusable = errors.New("invalid rctx2 repository context") // refusal:by-design operator-knowledge: verify the repository and refresh the exact provider-issued binding
 
-type reviewRepositoryContextV2ResolutionError struct{ cause error }
+var errInvalidReviewRepositoryContextV2 = ErrReviewRepositoryContextV2BindingUnusable
 
-func (err *reviewRepositoryContextV2ResolutionError) Error() string {
+// ReviewRepositoryContextV2ResolutionError preserves an underlying repository
+// or authority failure behind a path-free public message. It does not establish
+// that the supplied binding was valid when issued.
+type ReviewRepositoryContextV2ResolutionError struct{ cause error }
+
+func (err *ReviewRepositoryContextV2ResolutionError) Error() string {
 	return errInvalidReviewRepositoryContextV2.Error()
 }
 
-func (err *reviewRepositoryContextV2ResolutionError) Unwrap() error { return err.cause }
+func (err *ReviewRepositoryContextV2ResolutionError) Unwrap() error { return err.cause }
 
 func invalidReviewRepositoryContextV2Resolution(cause error) error {
 	if cause == nil {
 		return errInvalidReviewRepositoryContextV2
 	}
-	return &reviewRepositoryContextV2ResolutionError{cause: cause}
+	return &ReviewRepositoryContextV2ResolutionError{cause: cause}
 }
 
 // OpenRepositoryIdentityLease resolves and captures one exact Git worktree
@@ -207,9 +215,9 @@ func DeriveReviewRepositoryContextHandle(ctx context.Context, repo string, bindi
 }
 
 // deriveReviewRepositoryContextV2Token creates the self-contained rctx2 core
-// without publishing a locator or wiring a public consumer. Its explicit
-// authority check keeps token creation bounded to the currently active compact
-// record; its resolver repeats the same check before returning any identity.
+// without publishing a locator or establishing authority. It encodes the supplied
+// binding; only the resolver checks active compact authority before returning
+// any identity.
 func deriveReviewRepositoryContextV2Token(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) (string, error) {
 	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil {
 		return "", errInvalidReviewRepositoryContextV2
@@ -262,7 +270,7 @@ func resolveReviewRepositoryContextV2Token(ctx context.Context, repo, handle str
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
 	if err := validateReviewRepositoryContextRecord(ctx, identity.RepositoryRoot, binding, record); err != nil {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
+		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
 	if err := lease.Validate(ctx); err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)

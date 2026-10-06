@@ -68,7 +68,7 @@ func TestRepositoryContextCaptureFromUnrelatedCWDClosesOnLastCapture(t *testing.
 		replaceReviewArgument(t, bindingArgs, "--expected-revision", "sha256:"+strings.Repeat("0", 64)),
 	} {
 		if err := RunReviewCaptureResult(append(args, "--preflight"), io.Discard); err == nil ||
-			!strings.Contains(err.Error(), "repository_context_") || strings.Contains(err.Error(), repo) {
+			!strings.Contains(err.Error(), "rctx2_binding_unusable") || strings.Contains(err.Error(), repo) {
 			t.Fatalf("invalid rctx2 preflight error = %v", err)
 		}
 		afterRefusal, err := os.ReadFile(store.StatePath())
@@ -130,7 +130,7 @@ func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
 				"--lens", started.SelectedLenses[0], "--order", "0", "--preflight",
 			}, io.Discard)
 			if err == nil || strings.Contains(err.Error(), repo) || strings.Contains(err.Error(), home) ||
-				!strings.Contains(err.Error(), "repository_context_") || !strings.Contains(err.Error(), "refresh") {
+				!strings.Contains(err.Error(), "rctx2_resolution_failed") || !strings.Contains(err.Error(), "underlying cause") {
 				t.Fatalf("opaque context error = %q", err)
 			}
 		})
@@ -524,9 +524,9 @@ func TestNegotiatedStartRepositoryContextCoversWorkspaceStagedAndOverlay(t *test
 	}
 }
 
-// rctx2ReviewRepositoryContextForTest issues the same provider-owned handle the
-// lifecycle issues. The handle is a digest, so a test cannot hand-assemble one:
-// deriving it here is what keeps these tests honest about what a host receives.
+// rctx2ReviewRepositoryContextForTest derives a digest for the supplied tuple.
+// Derivation does not establish authority; callers must create real compact
+// authority separately when testing successful active resolution.
 func rctx2ReviewRepositoryContextForTest(t *testing.T, repo string, binding reviewtransaction.ReviewRepositoryContextBinding) string {
 	t.Helper()
 	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), repo, binding)
