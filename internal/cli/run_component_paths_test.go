@@ -1413,6 +1413,48 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 }
 
+// TestRoutingLegacyTriggerCleanupStripsKilocodeSettings covers the Kilocode
+// branch of the legacy trigger-rule cleanup: Kilo keeps its orchestrator prompt
+// in its own settings document, not in a system prompt file.
+func TestRoutingLegacyTriggerCleanupStripsKilocodeSettings(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "kilo", "opencode.json")
+	seeded := filemerge.InjectMarkdownSection("# My own notes\n", "trigger-rules", "Retired WorkRun ceremony\n")
+	payload, err := json.Marshal(map[string]any{
+		"agent": map[string]any{opencodedefault.ManagedAgent: map[string]any{"prompt": seeded}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, settingsPath, payload)
+
+	step := agentRoutingGuidanceStep{
+		id:      "agent-guidance:" + string(model.AgentKilocode),
+		agent:   model.AgentKilocode,
+		homeDir: home,
+		scope:   ScopeGlobal,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var settings struct {
+		Agent map[string]struct {
+			Prompt string `json:"prompt"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(readTextFile(t, settingsPath)), &settings); err != nil {
+		t.Fatalf("decode Kilo settings error = %v", err)
+	}
+	prompt := settings.Agent[opencodedefault.ManagedAgent].Prompt
+	if strings.Contains(prompt, "Retired WorkRun ceremony") {
+		t.Fatalf("legacy trigger-rules content survived in the Kilo settings:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# My own notes") {
+		t.Fatalf("stripping the legacy section destroyed unmanaged user content:\n%s", prompt)
+	}
+}
+
 // TestRoutingLegacyTriggerCleanupTargetsSelectedOpenCodeSettings covers issue
 // #5025 item 2: the retired trigger-rules cleanup must act on the settings file
 // OpenCode loads, never on a non-loaded global decoy, for install and sync.
