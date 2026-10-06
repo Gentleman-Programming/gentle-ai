@@ -90,11 +90,11 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 			if !hasClaude {
 				agentNames = append(agentNames, string(model.AgentClaudeCode))
 			}
-			continuation := fmt.Sprintf("gentle-ai install --agent %s --scope global --claude-orchestrator-modules", strings.Join(agentNames, ","))
+			agents := strings.Join(agentNames, ",")
 			if scope != ScopeGlobal {
-				return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q; rerun %s", scope, continuation)
+				return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q; rerun gentle-ai install --agent %s --scope global --claude-orchestrator-modules", scope, agents)
 			}
-			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the %s agent in the selection; rerun %s", model.AgentClaudeCode, continuation)
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the claude-code agent in the selection; rerun gentle-ai install --agent %s --scope global --claude-orchestrator-modules", agents)
 		}
 	}
 
