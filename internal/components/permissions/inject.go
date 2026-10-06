@@ -154,7 +154,7 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 		defaultsMerge := merge
 		merge = func(path string, base, overlay []byte) ([]byte, error) {
-			return defaultsMerge(path, base, withoutWildcardAllowsUnderUserDeny(base, overlay))
+			return defaultsMerge(path, base, withoutRulesLooserThanUserDefault(base, overlay))
 		}
 	}
 	writeResult, err := mergeJSONFile(settingsPath, overlay, merge)
@@ -165,17 +165,19 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
-// withoutWildcardAllowsUnderUserDeny drops the overlay's "*": "allow" tool
-// rules when the user's root permission denies by default. Merged into a tool
-// map the user scoped, such an allow is the last match and would loosen the
-// user's deny; the overlay's asks and denies only tighten, so they stay.
-func withoutWildcardAllowsUnderUserDeny(base, overlay []byte) []byte {
+// withoutRulesLooserThanUserDefault drops overlay tool rules looser than the
+// user's root permission "*" (deny is stricter than ask, ask than allow).
+// Merged into a tool map the user scoped, such a rule follows the root "*" and,
+// as the last match, would loosen the user's default.
+func withoutRulesLooserThanUserDefault(base, overlay []byte) []byte {
+	strictness := map[any]int{"allow": 0, "ask": 1, "deny": 2}
 	root, err := filemerge.UnmarshalJSONObject(base)
 	if err != nil {
 		return overlay
 	}
 	permission, _ := root["permission"].(map[string]any)
-	if permission["*"] != "deny" {
+	floor, ok := strictness[permission["*"]]
+	if !ok || floor == 0 {
 		return overlay
 	}
 	defaults, err := filemerge.UnmarshalJSONObject(overlay)
@@ -184,8 +186,11 @@ func withoutWildcardAllowsUnderUserDeny(base, overlay []byte) []byte {
 	}
 	rules, _ := defaults["permission"].(map[string]any)
 	for _, value := range rules {
-		if patterns, ok := value.(map[string]any); ok && patterns["*"] == "allow" {
-			delete(patterns, "*")
+		patterns, _ := value.(map[string]any)
+		for pattern, action := range patterns {
+			if strictness[action] < floor {
+				delete(patterns, pattern)
+			}
 		}
 	}
 	encoded, err := json.Marshal(defaults)

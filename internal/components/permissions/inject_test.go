@@ -1154,6 +1154,19 @@ func TestInjectKeepsUserDenyByDefault(t *testing.T) {
 			if got := remoteAction(t, raw, "rm -rf /"); got != "deny" {
 				t.Errorf("overlay deny lost: got %s", got)
 			}
+			// Overlay rules follow the root deny, so any ask or allow the
+			// overlay added would loosen it; only the user's allow may remain.
+			for tool, value := range root.Permission {
+				var patterns map[string]string
+				if json.Unmarshal(value, &patterns) != nil {
+					continue
+				}
+				for pattern, action := range patterns {
+					if action != "deny" && !(tool == "bash" && pattern == "git status") {
+						t.Errorf("%s %q: %s loosens the user's deny-by-default", tool, pattern, action)
+					}
+				}
+			}
 			if got := remoteAction(t, raw, "git status"); got != "allow" {
 				t.Errorf("user's own allow: got %s, want allow", got)
 			}
