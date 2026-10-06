@@ -197,7 +197,7 @@ func RenderUninstallProfiles(available []string, selected []string, engramProjec
 	b.WriteString("\n\n")
 
 	if len(available) > 0 {
-		b.WriteString(styles.SubtextStyle.Render("Choose which OpenCode SDD profiles should be removed from opencode.json."))
+		b.WriteString(styles.SubtextStyle.Render("Choose which legacy OpenCode profiles should be removed from opencode.json."))
 		b.WriteString("\n\n")
 	}
 
@@ -332,7 +332,7 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 	// Workspace-scoped assets warning
 	hasWorkspaceAssets := false
 	for _, comp := range components {
-		if comp == model.ComponentSDD || comp == model.ComponentSkills {
+		if comp == model.ComponentSkills {
 			hasWorkspaceAssets = true
 			break
 		}
@@ -340,9 +340,7 @@ func RenderUninstallConfirm(mode model.UninstallMode, selected []model.AgentID, 
 	if (mode == model.UninstallModeFull || mode == model.UninstallModeFullRemove) || hasWorkspaceAssets {
 		b.WriteString(styles.WarningStyle.Render("⚠ Workspace Assets Warning:"))
 		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("  Removing SDD or Skills will delete workspace-scoped files like:"))
-		b.WriteString("\n")
-		b.WriteString(styles.SubtextStyle.Render("  • .windsurf/workflows/ (SDD workflows)"))
+		b.WriteString(styles.SubtextStyle.Render("  Removing Skills will delete workspace-scoped files like:"))
 		b.WriteString("\n")
 		b.WriteString(styles.SubtextStyle.Render("  • .engram/ (persistent memory context)"))
 		b.WriteString("\n")
