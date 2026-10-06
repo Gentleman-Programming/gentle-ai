@@ -15,9 +15,9 @@ Use this skill after installing, removing, creating, moving, or renaming skills,
 
 - The registry is an index, not a compiler or summary. `SKILL.md` remains the source of truth.
 - Do not generate or inject compact rules by default; preserve author intent by passing exact skill paths to subagents.
-- Always write `.atl/skill-registry.md` regardless of SDD persistence mode.
+- Always write `.atl/skill-registry.md`, whether or not Engram is available.
 - Save the registry to Engram as `topic_key: skill-registry` when available, with `capture_prompt: false`.
-- Skip `sdd-*`, `_shared`, and `skill-registry`; deduplicate by skill name, preferring project-level skills over user-level skills.
+- Skip `_shared` and `skill-registry`; deduplicate by skill name, preferring project-level skills over user-level skills.
 - Add `.atl/` to `.gitignore` when possible unless explicitly disabled.
 
 ## Decision Gates

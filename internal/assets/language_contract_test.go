@@ -115,8 +115,8 @@ func oddLanguageContractContent(t *testing.T, path string) string {
 		t.Fatalf("%s must reference the shared ODD language contract exactly once", path)
 	}
 	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
-	const start = "<!-- sdd-orchestrator-section:Language Domain Contract:start -->"
-	const end = "<!-- sdd-orchestrator-section:Language Domain Contract:end -->"
+	const start = "<!-- odd-orchestrator-section:Language Domain Contract:start -->"
+	const end = "<!-- odd-orchestrator-section:Language Domain Contract:end -->"
 	from := strings.Index(shared, start)
 	to := strings.Index(shared, end)
 	if from < 0 || to <= from {
