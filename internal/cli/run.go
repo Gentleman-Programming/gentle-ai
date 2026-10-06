@@ -980,19 +980,28 @@ func (s nativeReviewAgentStep) Run() error {
 	return nil
 }
 
-// retiredSDDAssetsStep removes the SDD skills, slash commands, workflow, and
-// Claude Code preflight hook earlier releases installed for one runtime, and
-// reports what it cannot prove it wrote (#5157). The pipeline snapshot
-// captures the same inventory first (retiredSDDAssetBackupPaths).
+// retiredSDDAssetsStep removes the SDD skills, slash commands, workflow,
+// Codex profiles, Kimi module, and Claude Code preflight hook earlier
+// releases installed for one runtime, and the SDD text they left in prompt
+// files routing guidance does not migrate. It reports what it cannot prove it
+// wrote (#5157). The pipeline snapshot captures the same inventory first
+// (retiredSDDAssetBackupPaths).
 type retiredSDDAssetsStep struct {
 	id string
 	// agent is empty for the shared ~/.agents/skills root.
-	agent        model.AgentID
-	dirs         legacyassets.SDDAssetDirs
-	settings     string
+	agent    model.AgentID
+	dirs     legacyassets.SDDAssetDirs
+	settings string
+	// blocks are prompt files whose SDD orchestrator block is removed.
+	blocks       []sddPromptBlock
+	kimiHub      string
 	changedFiles *[]string
 	state        *runtimeState
 }
+
+// sddPromptBlock is a prompt file holding a retired SDD orchestrator block,
+// with the active prompt routing guidance migrates instead (empty when none).
+type sddPromptBlock struct{ path, active string }
 
 func (s retiredSDDAssetsStep) ID() string { return s.id }
 
@@ -1015,6 +1024,27 @@ func (s retiredSDDAssetsStep) Run() error {
 		}
 		actions = append(actions, hook.ManualActions()...)
 	}
+	texts := make([]legacyassets.TextRetireResult, 0, len(s.blocks)+1)
+	for _, block := range s.blocks {
+		res, err := legacyassets.RetireSDDOrchestratorBlock(block.path, block.active)
+		if err != nil {
+			return fmt.Errorf("retire SDD orchestrator block: %w", err)
+		}
+		texts = append(texts, res)
+	}
+	if s.kimiHub != "" {
+		res, err := legacyassets.RetireKimiSDDInclude(s.kimiHub)
+		if err != nil {
+			return fmt.Errorf("retire Kimi SDD include: %w", err)
+		}
+		texts = append(texts, res)
+	}
+	for _, res := range texts {
+		if res.Removed && s.changedFiles != nil {
+			*s.changedFiles = append(*s.changedFiles, res.Path)
+		}
+		actions = append(actions, res.ManualActions()...)
+	}
 	if s.state != nil {
 		s.state.retiredSDDActions = append(s.state.retiredSDDActions, actions...)
 	}
@@ -1022,11 +1052,12 @@ func (s retiredSDDAssetsStep) Run() error {
 }
 
 // retiredSDDAssetSteps resolves where releases installed retired SDD files
-// for the selected runtimes in this scope: skills, commands, and the Claude
-// Code hook under the scoped config root, the Windsurf workflow only in a
-// workspace-scoped run (releases wrote it into the project), and the shared
-// ~/.agents/skills root only in a global run on platforms where the generic
-// snapshot owns it. Pi is skipped: gentle-pi owns its home (#5219).
+// for the selected runtimes in this scope: skills, commands, Codex profiles,
+// the Kimi module, SDD prompt text, and the Claude Code hook under the
+// scoped config root, the Windsurf workflow only in a workspace-scoped run
+// (releases wrote it into the project), and the shared ~/.agents/skills root
+// only in a global run on platforms where the generic snapshot owns it. Pi is
+// skipped: gentle-pi owns its home (#5219).
 func retiredSDDAssetSteps(prefix, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string, state *runtimeState) []retiredSDDAssetsStep {
 	var steps []retiredSDDAssetsStep
 	for _, adapter := range resolveAdapters(agentIDs) {
@@ -1046,6 +1077,17 @@ func retiredSDDAssetSteps(prefix, homeDir, workspaceDir string, scope InstallSco
 		}
 		if adapter.Agent() == model.AgentClaudeCode {
 			step.settings = adapter.SettingsPath(root)
+		}
+		files := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), root)
+		step.dirs.CodexHome, step.dirs.KimiHome, step.kimiHub = files.Dirs.CodexHome, files.Dirs.KimiHome, files.Hub
+		if files.Prompt != "" {
+			step.blocks = append(step.blocks, sddPromptBlock{files.Prompt, files.Active})
+		}
+		// A workspace sync delivers no routing guidance to these runtimes, so
+		// nothing migrates the v3.7.0 SDD block of their project prompt.
+		if scope == ScopeWorkspace && workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) &&
+			!agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) && adapter.SupportsSystemPrompt() {
+			step.blocks = append(step.blocks, sddPromptBlock{path: adapter.SystemPromptFile(root)})
 		}
 		steps = append(steps, step)
 	}
@@ -1071,13 +1113,19 @@ func retiredSDDAssetStepList(steps []retiredSDDAssetsStep) []pipeline.Step {
 func retiredSDDAssetBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
 	var paths []string
 	for _, step := range retiredSDDAssetSteps("", homeDir, workspaceDir, scope, agentIDs, nil, nil) {
-		for _, path := range legacyassets.RetiredSDDAssetPaths(step.agent, step.dirs) {
-			if _, err := os.Lstat(path); err == nil {
-				paths = append(paths, path)
-			}
-		}
+		paths = append(paths, legacyassets.PresentRetiredSDDAssetPaths(step.agent, step.dirs)...)
 		if step.settings != "" {
 			paths = append(paths, step.settings)
+		}
+		// Retirement rewrites only regular prompt files, never through a link.
+		texts := []string{step.kimiHub}
+		for _, block := range step.blocks {
+			texts = append(texts, block.path)
+		}
+		for _, path := range texts {
+			if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+				paths = append(paths, path)
+			}
 		}
 	}
 	return paths

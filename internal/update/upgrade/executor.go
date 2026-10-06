@@ -217,7 +217,6 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		add(
 			filepath.Join(configDir, "persona.md"),
 			filepath.Join(configDir, "output-style.md"),
-			filepath.Join(configDir, "sdd-orchestrator.md"),
 			filepath.Join(configDir, "strict-tdd-mode.md"),
 			// The routing module carries both the orchestrator and routing
 			// guidance the Jinja router includes; upgrades rewrite it.
@@ -253,7 +252,18 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	if adapter.SupportsSkills() {
 		add(managedSkillBackupPaths(homeDir, adapter, diagnostics)...)
 		// The upgraded binary's sync retires SDD skills (#5157).
-		add(presentPaths(legacyassets.RetiredSDDAssetPaths(adapter.Agent(), legacyassets.SDDAssetDirs{Skills: adapter.SkillsDir(homeDir)}))...)
+		add(legacyassets.PresentRetiredSDDAssetPaths(adapter.Agent(), legacyassets.SDDAssetDirs{Skills: adapter.SkillsDir(homeDir)})...)
+	}
+
+	// It also retires Codex's SDD profiles and the SDD block of its lowercase
+	// agents.md, and Kimi's SDD module and its legacy include (#5157).
+	runtimeFiles := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), homeDir)
+	add(legacyassets.PresentRetiredSDDAssetPaths(adapter.Agent(), runtimeFiles.Dirs)...)
+	for _, path := range []string{runtimeFiles.Prompt, runtimeFiles.Hub} {
+		// Retirement rewrites only regular files, never through a link.
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			add(path)
+		}
 	}
 
 	// The managed plugin install resolves the config directory through the
@@ -276,8 +286,14 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 		)
-		for _, phase := range legacyassets.SharedPromptPhases() {
-			add(filepath.Join(legacyassets.SharedPromptDir(homeDir), phase+".md"))
+		// Retirement never enters a prompts directory that is not a real
+		// directory, and removes only prompts that exist.
+		if dir := legacyassets.SharedPromptDir(homeDir); isRealDir(dir) {
+			var prompts []string
+			for _, phase := range legacyassets.SharedPromptPhases() {
+				prompts = append(prompts, filepath.Join(dir, phase+".md"))
+			}
+			add(presentPaths(prompts)...)
 		}
 	}
 
@@ -295,6 +311,11 @@ func presentPaths(paths []string) []string {
 		}
 	}
 	return present
+}
+
+func isRealDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
 }
 
 func managedGlobalBackupPaths(homeDir string) []string {

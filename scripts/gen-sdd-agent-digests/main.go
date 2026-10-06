@@ -12,7 +12,9 @@
 // and shared prompt files releases wrote for the retired SDD agents of the
 // OpenCode family, proven against every release's settings golden render.
 // And the asset registry (see assets.go): every retired SDD skill, slash
-// command, and Windsurf workflow render, proven against the golden renders.
+// command, and Windsurf workflow render, proven against the golden renders,
+// plus Codex's SDD profiles and Kimi's SDD module, proven by replaying each
+// release's own writer (see replay.go).
 //
 // SDD was retired in v4.0.0, so the release set is closed at that tag and
 // later releases never change the registry. Fetch tags first:
@@ -134,10 +136,11 @@ func main() {
 	agents, parents := newRegistry(), newRegistry()
 	openCode := newOpenCodeHarvest()
 	assets := newAssetHarvest()
+	replays := newReplayHarvest()
 	for _, tag := range tags {
 		templates := map[string]string{}
 		files := map[string]string{}
-		for _, line := range strings.Split(git("ls-tree", "-r", tag, "--", "internal/assets", profilesFile, promptsFile, goldenDir, sddInjectFile, sddCommandsFile), "\n") {
+		for _, line := range strings.Split(git("ls-tree", "-r", tag, "--", "internal/assets", profilesFile, promptsFile, goldenDir, sddInjectFile, sddCommandsFile, codexProfilesFile), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) != 4 || fields[1] != "blob" {
 				continue
@@ -174,7 +177,10 @@ func main() {
 		verifyGoldens(tag, templates)
 		openCode.collect(tag, files)
 		assets.collect(tag, files)
+		replays.collect(tag, files)
 	}
+	replays.run()
+	replays.register(tags, assets)
 	settingsVerified := openCode.verifyGoldens()
 	fmt.Fprintf(os.Stderr, "gen-sdd-agent-digests: %d golden renders and %d OpenCode settings entries verified across %d releases\n", verifiedGoldens+assets.verified, settingsVerified, len(tags))
 	if len(agents.order) == 0 {
@@ -208,6 +214,9 @@ func main() {
 	writeSource(output, b.Bytes())
 	openCode.write(openCodeOutput, tags)
 	assets.write(assetOutput, tags)
+	for _, cleanup := range cleanups {
+		cleanup()
+	}
 }
 
 func writeTags(b *bytes.Buffer, tags []string) {
@@ -296,6 +305,10 @@ func sddAgentFamilies() map[string]bool {
 var root string
 
 func git(args ...string) string {
+	return string(gitBytes(args...))
+}
+
+func gitBytes(args ...string) []byte {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = root
 	var stderr bytes.Buffer
@@ -304,10 +317,16 @@ func git(args ...string) string {
 	if err != nil {
 		fail("git %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
 	}
-	return string(out)
+	return out
 }
+
+// cleanups run before a failure exits.
+var cleanups []func()
 
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "gen-sdd-agent-digests: "+format+"\n", args...)
+	for _, cleanup := range cleanups {
+		cleanup()
+	}
 	os.Exit(1)
 }
