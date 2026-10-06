@@ -64,7 +64,17 @@ one bound to its role.
   `opencode_review_transport_relay_refused (reason: <reason>)`, where the reason
   is one bounded code (`capability_unavailable`, `envelope_invalid`,
   `agent_mismatch`, `binding_mismatch`, `stale_authority`, `output_refused`,
-  `provider_failed`, `relay_unavailable`, `dispatch_refused`). Raw child output,
+  `provider_failed`, `relay_unavailable`, `dispatch_refused`). When native
+  admission refused the child's result, the refusal also names one bounded cause:
+  `opencode_review_transport_relay_refused (reason: output_refused, cause: <cause>)`,
+  where the cause is `reviewer_result_not_admissible`,
+  `validator_result_not_admissible`, `targeted_validation_inconclusive`,
+  `role_capture_failed`, or a native admission diagnostic code
+  (`inspection_coverage`, `invalid_finding_location`,
+  `evidence_path_out_of_scope`, `proof_path_out_of_scope`,
+  `candidate_causality_unclaimed_id`, `candidate_causality_evidence_degraded`).
+  The refused bytes and the full admission reason are preserved under
+  `<git common dir>/gentle-ai/rejected-results/<lineage>/`. Raw child output,
   paths and free text never reach the parent.
 - **Host subagent preamble.** OpenCode 2.0.19 prepends
   `You are a subagent spawned by another session.` to every subagent prompt, so

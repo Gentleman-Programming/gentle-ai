@@ -1932,8 +1932,17 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 
 // Provider STATUS can issue these roles without SDD. Keep their task permissions
 // with the OpenCode routing owner, not with the retired SDD overlay.
+//
+// The orchestrator prompt relays blocking prompts through the native question
+// tool, which OpenCode denies to custom agents unless their own permission
+// allows it (#4816); v3.7.0 shipped the same rule. A question rule the user
+// already set is kept.
 func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID) (bool, error) {
 	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return false, err
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
 	if err != nil {
 		return false, err
 	}
@@ -1941,8 +1950,15 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	for _, name := range opencodeagents.Roles(agent) {
 		task[name] = "allow"
 	}
+	permission := map[string]any{"task": task}
+	agents, _ := root["agent"].(map[string]any)
+	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
+	current, _ := orchestrator["permission"].(map[string]any)
+	if _, set := current["question"]; !set {
+		permission["question"] = "allow"
+	}
 	roles := map[string]any{
-		"gentle-orchestrator": map[string]any{"permission": map[string]any{"task": task}},
+		"gentle-orchestrator": map[string]any{"permission": permission},
 	}
 	if model.SupportsReceiptDrivenDevelopment(agent) {
 		roles["review-refuter"] = opencodeagents.Refuter()
