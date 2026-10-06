@@ -298,7 +298,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 		}},
 		{"native risk before candidate consent", []string{
 			"When RDD is enabled, first use the existing native candidate risk assessment",
-			"gentle-ai review assess --cwd <repo> --json",
+			"gentle-ai review assess --cwd <repo> --agent <runtime> --json",
 			"Passive/low uses silent structural checks with no reviewer or consent ceremony",
 			"Medium/high relays the existing candidate consent",
 			"native review runs only on grant",
@@ -327,6 +327,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
+						clause = strings.ReplaceAll(clause, "<runtime>", string(agent.ID))
 						if !strings.Contains(rendered, clause) {
 							t.Errorf("missing organic instruction %q", clause)
 						}
@@ -437,6 +438,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
+						clause = strings.ReplaceAll(clause, "<runtime>", string(agent.ID))
 						if !strings.Contains(rendered, clause) {
 							t.Errorf("missing work-unit commit instruction %q", clause)
 						}
@@ -595,6 +597,9 @@ func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 			t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
 		}
 
+		// Each runtime declares its own identity on review commands; that is
+		// the one intended difference between runtimes of the same group.
+		rendered = strings.ReplaceAll(rendered, "--agent "+string(agent.ID)+" ", "--agent <runtime> ")
 		semantics := routingSemantics(rendered)
 		if len(semantics) == 0 {
 			t.Fatalf("RenderRouting(%q) carries no routing semantics", agent.ID)
