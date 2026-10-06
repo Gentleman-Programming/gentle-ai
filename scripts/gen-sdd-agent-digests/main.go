@@ -39,6 +39,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 )
@@ -323,10 +324,19 @@ func gitBytes(args ...string) []byte {
 // cleanups run before a failure exits.
 var cleanups []func()
 
+// failing serializes failures from concurrent replays: the first one reports
+// and exits, so a cleanup cannot surface as a second, misleading failure.
+var failing sync.Mutex
+
 func fail(format string, args ...any) {
+	exit(1, format, args...)
+}
+
+func exit(code int, format string, args ...any) {
+	failing.Lock()
 	fmt.Fprintf(os.Stderr, "gen-sdd-agent-digests: "+format+"\n", args...)
 	for _, cleanup := range cleanups {
 		cleanup()
 	}
-	os.Exit(1)
+	os.Exit(code)
 }

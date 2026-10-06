@@ -27,8 +27,10 @@ import (
 //
 // The generator replays each release's own writer: it extracts the release's
 // internal tree, adds a test that calls the exact expression the release used,
-// and runs it offline (GOTOOLCHAIN=local, -mod=readonly; the module cache must
-// hold the release's dependencies). Releases whose render inputs are
+// and runs it offline (GOPROXY=off, GOTOOLCHAIN=local, -mod=readonly). The
+// local module cache must already hold the release's dependencies; when it
+// does not, the generator exits with replayUnavailableExit instead of
+// fetching them. Releases whose render inputs are
 // byte-identical share one replay. Codex profiles are replayed from absence
 // and from every render an earlier release produced, so every upgrade path
 // between releases is covered.
@@ -37,6 +39,10 @@ const (
 	kimiModuleAsset   = "internal/assets/kimi/sdd-orchestrator.md"
 	kimiModuleKey     = "modules/sdd-orchestrator.md"
 	replayTestFile    = "zz_gentle_ai_replay_test.go"
+	// replayUnavailableExit is the exit code for a replay whose modules are
+	// missing from the local cache, distinct from a generation failure.
+	replayUnavailableExit = 3
+	offlineModuleMiss     = "module lookup disabled by GOPROXY=off"
 )
 
 var (
@@ -231,8 +237,11 @@ func (g *replayGroup) replay(inputs []string) {
 	}
 	cmd := exec.Command("go", "test", "-count=1", "-vet=off", "-run", "^TestGentleAIReplay$", g.pkg)
 	cmd.Dir = g.dir
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly", "GOWORK=off", "GENTLE_AI_REPLAY_IN="+in, "GENTLE_AI_REPLAY_OUT="+out)
+	cmd.Env = append(os.Environ(), "GOPROXY=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly", "GOWORK=off", "GENTLE_AI_REPLAY_IN="+in, "GENTLE_AI_REPLAY_OUT="+out)
 	if output, err := cmd.CombinedOutput(); err != nil {
+		if strings.Contains(string(output), offlineModuleMiss) {
+			exit(replayUnavailableExit, "%s: replay %s needs modules missing from the local module cache, and replays run offline (GOPROXY=off); fill the cache once with network access (for example `go mod download` in a checkout of %s), then rerun\n%s", g.tags[0], g.pkg, g.tags[0], output)
+		}
 		fail("%s: replay %s: %v\n%s", g.tags[0], g.pkg, err, output)
 	}
 	if g.outputs == nil {

@@ -993,15 +993,16 @@ type retiredSDDAssetsStep struct {
 	dirs     legacyassets.SDDAssetDirs
 	settings string
 	// blocks are prompt files whose SDD orchestrator block is removed.
-	blocks       []sddPromptBlock
-	kimiHub      string
+	blocks       []sddPromptFile
+	kimiHub      sddPromptFile
 	changedFiles *[]string
 	state        *runtimeState
 }
 
-// sddPromptBlock is a prompt file holding a retired SDD orchestrator block,
-// with the active prompt routing guidance migrates instead (empty when none).
-type sddPromptBlock struct{ path, active string }
+// sddPromptFile is a prompt file holding retired SDD text, edited only when
+// every directory from root down to it is a real directory, with the active
+// prompt routing guidance migrates instead (empty when none).
+type sddPromptFile struct{ root, path, active string }
 
 func (s retiredSDDAssetsStep) ID() string { return s.id }
 
@@ -1026,14 +1027,14 @@ func (s retiredSDDAssetsStep) Run() error {
 	}
 	texts := make([]legacyassets.TextRetireResult, 0, len(s.blocks)+1)
 	for _, block := range s.blocks {
-		res, err := legacyassets.RetireSDDOrchestratorBlock(block.path, block.active)
+		res, err := legacyassets.RetireSDDOrchestratorBlock(block.root, block.path, block.active)
 		if err != nil {
 			return fmt.Errorf("retire SDD orchestrator block: %w", err)
 		}
 		texts = append(texts, res)
 	}
-	if s.kimiHub != "" {
-		res, err := legacyassets.RetireKimiSDDInclude(s.kimiHub)
+	if s.kimiHub.path != "" {
+		res, err := legacyassets.RetireKimiSDDInclude(s.kimiHub.root, s.kimiHub.path)
 		if err != nil {
 			return fmt.Errorf("retire Kimi SDD include: %w", err)
 		}
@@ -1078,16 +1079,21 @@ func retiredSDDAssetSteps(prefix, homeDir, workspaceDir string, scope InstallSco
 		if adapter.Agent() == model.AgentClaudeCode {
 			step.settings = adapter.SettingsPath(root)
 		}
+		// A workspace-scoped install wrote these under the workspace too.
 		files := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), root)
-		step.dirs.CodexHome, step.dirs.KimiHome, step.kimiHub = files.Dirs.CodexHome, files.Dirs.KimiHome, files.Hub
+		step.dirs.CodexHome, step.dirs.KimiHome = files.Dirs.CodexHome, files.Dirs.KimiHome
+		if files.Hub != "" {
+			step.kimiHub = sddPromptFile{root: files.Dirs.KimiHome, path: files.Hub}
+		}
 		if files.Prompt != "" {
-			step.blocks = append(step.blocks, sddPromptBlock{files.Prompt, files.Active})
+			step.blocks = append(step.blocks, sddPromptFile{files.Dirs.CodexHome, files.Prompt, files.Active})
 		}
 		// A workspace sync delivers no routing guidance to these runtimes, so
 		// nothing migrates the v3.7.0 SDD block of their project prompt.
 		if scope == ScopeWorkspace && workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) &&
 			!agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) && adapter.SupportsSystemPrompt() {
-			step.blocks = append(step.blocks, sddPromptBlock{path: adapter.SystemPromptFile(root)})
+			prompt := adapter.SystemPromptFile(root)
+			step.blocks = append(step.blocks, sddPromptFile{root: filepath.Dir(prompt), path: prompt})
 		}
 		steps = append(steps, step)
 	}
@@ -1117,14 +1123,9 @@ func retiredSDDAssetBackupPaths(homeDir, workspaceDir string, scope InstallScope
 		if step.settings != "" {
 			paths = append(paths, step.settings)
 		}
-		// Retirement rewrites only regular prompt files, never through a link.
-		texts := []string{step.kimiHub}
-		for _, block := range step.blocks {
-			texts = append(texts, block.path)
-		}
-		for _, path := range texts {
-			if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
-				paths = append(paths, path)
+		for _, prompt := range append([]sddPromptFile{step.kimiHub}, step.blocks...) {
+			if prompt.path != "" && legacyassets.RetirablePromptFile(prompt.root, prompt.path) {
+				paths = append(paths, prompt.path)
 			}
 		}
 	}

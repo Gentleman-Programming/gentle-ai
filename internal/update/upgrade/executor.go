@@ -259,10 +259,9 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	// agents.md, and Kimi's SDD module and its legacy include (#5157).
 	runtimeFiles := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), homeDir)
 	add(legacyassets.PresentRetiredSDDAssetPaths(adapter.Agent(), runtimeFiles.Dirs)...)
-	for _, path := range []string{runtimeFiles.Prompt, runtimeFiles.Hub} {
-		// Retirement rewrites only regular files, never through a link.
-		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
-			add(path)
+	for _, prompt := range [][2]string{{runtimeFiles.Dirs.CodexHome, runtimeFiles.Prompt}, {runtimeFiles.Dirs.KimiHome, runtimeFiles.Hub}} {
+		if prompt[1] != "" && legacyassets.RetirablePromptFile(prompt[0], prompt[1]) {
+			add(prompt[1])
 		}
 	}
 

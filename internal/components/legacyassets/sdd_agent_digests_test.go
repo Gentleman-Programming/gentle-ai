@@ -1,6 +1,7 @@
 package legacyassets
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,19 +15,12 @@ func TestReleasedSDDAgentDigestsMatchGenerator(t *testing.T) {
 	if testing.Short() {
 		t.Skip("regenerates from every release tag")
 	}
-	for _, tool := range []string{"git", "go"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("%s unavailable: %v", tool, err)
-		}
-	}
-	for _, anchor := range []string{"v1.10.0", "v3.7.0", "v4.0.0"} {
-		if exec.Command("git", "rev-parse", "-q", "--verify", "refs/tags/"+anchor+"^{commit}").Run() != nil {
-			t.Skipf("release tag %s unavailable; run git fetch --tags", anchor)
-		}
-	}
+	requireReleaseTags(t)
 	dir := t.TempDir()
-	cmd := exec.Command("go", "run", "../../../scripts/gen-sdd-agent-digests", filepath.Join(dir, "sdd_agent_digests.go"), filepath.Join(dir, "opencode_sdd_digests.go"), filepath.Join(dir, "sdd_asset_digests.go"))
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := runDigestGenerator(t, dir); err != nil {
+		if replayUnavailable(err) {
+			t.Skipf("release replays need modules missing from the local module cache, and the generator runs offline; fill the cache once with network access, then rerun:\n%s", output)
+		}
 		t.Fatalf("generator failed: %v\n%s", err, output)
 	}
 	for _, name := range []string{"sdd_agent_digests.go", "opencode_sdd_digests.go", "sdd_asset_digests.go"} {
@@ -42,6 +36,54 @@ func TestReleasedSDDAgentDigestsMatchGenerator(t *testing.T) {
 			t.Fatalf("%s is stale; run go generate ./internal/components/legacyassets/", name)
 		}
 	}
+}
+
+// A release replay whose modules are not in the local cache is reported as
+// unavailable, distinct from a generation failure, and never fetched: the
+// generator forces GOPROXY=off even when the environment names a proxy.
+func TestDigestGeneratorReportsMissingReplayModulesAsUnavailable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("harvests every release tag")
+	}
+	requireReleaseTags(t)
+	output, err := runDigestGenerator(t, t.TempDir(), "GOMODCACHE="+t.TempDir(), "GOPROXY=http://127.0.0.1:9", "GOFLAGS=")
+	if !replayUnavailable(err) || !strings.Contains(string(output), "GOPROXY=off") {
+		t.Fatalf("generator with an empty module cache: %v\n%s", err, output)
+	}
+}
+
+func requireReleaseTags(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"git", "go"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s unavailable: %v", tool, err)
+		}
+	}
+	for _, anchor := range []string{"v1.10.0", "v3.7.0", "v4.0.0"} {
+		if exec.Command("git", "rev-parse", "-q", "--verify", "refs/tags/"+anchor+"^{commit}").Run() != nil {
+			t.Skipf("release tag %s unavailable; run git fetch --tags", anchor)
+		}
+	}
+}
+
+// runDigestGenerator builds the generator with the ambient environment and
+// runs it into dir with env added.
+func runDigestGenerator(t *testing.T, dir string, env ...string) ([]byte, error) {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "gen-sdd-agent-digests")
+	if output, err := exec.Command("go", "build", "-o", bin, "../../../scripts/gen-sdd-agent-digests").CombinedOutput(); err != nil {
+		t.Fatalf("build generator: %v\n%s", err, output)
+	}
+	cmd := exec.Command(bin, filepath.Join(dir, "sdd_agent_digests.go"), filepath.Join(dir, "opencode_sdd_digests.go"), filepath.Join(dir, "sdd_asset_digests.go"))
+	cmd.Env = append(os.Environ(), env...)
+	return cmd.CombinedOutput()
+}
+
+// replayUnavailable reports the generator's exit code for a release replay
+// whose modules are missing offline.
+func replayUnavailable(err error) bool {
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 3
 }
 
 // genSDDRepo is a throwaway release history for the generator.

@@ -159,7 +159,7 @@ func TestRetireKimiSDDIncludeRemovesOnlyTheReleasedLine(t *testing.T) {
 	user := released + "\n## Mine\n{% include \"sdd-orchestrator.md\" %}\n"
 	writeFixture(t, hub, []byte(user))
 
-	res, err := RetireKimiSDDInclude(hub)
+	res, err := RetireKimiSDDInclude(filepath.Dir(hub), hub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +170,12 @@ func TestRetireKimiSDDIncludeRemovesOnlyTheReleasedLine(t *testing.T) {
 	if !strings.Contains(want, "{% include \"strict-tdd-mode.md\" ignore missing %}") {
 		t.Fatal("fixture lost a neighbouring include")
 	}
-	again, err := RetireKimiSDDInclude(hub)
+	again, err := RetireKimiSDDInclude(filepath.Dir(hub), hub)
 	if err != nil || again.Removed {
 		t.Fatalf("second retirement = %+v, %v", again, err)
 	}
-	if missing, err := RetireKimiSDDInclude(filepath.Join(t.TempDir(), "KIMI.md")); err != nil || missing.Removed || len(missing.ManualActions()) != 0 {
+	missingRoot := t.TempDir()
+	if missing, err := RetireKimiSDDInclude(missingRoot, filepath.Join(missingRoot, "KIMI.md")); err != nil || missing.Removed || len(missing.ManualActions()) != 0 {
 		t.Fatalf("missing hub = %+v, %v", missing, err)
 	}
 }
@@ -185,7 +186,7 @@ func TestRetireSDDOrchestratorBlockRemovesOnlyTheManagedBlock(t *testing.T) {
 	content := "# Mine\n\n<!-- gentle-ai:engram-protocol -->\nengram\n<!-- /gentle-ai:engram-protocol -->\n\n<!-- gentle-ai:sdd-orchestrator -->\n# SDD Orchestrator\n<!-- /gentle-ai:sdd-orchestrator -->\n\n## After\n"
 	writeFixture(t, prompt, []byte(content))
 
-	res, err := RetireSDDOrchestratorBlock(prompt, filepath.Join(dir, "AGENTS.md"))
+	res, err := RetireSDDOrchestratorBlock(dir, prompt, filepath.Join(dir, "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,16 +194,16 @@ func TestRetireSDDOrchestratorBlockRemovesOnlyTheManagedBlock(t *testing.T) {
 	if got, _ := os.ReadFile(prompt); string(got) != want || !res.Removed {
 		t.Fatalf("prompt = %q (removed %v), want %q", got, res.Removed, want)
 	}
-	again, err := RetireSDDOrchestratorBlock(prompt, "")
+	again, err := RetireSDDOrchestratorBlock(dir, prompt, "")
 	if err != nil || again.Removed {
 		t.Fatalf("second retirement = %+v, %v", again, err)
 	}
 
-	// An unterminated block has no ownership boundary: untouched.
+	// An unterminated block has no ownership boundary: untouched, reported.
 	open := "<!-- gentle-ai:sdd-orchestrator -->\nmine to the end\n"
 	writeFixture(t, prompt, []byte(open))
-	if res, err := RetireSDDOrchestratorBlock(prompt, ""); err != nil || res.Removed {
-		t.Fatalf("unterminated block = %+v, %v", res, err)
+	if res, err := RetireSDDOrchestratorBlock(dir, prompt, ""); err != nil || res.Removed || !strings.Contains(strings.Join(res.ManualActions(), "\n"), "move or delete it") {
+		t.Fatalf("unterminated block = %+v %v, %v", res, res.ManualActions(), err)
 	}
 	if got, _ := os.ReadFile(prompt); string(got) != open {
 		t.Fatalf("unterminated block rewritten: %q", got)
@@ -220,7 +221,7 @@ func TestRetireSDDOrchestratorBlockSkipsTheActivePrompt(t *testing.T) {
 	if err := os.Link(active, alias); err != nil {
 		t.Skipf("hard links unavailable: %v", err)
 	}
-	res, err := RetireSDDOrchestratorBlock(alias, active)
+	res, err := RetireSDDOrchestratorBlock(dir, alias, active)
 	if err != nil || res.Removed {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
@@ -239,7 +240,7 @@ func TestRetiredSDDPromptTextInSymlinkIsReported(t *testing.T) {
 	if err := os.Symlink(target, hub); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	res, err := RetireKimiSDDInclude(hub)
+	res, err := RetireKimiSDDInclude(dir, hub)
 	if err != nil || res.Removed {
 		t.Fatalf("result = %+v, %v", res, err)
 	}
@@ -256,7 +257,7 @@ func TestRetiredSDDPromptTextInSymlinkIsReported(t *testing.T) {
 	if err := os.Symlink(block, link); err != nil {
 		t.Fatal(err)
 	}
-	res, err = RetireSDDOrchestratorBlock(link, "")
+	res, err = RetireSDDOrchestratorBlock(dir, link, "")
 	if err != nil || res.Removed || len(res.ManualActions()) != 1 {
 		t.Fatalf("symlinked prompt = %+v %v, %v", res, res.ManualActions(), err)
 	}
@@ -291,5 +292,105 @@ func TestRetiredSDDRuntimeFilesLocatesLegacyCodexAndKimiFiles(t *testing.T) {
 	}
 	if other := RetiredSDDRuntimeFiles(model.AgentClaudeCode, "root"); other != (SDDRuntimeFiles{}) {
 		t.Errorf("Claude Code = %+v", other)
+	}
+}
+
+// Retirement removes one exactly delimited block, its line ending, and one
+// blank line before it; every other byte stays, including extra blank lines.
+func TestRetireSDDOrchestratorBlockKeepsSurroundingBytesExact(t *testing.T) {
+	dir := t.TempDir()
+	prompt := filepath.Join(dir, "agents.md")
+	block := "<!-- gentle-ai:sdd-orchestrator -->\nsdd\n<!-- /gentle-ai:sdd-orchestrator -->"
+	for _, tc := range []struct{ before, after, want string }{
+		{"a\n\n\n\n", "\n", "a\n\n\n"},
+		{"a\n", "\nb\n", "a\nb\n"},
+		{"", "\n\nb\n", "\nb\n"},
+		{"a\r\n\r\n", "\r\nb  \r\n", "a\r\nb  \r\n"},
+		{"a\n\n", "", "a\n"},
+	} {
+		writeFixture(t, prompt, []byte(tc.before+block+tc.after))
+		res, err := RetireSDDOrchestratorBlock(dir, prompt, "")
+		if err != nil || !res.Removed {
+			t.Fatalf("%q: %+v, %v", tc.before+block+tc.after, res, err)
+		}
+		if got, _ := os.ReadFile(prompt); string(got) != tc.want {
+			t.Errorf("%q -> %q, want %q", tc.before+block+tc.after, got, tc.want)
+		}
+	}
+}
+
+// Ambiguous markers have no trustworthy ownership boundary: the file is kept
+// byte for byte and reported.
+func TestRetireSDDOrchestratorBlockPreservesAmbiguousMarkers(t *testing.T) {
+	dir := t.TempDir()
+	prompt := filepath.Join(dir, "agents.md")
+	open, end := "<!-- gentle-ai:sdd-orchestrator -->", "<!-- /gentle-ai:sdd-orchestrator -->"
+	for name, content := range map[string]string{
+		"orphan open before a block": open + "\nmy notes\n\n" + open + "\nsdd\n" + end + "\n",
+		"orphan close":               "my notes\n" + end + "\n",
+		"close before open":          end + "\nmine\n" + open + "\n",
+		"two blocks":                 open + "\na\n" + end + "\nmine\n" + open + "\nb\n" + end + "\n",
+		"nested block":               open + "\n" + open + "\nx\n" + end + "\n" + end + "\n",
+		"inline marker":              "see " + open + "\nx\n" + end + "\n",
+		"marker not on its own line": open + " mine\nx\n" + end + "\n",
+	} {
+		writeFixture(t, prompt, []byte(content))
+		res, err := RetireSDDOrchestratorBlock(dir, prompt, "")
+		if err != nil || res.Removed {
+			t.Fatalf("%s: %+v, %v", name, res, err)
+		}
+		if got, _ := os.ReadFile(prompt); string(got) != content {
+			t.Errorf("%s: rewritten to %q", name, got)
+		}
+		if actions := res.ManualActions(); len(actions) != 1 || !strings.Contains(actions[0], prompt) || !strings.Contains(actions[0], "move or delete it") {
+			t.Errorf("%s: ManualActions = %v", name, actions)
+		}
+	}
+}
+
+// A symlinked runtime directory (dotfiles) is never entered: the prompt
+// behind it is not edited or snapshotted, and the directory is reported.
+func TestRetiredSDDPromptTextBehindSymlinkedDirectoryIsReported(t *testing.T) {
+	base := t.TempDir()
+	dotfiles := filepath.Join(base, "dotfiles")
+	hubContent := "{% include \"sdd-orchestrator.md\" ignore missing %}\n"
+	blockContent := "mine\n\n<!-- gentle-ai:sdd-orchestrator -->\nx\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	writeFixture(t, filepath.Join(dotfiles, "KIMI.md"), []byte(hubContent))
+	writeFixture(t, filepath.Join(dotfiles, "agents.md"), []byte(blockContent))
+	root := filepath.Join(base, ".kimi")
+	if err := os.Symlink(dotfiles, root); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	hub := filepath.Join(root, "KIMI.md")
+	prompt := filepath.Join(root, "agents.md")
+	if RetirablePromptFile(root, hub) || RetirablePromptFile(root, prompt) {
+		t.Error("a prompt behind a symlinked directory is retirable")
+	}
+	res, err := RetireKimiSDDInclude(root, hub)
+	if err != nil || res.Removed {
+		t.Fatalf("hub = %+v, %v", res, err)
+	}
+	if actions := strings.Join(res.ManualActions(), "\n"); !strings.Contains(actions, root) || !strings.Contains(actions, "sdd-orchestrator.md") {
+		t.Errorf("hub ManualActions = %v", res.ManualActions())
+	}
+	block, err := RetireSDDOrchestratorBlock(root, prompt, "")
+	if err != nil || block.Removed || !strings.Contains(strings.Join(block.ManualActions(), "\n"), root) {
+		t.Fatalf("prompt = %+v %v, %v", block, block.ManualActions(), err)
+	}
+	for name, content := range map[string]string{"KIMI.md": hubContent, "agents.md": blockContent} {
+		if got, _ := os.ReadFile(filepath.Join(dotfiles, name)); string(got) != content {
+			t.Errorf("%s behind the symlinked directory rewritten: %q", name, got)
+		}
+	}
+
+	// Nothing to retire behind the link: nothing to report.
+	writeFixture(t, filepath.Join(dotfiles, "KIMI.md"), []byte("mine\n"))
+	if res, err := RetireKimiSDDInclude(root, hub); err != nil || len(res.ManualActions()) != 0 {
+		t.Fatalf("clean hub behind a link = %+v %v, %v", res, res.ManualActions(), err)
+	}
+	real := filepath.Join(base, "real")
+	writeFixture(t, filepath.Join(real, "KIMI.md"), []byte(hubContent))
+	if !RetirablePromptFile(real, filepath.Join(real, "KIMI.md")) {
+		t.Error("a regular prompt in a real directory is not retirable")
 	}
 }

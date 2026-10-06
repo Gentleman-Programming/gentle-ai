@@ -1972,3 +1972,36 @@ func TestManagedAgentBackupPathsOmitAbsentRetiredRuntimeFiles(t *testing.T) {
 		t.Error("snapshot declares a prompt through a symlinked prompts directory")
 	}
 }
+
+// Retirement never enters a symlinked ~/.codex or ~/.kimi, so the snapshot
+// never declares a prompt behind one.
+func TestManagedAgentBackupPathsOmitPromptsBehindSymlinkedRuntimeDirs(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotfiles := t.TempDir()
+	writeRetiredFixture(t, filepath.Join(dotfiles, "codex", "agents.md"))
+	writeRetiredFixture(t, filepath.Join(dotfiles, "kimi", "KIMI.md"))
+	for name, target := range map[string]string{".codex": "codex", ".kimi": "kimi"} {
+		if err := os.Symlink(filepath.Join(dotfiles, target), filepath.Join(homeDir, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(homeDir, ".kimi-code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for agent, path := range map[model.AgentID]string{
+		model.AgentCodex: filepath.Join(homeDir, ".codex", "agents.md"),
+		model.AgentKimi:  filepath.Join(homeDir, ".kimi", "KIMI.md"),
+	} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		if slices.Contains(managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{}), path) {
+			t.Errorf("%s snapshot declares %s behind a symlinked directory", agent, path)
+		}
+	}
+}

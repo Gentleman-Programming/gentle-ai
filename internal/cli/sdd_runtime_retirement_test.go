@@ -231,3 +231,92 @@ func TestRunInstallRetiresKimiSDDModule(t *testing.T) {
 		t.Error("install snapshot omitted the Kimi SDD module")
 	}
 }
+
+// A dotfiles-symlinked ~/.codex or ~/.kimi is never entered: sync neither
+// edits nor snapshots the prompts behind it, and reports them.
+func TestRunSyncDoesNotEditPromptsBehindSymlinkedRuntimeDirectories(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound))
+	dotfiles := t.TempDir()
+	prompt := filepath.Join(dotfiles, "codex", "agents.md")
+	hub := filepath.Join(dotfiles, "kimi", "KIMI.md")
+	contents := map[string]string{
+		prompt: legacyCodexPromptUser + legacyCodexPromptBlock,
+		hub:    string(releasedSDDAsset(t, "v3.7.0", "kimi-KIMI.md")),
+	}
+	for path, data := range contents {
+		mustWriteFile(t, path, []byte(data))
+	}
+	for name, target := range map[string]string{".codex": filepath.Dir(prompt), ".kimi": filepath.Dir(hub)} {
+		if err := os.Symlink(target, filepath.Join(home, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	active := filepath.Join(dotfiles, "codex", "AGENTS.md")
+	if a, err := os.Stat(prompt); err == nil {
+		if b, err := os.Stat(active); err == nil && os.SameFile(a, b) {
+			t.Skip("case-insensitive filesystem: agents.md is the active AGENTS.md")
+		}
+	}
+
+	result, err := RunSync([]string{"--agents", string(model.AgentCodex) + "," + string(model.AgentKimi)})
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+	snapshot := backupManifestEntries(t, home)
+	for path, data := range contents {
+		if got, err := os.ReadFile(path); err != nil || string(got) != data {
+			t.Errorf("sync edited %s behind a symlinked directory: %q, %v", path, got, err)
+		}
+	}
+	for _, path := range []string{filepath.Join(home, ".codex", "agents.md"), filepath.Join(home, ".kimi", "KIMI.md")} {
+		if _, ok := snapshot[path]; ok {
+			t.Errorf("snapshot declares %s behind a symlinked directory", path)
+		}
+		if !slices.ContainsFunc(result.ManualActions, func(action string) bool {
+			return strings.Contains(action, path) && strings.Contains(action, "not a real directory")
+		}) {
+			t.Errorf("%s not reported: %v", path, result.ManualActions)
+		}
+	}
+}
+
+// A workspace-scoped install of v1.31.0 to v3.7.0 wrote the Codex profiles,
+// lowercase agents.md, Kimi module, and KIMI.md under the workspace, so a
+// workspace-scoped sync retires them there and leaves home alone.
+func TestRunSyncWorkspaceRetiresCodexAndKimiFilesInTheWorkspace(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("", exec.ErrNotFound))
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, ".git", "HEAD"), []byte("ref: refs/heads/main\n"))
+	homeFiles := seedRetiredRuntimeFiles(t, home)
+	wsFiles := seedRetiredRuntimeFiles(t, workspace)
+	t.Chdir(workspace)
+
+	if _, err := RunSync([]string{"--agents", string(model.AgentCodex) + "," + string(model.AgentKimi), "--scope", "workspace"}); err != nil {
+		t.Fatalf("workspace RunSync() error = %v", err)
+	}
+	for path := range wsFiles.owned {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("workspace sync kept %s: %v", path, err)
+		}
+	}
+	if got, _ := os.ReadFile(wsFiles.prompt); string(got) != legacyCodexPromptUser {
+		t.Errorf("workspace agents.md = %q", got)
+	}
+	if got, _ := os.ReadFile(wsFiles.hub); strings.Contains(string(got), kimiSDDInclude) {
+		t.Errorf("workspace KIMI.md kept the SDD include: %q", got)
+	}
+	for _, group := range []map[string][]byte{homeFiles.owned, homeFiles.kept, homeFiles.rewritten} {
+		for path, data := range group {
+			if got, err := os.ReadFile(path); err != nil || string(got) != string(data) {
+				t.Errorf("workspace sync touched home file %s: %v", path, err)
+			}
+		}
+	}
+}
