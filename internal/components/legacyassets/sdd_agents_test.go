@@ -136,7 +136,7 @@ func TestRetireSDDAgentsRemovesOnlyOwnedFilesAndIsIdempotent(t *testing.T) {
 	if !slices.Equal(result.Removed, []string{owned}) {
 		t.Errorf("removed = %v, want only %s", result.Removed, owned)
 	}
-	if want := []string{filepath.Join(dir, "sdd-explore.md"), edited}; !slices.Equal(result.Preserved, want) {
+	if want := []string{filepath.Join(dir, "sdd-explore.md"), edited}; !slices.Equal(preservedPaths(result), want) {
 		t.Errorf("preserved = %v, want %v", result.Preserved, want)
 	}
 	for _, path := range []string{edited, kept, filepath.Join(dir, "sdd-explore.md")} {
@@ -155,8 +155,9 @@ func TestRetireSDDAgentsRemovesOnlyOwnedFilesAndIsIdempotent(t *testing.T) {
 	if len(again.Removed) != 0 {
 		t.Errorf("second retirement removed %v", again.Removed)
 	}
-	if action := PreservedSDDAgentAction(edited); !strings.Contains(action, edited) || !strings.Contains(action, "move or delete it") {
-		t.Errorf("preserved action is not actionable: %s", action)
+	actions := result.ManualActions()
+	if len(actions) != 2 || !strings.Contains(actions[1], edited) || !strings.Contains(actions[1], "move or delete it") {
+		t.Errorf("preserved actions are not actionable: %v", actions)
 	}
 }
 
@@ -192,6 +193,103 @@ func TestRetireSDDAgentsKeepsKimiPairsTogether(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("%s of a partially user-owned pair removed: %v", name, err)
 		}
+	}
+	// The owned half is reported for its real reason, not as user-edited.
+	reasons := map[string]PreserveReason{}
+	for _, preserved := range result.Preserved {
+		reasons[filepath.Base(preserved.Path)] = preserved.Reason
+	}
+	if reasons["sdd-verify.yaml"] != PreservedPairUnproven || reasons["sdd-verify.md"] != PreservedUnproven {
+		t.Errorf("preserve reasons = %v", reasons)
+	}
+	for _, action := range result.ManualActions() {
+		if strings.Contains(action, "sdd-verify.yaml") && (!strings.Contains(action, "kept because its pair is user-edited") || strings.Contains(action, "differs from every released version")) {
+			t.Errorf("owned half reported with a wrong reason: %s", action)
+		}
+	}
+}
+
+func preservedPaths(result RetireResult) []string {
+	paths := make([]string, 0, len(result.Preserved))
+	for _, preserved := range result.Preserved {
+		paths = append(paths, preserved.Path)
+	}
+	return paths
+}
+
+// A v3 gentleman.yaml declares every SDD subagent by path. Retirement must
+// never delete a file another agent in the directory still references,
+// whoever owns that agent; the reference is reported once, naming the parent.
+func TestRetireSDDAgentsKeepsPairsAnotherAgentReferences(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".kimi", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent := filepath.Join(dir, "gentleman.yaml")
+	write("gentleman.yaml", releasedRender(t, "kimi-gentleman.yaml"))
+	write("sdd-apply.yaml", releasedRender(t, "kimi-sdd-apply.yaml"))
+	write("sdd-apply.md", releasedRender(t, "kimi-sdd-apply.md"))
+	write("sdd-verify.yaml", releasedRender(t, "kimi-sdd-verify.yaml"))
+	// v3.7.0's gentleman.yaml never declared sdd-research, so it is retired.
+	write("sdd-research.yaml", releasedRender(t, "kimi-sdd-research.yaml"))
+
+	result, err := RetireSDDAgents(model.AgentKimi, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{filepath.Join(dir, "sdd-research.yaml")}; !slices.Equal(result.Removed, want) {
+		t.Errorf("removed = %v, want %v", result.Removed, want)
+	}
+	for _, name := range []string{"sdd-apply.yaml", "sdd-apply.md", "sdd-verify.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("referenced %s removed: %v", name, err)
+		}
+	}
+	if len(result.Preserved) != 0 {
+		t.Errorf("referenced owned files reported as unproven: %v", result.Preserved)
+	}
+	want := []string{filepath.Join(dir, "sdd-apply.md"), filepath.Join(dir, "sdd-apply.yaml"), filepath.Join(dir, "sdd-verify.yaml")}
+	if len(result.Referenced) != 1 || result.Referenced[0].Parent != parent || !slices.Equal(result.Referenced[0].Agents, want) {
+		t.Fatalf("referenced = %+v, want one entry for %s with %v", result.Referenced, parent, want)
+	}
+	actions := result.ManualActions()
+	if len(actions) != 1 || !strings.Contains(actions[0], parent) || !strings.Contains(actions[0], "sdd-apply.yaml") || !strings.Contains(actions[0], "rerun") {
+		t.Errorf("reference not reported as one actionable message: %v", actions)
+	}
+
+	// Once the parent no longer declares them, the next run retires them.
+	write("gentleman.yaml", "version: \"1\"\nagent:\n  name: gentleman\n")
+	again, err := RetireSDDAgents(model.AgentKimi, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(again.Removed, want) || len(again.Referenced) != 0 {
+		t.Errorf("after the parent dropped its references: %+v", again)
+	}
+}
+
+func TestOwnsPreLedgerNativeAgentAcceptsOnlyReleasedV3Parent(t *testing.T) {
+	released := releasedRender(t, "kimi-gentleman.yaml")
+	if !OwnsPreLedgerNativeAgent(model.AgentKimi, "gentleman.yaml", []byte(released)) {
+		t.Error("v3 gentleman.yaml not recognized")
+	}
+	current := "version: \"1\"\nagent:\n  name: gentleman\n  extend: default\n  system_prompt_path: ../KIMI.md\n"
+	for name, content := range map[string]string{
+		"v4 bytes are ledger-owned only": current,
+		"user subagent":                  released + "    my-agent:\n      path: ./my-agent.yaml\n",
+		"empty":                          "",
+	} {
+		if OwnsPreLedgerNativeAgent(model.AgentKimi, "gentleman.yaml", []byte(content)) {
+			t.Errorf("%s: adopted", name)
+		}
+	}
+	if OwnsPreLedgerNativeAgent(model.AgentKimi, "sdd-apply.yaml", []byte(released)) || OwnsPreLedgerNativeAgent(model.AgentClaudeCode, "gentleman.yaml", []byte(released)) {
+		t.Error("ownership must be proven for the same agent and file name")
 	}
 }
 

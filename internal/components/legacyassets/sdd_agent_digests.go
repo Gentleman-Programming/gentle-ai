@@ -2,6 +2,39 @@
 
 package legacyassets
 
+// The registry was generated from these release tags, closed at v4.0.0.
+// The generator refuses a local tag set missing any of them.
+// tags: v0.1.1 v1.0.0 v1.0.1 v1.0.2 v1.0.3 v1.0.4 v1.0.5 v1.0.6 v1.0.7 v1.0.8
+// tags: v1.0.9 v1.1.0 v1.2.0 v1.2.1 v1.3.0 v1.3.1 v1.3.2 v1.3.3 v1.3.4 v1.4.0
+// tags: v1.4.1 v1.4.2 v1.4.3 v1.4.4 v1.4.5 v1.4.6-beta.1 v1.4.6 v1.4.7 v1.4.8 v1.4.9
+// tags: v1.4.10 v1.4.11 v1.4.12 v1.4.13 v1.4.14 v1.5.0 v1.5.1 v1.5.2 v1.5.3 v1.5.4
+// tags: v1.5.5 v1.6.0 v1.6.1 v1.6.2 v1.6.3 v1.7.0 v1.7.1 v1.7.2 v1.7.3 v1.7.4
+// tags: v1.7.5 v1.7.6 v1.7.7 v1.7.8 v1.7.9 v1.7.10 v1.7.11 v1.7.12 v1.7.13 v1.7.14
+// tags: v1.7.15 v1.7.16 v1.7.17 v1.7.18 v1.7.19 v1.7.20 v1.7.21 v1.7.22 v1.7.23 v1.7.24
+// tags: v1.8.0-beta.1 v1.8.0 v1.8.1 v1.8.2 v1.8.3 v1.8.4 v1.8.5 v1.8.6 v1.8.7 v1.8.8
+// tags: v1.8.9 v1.8.10 v1.8.11 v1.8.12 v1.8.13 v1.8.14 v1.9.0 v1.9.1 v1.9.2 v1.9.3
+// tags: v1.10.0 v1.10.1 v1.10.2 v1.10.3 v1.10.4 v1.11.0 v1.11.1 v1.11.2 v1.11.3 v1.11.4
+// tags: v1.11.5 v1.11.6 v1.12.0 v1.12.1 v1.12.2 v1.12.3 v1.13.0 v1.13.1 v1.13.2 v1.13.3
+// tags: v1.13.4 v1.14.0 v1.14.1 v1.14.2 v1.14.3 v1.14.4 v1.15.0 v1.15.1 v1.15.2 v1.15.3
+// tags: v1.15.4 v1.15.5 v1.15.6 v1.15.7 v1.15.8 v1.15.9 v1.15.10 v1.15.11 v1.15.12 v1.15.13
+// tags: v1.15.14 v1.16.0 v1.16.1 v1.17.0 v1.18.0 v1.18.1 v1.18.2 v1.18.3 v1.18.4 v1.19.0
+// tags: v1.19.1 v1.20.0 v1.20.1 v1.21.0 v1.22.0 v1.23.0 v1.24.0 v1.24.1 v1.24.2 v1.24.3
+// tags: v1.25.0 v1.25.1 v1.25.2 v1.25.3 v1.25.4 v1.25.5 v1.25.6 v1.26.0 v1.26.1 v1.26.2
+// tags: v1.26.3 v1.26.4 v1.26.5 v1.26.6 v1.27.0 v1.27.1 v1.27.2 v1.27.3 v1.27.4 v1.27.5
+// tags: v1.28.0 v1.28.1 v1.28.2 v1.28.3 v1.29.0 v1.29.1 v1.30.0 v1.30.1 v1.30.2 v1.30.3
+// tags: v1.30.4 v1.30.5 v1.30.6 v1.30.7 v1.30.8 v1.30.9 v1.30.10 v1.31.0 v1.32.0 v1.33.0
+// tags: v1.33.1 v1.33.2 v1.34.0 v1.34.1 v1.34.2 v1.35.0 v1.36.0 v1.36.1 v1.36.2 v1.36.3
+// tags: v1.36.4 v1.36.5 v1.36.6 v1.36.7 v1.36.8 v1.37.0 v1.37.1 v1.37.2 v1.38.0 v1.39.0
+// tags: v1.39.1 v1.39.2 v1.39.3 v1.39.4 v1.40.1 v1.40.2 v1.41.0 v1.42.0 v1.43.0 v1.43.1
+// tags: v1.43.2 v1.43.3 v1.43.4 v1.44.0 v1.44.1 v1.44.2 v1.44.3 v1.45.0 v1.46.0 v1.47.0
+// tags: v1.48.0 v1.49.0 v2.0.0 v2.0.1 v2.0.2 v2.1.0 v2.1.1 v2.1.2 v2.1.3 v2.1.4
+// tags: v2.1.5 v2.1.6 v2.1.7 v2.1.8 v2.1.9 v2.1.10 v2.1.11 v2.2.0-rc.1 v2.2.0 v2.2.1
+// tags: v2.2.2 v2.2.3-rc.1 v2.2.3-rc.2 v2.2.3-rc.3 v2.2.3-rc.4 v2.2.3 v2.2.4 v2.3.0-rc.1 v2.3.0-rc.2 v2.3.0-rc.3
+// tags: v2.3.0 v2.4.0-rc.1 v2.4.0-rc.3 v2.4.0-rc.4 v2.4.0-rc.6 v2.4.0-rc.7 v2.4.0-rc.8 v2.4.0 v2.5.0-rc.1 v2.5.0-rc.2
+// tags: v2.5.0-rc.3 v2.5.0 v2.6.0 v2.7.0-rc.1 v2.7.0 v2.8.0 v2.8.1 v2.8.2 v2.9.0 v2.9.1
+// tags: v3.0.0 v3.0.1 v3.0.2 v3.1.0 v3.2.1 v3.3.0 v3.4.0 v3.5.0 v3.6.0 v3.6.1
+// tags: v3.7.0 v4.0.0
+
 // releasedSDDAgentDigests maps <family>/<file> to the normalized digest of
 // every native SDD sub-agent template a Gentle AI release shipped.
 var releasedSDDAgentDigests = map[string][]string{
@@ -318,5 +351,14 @@ var releasedSDDAgentDigests = map[string][]string{
 		"13c4c02d032675c208781c67888601a15953a9e0f0cc708877810f72590cc5f1", // v1.30.0 to v2.5.0-rc.1
 		"7fb872eacdddc6fd08689055ad6b349e5e1a791293929361a834843af03df904", // v2.5.0-rc.2 to v2.9.1
 		"2ef5de7ea890a305d9b0140755d8020a312b31bc9e2ddf43d8c6e277da39cddb", // v3.0.0 to v3.7.0
+	},
+}
+
+// releasedPreLedgerNativeAgentDigests maps <family>/<file> to the normalized
+// digest of every retained native agent file a release before v4.0.0
+// shipped that declared SDD subagents.
+var releasedPreLedgerNativeAgentDigests = map[string][]string{
+	"kimi/gentleman.yaml": {
+		"b4487dd0a97dc5accc148a09fbffd2eff55582d7566e822ca7ead97f74e1b0c4", // v1.21.0 to v3.7.0
 	},
 }

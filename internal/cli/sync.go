@@ -585,12 +585,14 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
-	apply = append(apply, retiredSDDAgentSteps("sync:agent:retire-sdd:", r.homeDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
 	for _, agent := range r.agentIDs {
 		if nativeReviewAgentSupported(agent) {
 			apply = append(apply, nativeReviewAgentStep{id: "sync:agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, changedFiles: &r.changedFiles, state: r.state})
 		}
 	}
+	// After the native installer: it rewrites a Gentle-owned v3 Kimi
+	// gentleman.yaml, so the SDD subagents it declared can be retired now.
+	apply = append(apply, retiredSDDAgentSteps("sync:agent:retire-sdd:", r.homeDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
 
 	// Routing guidance is refreshed per agent and outside the component loop, for
 	// the same reason install schedules it there: a persisted selection without

@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"gopkg.in/yaml.v3"
 )
 
 // releasedSDDRender reads a real v3.7.0 render of a retired SDD agent.
@@ -207,5 +208,121 @@ func TestRunInstallRetiresOwnedSDDAgentsOnlyInGlobalScope(t *testing.T) {
 	}
 	if !slices.ContainsFunc(result.ManualActions, func(action string) bool { return strings.Contains(action, userEdited) }) {
 		t.Errorf("install did not report the preserved SDD agent: %v", result.ManualActions)
+	}
+}
+
+// kimiSubagentPaths returns the files gentleman.yaml declares as subagents.
+func kimiSubagentPaths(t *testing.T, parent string) []string {
+	t.Helper()
+	data, err := os.ReadFile(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Agent struct {
+			Subagents map[string]struct {
+				Path string `yaml:"path"`
+			} `yaml:"subagents"`
+		} `yaml:"agent"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse %s: %v", parent, err)
+	}
+	var paths []string
+	for _, subagent := range doc.Agent.Subagents {
+		paths = append(paths, filepath.Join(filepath.Dir(parent), subagent.Path))
+	}
+	slices.Sort(paths)
+	return paths
+}
+
+// A v3.x Kimi gentleman.yaml declares every SDD subagent by path and predates
+// the ownership ledger. Sync must never leave it pointing at deleted files:
+// released parent bytes are rewritten in the same run so the cleanup
+// completes, and an edited parent keeps every pair it references and is
+// reported once.
+func TestRunSyncRetiresKimiSDDAgentsWithoutDanglingParent(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		parentEdit   string
+		wantRetained bool
+	}{
+		{name: "released v3 parent is rewritten"},
+		{name: "edited parent keeps its references", parentEdit: "    my-reviewer:\n      path: ./my-reviewer.yaml\n", wantRetained: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			if err := state.Write(home, state.InstallState{
+				InstalledAgents: []string{string(model.AgentKimi)}, SelectionConfigured: true,
+				Components: []model.ComponentID{model.ComponentSDD, model.ComponentSkills},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(home, ".kimi", "agents")
+			parent := filepath.Join(dir, "gentleman.yaml")
+			parentBytes := append(releasedSDDRender(t, "kimi-gentleman.yaml"), tc.parentEdit...)
+			mustWriteFile(t, parent, parentBytes)
+			if tc.parentEdit != "" {
+				mustWriteFile(t, filepath.Join(dir, "my-reviewer.yaml"), []byte("version: \"1\"\nagent:\n  name: my-reviewer\n"))
+			}
+			pairs := []string{
+				filepath.Join(dir, "sdd-apply.yaml"), filepath.Join(dir, "sdd-apply.md"),
+				filepath.Join(dir, "sdd-verify.yaml"),
+			}
+			mustWriteFile(t, pairs[0], releasedSDDRender(t, "kimi-sdd-apply.yaml"))
+			mustWriteFile(t, pairs[1], releasedSDDRender(t, "kimi-sdd-apply.md"))
+			mustWriteFile(t, pairs[2], releasedSDDRender(t, "kimi-sdd-verify.yaml"))
+
+			existedBefore := map[string]bool{}
+			for _, path := range kimiSubagentPaths(t, parent) {
+				if _, err := os.Stat(path); err == nil {
+					existedBefore[path] = true
+				}
+			}
+			if !existedBefore[pairs[0]] || !existedBefore[pairs[2]] {
+				t.Fatalf("seeded parent does not reference the seeded pairs: %v", existedBefore)
+			}
+			result, err := RunSync([]string{"--agents", string(model.AgentKimi)})
+			if err != nil {
+				t.Fatalf("RunSync() error = %v", err)
+			}
+			for _, path := range kimiSubagentPaths(t, parent) {
+				if _, err := os.Stat(path); existedBefore[path] && err != nil {
+					t.Errorf("gentleman.yaml still declares %s, which sync removed", path)
+				}
+			}
+			got, err := os.ReadFile(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range pairs {
+				_, statErr := os.Stat(path)
+				if tc.wantRetained && statErr != nil {
+					t.Errorf("referenced %s removed: %v", path, statErr)
+				}
+				if !tc.wantRetained && !os.IsNotExist(statErr) {
+					t.Errorf("owned %s survived after its parent was rewritten: %v", path, statErr)
+				}
+			}
+			if !tc.wantRetained {
+				if strings.Contains(string(got), "sdd-") {
+					t.Fatalf("released v3 gentleman.yaml was not rewritten:\n%s", got)
+				}
+				return
+			}
+			if string(got) != string(parentBytes) {
+				t.Fatal("sync rewrote an edited gentleman.yaml")
+			}
+			var referenceActions []string
+			for _, action := range result.ManualActions {
+				if strings.Contains(action, parent) && strings.Contains(action, "sdd-apply.yaml") {
+					referenceActions = append(referenceActions, action)
+				}
+			}
+			if len(referenceActions) != 1 {
+				t.Errorf("want one action naming gentleman.yaml and its SDD pairs, got %v", result.ManualActions)
+			}
+		})
 	}
 }

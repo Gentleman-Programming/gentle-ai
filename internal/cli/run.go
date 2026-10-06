@@ -874,12 +874,14 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		step.backgroundPolicy = r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn
 		apply = append(apply, step)
 	}
-	apply = append(apply, retiredSDDAgentSteps("agent:retire-sdd:", r.homeDir, r.scope, r.resolved.Agents, nil, r.state)...)
 	for _, agent := range r.resolved.Agents {
 		if nativeReviewAgentSupported(agent) {
 			apply = append(apply, nativeReviewAgentStep{id: "agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, state: r.state})
 		}
 	}
+	// After the native installer: it rewrites a Gentle-owned v3 Kimi
+	// gentleman.yaml, so the SDD subagents it declared can be retired now.
+	apply = append(apply, retiredSDDAgentSteps("agent:retire-sdd:", r.homeDir, r.scope, r.resolved.Agents, nil, r.state)...)
 
 	// Routing guidance is scheduled per agent and outside the component loop:
 	// an agent that cannot choose between direct and delegated work is unusable,
@@ -989,9 +991,7 @@ func (s retiredSDDAgentsStep) Run() error {
 		return fmt.Errorf("retire SDD agents for %q: %w", s.agent, err)
 	}
 	if s.state != nil {
-		for _, path := range res.Preserved {
-			s.state.retiredSDDActions = append(s.state.retiredSDDActions, legacyassets.PreservedSDDAgentAction(path))
-		}
+		s.state.retiredSDDActions = append(s.state.retiredSDDActions, res.ManualActions()...)
 	}
 	return nil
 }

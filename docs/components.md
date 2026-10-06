@@ -21,7 +21,7 @@
 
 ODD (Organic Driven Development) is shared routing guidance, not a separate component to install. It is the only implementation workflow for direct and delegated work. See [ODD and recovery](usage.md#organic-driven-development-odd).
 
-> **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets. A global install or sync also removes the native `sdd-*` sub-agents earlier releases rendered for Claude Code, Kiro, Cursor, and Kimi, proven by comparing each file with every released template; edited files are preserved and reported as manual actions. Removed files are captured in the sync backup.
+> **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets. A global install or sync also removes the native `sdd-*` sub-agents earlier releases rendered for Claude Code, Kiro, Cursor, and Kimi, proven by comparing each file with every released template; edited files are preserved and reported as manual actions. A Kimi `gentleman.yaml` inherited from v3.x declares every SDD subagent by path: when its bytes match a release, sync rewrites it first so the cleanup completes; when it was edited, sync keeps every SDD agent it references and reports one manual action naming it. Removed files are captured in the sync backup.
 
 ## Primary remote-authorization guidance
 
