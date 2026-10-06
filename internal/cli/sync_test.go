@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -2932,6 +2934,86 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 	}
 	if !persisted.CommunityToolsConfigured || !reflect.DeepEqual(persisted.CommunityTools, []string{"codegraph"}) {
 		t.Fatalf("persisted community tools = (%v, %t), want migrated CodeGraph selection", persisted.CommunityTools, persisted.CommunityToolsConfigured)
+	}
+}
+
+// Issue #5219: sync must not recreate retired Pi SDD agents recorded in the
+// CodeGraph manifest, and undoing an overlay stays inside the sync backup.
+func TestRunSyncReleasesRetiredPiSDDAgentsFromCodeGraphManifest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}); err != nil {
+		t.Fatal(err)
+	}
+	probe := func(string) (communitytool.PiCodeGraphMCPProbeResult, error) {
+		return communitytool.PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []communitytool.PiCodeGraphMCPTool{{
+			Name: "codegraph_explore",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":       map[string]any{"type": "string"},
+					"maxFiles":    map[string]any{"type": "integer"},
+					"projectPath": map[string]any{"type": "string"},
+				},
+				"required": []any{"query"},
+			},
+		}}}, nil
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: probe}); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(home, ".pi", "agent", "agents")
+	missing, overlaid := filepath.Join(agentsDir, "sdd-apply.md"), filepath.Join(agentsDir, "sdd-verify.md")
+	before := "---\ntools: read, bash\n---\npackage sdd agent\n"
+	after := before + "\n<!-- gentle-ai:pi-codegraph-guidance -->\nguidance\n<!-- /gentle-ai:pi-codegraph -->\n"
+	sum := sha256.Sum256([]byte(after))
+	owned := map[string]any{"before": before, "after": after, "afterHash": hex.EncodeToString(sum[:]), "mode": 0o644}
+	manifestPath := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
+	var manifest map[string]any
+	if err := json.Unmarshal([]byte(readTextFile(t, manifestPath)), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	children := manifest["children"].(map[string]any)
+	children[missing], children[overlaid] = owned, owned
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, manifestPath, encoded)
+	if err := os.Chmod(manifestPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, overlaid, []byte(after))
+
+	codeGraph := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}}
+	targets, err := syncBackupTargetsScoped(home, "", ScopeGlobal, codeGraph, resolveAdapters(codeGraph.Agents))
+	if err != nil || !containsPath(targets, overlaid) {
+		t.Fatalf("retired Pi child release lacks a sync snapshot: %v, %v", targets, err)
+	}
+
+	previousRefresh := refreshPiCodeGraphIfConfigured
+	refreshPiCodeGraphIfConfigured = func(homeDir, workspaceDir string) (communitytool.PiCodeGraphResult, bool, error) {
+		result, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true, EffectiveMCPProbe: probe})
+		return result, true, err
+	}
+	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+
+	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("sync recreated retired Pi SDD agent: %v", err)
+	}
+	if got := readTextFile(t, overlaid); got != before {
+		t.Fatalf("retired Pi SDD agent = %q, want before-image %q", got, before)
+	}
+	if !containsPath(result.ChangedFiles, overlaid) || containsPath(result.ChangedFiles, missing) {
+		t.Fatalf("changed files = %v, want only the released overlay", result.ChangedFiles)
+	}
+	if text := readTextFile(t, manifestPath); strings.Contains(text, "sdd-apply.md") || strings.Contains(text, "sdd-verify.md") {
+		t.Fatalf("manifest still owns retired Pi SDD agents:\n%s", text)
 	}
 }
 
