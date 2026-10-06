@@ -1264,7 +1264,8 @@ func rewriteSkillRegistryHook(path string) operation {
 			if !changed {
 				return false, false, nil
 			}
-			if jsonIsEmptyObject(updated) {
+			// An emptied object that still holds JSONC comments is user text.
+			if jsonIsEmptyObject(updated) && json.Valid(updated) {
 				if err := removeFileIfExists(path); err != nil {
 					return false, false, err
 				}
@@ -1288,14 +1289,30 @@ func managedRetainedHookCommand(cmd string) bool {
 		cmd == "gentle-ai telemetry runtime codex --json"
 }
 
+// removeSkillRegistryHook removes the managed hook commands. Strict JSON is
+// re-encoded; JSONC keeps every byte outside the hooks value and refuses,
+// rather than normalizes, hooks spelled with escapes or holding comments.
 func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
+	strict := json.Valid(raw)
 	root := map[string]any{}
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return nil, false, err
+	if strict {
+		if err := json.Unmarshal(raw, &root); err != nil {
+			return nil, false, err
+		}
+	} else {
+		decoded, err := filemerge.UnmarshalJSONObject(raw)
+		if err != nil {
+			return nil, false, err
+		}
+		root = decoded
 	}
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return raw, false, nil
+	}
+	events := make([]string, 0, len(hooksMap))
+	for event := range hooksMap {
+		events = append(events, event)
 	}
 	changed := false
 	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop", "PreToolUse", "PostToolUse", "SessionEnd"} {
@@ -1340,6 +1357,27 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 	}
 	if !changed {
 		return raw, false, nil
+	}
+	if !strict && len(hooksMap) == 0 {
+		updated, kept, err := filemerge.RemoveJSONCMembers(raw, []string{"hooks"}, events, true)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(kept) > 0 {
+			return nil, false, fmt.Errorf("refuse to remove hooks %v spelled with escapes or holding comments; remove the Gentle AI hooks yourself", kept)
+		}
+		return updated, true, nil
+	}
+	if !strict {
+		overlay, err := json.Marshal(map[string]any{"hooks": map[string]any{"__replace__": hooksMap}})
+		if err != nil {
+			return nil, false, err
+		}
+		updated, err := filemerge.MergeOpenCodeJSONCObjects(raw, overlay)
+		if err != nil {
+			return nil, false, err
+		}
+		return updated, true, nil
 	}
 	if len(hooksMap) == 0 {
 		delete(root, "hooks")
