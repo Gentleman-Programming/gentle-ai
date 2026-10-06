@@ -30,6 +30,8 @@ gentle-ai review status \
 
 Claude Code also gets a deterministic per-session baseline and end-of-turn reminder through its installed `SessionStart` and `Stop` hooks, both backed by the review stop-hook subcommand: SessionStart records the session's starting candidate, and Stop reminds only about candidates that session itself produced; neither starts a review by itself.
 
+These hooks, like the telemetry and skill-registry hooks, are added to Claude Code settings that use comments or trailing commas (JSONC): the hook writers in install, sync, and uninstall rewrite only the `hooks` value and keep every other byte. Other settings writers, such as persona, permissions, and output style, still normalize the file. When the `hooks` value holds comments, or its key is duplicated or spelled with escapes, the hook writers stop with an error and leave the file unchanged rather than normalize it.
+
 ## Cross-repository root
 
 A session in repository A may review a nested target in unrelated repository B only after the user explicitly authorizes B. Native Go resolves the requested path to B's canonical worktree root; adapters carry opaque provider output and never parse authorization or roots.

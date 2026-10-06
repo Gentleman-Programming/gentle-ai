@@ -19,6 +19,17 @@ func releasedFixture(t *testing.T, tag, name string) []byte {
 	return data
 }
 
+// inventoryPaths lists every retired SDD asset path under dirs, present or
+// not, sorted: the inventory PresentRetiredSDDAssetPaths filters.
+func inventoryPaths(agent model.AgentID, dirs SDDAssetDirs) []string {
+	var paths []string
+	for _, item := range retiredSDDAssetItems(agent, dirs) {
+		paths = append(paths, item.path)
+	}
+	slices.Sort(paths)
+	return paths
+}
+
 func writeFixture(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -48,7 +59,7 @@ func TestRetiredSDDAssetInventoryMatchesRegistry(t *testing.T) {
 	if !slices.Equal(registered, enumerated) {
 		t.Fatalf("registry commands %v differ from enumerated %v", registered, enumerated)
 	}
-	paths := RetiredSDDAssetPaths(model.AgentOpenCode, SDDAssetDirs{Skills: "skills", Commands: "commands"})
+	paths := inventoryPaths(model.AgentOpenCode, SDDAssetDirs{Skills: "skills", Commands: "commands"})
 	for _, path := range paths {
 		if strings.HasPrefix(filepath.Base(path), "gentle-") {
 			t.Errorf("OpenCode inventory lists Claude-only command %s", path)
@@ -174,10 +185,10 @@ func TestRetireSDDAssetsReportsUnprovableClaudeWorkflow(t *testing.T) {
 	workflow := filepath.Join(skills, "_shared", "sdd-orchestrator-workflow.md")
 	writeFixture(t, workflow, []byte("## SDD Workflow (Spec-Driven Development)\n"))
 	dirs := SDDAssetDirs{Skills: skills}
-	if !slices.Contains(RetiredSDDAssetPaths(model.AgentClaudeCode, dirs), workflow) {
+	if !slices.Contains(inventoryPaths(model.AgentClaudeCode, dirs), workflow) {
 		t.Fatal("Claude Code inventory omits the lazy SDD workflow")
 	}
-	if slices.Contains(RetiredSDDAssetPaths(model.AgentCodex, dirs), workflow) {
+	if slices.Contains(inventoryPaths(model.AgentCodex, dirs), workflow) {
 		t.Fatal("only Claude Code received the lazy SDD workflow")
 	}
 	res, err := RetireSDDAssets(model.AgentClaudeCode, dirs)
