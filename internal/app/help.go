@@ -16,8 +16,10 @@ COMMANDS
   install      Configure AI coding agents on this machine
   uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
-  skill-registry refresh
-               Refresh .atl/skill-registry.md with cache-hit fast path
+  skill-registry refresh [--load <path>]
+               Refresh .atl/skill-registry.md with cache-hit fast path, or load curated registry
+  skill-registry load <path>
+               Load curated .atl/skill-registry.md and freeze against automatic refresh
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; the final capture closes and burns its review
