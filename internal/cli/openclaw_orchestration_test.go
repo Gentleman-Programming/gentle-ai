@@ -86,7 +86,7 @@ func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
 		home, workspace := t.TempDir(), t.TempDir()
 		selection := model.Selection{Agents: []model.AgentID{model.AgentOpenClaw}, StrictTDD: true}
 		runtime, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection,
-			planner.ResolvedPlan{Agents: selection.Agents}, system.PlatformProfile{})
+			planner.ResolvedPlan{Agents: selection.Agents}, system.PlatformProfile{}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +269,7 @@ func TestExplicitWorkspaceInstallOverridesOpenClawConfig(t *testing.T) {
 		Components: []model.ComponentID{model.ComponentPersona, model.ComponentSkills},
 		Skills:     []model.SkillID{model.SkillGoTesting}, Persona: model.PersonaGentleman,
 	}
-	rt, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}, system.PlatformProfile{})
+	rt, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}, system.PlatformProfile{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
