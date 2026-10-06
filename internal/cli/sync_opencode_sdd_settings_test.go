@@ -463,3 +463,26 @@ func TestSyncLeavesSymlinkedOpenCodeSDDPromptDirectory(t *testing.T) {
 		t.Errorf("symlinked prompts directory not reported: %v", result.ManualActions)
 	}
 }
+
+// Retirement never touches a symlinked prompts directory, so the snapshot must
+// not declare paths through it: a link that leaves the home would make an
+// unrelated rollback refuse to restore paths outside its allowed roots.
+func TestRetiredOpenCodeSDDBackupPathsSkipSymlinkedPromptDirectory(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	stubOpenCodeRuntimeVersion(t, home, "1.18.30")
+	link := filepath.Join(opencodeagent.ConfigPath(home), "prompts", "sdd")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for _, path := range retiredOpenCodeSDDBackupPaths(home, t.TempDir(), ScopeGlobal, []model.AgentID{model.AgentOpenCode}) {
+		if strings.HasPrefix(path, link+string(filepath.Separator)) {
+			t.Fatalf("snapshot declares %s through the symlinked prompts directory", path)
+		}
+	}
+}

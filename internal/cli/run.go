@@ -1091,6 +1091,13 @@ func retiredOpenCodeSDDBackupPaths(homeDir, workspaceDir string, scope InstallSc
 		if target.prompts == "" {
 			continue
 		}
+		// Retirement never enters a prompts directory that is not a real
+		// directory (e.g. a symlink), so the snapshot must not declare paths
+		// through it either; a link outside the home would make rollback
+		// refuse paths it never needed to restore.
+		if info, err := os.Lstat(target.prompts); err == nil && !info.IsDir() {
+			continue
+		}
 		for _, phase := range legacyassets.SharedPromptPhases() {
 			paths = append(paths, filepath.Join(target.prompts, phase+".md"))
 		}
