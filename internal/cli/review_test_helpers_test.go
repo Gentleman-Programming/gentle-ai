@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
@@ -26,6 +27,13 @@ func writeReviewCLIRawInput(t *testing.T, raw []byte) string {
 }
 
 func startFacadeReview(t *testing.T, repo string) ReviewFacadeStartResult {
+	t.Helper()
+	return startFacadeReviewForRuntime(t, repo, "")
+}
+
+// startFacadeReviewForRuntime freezes the lineage to runtime exactly as a
+// negotiated START declaring --agent does; empty keeps the manual route.
+func startFacadeReviewForRuntime(t *testing.T, repo string, runtime model.AgentID) ReviewFacadeStartResult {
 	t.Helper()
 	ctx := context.Background()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
@@ -50,7 +58,7 @@ func startFacadeReview(t *testing.T, repo string) ReviewFacadeStartResult {
 	}
 	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, "", "", reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	}, snapshot, assessment, assessment.ChangedLines, lenses, "")
+	}, snapshot, assessment, assessment.ChangedLines, lenses, runtime)
 	if err != nil {
 		t.Fatalf("prepare facade review compact atomic fixture: %v", err)
 	}

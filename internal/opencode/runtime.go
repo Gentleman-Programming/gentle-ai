@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -77,14 +78,25 @@ func (b *limitedBuffer) Write(data []byte) (int, error) {
 
 func (b *limitedBuffer) Bytes() []byte { return b.buffer.Bytes() }
 
+// ErrRuntimeVersionTimeout marks a probe that ran out of time: the runtime
+// may be perfectly supported, so callers must not report it as unsupported.
+var ErrRuntimeVersionTimeout = errors.New("`opencode --version` timed out")
+
+// runtimeVersionTimeout bounds the probe; a variable only so tests can
+// exercise the real deadline path without waiting for it.
+var runtimeVersionTimeout = 3 * time.Second
+
 func DetectRuntimeMajor(ctx context.Context) (RuntimeMajor, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, runtimeVersionTimeout)
 	defer cancel()
 	output, err := VersionRunnerOverride(ctx, Command{Path: "opencode", Args: []string{"--version"}, OutputLimit: 4096})
 	if err == nil && len(output.Stdout) <= 4096 && len(output.Stderr) <= 4096 {
 		if major := ParseRuntimeMajor(string(output.Stdout)); major != RuntimeUnknown {
 			return major, nil
 		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return RuntimeUnknown, fmt.Errorf("%w after %s; managed runtime assets were not selected", ErrRuntimeVersionTimeout, runtimeVersionTimeout)
 	}
 	return RuntimeUnknown, errors.New("OpenCode runtime version unavailable or unsupported; managed runtime assets were not selected")
 }
