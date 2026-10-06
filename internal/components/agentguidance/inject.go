@@ -166,8 +166,10 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 	}
 }
 
-// RoutingPaths reports the exact filesystem paths InjectRouting would write for
-// one supported agent under targetDir, without creating or touching anything.
+// RoutingPathsWithOptions reports the exact filesystem paths
+// InjectRoutingWithOptions would write for one supported agent under
+// targetDir, including any caller-resolved effective settings path, without
+// creating or touching anything.
 //
 // Install and sync must snapshot every file they are about to rewrite. Routing
 // guidance is delivered outside the component loop, so a selection whose
@@ -175,12 +177,6 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 // without a backup and could never be rolled back. Both answers come from the
 // same delivery resolution, so the backup contract cannot drift away from what
 // the injector actually writes.
-func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
-	return RoutingPathsWithOptions(targetDir, agent, RoutingOptions{})
-}
-
-// RoutingPathsWithOptions reports the same paths InjectRoutingWithOptions would
-// write, including any caller-resolved effective settings path.
 func RoutingPathsWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) ([]string, error) {
 	if isCatalogOnlyGuidanceTarget(agent) {
 		// Same catalog-only skip as InjectRoutingWithOptions: no guidance

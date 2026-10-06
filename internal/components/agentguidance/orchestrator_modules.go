@@ -165,20 +165,3 @@ func splitOrchestratorModules(annotated string, specs []orchestratorFragmentSpec
 }
 
 func orchestratorModuleFile(module string) string { return "orchestrator-" + module + ".md" }
-
-// reconstruct puts every fragment body back in place of its pointer, which
-// yields the public monolithic render the bundle was split from.
-func (b orchestratorModuleBundle) reconstruct() (string, error) {
-	var out strings.Builder
-	cursor := 0
-	for _, fragment := range b.fragments {
-		if fragment.offset < cursor || fragment.offset > len(b.core) || !strings.HasPrefix(b.core[fragment.offset:], fragment.pointer) {
-			return "", fmt.Errorf("%w: fragment %q pointer is not at offset %d", errInvalidOrchestratorFragments, fragment.id, fragment.offset)
-		}
-		out.WriteString(b.core[cursor:fragment.offset])
-		out.WriteString(fragment.body)
-		cursor = fragment.offset + len(fragment.pointer)
-	}
-	out.WriteString(b.core[cursor:])
-	return out.String(), nil
-}

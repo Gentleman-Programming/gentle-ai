@@ -7011,7 +7011,7 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 
-	routing, err := agentguidance.RoutingPaths(home, agent)
+	routing, err := agentguidance.RoutingPathsWithOptions(home, agent, agentguidance.RoutingOptions{})
 	if err != nil {
 		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
 	}

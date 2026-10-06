@@ -3686,12 +3686,9 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 	return skills.SkillsForPreset(selection.Preset)
 }
 
-func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
-	return installBackupTargets(homeDir, workspaceDir, scope, selection, resolved, false)
-}
-
-// installBackupTargets is backupTargets for an install that may carry the
-// explicit Claude module opt-in, so the snapshot plans every pilot path.
+// installBackupTargets lists every path an install is about to rewrite. An
+// install that carries the explicit Claude module opt-in also plans every
+// pilot path, so the snapshot can restore it.
 func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, claudeModules bool) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)

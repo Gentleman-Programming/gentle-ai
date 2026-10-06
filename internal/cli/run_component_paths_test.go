@@ -1586,7 +1586,7 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 		t.Fatalf("backupTargets() error = %v", err)
 	}
 
-	routing, err := agentguidance.RoutingPaths(home, agent)
+	routing, err := agentguidance.RoutingPathsWithOptions(home, agent, agentguidance.RoutingOptions{})
 	if err != nil {
 		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
 	}
@@ -2026,4 +2026,10 @@ func TestInstallPrepareValidationScopesRefusalsToSelectedWriters(t *testing.T) {
 			}
 		})
 	}
+}
+
+// backupTargets is the monolithic install snapshot plan these tests assert:
+// installBackupTargets without the Claude module opt-in.
+func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
+	return installBackupTargets(homeDir, workspaceDir, scope, selection, resolved, false)
 }
