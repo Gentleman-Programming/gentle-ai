@@ -73,7 +73,7 @@ func InjectStrictTDDWithOptions(targetDir string, agent model.AgentID, enabled b
 		if err != nil {
 			return Result{}, err
 		}
-		merged, err := filemerge.MergeJSONObjects(raw, overlay)
+		merged, err := filemerge.MergeJSONObjectsForPath(path, raw, overlay)
 		if err != nil {
 			return Result{}, err
 		}

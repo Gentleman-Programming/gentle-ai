@@ -1940,9 +1940,9 @@ func TestInstallPrepareValidationFollowsExistingContract(t *testing.T) {
 		if result.Err != nil {
 			t.Fatalf("install rejected valid OpenCode settings: %v", result.Err)
 		}
-		// The ownership writers normalize a JSONC document (pre-existing
-		// behavior, #5028); the data contract is that user members survive and
-		// the result stays parseable.
+		// User members survive and the result stays parseable; comment and
+		// trailing-comma preservation is pinned by
+		// TestOpenCodeRoutingWritersPreserveJSONCThroughInstallAndSync.
 		after, err := filemerge.UnmarshalJSONObject([]byte(readTextFile(t, settingsPath)))
 		if err != nil {
 			t.Fatalf("settings unreadable after install: %v", err)

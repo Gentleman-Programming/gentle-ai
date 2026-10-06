@@ -48,7 +48,7 @@ This lifecycle is available only to Claude Code, Codex, OpenCode, and Pi. Unsupp
 
 ### Repository context handles
 
-The provider-issued `repository_context` stays opaque (#3797). Its format depends on the runtime that STATUS renders for: the declared `--agent`, else the lineage's frozen runtime.
+The provider-issued `repository_context` stays opaque (#3797). Its format depends on the runtime that STATUS renders for: the declared `--agent`, else Pi when the exact Pi relay handshake (`GENTLE_PI_REVIEW_RELAY_CONTRACT`) is present, else the lineage's frozen runtime. A lineage that froze no runtime keeps the manual route.
 
 | Handle | Issued to | Resolution |
 | --- | --- | --- |
