@@ -71,3 +71,59 @@ func TestNormalizeInstallFlagsAcceptsSupportedAgent(t *testing.T) {
 		t.Fatalf("Selection.Agents = %v, want [claude-code]", input.Selection.Agents)
 	}
 }
+
+// TestDefaultAgentsFromDetection_ExcludesCommandCode proves defaultAgentsFromDetection
+// does not add command-code to install defaults because it is detect-only and managed
+// externally (install is unsupported by design).
+func TestDefaultAgentsFromDetection_ExcludesCommandCode(t *testing.T) {
+	// Case 1: command-code detected alongside an installable agent.
+	detection := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+			{Agent: "claude-code", Exists: true},
+		},
+	}
+	agents := defaultAgentsFromDetection(detection)
+	for _, a := range agents {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("defaultAgentsFromDetection() unexpectedly included command-code in install defaults: %v", agents)
+		}
+	}
+	if len(agents) != 1 || agents[0] != model.AgentClaudeCode {
+		t.Fatalf("defaultAgentsFromDetection() = %v, want [claude-code]", agents)
+	}
+
+	// Case 2: only command-code detected; fallback to catalog defaults must also not include command-code
+	// even when the catalog contains command-code (simulating Slice 1 addition).
+	origCatalog := catalogAllAgents
+	defer func() { catalogAllAgents = origCatalog }()
+	catalogAllAgents = func() []catalog.Agent {
+		return append(catalog.AllAgents(), catalog.Agent{ID: model.AgentID("command-code"), Name: "Command Code"})
+	}
+
+	detectionSolo := system.DetectionResult{
+		Configs: []system.ConfigState{
+			{Agent: "command-code", Exists: true},
+		},
+	}
+	soloAgents := defaultAgentsFromDetection(detectionSolo)
+	if len(soloAgents) == 0 {
+		t.Fatal("defaultAgentsFromDetection() with solo command-code returned empty agents")
+	}
+	for _, a := range soloAgents {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("defaultAgentsFromDetection() with solo command-code unexpectedly included command-code: %v", soloAgents)
+		}
+	}
+
+	// Case 3: empty detection; fallback to catalog defaults must also exclude command-code.
+	emptyAgents := defaultAgentsFromDetection(system.DetectionResult{})
+	if len(emptyAgents) == 0 {
+		t.Fatal("defaultAgentsFromDetection() with empty detection returned empty agents")
+	}
+	for _, a := range emptyAgents {
+		if a == model.AgentID("command-code") {
+			t.Fatalf("defaultAgentsFromDetection() with empty detection unexpectedly included command-code: %v", emptyAgents)
+		}
+	}
+}

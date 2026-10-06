@@ -59,6 +59,7 @@ var agentToolBinaries = map[string]string{
 	"vscode-copilot": "code",
 	"openclaw":       "openclaw",
 	"hermes":         "hermes",
+	"command-code":   "command-code",
 }
 
 const (
@@ -199,6 +200,9 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		if tool == "gentle-ai" {
 			detail += doctorInvokedGentleAIClause(resolved)
 		}
+		if tool == "command-code" && doctorGOOS != "windows" {
+			detail += " (Windows-only matrix, detect-don't-manage)"
+		}
 		return CheckResult{
 			Name:   doctor.ToolCheckID(tool),
 			Status: CheckStatusFail,
@@ -207,7 +211,23 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		}
 	}
 
-	copies := doctorToolCopies(tool, pathDirs)
+	copiesTool := tool
+	if tool == "command-code" && resolved != "" {
+		binName := filepath.Base(resolved)
+		if ext := filepath.Ext(binName); ext != "" && strings.EqualFold(ext, ".ps1") {
+			binName = strings.TrimSuffix(binName, ext)
+		} else if doctorGOOS == "windows" {
+			for _, ext := range executableExtensions() {
+				if ext != "" && strings.EqualFold(filepath.Ext(binName), ext) {
+					binName = strings.TrimSuffix(binName, filepath.Ext(binName))
+					break
+				}
+			}
+		}
+		copiesTool = binName
+	}
+
+	copies := doctorToolCopies(copiesTool, pathDirs)
 	if len(copies) > 1 {
 		// The duplicate branch is exactly where ambiguity about which build
 		// is running is guaranteed, so this is the branch that most needs
@@ -215,6 +235,9 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		detail := fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", "))
 		if tool == "gentle-ai" {
 			detail += doctorInvokedGentleAIClause(resolved)
+		}
+		if tool == "command-code" && doctorGOOS != "windows" {
+			detail += " (Windows-only matrix, detect-don't-manage)"
 		}
 		return CheckResult{
 			Name:   doctor.ToolCheckID(tool),
@@ -230,6 +253,9 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	}
 	if tool == "gentle-ai" {
 		detail += doctorInvokedGentleAIClause(resolved)
+	}
+	if tool == "command-code" && doctorGOOS != "windows" {
+		detail += " (Windows-only matrix, detect-don't-manage)"
 	}
 	return CheckResult{
 		Name:   doctor.ToolCheckID(tool),
@@ -281,19 +307,37 @@ func doctorSameExecutable(a, b string) bool {
 	return resolvedA == resolvedB
 }
 
+// commandCodeAliases returns the probed executable names for Command Code in precedence order.
+// Windows probes command-code then cmdc (never bare cmd, which collides with cmd.exe).
+// Unix probes command-code then cmd.
+func commandCodeAliases(goos string) []string {
+	if goos == "windows" {
+		return []string{"command-code", "cmdc"}
+	}
+	return []string{"command-code", "cmd"}
+}
+
 func resolveDoctorTool(tool string) (string, string, error) {
-	resolved, err := lookPathFn(tool)
-	if err == nil {
-		return resolved, "", nil
+	aliases := []string{tool}
+	if tool == "command-code" {
+		aliases = commandCodeAliases(doctorGOOS)
 	}
-	if doctorGOOS != "windows" {
-		return "", "", err
+	var lastErr error
+	for _, name := range aliases {
+		resolved, err := lookPathFn(name)
+		if err == nil {
+			return resolved, "", nil
+		}
+		lastErr = err
+		if doctorGOOS == "windows" {
+			resolved, ps1Err := lookPathFn(name + ".ps1")
+			if ps1Err == nil {
+				return resolved, "PowerShell shim", nil
+			}
+			lastErr = ps1Err
+		}
 	}
-	resolved, ps1Err := lookPathFn(tool + ".ps1")
-	if ps1Err != nil {
-		return "", "", err
-	}
-	return resolved, "PowerShell shim", nil
+	return "", "", lastErr
 }
 
 func doctorToolCopies(tool string, pathDirs []string) []string {
@@ -545,6 +589,8 @@ func agentConfigDir(homeDir, agentID string) string {
 		return filepath.Join(homeDir, ".codex")
 	case "kiro":
 		return filepath.Join(homeDir, ".kiro")
+	case "command-code":
+		return filepath.Join(homeDir, ".commandcode")
 	default:
 		return ""
 	}
