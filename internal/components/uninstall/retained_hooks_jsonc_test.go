@@ -89,6 +89,7 @@ func TestFullAgentClaudeRefusesUnsafeJSONCHooksWithoutWrite(t *testing.T) {
 		"comment beside managed hooks":    "{\n  \"hooks\": {\n    // mine\n    " + jsoncManagedStop + ",\n  },\n}\n",
 		"escaped hooks key":               "{\n  // note\n  \"\\u0068ooks\": {" + jsoncManagedStop + "},\n}\n",
 		"escaped hooks key beside a user": "{\n  // note\n  \"\\u0068ooks\": {" + jsoncMixedStop + "},\n}\n",
+		"duplicate hooks key":             "{\n  // note\n  \"hooks\": {},\n  \"hooks\": {" + jsoncManagedStop + "},\n}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			path, err := applyClaudeSettingsRewrite(t, seed)

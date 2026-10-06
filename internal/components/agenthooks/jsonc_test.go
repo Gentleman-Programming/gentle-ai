@@ -94,6 +94,7 @@ func TestHookWritersRefuseUnsafeJSONCHooksWithoutWrite(t *testing.T) {
 	seeds := map[string]string{
 		"comment inside hooks": "{\n  \"model\": \"opus\",\n  \"hooks\": {\n    // mine\n    \"PreToolUse\": [],\n  },\n}\n",
 		"escaped hooks key":    "{\n  // note\n  \"\\u0068ooks\": {\"PreToolUse\": []},\n}\n",
+		"duplicate hooks key":  "{\n  // note\n  \"hooks\": {},\n  \"hooks\": {\"PreToolUse\": []},\n}\n",
 	}
 	for _, writer := range hookWriters() {
 		for seedName, seed := range seeds {
