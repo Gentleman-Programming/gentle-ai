@@ -1677,8 +1677,19 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 			if root == workspace {
 				otherRoot = home
 			}
-			if !tc.sameWorkspace && containsPath(targets, adapters[0].SettingsPath(otherRoot)) {
-				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
+			otherSettings := adapters[0].SettingsPath(otherRoot)
+			if !tc.sameWorkspace && tc.scope == ScopeGlobal && containsPath(targets, otherSettings) {
+				t.Fatalf("global backupTargets selected workspace cleanup; targets=%v", targets)
+			}
+			// Routing writes retained hooks in HOME even in workspace scope.
+			// Back them up independently of Context7's selected-scope cleanup;
+			// neither cleanup is a Context7 verification requirement.
+			homeSettings := adapters[0].SettingsPath(home)
+			if !containsPath(targets, homeSettings) {
+				t.Fatalf("backupTargets missing global routing-hook settings %q; targets=%v", homeSettings, targets)
+			}
+			if containsPath(verificationPaths, homeSettings) {
+				t.Fatalf("Context7 verification must not require routing-hook settings %q; paths=%v", homeSettings, verificationPaths)
 			}
 		})
 	}
@@ -1940,9 +1951,9 @@ func TestInstallPrepareValidationFollowsExistingContract(t *testing.T) {
 		if result.Err != nil {
 			t.Fatalf("install rejected valid OpenCode settings: %v", result.Err)
 		}
-		// The ownership writers normalize a JSONC document (pre-existing
-		// behavior, #5028); the data contract is that user members survive and
-		// the result stays parseable.
+		// User members survive and the result stays parseable; comment and
+		// trailing-comma preservation is pinned by
+		// TestOpenCodeRoutingWritersPreserveJSONCThroughInstallAndSync.
 		after, err := filemerge.UnmarshalJSONObject([]byte(readTextFile(t, settingsPath)))
 		if err != nil {
 			t.Fatalf("settings unreadable after install: %v", err)

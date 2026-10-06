@@ -80,10 +80,10 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	// Rejected here, before the runtime is created or anything is written.
 	if flags.ClaudeOrchestratorModules {
 		if scope != ScopeGlobal {
-			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q", scope)
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q; rerun gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules", scope)
 		}
 		if !containsAgent(selection.Agents, model.AgentClaudeCode) {
-			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the %s agent in the selection", model.AgentClaudeCode)
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the %s agent in the selection; rerun gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules", model.AgentClaudeCode)
 		}
 	}
 

@@ -320,3 +320,47 @@ func TestRunSyncWorkspaceRetiresCodexAndKimiFilesInTheWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code's lazy SDD workflow is proven by replaying each release's
+// writer: sync removes a release render and snapshots it, and keeps and
+// reports a copy with custom model assignments.
+func TestRunSyncRetiresReplayedClaudeSDDWorkflow(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content []byte
+		owned   bool
+	}{
+		{"release render", releasedSDDAsset(t, "v3.7.0", "claude-sdd-orchestrator-workflow.md"), true},
+		{"custom assignments", []byte(strings.Replace(string(releasedSDDAsset(t, "v2.0.0", "claude-sdd-orchestrator-workflow-performance.md")), "| sdd-explore | sonnet |", "| sdd-explore | haiku |", 1)), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			workflow := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
+			mustWriteFile(t, workflow, tc.content)
+
+			result, err := RunSync([]string{"--agents", string(model.AgentClaudeCode)})
+			if err != nil {
+				t.Fatalf("RunSync() error = %v", err)
+			}
+			if _, ok := backupManifestEntries(t, home)[workflow]; !ok {
+				t.Error("sync snapshot omitted the Claude SDD workflow")
+			}
+			_, statErr := os.Lstat(workflow)
+			if tc.owned {
+				if !os.IsNotExist(statErr) || !slices.Contains(result.ChangedFiles, workflow) {
+					t.Fatalf("release render not retired: %v, changed %v", statErr, result.ChangedFiles)
+				}
+				return
+			}
+			if got, err := os.ReadFile(workflow); err != nil || string(got) != string(tc.content) {
+				t.Fatalf("sync changed the user's workflow: %v", err)
+			}
+			if !slices.ContainsFunc(result.ManualActions, func(action string) bool {
+				return strings.Contains(action, workflow) && strings.Contains(action, "move or delete it")
+			}) {
+				t.Errorf("preserved workflow not reported: %v", result.ManualActions)
+			}
+		})
+	}
+}

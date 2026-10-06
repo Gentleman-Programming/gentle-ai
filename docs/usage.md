@@ -269,6 +269,8 @@ gentle-ai uninstall --agent cursor --component skills --yes
 
 If no `--component` flag is provided for a partial uninstall, `gentle-ai` removes all managed uninstallable components for the selected agent set.
 
+An uninstall that removes every component of an agent (`--all`, or no `--component` flag) also retires what releases before v4.0.0 installed for the retired SDD workflow, with the same ownership proof as install and sync (see [Components](components.md)): `sdd-*` skills, commands, native agents, Codex profiles, the Kimi module, OpenCode and Kilocode agent entries and prompts, the Claude Code preflight hook, and the `<!-- gentle-ai:sdd-orchestrator -->` block of the agent's prompt files, including its active prompt, since uninstall delivers no routing guidance that would migrate it. Files whose bytes no release wrote are kept and reported: move or delete them yourself. A directory that is a symlink is never entered, Pi files are never touched, and everything uninstall changes is in its backup snapshot.
+
 A complete Claude Code uninstall also retires the optional orchestrator modules pilot and keeps module files Gentle AI does not own; see [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot).
 
 ### update / upgrade

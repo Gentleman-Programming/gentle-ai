@@ -31,7 +31,7 @@ var claudeModuleFiles = map[string]struct {
 	sha256 string
 }{
 	"orchestrator-delegation.md": {1171, "47f6a58cc2e6de22bbb4f3f8c9f5931b9b9678064465950a8bd43099cfa43935"},
-	"orchestrator-writer.md":     {2041, "27774cd79f47c2bf4a19ff3d00833746541670d6540c86f9823f989bf2c20d99"},
+	"orchestrator-writer.md":     {1977, "9d99c3377dda8abade697327f6a2e515c3efdf83c570e4e4f2edf74fcef4047b"},
 	"orchestrator-skills.md":     {3018, "ad2be8ac4e5dd4b1913b6c328b9860b61ab080ea5852448c15157bef0e7bdd7c"},
 }
 

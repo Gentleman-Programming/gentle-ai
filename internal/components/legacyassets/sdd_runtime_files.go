@@ -1,11 +1,13 @@
 package legacyassets
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -188,7 +190,8 @@ func retirePromptText(root, path, text string, edit func(string) (string, string
 	if unsupported != "" {
 		info, err = os.Stat(path)
 	}
-	if os.IsNotExist(err) {
+	// A runtime home that is a regular file (ENOTDIR) holds no prompt either.
+	if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
 		return result, nil
 	}
 	if err != nil {

@@ -188,6 +188,9 @@ func TestOrchestratorModuleCoreKeepsCriticalPolicy(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// Main's canonical gate now requires the concrete runtime binding.
+			// Compare its whole body after binding, not an unresolved template.
+			tc.body = strings.ReplaceAll(tc.body, "{{GENTLE_AI_RUNTIME_AGENT_ID}}", string(model.AgentClaudeCode))
 			for _, clause := range tc.clauses {
 				if !strings.Contains(tc.body, clause) {
 					t.Fatalf("canonical body no longer carries %q", clause)

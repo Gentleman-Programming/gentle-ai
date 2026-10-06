@@ -832,7 +832,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			id:           "prepare:opencode-settings-validation",
 			settingsPath: openCodeLoadedSettingsPath(r.homeDir, r.workspaceDir, opencodeagent.NewAdapter()),
 			// Routing guidance is scheduled for every install agent.
-			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true),
+			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true, false),
 		}}, prepare...)
 	}
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
@@ -994,119 +994,59 @@ func (s nativeReviewAgentStep) Run() error {
 // wrote (#5157). The pipeline snapshot captures the same inventory first
 // (retiredSDDAssetBackupPaths).
 type retiredSDDAssetsStep struct {
-	id string
-	// agent is empty for the shared ~/.agents/skills root.
-	agent    model.AgentID
-	dirs     legacyassets.SDDAssetDirs
-	settings string
-	// blocks are prompt files whose SDD orchestrator block is removed.
-	blocks       []sddPromptFile
-	kimiHub      sddPromptFile
+	id           string
+	inventory    legacyassets.SDDInventory
 	changedFiles *[]string
 	state        *runtimeState
 }
 
-// sddPromptFile is a prompt file holding retired SDD text, edited only when
-// every directory from root down to it is a real directory, with the active
-// prompt routing guidance migrates instead (empty when none).
-type sddPromptFile struct{ root, path, active string }
-
 func (s retiredSDDAssetsStep) ID() string { return s.id }
 
 func (s retiredSDDAssetsStep) Run() error {
-	res, err := legacyassets.RetireSDDAssets(s.agent, s.dirs)
+	res, err := s.inventory.Retire()
 	if s.changedFiles != nil {
 		*s.changedFiles = append(*s.changedFiles, res.Removed...)
+		*s.changedFiles = append(*s.changedFiles, res.Rewritten...)
 	}
 	if err != nil {
-		return fmt.Errorf("retire SDD files for %q: %w", s.agent, err)
-	}
-	actions := res.ManualActions()
-	if s.settings != "" {
-		hook, err := legacyassets.RetireClaudeSDDPreflightHook(s.settings)
-		if err != nil {
-			return fmt.Errorf("retire SDD preflight hook: %w", err)
-		}
-		if hook.Removed && s.changedFiles != nil {
-			*s.changedFiles = append(*s.changedFiles, s.settings)
-		}
-		actions = append(actions, hook.ManualActions()...)
-	}
-	texts := make([]legacyassets.TextRetireResult, 0, len(s.blocks)+1)
-	for _, block := range s.blocks {
-		res, err := legacyassets.RetireSDDOrchestratorBlock(block.root, block.path, block.active)
-		if err != nil {
-			return fmt.Errorf("retire SDD orchestrator block: %w", err)
-		}
-		texts = append(texts, res)
-	}
-	if s.kimiHub.path != "" {
-		res, err := legacyassets.RetireKimiSDDInclude(s.kimiHub.root, s.kimiHub.path)
-		if err != nil {
-			return fmt.Errorf("retire Kimi SDD include: %w", err)
-		}
-		texts = append(texts, res)
-	}
-	for _, res := range texts {
-		if res.Removed && s.changedFiles != nil {
-			*s.changedFiles = append(*s.changedFiles, res.Path)
-		}
-		actions = append(actions, res.ManualActions()...)
+		return err
 	}
 	if s.state != nil {
-		s.state.retiredSDDActions = append(s.state.retiredSDDActions, actions...)
+		s.state.retiredSDDActions = append(s.state.retiredSDDActions, res.ManualActions...)
 	}
 	return nil
 }
 
 // retiredSDDAssetSteps resolves where releases installed retired SDD files
-// for the selected runtimes in this scope: skills, commands, Codex profiles,
-// the Kimi module, SDD prompt text, and the Claude Code hook under the
-// scoped config root, the Windsurf workflow only in a workspace-scoped run
-// (releases wrote it into the project), and the shared ~/.agents/skills root
-// only in a global run on platforms where the generic snapshot owns it. Pi is
-// skipped: gentle-pi owns its home (#5219).
+// for the selected runtimes in this scope: the legacyassets inventory under
+// the scoped config root, the Windsurf workflow only in a workspace-scoped
+// run (releases wrote it into the project), and the shared ~/.agents/skills
+// root only in a global run on platforms where the generic snapshot owns it.
+// Pi has no inventory: gentle-pi owns its home (#5219).
 func retiredSDDAssetSteps(prefix, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string, state *runtimeState) []retiredSDDAssetsStep {
 	var steps []retiredSDDAssetsStep
 	for _, adapter := range resolveAdapters(agentIDs) {
 		if adapter.Agent() == model.AgentPi {
 			continue
 		}
-		root := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
-		step := retiredSDDAssetsStep{id: prefix + string(adapter.Agent()), agent: adapter.Agent(), changedFiles: changedFiles, state: state}
-		if adapter.SupportsSkills() {
-			step.dirs.Skills = adapter.SkillsDir(root)
-		}
-		if adapter.SupportsSlashCommands() {
-			step.dirs.Commands = adapter.CommandsDir(root)
-		}
-		if flows, ok := adapter.(interface{ WorkflowsDir(string) string }); ok && scope == ScopeWorkspace {
-			step.dirs.Workflows = flows.WorkflowsDir(workspaceDir)
-		}
-		if adapter.Agent() == model.AgentClaudeCode {
-			step.settings = adapter.SettingsPath(root)
-		}
 		// A workspace-scoped install wrote these under the workspace too.
-		files := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), root)
-		step.dirs.CodexHome, step.dirs.KimiHome = files.Dirs.CodexHome, files.Dirs.KimiHome
-		if files.Hub != "" {
-			step.kimiHub = sddPromptFile{root: files.Dirs.KimiHome, path: files.Hub}
-		}
-		if files.Prompt != "" {
-			step.blocks = append(step.blocks, sddPromptFile{files.Dirs.CodexHome, files.Prompt, files.Active})
+		root := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+		inventory := legacyassets.RetiredSDDInventory(adapter, root)
+		if flows, ok := adapter.(interface{ WorkflowsDir(string) string }); ok && scope == ScopeWorkspace {
+			inventory.Dirs.Workflows = flows.WorkflowsDir(workspaceDir)
 		}
 		// A workspace sync delivers no routing guidance to these runtimes, so
 		// nothing migrates the v3.7.0 SDD block of their project prompt.
 		if scope == ScopeWorkspace && workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) &&
 			!agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) && adapter.SupportsSystemPrompt() {
 			prompt := adapter.SystemPromptFile(root)
-			step.blocks = append(step.blocks, sddPromptFile{root: filepath.Dir(prompt), path: prompt})
+			inventory.Blocks = append(inventory.Blocks, legacyassets.SDDPromptFile{Root: filepath.Dir(prompt), Path: prompt})
 		}
-		steps = append(steps, step)
+		steps = append(steps, retiredSDDAssetsStep{id: prefix + string(adapter.Agent()), inventory: inventory, changedFiles: changedFiles, state: state})
 	}
 	if scope != ScopeWorkspace && !usesAnchoredCompatibilityTransaction() {
 		if dir, ok, err := compatibilitySkillsDir(homeDir); err == nil && ok {
-			steps = append(steps, retiredSDDAssetsStep{id: prefix + "compatibility-skills", dirs: legacyassets.SDDAssetDirs{Skills: dir}, changedFiles: changedFiles, state: state})
+			steps = append(steps, retiredSDDAssetsStep{id: prefix + "compatibility-skills", inventory: legacyassets.SDDInventory{Dirs: legacyassets.SDDAssetDirs{Skills: dir}}, changedFiles: changedFiles, state: state})
 		}
 	}
 	return steps
@@ -1126,15 +1066,7 @@ func retiredSDDAssetStepList(steps []retiredSDDAssetsStep) []pipeline.Step {
 func retiredSDDAssetBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
 	var paths []string
 	for _, step := range retiredSDDAssetSteps("", homeDir, workspaceDir, scope, agentIDs, nil, nil) {
-		paths = append(paths, legacyassets.PresentRetiredSDDAssetPaths(step.agent, step.dirs)...)
-		if step.settings != "" {
-			paths = append(paths, step.settings)
-		}
-		for _, prompt := range append([]sddPromptFile{step.kimiHub}, step.blocks...) {
-			if prompt.path != "" && legacyassets.RetirablePromptFile(prompt.root, prompt.path) {
-				paths = append(paths, prompt.path)
-			}
-		}
+		paths = append(paths, step.inventory.BackupPaths()...)
 	}
 	return paths
 }
@@ -2275,11 +2207,17 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 	if !changed {
 		return false, nil
 	}
-	encoded, err := filemerge.MarshalJSONPreservingPermissions(raw, root)
+	// Only the agent value is rewritten, through the same merge as the other
+	// OpenCode-family writers.
+	overlay, err := json.Marshal(map[string]any{"agent": map[string]any{"__replace__": agents}})
 	if err != nil {
 		return false, err
 	}
-	result, err := filemerge.WriteFileAtomic(settingsPath, append(encoded, '\n'), filemerge.ExistingFileMode(settingsPath, 0o644))
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
+	if err != nil {
+		return false, err
+	}
+	result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	return result.Changed, err
 }
 
@@ -2289,7 +2227,7 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 // The orchestrator prompt relays blocking prompts through the native question
 // tool, which OpenCode denies to custom agents unless their own permission
 // allows it (#4816); v3.7.0 shipped the same rule. A question rule the user
-// already set is kept.
+// already set is kept, and none is written over a user deny policy.
 func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID) (bool, error) {
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -2307,7 +2245,7 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	agents, _ := root["agent"].(map[string]any)
 	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
 	current, _ := orchestrator["permission"].(map[string]any)
-	if _, set := current["question"]; !set {
+	if _, set := current["question"]; !set && !userDeniesQuestion(root, orchestrator) {
 		permission["question"] = "allow"
 	}
 	roles := map[string]any{
@@ -2329,6 +2267,44 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	}
 	result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	return result.Changed, err
+}
+
+// userDeniesQuestion reports a user deny that covers the question tool, either
+// global or on the orchestrator. Agent rules are evaluated after global ones
+// and the last match wins, so an "allow" written beside it would override the
+// user's policy. Besides the `permission` map, OpenCode 2.x reads the native
+// `permissions` rule list and the root `tools` map, and 1.x turns an agent's
+// `tools` into permissions its `permission` map overrides.
+func userDeniesQuestion(root, orchestrator map[string]any) bool {
+	nativeAgents, _ := root["agents"].(map[string]any)
+	native, _ := nativeAgents["gentle-orchestrator"].(map[string]any)
+	for _, scope := range []map[string]any{root, orchestrator, native} {
+		permission := scope["permission"]
+		if permission == "deny" {
+			return true
+		}
+		rules, _ := permission.(map[string]any)
+		if rules["*"] == "deny" || rules["question"] == "deny" {
+			return true
+		}
+		for _, key := range []string{"*", "question"} {
+			if patterns, _ := rules[key].(map[string]any); patterns["*"] == "deny" {
+				return true
+			}
+		}
+		if tools, _ := scope["tools"].(map[string]any); tools["question"] == false {
+			return true
+		}
+		list, _ := scope["permissions"].([]any)
+		for _, item := range list {
+			rule, _ := item.(map[string]any)
+			resource, set := rule["resource"]
+			if (rule["action"] == "*" || rule["action"] == "question") && rule["effect"] == "deny" && (!set || resource == "*") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // installOpenCodeODDParityAgents installs the ODD/JD/review-lens subagents at
@@ -2773,15 +2749,19 @@ func (s openCodeSettingsValidationStep) Run() error {
 }
 
 // openCodeSettingsWriterKeys lists the top-level OpenCode settings keys the
-// planned JSONC-preserving writers touch: routing guidance and Persona write
-// agent, Engram and Context7 write mcp, and the Permission and Theme
-// components write permission and theme. The preflight refuses unsafe JSONC
-// only inside those values, so a key no selected writer touches never blocks
-// the run.
-func openCodeSettingsWriterKeys(components []model.ComponentID, routing bool) []string {
+// planned JSONC-preserving writers touch: the routing step writes agent and
+// default_agent, Persona and persisted model assignments write agent, Engram
+// and Context7 write mcp, and the Permission and Theme components write
+// permission and theme. The routing step writes share only while it is absent,
+// so it never refuses. The preflight refuses unsafe JSONC only inside those
+// values, so a key no selected writer touches never blocks the run.
+func openCodeSettingsWriterKeys(components []model.ComponentID, routing, modelAssignments bool) []string {
 	var keys []string
-	if routing || slices.Contains(components, model.ComponentPersona) {
+	if routing || modelAssignments || slices.Contains(components, model.ComponentPersona) {
 		keys = append(keys, "agent")
+	}
+	if routing {
+		keys = append(keys, "default_agent")
 	}
 	if slices.Contains(components, model.ComponentEngram) || slices.Contains(components, model.ComponentContext7) {
 		keys = append(keys, "mcp")
@@ -4156,12 +4136,18 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		case model.ComponentClaudeTheme:
 			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
 		case model.ComponentOpenCodeGentleLogo:
-			if adapter.Agent() == model.AgentOpenCode {
-				paths = append(paths,
-					filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-					filepath.Join(homeDir, ".config", "opencode", "tui.json"),
-				)
+			if adapter.Agent() != model.AgentOpenCode {
+				break
 			}
+			// OpenCode 2.x omits the logo (opencodeplugin.UnsupportedLogoError),
+			// so there are no logo files to back up or verify.
+			if major, err := opencodeactivation.DetectRuntimeMajor(context.Background()); err == nil && major == opencodeactivation.RuntimeV2 {
+				break
+			}
+			paths = append(paths,
+				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+			)
 		}
 	}
 

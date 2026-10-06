@@ -95,6 +95,9 @@ func TestClaudeModuleOptInRejectsWorkspaceAndNonClaudeBeforeWriting(t *testing.T
 			if err == nil || !strings.Contains(err.Error(), claudeModulesFlag) || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("RunInstall(%q) error = %v, want a %s rejection naming %q", tt.args, err, claudeModulesFlag, tt.want)
 			}
+			if !strings.Contains(err.Error(), "gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules") {
+				t.Errorf("rejection must name a runnable corrected install command: %v", err)
+			}
 			requireEmptyHome(t, home)
 		})
 	}
