@@ -585,6 +585,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
+	apply = append(apply, retiredSDDAgentSteps("sync:agent:retire-sdd:", r.homeDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
 	for _, agent := range r.agentIDs {
 		if nativeReviewAgentSupported(agent) {
 			apply = append(apply, nativeReviewAgentStep{id: "sync:agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, changedFiles: &r.changedFiles, state: r.state})
@@ -784,6 +785,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		}
 	}
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, guidanceAdapters) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, adapters) {
 		paths[path] = struct{}{}
 	}
 	for _, adapter := range adapters {
@@ -2054,6 +2058,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
 	}
 	result.ManualActions = append(result.ManualActions, rt.state.nativeReviewActions...)
+	result.ManualActions = append(result.ManualActions, rt.state.retiredSDDActions...)
 	result.ManualActions = append(result.ManualActions, rt.skippedActions...)
 
 	// Capture how many managed assets were actually changed.

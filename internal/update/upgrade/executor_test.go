@@ -1747,3 +1747,24 @@ func TestManagedAgentBackupPathsOpenCodeDefaultAgentOwnershipFollowsConfigDir(t 
 	}
 	t.Fatalf("backup paths miss default-agent ownership record %q; got %v", want, paths)
 }
+
+// The upgrade snapshot declares the same retired SDD agent inventory the
+// upgraded binary's sync removes (#5157, #5253).
+func TestManagedAgentBackupPathsIncludeRetiredSDDAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCursor, model.AgentKimi} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		want := filepath.Join(adapter.SubAgentsDir(homeDir), "sdd-apply.md")
+		if !slices.Contains(paths, want) {
+			t.Errorf("%s upgrade snapshot omits %s", agent, want)
+		}
+	}
+}

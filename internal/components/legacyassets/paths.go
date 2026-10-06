@@ -1,5 +1,6 @@
-// Package legacyassets enumerates retired managed paths for snapshots and rollback.
-// It does not install or render SDD assets.
+// Package legacyassets enumerates retired managed paths for snapshots and rollback,
+// and retires the SDD agents it can prove a release rendered. It never
+// installs or renders SDD assets.
 package legacyassets
 
 import (
