@@ -184,7 +184,7 @@ func TestTUIDeduplicatedNativeReviewSnapshotSurvivesPostApplyRollback(t *testing
 				}
 			}
 			t.Cleanup(func() { tuiInstallStagePlan = original })
-			result, orchestrator := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, system.PlatformProfile{OS: "darwin", Supported: true}, model.OpenCodeBackgroundAuto, "", nil)
+			result, orchestrator, _ := ExecuteTUIInstallRecordingCodexServiceTier(home, selection, resolved, system.PlatformProfile{OS: "darwin", Supported: true}, model.OpenCodeBackgroundAuto, "", nil)
 			if result.Err != nil {
 				t.Fatalf("apply: %v", result.Err)
 			}

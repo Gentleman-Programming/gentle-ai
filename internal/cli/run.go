@@ -3117,24 +3117,11 @@ var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
 }
 
-// ExecuteTUIInstallWithBackgroundAndOrchestrator runs a TUI install and returns
-// the orchestrator so downstream persistence failures can be compensated.
-// After successful persistence, callers must call orchestrator.Finish() to
-// release a deduplicated temporary rollback snapshot.
-func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
-	return executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
-}
-
-// ExecuteTUIInstallRecordingCodexServiceTier is
-// ExecuteTUIInstallWithBackgroundAndOrchestrator plus the service tier engram
-// left in Codex's config.toml (nil = not written), for state to record.
+// ExecuteTUIInstallRecordingCodexServiceTier runs a TUI install and returns
+// its orchestrator plus the service tier engram left in Codex's config.toml
+// (nil = not written), for state to record.
 func ExecuteTUIInstallRecordingCodexServiceTier(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
 	return executeTUIInstall(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
-}
-
-func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
-	result, orchestrator, _ := executeTUIInstall(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent...)
-	return result, orchestrator
 }
 
 func executeTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
