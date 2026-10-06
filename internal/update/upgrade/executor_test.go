@@ -1797,3 +1797,36 @@ func TestManagedAgentBackupPathsIncludeRetiredOpenCodeSDDSettings(t *testing.T) 
 		}
 	}
 }
+
+// The upgraded binary's sync retires SDD skills and slash commands for every
+// runtime that received them (#5157), so the snapshot holds the same
+// inventory.
+func TestManagedAgentBackupPathsIncludeRetiredSDDSkillsAndCommands(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[model.AgentID][]string{
+		model.AgentClaudeCode: {
+			filepath.Join(homeDir, ".claude", "skills", "sdd-apply", "SKILL.md"),
+			filepath.Join(homeDir, ".claude", "skills", "_shared", "openspec-convention.md"),
+			filepath.Join(homeDir, ".claude", "commands", "gentle-sdd-apply.md"),
+			filepath.Join(homeDir, ".claude", "commands", "sdd-apply.md"),
+		},
+		model.AgentCodex:    {filepath.Join(homeDir, ".codex", "skills", "sdd-verify", "references", "report-format.md")},
+		model.AgentQwenCode: {filepath.Join(homeDir, ".qwen", "commands", "sdd-init.md")},
+	} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		for _, path := range want {
+			if !slices.Contains(paths, path) {
+				t.Errorf("%s upgrade snapshot omits %s", agent, path)
+			}
+		}
+	}
+}

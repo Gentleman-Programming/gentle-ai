@@ -591,6 +591,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			apply = append(apply, nativeReviewAgentStep{id: "sync:agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, changedFiles: &r.changedFiles, state: r.state})
 		}
 	}
+	apply = append(apply, retiredSDDAssetStepList(retiredSDDAssetSteps("sync:agent:retire-sdd-assets:", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles, r.state))...)
 	// After the native installer: it rewrites a Gentle-owned v3 Kimi
 	// gentleman.yaml, so the SDD subagents it declared can be retired now.
 	apply = append(apply, retiredSDDAgentSteps("sync:agent:retire-sdd:", r.homeDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
@@ -790,6 +791,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		}
 	}
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, guidanceAdapters) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range retiredSDDAssetBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
 		paths[path] = struct{}{}
 	}
 	for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, adapters) {

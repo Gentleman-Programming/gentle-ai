@@ -888,6 +888,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			apply = append(apply, nativeReviewAgentStep{id: "agent:native-review:" + string(agent), agent: agent, homeDir: r.homeDir, workspaceDir: r.workspaceDir, scope: r.scope, selection: r.selection, state: r.state})
 		}
 	}
+	apply = append(apply, retiredSDDAssetStepList(retiredSDDAssetSteps("agent:retire-sdd-assets:", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil, r.state))...)
 	// After the native installer: it rewrites a Gentle-owned v3 Kimi
 	// gentleman.yaml, so the SDD subagents it declared can be retired now.
 	apply = append(apply, retiredSDDAgentSteps("agent:retire-sdd:", r.homeDir, r.scope, r.resolved.Agents, nil, r.state)...)
@@ -977,6 +978,109 @@ func (s nativeReviewAgentStep) Run() error {
 		}
 	}
 	return nil
+}
+
+// retiredSDDAssetsStep removes the SDD skills, slash commands, workflow, and
+// Claude Code preflight hook earlier releases installed for one runtime, and
+// reports what it cannot prove it wrote (#5157). The pipeline snapshot
+// captures the same inventory first (retiredSDDAssetBackupPaths).
+type retiredSDDAssetsStep struct {
+	id string
+	// agent is empty for the shared ~/.agents/skills root.
+	agent        model.AgentID
+	dirs         legacyassets.SDDAssetDirs
+	settings     string
+	changedFiles *[]string
+	state        *runtimeState
+}
+
+func (s retiredSDDAssetsStep) ID() string { return s.id }
+
+func (s retiredSDDAssetsStep) Run() error {
+	res, err := legacyassets.RetireSDDAssets(s.agent, s.dirs)
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, res.Removed...)
+	}
+	if err != nil {
+		return fmt.Errorf("retire SDD files for %q: %w", s.agent, err)
+	}
+	actions := res.ManualActions()
+	if s.settings != "" {
+		hook, err := legacyassets.RetireClaudeSDDPreflightHook(s.settings)
+		if err != nil {
+			return fmt.Errorf("retire SDD preflight hook: %w", err)
+		}
+		if hook.Removed && s.changedFiles != nil {
+			*s.changedFiles = append(*s.changedFiles, s.settings)
+		}
+		actions = append(actions, hook.ManualActions()...)
+	}
+	if s.state != nil {
+		s.state.retiredSDDActions = append(s.state.retiredSDDActions, actions...)
+	}
+	return nil
+}
+
+// retiredSDDAssetSteps resolves where releases installed retired SDD files
+// for the selected runtimes in this scope: skills, commands, and the Claude
+// Code hook under the scoped config root, the Windsurf workflow only in a
+// workspace-scoped run (releases wrote it into the project), and the shared
+// ~/.agents/skills root only in a global run on platforms where the generic
+// snapshot owns it. Pi is skipped: gentle-pi owns its home (#5219).
+func retiredSDDAssetSteps(prefix, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string, state *runtimeState) []retiredSDDAssetsStep {
+	var steps []retiredSDDAssetsStep
+	for _, adapter := range resolveAdapters(agentIDs) {
+		if adapter.Agent() == model.AgentPi {
+			continue
+		}
+		root := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+		step := retiredSDDAssetsStep{id: prefix + string(adapter.Agent()), agent: adapter.Agent(), changedFiles: changedFiles, state: state}
+		if adapter.SupportsSkills() {
+			step.dirs.Skills = adapter.SkillsDir(root)
+		}
+		if adapter.SupportsSlashCommands() {
+			step.dirs.Commands = adapter.CommandsDir(root)
+		}
+		if flows, ok := adapter.(interface{ WorkflowsDir(string) string }); ok && scope == ScopeWorkspace {
+			step.dirs.Workflows = flows.WorkflowsDir(workspaceDir)
+		}
+		if adapter.Agent() == model.AgentClaudeCode {
+			step.settings = adapter.SettingsPath(root)
+		}
+		steps = append(steps, step)
+	}
+	if scope != ScopeWorkspace && !usesAnchoredCompatibilityTransaction() {
+		if dir, ok, err := compatibilitySkillsDir(homeDir); err == nil && ok {
+			steps = append(steps, retiredSDDAssetsStep{id: prefix + "compatibility-skills", dirs: legacyassets.SDDAssetDirs{Skills: dir}, changedFiles: changedFiles, state: state})
+		}
+	}
+	return steps
+}
+
+func retiredSDDAssetStepList(steps []retiredSDDAssetsStep) []pipeline.Step {
+	list := make([]pipeline.Step, 0, len(steps))
+	for _, step := range steps {
+		list = append(list, step)
+	}
+	return list
+}
+
+// retiredSDDAssetBackupPaths is the snapshot half of retiredSDDAssetSteps.
+// Retirement only removes files that exist, so only present inventory files
+// enter the snapshot; retired SDD paths never become install targets.
+func retiredSDDAssetBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
+	var paths []string
+	for _, step := range retiredSDDAssetSteps("", homeDir, workspaceDir, scope, agentIDs, nil, nil) {
+		for _, path := range legacyassets.RetiredSDDAssetPaths(step.agent, step.dirs) {
+			if _, err := os.Lstat(path); err == nil {
+				paths = append(paths, path)
+			}
+		}
+		if step.settings != "" {
+			paths = append(paths, step.settings)
+		}
+	}
+	return paths
 }
 
 // retiredSDDAgentsStep removes the native SDD sub-agents earlier releases
@@ -3597,6 +3701,9 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	// selection whose components do not happen to cover the same file would be
 	// rewritten without ever having been snapshotted (issue #1794).
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range retiredSDDAssetBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
 		paths[path] = struct{}{}
 	}
 	for _, adapter := range adapters {

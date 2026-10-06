@@ -252,6 +252,8 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 
 	if adapter.SupportsSkills() {
 		add(managedSkillBackupPaths(homeDir, adapter, diagnostics)...)
+		// The upgraded binary's sync retires SDD skills (#5157).
+		add(legacyassets.RetiredSDDAssetPaths(adapter.Agent(), legacyassets.SDDAssetDirs{Skills: adapter.SkillsDir(homeDir)})...)
 	}
 
 	// The managed plugin install resolves the config directory through the

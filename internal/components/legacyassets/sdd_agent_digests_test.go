@@ -25,11 +25,11 @@ func TestReleasedSDDAgentDigestsMatchGenerator(t *testing.T) {
 		}
 	}
 	dir := t.TempDir()
-	cmd := exec.Command("go", "run", "../../../scripts/gen-sdd-agent-digests", filepath.Join(dir, "sdd_agent_digests.go"), filepath.Join(dir, "opencode_sdd_digests.go"))
+	cmd := exec.Command("go", "run", "../../../scripts/gen-sdd-agent-digests", filepath.Join(dir, "sdd_agent_digests.go"), filepath.Join(dir, "opencode_sdd_digests.go"), filepath.Join(dir, "sdd_asset_digests.go"))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generator failed: %v\n%s", err, output)
 	}
-	for _, name := range []string{"sdd_agent_digests.go", "opencode_sdd_digests.go"} {
+	for _, name := range []string{"sdd_agent_digests.go", "opencode_sdd_digests.go", "sdd_asset_digests.go"} {
 		want, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -63,8 +63,9 @@ func (r genSDDRepo) git(args ...string) {
 func (r genSDDRepo) release(tag, apply string) {
 	r.t.Helper()
 	for name, content := range map[string]string{
-		"gentleman.yaml": "version: \"1\"\nagent:\n  name: gentleman\n  subagents:\n    sdd-apply:\n      path: ./sdd-apply.yaml\n",
-		"sdd-apply.yaml": apply,
+		"gentleman.yaml":                  "version: \"1\"\nagent:\n  name: gentleman\n  subagents:\n    sdd-apply:\n      path: ./sdd-apply.yaml\n",
+		"sdd-apply.yaml":                  apply,
+		"../../skills/sdd-apply/SKILL.md": apply,
 	} {
 		path := filepath.Join(r.dir, "internal", "assets", "kimi", "agents", name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -102,8 +103,9 @@ func TestSDDAgentDigestGeneratorRefusesMissingIntermediateTags(t *testing.T) {
 	repo.git("tag", "v4.0.0")
 	registry := filepath.Join(t.TempDir(), "sdd_agent_digests.go")
 	openCodeRegistry := filepath.Join(t.TempDir(), "opencode_sdd_digests.go")
+	assetRegistry := filepath.Join(t.TempDir(), "sdd_asset_digests.go")
 	run := func() (string, error) {
-		cmd := exec.Command(generator, registry, openCodeRegistry)
+		cmd := exec.Command(generator, registry, openCodeRegistry, assetRegistry)
 		cmd.Dir, cmd.Env = repo.dir, repo.env
 		out, err := cmd.CombinedOutput()
 		return string(out), err
@@ -129,12 +131,14 @@ func TestSDDAgentDigestGeneratorRefusesMissingIntermediateTags(t *testing.T) {
 	if err := os.WriteFile(registry, []byte(edited), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	openCodeCommitted, err := os.ReadFile(openCodeRegistry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(openCodeRegistry, []byte(strings.ReplaceAll(string(openCodeCommitted), " v2.0.0", "")), 0o644); err != nil {
-		t.Fatal(err)
+	for _, file := range []string{openCodeRegistry, assetRegistry} {
+		recorded, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(strings.ReplaceAll(string(recorded), " v2.0.0", "")), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if out, err := run(); err == nil || !strings.Contains(out, "was not regenerated") || !strings.Contains(out, "git fetch --tags") {
 		t.Fatalf("dropped release digest accepted: %v\n%s", err, out)
