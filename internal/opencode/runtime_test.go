@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestRuntimeMajor(t *testing.T) {
@@ -36,5 +37,24 @@ func TestDetectRuntimeMajorBounded(t *testing.T) {
 	VersionRunnerOverride = func(context.Context, Command) (CommandOutput, error) { return CommandOutput{}, errors.New("missing") }
 	if _, err := DetectRuntimeMajor(context.Background()); err == nil {
 		t.Fatal("unknown version accepted")
+	}
+}
+
+// A probe that outlives its deadline is reported as a timeout, distinct from
+// an absent or unsupported runtime, through the real deadline path.
+func TestDetectRuntimeMajorReportsTimeoutDistinctly(t *testing.T) {
+	oldRunner, oldTimeout := VersionRunnerOverride, runtimeVersionTimeout
+	t.Cleanup(func() { VersionRunnerOverride, runtimeVersionTimeout = oldRunner, oldTimeout })
+	runtimeVersionTimeout = 10 * time.Millisecond
+	VersionRunnerOverride = func(ctx context.Context, _ Command) (CommandOutput, error) {
+		<-ctx.Done()
+		return CommandOutput{}, errors.New("signal: killed")
+	}
+	if _, err := DetectRuntimeMajor(context.Background()); !errors.Is(err, ErrRuntimeVersionTimeout) {
+		t.Fatalf("timed-out probe error = %v, want ErrRuntimeVersionTimeout", err)
+	}
+	VersionRunnerOverride = func(context.Context, Command) (CommandOutput, error) { return CommandOutput{}, errors.New("missing") }
+	if _, err := DetectRuntimeMajor(context.Background()); err == nil || errors.Is(err, ErrRuntimeVersionTimeout) {
+		t.Fatalf("missing runtime error = %v, want a non-timeout failure", err)
 	}
 }

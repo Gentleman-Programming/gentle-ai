@@ -1543,6 +1543,7 @@ func openCodeV2RuntimeForTest(t *testing.T) {
 	t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
 	old := runtimeopencode.VersionRunnerOverride
 	t.Cleanup(func() { runtimeopencode.VersionRunnerOverride = old })
+	freshOpenCodeRuntimeProbe(t)
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("opencode v2.0.19")}, nil
 	}

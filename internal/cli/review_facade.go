@@ -1367,11 +1367,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							// transport; the pi host relay collects the same roles
 							// through the printed materialize + submission route.
 							// Both discover pending roles identically here.
-							if runtime == "" && validationRequest != nil && record.State.RuntimeAgent != "" {
+							if runtime == "" && record.State.RuntimeAgent != "" {
 								// The lineage froze its runtime at START, so a STATUS
-								// that omits --agent still binds the validator role to
-								// it instead of stopping (#3805). A record without the
-								// field keeps the manual route.
+								// that omits --agent still binds every lens, refuter,
+								// and validator slot to it (#3805, #4808). A record
+								// without the field keeps the manual route.
 								if recorded, recordedErr := reviewRuntimeWithImmutableTransport(record.State.RuntimeAgent); recordedErr == nil {
 									runtime = recorded
 								}
