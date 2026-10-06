@@ -1370,9 +1370,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							if runtime == "" && record.State.RuntimeAgent != "" {
 								// The lineage froze its runtime at START, so a STATUS
 								// that omits --agent still binds every lens, refuter,
-								// and validator slot to it (#3805, #4808). A record
-								// without the field keeps the manual route.
-								if recorded, recordedErr := reviewRuntimeWithImmutableTransport(record.State.RuntimeAgent); recordedErr == nil {
+								// and validator slot to the runtime driving it: Pi
+								// under its relay handshake, else the frozen one
+								// (#3805, #4808). A record without the field keeps
+								// the manual route.
+								if recorded, recordedErr := reviewRuntimeWithImmutableTransport(string(reviewEffectiveRuntime("", record.State.RuntimeAgent))); recordedErr == nil {
 									runtime = recorded
 								}
 							}

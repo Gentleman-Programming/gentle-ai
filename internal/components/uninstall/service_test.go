@@ -261,9 +261,9 @@ func TestRetiredSDDExplicitUninstallFailsWithoutWrites(t *testing.T) {
 
 // TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents proves native
 // review and Judgment Day agent files survive uninstall without a dedicated
-// retention allowlist: nothing in the uninstall plan enumerates or removes
-// the sub-agents directory at all, so these permanently-installed native
-// agents (installed unconditionally by reviewassets.InstallNativeAgents,
+// retention allowlist: uninstall only inspects the retired SDD agent files
+// of the sub-agents directory, so these permanently-installed native agents
+// (installed unconditionally by reviewassets.InstallNativeAgents,
 // independent of any removable component) are never touched.
 func TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents(t *testing.T) {
 	home := t.TempDir()

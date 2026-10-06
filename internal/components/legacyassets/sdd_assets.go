@@ -25,10 +25,11 @@ const (
 )
 
 // claudeSDDWorkflowKey is the lazy SDD workflow v1.43.3 to v3.7.0 rendered
-// into Claude Code's shared skill references. Releases composed it per run,
-// most of them with the user's model assignments, and kept no golden of it,
-// so no installed copy can be proven Gentle AI's: retirement reports it and
-// never removes it.
+// into Claude Code's shared skill references; only Claude Code received it.
+// Releases composed it per run, until v2.6.0 with the user's model
+// assignments, so the registry holds the renders of each release's writer
+// with no assignments and with every model preset. A table the user
+// customized is not proven and is kept.
 const claudeSDDWorkflowKey = sddSkillKind + sddSharedDir + "sdd-orchestrator-workflow.md"
 
 // NormalizeSDDAsset maps every installed copy of a released skill, command,
@@ -108,6 +109,9 @@ func retiredSDDAssetItems(agent model.AgentID, dirs SDDAssetDirs) []sddAssetItem
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
+		if key == claudeSDDWorkflowKey {
+			continue // Claude Code's alone, added below
+		}
 		switch rel, _ := strings.CutPrefix(key, sddSkillKind); {
 		case dirs.Skills != "" && rel != key && strings.HasPrefix(rel, sddSharedDir):
 			add(dirs.Skills, key, key)
@@ -289,7 +293,7 @@ func (r AssetRetireResult) ManualActions() []string {
 	}
 	for _, path := range r.Preserved {
 		if strings.HasSuffix(filepath.ToSlash(path), "/"+strings.TrimPrefix(claudeSDDWorkflowKey, sddSkillKind)) {
-			actions = append(actions, fmt.Sprintf("Retired SDD workflow %s was preserved: Gentle AI rendered it per installation before v4.0.0 and cannot prove it is unchanged, so it may contain your changes. SDD was retired in v4.0.0 and Claude Code no longer reads this file; if you no longer need it, move or delete it.", path))
+			actions = append(actions, fmt.Sprintf("Retired SDD workflow %s was preserved: its content differs from every render a Gentle AI release wrote (for example, it carries model assignments you customized), so it may contain your changes. SDD was retired in v4.0.0 and Claude Code no longer reads this file; if you no longer need it, move or delete it.", path))
 			continue
 		}
 		actions = append(actions, fmt.Sprintf("Retired SDD file %s was preserved: Gentle AI cannot prove it wrote this file (its content differs from every released version, or it is not a regular file), so it may contain your changes. SDD was retired in v4.0.0 and this file is no longer maintained; if you no longer need it, move or delete it, then rerun `gentle-ai sync` to retire the SDD files kept beside it.", path))

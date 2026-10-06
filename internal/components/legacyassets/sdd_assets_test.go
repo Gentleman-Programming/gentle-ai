@@ -178,28 +178,50 @@ func TestRetireSDDAssetsKeepsEditedSkillUnit(t *testing.T) {
 	}
 }
 
-// Claude Code's lazy SDD workflow was rendered per installation, so its
-// ownership cannot be proven: it is snapshotted, kept, and reported.
-func TestRetireSDDAssetsReportsUnprovableClaudeWorkflow(t *testing.T) {
-	skills := filepath.Join(t.TempDir(), "skills")
-	workflow := filepath.Join(skills, "_shared", "sdd-orchestrator-workflow.md")
-	writeFixture(t, workflow, []byte("## SDD Workflow (Spec-Driven Development)\n"))
-	dirs := SDDAssetDirs{Skills: skills}
-	if !slices.Contains(inventoryPaths(model.AgentClaudeCode, dirs), workflow) {
-		t.Fatal("Claude Code inventory omits the lazy SDD workflow")
-	}
-	if slices.Contains(inventoryPaths(model.AgentCodex, dirs), workflow) {
-		t.Fatal("only Claude Code received the lazy SDD workflow")
-	}
-	res, err := RetireSDDAssets(model.AgentClaudeCode, dirs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Removed) != 0 || !slices.Equal(res.Preserved, []string{workflow}) {
-		t.Fatalf("result = %+v", res)
-	}
-	if actions := res.ManualActions(); len(actions) != 1 || !strings.Contains(actions[0], "workflow") || !strings.Contains(actions[0], "move or delete it") {
-		t.Fatalf("ManualActions = %v", actions)
+// Claude Code's lazy SDD workflow is proven by replaying each release's
+// writer: a render some release wrote, with or without a model preset, is
+// retired; any other bytes (custom assignments, edits) are kept and reported.
+// Only Claude Code received it.
+func TestRetireSDDAssetsRetiresReplayedClaudeWorkflow(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content []byte
+		owned   bool
+	}{
+		{"v3.7.0 render", releasedFixture(t, "v3.7.0", "claude-sdd-orchestrator-workflow.md"), true},
+		{"v2.0.0 performance preset render", releasedFixture(t, "v2.0.0", "claude-sdd-orchestrator-workflow-performance.md"), true},
+		{"crlf v3.7.0 render", []byte(strings.ReplaceAll(string(releasedFixture(t, "v3.7.0", "claude-sdd-orchestrator-workflow.md")), "\n", "\r\n")), true},
+		{"custom assignment", []byte(strings.Replace(string(releasedFixture(t, "v2.0.0", "claude-sdd-orchestrator-workflow-performance.md")), "| sdd-explore | sonnet |", "| sdd-explore | haiku |", 1)), false},
+		{"edited", []byte("## SDD Workflow (Spec-Driven Development)\n"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skills := filepath.Join(t.TempDir(), "skills")
+			workflow := filepath.Join(skills, "_shared", "sdd-orchestrator-workflow.md")
+			writeFixture(t, workflow, tc.content)
+			dirs := SDDAssetDirs{Skills: skills}
+			if !slices.Contains(inventoryPaths(model.AgentClaudeCode, dirs), workflow) {
+				t.Fatal("Claude Code inventory omits the lazy SDD workflow")
+			}
+			if slices.Contains(inventoryPaths(model.AgentCodex, dirs), workflow) || slices.Contains(inventoryPaths("", dirs), workflow) {
+				t.Fatal("only Claude Code received the lazy SDD workflow")
+			}
+			res, err := RetireSDDAssets(model.AgentClaudeCode, dirs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.owned {
+				if !slices.Equal(res.Removed, []string{workflow}) || len(res.Preserved) != 0 {
+					t.Fatalf("result = %+v, want the release render removed", res)
+				}
+				return
+			}
+			if len(res.Removed) != 0 || !slices.Equal(res.Preserved, []string{workflow}) {
+				t.Fatalf("result = %+v, want the file preserved", res)
+			}
+			if actions := res.ManualActions(); len(actions) != 1 || !strings.Contains(actions[0], "workflow") || !strings.Contains(actions[0], "move or delete it") {
+				t.Fatalf("ManualActions = %v", actions)
+			}
+		})
 	}
 }
 

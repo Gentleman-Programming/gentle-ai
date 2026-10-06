@@ -20,6 +20,9 @@ import (
 // the unchanged rctx2 digest.
 
 func TestOpenCodeLineageStatusSealsOnlyItsCollectInputs(t *testing.T) {
+	// Inheritance applies only without the Pi relay handshake; a Pi host
+	// running this test must not turn the STATUS into a Pi-driven one.
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
 	if testing.Short() {
 		t.Skip("requires relay subprocesses")
 	}
@@ -65,6 +68,9 @@ func TestOpenCodeLineageStatusSealsOnlyItsCollectInputs(t *testing.T) {
 }
 
 func TestOpenCodeSealedCollectArgumentsResolveFromAnUnrelatedCwd(t *testing.T) {
+	// Inheritance applies only without the Pi relay handshake; a Pi host
+	// running this test must not turn the STATUS into a Pi-driven one.
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
 	if testing.Short() {
 		t.Skip("requires git fixtures")
 	}
