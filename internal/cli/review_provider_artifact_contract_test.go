@@ -10,7 +10,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
@@ -27,7 +27,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"fixtures/status-v2.fixture.json":        "ff3690a9e716c9fa48e3c26a67047f9b4ce4c3cce8391a240dbe9834bd4e13ee",
 		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
-		"fixtures/status-recover.fixture.json":   "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
+		"fixtures/status-recover.fixture.json":   "ad814f34f438583fdf699cd5ce95ab7cd0700de9b21a4d1ed79207de9c463dfc",
 		"fixtures/status-unrelated.fixture.json": "deab36c877ced3c9b480ca33724c10d88f75c761d6426fa14be850345122891d",
 		"schemas/admitted-result.schema.json":    "7796e8dbba331434594108c902dfab7ec46f691fa447a9259a78f2448111b0de",
 		"schemas/artifact-subject.schema.json":   "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
@@ -161,7 +161,10 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
 		"fixtures/start-v4.fixture.json":          "639a6e78b40cb5e000ec15265fd444c243e28594035c7d376c378142162bfb02",
 		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
-		"schemas/start-v4.schema.json":            "770c6a7e40a62a945d1134cba933cfd811f4c5e6ab407a36a26ba56508bc00e4",
+		// issues #5136/#4516: the handle also admits the sealed rctx3 shape
+		// OpenCode hosts receive; rctx1/rctx2 are unchanged. Deliberate, not
+		// drift.
+		"schemas/start-v4.schema.json": "bab86b0ef33dc905ced2de5a18fe3c04290d1007a55623108b37b41709230508",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -212,7 +215,9 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 		// references. Deliberate, not drift.
 		// issue #3932: start_status_execution carries the opaque
 		// repository-context row, so a foreign process cwd fails closed.
-		"schemas/transition-execution.schema.json":   "3743a16d915f5d95be047af1f0454f342aa4c3eb7bcb0d8991f81ae3b89873c1",
+		// issues #5136/#4516: the repository-context row also admits the
+		// sealed rctx3 shape OpenCode hosts receive.
+		"schemas/transition-execution.schema.json":   "fcddf353a243d0e6d6553742e8c180c71a110465d9676f74b149f26b9e3cffd8",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {

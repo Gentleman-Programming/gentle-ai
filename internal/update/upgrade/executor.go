@@ -3,9 +3,9 @@
 // isolated from install, pipeline, planner, and config-sync code paths.
 //
 // Import boundary: this package MUST NOT import:
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/pipeline
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/planner
-//   - github.com/gentleman-programming/gentle-ai/v3/internal/cli
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/pipeline
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/planner
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/cli
 package upgrade
 
 import (
@@ -20,21 +20,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/legacyassets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // Package-level vars for testability — same pattern as internal/update/detect.go.
@@ -217,7 +217,6 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		add(
 			filepath.Join(configDir, "persona.md"),
 			filepath.Join(configDir, "output-style.md"),
-			filepath.Join(configDir, "sdd-orchestrator.md"),
 			filepath.Join(configDir, "strict-tdd-mode.md"),
 			// The routing module carries both the orchestrator and routing
 			// guidance the Jinja router includes; upgrades rewrite it.
@@ -234,7 +233,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	if adapter.SupportsSlashCommands() {
-		add(legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
+		add(presentPaths(legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir)))...)
 		commands, err := skills.AllSkillCommandPaths(homeDir, adapter)
 		if err != nil {
 			writeBackupDiagnostic(diagnostics, "backup: skipping skill commands for %s: %v", adapter.Agent(), err)
@@ -246,10 +245,30 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		for _, name := range embeddedFileNames(adapter.EmbeddedSubAgentsDir(), diagnostics) {
 			add(filepath.Join(adapter.SubAgentsDir(homeDir), name))
 		}
+		// The upgraded binary's sync retires native SDD agents (#5157).
+		add(presentPaths(legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir)))...)
 	}
 
 	if adapter.SupportsSkills() {
 		add(managedSkillBackupPaths(homeDir, adapter, diagnostics)...)
+		// The upgraded binary's sync retires SDD skills (#5157).
+		add(legacyassets.PresentRetiredSDDAssetPaths(adapter.Agent(), legacyassets.SDDAssetDirs{Skills: adapter.SkillsDir(homeDir)})...)
+	}
+
+	// It also retires Codex's SDD profiles and the SDD block of its lowercase
+	// agents.md, and Kimi's SDD module and its legacy include (#5157).
+	runtimeFiles := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), homeDir)
+	add(legacyassets.PresentRetiredSDDAssetPaths(adapter.Agent(), runtimeFiles.Dirs)...)
+	for _, prompt := range [][2]string{{runtimeFiles.Dirs.CodexHome, runtimeFiles.Prompt}, {runtimeFiles.Dirs.KimiHome, runtimeFiles.Hub}} {
+		if prompt[1] != "" && legacyassets.RetirablePromptFile(prompt[0], prompt[1]) {
+			add(prompt[1])
+		}
+	}
+
+	// The managed plugin install resolves the config directory through the
+	// adapter and owns the plugin list; the snapshot must match it (#3219).
+	if opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		add(opencoderuntimeplugins.PluginPaths(homeDir, adapter)...)
 	}
 
 	switch adapter.Agent() {
@@ -262,22 +281,40 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		// settings path, which honors an absolute OPENCODE_CONFIG_DIR; the
 		// snapshot must resolve it the same way.
 		add(opencodedefault.OwnershipPath(opencode.EffectiveSettingsPath(homeDir, "")))
-		// The SDD plugin writer resolves the config directory through the
-		// adapter and owns the plugin list; the snapshot must match it (#3219).
-		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
-			add(filepath.Join(pluginsDir, name))
-		}
 		add(
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 		)
-		for _, phase := range legacyassets.SharedPromptPhases() {
-			add(filepath.Join(legacyassets.SharedPromptDir(homeDir), phase+".md"))
+		// Retirement never enters a prompts directory that is not a real
+		// directory, and removes only prompts that exist.
+		if dir := legacyassets.SharedPromptDir(homeDir); isRealDir(dir) {
+			var prompts []string
+			for _, phase := range legacyassets.SharedPromptPhases() {
+				prompts = append(prompts, filepath.Join(dir, phase+".md"))
+			}
+			add(presentPaths(prompts)...)
 		}
 	}
 
 	return paths
+}
+
+// presentPaths keeps the retired inventory paths that exist. Sync only
+// removes what exists, and a restore deletes every path the snapshot recorded
+// as absent, which would remove a file the user later created there.
+func presentPaths(paths []string) []string {
+	var present []string
+	for _, path := range paths {
+		if _, err := os.Lstat(path); err == nil {
+			present = append(present, path)
+		}
+	}
+	return present
+}
+
+func isRealDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
 }
 
 func managedGlobalBackupPaths(homeDir string) []string {

@@ -1,10 +1,13 @@
 # Review Authority Threat Model
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ## Outcome
 
 The compact review store protects valid review authority from accidental corruption and concurrent writers. It does not claim to authenticate state against a malicious local actor with the same user and filesystem access: without an external trust anchor, that actor can rewrite the state, receipt, Git repository, or binary.
 
-Review authority governs review lifecycle continuation and recovery only. Receipts, candidate identity, gate/context results, and shadow output are review-context evidence; ordinary repository policy governs delivery; SDD archive preserves actual state without a verification certificate.
+Review authority governs review lifecycle continuation and recovery only. Receipts, candidate identity, gate/context results, and shadow output are review-context evidence; ordinary repository policy governs delivery.
 
 ## Scope
 
@@ -14,7 +17,7 @@ Review authority governs review lifecycle continuation and recovery only. Receip
 | Interrupted replacement | Yes | Atomic replacement and filesystem synchronization preserve either the old or new valid record where practical. |
 | Concurrent or stale writer | Yes | A lock plus expected revision rejects stale transitions; an exact retry is idempotent. |
 | STATUS overlaps terminal receipt publication | Yes | A bounded double-collect rechecks state revision and snapshot identities, then requires matching receipt and journal existence, raw identity, and canonical content around that state observation; continuing churn returns a concurrency error. |
-| Repository changes after review | Yes | Review-context evaluation re-derives evidence from live Git and reports incompatible scope or identity changes for review repair; ordinary delivery and SDD archive remain independently governed. |
+| Repository changes after review | Yes | Review-context evaluation re-derives evidence from live Git and reports incompatible scope or identity changes for review repair; ordinary delivery remains independently governed. |
 | Historical intended path becomes tracked or disappears | Yes | Read-only status treats frozen membership as receipt-bound history; healthy authority and receipt bytes remain unchanged. |
 | Terminal escalation needs another review | Yes | Generic `review recover` requires its existing scope/state predicates. Escalation remains receiptless and recoverable, while predecessor authority bytes remain immutable. |
 | Malicious same-user local actor | No | No authenticity or tamper-resistance claim is made. |

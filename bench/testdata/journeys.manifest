@@ -24,6 +24,7 @@ j126-selected-untracked-terminal-status-resumes-without-flags
 j127-customizable-install-rdd-choice
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
+j1658-native-status-recovery-executes-without-authored-authorization
 j17-bare-repository
 j2138-opencode-review-role-boundary
 j2995-selector-scoped-historical-disposition-quarantine

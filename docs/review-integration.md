@@ -1,5 +1,8 @@
 # Review Integration Contract
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 `gentle-ai.review-integration/v2` coordinates one immutable review transaction at a time. Go owns the candidate snapshot, review admission, correction boundary, terminal burn, and all provider-facing bindings. Claude Code, OpenCode, Codex, and Pi transport provider-issued work; no runtime adapter decides review or delivery.
@@ -27,6 +30,8 @@ gentle-ai review status \
 
 Claude Code also gets a deterministic per-session baseline and end-of-turn reminder through its installed `SessionStart` and `Stop` hooks, both backed by the review stop-hook subcommand: SessionStart records the session's starting candidate, and Stop reminds only about candidates that session itself produced; neither starts a review by itself.
 
+These hooks, like the telemetry and skill-registry hooks, are added to Claude Code settings that use comments or trailing commas (JSONC): the hook writers in install, sync, and uninstall rewrite only the `hooks` value and keep every other byte. Other settings writers, such as persona, permissions, and output style, still normalize the file. When the `hooks` value holds comments, or its key is duplicated or spelled with escapes, the hook writers stop with an error and leave the file unchanged rather than normalize it.
+
 ## Cross-repository root
 
 A session in repository A may review a nested target in unrelated repository B only after the user explicitly authorizes B. Native Go resolves the requested path to B's canonical worktree root; adapters carry opaque provider output and never parse authorization or roots.
@@ -40,6 +45,17 @@ A session in repository A may review a nested target in unrelated repository B o
 | Delivery | Ordinary repository policy and any explicit delivery authorization name B. Approval never authorizes delivery. |
 
 This lifecycle is available only to Claude Code, Codex, OpenCode, and Pi. Unsupported runtimes fail before repository or authority mutation.
+
+### Repository context handles
+
+The provider-issued `repository_context` stays opaque (#3797). Its format depends on the runtime that STATUS renders for: the declared `--agent`, else Pi when the exact Pi relay handshake (`GENTLE_PI_REVIEW_RELAY_CONTRACT`) is present, else the lineage's frozen runtime. A lineage that froze no runtime keeps the manual route.
+
+| Handle | Issued to | Resolution |
+| --- | --- | --- |
+| `rctx2_` + sha256 hex | Claude Code, Codex, Pi, manual, and every START/STATUS envelope | A digest over repository identity, lineage, target, and revision, verified against the caller's repository (`--cwd`). |
+| `rctx3_` + unpadded base64url | OpenCode collect inputs and provider tasks only (#5136, #4516) | Seals B's canonical root and identity digest with AES-256-GCM under a private per-user key, `~/.gentle-ai/review-context.key` (32 bytes, mode `0600`, created on first use). Go opens the repository at the sealed root only, re-derives the digest, and requires live authority. Host cwd, worktree registries, and submodule lists never take part. |
+
+The OpenCode relay resolves `rctx3` only; given `rctx2`, it refuses and names the OpenCode STATUS that reissues the Task. Other commands dispatch by prefix, so an OpenCode host can run `capture-result`, `capture-unachievable`, or `lens-context` with its collect input from any cwd. A tampered handle, another user's handle, a moved or replaced root, or stale authority refuses without mutation. An unsafe key file refuses with its repair.
 
 ## Atomic lifecycle
 
@@ -64,6 +80,30 @@ A reviewing START carries `next_transition.execute(review.status)` — the provi
 | `stop` | Run no lifecycle operation. Do not infer a recovery from prose. |
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
+
+#### Native recovery for an explicitly selected lineage
+
+When native STATUS selects legal, representable recovery, its returned
+`review.recover` invocation carries four core arguments: predecessor lineage,
+exact predecessor revision, successor lineage, and disposition. Replay every
+returned target selector unchanged, including declared untracked scope and its
+inventory digest. Native RECOVER derives actor, reason, and the exact audit
+binding; consumers must not manufacture an external authorization collection.
+This does not supply missing runtime consent or authorize delivery.
+
+STATUS preserves an explicit `--recovery-successor-lineage`; otherwise it derives
+one name from the existing worktree-and-target identity. It never searches for
+an available suffix. An occupied name, the predecessor's own name, or an already
+recorded successor fails closed with a read-only `review inspect-authority`
+diagnostic. Run that diagnostic with the requested repository as process cwd;
+do not invent a new successor to bypass the conflict.
+
+Explicit compatibility remains available through the complete successor,
+`--recovery-actor`, `--recovery-reason`, and `--recovery-authorization` binding.
+STATUS renders the existing seven-argument RECOVER form only for an exact binding.
+Explicit empty/wrong authorization or a partial tuple refuses without mutation;
+it never falls back to self-derivation. Core recovery legality remains unchanged,
+including failed-criteria and accounting-only evidence checks.
 
 ### 4. Approved authority awaits acknowledgement, then burns
 
@@ -102,9 +142,11 @@ Medium and high-risk START may return the typed `gentle-ai.review-integration.co
 
 ## Read-only risk assessment (`gentle-ai review assess`)
 
-`gentle-ai review assess --cwd <repo> [--agent <runtime>] [--base-ref <ref> --committed-only] [--untracked-scope exclude|select --intended-untracked <path> --expected-untracked-inventory <digest>] [--json]` prints the same candidate risk classification START uses to select lenses (`reviewtransaction.AssessSnapshotRisk`), without creating any review authority, lineage, or store mutation. It works identically with receipt-driven development on or off, so a host can gate delegated verification on the result before ever calling `review start`.
+`gentle-ai review assess --cwd <repo> [--agent <runtime>] [--base-ref <ref> --committed-only] [--untracked-scope exclude|select --intended-untracked <path> --expected-untracked-inventory <digest>] [--escalate-item <1-6> --escalate-reason <text>] [--json]` prints the same candidate risk classification START uses to select lenses (`reviewtransaction.AssessSnapshotRisk`), without creating any review authority, lineage, or store mutation. It works identically with receipt-driven development on or off, so a host can gate delegated verification on the result before ever calling `review start`.
 
 It builds the exact same candidate `review start` would: current changes by default, or an immutable base-to-HEAD comparison with `--base-ref` (which requires `--committed-only` to acknowledge dirty tracked changes, exactly like `review start`). The untracked-scope flags accept the same values `review start` does. The optional `--agent` declares the runtime identity to carry on `next_transition` below; it is validated exactly as `review status --agent` is.
+
+The optional `--escalate-item` and `--escalate-reason` let an agent raise the risk to `high` by citing one high-risk item. They must be passed together: `--escalate-item` is an integer from 1 to 6 (1 data or irreversible effects, 2 security, 3 contracts others consume, 4 concurrency, 5 delivery or environment, 6 no test would catch a regression), and `--escalate-reason` is a non-empty reason of at most 500 bytes (UTF-8); keep it to one line. Escalation raises `passive` or `medium` to `high`, never lowers a tier, and appends an `agent_escalation` reason naming the item. Missing either flag, an item outside 1-6, or an empty or oversized reason fails with a rerun hint.
 
 With `--json`, it prints the typed `gentle-ai.review-assessment/v1` envelope:
 

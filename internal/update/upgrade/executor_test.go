@@ -9,17 +9,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // --- helpers ---
@@ -1685,11 +1686,34 @@ func TestManagedAgentBackupPathsOpenCodePluginsFollowXDGConfigHome(t *testing.T)
 			t.Fatalf("backup path %q ignores XDG_CONFIG_HOME", p)
 		}
 	}
-	for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(model.AgentOpenCode)...) {
+	for _, name := range opencoderuntimeplugins.OpenCodePluginLifecycleNames(model.AgentOpenCode) {
 		want := filepath.Join(xdg, "opencode", "plugins", name)
 		if _, ok := pathSet[want]; !ok {
 			t.Fatalf("backup paths miss managed plugin %q; got %v", want, paths)
 		}
+	}
+}
+
+// The pre-upgrade snapshot covers exactly the plugin paths the managed plugin
+// install can write or retire, for every plugin-receiving agent.
+func TestManagedAgentBackupPathsKilocodePluginLifecycle(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get(model.AgentKilocode)
+	if !ok {
+		t.Fatal("kilocode adapter not found in registry")
+	}
+	paths := managedAgentBackupPaths(homeDir, adapter, log.Writer())
+	for _, want := range opencoderuntimeplugins.PluginPaths(homeDir, adapter) {
+		if !slices.Contains(paths, want) {
+			t.Errorf("backup paths miss Kilocode plugin %q", want)
+		}
+	}
+	if len(opencoderuntimeplugins.PluginPaths(homeDir, adapter)) == 0 {
+		t.Fatal("no Kilocode plugin paths")
 	}
 }
 
@@ -1722,4 +1746,262 @@ func TestManagedAgentBackupPathsOpenCodeDefaultAgentOwnershipFollowsConfigDir(t 
 		}
 	}
 	t.Fatalf("backup paths miss default-agent ownership record %q; got %v", want, paths)
+}
+
+// The upgrade snapshot declares the same retired SDD agent inventory the
+// upgraded binary's sync removes (#5157, #5253).
+func TestManagedAgentBackupPathsIncludeRetiredSDDAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCursor, model.AgentKimi} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		want := filepath.Join(adapter.SubAgentsDir(homeDir), "sdd-apply.md")
+		writeRetiredFixture(t, want)
+		paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		if !slices.Contains(paths, want) {
+			t.Errorf("%s upgrade snapshot omits %s", agent, want)
+		}
+	}
+}
+
+// The upgraded binary's sync retires the OpenCode family's SDD settings
+// entries and shared prompts (#5157, #5182), so the snapshot holds them.
+func TestManagedAgentBackupPathsIncludeRetiredOpenCodeSDDSettings(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd", "sdd-apply.md")
+	writeRetiredFixture(t, prompt)
+	for agent, want := range map[model.AgentID][]string{
+		model.AgentOpenCode: {
+			filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+			prompt,
+		},
+		model.AgentKilocode: {filepath.Join(homeDir, ".config", "kilo", "opencode.json")},
+	} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		for _, path := range want {
+			if !slices.Contains(paths, path) {
+				t.Errorf("%s upgrade snapshot omits %s", agent, path)
+			}
+		}
+	}
+}
+
+// writeRetiredFixture creates a leftover retired file: the snapshot only
+// records retired inventory paths that exist.
+func writeRetiredFixture(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The upgraded binary's sync retires SDD skills and slash commands for every
+// runtime that received them (#5157), so the snapshot holds the same
+// inventory.
+func TestManagedAgentBackupPathsIncludeRetiredSDDSkillsAndCommands(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[model.AgentID][]string{
+		model.AgentClaudeCode: {
+			filepath.Join(homeDir, ".claude", "skills", "sdd-apply", "SKILL.md"),
+			filepath.Join(homeDir, ".claude", "skills", "_shared", "openspec-convention.md"),
+			filepath.Join(homeDir, ".claude", "commands", "gentle-sdd-apply.md"),
+			filepath.Join(homeDir, ".claude", "commands", "sdd-apply.md"),
+		},
+		model.AgentCodex:    {filepath.Join(homeDir, ".codex", "skills", "sdd-verify", "references", "report-format.md")},
+		model.AgentQwenCode: {filepath.Join(homeDir, ".qwen", "commands", "sdd-init.md")},
+	} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		for _, path := range want {
+			writeRetiredFixture(t, path)
+		}
+		paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		for _, path := range want {
+			if !slices.Contains(paths, path) {
+				t.Errorf("%s upgrade snapshot omits %s", agent, path)
+			}
+		}
+	}
+}
+
+// A restore recreates the snapshot: a path recorded as absent would be
+// deleted, removing a file the user created there after the upgrade. Retired
+// SDD inventories therefore enter the snapshot only when present.
+func TestManagedAgentBackupPathsOmitAbsentRetiredSDDPaths(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("default registry does not contain claude-code")
+	}
+	present := []string{
+		filepath.Join(homeDir, ".claude", "skills", "sdd-apply", "SKILL.md"),
+		filepath.Join(homeDir, ".claude", "agents", "sdd-apply.md"),
+		filepath.Join(homeDir, ".claude", "commands", "gentle-sdd-apply.md"),
+	}
+	for _, path := range present {
+		writeRetiredFixture(t, path)
+	}
+	paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+	for _, path := range present {
+		if !slices.Contains(paths, path) {
+			t.Errorf("snapshot omits present retired path %s", path)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(homeDir, ".claude", "skills", "sdd-verify", "SKILL.md"),
+		filepath.Join(homeDir, ".claude", "skills", "_shared", "openspec-convention.md"),
+		filepath.Join(homeDir, ".claude", "agents", "sdd-verify.md"),
+		filepath.Join(homeDir, ".claude", "commands", "gentle-sdd-verify.md"),
+	} {
+		if slices.Contains(paths, path) {
+			t.Errorf("snapshot records absent retired path %s", path)
+		}
+	}
+}
+
+// The upgraded binary's sync retires Codex's SDD profiles and the SDD block
+// of its lowercase agents.md, and Kimi's SDD module and its legacy include
+// (#5157), so the snapshot holds every one of them that exists.
+func TestManagedAgentBackupPathsIncludeRetiredCodexAndKimiSDDFiles(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[model.AgentID][]string{
+		model.AgentCodex: {
+			filepath.Join(homeDir, ".codex", "sdd-strong.config.toml"),
+			filepath.Join(homeDir, ".codex", "agents.md"),
+		},
+		// The current kimi-code root does not hide the legacy files.
+		model.AgentKimi: {
+			filepath.Join(homeDir, ".kimi", "sdd-orchestrator.md"),
+			filepath.Join(homeDir, ".kimi", "KIMI.md"),
+		},
+	} {
+		for _, path := range want {
+			writeRetiredFixture(t, path)
+		}
+		if err := os.MkdirAll(filepath.Join(homeDir, ".kimi-code"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		for _, path := range want {
+			if !slices.Contains(paths, path) {
+				t.Errorf("%s upgrade snapshot omits %s", agent, path)
+			}
+		}
+	}
+}
+
+// Absent retired files never enter the upgrade snapshot: a restore would
+// delete a file the user created there later. Prompts behind a symlinked
+// directory are not declared either; retirement never enters it.
+func TestManagedAgentBackupPathsOmitAbsentRetiredRuntimeFiles(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent := map[model.AgentID][]string{
+		model.AgentOpenCode: {filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd", "sdd-apply.md")},
+		model.AgentCodex: {
+			filepath.Join(homeDir, ".codex", "sdd-strong.config.toml"),
+			filepath.Join(homeDir, ".codex", "agents.md"),
+		},
+		model.AgentKimi: {filepath.Join(homeDir, ".kimi", "sdd-orchestrator.md")},
+	}
+	for agent, paths := range absent {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		got := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		for _, path := range paths {
+			if slices.Contains(got, path) {
+				t.Errorf("%s snapshot records absent retired path %s", agent, path)
+			}
+		}
+	}
+
+	dotfiles := filepath.Join(homeDir, "dotfiles")
+	writeRetiredFixture(t, filepath.Join(dotfiles, "sdd-apply.md"))
+	prompts := filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd")
+	if err := os.MkdirAll(filepath.Dir(prompts), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfiles, prompts); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	adapter, _ := reg.Get(model.AgentOpenCode)
+	if got := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{}); slices.Contains(got, filepath.Join(prompts, "sdd-apply.md")) {
+		t.Error("snapshot declares a prompt through a symlinked prompts directory")
+	}
+}
+
+// Retirement never enters a symlinked ~/.codex or ~/.kimi, so the snapshot
+// never declares a prompt behind one.
+func TestManagedAgentBackupPathsOmitPromptsBehindSymlinkedRuntimeDirs(t *testing.T) {
+	homeDir := t.TempDir()
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dotfiles := t.TempDir()
+	writeRetiredFixture(t, filepath.Join(dotfiles, "codex", "agents.md"))
+	writeRetiredFixture(t, filepath.Join(dotfiles, "kimi", "KIMI.md"))
+	for name, target := range map[string]string{".codex": "codex", ".kimi": "kimi"} {
+		if err := os.Symlink(filepath.Join(dotfiles, target), filepath.Join(homeDir, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(homeDir, ".kimi-code"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for agent, path := range map[model.AgentID]string{
+		model.AgentCodex: filepath.Join(homeDir, ".codex", "agents.md"),
+		model.AgentKimi:  filepath.Join(homeDir, ".kimi", "KIMI.md"),
+	} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		if slices.Contains(managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{}), path) {
+			t.Errorf("%s snapshot declares %s behind a symlinked directory", agent, path)
+		}
+	}
 }

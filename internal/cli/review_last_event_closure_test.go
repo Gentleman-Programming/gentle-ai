@@ -15,9 +15,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func assertApprovedCompactAuthorityBurned(t *testing.T, store reviewtransaction.CompactStore, lineage string) {
@@ -1123,6 +1123,9 @@ func TestNegotiatedStatusKeepsFreshStartForApprovedRecordOfDifferentTarget(t *te
 // bound to that recorded runtime, exactly as the `--agent` form does, instead
 // of stopping with manual_intervention_required.
 func TestNegotiatedStatusAfterInBudgetCorrectionExposesValidationWithoutHostRuntime(t *testing.T) {
+	// Inheritance applies only without the Pi relay handshake; a Pi host
+	// running this test must not turn the STATUS into a Pi-driven one.
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
 	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t, "--agent", string(model.AgentClaudeCode))
 

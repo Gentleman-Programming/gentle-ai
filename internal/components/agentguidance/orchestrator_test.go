@@ -4,13 +4,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const (
@@ -21,7 +23,9 @@ const (
 )
 
 // orchestratorRuntimes lists every agent whose installed prompt carries the
-// orchestrator. Pi is excluded because its prompt is owned by Gentle Shell.
+// orchestrator. Pi is excluded because its prompt is owned by Gentle Shell,
+// and Conductor is excluded because it is detection/catalog-only and has no
+// prompt file of its own.
 func orchestratorRuntimes(t *testing.T) []model.AgentID {
 	t.Helper()
 
@@ -29,6 +33,9 @@ func orchestratorRuntimes(t *testing.T) []model.AgentID {
 	for _, agent := range catalog.AllAgents() {
 		if agent.ID == model.AgentPi {
 			continue
+		}
+		if agent.ID == model.AgentConductor {
+			continue // Catalog-only: no standalone guidance target.
 		}
 		adapter, err := agents.NewAdapter(agent.ID)
 		if err != nil {
@@ -39,8 +46,8 @@ func orchestratorRuntimes(t *testing.T) []model.AgentID {
 		}
 		selected = append(selected, agent.ID)
 	}
-	if len(selected) != supportedAgentCount-1 {
-		t.Fatalf("selected %d orchestrator runtimes, want %d", len(selected), supportedAgentCount-1)
+	if len(selected) != supportedAgentCount-2 {
+		t.Fatalf("selected %d orchestrator runtimes, want %d", len(selected), supportedAgentCount-2)
 	}
 	return selected
 }
@@ -66,6 +73,141 @@ func advertisesReviewTransport(t *testing.T, agent model.AgentID) bool {
 		t.Fatalf("capabilitymanifest.ForAgent(%q) error = %v", agent, err)
 	}
 	return manifest.Advertises(capabilitymanifest.ContractReviewTransportV1)
+}
+
+func TestRenderGenericOrchestratorModelVariants(t *testing.T) {
+	content, err := RenderOrchestratorWithSource(model.AgentOpenClaw, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "Orchestrator Instructions (Small Model)") {
+		t.Fatal("default OpenClaw render contains the alternative small-model variant")
+	}
+	if strings.Count(content, "# Agent Teams Lite — Orchestrator Instructions") != 1 {
+		t.Fatal("default render must contain exactly one capable variant")
+	}
+	for _, common := range []string{"Lossless Blocking Prompts", "Sub-Agent Launch Deduplication", "Skill Resolution Feedback", "Sub-Agent Context Protocol"} {
+		if !strings.Contains(content, common) {
+			t.Errorf("default render lost %q", common)
+		}
+	}
+}
+
+func TestSelectGenericOrchestratorPreservesCommonSections(t *testing.T) {
+	asset, err := assets.Read("generic/orchestrator.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hint := range []string{"", "unknown", "capable", "small"} {
+		t.Run(hint, func(t *testing.T) {
+			content := "common prefix\n" + asset + "\ncommon suffix"
+			got, err := selectGenericOrchestrator(content, hint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(got, "common prefix\n") || !strings.HasSuffix(got, "\ncommon suffix") {
+				t.Fatal("selection lost synthetic common surroundings")
+			}
+			actualSuffix := asset[strings.Index(asset, "<!-- /section:model-small -->")+len("<!-- /section:model-small -->"):]
+			if !strings.Contains(got, actualSuffix) {
+				t.Fatal("selection changed actual common suffix")
+			}
+			if strings.Contains(got, "section:model-") || strings.Count(got, "# Agent Teams Lite — Orchestrator Instructions") != 1 {
+				t.Fatal("selection retained wrappers or duplicate variants")
+			}
+			if strings.Contains(got, "Orchestrator Instructions (Small Model)") != (hint == "small") {
+				t.Fatal("wrong model variant selected")
+			}
+		})
+	}
+	for _, malformed := range []string{
+		"common only",
+		strings.Replace(asset, "<!-- /section:model-small -->", "", 1),
+		strings.Replace(asset, "<!-- section:model-capable -->", "<!-- /section:model-capable -->", 1),
+		asset + "<!-- section:model-small -->",
+	} {
+		if _, err := selectGenericOrchestrator(malformed, "small"); err == nil {
+			t.Error("malformed sections must fail rather than deliver truncated content")
+		}
+	}
+}
+
+func TestInjectRoutingGenericModelVariantUpgrade(t *testing.T) {
+	asset, err := assets.Read("generic/orchestrator.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentOpenClaw, model.AgentTrae} {
+		for _, hint := range []string{"", "unknown", "capable", "small"} {
+			t.Run(string(agent)+"/"+hint, func(t *testing.T) {
+				home := t.TempDir()
+				paths, err := RoutingPaths(home, agent)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := paths[0]
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				legacy := "User prefix\n" + legacyOrchestratorOpenMarker + "\n" + asset + "\n<!-- /gentle-ai:sdd-orchestrator -->\nUser suffix\n"
+				if err := os.WriteFile(path, []byte(legacy), 0o640); err != nil {
+					t.Fatal(err)
+				}
+				// Compare against the observed mode: Windows reports 0o666 for any
+				// writable file, so the requested 0o640 is not portable.
+				before, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				options := RoutingOptions{OrchestratorCapability: hint}
+				first, err := InjectRoutingWithOptions(home, agent, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := readFile(t, path)
+				if !first.Changed || !strings.HasPrefix(got, "User prefix\n") || !strings.Contains(got, "\nUser suffix\n") {
+					t.Fatal("upgrade must change managed content and preserve user bytes")
+				}
+				if strings.Contains(got, legacyOrchestratorOpenMarker) || strings.Contains(got, "section:model-") || strings.Count(got, "# Agent Teams Lite — Orchestrator Instructions") != 1 {
+					t.Fatal("upgrade retained dual variants or legacy wrappers")
+				}
+				if strings.Contains(got, "Orchestrator Instructions (Small Model)") != (hint == "small") {
+					t.Fatal("injection did not forward capability")
+				}
+				for _, common := range []string{"Sub-Agent Launch Deduplication", "Skill Resolution Feedback", "Sub-Agent Context Protocol", "Remote operation authorization"} {
+					if !strings.Contains(got, common) {
+						t.Errorf("lost common safety content %q", common)
+					}
+				}
+				info, err := os.Stat(path)
+				if err != nil || info.Mode().Perm() != before.Mode().Perm() {
+					t.Fatal("upgrade changed file mode", err)
+				}
+				second, err := InjectRoutingWithOptions(home, agent, options)
+				if err != nil || second.Changed || readFile(t, path) != got {
+					t.Fatal("repeat upgrade is not a no-op", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRenderExplicitOrchestratorsIgnoreModelCapability(t *testing.T) {
+	for _, agent := range orchestratorRuntimes(t) {
+		if orchestratorAsset(agent) == "generic/orchestrator.md" {
+			continue
+		}
+		t.Run(string(agent), func(t *testing.T) {
+			want, err := RenderOrchestratorWithSource(agent, nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := RenderOrchestratorWithSource(agent, nil, "small")
+			if err != nil || got != want {
+				t.Fatal("generic capability changed explicit runtime output", err)
+			}
+		})
+	}
 }
 
 func TestInjectRoutingInstallsOrchestratorForEveryRuntime(t *testing.T) {
@@ -232,7 +374,7 @@ func TestInjectRoutingReplacesLegacySDDOrchestratorBlockInPlace(t *testing.T) {
 			}
 			if info, err := os.Stat(promptPath); err != nil {
 				t.Fatal(err)
-			} else if info.Mode().Perm() != 0o600 {
+			} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 				t.Fatalf("prompt mode = %v, want preserved 0600", info.Mode().Perm())
 			}
 		})

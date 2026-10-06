@@ -14,25 +14,143 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeplugin"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v3/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 	"github.com/muesli/termenv"
 )
+
+func TestOpenCodeV2SDKConfirmationSeparateAndDefaultsBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersion })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("2.0.18")}, nil
+	}
+	config := filepath.Join(home, "xdg", "opencode")
+	if err := os.MkdirAll(config, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{"packageManager":"npm@10"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.DependencyPlan.Agents = m.Selection.Agents
+	m.Screen = ScreenReview
+	m.Cursor = 0
+	// Existing dependency state must never offer automatic installation.
+	blocked, _ := m.continueToSDKOrInstall()
+	manual := blocked.(Model)
+	if manual.Screen != ScreenReview || manual.sdkProposal != nil || manual.sdkConsent != nil || manual.Err == nil || !strings.Contains(manual.Err.Error(), "package.json is present") || !strings.Contains(manual.Err.Error(), "manually") {
+		t.Fatalf("manifest-backed config did not remain manual: screen=%v proposal=%+v consent=%+v err=%v", manual.Screen, manual.sdkProposal, manual.sdkConsent, manual.Err)
+	}
+	if err := os.Remove(filepath.Join(config, "package.json")); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := m.continueToSDKOrInstall()
+	confirm := updated.(Model)
+	if confirm.Screen != ScreenOpenCodeSDKConfirm || confirm.Cursor != 1 || !strings.Contains(confirm.View(), "@opencode/plugin@2.0.4") || !strings.Contains(confirm.View(), config) || !strings.Contains(confirm.View(), "rollback") || !strings.Contains(confirm.View(), "No / Back") {
+		t.Fatalf("separate SDK confirmation = %v, cursor=%d, view=%s", confirm.Screen, confirm.Cursor, confirm.View())
+	}
+	updated, _ = confirm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	back := updated.(Model)
+	if back.Screen != ScreenReview || back.sdkConsent != nil {
+		t.Fatalf("default choice began install or retained consent: %+v", back)
+	}
+	confirm.Cursor = 0
+	var received *cli.OpenCodeSDKConsent
+	confirm.ExecuteSDKFn = func(_ model.Selection, _ planner.ResolvedPlan, _ system.DetectionResult, _, _ model.OpenCodeBackgroundIntent, _, _ model.PiBackgroundIntent, _ pipeline.ProgressFunc, consent *cli.OpenCodeSDKConsent) pipeline.ExecutionResult {
+		received = consent
+		return pipeline.ExecutionResult{}
+	}
+	updated, _ = confirm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	accepted := updated.(Model)
+	if accepted.Screen != ScreenInstalling || accepted.sdkConsent != nil {
+		t.Fatalf("affirmative choice did not consume invocation consent: screen=%v consent=%+v", accepted.Screen, accepted.sdkConsent)
+	}
+	_, command := confirm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("accepted confirmation did not schedule installation")
+	}
+	commands, ok := command().(tea.BatchMsg)
+	if !ok || len(commands) == 0 {
+		t.Fatal("accepted confirmation did not schedule execution")
+	}
+	commands[0]()
+	if received == nil || received.Dependency != "@opencode/plugin@2.0.4" || received.Manager != "npm" || received.ConfigDir != config {
+		t.Fatalf("executor did not receive the approved operation: %+v", received)
+	}
+}
+
+func TestReviewErrorLabelsOnlySDKOriginatedErrors(t *testing.T) {
+	t.Run("background resolution error is not labeled as SDK", func(t *testing.T) {
+		t.Setenv(cli.OpenCodeBackgroundSubagentsEnv, "sideways")
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+		m.DependencyPlan.Agents = m.Selection.Agents
+		m.Screen = ScreenReview
+		m.Cursor = 0
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		got := updated.(Model)
+		if got.Screen != ScreenReview || got.Err == nil {
+			t.Fatalf("invalid background preference did not stay on Review: screen=%v err=%v", got.Screen, got.Err)
+		}
+		view := got.View()
+		if strings.Contains(view, "OpenCode SDK:") {
+			t.Fatalf("background resolution error was labeled as an SDK error:\n%s", view)
+		}
+		if !strings.Contains(view, "sideways") {
+			t.Fatalf("background resolution error is not visible on Review:\n%s", view)
+		}
+	})
+	t.Run("SDK proposal error keeps the SDK label", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		oldVersion := opencode.VersionRunnerOverride
+		t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersion })
+		opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+			return opencode.CommandOutput{Stdout: []byte("2.0.18")}, nil
+		}
+		config := filepath.Join(home, "xdg", "opencode")
+		if err := os.MkdirAll(config, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, "package.json"), []byte(`{}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		m := NewModel(system.DetectionResult{}, "dev")
+		m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+		m.DependencyPlan.Agents = m.Selection.Agents
+		m.Screen = ScreenReview
+		updated, _ := m.continueToSDKOrInstall()
+		view := updated.(Model).View()
+		if !strings.Contains(view, "OpenCode SDK: automatic OpenCode SDK install refused") {
+			t.Fatalf("SDK proposal error lost its label:\n%s", view)
+		}
+	})
+}
 
 func TestSyncDetailedPreservedActionsReachCompletion(t *testing.T) {
 	path := "/home/example/.cursor/agents/review-risk.md"
@@ -68,9 +186,9 @@ func TestCodexCustomDiscoveryStartsAsCommandWithFallback(t *testing.T) {
 	t.Cleanup(func() { discoverCodexModels = originalDiscover })
 
 	called := false
-	discoverCodexModels = func(context.Context) []string {
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
 		called = true
-		return []string{"discovered-model"}
+		return model.CodexModelCatalog{Models: []string{"discovered-model"}}
 	}
 
 	m := NewModel(system.DetectionResult{}, "dev")
@@ -112,11 +230,14 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 		wantApplied bool
 	}{
 		{
+			// Presets read discovered service tiers, so the newest result
+			// applies on the main picker too.
 			name: "after leaving Custom",
 			setup: func(m *Model) {
 				m.CodexModelPicker.CustomMode = screens.CodexCustomModeNone
 			},
-			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			msg:         CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			wantApplied: true,
 		},
 		{
 			name: "after leaving picker",
@@ -164,6 +285,57 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 				t.Fatalf("AvailableModels = %v, want unchanged %v", state.CodexModelPicker.AvailableModels, fallback)
 			}
 		})
+	}
+}
+
+func TestCodexServiceTierPreselectsDiscoversAndFeedsSyncOverride(t *testing.T) {
+	originalDiscover := discoverCodexModels
+	t.Cleanup(func() { discoverCodexModels = originalDiscover })
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(screens.CodexPresetRecommended)).Model
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
+		return model.CodexModelCatalog{
+			Models: []string{orchestrator},
+			Capabilities: map[string]model.CodexModelCapabilities{
+				orchestrator: {ServiceTiers: []model.CodexServiceTier{{ID: "priority", Name: "Fast"}}, ServiceTiersReported: true},
+			},
+		}
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{CodexServiceTier: "priority"})
+	if m.Selection.CodexServiceTier != "priority" || m.Selection.CodexManagedServiceTier != "priority" {
+		t.Fatalf("NewModel tier = %q managed = %q, want persisted priority", m.Selection.CodexServiceTier, m.Selection.CodexManagedServiceTier)
+	}
+	m.Screen = ScreenModelConfig
+	m.Cursor = 3 // Configure Codex models
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenCodexModelPicker || state.CodexModelPicker.ServiceTier != "priority" {
+		t.Fatalf("screen = %v tier = %q, want Codex picker pre-selecting priority", state.Screen, state.CodexModelPicker.ServiceTier)
+	}
+	if cmd == nil {
+		t.Fatal("opening the Codex picker did not start runtime discovery")
+	}
+	updated, _ = state.Update(cmd())
+	state = updated.(Model)
+
+	state.Cursor = 1 // Recommended
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModeServiceTier || state.CodexModelPicker.ServiceTierCursor != 1 {
+		t.Fatalf("mode = %v cursor = %d, want tier step with priority pre-selected", state.CodexModelPicker.CustomMode, state.CodexModelPicker.ServiceTierCursor)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyUp})
+	state = updated.(Model)
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Selection.CodexServiceTier != "" {
+		t.Fatalf("Selection.CodexServiceTier = %q, want standard", state.Selection.CodexServiceTier)
+	}
+	overrides := state.PendingSyncOverrides
+	if overrides == nil || overrides.CodexServiceTier == nil || *overrides.CodexServiceTier != "" {
+		t.Fatalf("PendingSyncOverrides.CodexServiceTier = %#v, want explicit standard", overrides)
 	}
 }
 
@@ -232,6 +404,74 @@ func TestCodexCustomDiscoveryClampsModelSelectCursorBeforeEnter(t *testing.T) {
 	}
 	if state.CodexModelPicker.CustomPendingModel != "discovered-model-2" {
 		t.Fatalf("CustomPendingModel = %q, want %q", state.CodexModelPicker.CustomPendingModel, "discovered-model-2")
+	}
+}
+
+func TestCodexCustomDiscoveryClampsEffortSelectCursorBeforeEnter(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.CodexModelPicker.CustomMode = screens.CodexCustomModeEffortSelect
+	m.CodexModelPicker.CustomPendingModel = "gpt-5.6-luna"
+	m.CodexModelPicker.CustomEffortCursor = 3 // curated xhigh, before discovery
+	m.codexModelDiscoveryRequest = 1
+
+	updated, _ := m.Update(CodexModelsDiscoveredMsg{
+		RequestID: 1,
+		Models:    []string{"gpt-5.6-luna"},
+		Capabilities: map[string]model.CodexModelCapabilities{
+			"gpt-5.6-luna": {Efforts: []model.CodexEffort{model.CodexEffortLow, model.CodexEffortMedium}},
+		},
+	})
+	state := updated.(Model)
+	if state.CodexModelPicker.CustomEffortCursor != 1 {
+		t.Fatalf("CustomEffortCursor = %d, want clamped to 1 on capability arrival", state.CodexModelPicker.CustomEffortCursor)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if got := state.CodexModelPicker.CustomAssignments["jd-judge-a"]; got.ModelID != "gpt-5.6-luna" || got.Effort != model.CodexEffortMedium {
+		t.Fatalf("assignment = %+v, want gpt-5.6-luna/medium", got)
+	}
+}
+
+// TestCodexManagedServiceTierRefreshesFromStateAfterSyncAndInstall keeps the
+// session's managed tier equal to what state recorded as written, so a later
+// Standard choice in the same session retires exactly that value.
+func TestCodexManagedServiceTierRefreshesFromStateAfterSyncAndInstall(t *testing.T) {
+	original := readPersistedCodexServiceTier
+	t.Cleanup(func() { readPersistedCodexServiceTier = original })
+	readPersistedCodexServiceTier = func() *string { tier := "priority"; return &tier }
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.SyncFn = func(*model.SyncOverrides) ([]string, error) { return nil, nil }
+	msg, ok := m.startSync(nil)().(SyncDoneMsg)
+	if !ok || msg.CodexServiceTier == nil || *msg.CodexServiceTier != "priority" {
+		t.Fatalf("sync completion did not carry the recorded tier: %#v", msg)
+	}
+	m.Screen = ScreenSync
+	updated, _ := m.Update(msg)
+	state := updated.(Model)
+	if state.Selection.CodexManagedServiceTier != "priority" {
+		t.Fatalf("managed tier after sync = %q, want priority recorded in state", state.Selection.CodexManagedServiceTier)
+	}
+
+	standard := ""
+	updated, _ = state.Update(PipelineDoneMsg{CodexServiceTier: &standard})
+	state = updated.(Model)
+	if state.Selection.CodexManagedServiceTier != "" {
+		t.Fatalf("managed tier after install = %q, want empty recorded in state", state.Selection.CodexManagedServiceTier)
+	}
+	updated, _ = state.Update(PipelineDoneMsg{}) // unreadable state keeps the session value
+	if got := updated.(Model).Selection.CodexManagedServiceTier; got != "" {
+		t.Fatalf("managed tier changed without a recorded value: %q", got)
+	}
+}
+
+func TestNewModelDropsInvalidPersistedCodexServiceTier(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{CodexServiceTier: "priority\nmodel = \"x\""})
+	if m.Selection.CodexServiceTier != "" || m.Selection.CodexManagedServiceTier != "" {
+		t.Fatalf("tier = %q managed = %q, want invalid state value dropped", m.Selection.CodexServiceTier, m.Selection.CodexManagedServiceTier)
 	}
 }
 
@@ -425,6 +665,32 @@ func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *test
 	}
 }
 
+func TestSanitizeKnownModelEfforts_PreservesRuntimeAdvertisedEffortLevels(t *testing.T) {
+	tests := []struct {
+		name       string
+		assignment model.ModelAssignment
+		sddModels  map[string][]opencode.Model
+		wantEffort string
+	}{
+		{
+			name:       "extended effort preserved when in model EffortLevels",
+			assignment: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5.6-sol", Effort: "max"},
+			sddModels:  map[string][]opencode.Model{"openai": {{ID: "gpt-5.6-sol", Variants: []string{"low", "medium", "high", "max", "ultra"}}}},
+			wantEffort: "max",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assignments := map[string]model.ModelAssignment{"sdd-apply": tt.assignment}
+			got := sanitizeKnownModelEfforts(assignments, tt.sddModels)
+			if got["sdd-apply"].Effort != tt.wantEffort {
+				t.Fatalf("Effort = %q, want %q", got["sdd-apply"].Effort, tt.wantEffort)
+			}
+		})
+	}
+}
+
 func TestModelPickerNavigationSkipsReviewSeparator(t *testing.T) {
 	rows := screens.ModelPickerRows()
 	separator := -1
@@ -552,6 +818,18 @@ func TestPiCombinedWithOtherAgentKeepsGenericFlow(t *testing.T) {
 
 func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 	t.Setenv(cli.PiBackgroundSubagentsEnv, "")
+	// Pin the host: OpenCode detection and the SDK proposal read `opencode
+	// --version` and the user's config, so a runner without OpenCode would
+	// otherwise stop on the Review screen instead of installing.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	oldVersion := opencode.VersionRunnerOverride
+	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersion })
+	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
+		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgents
 	m.InstallFlowActive = true
@@ -587,15 +865,8 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 	state.Cursor = len(communityToolDefinitions()) * 2
 	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state = updated.(Model)
-	if state.Screen != ScreenOpenCodePlugins {
-		t.Fatalf("after community tools screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
-	}
-
-	state.Cursor = len(opencodepluginDefinitions()) * 2 // Continue without optional plugins.
-	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state = updated.(Model)
 	if state.Screen != ScreenDependencyTree {
-		t.Fatalf("after OpenCode plugins screen = %v, want %v", state.Screen, ScreenDependencyTree)
+		t.Fatalf("after community tools screen = %v, want %v", state.Screen, ScreenDependencyTree)
 	}
 
 	wantAgents := []model.AgentID{model.AgentPi, model.AgentOpenCode, model.AgentClaudeCode}
@@ -1845,7 +2116,8 @@ func TestWelcomeMenu_ConfigureModelsNavigation(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_OpenCodeCommunityPluginsNavigation(t *testing.T) {
+// TestWelcomeMenu_BackupsNavigation verifies cursor 6 goes to ScreenBackups.
+func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 6
@@ -1853,112 +2125,21 @@ func TestWelcomeMenu_OpenCodeCommunityPluginsNavigation(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenOpenCodePlugins {
-		t.Fatalf("cursor=6 (OpenCode Community Plugins): screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
-	}
-	if !state.OpenCodePluginsStandalone {
-		t.Fatalf("expected standalone OpenCode plugin mode")
-	}
-}
-
-// TestWelcomeMenu_BackupsNavigation verifies cursor 8 (Manage backups) goes to ScreenBackups.
-func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 8
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
 	if state.Screen != ScreenBackups {
-		t.Fatalf("cursor=8 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
-	}
-}
-
-// TestWelcomeMenu_UninstallOpenCodePluginNavigation verifies cursor 7
-// (Uninstall OpenCode Plugin shortcut added in slice 3b) goes to
-// ScreenOpenCodePluginUninstall and sets the standalone flag.
-func TestWelcomeMenu_UninstallOpenCodePluginNavigation(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	// Pre-populate tui.json so the Select screen has at least one plugin
-	// to display (otherwise it renders blank and Enter is a no-op).
-	opencodeDir := filepath.Join(home, ".config", "opencode")
-	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(opencodeDir, "tui.json"),
-		[]byte(`{"$schema":"https://opencode.ai/tui.json","plugin":["opencode-subagent-statusline"]}`),
-		0o644,
-	); err != nil {
-		t.Fatalf("write tui.json: %v", err)
-	}
-
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 7
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenOpenCodePluginUninstall {
-		t.Fatalf("cursor=7 (Uninstall OpenCode Plugin): screen = %v, want %v",
-			state.Screen, ScreenOpenCodePluginUninstall)
-	}
-	if !state.OpenCodePluginUninstallStandalone {
-		t.Fatal("expected standalone uninstall mode")
-	}
-	if len(state.OpenCodePluginUninstallInstalled) != 1 ||
-		state.OpenCodePluginUninstallInstalled[0] != model.OpenCodePluginSubAgentStatusline {
-		t.Fatalf("installed = %#v, want one entry", state.OpenCodePluginUninstallInstalled)
-	}
-}
-
-// TestWelcomeMenu_UninstallOpenCodePluginEmptyTUIJSON covers A-603: when
-// the launcher finds no installed plugins (missing or empty tui.json), it
-// must short-circuit to ScreenOpenCodePluginUninstallResult so the
-// Result screen can show the empty-state message — NOT navigate to
-// ScreenOpenCodePluginUninstall which would render a blank frame.
-func TestWelcomeMenu_UninstallOpenCodePluginEmptyTUIJSON(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	// Do NOT pre-populate tui.json — the launcher will find zero installed
-	// plugins and should route to the Result screen, not Select.
-
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenWelcome
-	m.Cursor = 7
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenOpenCodePluginUninstallResult {
-		t.Fatalf("cursor=7 with empty tui.json: screen = %v, want %v (short-circuit to Result)",
-			state.Screen, ScreenOpenCodePluginUninstallResult)
-	}
-	if !state.OpenCodePluginUninstallStandalone {
-		t.Fatal("expected standalone uninstall mode even with empty tui.json")
-	}
-	if len(state.OpenCodePluginUninstallInstalled) != 0 {
-		t.Fatalf("installed = %#v, want empty", state.OpenCodePluginUninstallInstalled)
+		t.Fatalf("cursor=6 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
 	}
 }
 
 func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 11
+	m.Cursor = 9
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=11 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=9 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
@@ -1967,26 +2148,26 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 11
+	m.Cursor = 9
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=11 (Managed uninstall with OpenCode): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=9 (Managed uninstall with OpenCode): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
 // TestWelcomeMenu_OptionCount verifies legacy discovery does not change the menu.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Without OpenCode detected: 14 options, including the review-mode entry.
+	// Legacy discovery does not change the 12 retained options.
 	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true, true)
-	if len(opts) != 14 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 14; got %v", len(opts), opts)
+	if len(opts) != 12 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 12; got %v", len(opts), opts)
 	}
 	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true, true)
-	if len(optsWithProfiles) != 14 || !reflect.DeepEqual(opts, optsWithProfiles) {
+	if len(optsWithProfiles) != 12 || !reflect.DeepEqual(opts, optsWithProfiles) {
 		t.Fatalf("legacy profile discovery changed welcome menu: %v", optsWithProfiles)
 	}
 }
@@ -2194,81 +2375,6 @@ func TestCommunityToolInstallationPreservesPartialResultOnError(t *testing.T) {
 	}
 	if len(state.CommunityToolResults) != 1 || len(state.CommunityToolResults[0].CommandsRun) != 1 {
 		t.Fatalf("state results = %#v, want preserved partial result", state.CommunityToolResults)
-	}
-}
-
-func TestStandaloneOpenCodePluginsContinueRegistersSelectedPlugins(t *testing.T) {
-	oldVersionRunner := opencode.VersionRunnerOverride
-	t.Cleanup(func() { opencode.VersionRunnerOverride = oldVersionRunner })
-	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
-		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePlugins
-	m.OpenCodePluginsStandalone = true
-	m.Selection.OpenCodePlugins = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
-	m.Cursor = len(opencodepluginDefinitions()) * 2
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-	if state.Screen != ScreenOpenCodePlugins {
-		t.Fatalf("screen = %v, want %v until registration completes", state.Screen, ScreenOpenCodePlugins)
-	}
-	if cmd == nil {
-		t.Fatal("expected registration command")
-	}
-
-	msg := cmd()
-	done, ok := msg.(OpenCodePluginRegistrationDoneMsg)
-	if !ok {
-		t.Fatalf("message = %T, want OpenCodePluginRegistrationDoneMsg", msg)
-	}
-	if done.Err != nil {
-		t.Fatalf("registration error = %v", done.Err)
-	}
-	if len(done.Results) != 1 || !done.Results[0].Changed {
-		t.Fatalf("results = %#v, want one changed registration", done.Results)
-	}
-
-	updated, _ = state.Update(done)
-	state = updated.(Model)
-	if state.OpenCodePluginRegistrationErr != nil {
-		t.Fatalf("state registration err = %v", state.OpenCodePluginRegistrationErr)
-	}
-	if len(state.OpenCodePluginRegistrationResults) != 1 {
-		t.Fatalf("state results = %#v, want one result", state.OpenCodePluginRegistrationResults)
-	}
-
-	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
-	if err != nil {
-		t.Fatalf("read tui.json: %v", err)
-	}
-	if !strings.Contains(string(data), "opencode-subagent-statusline") {
-		t.Fatalf("tui.json missing plugin registration: %s", data)
-	}
-}
-
-func TestStandaloneOpenCodePluginsResultEnterReturnsToWelcome(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginResult
-	m.OpenCodePluginsStandalone = true
-	m.Selection.OpenCodePlugins = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenWelcome)
-	}
-	if state.OpenCodePluginsStandalone {
-		t.Fatalf("standalone mode should reset after result acknowledgement")
-	}
-	if len(state.Selection.OpenCodePlugins) != 0 {
-		t.Fatalf("selection should reset after standalone flow, got %v", state.Selection.OpenCodePlugins)
 	}
 }
 
@@ -2891,15 +2997,15 @@ func TestCodexPickerBackRowEnterNavigates(t *testing.T) {
 	}
 }
 
-// The optional plugin screen returns to Preset without an intermediate choice.
-func TestInstallerPluginBackReturnsToPreset(t *testing.T) {
+// The install plan returns to Preset without an intermediate choice.
+func TestInstallerPlanBackReturnsToPreset(t *testing.T) {
 	for _, key := range []tea.KeyType{tea.KeyEnter, tea.KeyEsc} {
 		t.Run(key.String(), func(t *testing.T) {
 			m := NewModel(system.DetectionResult{}, "dev")
-			m.Screen = ScreenOpenCodePlugins
+			m.Screen = ScreenDependencyTree
 			m.Selection.Preset = model.PresetFullGentleman
 			m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentCodex, model.AgentClaudeCode}
-			m.Cursor = len(opencodepluginDefinitions())*2 + 1
+			m.Cursor = 1 // Back
 			updated, _ := m.Update(tea.KeyMsg{Type: key})
 			if got := updated.(Model).Screen; got != ScreenPreset {
 				t.Fatalf("screen = %v, want Preset", got)
@@ -3886,12 +3992,8 @@ func TestNewModel_StateAgentsArePreselected(t *testing.T) {
 
 // ─── Bug fixes: Enter-Back navigation must be consistent with ESC ────────────
 
-// TestDependencyTreeEnterBackNavigatesToOpenCodePlugins verifies that pressing Enter
-// on the "Back" option (cursor == 1) of a non-custom DependencyTree screen goes
-// to ScreenOpenCodePlugins when OpenCode is selected (shouldShowOpenCodePluginsScreen=true).
-// This ensures Enter-on-Back is consistent with Esc (INV-2: both paths must produce
-// identical results). Neither path may skip the OpenCodePlugins screen.
-func TestDependencyTreeEnterBackNavigatesToOpenCodePlugins(t *testing.T) {
+// Enter-on-Back returns to Preset, matching Esc without external plugin detours.
+func TestDependencyTreeEnterBackNavigatesToPreset(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenDependencyTree
 	m.Selection.Preset = model.PresetFullGentleman // non-custom
@@ -3904,8 +4006,8 @@ func TestDependencyTreeEnterBackNavigatesToOpenCodePlugins(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenOpenCodePlugins {
-		t.Fatalf("screen = %v, want ScreenOpenCodePlugins after Enter on DependencyTree Back (OpenCode+SDD, INV-2 consistency with Esc)", state.Screen)
+	if state.Screen != ScreenPreset {
+		t.Fatalf("screen = %v, want ScreenPreset after Enter on Back", state.Screen)
 	}
 }
 
@@ -4655,11 +4757,11 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 
 	// Navigate back to ScreenBackups (cursor 8 on Welcome → enter, since
 	// slice 3b inserts "Uninstall OpenCode Plugin" at index 7).
-	afterEsc.Cursor = 8
+	afterEsc.Cursor = 6
 	updated2, _ := afterEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	afterReturn := updated2.(Model)
 	if afterReturn.Screen != ScreenBackups {
-		t.Fatalf("Enter cursor=8 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
+		t.Fatalf("Enter cursor=6 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
 	}
 
 	// PinErr must be cleared on re-entry.
@@ -5063,27 +5165,27 @@ func TestCodexPresetSelection_PopulatesPendingSyncOverrides(t *testing.T) {
 			name:   "low cost",
 			cursor: 0,
 			want: map[string]string{
-				"sdd-strong": "gpt-6-sol",
-				"sdd-mid":    "gpt-6-luna",
-				"sdd-cheap":  "gpt-6-luna",
+				"sdd-strong": "gpt-6.1-sol",
+				"sdd-mid":    "gpt-6.1-luna",
+				"sdd-cheap":  "gpt-6.1-luna",
 			},
 		},
 		{
 			name:   "recommended",
 			cursor: 1,
 			want: map[string]string{
-				"sdd-strong": "gpt-6-sol",
-				"sdd-mid":    "gpt-6-luna",
-				"sdd-cheap":  "gpt-6-luna",
+				"sdd-strong": "gpt-6.1-sol",
+				"sdd-mid":    "gpt-6.1-luna",
+				"sdd-cheap":  "gpt-6.1-luna",
 			},
 		},
 		{
 			name:   "powerful",
 			cursor: 2,
 			want: map[string]string{
-				"sdd-strong": "gpt-6-astra",
-				"sdd-mid":    "gpt-6-sol",
-				"sdd-cheap":  "gpt-6-luna",
+				"sdd-strong": "gpt-6.1-astra",
+				"sdd-mid":    "gpt-6.1-sol",
+				"sdd-cheap":  "gpt-6.1-luna",
 			},
 		},
 	}
@@ -5140,7 +5242,7 @@ func TestCodexModelPickerPresetClearsCustomState(t *testing.T) {
 	m.CodexModelPicker.CustomConfirmed = true
 	m.Selection.CodexPhaseModelAssignments = map[string]string{
 		"sdd-propose": "gpt-5.4",
-		"odd-worker":  "gpt-6-astra",
+		"odd-worker":  "gpt-6.1-astra",
 	}
 	m.Selection.CodexModelAssignments = map[string]model.CodexEffort{"sdd-propose": model.CodexEffortXHigh}
 
@@ -5701,7 +5803,7 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 		{name: "narrow resize", width: 80, height: 24},
 		{name: "short viewport", width: 120, height: 19},
 		{name: "below compact height", width: 120, height: 2, minimum: true},
-		{name: "below compact width", width: 18, height: 20, minimum: true},
+		{name: "wrapped compact width", width: 18, height: 20},
 		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Go"},
 		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Go", wantControl: "q"},
 		{name: "single column tiny viewport uses atomic labels", width: 1, height: 2, minimum: true, wantPrimary: ">", wantControl: "q"},
@@ -5735,7 +5837,9 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 			if got := lipgloss.Height(view); got > tc.height {
 				t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, tc.height, view)
 			}
-			content := view
+			// Compact menus may now fit where the larger retired menu needed
+			// minimum mode. Text remains actionable even when wrapped.
+			content := strings.Join(strings.Fields(view), " ")
 			if tc.minimum {
 				content = strings.ReplaceAll(view, "\n", "")
 			}
@@ -5758,7 +5862,7 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 				}
 			} else {
 				for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
-					if !strings.Contains(view, want) {
+					if !strings.Contains(content, want) {
 						t.Fatalf("welcome lost %q after resize\nview:\n%s", want, view)
 					}
 				}
@@ -7282,7 +7386,7 @@ func TestPickerBackRowRegression(t *testing.T) {
 			wantScreen: ScreenPreset,
 		},
 		{
-			name: "DependencyTree Back OpenCode returns to OpenCodePlugins",
+			name: "DependencyTree Back OpenCode returns to Preset",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
@@ -7292,7 +7396,7 @@ func TestPickerBackRowRegression(t *testing.T) {
 				m.Cursor = depTreeBackRow
 				return m
 			},
-			wantScreen: ScreenOpenCodePlugins,
+			wantScreen: ScreenPreset,
 		},
 		{
 			name: "custom Kiro-only DependencyTree Continue loads RDD",
@@ -7339,7 +7443,7 @@ func TestPickerBackRowRegression(t *testing.T) {
 
 func TestGoBackCustomSkipsRetiredModelPicker(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen, m.Selection.Preset, m.Selection.SDDMode = ScreenOpenCodePlugins, model.PresetCustom, model.SDDModeMulti
+	m.Screen, m.Selection.Preset, m.Selection.SDDMode = ScreenInstallReviewMode, model.PresetCustom, model.SDDModeMulti
 	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
 	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -7397,7 +7501,7 @@ func TestDependencyTreeForward(t *testing.T) {
 			wantScreen: ScreenSkillPicker,
 		},
 		{
-			name: "custom OpenCode goes to plugins before RDD",
+			name: "custom OpenCode loads RDD directly",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenDependencyTree
@@ -7408,7 +7512,7 @@ func TestDependencyTreeForward(t *testing.T) {
 				m.Cursor = len(screens.AllComponents())
 				return m
 			},
-			wantScreen: ScreenOpenCodePlugins,
+			wantScreen: ScreenInstallReviewMode,
 		},
 	}
 
@@ -7436,13 +7540,13 @@ func TestDependencyTreeForward(t *testing.T) {
 
 func TestCodexCustomAssignmentsRestoreFromSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Selection.CodexPhaseModelAssignments = map[string]string{"odd-explorer": "gpt-6-luna", "rdd-risk": "gpt-6-astra"}
+	m.Selection.CodexPhaseModelAssignments = map[string]string{"odd-explorer": "gpt-6.1-luna", "rdd-risk": "gpt-6.1-astra"}
 	m.Selection.CodexModelAssignments = map[string]model.CodexEffort{"odd-explorer": model.CodexEffortLow, "rdd-risk": model.CodexEffortHigh}
 	m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
 	m.restoreCodexCustomAssignments()
 	for role, want := range map[string]screens.CodexCustomAssignment{
-		"odd-explorer": {ModelID: "gpt-6-luna", Effort: model.CodexEffortLow},
-		"rdd-risk":     {ModelID: "gpt-6-astra", Effort: model.CodexEffortHigh},
+		"odd-explorer": {ModelID: "gpt-6.1-luna", Effort: model.CodexEffortLow},
+		"rdd-risk":     {ModelID: "gpt-6.1-astra", Effort: model.CodexEffortHigh},
 	} {
 		if got := m.CodexModelPicker.CustomAssignments[role]; got != want {
 			t.Errorf("restored %s = %+v, want %+v", role, got, want)
@@ -7456,8 +7560,8 @@ func TestCodexModelPickerCustomConfirmSignalsOrchestratorClear(t *testing.T) {
 	m.ModelConfigMode = true
 	m.CodexModelPicker = screens.NewCodexModelPickerState()
 	m.CodexModelPicker.CustomMode = screens.CodexCustomModePhaseList
-	m.CodexModelPicker.CustomAssignments["odd-worker"] = screens.CodexCustomAssignment{ModelID: "gpt-6-sol", Effort: model.CodexEffortHigh}
-	m.CodexModelPicker.CustomAssignments["rdd-validator"] = screens.CodexCustomAssignment{ModelID: "gpt-6-astra", Effort: model.CodexEffortXHigh}
+	m.CodexModelPicker.CustomAssignments["odd-worker"] = screens.CodexCustomAssignment{ModelID: "gpt-6.1-sol", Effort: model.CodexEffortHigh}
+	m.CodexModelPicker.CustomAssignments["rdd-validator"] = screens.CodexCustomAssignment{ModelID: "gpt-6.1-astra", Effort: model.CodexEffortXHigh}
 	m.Selection.CodexOrchestratorAssignment = model.CodexPresetOrchestratorAssignment(string(model.CodexPresetRecommended))
 	m.Cursor = screens.CodexModelPickerOptionCount(m.CodexModelPicker) - 1 // Confirm row.
 
@@ -7472,229 +7576,10 @@ func TestCodexModelPickerCustomConfirmSignalsOrchestratorClear(t *testing.T) {
 	if state.PendingSyncOverrides == nil || !state.PendingSyncOverrides.ClearCodexOrchestratorAssignment {
 		t.Fatal("custom confirmation did not propagate clear signal to sync overrides")
 	}
-	for role, want := range map[string]string{"odd-worker": "gpt-6-sol", "rdd-validator": "gpt-6-astra"} {
+	for role, want := range map[string]string{"odd-worker": "gpt-6.1-sol", "rdd-validator": "gpt-6.1-astra"} {
 		if state.Selection.CodexPhaseModelAssignments[role] != want || state.PendingSyncOverrides.CodexPhaseModelAssignments[role] != want {
 			t.Errorf("role %s not forwarded to persisted sync selection", role)
 		}
-	}
-}
-
-// ─── Slice 3b — OpenCode plugin uninstall TUI wiring ────────────────────────
-
-// openCodePluginUninstallTestInstalled returns the canonical installed-plugins
-// fixture for the uninstall flow. Mirrors what the standalone launcher would
-// read from tui.json's plugin[] list.
-func openCodePluginUninstallTestInstalled() []model.OpenCodeCommunityPluginID {
-	return []model.OpenCodeCommunityPluginID{
-		model.OpenCodePluginSubAgentStatusline,
-		model.OpenCodePluginSDDEngramManage,
-	}
-}
-
-// screenName renders a Screen value as a stable string for subtest names.
-func screenName(s Screen) string {
-	return fmt.Sprintf("Screen#%d", int(s))
-}
-
-// TestOpenCodePluginUninstallDetectsInstalledFromTUIJSON verifies the
-// detection helper reads tui.json's plugin[] list and maps package names
-// back to OpenCodeCommunityPluginIDs. Unknown entries are ignored.
-func TestOpenCodePluginUninstallDetectsInstalledFromTUIJSON(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	opencodeDir := filepath.Join(home, ".config", "opencode")
-	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	tuiJSON := `{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    "opencode-subagent-statusline",
-    "unrelated-plugin",
-    "/home/me/.config/opencode/tui-plugins/gentle-logo.tsx"
-  ]
-}`
-	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(tuiJSON), 0o644); err != nil {
-		t.Fatalf("write tui.json: %v", err)
-	}
-
-	got := openCodePluginUninstallInstalledFromTUI(home)
-	want := []model.OpenCodeCommunityPluginID{
-		model.OpenCodePluginSubAgentStatusline,
-		model.OpenCodePluginGentleLogo,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("installed = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("installed[%d] = %v, want %v", i, got[i], want[i])
-		}
-	}
-}
-
-// TestOpenCodePluginUninstallDetectsInstalledMissingTUIJSON verifies the
-// helper returns an empty slice (not an error) when tui.json does not
-// exist — the Select screen then renders "" which is the no-plugins state.
-func TestOpenCodePluginUninstallDetectsInstalledMissingTUIJSON(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	got := openCodePluginUninstallInstalledFromTUI(home)
-	if len(got) != 0 {
-		t.Fatalf("installed = %#v, want empty slice", got)
-	}
-}
-
-// TestNavigationOpenCodePluginUninstallSelectToConfirm verifies the Select
-// screen advances to Confirm when the user presses Enter on a plugin row.
-func TestNavigationOpenCodePluginUninstallSelectToConfirm(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstall
-	m.OpenCodePluginUninstallStandalone = true
-	m.OpenCodePluginUninstallInstalled = openCodePluginUninstallTestInstalled()
-	m.OpenCodePluginUninstallSelected = model.OpenCodePluginSubAgentStatusline
-	m.Cursor = 0
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenOpenCodePluginUninstallConfirm {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenOpenCodePluginUninstallConfirm)
-	}
-	if state.OpenCodePluginUninstallSelected != model.OpenCodePluginSubAgentStatusline {
-		t.Fatalf("selected = %v, want %v", state.OpenCodePluginUninstallSelected, model.OpenCodePluginSubAgentStatusline)
-	}
-}
-
-// TestNavigationOpenCodePluginUninstallConfirmToResult verifies the Confirm
-// screen starts the async uninstall and advances to Result when the runner
-// returns. Uses an injected uninstall Fn so no filesystem is touched.
-func TestNavigationOpenCodePluginUninstallConfirmToResult(t *testing.T) {
-	wantResult := opencodeplugin.UninstallResult{
-		PluginID:           model.OpenCodePluginSubAgentStatusline,
-		ChangedTUI:         true,
-		ChangedPackageJSON: true,
-		ChangedNodeModules: true,
-		CacheEntryRemoved:  "/home/me/.cache/opencode/packages/opencode-subagent-statusline@latest",
-		NodeModulesPath:    "/home/me/.config/opencode/node_modules/opencode-subagent-statusline",
-	}
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallConfirm
-	m.OpenCodePluginUninstallStandalone = true
-	m.OpenCodePluginUninstallSelected = model.OpenCodePluginSubAgentStatusline
-	m.OpenCodePluginUninstallFn = func(_ string, _ model.OpenCodeCommunityPluginID) (opencodeplugin.UninstallResult, error) {
-		return wantResult, nil
-	}
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-	if state.Screen != ScreenOpenCodePluginUninstallConfirm {
-		t.Fatalf("screen after Enter = %v, want %v (still on Confirm until cmd resolves)",
-			state.Screen, ScreenOpenCodePluginUninstallConfirm)
-	}
-	if !state.OperationRunning {
-		t.Fatal("OperationRunning should be true while uninstall is in flight")
-	}
-	if cmd == nil {
-		t.Fatal("expected uninstall command")
-	}
-
-	// The cmd is a tea.BatchMsg containing tickCmd() + the uninstall
-	// goroutine; search the batch for the OpenCodePluginUninstallDoneMsg
-	// rather than assuming cmd() returns it directly.
-	var done OpenCodePluginUninstallDoneMsg
-	raw := cmd()
-	if batch, ok := raw.(tea.BatchMsg); ok {
-		for _, fn := range batch {
-			if inner := fn(); inner != nil {
-				if d, isDone := inner.(OpenCodePluginUninstallDoneMsg); isDone {
-					done = d
-					break
-				}
-			}
-		}
-	} else if d, ok := raw.(OpenCodePluginUninstallDoneMsg); ok {
-		done = d
-	} else {
-		t.Fatalf("message = %T, want tea.BatchMsg or OpenCodePluginUninstallDoneMsg", raw)
-	}
-	if done.Err != nil {
-		t.Fatalf("done.Err = %v, want nil", done.Err)
-	}
-	if done.Result.PluginID != model.OpenCodePluginSubAgentStatusline {
-		t.Fatalf("done.Result.PluginID = %v, want %v", done.Result.PluginID, model.OpenCodePluginSubAgentStatusline)
-	}
-
-	updated, _ = state.Update(done)
-	state = updated.(Model)
-	if state.Screen != ScreenOpenCodePluginUninstallResult {
-		t.Fatalf("screen after DoneMsg = %v, want %v", state.Screen, ScreenOpenCodePluginUninstallResult)
-	}
-	if state.OpenCodePluginUninstallResult.PluginID != model.OpenCodePluginSubAgentStatusline {
-		t.Fatalf("state.OpenCodePluginUninstallResult.PluginID = %v, want %v",
-			state.OpenCodePluginUninstallResult.PluginID, model.OpenCodePluginSubAgentStatusline)
-	}
-	if state.OperationRunning {
-		t.Fatal("OperationRunning should be false after DoneMsg")
-	}
-}
-
-// TestNavigationOpenCodePluginUninstallResultToWelcome verifies the Result
-// screen returns to Welcome on Enter and clears standalone state.
-func TestNavigationOpenCodePluginUninstallResultToWelcome(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallResult
-	m.OpenCodePluginUninstallStandalone = true
-	m.OpenCodePluginUninstallSelected = model.OpenCodePluginSubAgentStatusline
-	m.OpenCodePluginUninstallResult = opencodeplugin.UninstallResult{
-		PluginID:   model.OpenCodePluginSubAgentStatusline,
-		ChangedTUI: true,
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenWelcome)
-	}
-	if state.OpenCodePluginUninstallStandalone {
-		t.Fatal("OpenCodePluginUninstallStandalone should reset after Result acknowledgement")
-	}
-	if state.OpenCodePluginUninstallSelected != "" {
-		t.Fatalf("OpenCodePluginUninstallSelected should reset, got %q", state.OpenCodePluginUninstallSelected)
-	}
-	if state.OpenCodePluginUninstallResult.PluginID != "" {
-		t.Fatalf("OpenCodePluginUninstallResult should reset, got %#v", state.OpenCodePluginUninstallResult)
-	}
-	if state.OpenCodePluginUninstallErr != nil {
-		t.Fatalf("OpenCodePluginUninstallErr should reset, got %v", state.OpenCodePluginUninstallErr)
-	}
-}
-
-// TestOpenCodePluginUninstallSpinnerAdvancesFrame verifies the dedicated
-// uninstall spinner frame advances on TickMsg while the Confirm screen is
-// running.
-func TestOpenCodePluginUninstallSpinnerAdvancesFrame(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallConfirm
-	m.OperationRunning = true
-	m.OpenCodePluginUninstallSpinnerFrame = 0
-
-	updated, _ := m.Update(TickMsg{})
-	state := updated.(Model)
-
-	if state.OpenCodePluginUninstallSpinnerFrame != 1 {
-		t.Fatalf("spinner frame = %d, want 1", state.OpenCodePluginUninstallSpinnerFrame)
-	}
-
-	updated, _ = state.Update(TickMsg{})
-	state = updated.(Model)
-	if state.OpenCodePluginUninstallSpinnerFrame != 2 {
-		t.Fatalf("spinner frame after second tick = %d, want 2", state.OpenCodePluginUninstallSpinnerFrame)
 	}
 }
 
@@ -7778,25 +7663,6 @@ func TestTickMsg_NoAnimationRequiresExactOne(t *testing.T) {
 	}
 }
 
-func TestOpenCodePluginUninstallSpinner_NoAnimationKeepsFrameAndStopsReschedule(t *testing.T) {
-	one := "1"
-	setNoAnimationEnv(t, &one)
-
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallConfirm
-	m.OperationRunning = true
-	m.OpenCodePluginUninstallSpinnerFrame = 6
-
-	updated, cmd := m.Update(TickMsg{})
-	state := updated.(Model)
-	if state.OpenCodePluginUninstallSpinnerFrame != 6 {
-		t.Fatalf("spinner frame = %d, want 6", state.OpenCodePluginUninstallSpinnerFrame)
-	}
-	if cmd != nil {
-		t.Fatal("tick command should not be rescheduled when animation is disabled")
-	}
-}
-
 func TestNoAnimationPreservesSyncOperationCommand(t *testing.T) {
 	one := "1"
 	setNoAnimationEnv(t, &one)
@@ -7825,265 +7691,6 @@ func TestNoAnimationPreservesSyncOperationCommand(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("sync operation command was not executed")
-	}
-}
-
-func TestNoAnimationPreservesOpenCodePluginUninstallOperationCommand(t *testing.T) {
-	one := "1"
-	setNoAnimationEnv(t, &one)
-
-	called := false
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallConfirm
-	m.OpenCodePluginUninstallSelected = model.OpenCodePluginSubAgentStatusline
-	m.OpenCodePluginUninstallFn = func(_ string, id model.OpenCodeCommunityPluginID) (opencodeplugin.UninstallResult, error) {
-		called = true
-		return opencodeplugin.UninstallResult{PluginID: id}, nil
-	}
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-	if !state.OperationRunning {
-		t.Fatal("OpenCode plugin uninstall should start with animation disabled")
-	}
-
-	msg := executeSingleNoAnimationCommand(t, cmd)
-	done, ok := msg.(OpenCodePluginUninstallDoneMsg)
-	if !ok {
-		t.Fatalf("operation message = %T, want OpenCodePluginUninstallDoneMsg", msg)
-	}
-	if done.Err != nil {
-		t.Fatalf("uninstall returned unexpected error: %v", done.Err)
-	}
-	if done.Result.PluginID != model.OpenCodePluginSubAgentStatusline {
-		t.Fatalf("uninstalled plugin = %q, want %q", done.Result.PluginID, model.OpenCodePluginSubAgentStatusline)
-	}
-	if !called {
-		t.Fatal("OpenCode plugin uninstall command was not executed")
-	}
-}
-
-// TestOpenCodePluginUninstallStandaloneFlagResetsOnResultExit verifies that
-// pressing Enter on the Result screen clears the standalone flag (matching
-// the OpenCodePluginsStandalone reset pattern).
-func TestOpenCodePluginUninstallStandaloneFlagResetsOnResultExit(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallResult
-	m.OpenCodePluginUninstallStandalone = true
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.OpenCodePluginUninstallStandalone {
-		t.Fatal("standalone flag should reset to false on Result exit")
-	}
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenWelcome)
-	}
-}
-
-// TestOpenCodePluginUninstallRoutesBackward verifies the router exposes the
-// three uninstall screens with the expected Backward targets.
-func TestOpenCodePluginUninstallRoutesBackward(t *testing.T) {
-	cases := []struct {
-		screen Screen
-		want   Screen
-	}{
-		{ScreenOpenCodePluginUninstall, ScreenWelcome},
-		{ScreenOpenCodePluginUninstallConfirm, ScreenOpenCodePluginUninstall},
-		{ScreenOpenCodePluginUninstallResult, ScreenWelcome},
-	}
-	for _, tc := range cases {
-		t.Run(screenName(tc.screen), func(t *testing.T) {
-			prev, ok := PreviousScreen(tc.screen)
-			if !ok {
-				t.Fatalf("PreviousScreen(%v) returned ok=false", tc.screen)
-			}
-			if prev != tc.want {
-				t.Fatalf("PreviousScreen(%v) = %v, want %v", tc.screen, prev, tc.want)
-			}
-		})
-	}
-}
-
-// TestOpenCodePluginUninstallFnReceivesHomeDirAndSelectedID verifies the
-// injected uninstall Fn receives (homeDir, selectedID) — the contract
-// startOpenCodePluginUninstall uses.
-func TestOpenCodePluginUninstallFnReceivesHomeDirAndSelectedID(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	var (
-		gotHome string
-		gotID   model.OpenCodeCommunityPluginID
-	)
-	calls := 0
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallConfirm
-	m.OpenCodePluginUninstallSelected = model.OpenCodePluginSDDEngramManage
-	m.OpenCodePluginUninstallFn = func(h string, id model.OpenCodeCommunityPluginID) (opencodeplugin.UninstallResult, error) {
-		gotHome = h
-		gotID = id
-		calls++
-		return opencodeplugin.UninstallResult{PluginID: id}, nil
-	}
-
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected uninstall command")
-	}
-	// The cmd is a tea.BatchMsg containing tickCmd() + the uninstall
-	// goroutine; search the batch for the OpenCodePluginUninstallDoneMsg
-	// rather than assuming cmd() returns it directly.
-	var done OpenCodePluginUninstallDoneMsg
-	raw := cmd()
-	if batch, ok := raw.(tea.BatchMsg); ok {
-		for _, fn := range batch {
-			if inner := fn(); inner != nil {
-				if d, isDone := inner.(OpenCodePluginUninstallDoneMsg); isDone {
-					done = d
-					break
-				}
-			}
-		}
-	} else if d, ok := raw.(OpenCodePluginUninstallDoneMsg); ok {
-		done = d
-	} else {
-		t.Fatalf("message = %T, want tea.BatchMsg or OpenCodePluginUninstallDoneMsg", raw)
-	}
-
-	if calls != 1 {
-		t.Fatalf("Fn called %d times, want 1", calls)
-	}
-	if gotID != model.OpenCodePluginSDDEngramManage {
-		t.Fatalf("gotID = %v, want %v", gotID, model.OpenCodePluginSDDEngramManage)
-	}
-	if gotHome != home {
-		t.Fatalf("gotHome = %q, want %q", gotHome, home)
-	}
-	if done.Result.PluginID != model.OpenCodePluginSDDEngramManage {
-		t.Fatalf("Result.PluginID = %v, want %v", done.Result.PluginID, model.OpenCodePluginSDDEngramManage)
-	}
-}
-
-// TestOpenCodePluginUninstallResultMsgPopulatesResultAndErr verifies the
-// DoneMsg handler populates both fields, including on error paths.
-func TestOpenCodePluginUninstallResultMsgPopulatesResultAndErr(t *testing.T) {
-	wantErr := errors.New("uninstall failed")
-	wantResult := opencodeplugin.UninstallResult{PluginID: model.OpenCodePluginSubAgentStatusline}
-
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenOpenCodePluginUninstallConfirm
-	m.OperationRunning = true
-
-	updated, _ := m.Update(OpenCodePluginUninstallDoneMsg{Result: wantResult, Err: wantErr})
-	state := updated.(Model)
-
-	if state.Screen != ScreenOpenCodePluginUninstallResult {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenOpenCodePluginUninstallResult)
-	}
-	if state.OpenCodePluginUninstallErr == nil || state.OpenCodePluginUninstallErr.Error() != wantErr.Error() {
-		t.Fatalf("OpenCodePluginUninstallErr = %v, want %v", state.OpenCodePluginUninstallErr, wantErr)
-	}
-	if state.OpenCodePluginUninstallResult.PluginID != model.OpenCodePluginSubAgentStatusline {
-		t.Fatalf("OpenCodePluginUninstallResult.PluginID = %v, want %v",
-			state.OpenCodePluginUninstallResult.PluginID, model.OpenCodePluginSubAgentStatusline)
-	}
-	if state.OperationRunning {
-		t.Fatal("OperationRunning should be false after DoneMsg")
-	}
-}
-
-// TestOpenCodePluginUninstallStandaloneResetMatchesPluginsPattern verifies
-// that every place where OpenCodePluginsStandalone is reset, the
-// OpenCodePluginUninstallStandalone flag is also reset.
-func TestOpenCodePluginUninstallStandaloneResetMatchesPluginsPattern(t *testing.T) {
-	cases := []struct {
-		name     string
-		prepare  func(Model) Model
-		action   tea.Msg
-		validate func(t *testing.T, m Model)
-	}{
-		{
-			name: "Enter on ScreenOpenCodePluginUninstallResult clears standalone",
-			prepare: func(m Model) Model {
-				m.Screen = ScreenOpenCodePluginUninstallResult
-				m.OpenCodePluginUninstallStandalone = true
-				return m
-			},
-			action: tea.KeyMsg{Type: tea.KeyEnter},
-			validate: func(t *testing.T, m Model) {
-				if m.OpenCodePluginUninstallStandalone {
-					t.Fatal("OpenCodePluginUninstallStandalone should be false after Result exit")
-				}
-			},
-		},
-		{
-			name: "Esc on ScreenOpenCodePluginUninstallConfirm keeps standalone on goBack path",
-			prepare: func(m Model) Model {
-				m.Screen = ScreenOpenCodePluginUninstallConfirm
-				m.OpenCodePluginUninstallStandalone = true
-				return m
-			},
-			action: tea.KeyMsg{Type: tea.KeyEsc},
-			validate: func(t *testing.T, m Model) {
-				// goBack from Confirm goes to Select; the standalone flag is
-				// still set because we haven't exited the flow yet.
-				if m.Screen != ScreenOpenCodePluginUninstall {
-					t.Fatalf("screen = %v, want %v", m.Screen, ScreenOpenCodePluginUninstall)
-				}
-			},
-		},
-		{
-			name: "Esc on ScreenOpenCodePluginUninstallSelect clears standalone",
-			prepare: func(m Model) Model {
-				m.Screen = ScreenOpenCodePluginUninstall
-				m.OpenCodePluginUninstallStandalone = true
-				m.OpenCodePluginUninstallInstalled = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
-				return m
-			},
-			action: tea.KeyMsg{Type: tea.KeyEsc},
-			validate: func(t *testing.T, m Model) {
-				if m.OpenCodePluginUninstallStandalone {
-					t.Fatal("OpenCodePluginUninstallStandalone should be false after Esc from Select")
-				}
-				if m.Screen != ScreenWelcome {
-					t.Fatalf("screen = %v, want %v", m.Screen, ScreenWelcome)
-				}
-				if len(m.OpenCodePluginUninstallInstalled) != 0 {
-					t.Fatalf("installed should be cleared after Esc from Select; got %v", m.OpenCodePluginUninstallInstalled)
-				}
-			},
-		},
-		{
-			name: "Enter on Back row of Select clears standalone",
-			prepare: func(m Model) Model {
-				m.Screen = ScreenOpenCodePluginUninstall
-				m.Cursor = 1 // Cursor on Back row when 1 plugin installed
-				m.OpenCodePluginUninstallInstalled = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
-				m.OpenCodePluginUninstallStandalone = true
-				return m
-			},
-			action: tea.KeyMsg{Type: tea.KeyEnter},
-			validate: func(t *testing.T, m Model) {
-				if m.OpenCodePluginUninstallStandalone {
-					t.Fatal("OpenCodePluginUninstallStandalone should be false after Enter on Back row")
-				}
-				if m.Screen != ScreenWelcome {
-					t.Fatalf("screen = %v, want %v", m.Screen, ScreenWelcome)
-				}
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := NewModel(system.DetectionResult{}, "dev")
-			m = tc.prepare(m)
-			updated, _ := m.Update(tc.action)
-			state := updated.(Model)
-			tc.validate(t, state)
-		})
 	}
 }
 

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -9,9 +10,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
 func reviewStoreResetModel(t *testing.T) Model {
@@ -161,6 +162,31 @@ func TestNewModelProbesGitRepositoryOnce(t *testing.T) {
 	}
 }
 
+func TestGitRepoProbeEnvironmentRemovesRepositoryOverrides(t *testing.T) {
+	for _, name := range []string{
+		"GIT_CEILING_DIRECTORIES",
+		"GIT_COMMON_DIR",
+		"GIT_DIR",
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM",
+		"GIT_IMPLICIT_WORK_TREE",
+		"GIT_OBJECT_DIRECTORY",
+		"GIT_PREFIX",
+		"GIT_WORK_TREE",
+		"git_object_directory",
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment := []string{"PATH=/test-bin", name + "=/inherited", "GIT_OPTIONAL_LOCKS=0"}
+			got := gitRepoProbeEnvironment(environment)
+			if len(got) != 2 || got[0] != "PATH=/test-bin" || got[1] != "GIT_OPTIONAL_LOCKS=0" {
+				t.Fatalf("probe environment = %v, want ordinary environment without %s", got, name)
+			}
+			if environment[1] != name+"=/inherited" {
+				t.Fatal("probe environment mutated its input")
+			}
+		})
+	}
+}
+
 // TestGitRepoProbeIgnoresInheritedRepositoryLocation keeps an ambient shell's
 // repository-location overrides from making an unrelated cwd appear to be a
 // Git worktree. It exercises the real Git command and is skipped for short
@@ -174,15 +200,30 @@ func TestGitRepoProbeIgnoresInheritedRepositoryLocation(t *testing.T) {
 		t.Skip("git executable is unavailable")
 	}
 
+	// Seed the inherited shell environment before fixture creation, too.
+	inherited := t.TempDir()
+	t.Setenv("GIT_DIR", filepath.Join(inherited, ".git"))
+	t.Setenv("GIT_COMMON_DIR", filepath.Join(inherited, ".git"))
+	t.Setenv("GIT_WORK_TREE", inherited)
+	t.Setenv("GIT_OBJECT_DIRECTORY", filepath.Join(inherited, "missing-objects"))
+
 	repo := t.TempDir()
-	if output, err := exec.Command(git, "init", "--quiet", repo).CombinedOutput(); err != nil {
+	cmd := exec.Command(git, "init", "--quiet", repo)
+	cmd.Env = gitRepoProbeEnvironment(os.Environ())
+	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	if info, err := os.Stat(filepath.Join(repo, ".git")); err != nil || !info.IsDir() {
+		t.Fatalf("fixture was not initialized in the requested directory: %v", err)
 	}
 	outside := t.TempDir()
 	t.Setenv("GIT_DIR", filepath.Join(repo, ".git"))
 	t.Setenv("GIT_WORK_TREE", repo)
 	t.Setenv("GIT_COMMON_DIR", filepath.Join(repo, ".git"))
 
+	if !gitRepoProbeFn(repo) {
+		t.Fatal("Git probe failed to recognize the requested worktree with inherited repository overrides")
+	}
 	if gitRepoProbeFn(outside) {
 		t.Fatalf("Git probe treated unrelated cwd %q as a worktree through inherited repository overrides", outside)
 	}

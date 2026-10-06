@@ -45,7 +45,7 @@ console.log(JSON.stringify({ prompt: before.args.prompt, output: after.output })
 	if result.Prompt != "Go-materialized immutable prompt" || result.Output != "captured" {
 		t.Fatalf("relay result = %#v", result)
 	}
-	frames := "{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"start\",\"prompt\":\"Go must receive this original host prompt\"}\n{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"complete\",\"nonce\":\"nonce\",\"output\":\"untrusted reviewer output\"}\n"
+	frames := "{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"start\",\"prompt\":\"Go must receive this original host prompt\",\"agent\":\"review-risk\"}\n{\"schema\":\"gentle-ai.provider-transport/v1\",\"operation\":\"complete\",\"nonce\":\"nonce\",\"output\":\"untrusted reviewer output\"}\n"
 	if log != frames+frames {
 		t.Fatalf("relay frames = %q", log)
 	}

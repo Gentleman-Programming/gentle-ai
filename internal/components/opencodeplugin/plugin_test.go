@@ -11,19 +11,53 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
-func TestActiveDefinitionsExcludeRetiredSDDPluginButPreserveLegacyLookup(t *testing.T) {
-	for _, def := range Definitions() {
-		if def.ID == model.OpenCodePluginSDDEngramManage {
-			t.Fatal("retired SDD plugin is still offered for installation")
-		}
+func TestExternalPluginsRefusedWithoutWrites(t *testing.T) {
+	for _, id := range []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage} {
+		t.Run(string(id), func(t *testing.T) {
+			for _, existing := range []bool{false, true} {
+				home := t.TempDir()
+				path := filepath.Join(home, ".config", "opencode", "tui.json")
+				original := []byte(`{"plugin":["user-plugin","opencode-subagent-statusline","opencode-sdd-engram-manage"]}`)
+				if existing {
+					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, original, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				result, err := Install(home, id)
+				if err == nil || result.Changed || len(result.Files) != 0 {
+					t.Fatalf("retired Install = %+v, %v", result, err)
+				}
+				if existing {
+					data, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(data, original) {
+						t.Fatalf("configuration changed: %q, %v", data, err)
+					}
+				} else if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
+					t.Fatalf("refusal wrote files: %v, %v", entries, err)
+				}
+			}
+		})
 	}
-	legacy, ok := DefinitionFor(model.OpenCodePluginSDDEngramManage)
-	if !ok || legacy.PackageName != "opencode-sdd-engram-manage" {
-		t.Fatalf("legacy uninstall lookup = (%+v, %v), want owned package", legacy, ok)
+}
+
+func TestLegacyLookupRemainsUninstallOnly(t *testing.T) {
+	for id, pkg := range map[model.OpenCodeCommunityPluginID]string{
+		model.OpenCodePluginSDDEngramManage:    "opencode-sdd-engram-manage",
+		model.OpenCodePluginSubAgentStatusline: "opencode-subagent-statusline",
+	} {
+		t.Run(string(id), func(t *testing.T) {
+			legacy, ok := DefinitionFor(id)
+			if !ok || legacy.PackageName != pkg {
+				t.Fatalf("legacy lookup = (%+v, %v)", legacy, ok)
+			}
+		})
 	}
 }
 
@@ -53,34 +87,6 @@ func TestRetiredSDDPluginCanStillBeUninstalledWithoutRemovingOtherRegistrations(
 	}
 }
 
-func TestInstallAddsCommunityPluginToTUIConfig(t *testing.T) {
-	home := t.TempDir()
-
-	result, err := Install(home, model.OpenCodePluginSubAgentStatusline)
-	if err != nil {
-		t.Fatalf("Install() error = %v", err)
-	}
-	if !result.Changed {
-		t.Fatal("Install() changed = false, want true")
-	}
-
-	configPath := filepath.Join(home, ".config", "opencode", "tui.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(tui.json) error = %v", err)
-	}
-
-	var root struct {
-		Plugin []string `json:"plugin"`
-	}
-	if err := json.Unmarshal(data, &root); err != nil {
-		t.Fatalf("Unmarshal(tui.json) error = %v", err)
-	}
-	if len(root.Plugin) != 1 || root.Plugin[0] != "opencode-subagent-statusline" {
-		t.Fatalf("plugin list = %#v, want opencode-subagent-statusline", root.Plugin)
-	}
-}
-
 func TestInstallPreservesExistingTUIPluginsAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 	configDir := filepath.Join(home, ".config", "opencode")
@@ -92,11 +98,11 @@ func TestInstallPreservesExistingTUIPluginsAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := Install(home, model.OpenCodePluginSDDEngramManage)
+	first, err := Install(home, model.OpenCodePluginGentleLogo)
 	if err != nil {
 		t.Fatalf("first Install() error = %v", err)
 	}
-	second, err := Install(home, model.OpenCodePluginSDDEngramManage)
+	second, err := Install(home, model.OpenCodePluginGentleLogo)
 	if err != nil {
 		t.Fatalf("second Install() error = %v", err)
 	}
@@ -117,7 +123,7 @@ func TestInstallPreservesExistingTUIPluginsAndIsIdempotent(t *testing.T) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"existing-plugin", "opencode-sdd-engram-manage"}
+	want := []string{"existing-plugin", filepath.Join(configDir, "tui-plugins", gentleLogoPluginFile)}
 	if len(root.Plugin) != len(want) {
 		t.Fatalf("plugin list = %#v, want %#v", root.Plugin, want)
 	}
@@ -221,7 +227,7 @@ func TestPriorFileRestoreReportsRemovalFailure(t *testing.T) {
 func TestInstallDoesNotRunPackageManager(t *testing.T) {
 	home := t.TempDir()
 
-	if _, err := Install(home, model.OpenCodePluginSubAgentStatusline); err != nil {
+	if _, err := Install(home, model.OpenCodePluginGentleLogo); err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "node_modules")); !os.IsNotExist(err) {

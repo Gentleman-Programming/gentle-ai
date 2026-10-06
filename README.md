@@ -12,7 +12,7 @@
 <p>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/releases"><img src="https://img.shields.io/github/v/release/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Release"></a>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/stargazers"><img src="https://img.shields.io/github/stars/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Stars"></a>
-<img src="https://img.shields.io/badge/agents-16-F095C8?style=for-the-badge&labelColor=1A1218" alt="16 agents">
+<img src="https://img.shields.io/badge/agents-17-F095C8?style=for-the-badge&labelColor=1A1218" alt="17 agents">
 <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform">
 <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
 </p>
@@ -30,6 +30,24 @@
 Your agent writes code, then forgets everything. It has no opinion about your project,
 and no way to prove what it did beyond asking you to read every line.
 <strong>Gentle-AI gives it memory, a workflow, and evidence.</strong>
+</p>
+
+<p>
+ <h3>See it in action</h3>
+
+   <p>
+   One prompt, from idea to reviewed commit: memory, workflow, and evidence in a real session.
+   </p>
+
+https://github.com/user-attachments/assets/fa5c0cfe-06e7-4c0d-bd6e-8ac7cb934339
+
+
+   <p>Prefer Spanish subtitles?</p>
+   
+
+https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
+
+
 </p>
 
 <br/>
@@ -85,9 +103,10 @@ and no way to prove what it did beyond asking you to read every line.
 <strong><a href="docs/agents.md#antigravity">Antigravity</a></strong> ·
 <strong><a href="docs/agents.md#windsurf">Windsurf</a></strong> ·
 <strong><a href="docs/agents.md#openclaw">OpenClaw</a></strong> ·
-<strong><a href="docs/agents.md#trae">Trae</a></strong>
+<strong><a href="docs/agents.md#trae">Trae</a></strong> ·
+<strong><a href="docs/agents.md#conductor">Conductor</a></strong>
 
-<sub>16 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
+<sub>17 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
 
 </div>
 
@@ -117,9 +136,9 @@ Small changes should not need a planning pipeline, and larger work should not lo
 
 ---
 
-### Strict TDD — Prove behavior when enabled
+### Test-first by default — Prove each requested rule
 
-ODD uses the configured TDD mode and exact test runner. When Strict TDD is enabled, capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. When disabled, run applicable functional checks anyway. The presence of tests alone does not enable Strict TDD.
+ODD applies test-first development by default when a relevant runnable test and a clear expected outcome exist: capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. Each requested rule gets one RED test, each touched existing command or option gets one test proving its previous behavior still holds, and nothing else is padded in. Without a meaningful runnable test, the agent explains the exception and runs applicable functional checks anyway.
 
 **[Docs →](docs/usage.md#organic-driven-development-odd)**
 
@@ -155,11 +174,11 @@ Gentle Shell is a separate Pi integration package. Gentle AI configures supporte
 
 ---
 
-### 16 agents — Keep the agent you already use
+### 17 agents — Keep the agent you already use
 
 <img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
-Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and twelve more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
+Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and thirteen more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
 
 **[Docs →](docs/agents.md)**
 
@@ -194,8 +213,8 @@ brew install gentleman-programming/tap/gentle-ai
 # macOS / Linux (curl)
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
-# Windows (PowerShell) — source install, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
+# Windows (PowerShell) — source install of the latest release, needs Go 1.25.10+
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0
 ```
 
 ```bash
@@ -205,7 +224,7 @@ gentle-ai doctor   # verify — read-only, changes nothing
 
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
-> **Beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
+> **Beta channel and per-distro prerequisites: [Quickstart →](docs/quickstart.md) · Signature verification: [Release signing →](docs/release-signing.md#user-verification)**
 
 <div align="right"><a href="#top">Back to top</a></div>
 
@@ -217,7 +236,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 | :--- | :--- |
 | **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
 | **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
-| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 16 |
+| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 17 |
 | **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct and delegated work |
 | **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
 | **[Engram](docs/engram.md)** · **[Components](docs/components.md)** | Memory commands, skills, presets and personas |

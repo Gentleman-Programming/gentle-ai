@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 )
 
 // OpenCode retains the parent orchestrator and provider-bound review route,

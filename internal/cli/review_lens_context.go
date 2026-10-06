@@ -7,14 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // reviewLensContextTimeout bounds the whole assembly, not one read. The surface
@@ -286,7 +287,7 @@ const (
 // handed a reviewer slot nothing had verified was fillable.
 func reviewLensContextBudgetProbe(
 	ctx context.Context, deps reviewLensContextDeps, repo string,
-	state reviewtransaction.CompactState, revision string,
+	state reviewtransaction.CompactState, revision string, runtime model.AgentID,
 ) (reviewLensContextProbeOutcome, error) {
 	assemblyContext, cancel := context.WithTimeout(ctx, deps.timeout)
 	defer cancel()
@@ -296,7 +297,14 @@ func reviewLensContextBudgetProbe(
 	}
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
-	repositoryContext, err := reviewtransaction.DeriveReviewRepositoryContextHandle(assemblyContext, repo, reviewtransaction.ReviewRepositoryContextBinding{
+	// Measure with the handle the lens block will really carry: the runtime
+	// driving this call -- by the same rule STATUS emission follows -- decides
+	// whether that is the sealed rctx3 handle or the shorter rctx2 digest.
+	deriveContext := reviewtransaction.DeriveReviewRepositoryContextHandle
+	if reviewEffectiveRuntime(runtime, state.RuntimeAgent) == model.AgentOpenCode {
+		deriveContext = reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle
+	}
+	repositoryContext, err := deriveContext(assemblyContext, repo, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: revision,
 	})
 	if err != nil {
@@ -366,15 +374,30 @@ func reviewLensContextBudgetProbe(
 // evidence and refuses when the live tree no longer matches. Read the
 // guarantee as "the exit is there when the lineage arrives", never as "the
 // exit cannot be lost".
-func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
+func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string, runtime model.AgentID) bool {
 	// An undecided probe is deliberately NOT refused here. A candidate whose
 	// diff exceeds the native Git ceiling reaches this surface as an assembly
 	// failure, and c6e6a1e4 (#1689) made exactly that candidate startable on
 	// purpose: START carries frozen tree references instead of an eager diff,
 	// so a change larger than any inline limit stays addressable. Refusing on
 	// an undecided outcome would retract that.
-	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
+	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision, runtime)
 	return outcome == reviewLensContextOverBudget
+}
+
+// reviewEffectiveRuntime is the runtime a STATUS renders for: the declared
+// --agent, else Pi when the exact Pi relay handshake is present (the same
+// proof that admits Pi, so the invocation is Pi-driven), else the runtime the
+// lineage froze at START. A lineage that froze no runtime keeps the manual
+// route.
+func reviewEffectiveRuntime(declared model.AgentID, frozen string) model.AgentID {
+	if declared != "" {
+		return declared
+	}
+	if frozen != "" && os.Getenv(reviewPiHostRelayContractEnvironment) == reviewPiHostRelayContract {
+		return model.AgentPi
+	}
+	return model.AgentID(frozen)
 }
 
 // reviewLensContextCompactAtomicStartBudgetRefusal applies the complete-evidence
@@ -397,7 +420,9 @@ func reviewLensContextCompactAtomicStartBudgetRefusal(
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("derive compact atomic START reviewer-context binding: %w", err))
 	}
-	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision)
+	// START freezes this runtime, so it is the one every later STATUS of the
+	// same runtime will render for.
+	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision, model.AgentID(state.RuntimeAgent))
 	if outcome != reviewLensContextOverBudget {
 		return nil
 	}

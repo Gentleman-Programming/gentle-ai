@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -98,6 +100,70 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 	if root.Theme != "gentleman" {
 		t.Fatalf("theme = %q, want gentleman", root.Theme)
+	}
+}
+
+// TestInjectLeavesNonJSONNativeSettingsUntouched covers #1829: valid native
+// TOML/YAML settings are not JSON targets, so Inject neither rewrites them nor
+// creates a JSON fixture when they are missing.
+func TestInjectLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
+	tests := []struct {
+		name     string
+		adapter  agents.Adapter
+		settings string
+		content  string
+	}{
+		{name: "kimi legacy", adapter: kimi.NewAdapter(), settings: ".kimi/config.toml", content: "default_model = \"k2\"\n"},
+		{name: "kimi current", adapter: kimi.NewAdapter(), settings: ".kimi-code/config.toml", content: "[models.k2]\nprovider = \"moonshot\"\n"},
+		{name: "hermes", adapter: hermes.NewAdapter(), settings: ".hermes/config.yaml", content: "providers:\n  - name: hermes\n"},
+		{name: "hermes missing", adapter: hermes.NewAdapter(), settings: ".hermes/config.yaml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settings)
+			if tt.content != "" {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			result, err := Inject(home, tt.adapter)
+			if err != nil || result.Changed || len(result.Files) != 0 {
+				t.Fatalf("Inject() = %#v, %v; want a no-op without reported files", result, err)
+			}
+			if tt.content == "" {
+				if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+					t.Fatalf("Inject() created %s; stat error = %v", settingsPath, err)
+				}
+				return
+			}
+			got, err := os.ReadFile(settingsPath)
+			if err != nil || string(got) != tt.content {
+				t.Fatalf("native settings = %q, %v; want bytes preserved", got, err)
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			}
+		})
+	}
+}
+
+func TestInjectAtPathAcceptsCustomSelectedFilename(t *testing.T) {
+	selected := filepath.Join(t.TempDir(), "custom-opencode-settings")
+	if err := os.WriteFile(selected, []byte(`{"custom":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := InjectAtPath(selected)
+	if err != nil || !result.Changed || len(result.Files) != 1 || result.Files[0] != selected {
+		t.Fatalf("InjectAtPath() = %#v, %v; want the selected file written", result, err)
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(got, []byte(`"theme": "gentleman"`)) || !bytes.Contains(got, []byte(`"custom": true`)) {
+		t.Fatalf("selected settings = %s, %v", got, err)
 	}
 }
 

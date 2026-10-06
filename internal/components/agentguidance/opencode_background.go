@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 )
 
 const (
@@ -60,7 +60,7 @@ func ApplyOpenCodeBackgroundPolicy(settingsPath string, enabled bool) (Result, e
 		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + policy + "\n"
 	}
 	managed["prompt"] = prompt
-	overlay, err := filemerge.MergeJSONObjects(raw, mustBackgroundOverlay(managed))
+	overlay, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, mustBackgroundOverlay(managed))
 	if err != nil {
 		return Result{}, err
 	}

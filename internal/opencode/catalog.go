@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"sort"
@@ -76,8 +77,20 @@ type waitErrorReader interface {
 func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner CommandRunner) (map[string]Provider, error) {
 	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
+	version, err := runner(ctx, Command{Path: "opencode", Args: []string{"--version"}, Dir: projectDir})
+	if err != nil {
+		return nil, catalogCommandError(ctx, err)
+	}
+	major, versionErr := readCatalogVersion(ctx, version)
+	if versionErr != nil {
+		return nil, versionErr
+	}
+	args := []string{"models", "--verbose"}
+	if major == RuntimeV2 {
+		args = []string{"api", "get", "/api/model?location%5Bdirectory%5D=" + url.QueryEscape(projectDir)}
+	}
 	limit := maxCatalogOutput
-	r, err := runner(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: projectDir})
+	r, err := runner(ctx, Command{Path: "opencode", Args: args, Dir: projectDir})
 	if err != nil {
 		return nil, catalogCommandError(ctx, err)
 	}
@@ -85,7 +98,13 @@ func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner Co
 		defer closer.Close()
 	}
 	limitReader := &countingLimitReader{r: r, limit: int64(limit), cancel: cancel}
-	providers, parseErr := parseVerboseCatalog(limitReader)
+	var providers map[string]Provider
+	var parseErr error
+	if major == RuntimeV2 {
+		providers, parseErr = parseV2ModelAPI(limitReader)
+	} else {
+		providers, parseErr = parseVerboseCatalog(limitReader)
+	}
 	if parseErr != nil {
 		var catalogErr *CatalogError
 		if errors.As(parseErr, &catalogErr) && catalogErr.Kind == CatalogErrorOutputTooLarge {
@@ -99,6 +118,111 @@ func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner Co
 		}
 	}
 	return providers, nil
+}
+
+func readCatalogVersion(ctx context.Context, r io.Reader) (RuntimeMajor, error) {
+	if closer, ok := r.(io.Closer); ok {
+		defer closer.Close()
+	}
+	data, err := io.ReadAll(io.LimitReader(r, 4097))
+	if err != nil {
+		return RuntimeUnknown, catalogCommandErrorWithRunnerWait(ctx, r, err)
+	}
+	if len(data) > 4096 {
+		return RuntimeUnknown, &CatalogError{Kind: CatalogErrorOutputTooLarge}
+	}
+	if waiter, ok := r.(waitErrorReader); ok {
+		if err := waiter.WaitError(); err != nil {
+			return RuntimeUnknown, catalogCommandError(ctx, err)
+		}
+	}
+	major := ParseRuntimeMajor(string(data))
+	if major == RuntimeUnknown {
+		return major, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+	}
+	return major, nil
+}
+
+// parseV2ModelAPI consumes the location-scoped V2 API response. Its explicit
+// tools capability is required; model IDs alone cannot establish suitability
+// for the SDD picker.
+func parseV2ModelAPI(r io.Reader) (map[string]Provider, error) {
+	var response struct {
+		Data []struct {
+			ID           string `json:"id"`
+			ProviderID   string `json:"providerID"`
+			ModelID      string `json:"modelID"`
+			Name         string `json:"name"`
+			Family       string `json:"family"`
+			Enabled      *bool  `json:"enabled"`
+			Capabilities *struct {
+				Tools     *bool `json:"tools"`
+				Reasoning *bool `json:"reasoning"`
+			} `json:"capabilities"`
+			Variants []struct {
+				ID string `json:"id"`
+			} `json:"variants"`
+			Limit ModelLimit  `json:"limit"`
+			Cost  []ModelCost `json:"cost"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(&response); err != nil {
+		return nil, catalogJSONError(err)
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+		}
+		return nil, catalogJSONError(err)
+	}
+	if response.Data == nil {
+		return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+	}
+	providers := map[string]Provider{}
+	for _, raw := range response.Data {
+		if raw.ProviderID == "" || raw.ModelID == "" || raw.ID == "" || raw.Capabilities == nil || raw.Capabilities.Tools == nil || raw.Enabled == nil {
+			return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+		}
+		if !*raw.Enabled {
+			continue
+		}
+		provider := providers[raw.ProviderID]
+		if provider.ID == "" {
+			provider = Provider{ID: raw.ProviderID, Name: raw.ProviderID, Models: map[string]Model{}}
+		}
+		variants := make([]string, 0, len(raw.Variants))
+		for _, variant := range raw.Variants {
+			if variant.ID == "" {
+				return nil, &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+			}
+			variants = append(variants, variant.ID)
+		}
+		sortVariants(variants)
+		model := Model{ID: raw.ID, Name: raw.Name, Family: raw.Family, ToolCall: *raw.Capabilities.Tools, Limit: raw.Limit, Variants: variants}
+		if raw.Capabilities.Reasoning != nil {
+			model.Reasoning = *raw.Capabilities.Reasoning
+		}
+		if len(raw.Cost) > 0 {
+			model.Cost = raw.Cost[0]
+		}
+		provider.Models[raw.ID] = model
+		providers[raw.ProviderID] = provider
+	}
+	return providers, nil
+}
+
+func catalogJSONError(err error) error {
+	var catalogErr *CatalogError
+	if errors.As(err, &catalogErr) {
+		return catalogErr
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return &CatalogError{Kind: CatalogErrorUnsupportedSchema}
+	}
+	return &CatalogError{Kind: CatalogErrorMalformed}
 }
 
 // MergeConfiguredCatalog augments the runtime catalog with file-backed config
@@ -118,13 +242,28 @@ func MergeConfiguredCatalog(runtimeCatalog, configuredCatalog map[string]Provide
 			runtimeProvider.Models = map[string]Model{}
 		}
 		for modelID, configuredModel := range configuredProvider.Models {
-			if _, exists := runtimeProvider.Models[modelID]; !exists {
+			if existingModel, exists := runtimeProvider.Models[modelID]; !exists {
 				if len(configuredModel.Variants) > 0 {
 					variants := make([]string, len(configuredModel.Variants))
 					copy(variants, configuredModel.Variants)
 					configuredModel.Variants = variants
 				}
 				runtimeProvider.Models[modelID] = configuredModel
+			} else if len(configuredModel.Variants) > 0 {
+				existingVariants := make(map[string]struct{}, len(existingModel.Variants))
+				for _, v := range existingModel.Variants {
+					existingVariants[v] = struct{}{}
+				}
+				mergedVariants := append([]string(nil), existingModel.Variants...)
+				for _, v := range configuredModel.Variants {
+					if _, ok := existingVariants[v]; !ok {
+						existingVariants[v] = struct{}{}
+						mergedVariants = append(mergedVariants, v)
+					}
+				}
+				sortVariants(mergedVariants)
+				existingModel.Variants = mergedVariants
+				runtimeProvider.Models[modelID] = existingModel
 			}
 		}
 		merged[providerID] = runtimeProvider
@@ -413,18 +552,29 @@ func isCatalogHeader(line string) bool {
 }
 
 // effortRank orders the known reasoning-effort variant names semantically.
-var effortRank = map[string]int{"low": 0, "medium": 1, "high": 2}
+var effortRank = map[string]int{
+	"low":    0,
+	"medium": 1,
+	"high":   2,
+	"xhigh":  3,
+	"max":    4,
+	"ultra":  5,
+}
 
-// sortVariants emits low/medium/high semantic order when every variant key is
-// a known effort name, falling back to lexical order for anything else.
+// sortVariants orders ranked effort levels first by rank, followed by
+// non-effort/speed variants in stable lexical order.
 func sortVariants(variants []string) {
-	for _, variant := range variants {
-		if _, known := effortRank[variant]; !known {
-			sort.Strings(variants)
-			return
+	sort.Slice(variants, func(i, j int) bool {
+		rI, okI := effortRank[variants[i]]
+		rJ, okJ := effortRank[variants[j]]
+		if okI && okJ {
+			return rI < rJ
 		}
-	}
-	sort.Slice(variants, func(i, j int) bool { return effortRank[variants[i]] < effortRank[variants[j]] })
+		if okI != okJ {
+			return okI
+		}
+		return variants[i] < variants[j]
+	})
 }
 
 // runCatalogCommand starts `opencode models --verbose` and returns a reader

@@ -27,6 +27,24 @@ type ClaudeHook struct {
 	TranscriptPath      string   `json:"-"`
 	AgentTranscriptPath string   `json:"-"`
 	LastAssistantDigest [32]byte `json:"-"`
+	EffortLevel         string   `json:"-"`
+}
+
+// claudeHookEffortLevels are the documented values of the common hook field
+// `effort.level` (https://code.claude.com/docs/en/hooks): the level Claude Code
+// ran after model fallback and caps, with ultracode reported as xhigh.
+const claudeHookEffortLevels = "low|medium|high|xhigh|max"
+
+// claudeHookEffort keeps only a documented level. A missing, malformed, or
+// undocumented value is dropped instead of discarding the whole hook.
+func claudeHookEffort(raw json.RawMessage) string {
+	var effort struct {
+		Level string `json:"level"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &effort) != nil || !runtimeMember(effort.Level, claudeHookEffortLevels) {
+		return ""
+	}
+	return effort.Level
 }
 
 // ClaudeUsage is bounded response evidence extracted from a transcript tail.
@@ -98,11 +116,12 @@ func ParseClaudeHook(input io.Reader) (ClaudeHook, error) {
 		return result, errClaude
 	}
 	var source struct {
-		HookEventName        string `json:"hook_event_name"`
-		AgentType            string `json:"agent_type"`
-		TranscriptPath       string `json:"transcript_path"`
-		AgentTranscriptPath  string `json:"agent_transcript_path"`
-		LastAssistantMessage string `json:"last_assistant_message"`
+		HookEventName        string          `json:"hook_event_name"`
+		AgentType            string          `json:"agent_type"`
+		TranscriptPath       string          `json:"transcript_path"`
+		AgentTranscriptPath  string          `json:"agent_transcript_path"`
+		LastAssistantMessage string          `json:"last_assistant_message"`
+		Effort               json.RawMessage `json:"effort"`
 	}
 	if json.Unmarshal(data, &source) != nil || source.HookEventName == "" {
 		return result, errClaude
@@ -110,7 +129,7 @@ func ParseClaudeHook(input io.Reader) (ClaudeHook, error) {
 	if source.HookEventName == "SubagentStop" && source.AgentType == "" {
 		return result, errClaude
 	}
-	result = ClaudeHook{HookEventName: source.HookEventName, AgentType: source.AgentType, TranscriptPath: source.TranscriptPath, AgentTranscriptPath: source.AgentTranscriptPath}
+	result = ClaudeHook{HookEventName: source.HookEventName, AgentType: source.AgentType, TranscriptPath: source.TranscriptPath, AgentTranscriptPath: source.AgentTranscriptPath, EffortLevel: claudeHookEffort(source.Effort)}
 	if source.LastAssistantMessage != "" {
 		result.LastAssistantDigest = sha256.Sum256([]byte(source.LastAssistantMessage))
 	}
@@ -124,6 +143,20 @@ func ClaudeNamedAgent(name string) bool {
 		return false
 	}
 	return !runtimeMember(name, "orchestrator|worker|explore|verify|unknown")
+}
+
+// claudeBuiltInAgentClass maps Claude Code's own built-in subagent types, by
+// their exact case-sensitive agent_type, to the generic aggregate classes. The
+// generic class names themselves stay custom: a user agent file literally named
+// "worker" or "explore" is not a built-in and must not borrow its class.
+func claudeBuiltInAgentClass(agentType string) string {
+	switch agentType {
+	case "general-purpose":
+		return "worker"
+	case "Explore":
+		return "explore"
+	}
+	return ""
 }
 
 // ParseClaudeTranscriptTail returns the last valid assistant usage record in a
@@ -231,8 +264,16 @@ func NormalizeClaude(hook ClaudeHook, usage ClaudeUsage, agentDefinition []byte)
 	r := RuntimeRow{Model: RuntimeModel{Provider: "unknown", ID: "unknown"}, ModelEvidence: "unknown", AgentKind: "custom", AgentClass: "unknown", SelectedEffort: "unavailable", EffectiveEffort: "unavailable", Launches: json.RawMessage("1"), Responses: json.RawMessage("null"), ErrorCategory: "none", Duration: RuntimeDuration{Kind: "unavailable", MeasuredCount: json.RawMessage("0"), SumMS: json.RawMessage("null")}}
 	if hook.HookEventName == "Stop" {
 		r.AgentKind, r.AgentClass = "orchestrator", "orchestrator"
+		// The hook's effort is the level in effect, so it is effective evidence
+		// only. It is not attributed to SubagentStop rows: the hook contract does
+		// not establish whether that level is the subagent's or the session's.
+		if hook.EffortLevel != "" {
+			r.EffectiveEffort = hook.EffortLevel
+		}
 	} else if ClaudeNamedAgent(hook.AgentType) {
 		r.AgentKind, r.AgentClass = "built_in", hook.AgentType
+	} else if class := claudeBuiltInAgentClass(hook.AgentType); class != "" {
+		r.AgentKind, r.AgentClass = "built_in", class
 	}
 	selectedModel, selectedEffort := claudeFrontmatter(agentDefinition)
 	selectedModel = claudeCanonicalModelID(selectedModel)

@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // ReviewAssessmentSchema is the typed envelope gentle-ai review assess prints
@@ -191,6 +192,65 @@ func reviewAssessNextTransitionFor(root string, runtime model.AgentID, baseRef s
 	}
 }
 
+// reviewAssessHighRiskItems is the shared high-risk list of the routing
+// block's Task Size section (gentle-shell#1494). The agent that made a change
+// may cite one item to raise the assessed risk to high; it can never lower a
+// tier, so lowering stays with the deterministic assessment.
+var reviewAssessHighRiskItems = map[int]string{
+	1: "data or irreversible effects",
+	2: "security",
+	3: "contracts others consume",
+	4: "concurrency",
+	5: "delivery or environment",
+	6: "no test would catch a regression",
+}
+
+const (
+	reviewAssessEscalationReasonCode = "agent_escalation"
+	reviewAssessEscalationReasonMax  = 500
+)
+
+type reviewAssessEscalation struct {
+	item   int
+	reason string
+}
+
+// parseReviewAssessEscalation validates the optional --escalate-item and
+// --escalate-reason pair. Both or neither must be present.
+func parseReviewAssessEscalation(args []string, item, reason string) (*reviewAssessEscalation, error) {
+	itemGiven := reviewFlagProvided(args, "--escalate-item") || strings.TrimSpace(item) != ""
+	reasonGiven := reviewFlagProvided(args, "--escalate-reason") || reason != ""
+	if !itemGiven && !reasonGiven {
+		return nil, nil
+	}
+	if !itemGiven || !reasonGiven {
+		return nil, errors.New("review assess --escalate-item and --escalate-reason must be passed together; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>`")
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(item))
+	if _, known := reviewAssessHighRiskItems[number]; err != nil || !known {
+		return nil, fmt.Errorf("review assess --escalate-item %q must be an integer from 1 to 6 naming a high-risk item; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>`", item)
+	}
+	if strings.TrimSpace(reason) == "" || len(reason) > reviewAssessEscalationReasonMax {
+		return nil, fmt.Errorf("review assess --escalate-reason must be non-empty and at most %d characters; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>` with a one-line reason", reviewAssessEscalationReasonMax)
+	}
+	return &reviewAssessEscalation{item: number, reason: reason}, nil
+}
+
+// escalateReviewAssessRisk raises passive or medium to high for an agent
+// escalation and records why; it never lowers a tier.
+func escalateReviewAssessRisk(publicRisk string, reasons []ReviewAssessmentReason, escalation *reviewAssessEscalation) (string, []ReviewAssessmentReason) {
+	if escalation == nil {
+		return publicRisk, reasons
+	}
+	if publicRisk == "passive" || publicRisk == "medium" {
+		publicRisk = "high"
+	}
+	return publicRisk, append(reasons, ReviewAssessmentReason{
+		Code:   reviewAssessEscalationReasonCode,
+		Detail: fmt.Sprintf("item %d (%s): %s", escalation.item, reviewAssessHighRiskItems[escalation.item], escalation.reason),
+	})
+}
+
 func reviewFlagProvided(args []string, flag string) bool {
 	for _, arg := range args {
 		if arg == flag {
@@ -251,6 +311,8 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
 	agent := flags.String("agent", "", "optional generated active runtime identity to carry on the next_transition preflight")
 	jsonOutput := flags.Bool("json", false, "print the gentle-ai.review-assessment/v1 envelope as JSON instead of human-readable text")
+	escalateItem := flags.String("escalate-item", "", "raise the risk to high by citing one high-risk item (1-6); never lowers a tier")
+	escalateReason := flags.String("escalate-reason", "", "one-line reason for --escalate-item")
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
 	expectedUntrackedInventory := reviewSingleValueFlag{}
@@ -265,6 +327,11 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		return failClosed(reviewPreflightError(fmt.Errorf("unexpected review assess argument %q; run `gentle-ai review assess --help` for the closed command form", flags.Arg(0))), failClosedCandidate)
+	}
+
+	escalation, err := parseReviewAssessEscalation(args, *escalateItem, *escalateReason)
+	if err != nil {
+		return failClosed(reviewPreflightError(err), failClosedCandidate)
 	}
 
 	trimmedBaseRef := strings.TrimSpace(*baseRef)
@@ -338,6 +405,7 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	if err != nil {
 		return failClosed(err, failClosedCandidate)
 	}
+	publicRisk, reasons := escalateReviewAssessRisk(publicRisk, reviewAssessmentReasons(assessment.Reasons), escalation)
 
 	// Computed the same way STATUS itself computes it, so a lineage STATUS
 	// would already report consumed can never disagree with what assess
@@ -354,7 +422,7 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	}
 
 	result := ReviewAssessmentResult{
-		Schema: ReviewAssessmentSchema, Risk: publicRisk, Reasons: reviewAssessmentReasons(assessment.Reasons),
+		Schema: ReviewAssessmentSchema, Risk: publicRisk, Reasons: reasons,
 		ChangedPaths: len(snapshot.Paths), ChangedLines: assessment.ChangedLines,
 		Candidate:       ReviewAssessmentCandidate{Kind: string(snapshot.Kind), BaseRef: trimmedBaseRef, Consumed: consumed},
 		ReviewDue:       reviewDue,

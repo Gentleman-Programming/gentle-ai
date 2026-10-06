@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // embeddedSharedFileNames returns the names of every file embedded under
@@ -58,7 +58,7 @@ func TestComponentPathsSDDCoversEveryEmbeddedSharedFile(t *testing.T) {
 	}
 	home := t.TempDir()
 	selection := model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}
-	paths := componentPaths(home, selection, resolveAdapters([]model.AgentID{model.AgentGeminiCLI}), model.ComponentSkills)
+	paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentGeminiCLI}), model.ComponentSkills)
 	if want := filepath.Join(home, ".gemini", "skills", "go-testing", "SKILL.md"); !containsPath(paths, want) {
 		t.Fatalf("retained skill not tracked: %s", want)
 	}

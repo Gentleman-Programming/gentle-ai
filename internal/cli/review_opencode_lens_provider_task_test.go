@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 func TestOpenCodeV1StatusEmitsProviderOwnedLensTasks(t *testing.T) {
@@ -168,6 +168,7 @@ func stubOpenCodeV1ReviewRuntime(t *testing.T) {
 	t.Helper()
 	old := opencode.VersionRunnerOverride
 	t.Cleanup(func() { opencode.VersionRunnerOverride = old })
+	freshOpenCodeRuntimeProbe(t)
 	t.Setenv("GENTLE_AI_OPENCODE_RELAY_CONTRACT", "")
 	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
 		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil

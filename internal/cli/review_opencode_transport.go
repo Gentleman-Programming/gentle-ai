@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const (
@@ -31,12 +31,15 @@ const (
 // with the managed OpenCode shim. It relays only opaque prompt and output
 // bytes; Go owns prompt materialization, admission, and capture.
 type openCodeTransportEnvelope struct {
-	Schema    string  `json:"schema"`
-	Operation string  `json:"operation"`
-	Nonce     string  `json:"nonce,omitempty"`
-	Prompt    string  `json:"prompt,omitempty"`
-	Output    *string `json:"output,omitempty"`
-	Error     string  `json:"error,omitempty"`
+	Schema    string `json:"schema"`
+	Operation string `json:"operation"`
+	Nonce     string `json:"nonce,omitempty"`
+	Prompt    string `json:"prompt,omitempty"`
+	// Agent is the host subagent that will run the Task. The managed plugin
+	// reads it from the dispatched tool input; Go binds it to the Task role.
+	Agent  string  `json:"agent,omitempty"`
+	Output *string `json:"output,omitempty"`
+	Error  string  `json:"error,omitempty"`
 }
 
 type openCodeTaskOutputError struct{ Code string }
@@ -54,14 +57,67 @@ func (err *openCodeTaskOutputError) Error() string {
 	}
 }
 
-type openCodeTransportBindingError struct{ detail string }
+type openCodeTransportBindingError struct {
+	code, detail string
+	stale        bool
+}
 
 func (err *openCodeTransportBindingError) Error() string {
-	return "opencode_review_transport_binding_invalid: " + err.detail
+	code := err.code
+	if code == "" {
+		code = "opencode_review_transport_binding_invalid"
+	}
+	return code + ": " + err.detail
+}
+
+const openCodeTransportAgentMismatchCode = "opencode_review_transport_agent_mismatch"
+
+// openCodeTransportBoundAgent is the only host agent allowed to run a Task:
+// the lens agent for a lens slot, or the Go-issued agent for a provider role.
+func openCodeTransportBoundAgent(binding openCodeTransportTaskBinding) string {
+	if binding.Role != "" {
+		return reviewProviderRoleOpenCodeAgent(binding.Role)
+	}
+	return binding.Lens
+}
+
+// validateOpenCodeTransportAgent binds the dispatched host agent to the role
+// the Task prompt carries, so a prompt can never select its own role under an
+// unrelated subagent. An absent agent is the V1 wire shape; the V2 start frame
+// requires it (validateOpenCodeTransportStart).
+func validateOpenCodeTransportAgent(binding openCodeTransportTaskBinding, agent string) error {
+	if agent == "" {
+		return nil
+	}
+	if bound := openCodeTransportBoundAgent(binding); bound == "" || agent != bound {
+		return &openCodeTransportBindingError{code: openCodeTransportAgentMismatchCode, detail: "the host agent running this Task is not the agent bound to its review role"}
+	}
+	return nil
 }
 
 func openCodeTransportBindingInvalid(detail string) error {
 	return &openCodeTransportBindingError{detail: detail}
+}
+
+// openCodeTransportContextRefusal names why a provider-issued repository
+// context did not resolve, without any path: an unsealed handle and an unsafe
+// sealing key each have their own remedy, and every other cause is a handle
+// that does not commit to this binding and live repository.
+func openCodeTransportContextRefusal(err error) error {
+	switch {
+	case errors.Is(err, reviewtransaction.ErrUnsealedReviewRepositoryContext):
+		// This relay is the OpenCode transport, so the runtime that drives the
+		// reissuing STATUS is OpenCode by construction.
+		if lineage, ok := reviewtransaction.UnsealedReviewRepositoryContextLineage(err); ok {
+			return openCodeTransportStaleAuthority("Task repository context is not the sealed rctx3 handle OpenCode STATUS issues; run `" +
+				reviewProviderCaptureContinuation(model.AgentOpenCode, lineage) + "` to obtain the current provider-issued Task")
+		}
+		return openCodeTransportStaleAuthority("Task repository context is not the sealed rctx3 handle OpenCode STATUS issues; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --lineage <lineage> --next-transition` to obtain the current provider-issued Task")
+	case errors.Is(err, reviewtransaction.ErrReviewRepositoryContextKeyUnsafe):
+		return openCodeTransportBindingInvalid(reviewtransaction.ErrReviewRepositoryContextKeyUnsafe.Error())
+	default:
+		return openCodeTransportBindingInvalid("Task repository context does not match the repository and binding it commits to")
+	}
 }
 
 type openCodeTransportTaskBinding struct {
@@ -172,7 +228,36 @@ func RunReviewOpenCodeTransport(args []string, stdout io.Writer) error {
 	return runReviewOpenCodeTransport(args, os.Stdin, stdout)
 }
 
+// runReviewOpenCodeTransport runs one relay. Under the exact V2 relay
+// declaration a refusal also ends stdout with one bounded refused frame, so
+// the managed V2 plugin can name the cause to its parent; the V1 plugin keeps
+// its existing stderr-only refusal wire.
 func runReviewOpenCodeTransport(args []string, stdin io.Reader, stdout io.Writer) error {
+	err := runReviewOpenCodeTransportFrames(args, stdin, stdout)
+	if err != nil && openCodeRelayDeclaresV2() {
+		_ = json.NewEncoder(stdout).Encode(openCodeTransportRefusedFrameFor(err))
+	}
+	return err
+}
+
+// openCodeTransportRefusedFrame is the V2 refusal wire. cause is optional and
+// additive: an older V2 plugin that predates it ignores the field and keeps
+// naming the bounded reason alone.
+type openCodeTransportRefusedFrame struct {
+	Schema    string `json:"schema"`
+	Operation string `json:"operation"`
+	Error     string `json:"error"`
+	Cause     string `json:"cause,omitempty"`
+}
+
+func openCodeTransportRefusedFrameFor(err error) openCodeTransportRefusedFrame {
+	return openCodeTransportRefusedFrame{
+		Schema: openCodeReviewTransportSchema, Operation: "refused",
+		Error: openCodeTransportRefusalReason(err), Cause: openCodeTransportRefusalFrameCause(err),
+	}
+}
+
+func runReviewOpenCodeTransportFrames(args []string, stdin io.Reader, stdout io.Writer) error {
 	if !reviewImmutableRuntimeCapability(model.AgentOpenCode).supportsImmutableReceiptReview() {
 		return errors.New(reviewImmutableTransportUnsupportedCode)
 	}
@@ -275,6 +360,9 @@ func validateOpenCodeTransportStart(envelope openCodeTransportEnvelope) error {
 	if envelope.Operation != "start" || envelope.Prompt == "" || envelope.Nonce != "" || envelope.Output != nil || envelope.Error != "" {
 		return errors.New("opencode_review_transport_envelope_invalid: relay start requires only the original Task prompt") // refusal:by-design world-action: the shim must relay the original bound Task prompt before the host Task starts
 	}
+	if envelope.Agent == "" && openCodeRelayDeclaresV2() {
+		return errors.New("opencode_review_transport_envelope_invalid: the V2 relay start must name the host agent dispatched for the Task") // refusal:by-design world-action: the managed V2 plugin must forward the dispatched subagent name with the Task prompt
+	}
 	return nil
 }
 
@@ -290,7 +378,7 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
-	session, err := openCodeTransportStartBound(ctx, taskPrompt)
+	session, err := openCodeTransportStartBound(ctx, taskPrompt, envelope.Agent)
 	if err != nil {
 		return openCodeTransportSession{}, err
 	}
@@ -320,24 +408,29 @@ func openCodeTransportStart(ctx context.Context, envelope openCodeTransportEnvel
 	return session, nil
 }
 
-func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCodeTransportSession, error) {
+func openCodeTransportStartBound(ctx context.Context, taskPrompt, agent string) (openCodeTransportSession, error) {
 	binding, err := decodeOpenCodeTransportBinding(taskPrompt)
 	if err != nil {
+		return openCodeTransportSession{}, err
+	}
+	if err := validateOpenCodeTransportAgent(binding, agent); err != nil {
 		return openCodeTransportSession{}, err
 	}
 	requested := reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
 	}
-	// OpenCode exposes the host process cwd but not the Task target cwd. Resolve
-	// the opaque binding only through Git's registered sibling worktrees, then
-	// keep all authority, materialization, and capture operations on that root.
-	root, contextBinding, err := reviewtransaction.ResolveReviewRepositoryContextBindingFromHost(ctx, ".", binding.RepositoryContext, requested)
+	// The relay runs in the host session directory, which says nothing about
+	// the review: it may be a superproject, a git-less parent, or another
+	// repository. The OpenCode-issued rctx3 handle seals the root it was
+	// derived for, so it alone selects the repository; every authority,
+	// materialization, and capture operation below stays on that root.
+	root, contextBinding, err := reviewtransaction.ResolveOpenCodeReviewRepositoryContextBinding(ctx, binding.RepositoryContext, requested)
 	if err != nil {
-		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task repository context does not match the repository and binding it commits to")
+		return openCodeTransportSession{}, openCodeTransportContextRefusal(err)
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, binding.LineageID, false)
 	if err != nil {
-		return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lineage does not match live compact review authority")
+		return openCodeTransportSession{}, openCodeTransportStaleAuthority("Task lineage does not match live compact review authority")
 	}
 	if err := validateReviewProviderTaskAuthorityBinding(ReviewTransitionBinding{
 		LineageID: binding.LineageID, Revision: binding.Revision, TargetIdentity: binding.TargetIdentity,
@@ -418,7 +511,13 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	if session.binding.Role != "" {
 		closure, err := openCodeTransportCaptureRole(ctx, session.root, store, record, session.binding.Role, hostOutput)
 		if err != nil {
-			return openCodeTransportEnvelope{}, openCodeTransportCaptureRefusal(err)
+			// Exactly like the lens path below: the refused bytes and the full
+			// reason are preserved for the report; the refusal names only the
+			// bounded cause.
+			preserved := reviewRejectedResultClause(ctx, session.root, reviewRejectedResultMeta{
+				LineageID: record.State.LineageID, Lens: string(session.binding.Role), Attempt: 1, Reason: err.Error(),
+			}, hostOutput)
+			return openCodeTransportEnvelope{}, openCodeTransportCaptureRefusal(err, preserved)
 		}
 		if closure != nil {
 			if session.binding.Role == reviewerprovider.RoleRefuter {
@@ -426,7 +525,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 			}
 			payload, err := json.Marshal(closure)
 			if err != nil {
-				return openCodeTransportEnvelope{}, openCodeTransportCaptureRefusal(err)
+				return openCodeTransportEnvelope{}, openCodeTransportCaptureRefusal(err, "")
 			}
 			output := string(payload)
 			return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
@@ -438,10 +537,10 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	if err != nil {
 		// The host relay owns its reviewer and gets no corrective
 		// re-invocation, but the refused bytes are preserved for the report.
-		_ = reviewRejectedResultClause(ctx, session.root, reviewRejectedResultMeta{
+		preserved := reviewRejectedResultClause(ctx, session.root, reviewRejectedResultMeta{
 			LineageID: record.State.LineageID, Lens: session.lensRequest.Binding.Lens, Attempt: 1, Reason: err.Error(),
 		}, hostOutput)
-		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_reviewer_result_refused")
+		return openCodeTransportEnvelope{}, &openCodeTransportRefusal{code: "opencode_reviewer_result_refused", cause: openCodeTransportLensRefusalCause(err), preserved: preserved}
 	}
 	captured, err := store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
 		ExpectedRevision: record.State.CapturePhaseRevision, TargetIdentity: session.lensRequest.Binding.Target, FrozenContext: admitted.Frozen,
@@ -556,7 +655,7 @@ func validateReviewProviderTaskAuthorityBinding(binding ReviewTransitionBinding,
 	// freshly discovered record prevents a stale locator from selecting another
 	// authority before any provider prompt can be materialized.
 	if record.State.LineageID != binding.LineageID || record.State.CapturePhaseRevision != binding.Revision {
-		return openCodeTransportBindingInvalid("Task binding does not match live compact review authority")
+		return openCodeTransportStaleAuthority("Task binding does not match live compact review authority")
 	}
 	return nil
 }
@@ -792,10 +891,126 @@ func openCodeTransportCaptureRefusalCause(err error) string {
 	return "role_capture_failed"
 }
 
-func openCodeTransportCaptureRefusal(err error) error {
-	return fmt.Errorf("opencode_provider_role_result_refused (cause: %s): OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying", openCodeTransportCaptureRefusalCause(err))
+// openCodeTransportAdmissionDiagnosticCauses is the closed set of scrubbed
+// native admission diagnostic codes a lens refusal may name. Any other
+// admission failure -- for example a payload the strict decoder refuses --
+// is named reviewer_result_not_admissible.
+var openCodeTransportAdmissionDiagnosticCauses = []string{
+	"inspection_coverage", "invalid_finding_location", "evidence_path_out_of_scope", "proof_path_out_of_scope",
+	"candidate_causality_unclaimed_id", "candidate_causality_evidence_degraded",
+}
+
+// openCodeTransportLensRefusalCause classifies a refused lens result by the
+// bounded diagnostic code native admission attached to it, never by its
+// prose, so no reviewer byte or path reaches the rendered refusal.
+func openCodeTransportLensRefusalCause(err error) string {
+	var admission *reviewtransaction.ArtifactAdmissionError
+	if errors.As(err, &admission) && admission.Diagnostic != nil && slices.Contains(openCodeTransportAdmissionDiagnosticCauses, admission.Diagnostic.Code) {
+		return admission.Diagnostic.Code
+	}
+	return "reviewer_result_not_admissible"
+}
+
+// openCodeTransportRefusal is a captured-output refusal that names its bounded
+// cause. preserved is the reviewRejectedResultClause for the refused bytes,
+// empty when nothing was preserved.
+type openCodeTransportRefusal struct{ code, cause, preserved string }
+
+func (err *openCodeTransportRefusal) Error() string {
+	return fmt.Sprintf("%s (cause: %s): OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying%s", err.code, err.cause, err.preserved)
+}
+
+func openCodeTransportCaptureRefusal(err error, preserved string) error {
+	return &openCodeTransportRefusal{code: "opencode_provider_role_result_refused", cause: openCodeTransportCaptureRefusalCause(err), preserved: preserved}
 }
 
 func openCodeTransportAuthorityUnavailable(cause error) error {
 	return fmt.Errorf("opencode_review_transport_authority_unavailable: OpenCode Task transport did not produce a capturable reviewer result; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` before retrying: %w", cause)
+}
+
+// openCodeRefusalCauses is the closed vocabulary a V2 refused frame may name
+// beside its reason. The plugin forwards only these exact codes and drops any
+// other value, so free text, paths, or payload bytes never reach the parent.
+var openCodeRefusalCauses = append([]string{
+	"reviewer_result_not_admissible", "validator_result_not_admissible",
+	"targeted_validation_inconclusive", "role_capture_failed",
+}, openCodeTransportAdmissionDiagnosticCauses...)
+
+// openCodeTransportRefusalFrameCause reads the cause only from a typed
+// captured-output refusal and only when it is a closed-vocabulary member;
+// every other refusal names no cause.
+func openCodeTransportRefusalFrameCause(err error) string {
+	var refusal *openCodeTransportRefusal
+	if errors.As(err, &refusal) && slices.Contains(openCodeRefusalCauses, refusal.cause) {
+		return refusal.cause
+	}
+	return ""
+}
+
+// Bounded refusal reasons the V2 relay may surface to the parent. The plugin
+// forwards only these exact codes; everything else is relay_unavailable.
+const (
+	openCodeRefusalCapabilityUnavailable = "capability_unavailable"
+	openCodeRefusalEnvelopeInvalid       = "envelope_invalid"
+	openCodeRefusalAgentMismatch         = "agent_mismatch"
+	openCodeRefusalBindingMismatch       = "binding_mismatch"
+	openCodeRefusalStaleAuthority        = "stale_authority"
+	openCodeRefusalOutputRefused         = "output_refused"
+	openCodeRefusalProviderFailed        = "provider_failed"
+	openCodeRefusalRelayUnavailable      = "relay_unavailable"
+)
+
+var openCodeRefusalReasons = []string{
+	openCodeRefusalCapabilityUnavailable, openCodeRefusalEnvelopeInvalid, openCodeRefusalAgentMismatch,
+	openCodeRefusalBindingMismatch, openCodeRefusalStaleAuthority, openCodeRefusalOutputRefused,
+	openCodeRefusalProviderFailed, openCodeRefusalRelayUnavailable,
+}
+
+// openCodeTransportRefusalReason maps a relay refusal to its bounded reason.
+// It reads only typed errors and the leading Go-owned code token; the detail
+// text, raw child output, and paths never influence or reach the result.
+func openCodeTransportRefusalReason(err error) string {
+	var binding *openCodeTransportBindingError
+	if errors.As(err, &binding) {
+		switch {
+		case binding.code == openCodeTransportAgentMismatchCode:
+			return openCodeRefusalAgentMismatch
+		case binding.stale:
+			return openCodeRefusalStaleAuthority
+		default:
+			return openCodeRefusalBindingMismatch
+		}
+	}
+	var output *openCodeTaskOutputError
+	if errors.As(err, &output) {
+		if output.Code == "opencode_task_error" {
+			return openCodeRefusalProviderFailed
+		}
+		return openCodeRefusalOutputRefused
+	}
+	if err == nil {
+		return openCodeRefusalRelayUnavailable
+	}
+	message := err.Error()
+	code := message[:len(message)-len(strings.TrimLeft(message, "abcdefghijklmnopqrstuvwxyz0123456789_"))]
+	switch code {
+	case reviewImmutableTransportUnsupportedCode:
+		return openCodeRefusalCapabilityUnavailable
+	case "opencode_review_transport_envelope_invalid":
+		return openCodeRefusalEnvelopeInvalid
+	case "opencode_review_transport_authority_unavailable", "opencode_review_transport_completion_unavailable":
+		return openCodeRefusalStaleAuthority
+	case "opencode_reviewer_result_refused", "opencode_provider_role_result_refused":
+		return openCodeRefusalOutputRefused
+	case "opencode_task_transport_failed", "opencode_review_transport_provider_result_missing":
+		return openCodeRefusalProviderFailed
+	default:
+		return openCodeRefusalRelayUnavailable
+	}
+}
+
+// openCodeTransportStaleAuthority is a well-formed binding that no longer
+// matches live compact authority: its lineage or revision has moved on.
+func openCodeTransportStaleAuthority(detail string) error {
+	return &openCodeTransportBindingError{detail: detail, stale: true}
 }

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) {
@@ -240,7 +240,7 @@ func TestNegotiatedStatusRoutesCorrectionRequiredDriftCorrectly(t *testing.T) {
 		status := negotiatedReviewStatusForLineage(t, repo, lineage)
 		if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
 			status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
-			status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "recovery_authorization_required" {
+			status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.recover" {
 			t.Fatalf("out-of-manifest drift status = %#v", status)
 		}
 	})

@@ -5,12 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const (
@@ -49,7 +50,7 @@ func installedGuidance(t *testing.T, home string, agent model.AgentID) (string, 
 		t.Fatalf("NewAdapter(%q) error = %v", agent, err)
 	}
 	paths, err := agentguidance.RoutingPathsWithOptions(home, agent, routingGuidanceOptions(home, "", adapter))
-	if err != nil || len(paths) != 1 {
+	if err != nil || len(paths) == 0 {
 		t.Fatalf("RoutingPathsWithOptions(%q) = %v, %v", agent, paths, err)
 	}
 	raw := readTextFile(t, paths[0])
@@ -67,6 +68,52 @@ func installedGuidance(t *testing.T, home string, agent model.AgentID) (string, 
 	return paths[0], settings.Agent[opencodedefault.ManagedAgent].Prompt
 }
 
+func TestInstallAndSyncSelectGenericOrchestratorVariant(t *testing.T) {
+	asset, err := assets.Read("generic/orchestrator.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []model.AgentID{model.AgentVSCodeCopilot, model.AgentOpenClaw, model.AgentTrae} {
+		for _, route := range []string{"fresh", "install-upgrade", "sync-upgrade"} {
+			t.Run(string(agent)+"/"+route, func(t *testing.T) {
+				home := t.TempDir()
+				selection := model.Selection{Agents: []model.AgentID{agent}}
+				if route != "fresh" {
+					path := systemPromptFileFor(t, home, agent)
+					legacy := "User prefix\n" + legacyOrchestratorOpenMarker + "\n" + asset + "\n<!-- /gentle-ai:sdd-orchestrator -->\nUser suffix\n"
+					mustWriteFile(t, path, []byte(legacy))
+				}
+				if route == "sync-upgrade" {
+					runSyncInjectionSteps(t, home, selection)
+				} else {
+					runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+				}
+				path, prompt := installedGuidance(t, home, agent)
+				if strings.Count(prompt, "# Agent Teams Lite — Orchestrator Instructions") != 1 || strings.Contains(prompt, "Orchestrator Instructions (Small Model)") || strings.Contains(prompt, "section:model-") {
+					t.Fatal("installed carrier must contain only the default capable variant")
+				}
+				for _, marker := range []string{"Lossless Blocking Prompts", "Delegated Verification Gate", "Sub-Agent Launch Deduplication", "Skill Resolution Feedback", "Sub-Agent Context Protocol", "Remote operation authorization"} {
+					if !strings.Contains(prompt, marker) {
+						t.Errorf("installed carrier lost %q", marker)
+					}
+				}
+				if route != "fresh" && (!strings.HasPrefix(prompt, "User prefix\n") || !strings.Contains(prompt, "\nUser suffix\n")) {
+					t.Fatal("upgrade changed user bytes")
+				}
+				installed := readTextFile(t, path)
+				runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+				if readTextFile(t, path) != installed {
+					t.Fatal("repeat install changed carrier")
+				}
+				runSyncInjectionSteps(t, home, selection)
+				if readTextFile(t, path) != installed {
+					t.Fatal("repeat sync changed carrier")
+				}
+			})
+		}
+	}
+}
+
 func TestInstallAndSyncDeliverOrchestratorOnceForEveryRuntime(t *testing.T) {
 	for _, agent := range orchestratorRuntimesForInstall(t) {
 		t.Run(string(agent), func(t *testing.T) {
@@ -81,7 +128,7 @@ func TestInstallAndSyncDeliverOrchestratorOnceForEveryRuntime(t *testing.T) {
 			path, prompt := installedGuidance(t, home, agent)
 			installed := readTextFile(t, path)
 
-			rendered, err := agentguidance.RenderOrchestratorWithSource(agent, reviewassets.ReviewExecutionContractFor)
+			rendered, err := agentguidance.RenderOrchestratorWithSource(agent, reviewassets.ReviewExecutionContractFor, "")
 			if err != nil {
 				t.Fatalf("RenderOrchestrator(%q) error = %v", agent, err)
 			}

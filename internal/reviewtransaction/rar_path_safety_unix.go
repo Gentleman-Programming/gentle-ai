@@ -101,12 +101,48 @@ func createPrivateRARDirectory(path string) (bool, error) {
 // release or an interrupted run left behind is exactly as repairable). A
 // symlink, somebody else's entry, and a directory already holding state all
 // still refuse -- see validatePrivateRARDirectory / the no-follow repair.
+// When the refusal is the weakened-directory one -- whether because the
+// no-follow repair ran and the mode STILL reports world-access, or because
+// the repair refused to touch a directory that already holds state -- the
+// refusal is refined into the typed #5112 capability diagnostic, because
+// the printed chmod repair can never take effect on that mount class.
 func repairAndValidatePrivateRARDirectory(path string) error {
 	validateErr := validatePrivateRARDirectory(path)
 	if validateErr != nil {
 		if repairErr := rarPrivateDirectoryChmod(path, 0o700); repairErr == nil {
 			validateErr = validatePrivateRARDirectory(path)
 		}
+	}
+	return refinePrivateModeRepairFailure(path, validateErr)
+}
+
+// refinePrivateModeRepairFailure distinguishes the one repairable-permission
+// refusal from the structurally unsatisfiable one. A directory owned by this
+// process whose mode still reports group or other access, on a filesystem a
+// probe shows cannot represent private modes at all, is the WSL DrvFS
+// no-metadata class (#5112): telling that operator to run chmod again sends
+// them into a loop the mount can never exit, so the refusal becomes the typed
+// capability diagnostic instead. Every other shape -- a symlink, somebody else's entry, a probe error, a capable filesystem
+// that simply needs the printed repair -- keeps the existing refusal
+// unchanged, exactly as it validates today.
+func refinePrivateModeRepairFailure(path string, validateErr error) error {
+	var unsafe *UnsafeRARPathError
+	if !errors.As(validateErr, &unsafe) {
+		return validateErr
+	}
+	before, err := os.Lstat(path)
+	if err != nil || rarPathUnsafe(path, before) || !before.IsDir() {
+		return validateErr
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Geteuid()) {
+		return validateErr
+	}
+	// The capability question is about the refused directory's own
+	// filesystem: probing its parent would misanswer a bind-mounted or
+	// overlayed RAR directory.
+	if before.Mode().Perm()&0o077 != 0 && rarPOSIXPrivateModeIneffective(path) {
+		return &PrivateModeIneffectiveError{Path: path, Directory: true, Cause: validateErr}
 	}
 	return validateErr
 }
@@ -171,6 +207,45 @@ func rarRepositoryOpenDirectorySafe(_ *os.File, info fs.FileInfo) bool {
 // kept as a variable so tests can reproduce either outcome, and any probe
 // error, without a real FUSE mount.
 var rarPOSIXFUSEProjectedOwnership = posixFUSEProjectedOwnership
+
+// rarPOSIXPrivateModeIneffective reports whether the filesystem hosting dir
+// cannot represent private POSIX modes at all: a fresh probe file that a
+// successful chmod set to owner-only still reports group or other access.
+// WSL DrvFS/9p without the metadata option (#5112), exFAT, and SMB mounts
+// without POSIX extensions all behave this way -- the same mount class the
+// mkdir/chmod primitives above were built to reproduce. Like the FUSE
+// ownership probe, any probe error reports "effective": an inconclusive
+// probe is not grounds to guess a new refusal. Kept as a variable so tests
+// can reproduce the ineffective outcome without a real mount of this class.
+var rarPOSIXPrivateModeIneffective = posixPrivateModeIneffective
+
+// posixPrivateModeIneffective runs the mount-class probe against dir itself:
+// create a scratch file inside it, unlink it while holding the descriptor (so
+// the measurement runs against the exact filesystem being diagnosed and even
+// a crash cannot leave the authority directory non-empty), set the descriptor
+// owner-only, and read the mode back. It runs only on the already-failing
+// path and never touches an authority payload. An unprobeable directory
+// reports "effective": an inconclusive probe is not grounds to guess a new
+// refusal.
+func posixPrivateModeIneffective(dir string) bool {
+	file, err := os.CreateTemp(dir, ".gentle-ai-private-mode-probe-")
+	if err != nil {
+		return false
+	}
+	if err := os.Remove(file.Name()); err != nil {
+		_ = file.Close()
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	if err := file.Chmod(0o600); err != nil {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode().Perm()&0o077 != 0
+}
 
 func formatRARAuthorityRefusal(path string) error {
 	// #2838: a directory whose reported owner is a FUSE mount-time

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func createWindowsCompatibilityJunction(t *testing.T, link, target string) {
@@ -157,9 +157,9 @@ func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterSuccess(t *t
 		closeCount++
 	})
 	selection, resolved, profile := windowsTUICompatibilityPlan()
-	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, model.PiBackgroundIntent(""), nil)
+	result, _, _ := ExecuteTUIInstallRecordingCodexServiceTier(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, model.PiBackgroundIntent(""), nil)
 	if result.Err != nil {
-		t.Fatalf("ExecuteTUIInstallWithBackgroundAndOrchestrator() error = %v", result.Err)
+		t.Fatalf("ExecuteTUIInstallRecordingCodexServiceTier() error = %v", result.Err)
 	}
 	if closeCount != 1 {
 		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
@@ -190,12 +190,12 @@ func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterRollback(t *
 	})
 
 	selection, resolved, profile := windowsTUICompatibilityPlan()
-	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, model.PiBackgroundIntent(""), nil)
+	result, _, _ := ExecuteTUIInstallRecordingCodexServiceTier(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, model.PiBackgroundIntent(""), nil)
 	if result.Err == nil {
-		t.Fatal("ExecuteTUIInstallWithBackgroundAndOrchestrator() error = nil, want post-publication failure")
+		t.Fatal("ExecuteTUIInstallRecordingCodexServiceTier() error = nil, want post-publication failure")
 	}
 	if !result.Rollback.Success {
-		t.Fatalf("ExecuteTUIInstallWithBackgroundAndOrchestrator() rollback = %+v, want successful restoration", result.Rollback)
+		t.Fatalf("ExecuteTUIInstallRecordingCodexServiceTier() rollback = %+v, want successful restoration", result.Rollback)
 	}
 	if closeCount != 1 {
 		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
@@ -419,7 +419,7 @@ func TestWindowsCompatibilityTransactionRollbackRemovesCreatedFilesAfterDuplicat
 	writeStale(t, existing)
 	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
 
-	first, err := newSyncRuntime(home, selection)
+	first, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestWindowsCompatibilityTransactionRollbackRemovesCreatedFilesAfterDuplicat
 	first.state.cleanupRollbackSnapshot()
 	first.state.cleanupCompatibilityTransaction()
 
-	runtime, err := newSyncRuntime(home, selection)
+	runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}

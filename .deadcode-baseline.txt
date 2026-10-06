@@ -42,11 +42,8 @@ internal/cli/review_printed_command.go	SplitPrintedCommandWords
 internal/cli/review_provider.go	reviewProviderAdmitLensRaw
 internal/cli/review_provider.go	reviewProviderRoleContracts
 internal/cli/run.go	componentPathDir
-internal/cli/run.go	componentPaths
 internal/cli/run.go	ensureGoAvailableAfterInstall
 internal/cli/run.go	windowsGoCandidates
-internal/cli/sync.go	syncComponentPaths
-internal/cli/sync.go	syncPersonaPaths
 internal/components/communitytool/pi_codegraph.go	ValidatePiCodeGraphRoot
 internal/components/communitytool/pi_codegraph.go	verifyPiMCP
 internal/components/communitytool/tool.go	CodeGraphCommands
@@ -55,9 +52,6 @@ internal/components/engram/download.go	downloadAndExtractTarGz
 internal/components/engram/download.go	downloadAndExtractZip
 internal/components/engram/inject.go	Inject
 internal/components/engram/inject.go	SetLookPathForTest
-internal/components/engram/inject.go	engramServerJSON
-internal/components/engram/inject.go	ensureAntigravitySettings
-internal/components/engram/inject.go	isAbsoluteEngramPath
 internal/components/engram/verify.go	CountVersionCallsForTest
 internal/components/engram/verify.go	SetVersionForTest
 internal/components/filemerge/toml.go	RemoveTOMLTableKeys
@@ -68,6 +62,8 @@ internal/components/gga/install.go	ShouldInstall
 internal/components/gga/runtime.go	RuntimeBinDir
 internal/components/mcp/inject.go	context7Args
 internal/components/telemetryruntime/managed.go	Reconcile
+internal/filecoord/lock.go	UnsupportedError.Error
+internal/filecoord/lock.go	UnsupportedError.Unwrap
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
 internal/installcmd/testhelper.go	OverrideGetenv

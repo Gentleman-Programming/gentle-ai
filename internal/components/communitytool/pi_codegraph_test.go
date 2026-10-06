@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	piagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
 func TestPiCodeGraphUnselectedIsNoOp(t *testing.T) {
@@ -280,16 +280,15 @@ func TestPiCodeGraphDeselectionRemovesOnlyOwnedIntegration(t *testing.T) {
 	}
 }
 
-func TestPiCodeGraphRefreshRestoresMissingOwnedChild(t *testing.T) {
+// A removed child is never recreated: sync drops its ownership record instead
+// of resurrecting a file the user or the Pi package deleted (issue #5219).
+func TestPiCodeGraphRefreshDoesNotRecreateMissingChild(t *testing.T) {
 	home := t.TempDir()
 	previousProbe := piCodeGraphEffectiveMCPProbe
 	piCodeGraphEffectiveMCPProbe = piProbeForTest
 	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previousProbe })
 	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
 	writePiFile(t, childPath, "---\ntools: bash\n---\nwork\n")
-	if err := os.Chmod(childPath, 0o640); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
 		t.Fatal(err)
 	}
@@ -300,15 +299,165 @@ func TestPiCodeGraphRefreshRestoresMissingOwnedChild(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("RefreshPiCodeGraphIfConfigured() = %#v, %v, %v", result, handled, err)
 	}
-	if got := string(mustReadPiFile(t, childPath)); !strings.Contains(got, piCodeGraphGuidanceMarker) || !strings.Contains(got, "mcp") {
-		t.Fatalf("refresh did not restore and verify child: %q", got)
+	if _, err := os.Stat(childPath); !os.IsNotExist(err) {
+		t.Fatalf("refresh recreated a removed child: %v", err)
 	}
-	info, err := os.Stat(childPath)
+	if _, exists := readPiManifestForTest(t, home).Children[childPath]; exists {
+		t.Fatal("manifest still owns a removed child")
+	}
+}
+
+// seedRetiredPiSDDChildren records retired SDD overlays in the manifest the
+// way pre-retirement releases adopted them from the Pi agent home.
+func seedRetiredPiSDDChildren(t *testing.T, home string, names ...string) map[string]piCodeGraphOwnedFile {
+	t.Helper()
+	paths := piagent.CodeGraphPaths(home)
+	manifest := readPiManifestForTest(t, home)
+	recorded := map[string]piCodeGraphOwnedFile{}
+	for _, name := range names {
+		path := filepath.Join(paths.AgentDir, "agents", name)
+		before := "---\ntools: read, bash\n---\n" + name + " package body\n"
+		after, err := renderPiChild(before, []string{"read", "bash", "mcp"}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owned := piCodeGraphOwnedFile{Before: &before, After: after, AfterHash: hashPiBytes([]byte(after)), Mode: 0o644}
+		manifest.Children[path] = owned
+		recorded[path] = owned
+	}
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o640 {
-		t.Fatalf("restored child mode = %o, want %o", got, 0o640)
+	if err := os.WriteFile(paths.Manifest, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return recorded
+}
+
+func readPiManifestForTest(t *testing.T, home string) piCodeGraphManifest {
+	t.Helper()
+	var manifest piCodeGraphManifest
+	if err := json.Unmarshal(mustReadPiFile(t, piagent.CodeGraphPaths(home).Manifest), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+// Issue #5219: sync recreated every retired SDD agent recorded in the manifest
+// and kept its overlay in the rest, so gentle-pi could not prove ownership.
+func TestPiCodeGraphRefreshReleasesRetiredSDDChildren(t *testing.T) {
+	home := t.TempDir()
+	previousProbe := piCodeGraphEffectiveMCPProbe
+	piCodeGraphEffectiveMCPProbe = piProbeForTest
+	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previousProbe })
+	agents := filepath.Join(piagent.CodeGraphPaths(home).AgentDir, "agents")
+	worker := filepath.Join(agents, "worker.md")
+	writePiFile(t, worker, "---\ntools: bash\n---\nwork\n")
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	recorded := seedRetiredPiSDDChildren(t, home, "sdd-apply.md", "sdd-verify.md", "sdd-spec.md")
+	missing, overlaid, edited := filepath.Join(agents, "sdd-apply.md"), filepath.Join(agents, "sdd-verify.md"), filepath.Join(agents, "sdd-spec.md")
+	writePiFile(t, overlaid, recorded[overlaid].After)
+	editedBody := recorded[edited].After + "\nuser edit\n"
+	writePiFile(t, edited, editedBody)
+
+	result, handled, err := RefreshPiCodeGraphIfConfigured(home, "")
+	if err != nil || !handled {
+		t.Fatalf("RefreshPiCodeGraphIfConfigured() = %#v, %v, %v", result, handled, err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("sync recreated a retired SDD child: %v", err)
+	}
+	if got := string(mustReadPiFile(t, overlaid)); got != *recorded[overlaid].Before {
+		t.Fatalf("overlaid retired child = %q, want recorded before-image %q", got, *recorded[overlaid].Before)
+	}
+	if got := string(mustReadPiFile(t, edited)); got != editedBody {
+		t.Fatalf("edited retired child = %q, want untouched %q", got, editedBody)
+	}
+	if !slices.Contains(result.Files, overlaid) || slices.Contains(result.Files, missing) || slices.Contains(result.Files, edited) {
+		t.Fatalf("changed files = %v, want only the restored retired child", result.Files)
+	}
+	manifest := readPiManifestForTest(t, home)
+	for path := range recorded {
+		if _, exists := manifest.Children[path]; exists {
+			t.Fatalf("manifest still owns retired child %s", path)
+		}
+	}
+	if _, exists := manifest.Children[worker]; !exists {
+		t.Fatal("manifest dropped a non-retired child")
+	}
+	if !strings.Contains(string(mustReadPiFile(t, worker)), piCodeGraphGuidanceMarker) {
+		t.Fatal("non-retired child lost its CodeGraph overlay")
+	}
+
+	second, _, err := RefreshPiCodeGraphIfConfigured(home, "")
+	if err != nil || second.Changed {
+		t.Fatalf("second refresh = %#v, %v; want idempotent no-op", second, err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("second refresh recreated a retired SDD child: %v", err)
+	}
+	if got := string(mustReadPiFile(t, overlaid)); got != *recorded[overlaid].Before {
+		t.Fatalf("second refresh re-overlaid a retired child: %q", got)
+	}
+	if got := string(mustReadPiFile(t, edited)); got != editedBody {
+		t.Fatalf("second refresh changed an edited retired child: %q", got)
+	}
+}
+
+func TestPiCodeGraphDoesNotProjectRetiredSDDChildren(t *testing.T) {
+	home := t.TempDir()
+	agentDir := piagent.CodeGraphPaths(home).AgentDir
+	packageChild := filepath.Join(agentDir, "node_modules", "gentle-pi", "agents", "sdd-apply.md")
+	homeChild := filepath.Join(agentDir, "agents", "sdd-init.md")
+	homeBody := "---\ntools: bash\n---\nsdd-init body\n"
+	writePiFile(t, packageChild, "---\ntools: bash\n---\nretired package body\n")
+	writePiFile(t, homeChild, homeBody)
+
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Children) != 0 {
+		t.Fatalf("children = %#v, want retired SDD agents skipped", result.Children)
+	}
+	if _, err := os.Stat(filepath.Join(agentDir, "subagents", "sdd-apply.md")); !os.IsNotExist(err) {
+		t.Fatalf("retired package agent was projected: %v", err)
+	}
+	if got := string(mustReadPiFile(t, homeChild)); got != homeBody {
+		t.Fatalf("retired agent-home child = %q, want untouched %q", got, homeBody)
+	}
+	if children := readPiManifestForTest(t, home).Children; len(children) != 0 {
+		t.Fatalf("manifest children = %v, want none", children)
+	}
+	if configured, reason := PiCodeGraphConfigured(home, ""); !configured {
+		t.Fatalf("PiCodeGraphConfigured() = false (%s), want retired children ignored", reason)
+	}
+}
+
+func TestPiCodeGraphRetiredSDDReleaseRollsBackOnFailure(t *testing.T) {
+	home := t.TempDir()
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	recorded := seedRetiredPiSDDChildren(t, home, "sdd-apply.md")
+	path := filepath.Join(piagent.CodeGraphPaths(home).AgentDir, "agents", "sdd-apply.md")
+	writePiFile(t, path, recorded[path].After)
+	manifestBefore := mustReadPiFile(t, piagent.CodeGraphPaths(home).Manifest)
+
+	failingProbe := func(string) (PiCodeGraphMCPProbeResult, error) {
+		return PiCodeGraphMCPProbeResult{}, errors.New("probe failed")
+	}
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: failingProbe}); err == nil {
+		t.Fatal("ReconcilePiCodeGraph() error = nil, want probe failure")
+	}
+	if got := string(mustReadPiFile(t, path)); got != recorded[path].After {
+		t.Fatalf("retired child after rollback = %q, want overlay %q", got, recorded[path].After)
+	}
+	if got := mustReadPiFile(t, piagent.CodeGraphPaths(home).Manifest); !bytes.Equal(got, manifestBefore) {
+		t.Fatalf("manifest changed after rollback:\n%s", got)
 	}
 }
 
@@ -411,8 +560,9 @@ func TestVerifyPiCodeGraphRejectsNonCanonicalMCP(t *testing.T) {
 	}
 }
 
-func TestVerifyPiMCPFailsClosedWithoutAdapterOrProcess(t *testing.T) {
+func TestVerifyPiMCPFailsClosedWithoutMCPProcess(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
 	mcpPath := filepath.Join(home, "mcp.json")
 	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 	previous := piCodeGraphEffectiveMCPProbe
@@ -420,7 +570,7 @@ func TestVerifyPiMCPFailsClosedWithoutAdapterOrProcess(t *testing.T) {
 	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
 
 	if _, err := verifyPiMCP(mcpPath); err == nil {
-		t.Fatal("verifyPiMCP() succeeded without a Pi MCP adapter or MCP process")
+		t.Fatal("verifyPiMCP() succeeded without a CodeGraph MCP process")
 	}
 }
 
@@ -567,7 +717,6 @@ func TestPiCodeGraphPendingProbePreservesConfiguredFiles(t *testing.T) {
 	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
 	manifestPath := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
 	writePiFile(t, childPath, "---\ntools: bash\n---\nwork\n")
-	writePiFile(t, filepath.Join(home, ".pi", "agent", "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 	installFakeCodeGraph(t)
 	previousProbe := piCodeGraphEffectiveMCPProbe
 	piCodeGraphEffectiveMCPProbe = probePiCodeGraphMCP
@@ -727,15 +876,15 @@ func TestPiCodeGraphFailsClosedForBrokenProjectMCPOverride(t *testing.T) {
 	}
 }
 
+// Pi >= 0.99.0 runs MCP servers through its built-in MCP support, so the
+// probe must not require the retired pi-mcp-adapter package on disk.
 func TestPiCodeGraphProbeVerifiesDirectMCPWithoutPiProcess(t *testing.T) {
 	home := t.TempDir()
-	agentDir := filepath.Join(home, "custom-agent")
 	mcpPath := filepath.Join(home, "project", ".mcp.json")
-	writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
 	installFakeCodeGraph(t)
 
-	result, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir)
+	result, err := probePiCodeGraphMCP(mcpPath)
 	if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
 		t.Fatalf("probe error = %v, want unavailable adapter health", err)
 	}
@@ -821,8 +970,6 @@ func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 	for _, response := range responses {
 		t.Run(response, func(t *testing.T) {
 			home := t.TempDir()
-			agentDir := filepath.Join(home, "custom-agent")
-			writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
 			if runtime.GOOS == "windows" {
 				t.Setenv("GENTLE_AI_CODEGRAPH_TEST_RESPONSE", response)
 				installFakeCodeGraphHelper(t, "invalid-response")
@@ -830,7 +977,7 @@ func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 				installFakeCodeGraphScript(t, `while IFS= read -r request; do printf '%s\n' '`+response+`'; done`)
 			}
 
-			_, err := probePiCodeGraphMCPWithAgentDir(filepath.Join(home, "mcp.json"), agentDir)
+			_, err := probePiCodeGraphMCP(filepath.Join(home, "mcp.json"))
 			if err == nil || !strings.Contains(err.Error(), "invalid JSON-RPC 2.0 result") {
 				t.Fatalf("probe error = %v, want invalid initialize response", err)
 			}
@@ -1046,6 +1193,13 @@ func installFakeCodeGraphScript(t *testing.T, body string) {
 func TestCodeGraphIsolatedManifestWithConfiguredAgentDir(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	home := t.TempDir()
+	// internal/agents/pi.isRealUserHome only honors an absolute
+	// PI_CODING_AGENT_DIR override for the process's actual home directory,
+	// so this test must make home look real for the duration of the test.
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
 
 	// 1. Initial run under standard Pi config creates a manifest with an owned child.
 	defaultPaths := piagent.CodeGraphPaths(home)

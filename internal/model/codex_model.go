@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -15,9 +16,9 @@ import (
 // availability probe; the Codex CLI remains the source of truth at execution
 // time. Order is intentional: newest/most-capable first.
 var codexModelCatalog = []string{
-	"gpt-6-astra",
-	"gpt-6-sol",
-	"gpt-6-luna",
+	"gpt-6.1-astra",
+	"gpt-6.1-sol",
+	"gpt-6.1-luna",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
@@ -84,35 +85,68 @@ type codexDiscoveredModelCatalog struct {
 }
 
 type codexCatalogModel struct {
-	Slug           string `json:"slug"`
-	Visibility     string `json:"visibility"`
-	SupportedInAPI *bool  `json:"supported_in_api"`
+	Slug                     string `json:"slug"`
+	Visibility               string `json:"visibility"`
+	SupportedInAPI           *bool  `json:"supported_in_api"`
+	SupportedReasoningLevels []struct {
+		Effort string `json:"effort"`
+	} `json:"supported_reasoning_levels"`
+	// ServiceTiers is nil when an older Codex omits the key entirely.
+	ServiceTiers *[]CodexServiceTier `json:"service_tiers"`
 }
 
-// DiscoverCodexModels returns selectable models from the locally installed Codex
-// CLI. It falls back to the curated catalog if Codex is unavailable, times out,
-// returns invalid JSON, or reports no selectable models.
-func DiscoverCodexModels(ctx context.Context) []string {
+// CodexServiceTier is one Codex service tier a model advertises. ID is the
+// request value written to config.toml's top-level service_tier key; "fast"
+// is the priority tier, a speed selection rather than a reasoning effort.
+type CodexServiceTier struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// CodexModelCapabilities is what the installed Codex runtime advertises for
+// one model: its reasoning efforts and its service tiers.
+type CodexModelCapabilities struct {
+	Efforts      []CodexEffort
+	ServiceTiers []CodexServiceTier
+	// ServiceTiersReported is false when the runtime predates service_tiers;
+	// the tiers are then unknown and a persisted selection must be kept.
+	ServiceTiersReported bool
+}
+
+// CodexModelCatalog is the Custom picker catalog. Models missing from
+// Capabilities (including the whole curated fallback) have unknown
+// capabilities, so callers keep their curated effort list for them.
+type CodexModelCatalog struct {
+	Models       []string
+	Capabilities map[string]CodexModelCapabilities
+}
+
+// DiscoverCodexModels returns selectable models and their advertised
+// capabilities from the locally installed Codex CLI. It falls back to the
+// curated catalog if Codex is unavailable, times out, returns invalid JSON,
+// or reports no selectable models.
+func DiscoverCodexModels(ctx context.Context) CodexModelCatalog {
+	fallback := CodexModelCatalog{Models: CodexAvailableModels()}
 	discoveryCtx, cancel := context.WithTimeout(ctx, codexModelDiscoveryTimeout)
 	defer cancel()
 
 	codexPath, err := codexLookPath("codex")
 	if err != nil {
-		return CodexAvailableModels()
+		return fallback
 	}
 	cmd := codexCommand(discoveryCtx, codexPath, "debug", "models")
 	output := &codexDiscoveryOutput{limit: codexModelDiscoveryOutputLimit}
 	cmd.Stdout = output
 	if err := cmd.Run(); err != nil || output.overflow {
-		return CodexAvailableModels()
+		return fallback
 	}
 
 	var catalog codexDiscoveredModelCatalog
 	if err := json.Unmarshal([]byte(output.data.String()), &catalog); err != nil {
-		return CodexAvailableModels()
+		return fallback
 	}
 
-	models := make([]string, 0, len(catalog.Models))
+	discovered := CodexModelCatalog{Models: make([]string, 0, len(catalog.Models))}
 	seen := make(map[string]struct{}, len(catalog.Models))
 	for _, entry := range catalog.Models {
 		slug := strings.TrimSpace(entry.Slug)
@@ -123,12 +157,65 @@ func DiscoverCodexModels(ctx context.Context) []string {
 			continue
 		}
 		seen[slug] = struct{}{}
-		models = append(models, slug)
+		discovered.Models = append(discovered.Models, slug)
+		if capabilities, ok := entry.capabilities(); ok {
+			if discovered.Capabilities == nil {
+				discovered.Capabilities = make(map[string]CodexModelCapabilities)
+			}
+			discovered.Capabilities[slug] = capabilities
+		}
 	}
-	if len(models) == 0 {
-		return CodexAvailableModels()
+	if len(discovered.Models) == 0 {
+		return fallback
 	}
-	return models
+	return discovered
+}
+
+// capabilities keeps only efforts Gentle AI can route, in canonical order, and
+// service tiers that are safe request values. "default" is Codex's explicit
+// standard-routing sentinel, not a tier.
+func (entry codexCatalogModel) capabilities() (CodexModelCapabilities, bool) {
+	var capabilities CodexModelCapabilities
+	advertised := make(map[CodexEffort]bool, len(entry.SupportedReasoningLevels))
+	for _, level := range entry.SupportedReasoningLevels {
+		advertised[CodexEffort(level.Effort)] = true
+	}
+	for _, effort := range codexEffortOrder {
+		if advertised[effort] {
+			capabilities.Efforts = append(capabilities.Efforts, effort)
+		}
+	}
+	if entry.ServiceTiers != nil {
+		capabilities.ServiceTiersReported = true
+	}
+	for _, tier := range ptrValue(entry.ServiceTiers) {
+		if tier.ID != "default" && ValidCodexServiceTier(tier.ID) && !slices.ContainsFunc(capabilities.ServiceTiers, func(t CodexServiceTier) bool { return t.ID == tier.ID }) {
+			capabilities.ServiceTiers = append(capabilities.ServiceTiers, tier)
+		}
+	}
+	return capabilities, len(capabilities.Efforts) > 0 || capabilities.ServiceTiersReported
+}
+
+func ptrValue[T any](value *T) T {
+	if value == nil {
+		var zero T
+		return zero
+	}
+	return *value
+}
+
+// ValidCodexServiceTier accepts a single lowercase request token so persisted
+// state cannot shape config.toml beyond one string value.
+func ValidCodexServiceTier(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // FilterCodexModelList returns the subset of models whose ID contains query as a
@@ -156,16 +243,17 @@ const (
 	CodexEffortMedium CodexEffort = "medium"
 	CodexEffortHigh   CodexEffort = "high"
 	CodexEffortXHigh  CodexEffort = "xhigh"
+	// Max and Ultra exist only on models whose runtime catalog advertises them.
+	CodexEffortMax   CodexEffort = "max"
+	CodexEffortUltra CodexEffort = "ultra"
 )
 
-// Valid reports whether the effort value is one of the four known levels.
+// codexEffortOrder is the canonical low-to-high order of routable efforts.
+var codexEffortOrder = []CodexEffort{CodexEffortLow, CodexEffortMedium, CodexEffortHigh, CodexEffortXHigh, CodexEffortMax, CodexEffortUltra}
+
+// Valid reports whether the effort value is a known routable level.
 func (e CodexEffort) Valid() bool {
-	switch e {
-	case CodexEffortLow, CodexEffortMedium, CodexEffortHigh, CodexEffortXHigh:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(codexEffortOrder, e)
 }
 
 type CodexCarrilDefault struct {
@@ -183,19 +271,19 @@ const (
 
 var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
-		"sdd-strong": {Model: "gpt-6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-6-luna", Effort: CodexEffortMedium},
-		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetRecommended: {
-		"sdd-strong": {Model: "gpt-6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetPowerful: {
-		"sdd-strong": {Model: "gpt-6-astra", Effort: CodexEffortXHigh},
-		"sdd-mid":    {Model: "gpt-6-sol", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
+		"sdd-mid":    {Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 }
 
@@ -205,9 +293,9 @@ var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 // every strong lane, and the strong lanes are where reasoning actually pays.
 // Unknown keys fall back to Recommended, as the carril matrix does.
 var codexPresetOrchestrator = map[CodexPresetKey]CodexOrchestratorAssignment{
-	CodexPresetLowCost:     {Model: "gpt-6-luna", Effort: CodexEffortMedium},
-	CodexPresetRecommended: {Model: "gpt-6-sol", Effort: CodexEffortMedium},
-	CodexPresetPowerful:    {Model: "gpt-6-astra", Effort: CodexEffortMedium},
+	CodexPresetLowCost:     {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+	CodexPresetRecommended: {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+	CodexPresetPowerful:    {Model: "gpt-6.1-astra", Effort: CodexEffortMedium},
 }
 
 // CodexODDRoles maps ODD worker classes to legacy saved carril keys.
@@ -221,19 +309,19 @@ var codexODDRoles = []struct{ Role, Carril string }{
 
 var codexODDDefaults = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
-		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-worker":   {Model: "gpt-6-luna", Effort: CodexEffortMedium},
-		"odd-verify":   {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+		"odd-verify":   {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
 	},
 	CodexPresetRecommended: {
-		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-worker":   {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-verify":   {Model: "gpt-6-sol", Effort: CodexEffortMedium},
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
 	},
 	CodexPresetPowerful: {
-		"odd-explorer": {Model: "gpt-6-luna", Effort: CodexEffortHigh},
-		"odd-worker":   {Model: "gpt-6-sol", Effort: CodexEffortHigh},
-		"odd-verify":   {Model: "gpt-6-astra", Effort: CodexEffortXHigh},
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
 	},
 }
 
@@ -469,14 +557,6 @@ func DefaultCarrilModels() map[string]string {
 	return m
 }
 
-// codexEffortRank maps effort levels to a numeric rank for max-derivation.
-var codexEffortRank = map[CodexEffort]int{
-	CodexEffortLow:    0,
-	CodexEffortMedium: 1,
-	CodexEffortHigh:   2,
-	CodexEffortXHigh:  3,
-}
-
 func maxEffort(assignments map[string]CodexEffort, phases []string) CodexEffort {
 	best := CodexEffortLow
 	for _, phase := range phases {
@@ -484,7 +564,7 @@ func maxEffort(assignments map[string]CodexEffort, phases []string) CodexEffort 
 		if !ok {
 			continue
 		}
-		if codexEffortRank[e] > codexEffortRank[best] {
+		if slices.Index(codexEffortOrder, e) > slices.Index(codexEffortOrder, best) {
 			best = e
 		}
 	}

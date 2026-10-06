@@ -1,5 +1,8 @@
 # Components, Skills & Presets
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 ---
@@ -9,19 +12,20 @@
 | Component | ID | Description |
 |-----------|-----|-------------|
 | Engram™ | `engram` | Persistent cross-session memory via MCP — auto-detection of project name, full-text search, git sync, project consolidation. See [engram repo](https://github.com/Gentleman-Programming/engram) |
-| SDD | `sdd` | Optional Spec-Driven Development workflow, including `sdd-onboard`; selected explicitly when its formal phase artifacts are wanted |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
 | Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
-| Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode (the two adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx` |
+| Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode/Kilocode (the adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx`. OpenCode/Kilocode follow the Gentle Pi safety model: everything is allowed by design; recursive `rm` on `/`, `~`, `$HOME`, `.` or `..` (also behind `sudo`), hard reset, forced `git clean`, force push (also with `git -C <dir>`), `chmod -R 777` and recursive `chown` are denied; other recursive `rm`, `find -delete`, destructive SQL passed to `psql`/`mysql`/`mariadb`/`sqlite3`, `git push`, `git rebase`, `git branch -D` and `npm publish` ask; remote commands ask (#4324); and the sensitive paths are denied to `read` and `edit` (which covers write and patch). Like Pi, reading a secret through `bash` or the `grep` tool is not blocked. Wildcard rules cannot parse shell syntax the way Pi does, so other wrappers (`env`, `xargs`, `VAR=value`), nested shells, absolute executable paths, unusual flag permutations, and `rm -rf /*` are not guarded. |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
 
-ODD (Organic Driven Development) is shared routing guidance, not a separate component to install. Use it for everyday direct/delegated work; installing the SDD component does not select SDD for a task. See [ODD and recovery](usage.md#organic-driven-development-odd).
+ODD (Organic Driven Development) is shared routing guidance, not a separate component to install. It is the only implementation workflow for direct and delegated work. See [ODD and recovery](usage.md#organic-driven-development-odd).
+
+> **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets. A global install or sync also removes the native `sdd-*` sub-agents earlier releases rendered for Claude Code, Kiro, Cursor, and Kimi, proven by comparing each file with every released template; edited files are preserved and reported as manual actions. A Kimi `gentleman.yaml` inherited from v3.x declares every SDD subagent by path: when its bytes match a release, sync rewrites it first so the cleanup completes; when it was edited, sync keeps every SDD agent it references and reports one manual action naming it. For OpenCode and Kilocode, install and sync remove the `sdd-*` agent entries (including profile copies and the 3.7.0 plural `agents` map) and the `prompts/sdd/` files releases wrote; see [OpenCode compatibility](opencode-compatibility.md). For every runtime except Pi, install and sync also remove the retired `sdd-*` skills, the shared `_shared/sdd-*.md` and `_shared/openspec-convention.md` references (including the shared `~/.agents/skills` root outside Windows), the `/sdd-*` and `/gentle-sdd-*` slash commands, and the Claude Code `PreToolUse` hook that runs the removed `gentle-ai sdd-preflight-hook` command, each only when it matches what a release wrote. A workspace-scoped sync handles the workspace copies, including the Windsurf `.windsurf/workflows/sdd-new.md` workflow. An edited SDD skill keeps its whole directory and the shared SDD references it reads. A skills, skill, or `_shared` directory that is a symlink is never entered, and Claude Code settings that are a symlink or not strict JSON are never rewritten; both are reported with the exact file or hook to remove. Claude Code's `_shared/sdd-orchestrator-workflow.md` was rendered per installation: it is removed when it matches what a release's own writer renders with no model assignments or with one of that release's model presets, and kept and reported otherwise, for example when it carries model assignments you customized. For Codex, install and sync remove the `sdd-strong`, `sdd-mid`, and `sdd-cheap` `.config.toml` profiles when they hold exactly what a release wrote (only the `model` and `model_reasoning_effort` values may differ); a profile with anything else, including a profile left by downgrading to v1.36–v1.38, is kept and reported. They also remove the `<!-- gentle-ai:sdd-orchestrator -->` block from the lowercase `~/.codex/agents.md` that v1.7.10 to v1.31.0 wrote, when it is a separate file from `AGENTS.md`; a file that held only the block is left empty. For Kimi, they remove `~/.kimi/sdd-orchestrator.md` when it matches a release's render and the exact `{% include "sdd-orchestrator.md" ignore missing %}` line from `~/.kimi/KIMI.md`. A workspace-scoped sync retires the same Codex and Kimi files a workspace-scoped install wrote under the project and, since it refreshes no routing guidance for Claude Code or Codex, removes the v3.7.0 SDD orchestrator block from their project prompt files. Only one block whose markers each fill a line is removed; a file with an unmatched, repeated, or nested marker is kept unchanged and reported. Prompt files that are symlinks, or that sit in a symlinked `~/.codex` or `~/.kimi`, are never rewritten and are reported. Removed files are captured in the sync backup.
 
 ## Primary remote-authorization guidance
 
-Always-installed agent guidance includes a canonical remote-operation boundary, independent of the optional persona, SDD, and permissions components. Local-development access does not authorize remote execution, transfer, or discovery/reuse of ambient SSH agents, ControlMaster sockets, credentials, or sessions. Ask for explicit destination, operation, and credential/session authorization; authorized work remains allowed within stricter user/runtime restrictions.
+Always-installed agent guidance includes a canonical remote-operation boundary, independent of the optional persona and permissions components. Local-development access does not authorize remote execution, transfer, or discovery/reuse of ambient SSH agents, ControlMaster sockets, credentials, or sessions. Ask for explicit destination, operation, and credential/session authorization; authorized work remains allowed within stricter user/runtime restrictions.
 
 This first delivery covers the 15 non-Pi primary instruction carriers, not every executor role or named profile. Pi remains owned by `gentle-pi`. The behavioral section provides no sandbox or fresh-human-per-execution guarantee. Separately, OpenCode/Kilocode permission defaults ask for direct ssh/scp/sftp/rsync commands, without silently replacing personal allows or restrictions; existing installs must opt into permission sync. See [sync update instructions and limitations](usage.md#sync). Issue #4324 remains open for the remaining projections and native approvals.
 
@@ -54,22 +58,12 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 
 ### Included Skills (installed by gentle-ai)
 
-22 skill files organized by category, embedded in the binary and injected into your agent's configuration:
+Skill files organized by category, embedded in the binary and injected into your agent's configuration:
 
-#### SDD (Spec-Driven Development)
+#### Review
 
 | Skill | ID | Description |
 |-------|-----|-------------|
-| SDD Init | `sdd-init` | Bootstrap SDD context in a project |
-| SDD Explore | `sdd-explore` | Investigate codebase before committing to a change |
-| SDD Propose | `sdd-propose` | Create change proposal with intent, scope, approach |
-| SDD Spec | `sdd-spec` | Write specifications with requirements and scenarios |
-| SDD Design | `sdd-design` | Technical design with architecture decisions |
-| SDD Tasks | `sdd-tasks` | Break down a change into implementation tasks |
-| SDD Apply | `sdd-apply` | Implement tasks following specs and design |
-| SDD Verify | `sdd-verify` | Validate implementation matches specs |
-| SDD Archive | `sdd-archive` | Sync delta specs to main specs and archive |
-| SDD Onboard | `sdd-onboard` | Guided end-to-end SDD walkthrough on the real codebase |
 | Judgment Day | `judgment-day` | Parallel adversarial review — two independent judges review the same target |
 
 #### Foundation
@@ -100,9 +94,9 @@ For framework-specific skills (React 19, Angular, TypeScript, Tailwind 4, Zod 4,
 
 | Preset | ID | What's Included |
 |--------|-----|-----------------|
-| Dev Stack + Polish | `full-gentleman` | All components (Engram + SDD + Skills + Context7 + GGA + Permissions + Theme) + all skills |
-| Dev Stack | `ecosystem-only` | Core components (Engram + SDD + Skills + Context7 + GGA) + all skills |
-| Memory Only | `minimal` | Engram + SDD skills only |
+| Dev Stack + Polish | `full-gentleman` | All components (Engram + Skills + Context7 + GGA + Permissions + visual polish) + all skills |
+| Dev Stack | `ecosystem-only` | Core components (Engram + Skills + Context7 + GGA) + all skills |
+| Memory Only | `minimal` | Engram only |
 | Custom | `custom` | You choose components and skills manually while keeping any existing persona/settings unmanaged |
 
 Persona is selected separately on the Persona screen and applied independently of the preset.

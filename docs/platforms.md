@@ -1,5 +1,8 @@
 # Supported Platforms
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. The install commands track the latest release. For the latest release docs, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 ---
@@ -11,9 +14,14 @@
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
 | Linux (Fedora Silverblue) | rpm-ostree | Supported |
+| Linux (any distro, via Homebrew on Linux) | Homebrew | Supported (install prerequisites manually) |
+| Linux (Alpine) | apk | Supported (install prerequisites manually) |
+| Linux (openSUSE, SUSE Linux Enterprise) | zypper | Supported (install prerequisites manually) |
+| Linux (NixOS) | nix | Supported (install prerequisites manually) |
+| Linux (Gentoo) | emerge | Supported (install prerequisites manually) |
 | Windows 10/11 | `go install` (Go toolchain) | Supported (binary distribution held) |
 
-Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
+On Linux, support depends on which package manager is on `PATH`, not on the distribution name, so derivatives (Linux Mint, Pop!_OS, Manjaro, Rocky Linux, etc.) work too. Gentle AI checks `brew`, `apt`, `dnf`, `rpm-ostree`, `pacman`, `apk`, `zypper`, `nix`, `emerge` in that order and uses the first one it finds. `rpm-ostree` is considered only on OSTree-booted systems, where it wins over `dnf` (see [Precedence](#fedora-silverblue-rpm-ostree-notes)). "Install prerequisites manually" means that when Git, curl, or Node.js is missing, `gentle-ai install` prints a download link instead of a package-manager command. For a missing npm, it asks you to install Node.js first on every platform.
 
 Release archives are currently produced for macOS and Linux only. Windows source compatibility remains supported, but official Windows executable/archive assets and Scoop publication are temporarily unavailable pending the [Authenticode restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
@@ -21,9 +29,24 @@ Release archives are currently produced for macOS and Linux only. Windows source
 
 When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI™ writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
 
-Deactivation removes managed launcher files but may leave `~/.gentle-ai/bin/` in `PATH`; Gentle AI does not clean up shell profiles.
+On POSIX systems, including WSL, Gentle AI also persists `~/.gentle-ai/bin/` in the login profile your `SHELL` reads, inside a marked block (`# >>> gentle-ai managed OpenCode launcher >>>` … `<<<`). zsh uses `~/.zprofile`; bash uses the first existing of `~/.bash_profile`, `~/.bash_login`, or `~/.profile`, and creates `~/.profile` when none exists; `sh`, `dash`, and `ksh` use `~/.profile`. Gentle AI never modifies a profile that is a symlink, read-only, or carries an edited or duplicated block, and it does not manage other shells (such as fish) or a zsh `ZDOTDIR` outside your home. In those cases the activation report shows the `export PATH=...` line to add yourself, and `gentle-ai doctor` warns until the directory is persisted.
 
-Restart OpenCode after enabling managed activation. Restart the shell if the launcher directory has not entered PATH. OpenCode `serve`, `attach`, Desktop, or any session started outside the managed launcher uses foreground fallback rather than receiving an unsafe partial activation.
+The activation report and `gentle-ai doctor` state whether activation is effective, not only whether your OpenCode version supports it. Gentle AI replays the `PATH` edits of your startup files (zsh: `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`; bash: the login profile, plus `~/.bashrc` outside macOS; files they source are followed) and checks which `opencode` a new login shell runs:
+
+| Status | Meaning |
+|--------|---------|
+| `ready` | New login shells run the managed launcher. |
+| `pending` | Activation is not applied yet, or no startup file puts `~/.gentle-ai/bin/` on `PATH`. |
+| `shadowed` | A startup file adds another OpenCode directory ahead of the launcher. The OpenCode installer does this when it appends `export PATH=~/.opencode/bin:$PATH` to `~/.zshrc` or `~/.bashrc`, which run after the login profile. The report names the file; remove that line or add the `export PATH=...` line after it. Gentle AI never edits rc files. |
+| `unknown` | Gentle AI cannot verify which `opencode` new shells run. This is informational: either the OpenCode runtime could not be probed (execution stays in the foreground), the shell's startup cannot be modeled (fish, unset `SHELL`), or a startup file read after the managed block contains something that may change `PATH` but cannot be replayed statically — `eval` (for example `brew shellenv` or `mise activate`), command substitution in a `PATH` value, `PATH` changes inside a function, `case`, loop, or `else` body (pnpm, nvm), or a sourced file that cannot be resolved or read. The reason names the file; run `command -v opencode` in a new login shell to check it prints the managed launcher. |
+| `unsupported` | The OpenCode version is too old, or (on Windows) its path cannot be used safely; execution stays in the foreground. |
+| `off` | Background subagents are turned off. |
+
+On Windows, `ready` means the `PATH` that new terminals inherit (machine entries, then user entries) resolves `opencode` to the managed launcher. Gentle AI refuses activation when the resolved OpenCode path contains `%`, `!`, `"`, or control characters, because `cmd.exe` would expand or split them inside `opencode.cmd`.
+
+Deactivation and uninstall remove managed launcher files and only the unedited managed profile block; every other profile line is preserved.
+
+Restart OpenCode after enabling managed activation. Start a new login shell so the persisted launcher directory enters PATH. OpenCode `serve`, `attach`, Desktop, or any session started outside the managed launcher uses foreground fallback rather than receiving an unsafe partial activation.
 
 ---
 
@@ -45,11 +68,11 @@ Restart OpenCode after enabling managed activation. Restart the shell if the lau
 
 ## Windows Notes
 
-- **Install from source** with Go 1.25.10+:
-  `go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest`.
+- **Install from source** with Go 1.25.10+, pinned to the latest release:
+  `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0`.
 - **`gentle-ai upgrade` updates itself automatically on release channels when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
   Because `go install` writes to `GOBIN` (or `GOPATH\bin`), which is not necessarily the directory your shell resolves, the upgrade checks the destination afterwards and warns — naming both full paths — if a different `gentle-ai.exe` earlier on `PATH` would keep running.
-   On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@main`).
+   On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main`).
    Re-running either installer defaults to stable, so preserve beta explicitly: `curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta` on macOS/Linux, or `$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex` in PowerShell.
 - **Without Go on `PATH`, the upgrader fails closed.** It downloads and executes nothing, and prints the runnable `go install` command instead.
 - **Scoop and official Windows binaries are still temporarily unavailable.** No unsigned artifact is ever downloaded and `gentle-ai upgrade` never executes a remote update script.
@@ -73,10 +96,10 @@ Restart OpenCode after enabling managed activation. Restart the shell if the lau
 | VS Code Copilot | `%APPDATA%\Code\User\` (settings, MCP, prompts) + `%USERPROFILE%\.copilot\` (skills) |
 | Codex | `%USERPROFILE%\.codex\` |
 | Windsurf | `%USERPROFILE%\.codeium\windsurf\` (skills, MCP, rules) + `%APPDATA%\Windsurf\User\` (settings) |
-| Kimi | `%USERPROFILE%\.kimi\` (includes `config.toml`, system prompt, agents, MCP) |
+| Kimi | `%USERPROFILE%\.kimi-code\` (kimi-code v0.11+: `config.toml`, `AGENTS.md` system prompt, skills, MCP) with legacy fallback to `%USERPROFILE%\.kimi\` (`config.toml`, `KIMI.md`, YAML agents) |
 | Antigravity | `%USERPROFILE%\.gemini\antigravity\` |
-| Kiro IDE | `%USERPROFILE%\.kiro\steering\` (prompts) + `%USERPROFILE%\.kiro\skills\` (skills) + `%USERPROFILE%\.kiro\agents\` (SDD agents) + `%APPDATA%\kiro\User\settings.json` (settings) + `%USERPROFILE%\.kiro\settings\mcp.json` (MCP) |
-| OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped SDD skills |
+| Kiro IDE | `%USERPROFILE%\.kiro\steering\` (prompts) + `%USERPROFILE%\.kiro\skills\` (skills) + `%USERPROFILE%\.kiro\agents\` (Judgment Day agents) + `%APPDATA%\kiro\User\settings.json` (settings) + `%USERPROFILE%\.kiro\settings\mcp.json` (MCP) |
+| OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped skills |
 | Trae | `%USERPROFILE%\.trae\` (skills) + `%APPDATA%\Trae\User\user_rules.md` (rules) + `%APPDATA%\Trae\User\mcp.json` (MCP) |
 | Pi | `%USERPROFILE%\.pi\` (Pi config, project agents/chains, Gentle AI support assets) |
 | Hermes | `%USERPROFILE%\.hermes\` (config.yaml, SOUL.md, skills/) |

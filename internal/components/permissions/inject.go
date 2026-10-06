@@ -1,12 +1,13 @@
 package permissions
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type InjectionResult struct {
@@ -56,46 +57,6 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(**/secrets/*)",
       "Edit(**/secrets/*)"
     ]
-  }
-}
-`)
-
-// openCodeOverlayJSON uses the OpenCode "permission" key with bash/read granularity.
-var openCodeOverlayJSON = []byte(`{
-  "permission": {
-    "bash": {
-      "*": "allow",
-      "git commit *": "ask",
-      "git push *": "ask",
-      "git push": "ask",
-      "git push --force *": "ask",
-      "git rebase *": "ask",
-      "git reset --hard *": "ask",
-      "ssh": "ask",
-      "ssh *": "ask",
-      "scp": "ask",
-      "scp *": "ask",
-      "sftp": "ask",
-      "sftp *": "ask",
-      "rsync": "ask",
-      "rsync *": "ask"
-    },
-    "read": {
-      "*": "allow",
-      "*.env": "deny",
-      "*.env.*": "deny",
-      "**/.env": "deny",
-      "**/.env.*": "deny",
-      "**/secrets/**": "deny",
-      "**/credentials.json": "deny",
-      "**/.ssh/**": "deny",
-      "**/.credentials/**": "deny",
-      "**/Library/Keychains/**": "deny",
-      "**/.aws/credentials": "deny",
-      "**/.config/gh/hosts.yml": "deny",
-      "**/*.pem": "deny",
-      "**/*.key": "deny"
-    }
   }
 }
 `)
@@ -190,12 +151,57 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	case model.AgentKilocode:
 		merge = filemerge.MergeJSONDefaultsForPath
 	}
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+		defaultsMerge := merge
+		merge = func(path string, base, overlay []byte) ([]byte, error) {
+			return defaultsMerge(path, base, withoutRulesLooserThanUserDefault(base, overlay))
+		}
+	}
 	writeResult, err := mergeJSONFile(settingsPath, overlay, merge)
 	if err != nil {
 		return InjectionResult{}, err
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+// withoutRulesLooserThanUserDefault drops overlay tool rules looser than the
+// user's root permission "*" (deny is stricter than ask, ask than allow).
+// Merged into a tool map the user scoped, such a rule follows the root "*" and,
+// as the last match, would loosen the user's default.
+func withoutRulesLooserThanUserDefault(base, overlay []byte) []byte {
+	strictness := map[string]int{"allow": 0, "ask": 1, "deny": 2}
+	root, err := filemerge.UnmarshalJSONObject(base)
+	if err != nil {
+		return overlay
+	}
+	permission, _ := root["permission"].(map[string]any)
+	rootAction, _ := permission["*"].(string)
+	if patterns, ok := permission["*"].(map[string]any); ok {
+		rootAction, _ = patterns["*"].(string)
+	}
+	floor, ok := strictness[rootAction]
+	if !ok || floor == 0 {
+		return overlay
+	}
+	defaults, err := filemerge.UnmarshalJSONObject(overlay)
+	if err != nil {
+		return overlay
+	}
+	rules, _ := defaults["permission"].(map[string]any)
+	for _, value := range rules {
+		patterns, _ := value.(map[string]any)
+		for pattern, action := range patterns {
+			if name, _ := action.(string); strictness[name] < floor {
+				delete(patterns, pattern)
+			}
+		}
+	}
+	encoded, err := json.Marshal(defaults)
+	if err != nil {
+		return overlay
+	}
+	return encoded
 }
 
 func mergeJSONFile(path string, overlay []byte, merge func(string, []byte, []byte) ([]byte, error)) (filemerge.WriteResult, error) {

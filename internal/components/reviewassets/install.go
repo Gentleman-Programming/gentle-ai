@@ -9,12 +9,13 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // NativeAgentManifest is an explicit allowlist: never enumerate the embedded agents directory.
@@ -78,6 +79,7 @@ type claudeModelResolver interface {
 // InstallNativeAgents installs only retained review, Judgment Day, and Kimi native agents.
 // It never removes legacy SDD files or user-owned agents; it removes only the
 // retired review agents Gentle AI owns (see RetiredNativeAgentManifest).
+// legacyassets.RetireSDDAgents retires SDD agents after this runs.
 func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOptions) (InstallResult, error) {
 	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
@@ -144,7 +146,10 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 			return result, err
 		}
 		expected, known := ledger.Files[name]
-		owned := exists && known && installedHash(data) == expected
+		// A file a release shipped before the ledger existed (v3 Kimi
+		// gentleman.yaml, which declares every SDD subagent) is owned by
+		// those exact bytes, so retiring SDD can rewrite it (#5253).
+		owned := exists && ((known && installedHash(data) == expected) || legacyassets.OwnsPreLedgerNativeAgent(adapter.Agent(), name, data))
 		if exists && !owned {
 			result.Skipped = append(result.Skipped, path)
 		}

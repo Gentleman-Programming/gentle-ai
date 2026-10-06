@@ -1,5 +1,8 @@
 # Intended Usage
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 Gentle AI configures the AI agent you already use. After installation, open a project and describe the outcome; you do not need to invoke a planning command or hand-edit generated configuration.
@@ -10,7 +13,7 @@ Organic Driven Development (ODD) starts by deciding whether your request authori
 
 Small, understood changes need no persistent task artifact. For substantial work, the agent creates one `odd/tasks/<feature-name>.md` before source changes, with scope, tasks, evidence, and the next step. An Engram copy under `odd/<feature-name>/tasks` helps resume across sessions. The parent reconciles both copies before resuming; missing memory is reported rather than treated as success. Accepted scope changes update affected tasks; findings do not silently expand authorization. Each task closes with a work-unit commit on the feature branch under the ODD protocol; push, pull request, and merge remain separate decisions.
 
-Strict TDD follows the configured mode, source, and exact runner. When enabled, observe RED before implementation, GREEN after, then REFACTOR; when disabled, still run functional checks. The presence of tests alone does not enable TDD. See [ODD details](usage.md#organic-driven-development-odd).
+Test-first development is the default when a relevant runnable deterministic test and a clear expected outcome exist: observe RED before implementation, GREEN after, then REFACTOR; otherwise explain the exception and still run functional checks. Write one RED test per requested rule, add one test per touched existing command or option proving its previous behavior still holds, and add no other cases. See [ODD details](usage.md#organic-driven-development-odd).
 
 ## Review is a separate choice
 
@@ -18,7 +21,7 @@ Receipt-Driven Development (RDD) checks an exact change candidate when enabled. 
 
 ## Delegation and skills
 
-The orchestrator can delegate broad exploration, multi-file writing, and independent verification to focused workers when the selected agent supports it. Workers receive a bounded mission and relevant exact skill paths; the parent verifies outcomes rather than treating self-report as proof. Native delegation capabilities differ by agent; see [Supported Agents](agents.md).
+The parent works inline by default and delegates only for a named reason when the selected agent supports it: an exploration map it needs to decide or route, parallel writers on disjoint edit surfaces, the long-session context backstop, or independent verification of a high-risk change. File count never decides delegation. Workers receive a bounded mission and relevant exact skill paths; the parent verifies outcomes rather than treating self-report as proof. Native delegation capabilities differ by agent; see [Supported Agents](agents.md).
 
 The skill registry catalogs project and installed skills. On supported clients, startup hooks refresh it with a cache; to refresh manually from a project use `gentle-ai skill-registry refresh --force`. Pi startup behavior belongs to the separately installed Gentle Shell package, not to this binary. See [Usage](usage.md#skill-registry-refresh) and [Pi integration](pi.md).
 

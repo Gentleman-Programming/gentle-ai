@@ -176,6 +176,22 @@ func UserPathEntries(goos string) ([]string, error) {
 	return splitWindowsPath(strings.TrimSpace(string(output))), nil
 }
 
+// NewShellPath returns the PATH a newly started shell inherits. On Windows it
+// reads the persistent machine PATH followed by the persistent user PATH, the
+// order new processes receive; elsewhere, and under go test, it returns the
+// current process PATH.
+func NewShellPath() (string, error) {
+	if userPathGOOS != "windows" || userPathRunningInGoTest() {
+		return os.Getenv("PATH"), nil
+	}
+	output, err := newUserPathPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command",
+		`[Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH', 'User')`)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func splitWindowsPath(value string) []string {
 	if value == "" {
 		return nil

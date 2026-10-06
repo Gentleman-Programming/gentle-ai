@@ -55,33 +55,38 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 ### Delegation Rules
 
-These rules select execution topology, not the implementation method. Implementation runs as **direct inline** or **delegated direct** under ODD; size, file count, or risk alone never selects another workflow.
+These rules select execution topology, not the implementation method. Implementation runs as **direct inline** or **delegated direct** under ODD; the Task Size section in the routing block selects the topology, and file count never does.
 
 Core principle: **does this inflate the parent context without need?** If yes, use one bounded worker. If no, do it inline.
 
 | Action | Direct inline | Delegated direct worker |
 |--------|---------------|-------------------------|
-| Read to decide/verify (1–3 files) | ✅ | — |
-| Read to explore/understand (4+ files) | — | ✅ one narrow mapper |
-| Read as preparation for writing | — | ✅ together with the write |
-| Write one mechanical, already-understood file | ✅ | — |
-| Write 2+ non-trivial files | — | ✅ one writer |
+| Decide/verify within the inline evidence budget | ✅ one bounded batch | — |
+| Understanding beyond the inline evidence budget, or long sequential exploration | — | ✅ one read-only explorer, then re-evaluate task size |
+| Read as preparation for a delegated write | — | ✅ together with the write |
+| Write a small task (one understood change, any number of files) | ✅ | — |
+| Write a large (tracked) task with no Write rule reason | ✅ following its logbook | — |
+| Write a unit with a Write rule reason | — | ✅ one bounded writer per unit |
 | Bash for state (`git`, `gh`) | ✅ | — |
-| Tests, builds, installs, or native review actions | allowed as a bounded action | ✅ fresh per-action worker without changing route |
+| Focused test and suite of the change being made | ✅ once each | — |
+| High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
 Route read-only mapping to the installed `gentle-ai-explore` agent, implementation or command execution to the installed `gentle-ai-worker` agent, and read-only technical verification to the installed `gentle-ai-verify` agent.
 
-Keep one writer and a short synthesized handoff. Delegation is mandatory at the mapping, write, preparation, and broad-research boundaries.
+Keep each delegated writer bounded, with a short synthesized handoff. Delegation is mandatory only when a mechanism's own trigger fires.
 
 #### Mandatory Delegation Triggers
 
 These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-1. **Bounded read rule**: read 1–3 files inline to decide or verify.
-2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
-3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
-4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
+1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
+2. **Mapping rule**: understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures.
+   - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
+3. **Write rule**: a small task's writes stay inline, even across files; delegate a writer only for a named reason: parallel units launched together (two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent) or the context backstop. Never for size, a large task alone, file count, or a price ratio; without a reason the parent writes inline, following its logbook. File count never fires this rule.
+4. **Context rule**: when the Write rule delegates a write, delegate reading that prepares a write together with it, plus broad research/context compression; an inline write reads inline, and never explore files you will read anyway before writing inline.
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route.
+6. **Verification rule**: a high-risk change (Task Size list) gets an independent verifier after the change's own checks; otherwise the change's own focused test and suite run inline.
 
 #### Delegated Verification Gate (MANDATORY)
 
@@ -106,14 +111,14 @@ The canonical native bounded-review contract is injected from the shared provide
 #### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
-- Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
+- Delegate a writer only for a named reason; parallel writers follow the **Parallel writers** rule under `## Implementation Routing`.
 - Let native review select its bounded checking plan; delivery remains human-owned under ordinary repository policy.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
 <!-- gentle-ai:opencode-desktop-delegation-progress -->
 #### Delegation Visibility (OpenCode Desktop)
 
-For every native `delegate` or `task` call, emit exactly one concise, assistant-visible status line immediately before the call:
+For every native subagent launch, emit exactly one concise, assistant-visible status line immediately before the call:
 
 `⏳ Delegating {phase} to {agent}...`
 
@@ -146,9 +151,9 @@ This prevents duplicate sub-agent launches that cause "File X has been modified 
 
 ### Sub-Agent Launch Pattern
 
-ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved skill paths from the skill registry. Follow the Skill Resolver Protocol (see `_shared/skill-resolver.md` in the skills directory).
+ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include the matching skills from the skill registry.
 
-The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent's prompt.
+The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching skills into each sub-agent's prompt.
 
 Orchestrator skill resolution (do once per session):
 
@@ -160,15 +165,15 @@ Orchestrator skill resolution (do once per session):
 For each sub-agent launch:
 
 1. Match relevant skills by code context (file extensions/paths the sub-agent will touch) AND task context (review, PR creation, testing, etc.)
-2. Copy matching `SKILL.md` paths into the sub-agent prompt as `## Skills to load before work`
-3. Instruct the sub-agent to read those exact files BEFORE task-specific work
+2. List matching skills in the sub-agent prompt under `## Skills to load before work`: an installed skill (one listed in `<available_skills>`) by the identifier the native `skill` tool takes: its `<id>` when `<available_skills>` lists one (OpenCode 2.x), otherwise its `<name>` (OpenCode 1.x); and a skill file inside the workspace by its workspace-relative `SKILL.md` path. Never pass an absolute path outside the workspace: a delegated agent may be denied reads there, while the native `skill` tool loads installed skills by that identifier.
+3. Instruct the sub-agent to load each listed skill BEFORE task-specific work: a skill identifier with the native `skill` tool, a path with `read`
 
 ### Skill Resolution Feedback
 
 After every delegation that returns a result, check the `skill_resolution` field:
 
-- `paths-injected` -> all good; exact skill paths were passed and loaded
-- `fallback-registry`, `fallback-path`, or `none` -> skill cache was lost; re-read the registry immediately and pass skill paths in subsequent delegations
+- `paths-injected` -> all good; the listed skills were passed and loaded
+- `fallback-registry`, `fallback-path`, or `none` -> skill cache was lost; re-read the registry immediately and pass skills in subsequent delegations
 
 ### Sub-Agent Context Protocol
 
@@ -180,4 +185,4 @@ Sub-agents get a fresh context with NO memory. The orchestrator controls context
 - Write context: sub-agent MUST save significant discoveries, decisions, or bug fixes to engram via `mem_save` before returning.
 - Always add to the sub-agent prompt: `"If you make important discoveries, decisions, or fix bugs, save them to engram via mem_save with project: '{project}'."`
 
-Forward the configured TDD mode, its source, and the exact runner to every implementation delegate. When strict TDD is active, require observed RED → GREEN → REFACTOR; do not infer the mode from test presence.
+Forward the applicable test-first policy and runner from `## Implementation Routing` to every implementation delegate. When that policy applies, require observed RED → GREEN → REFACTOR; do not infer applicability from test presence alone.

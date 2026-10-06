@@ -15,23 +15,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 )
 
 func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
@@ -101,8 +101,11 @@ func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
 					}
 				}
 				info, err := os.Stat(path)
-				if err != nil || info.Mode().Perm() != 0600 {
-					t.Fatalf("mode: %v, %v", info, err)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+					t.Fatalf("mode: %v", info.Mode().Perm())
 				}
 			}
 		})
@@ -258,9 +261,9 @@ func TestRetiredSDDExplicitUninstallFailsWithoutWrites(t *testing.T) {
 
 // TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents proves native
 // review and Judgment Day agent files survive uninstall without a dedicated
-// retention allowlist: nothing in the uninstall plan enumerates or removes
-// the sub-agents directory at all, so these permanently-installed native
-// agents (installed unconditionally by reviewassets.InstallNativeAgents,
+// retention allowlist: uninstall only inspects the retired SDD agent files
+// of the sub-agents directory, so these permanently-installed native agents
+// (installed unconditionally by reviewassets.InstallNativeAgents,
 // independent of any removable component) are never touched.
 func TestCompleteUninstallPreservesNativeReviewAndJudgmentDayAgents(t *testing.T) {
 	home := t.TempDir()
@@ -382,7 +385,7 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 		}
 		content := []byte("user launcher")
 		if index == 0 {
-			content = []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\n")
+			content = ownedOpenCodeLauncher(path)
 		}
 		if err := os.WriteFile(path, content, 0o755); err != nil {
 			t.Fatal(err)
@@ -405,6 +408,146 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 	}
 	if !slices.Contains(result.RemovedFiles, ownedPath) {
 		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, ownedPath)
+	}
+}
+
+// Issue #3451: a launcher that only mentions the ownership marker belongs to
+// the user and survives uninstall.
+func TestUninstallPreservesLauncherWithIncidentalMarker(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	content := []byte("user launcher mentions " + opencodeactivation.OwnershipMarker)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(content) {
+		t.Fatalf("user launcher after uninstall = %q, %v; want preserved", got, err)
+	}
+}
+
+// Issue #3451: uninstall never follows or removes a symlink at the launcher
+// path, even when its target holds managed launcher bytes.
+func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges not guaranteed on Windows")
+	}
+	homeDir := t.TempDir()
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	target := filepath.Join(t.TempDir(), "launcher-target")
+	targetContent := ownedOpenCodeLauncher(path)
+	if err := os.WriteFile(target, targetContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(path); err != nil || got != target {
+		t.Fatalf("launcher symlink after uninstall = %q, %v; want preserved", got, err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != string(targetContent) {
+		t.Fatalf("launcher target after uninstall = %q, %v; want preserved", data, err)
+	}
+}
+
+// Issue #3452: uninstall removes only the canonical managed PATH block from
+// login profiles and preserves every user line, edited blocks, and symlinks.
+func TestUninstallRemovesOnlyManagedOpenCodeProfileBlock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login profiles are not used on Windows")
+	}
+	homeDir := t.TempDir()
+	binDir := opencodeactivation.BinDir(homeDir)
+	block := "# >>> gentle-ai managed OpenCode launcher >>>\n" + opencodeactivation.ProfileExportLine(binDir) + "\n# <<< gentle-ai managed OpenCode launcher <<<\n"
+	managed := filepath.Join(homeDir, ".zprofile")
+	if err := os.WriteFile(managed, []byte("export BEFORE=1\n"+block+"export AFTER=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	edited := filepath.Join(homeDir, ".profile")
+	editedContent := strings.Replace(block, "export PATH=", "export PATH=/user:", 1)
+	if err := os.WriteFile(edited, []byte(editedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkTarget := filepath.Join(t.TempDir(), "dotfiles-bash_profile")
+	if err := os.WriteFile(linkTarget, []byte(block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(homeDir, ".bash_profile")
+	if err := os.Symlink(linkTarget, linked); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(plan.backupTargets, edited) || slices.Contains(plan.backupTargets, linked) {
+		t.Fatalf("backup targets = %v, want only profiles carrying the managed block", plan.backupTargets)
+	}
+	result, err := svc.executePlan(plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(managed); err != nil || string(data) != "export BEFORE=1\nexport AFTER=1\n" {
+		t.Fatalf("managed profile after uninstall = %q, %v", data, err)
+	}
+	if info, err := os.Stat(managed); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("managed profile mode after uninstall = %v, %v; want 0600", info, err)
+	}
+	if !slices.Contains(result.ChangedFiles, managed) {
+		t.Fatalf("changed files = %v, want %q", result.ChangedFiles, managed)
+	}
+	if data, err := os.ReadFile(edited); err != nil || string(data) != editedContent {
+		t.Fatalf("edited profile after uninstall = %q, %v; want preserved", data, err)
+	}
+	if got, err := os.Readlink(linked); err != nil || got != linkTarget {
+		t.Fatalf("profile symlink after uninstall = %q, %v; want preserved", got, err)
+	}
+	if data, err := os.ReadFile(linkTarget); err != nil || string(data) != block {
+		t.Fatalf("profile symlink target after uninstall = %q, %v; want preserved", data, err)
+	}
+}
+
+// ownedOpenCodeLauncher returns the exact bytes Gentle AI generates for the
+// launcher at path, targeting a fixed historical OpenCode location.
+func ownedOpenCodeLauncher(path string) []byte {
+	switch filepath.Ext(path) {
+	case ".cmd":
+		return []byte("@echo off\r\nrem " + opencodeactivation.OwnershipMarker + "\r\nsetlocal\r\nif not defined OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS set \"OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\"\r\n\"C:\\old\\opencode.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n")
+	case ".ps1":
+		return []byte("# " + opencodeactivation.OwnershipMarker + "\r\n$ErrorActionPreference = 'Stop'\r\nif (-not (Test-Path Env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS)) { $env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = 'true' }\r\n& 'C:\\old\\opencode.exe' @args\r\nexit $LASTEXITCODE\r\n")
+	default:
+		return []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n")
 	}
 }
 
@@ -893,9 +1036,9 @@ func TestPartialUninstallPiReportsRetainedResourcesAndOptionalCleanup(t *testing
 	wantCommands := []string{
 		"pi remove npm:gentle-pi",
 		"pi remove npm:gentle-engram",
-		"pi remove npm:pi-mcp-adapter",
 		"pi remove npm:pi-web-access",
 		"pi remove npm:pi-btw",
+		"pi remove npm:pi-mcp-adapter",
 	}
 	if !slices.Equal(result.OptionalPiPackageCleanupCommands, wantCommands) {
 		t.Fatalf("OptionalPiPackageCleanupCommands = %v, want %v", result.OptionalPiPackageCleanupCommands, wantCommands)
@@ -2046,6 +2189,124 @@ func TestRetainedHooksOutsideFullAgentRemoval(t *testing.T) {
 	}
 }
 
+// Uninstall owns every plugin byte sequence a Gentle AI release shipped under
+// that name, including retired plugins, and preserves all other bytes.
+func TestFullAgentOpenCodeUninstallRemovesReleasedPluginBytes(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("OpenCode adapter not found")
+	}
+	pluginDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	released := func(rel string) []byte {
+		data, err := os.ReadFile(filepath.Join("..", "opencoderuntimeplugins", "testdata", "released", filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	owned := map[string][]byte{
+		"opencode-review-transport.ts": released("v3.7.0/plugins/opencode-review-transport.ts"),
+		"sdd-task-result-artifacts.ts": released("v3.7.0/plugins-v2/sdd-task-result-artifacts.ts"),
+		"background-agents.ts":         released("v1.33.2/plugins/background-agents.ts"),
+		"review-result-artifacts.ts":   released("v2.1.7/plugins/review-result-artifacts.ts"),
+	}
+	user := map[string][]byte{
+		"skill-registry.ts": append(released("v3.7.0/plugins/opencode-review-transport.ts"), "// user edit\n"...),
+		"model-variants.ts": released("v3.7.0/plugins/sdd-task-result-artifacts.ts"),
+	}
+	for _, files := range []map[string][]byte{owned, user} {
+		for name, data := range files {
+			if err := os.WriteFile(filepath.Join(pluginDir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan, []model.AgentID{model.AgentOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range owned {
+		path := filepath.Join(pluginDir, name)
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("released plugin bytes %s kept: %v", name, err)
+		}
+		if !slices.Contains(result.RemovedFiles, path) {
+			t.Errorf("released plugin removal not reported: %s", path)
+		}
+	}
+	for name, data := range user {
+		if got, err := os.ReadFile(filepath.Join(pluginDir, name)); err != nil || string(got) != string(data) {
+			t.Errorf("user plugin bytes %s changed: %v", name, err)
+		}
+	}
+}
+
+// A symlinked plugins directory is user-owned, as Install treats it: uninstall
+// neither removes the link nor deletes plugin bytes through it.
+func TestFullAgentOpenCodeUninstallPreservesSymlinkedPluginsDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("OpenCode adapter not found")
+	}
+	root := adapter.GlobalConfigDir(homeDir)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	body, err := assets.Read("opencode/plugins/model-variants.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipped := filepath.Join(target, "model-variants.ts")
+	if err := os.WriteFile(shipped, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pluginDir := filepath.Join(root, "plugins")
+	if err := os.Symlink(target, pluginDir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	preserved := func(stage string) {
+		t.Helper()
+		if info, err := os.Lstat(pluginDir); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s: symlinked plugins directory removed: %v %v", stage, info, err)
+		}
+		if got, err := os.ReadFile(shipped); err != nil || string(got) != body {
+			t.Fatalf("%s: deleted through plugins symlink: %v", stage, err)
+		}
+	}
+	// The plugin operations guard themselves, whatever else the plan checks.
+	for _, op := range retainedOpenCodePluginOperations(adapter, homeDir) {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("plugin operation %s: %v", op.path, err)
+		}
+	}
+	preserved("plugin operations")
+	// The full plan may refuse the symlink outright; either way nothing moves.
+	if plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents); err == nil {
+		if _, err := svc.executePlan(plan, []model.AgentID{model.AgentOpenCode}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	preserved("full uninstall")
+}
+
 // TestFullAgentOpenCodePluginsUnderXDGConfigHome pins #3219 for the retained
 // plugin owner: uninstall resolves the same OpenCode config dir as installation.
 func TestFullAgentOpenCodePluginsUnderXDGConfigHome(t *testing.T) {
@@ -2201,6 +2462,72 @@ func TestUninstallSkillsRemovesLegacySharedMarkerAfterUpgrade(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Dir(marker)); (err == nil) != tt.wantSharedDir {
 				t.Fatalf("_shared present = %v, want %v (err %v)", err == nil, tt.wantSharedDir, err)
+			}
+		})
+	}
+}
+
+// TestPartialUninstallLeavesNonJSONNativeSettingsUntouched covers #1828: Kimi
+// (TOML) and Hermes (YAML) native settings must never reach the generic JSON
+// cleaner, while managed persona text and Kimi's separate JSON MCP file are
+// still cleaned.
+func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
+	tests := []struct {
+		name     string
+		agent    model.AgentID
+		settings string
+		content  string
+		prompt   string
+		mcp      string
+	}{
+		{name: "kimi legacy", agent: model.AgentKimi, settings: ".kimi/config.toml", content: "default_model = \"k2\"\n[models.k2]\nprovider = \"moonshot\"\n", prompt: ".kimi/KIMI.md", mcp: ".kimi/mcp.json"},
+		{name: "kimi current", agent: model.AgentKimi, settings: ".kimi-code/config.toml", content: "default_model = \"k2\"\n", prompt: ".kimi-code/AGENTS.md", mcp: ".kimi-code/mcp.json"},
+		{name: "hermes", agent: model.AgentHermes, settings: ".hermes/config.yaml", content: "providers:\n  - name: hermes\n", prompt: ".hermes/SOUL.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settings)
+			promptPath := filepath.Join(home, tt.prompt)
+			writeBatchFile(t, settingsPath, tt.content)
+			if err := os.Chmod(settingsPath, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeBatchFile(t, promptPath, "My own rules.\n\n<!-- gentle-ai:persona -->\nmanaged\n<!-- /gentle-ai:persona -->\n")
+			if tt.mcp != "" {
+				writeBatchFile(t, filepath.Join(home, tt.mcp), `{"mcpServers":{"engram":{"command":"engram"},"context7":{"url":"x"},"mine":{"command":"mine"}}}`)
+			}
+			if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(tt.agent), "claude-code"}}); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := NewService(home, t.TempDir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+
+			result, err := svc.PartialUninstall([]model.AgentID{tt.agent}, nil)
+			if err != nil {
+				t.Fatalf("PartialUninstall() error = %v, want native %s left to its owner", err, filepath.Base(settingsPath))
+			}
+			if !slices.Equal(result.AgentsRemovedFromState, []model.AgentID{tt.agent}) || len(result.FailedAgents) != 0 {
+				t.Fatalf("removed = %v, failed = %v, want only %s removed", result.AgentsRemovedFromState, result.FailedAgents, tt.agent)
+			}
+			if got := string(mustReadServiceFile(t, settingsPath)); got != tt.content {
+				t.Fatalf("native settings = %q, want bytes preserved %q", got, tt.content)
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			}
+			prompt := string(mustReadServiceFile(t, promptPath))
+			if strings.Contains(prompt, "gentle-ai:persona") || !strings.Contains(prompt, "My own rules.") {
+				t.Fatalf("prompt = %q, want managed persona removed and user text kept", prompt)
+			}
+			if tt.mcp != "" {
+				servers, _ := readJSONFileForTest(t, filepath.Join(home, tt.mcp))["mcpServers"].(map[string]any)
+				if _, ok := servers["engram"]; ok || servers["mine"] == nil || servers["context7"] != nil {
+					t.Fatalf("mcpServers = %v, want owned servers removed and custom server kept", servers)
+				}
 			}
 		})
 	}

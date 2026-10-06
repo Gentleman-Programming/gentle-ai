@@ -7,15 +7,15 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/qwen"
-	runtimeopencode "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/qwen"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
 // telemetryTestSpawnRecorder is the RecordingSpawner installed as
@@ -65,6 +65,14 @@ func TestMain(m *testing.M) {
 	// (Gentle Shell does) would otherwise redirect these tests into the real
 	// ~/.pi regardless of the sandboxed HOME set up below.
 	testenv.Isolate()
+	// The default fake is V1; an inherited host declaration must not override
+	// it, including in stand-in subprocesses. V2 tests set their own declaration.
+	// The un-stubbed real-host E2E keeps both for its relay stand-in (below).
+	inheritedRelayDeclaration, relayDeclared := os.LookupEnv(openCodeRelayContractEnvironment)
+	realVersionRunner := runtimeopencode.VersionRunnerOverride
+	if err := os.Unsetenv(openCodeRelayContractEnvironment); err != nil {
+		panic(err)
+	}
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}
@@ -91,11 +99,33 @@ func TestMain(m *testing.M) {
 		// here without an import cycle): strip the verb, reject anything else,
 		// and run the real flag parsing and sync execution.
 		args := os.Args[1:]
-		if len(args) == 0 || args[0] != "sync" {
+		var err error
+		switch {
+		case len(args) > 0 && args[0] == "sync":
+			_, err = RunSync(args[1:])
+		case len(args) == 2 && args[0] == "review" && args[1] == "opencode-transport":
+			// The real OpenCode V2 host E2E (review_opencode_v2_host_e2e_test.go)
+			// reaches the real Go relay through this stand-in. By default it is a
+			// TEST-ONLY STUB: the declaration the managed plugin sets is unset and
+			// the version runner reports V1 (both above), so the capability gate
+			// is stubbed open as V1 and the gate itself is not proven. With
+			// GENTLE_AI_TEST_STANDIN_REAL_CAPABILITY_GATE=1 the stand-in restores
+			// the plugin's inherited declaration and the production version
+			// runner, so the real gate decides against the real V2 host binary.
+			if os.Getenv(openCodeV2StandInRealGateEnvironment) == "1" {
+				if relayDeclared {
+					if err := os.Setenv(openCodeRelayContractEnvironment, inheritedRelayDeclaration); err != nil {
+						panic(err)
+					}
+				}
+				runtimeopencode.VersionRunnerOverride = realVersionRunner
+			}
+			err = RunReview(args[1:], os.Stdout)
+		default:
 			fmt.Fprintf(os.Stderr, "stand-in: unsupported CLI arguments %q\n", args)
 			os.Exit(1)
 		}
-		if _, err := RunSync(args[1:]); err != nil {
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

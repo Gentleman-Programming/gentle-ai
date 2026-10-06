@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type InjectionResult struct {
@@ -213,6 +213,31 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 
 			healed = filemerge.StripLegacyATLBlock(healed)
 			updated := filemerge.InjectMarkdownSection(healed, "persona", content)
+
+			writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || writeResult.Changed
+			files = append(files, promptPath)
+			break
+		}
+
+		// Codex shares ~/.codex/AGENTS.md with user-authored content and with
+		// other managed sections (engram, SDD) that are appended after persona.
+		// The persona must therefore live inside a <!-- gentle-ai:persona -->
+		// marker section instead of owning the whole file, so install, sync and
+		// uninstall can replace or remove exactly the managed persona content
+		// (issue #981). This mirrors the OpenCode handling above.
+		if adapter.Agent() == model.AgentCodex {
+			existing, err := readFileOrEmpty(promptPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+
+			healed := stripExactLegacyPersonaAsset(existing)
+			healed = filemerge.StripLegacyATLBlock(healed)
+			updated := injectPersonaBeforeManagedSections(healed, content)
 
 			writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
 			if err != nil {
@@ -549,6 +574,57 @@ func isExactLegacyPersonaAsset(existing string) bool {
 	return false
 }
 
+// stripExactLegacyPersonaAsset removes installer-owned legacy persona content
+// from existing when it is byte-for-byte one of the known legacy persona
+// assets. Two safe cases are handled:
+//
+//  1. The whole file is the legacy asset (no markers at all) — the old
+//     installer owned the entire file, so it can be replaced wholesale.
+//  2. The pre-marker zone (content before the first <!-- gentle-ai: -->
+//     marker) is exactly the legacy asset, followed by managed sections that
+//     later install steps appended (engram, SDD). Only the installer-owned
+//     zone is removed; every marker section is preserved. This migrates the
+//     markerless persona prose written by installers up to v1.43.2
+//     (issue #981).
+//
+// Anything else — including user content that merely resembles the persona —
+// is returned unchanged.
+func stripExactLegacyPersonaAsset(existing string) string {
+	if strings.TrimSpace(existing) == "" {
+		return existing
+	}
+	firstMarkerIdx := strings.Index(existing, "<!-- gentle-ai:")
+	if firstMarkerIdx < 0 {
+		if isExactLegacyPersonaAsset(existing) {
+			return ""
+		}
+		return existing
+	}
+	if isExactLegacyPersonaAsset(existing[:firstMarkerIdx]) {
+		return existing[firstMarkerIdx:]
+	}
+	return existing
+}
+
+func injectPersonaBeforeManagedSections(existing, content string) string {
+	if strings.Contains(existing, "<!-- gentle-ai:persona -->") {
+		return filemerge.InjectMarkdownSection(existing, "persona", content)
+	}
+
+	firstMarkerIdx := strings.Index(existing, "<!-- gentle-ai:")
+	if firstMarkerIdx < 0 {
+		return filemerge.InjectMarkdownSection(existing, "persona", content)
+	}
+
+	section := filemerge.InjectMarkdownSection("", "persona", content)
+	before := strings.TrimRight(existing[:firstMarkerIdx], "\r\n")
+	after := strings.TrimLeft(existing[firstMarkerIdx:], "\r\n")
+	if before == "" {
+		return section + "\n" + after
+	}
+	return before + "\n\n" + section + "\n" + after
+}
+
 func shouldStripManagedLegacyPersona(existing string) bool {
 	return strings.Contains(existing, "<!-- gentle-ai:persona -->")
 }
@@ -841,7 +917,7 @@ func readFileOrEmpty(path string) (string, error) {
 func wrapInstructionsFile(content string) string {
 	frontmatter := "---\n" +
 		"name: Gentle AI Persona\n" +
-		"description: Teaching-oriented persona with SDD orchestration and Engram protocol\n" +
+		"description: Teaching-oriented persona with ODD orchestration and Engram protocol\n" +
 		"applyTo: \"**\"\n" +
 		"---\n\n"
 

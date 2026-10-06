@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // lensContextArgv renders the closed lens-context command form from the flags
@@ -1041,7 +1041,7 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 		t.Fatal(err)
 	}
 
-	if reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision) {
+	if reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision, "") {
 		t.Fatal("reachable small candidate was classified as over budget")
 	}
 
@@ -1067,7 +1067,7 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			outcome, err := reviewLensContextBudgetProbe(t.Context(), test.deps(reviewLensContextDependencies()), repo, record.State, record.Revision)
+			outcome, err := reviewLensContextBudgetProbe(t.Context(), test.deps(reviewLensContextDependencies()), repo, record.State, record.Revision, "")
 			if err == nil {
 				t.Fatalf("probe answered outcome=%v with no cause after it never evaluated the budget", outcome)
 			}

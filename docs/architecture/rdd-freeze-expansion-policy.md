@@ -1,5 +1,8 @@
 # RDD Freeze-Expansion Policy — Wave 0
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 **Decision**: Wave 0 stops additive old-facade recovery and transport work on the RDD lifecycle, except for a proven security defect meeting all four criteria below. This is maintainer-internal guidance, not CI-enforced, and expires when Wave 7 completes or the tracker branch (`feature/rdd-root-simplification`) is abandoned.
 
 This policy exists because the problem statement in `docs/architecture/rdd-root-simplification-design.md` names a repeatable failure pattern: a local patch adds a reason code, contract field, command, state field, adapter rule, or persisted artifact to fix one edge, while a sibling flow still implements the old interpretation. Every wave-0 through wave-7 PR on the tracker chain is exempt from this policy by definition — the policy freezes *additive* work on the *old* facade, not the migration that replaces it.

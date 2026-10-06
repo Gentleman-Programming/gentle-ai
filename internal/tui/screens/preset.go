@@ -3,8 +3,8 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 func PresetOptions() []model.PresetID {
@@ -18,7 +18,7 @@ func PresetOptions() []model.PresetID {
 
 var presetDescriptions = map[model.PresetID]string{
 	model.PresetMinimal:       "Just Engram persistent memory across sessions",
-	model.PresetEcosystemOnly: "Memory + SDD + skills + docs + GGA",
+	model.PresetEcosystemOnly: "Memory + skills + docs + GGA",
 	model.PresetFullGentleman: "Dev Stack plus managed themes and logo polish",
 	model.PresetCustom:        "Choose each component manually: memory, persona, themes, logo, and more",
 }

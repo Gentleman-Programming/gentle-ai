@@ -1,5 +1,8 @@
 # Docker E2E Testing
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 End-to-end tests that validate the `gentle-ai` installer binary inside Docker containers running real Linux distributions.
 
 ## Architecture
@@ -28,7 +31,7 @@ RUN_FULL_E2E=1 RUN_BACKUP_TESTS=1 ./e2e/docker-test.sh
 | Tier | Env var | What it tests |
 |------|---------|---------------|
 | 1 (default) | — | Binary exists, runs, dry-run output format, flag validation |
-| 2 | `RUN_FULL_E2E=1` | Full install: opencode+permissions, claude-code+persona, context7, sdd |
+| 2 | `RUN_FULL_E2E=1` | Full install: opencode+permissions, claude-code+persona, context7, skills |
 | 3 | `RUN_BACKUP_TESTS=1` | Backup snapshot creation, backup file contents |
 
 ## Supported platforms

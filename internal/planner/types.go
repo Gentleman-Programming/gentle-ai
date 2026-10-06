@@ -1,8 +1,8 @@
 package planner
 
 import (
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Resolver interface {
@@ -37,6 +37,17 @@ type ReviewPayload struct {
 	// HasSDD is true when the SDD component is present in the resolved plan (Issue #149).
 	// Controls whether the Strict TDD row is shown in the review screen.
 	HasSDD bool
+
+	// AgentNotes carries per-agent review notes for the selected agents.
+	// Only catalog-only agents (currently Conductor) carry notes; writable
+	// agents must stay note-free so the review screen stays quiet.
+	AgentNotes []AgentNote
+}
+
+// AgentNote pairs one selected agent with a catalog-owned review note.
+type AgentNote struct {
+	Agent model.AgentID
+	Note  string
 }
 
 type PlatformDecision struct {

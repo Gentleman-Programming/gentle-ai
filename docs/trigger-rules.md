@@ -1,18 +1,23 @@
 # Organic Implementation Trigger Rules
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 <- [Back to README](../README.md)
 
 Ask for the outcome. Gentle AI™ keeps already-understood work inline, delegates only
 the actions that benefit from fresh context, and uses [Organic Driven Development
-(ODD)](usage.md#organic-driven-development-odd) for everyday work. SDD is an explicit
-choice when its separate planning artifacts are wanted, not an ambiguity resolver.
+(ODD)](usage.md#organic-driven-development-odd) for every implementation request.
 Native providers own verification, review mechanics, and lifecycle authority; ordinary repository policy owns delivery.
+
+> **Since v4.0.0:** SDD (Spec-Driven Development) is retired. ODD is
+> the only implementation workflow; there is no optional alternative route.
 
 ## Quick path
 
 1. Describe the outcome in natural language.
-2. Gentle AI uses the smallest useful implementation route: direct inline,
-   delegated direct ODD, or explicitly selected SDD.
+2. Gentle AI uses the smallest useful implementation route: direct inline or
+   delegated direct.
 3. The normal interaction reports only **Working**, **Checking**, **Ready**, or
    **Needs your decision**.
 
@@ -25,23 +30,21 @@ verification cost or external side effects, accepted residual risk, or delivery.
 
 | Route | Use it when | What happens |
 |---|---|---|
-| **Direct inline** | Deciding or verifying requires **1–3 files**; or the change is **one mechanical, already-understood file** with no research or unresolved design decision. | Keep the bounded action inline. |
-| **Delegated direct** | Understanding requires **4+ files**; reading prepares a write; broad research is needed; or a writer must change **2+ non-trivial files**. | Delegate the narrow exploration and/or one writer needed for that action. |
-| **Optional SDD** | The user explicitly wants separate proposal, spec, design, tasks, and verification artifacts. | Select only after an explicit request or accepted proposal, never from size, ambiguity, or risk alone. |
+| **Direct inline** | The task is **small**: understood within the inline evidence budget, risk contained, and resumable from the request plus `git diff`, whatever the number of files. | Read, edit, and run the focused test and suite inline. |
+| **Delegated direct** | Understanding exceeds the inline evidence budget; or a writer has a named reason (two or more independent units with disjoint edit surfaces launched together, or the long-session context backstop), so reading that prepares that write delegates with it; or the change is **high risk** and needs an independent verifier. Size, a large task alone, file count, or a price ratio never decides it. | Delegate the narrow exploration, one bounded writer per unit with a reason, and/or the verifier needed for that action. |
 
-The file counts describe the context needed for the current action, not a risk
-score and not an SDD threshold. Risk may strengthen native verification or
-review, but it never forces SDD.
+File count never decides the route or the task size. High risk takes a task
+out of the small path and adds an independent verifier after the change's own
+checks. The feature document still comes only from a failed resume test; a
+large task without a writer reason stays inline, following its logbook. When receipt-driven development is on and native assess returns a
+risk tier, that tier wins; the agent may only raise it.
 
 Delegation also applies per action. Tests, builds, installs, and native review
-actors may use fresh workers without changing the implementation route or
-creating an SDD run. Direct and delegated work create no SDD artifacts, phase
-attempts, or synthetic SDD lifecycle.
+actors may use fresh workers without changing the implementation route.
 
 If work reveals uncertainty, use optional scoped research or clarify the affected
-decision within ODD. Do not recommend SDD merely to resolve ambiguity. Its extra
-phases and artifact handoffs are useful when explicitly wanted, not a prerequisite
-for substantial work. No silent SDD enrollment.
+decision within ODD. Substantial work needs no separate planning phase or
+artifact handoff.
 
 ## Native progress and authority
 
@@ -55,8 +58,7 @@ for substantial work. No silent SDD enrollment.
 The user still asks only for the outcome. Repository identity, route, policy,
 candidate, delivery mechanism, and authority references remain owner-derived.
 Adapters do not select review lenses, reconstruct recovery policy, or infer
-success from prose. Existing SDD v1 runs continue through their SDD-specific
-status contract; direct and delegated runs do not create or consume an SDD run.
+success from prose.
 
 ## Review mode
 
@@ -80,13 +82,11 @@ report how to disable review mode. Interactive consent is asked
 once per clone. Accepting records that choice; **not now** applies only to that
 candidate and does not change review mode.
 
-While review mode is disabled, continue through direct inline, delegated direct,
-or optional SDD routing without starting, retrying, or re-enabling review on the
+While review mode is disabled, continue through direct inline or delegated direct
+routing without starting, retrying, or re-enabling review on the
 user's behalf. Review context may remain visible when available, but it never
 authorizes or blocks commit, push, PR, release, or archive. Native delivery gates
 report `disabled/unmanaged` when no exact receipt applies and never fabricate approval.
-
-In stable [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0) and unreleased `main`, disabled SDD status skips review authority and leaves `reviewGate` structurally absent. Pre-verify continues without routing to review. When visible, `reviewGate` is informational only; SDD archive preserves actual task and diagnostic history without requiring a verification certificate, while ordinary repository policy owns delivery. Native compatibility commands may report `disabled/unmanaged` review context, but no receipt state or validation result governs delivery. See the [SDD status contract](../internal/assets/skills/_shared/sdd-status-contract.md).
 
 ## Review store reset
 
@@ -122,7 +122,7 @@ marked SKIPPED was touched.
 
 It **preserves** the receipt-driven-development kill switch in both the
 `review-mode/` location and the pre-#2882 mirror inside
-`review-transactions/rar-authority/`, along with `sdd-runtime/`,
+`review-transactions/rar-authority/`, along with the legacy `sdd-runtime/` attempt state,
 `defect-reports/`, `review-artifacts/`, `incidents/`, and
 `REVIEW-MAINTENANCE.lock`. Reviews that were off stay off. The list is an
 allowlist, so any path the command does not recognize -- including one a future
@@ -161,8 +161,7 @@ in-flight work is never one keystroke away.
 ## Installation and refresh
 
 `gentle-ai install` and `gentle-ai sync` project the same canonical rules into
-every supported adapter, independently of whether the optional SDD component is
-selected:
+every supported adapter:
 
 - Standard adapters receive the managed `agent-routing` marker in their
   adapter-owned system-prompt file.

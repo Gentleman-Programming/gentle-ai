@@ -1,5 +1,8 @@
 # Release signing and key rotation
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Gentle AI™ releases only when the protected `release` environment provides a real Minisign credential whose public key matches the trust anchors embedded in the binary. An unset, malformed, placeholder, or isolated test key stops both the updater and release workflow.
 
 ## User verification
@@ -45,7 +48,7 @@ The public key is not secret, but its provenance is security-critical. A key fet
 The workflow validates the complete repository-variable value, exports a separate canonical value, and permits GoReleaser to inject only that validated output through this exact linker variable:
 
 ```text
-github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys
+github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys
 ```
 
 Source/test builds retain `UNSET`; their binary self-updater refuses network replacement. There is no grace version and no unsigned fallback.
@@ -88,7 +91,7 @@ Because there is no signed Windows asset to download, Windows never downloads an
 unsigned executable and never executes a remote update script. Instead:
 
 - With Go 1.25.10+ on `PATH`, the built-in upgrader runs
-  `go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@vX.Y.Z`,
+  `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@vX.Y.Z`,
   pinned to the exact release tag. This is verified — just against a different
   trust anchor: the module is checked against the Go checksum database
   (`sum.golang.org`) rather than our minisign release signature. The upgrader

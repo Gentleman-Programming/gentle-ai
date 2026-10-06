@@ -71,6 +71,13 @@ func TestParseEvent_AcceptsValidHeartbeatEvent(t *testing.T) {
 	}
 }
 
+func TestParseEvent_AcceptsConductorAgent(t *testing.T) {
+	body := strings.Replace(validHeartbeatEvent, `"claude-code", "opencode"`, `"claude-code", "conductor", "opencode"`, 1)
+	if _, err := ParseEvent([]byte(body)); err != nil {
+		t.Fatalf("ParseEvent with conductor agent: unexpected error: %v", err)
+	}
+}
+
 func TestParseEvent_RejectsInvalidPayloads(t *testing.T) {
 	tests := []struct {
 		name string

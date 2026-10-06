@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // Captured by actual sdd.Inject in the disposable af4ce122 worktree, TestParityCapture.
@@ -114,5 +114,59 @@ func TestInstalledNativeAgentParity(t *testing.T) {
 	}
 	if count != 12 {
 		t.Fatalf("fixture has %d paths, want 12", count)
+	}
+}
+
+// A v3.x Kimi gentleman.yaml predates the ownership ledger and declares every
+// SDD subagent by path. Its released bytes are Gentle AI's, so the installer
+// rewrites it; any other bytes stay preserved as before (#5253).
+func TestKimiInstallRewritesReleasedPreLedgerParent(t *testing.T) {
+	released, err := os.ReadFile(filepath.Join("..", "legacyassets", "testdata", "v3.7.0", "kimi-gentleman.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := agents.NewAdapter(model.AgentKimi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		content   []byte
+		rewritten bool
+	}{
+		{"released v3 bytes", released, true},
+		{"edited v3 bytes", append(append([]byte(nil), released...), "    mine:\n      path: ./mine.yaml\n"...), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(adapter.SubAgentsDir(home), "gentleman.yaml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, tc.content, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			result, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.rewritten {
+				if string(got) != string(tc.content) || !containsPath(result.Skipped, path) {
+					t.Fatalf("edited parent was not preserved: %+v", result)
+				}
+				return
+			}
+			if string(got) == string(tc.content) || containsPath(result.Skipped, path) {
+				t.Fatalf("released v3 parent was not rewritten: %+v", result)
+			}
+			ledger := readOwnershipLedger(t, filepath.Join(adapter.SubAgentsDir(home), reviewassets.OwnershipLedgerFilename))
+			if ledger.Files["gentleman.yaml"] == "" {
+				t.Fatal("rewritten parent not recorded in the ownership ledger")
+			}
+		})
 	}
 }

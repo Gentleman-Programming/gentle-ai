@@ -6,12 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodeagents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // kiloParityAgentNames is the Kilo agent set: the v3.7.0 Judgment Day roles
@@ -74,6 +75,11 @@ func assertKiloParityAgents(t *testing.T, agents map[string]any) {
 	}
 	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
 	permission, _ := orchestrator["permission"].(map[string]any)
+	// Kilo shares the OpenCode permission defaults and the orchestrator prompt
+	// that relays blocking prompts through the native question tool (#4816).
+	if permission["question"] != "allow" {
+		t.Fatalf("Kilo gentle-orchestrator permission.question = %#v, want \"allow\"", permission["question"])
+	}
 	task, _ := permission["task"].(map[string]any)
 	for _, name := range kiloParityAgentNames {
 		if task[name] != "allow" {
@@ -325,7 +331,7 @@ func TestRetireKiloReviewAgentsPreservesSettingsMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("settings mode = %v, want 0600 preserved", info.Mode().Perm())
 	}
 	raw, _ := os.ReadFile(path)
