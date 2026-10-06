@@ -1,0 +1,7 @@
+version: "1"
+agent:
+  name: gentle-ai-security
+  extend: default
+  system_prompt_path: ./gentle-ai-security.md
+  exclude_tools:
+    - "kimi_cli.tools.multiagent:Task"

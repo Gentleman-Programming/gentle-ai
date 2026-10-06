@@ -261,7 +261,7 @@ func TestRetiredReviewAgentCleanupSkipsNonRegularFiles(t *testing.T) {
 	}
 }
 
-func TestCursorInstallWithoutAgentsDirectoryWritesNothing(t *testing.T) {
+func TestCursorInstallCreatesSecurityAgent(t *testing.T) {
 	t.Parallel()
 
 	adapter, err := agents.NewAdapter(model.AgentCursor)
@@ -270,12 +270,15 @@ func TestCursorInstallWithoutAgentsDirectoryWritesNothing(t *testing.T) {
 	}
 	home := t.TempDir()
 	result, err := InstallNativeAgents(home, adapter, InstallOptions{})
-	if err != nil || result.Changed {
-		t.Fatalf("InstallNativeAgents(cursor) = %+v, %v; want no change", result, err)
+	if err != nil {
+		t.Fatalf("InstallNativeAgents(cursor) error = %v", err)
 	}
-	entries, err := os.ReadDir(home)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("cursor install wrote into an empty home: %v %v", entries, err)
+	if !result.Changed {
+		t.Fatal("cursor install reported no change on a fresh home")
+	}
+	path := filepath.Join(adapter.SubAgentsDir(home), "gentle-ai-security.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("cursor install missing gentle-ai-security.md: %v", err)
 	}
 }
 
