@@ -114,6 +114,22 @@ post-sync verification checks that every retired plugin is gone for OpenCode and
 Kilocode. Uninstall removes only bytes the same registry recognizes and leaves a
 symlinked `plugins` directory and its contents untouched.
 
+Install and sync also remove the retired agents earlier releases wrote to the
+settings file, on both runtime majors: `sdd-orchestrator` and `sdd-<phase>`
+entries, their profile-suffixed copies (`sdd-apply-fallback`), every entry of
+the plural `agents` map 3.7.0 left in some configs (OpenCode 1.x refuses that
+map, #5182), and the orchestrator `task` permissions that named a removed
+agent. An entry counts as Gentle AI's when it carries the 3.x
+`__managed_by: gentle-ai/sdd` marker or every field holds a value some release
+wrote (the registry in `internal/components/legacyassets/`, generated with the
+native agent registry). Global runs also remove the `prompts/sdd/*.md` files
+those agents loaded when their bytes match a release. Only the removed members
+are edited, so JSONC comments elsewhere survive; an entry with attached
+comments, any other same-name entry, and an edited prompt are preserved and
+listed under manual actions. A workspace sync edits only the project settings
+file. The settings file and prompts are in the install, sync, and upgrade
+snapshots.
+
 Before writing V2 managed plugins, install and sync check the SDK installed in
 the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so
 an SDK that matches a newer OpenCode runtime is kept as is. A missing SDK, an older

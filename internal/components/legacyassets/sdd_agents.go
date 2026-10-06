@@ -1,6 +1,6 @@
 package legacyassets
 
-//go:generate go run ../../../scripts/gen-sdd-agent-digests sdd_agent_digests.go
+//go:generate go run ../../../scripts/gen-sdd-agent-digests sdd_agent_digests.go opencode_sdd_digests.go
 
 import (
 	"crypto/sha256"

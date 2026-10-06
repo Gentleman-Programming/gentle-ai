@@ -1768,3 +1768,32 @@ func TestManagedAgentBackupPathsIncludeRetiredSDDAgents(t *testing.T) {
 		}
 	}
 }
+
+// The upgraded binary's sync retires the OpenCode family's SDD settings
+// entries and shared prompts (#5157, #5182), so the snapshot holds them.
+func TestManagedAgentBackupPathsIncludeRetiredOpenCodeSDDSettings(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for agent, want := range map[model.AgentID][]string{
+		model.AgentOpenCode: {
+			filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+			filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd", "sdd-apply.md"),
+		},
+		model.AgentKilocode: {filepath.Join(homeDir, ".config", "kilo", "opencode.json")},
+	} {
+		adapter, ok := reg.Get(agent)
+		if !ok {
+			t.Fatalf("default registry does not contain %s", agent)
+		}
+		paths := managedAgentBackupPaths(homeDir, adapter, &bytes.Buffer{})
+		for _, path := range want {
+			if !slices.Contains(paths, path) {
+				t.Errorf("%s upgrade snapshot omits %s", agent, path)
+			}
+		}
+	}
+}

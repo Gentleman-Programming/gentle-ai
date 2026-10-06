@@ -24,21 +24,23 @@ func TestReleasedSDDAgentDigestsMatchGenerator(t *testing.T) {
 			t.Skipf("release tag %s unavailable; run git fetch --tags", anchor)
 		}
 	}
-	out := filepath.Join(t.TempDir(), "sdd_agent_digests.go")
-	cmd := exec.Command("go", "run", "../../../scripts/gen-sdd-agent-digests", out)
+	dir := t.TempDir()
+	cmd := exec.Command("go", "run", "../../../scripts/gen-sdd-agent-digests", filepath.Join(dir, "sdd_agent_digests.go"), filepath.Join(dir, "opencode_sdd_digests.go"))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generator failed: %v\n%s", err, output)
 	}
-	want, err := os.ReadFile("sdd_agent_digests.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(want) {
-		t.Fatal("sdd_agent_digests.go is stale; run go generate ./internal/components/legacyassets/")
+	for _, name := range []string{"sdd_agent_digests.go", "opencode_sdd_digests.go"} {
+		want, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("%s is stale; run go generate ./internal/components/legacyassets/", name)
+		}
 	}
 }
 
@@ -99,8 +101,9 @@ func TestSDDAgentDigestGeneratorRefusesMissingIntermediateTags(t *testing.T) {
 	repo.release("v3.7.0", "name: sdd-apply\n")
 	repo.git("tag", "v4.0.0")
 	registry := filepath.Join(t.TempDir(), "sdd_agent_digests.go")
+	openCodeRegistry := filepath.Join(t.TempDir(), "opencode_sdd_digests.go")
 	run := func() (string, error) {
-		cmd := exec.Command(generator, registry)
+		cmd := exec.Command(generator, registry, openCodeRegistry)
 		cmd.Dir, cmd.Env = repo.dir, repo.env
 		out, err := cmd.CombinedOutput()
 		return string(out), err
@@ -124,6 +127,13 @@ func TestSDDAgentDigestGeneratorRefusesMissingIntermediateTags(t *testing.T) {
 	// history is missing.
 	edited := strings.ReplaceAll(string(committed), " v2.0.0", "")
 	if err := os.WriteFile(registry, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeCommitted, err := os.ReadFile(openCodeRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(openCodeRegistry, []byte(strings.ReplaceAll(string(openCodeCommitted), " v2.0.0", "")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := run(); err == nil || !strings.Contains(out, "was not regenerated") || !strings.Contains(out, "git fetch --tags") {

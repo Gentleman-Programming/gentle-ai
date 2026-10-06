@@ -593,6 +593,8 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	// After the native installer: it rewrites a Gentle-owned v3 Kimi
 	// gentleman.yaml, so the SDD subagents it declared can be retired now.
 	apply = append(apply, retiredSDDAgentSteps("sync:agent:retire-sdd:", r.homeDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
+	// Before routing guidance, which rewrites the same settings documents.
+	apply = append(apply, retiredOpenCodeSDDSettingsSteps("sync:agent:retire-sdd-settings:", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles, r.state)...)
 
 	// Routing guidance is refreshed per agent and outside the component loop, for
 	// the same reason install schedules it there: a persisted selection without
@@ -791,6 +793,11 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	}
 	for _, path := range retiredSDDAgentBackupPaths(homeDir, scope, adapters) {
 		paths[path] = struct{}{}
+	}
+	for _, adapter := range adapters {
+		for _, path := range retiredOpenCodeSDDBackupPaths(homeDir, workspaceDir, scope, []model.AgentID{adapter.Agent()}) {
+			paths[path] = struct{}{}
+		}
 	}
 	for _, adapter := range adapters {
 		if names := reviewassets.NativeAgentFileNames(adapter.Agent()); len(names) > 0 {
@@ -1079,12 +1086,11 @@ func (s *openCodeMarkerMigrationSyncStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("read OpenCode settings: %w", err)
 	}
+	// Retired sdd-* agents are never eligible: their marker is the ownership
+	// proof the settings retirement deletes them by.
 	names := append([]string{"gentle-orchestrator"}, opencodeactivation.GentleAIODDPhases()...)
 	names = append(names, opencodeactivation.JDPhases()...)
 	names = append(names, opencodeactivation.ReviewPhases()...)
-	// Older installations used sdd-* names; these are eligible only when
-	// their definition still carries the exact retired ownership marker.
-	names = append(names, "sdd-orchestrator", "sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard")
 	updated, err := filemerge.RemoveLegacyOpenCodeAgentMarkers(s.path, raw, names)
 	if err != nil {
 		return fmt.Errorf("migrate OpenCode agent markers: %w", err)

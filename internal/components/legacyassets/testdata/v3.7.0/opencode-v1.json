@@ -1,0 +1,367 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "explore": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Freeform exploration fallback agent",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "write": "deny"
+      },
+      "prompt": "You are the explore fallback sub-agent aligned with gentle-pi guidance.\n- Independently inspect codebase files and execution paths in full without relying on unverified assumptions.\n- Read relevant code files completely before reaching conclusions.\n"
+    },
+    "general": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "General unstructured queries and auxiliary fallback tasks",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "task": "deny"
+      },
+      "prompt": "You are the general fallback sub-agent. When handling unstructured auxiliary tasks:\n- Read relevant codebase context before drawing conclusions.\n- Perform empirical verification of all claims and code execution paths.\n"
+    },
+    "gentle-orchestrator": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Gentle AI SDD Orchestrator - coordinates sub-agents, never does work inline",
+      "mode": "primary",
+      "model": "openai/gpt-5",
+      "permission": {
+        "question": "allow",
+        "task": {
+          "*": "deny",
+          "explore": "allow",
+          "general": "allow",
+          "jd-fix-agent": "allow",
+          "jd-judge-a": "allow",
+          "jd-judge-b": "allow",
+          "review-readability": "allow",
+          "review-refuter": "allow",
+          "review-reliability": "allow",
+          "review-resilience": "allow",
+          "review-risk": "allow",
+          "review-validator": "allow",
+          "sdd-apply": "allow",
+          "sdd-archive": "allow",
+          "sdd-design": "allow",
+          "sdd-explore": "allow",
+          "sdd-init": "allow",
+          "sdd-onboard": "allow",
+          "sdd-propose": "allow",
+          "sdd-research": "allow",
+          "sdd-spec": "allow",
+          "sdd-tasks": "allow",
+          "sdd-verify": "allow"
+        }
+      },
+      "prompt": "# Gentle AI — SDD Orchestrator Instructions\n\nBind this to the dedicated `gentle-orchestrator` agent only. Do NOT apply it to executor phase agents such as `sdd-apply` or `sdd-verify`.\n",
+      "variant": ""
+    },
+    "jd-fix-agent": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Surgical fix agent for judgment-day protocol",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the task prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.\n\n<!-- gentle-ai:codegraph-guidance -->\n"
+    },
+    "jd-judge-a": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "write": "deny"
+      },
+      "prompt": "You are a read-only adversarial reviewer. Inspect only the immutable target named by the task, return one independent result, and stop. Do not edit, delegate, or inspect unrelated scope.\n\nReport only real, user-impacting defects. Every severe finding must state whether the candidate introduced, behavior-activated, or worsened the behavior and cite changed-hunk, differential-test, candidate-created-path, or before/after proof. Mark unchanged defects pre-existing or base-only; use unknown when causality cannot be proved.\n"
+    },
+    "jd-judge-b": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "write": "deny"
+      },
+      "prompt": "You are a read-only adversarial reviewer. Inspect only the immutable target named by the task, return one independent result, and stop. Do not edit, delegate, or inspect unrelated scope.\n\nReport only real, user-impacting defects. Every severe finding must state whether the candidate introduced, behavior-activated, or worsened the behavior and cite changed-hunk, differential-test, candidate-created-path, or before/after proof. Mark unchanged defects pre-existing or base-only; use unknown when causality cannot be proved.\n"
+    },
+    "review-readability": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "R2 Readability reviewer — naming, complexity, intention, maintainability, review size, and context clarity",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "*": "deny"
+      },
+      "prompt": "# R2 Readability Review\n\nReview once, return one result, and stop. Never edit, delegate, or expand scope.\n"
+    },
+    "review-refuter": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Batched adversarial refuter — evaluates every BLOCKER/CRITICAL candidate through one assigned lens and returns one verdict per finding",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "bash": "deny",
+        "edit": "deny",
+        "task": "deny",
+        "write": "deny"
+      },
+      "prompt": "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive.\n\n<!-- gentle-ai:agent-language-contract -->\n"
+    },
+    "review-reliability": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "R3 Reliability reviewer — behavior-first tests, coverage value, edge cases, determinism, contracts, and regressions",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "*": "deny"
+      },
+      "prompt": "# R3 Reliability Review\n\nReview once, return one result, and stop. Never edit, delegate, or expand scope.\n"
+    },
+    "review-resilience": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "R4 Resilience reviewer — fallbacks, retry/backoff, graceful degradation, observability, load, rollback, and SLO risks",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "*": "deny"
+      },
+      "prompt": "# R4 Resilience Review\n\nReview once, return one result, and stop. Never edit, delegate, or expand scope.\n"
+    },
+    "review-risk": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "R1 Risk reviewer — security, privilege boundaries, data exposure, dependency risks, and merge-blocking vulnerabilities",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "*": "deny"
+      },
+      "prompt": "# R1 Risk Review\n\nReview once, return one result, and stop. Never edit, delegate, or expand scope.\n"
+    },
+    "review-validator": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Targeted read-only validator for provider-issued review checks",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "bash": {
+          "*": "deny",
+          "gentle-ai review inspect-candidate --purpose targeted-validation *": "allow"
+        },
+        "edit": "deny",
+        "task": "deny",
+        "write": "deny"
+      },
+      "prompt": "You are a targeted validation subagent. Execute only the provider-issued targeted validation in the Go-issued task prompt. Do NOT edit files. Do NOT delegate. That prompt embeds the frozen patch for every corrected path and names the one read-only command you may run to read the immutable trees yourself, `gentle-ai review inspect-candidate --purpose targeted-validation`, with every argument it needs. Use it when you need more than the embedded patches; run nothing else against the repository and never read the live worktree, index, or HEAD. Reporting that the candidate could not be inspected is a last resort, not a first response, and an inconclusive inspection is never a failed check. Return the exact requested JSON and nothing else.\n\n<!-- gentle-ai:codegraph-guidance -->\n"
+    },
+    "sdd-apply": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Implement code changes from task definitions",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "anthropic/claude-sonnet-4",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-apply.md}",
+      "variant": "high"
+    },
+    "sdd-apply-fallback": {
+      "description": "Implement code changes from task definitions",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "anthropic/claude-sonnet-4",
+      "prompt": "{file:./prompts/sdd/sdd-apply.md}",
+      "variant": "high"
+    },
+    "sdd-archive": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Archive completed change artifacts",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-archive.md}"
+    },
+    "sdd-archive-fallback": {
+      "description": "Archive completed change artifacts",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-archive.md}"
+    },
+    "sdd-design": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Create technical design from proposals",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-design.md}"
+    },
+    "sdd-design-fallback": {
+      "description": "Create technical design from proposals",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-design.md}"
+    },
+    "sdd-explore": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Investigate codebase and think through ideas",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-explore.md}"
+    },
+    "sdd-explore-fallback": {
+      "description": "Investigate codebase and think through ideas",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-explore.md}"
+    },
+    "sdd-init": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Bootstrap SDD context and project configuration",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-init.md}"
+    },
+    "sdd-init-fallback": {
+      "description": "Bootstrap SDD context and project configuration",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-init.md}"
+    },
+    "sdd-onboard": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Guide user through a complete SDD cycle using their real codebase",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-onboard.md}"
+    },
+    "sdd-onboard-fallback": {
+      "description": "Guide user through a complete SDD cycle using their real codebase",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-onboard.md}"
+    },
+    "sdd-orchestrator-fallback": {
+      "description": "SDD Orchestrator (fallback profile) - coordinates sub-agents, never does work inline",
+      "mode": "primary",
+      "model": "openai/gpt-5",
+      "permission": {
+        "question": "allow",
+        "task": {
+          "*": "deny",
+          "explore": "allow",
+          "general": "allow",
+          "jd-fix-agent": "allow",
+          "jd-judge-a": "allow",
+          "jd-judge-b": "allow",
+          "review-readability": "allow",
+          "review-refuter": "allow",
+          "review-reliability": "allow",
+          "review-resilience": "allow",
+          "review-risk": "allow",
+          "review-validator": "allow",
+          "sdd-apply-fallback": "allow",
+          "sdd-archive-fallback": "allow",
+          "sdd-design-fallback": "allow",
+          "sdd-explore-fallback": "allow",
+          "sdd-init-fallback": "allow",
+          "sdd-onboard-fallback": "allow",
+          "sdd-propose-fallback": "allow",
+          "sdd-research-fallback": "allow",
+          "sdd-spec-fallback": "allow",
+          "sdd-tasks-fallback": "allow",
+          "sdd-verify-fallback": "allow"
+        }
+      },
+      "prompt": "# Gentle AI — SDD Orchestrator Instructions\n\nBind this to the dedicated `gentle-orchestrator` agent only. Do NOT apply it to executor phase agents such as `sdd-apply-fallback` or `sdd-verify-fallback`.\n",
+      "variant": ""
+    },
+    "sdd-propose": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Create change proposals from explorations",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-propose.md}"
+    },
+    "sdd-propose-fallback": {
+      "description": "Create change proposals from explorations",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-propose.md}"
+    },
+    "sdd-research": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Collect source-backed evidence for selected SDD research",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {
+        "bash": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny"
+      },
+      "prompt": "You are the SDD research executor, not the orchestrator. Do NOT delegate or call task. Read ~/.config/opencode/skills/sdd-research/SKILL.md and follow it exactly. Use only actually available and authorized external tools. This managed configuration denies web access; disclose unavailable evidence without bypassing permissions. Return findings to the orchestrator; do not persist state or infer proposal readiness.\n\n<!-- gentle-ai:agent-language-contract -->\n## Artifact Language Contract\n\nGenerated artifacts (code, comments, UI copy, docs, specs, tests, commit messages, memory entries) default to English. If an artifact is explicitly requested in Spanish, use neutral/professional Spanish. Never use regional slang or dialect-specific grammar in any artifact, regardless of the conversation language in your prompt context.\n\nBefore any Write/Edit whose content is an artifact, re-verify these artifact language rules.\n<!-- /gentle-ai:agent-language-contract -->\n\n<!-- gentle-ai:remote-authorization -->\n## Remote operation authorization\n\nPermission to develop locally does not authorize remote execution or file transfer. Before remote work, require explicit user authorization for the destination, operation, and credential/session to use. If any part is missing or ambiguous, ask and remain local; do not probe the destination to resolve the ambiguity.\n\n- Do not discover, inspect, or reuse ambient SSH agents, ControlMaster sockets, credentials, authenticated sessions, or other remote access channels without explicit authorization. Their availability is not permission to use them.\n- Apply this boundary regardless of the tool or spelling: direct commands, wrappers, interpreters, libraries, and delegated work do not bypass it. Pass the authorized scope to delegates; delegation cannot expand it.\n- Explicitly authorized remote work is allowed within that scope. Preserve stricter user instructions and runtime restrictions; do not weaken them or change approval settings to proceed.\n- Native ask rules are an additional runtime mechanism, not authorization inferred from local-development access. Automation modes and remembered approvals may suppress prompts. This behavioral contract is not a sandbox and does not guarantee a fresh human prompt for every execution.\n<!-- /gentle-ai:remote-authorization -->\n"
+    },
+    "sdd-research-fallback": {
+      "description": "Collect auditable external evidence",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-research.md}"
+    },
+    "sdd-spec": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Write detailed specifications from proposals",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-spec.md}"
+    },
+    "sdd-spec-fallback": {
+      "description": "Write detailed specifications from proposals",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-spec.md}"
+    },
+    "sdd-tasks": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Break down specs and designs into implementation tasks",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-tasks.md}"
+    },
+    "sdd-tasks-fallback": {
+      "description": "Break down specs and designs into implementation tasks",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-tasks.md}"
+    },
+    "sdd-verify": {
+      "__managed_by": "gentle-ai/sdd",
+      "description": "Validate implementation against specs",
+      "hidden": true,
+      "mode": "subagent",
+      "permission": {},
+      "prompt": "{file:./prompts/sdd/sdd-verify.md}"
+    },
+    "sdd-verify-fallback": {
+      "description": "Validate implementation against specs",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "{file:./prompts/sdd/sdd-verify.md}"
+    }
+  },
+  "default_agent": "gentle-orchestrator",
+  "share": "disabled"
+}
