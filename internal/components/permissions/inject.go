@@ -170,13 +170,17 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 // Merged into a tool map the user scoped, such a rule follows the root "*" and,
 // as the last match, would loosen the user's default.
 func withoutRulesLooserThanUserDefault(base, overlay []byte) []byte {
-	strictness := map[any]int{"allow": 0, "ask": 1, "deny": 2}
+	strictness := map[string]int{"allow": 0, "ask": 1, "deny": 2}
 	root, err := filemerge.UnmarshalJSONObject(base)
 	if err != nil {
 		return overlay
 	}
 	permission, _ := root["permission"].(map[string]any)
-	floor, ok := strictness[permission["*"]]
+	rootAction, _ := permission["*"].(string)
+	if patterns, ok := permission["*"].(map[string]any); ok {
+		rootAction, _ = patterns["*"].(string)
+	}
+	floor, ok := strictness[rootAction]
 	if !ok || floor == 0 {
 		return overlay
 	}
@@ -188,7 +192,7 @@ func withoutRulesLooserThanUserDefault(base, overlay []byte) []byte {
 	for _, value := range rules {
 		patterns, _ := value.(map[string]any)
 		for pattern, action := range patterns {
-			if strictness[action] < floor {
+			if name, _ := action.(string); strictness[name] < floor {
 				delete(patterns, pattern)
 			}
 		}

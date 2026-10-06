@@ -1209,3 +1209,41 @@ func TestInjectKeepsUserAskByDefault(t *testing.T) {
 		t.Errorf("overlay ask lost: got %s", got)
 	}
 }
+
+// A root "*" pattern map of deny is deny-by-default too: the overlay adds no
+// looser rule, and the filter must not panic on the map form.
+func TestInjectToleratesPatternMapRootDefault(t *testing.T) {
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentKilocode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permission":{"*":{"*":"deny"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Permission map[string]json.RawMessage `json:"permission"`
+	}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	for tool, value := range root.Permission {
+		var patterns map[string]string
+		if tool == "*" || json.Unmarshal(value, &patterns) != nil {
+			continue
+		}
+		for pattern, action := range patterns {
+			if action != "deny" {
+				t.Errorf("%s %q: %s loosens the user's deny-by-default", tool, pattern, action)
+			}
+		}
+	}
+}
