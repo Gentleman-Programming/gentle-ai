@@ -191,3 +191,76 @@ func TestRetireSDDAssetsReportsUnprovableClaudeWorkflow(t *testing.T) {
 		t.Fatalf("ManualActions = %v", actions)
 	}
 }
+
+// A symlinked skills root, skill directory, or _shared directory belongs to
+// the user (dotfiles): retirement never enters it, so files in its target are
+// never removed, and it is reported once with an action.
+func TestRetireSDDAssetsDoesNotEnterSymlinkedDirectories(t *testing.T) {
+	base := t.TempDir()
+	skill := releasedFixture(t, "v3.7.0", "skill-sdd-init.md")
+	shared := releasedFixture(t, "v3.7.0", "skill-shared-sdd-orchestrator-sections.md")
+	dotfiles := filepath.Join(base, "dotfiles")
+	writeFixture(t, filepath.Join(dotfiles, "sdd-init", "SKILL.md"), skill)
+	writeFixture(t, filepath.Join(dotfiles, "_shared", "sdd-orchestrator-sections.md"), shared)
+	writeFixture(t, filepath.Join(dotfiles, "sdd-verify-refs", "report-format.md"), releasedFixture(t, "v3.7.0", "skill-sdd-verify-report-format.md"))
+
+	skills := filepath.Join(base, "skills")
+	commands := filepath.Join(base, "commands")
+	owned := filepath.Join(commands, "sdd-init.md")
+	writeFixture(t, owned, releasedFixture(t, "v2.0.0", "claude-sdd-init.md"))
+	if err := os.MkdirAll(filepath.Join(skills, "sdd-verify"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		filepath.Join(skills, "sdd-init"):                 filepath.Join(dotfiles, "sdd-init"),
+		filepath.Join(skills, "_shared"):                  filepath.Join(dotfiles, "_shared"),
+		filepath.Join(skills, "sdd-verify", "references"): filepath.Join(dotfiles, "sdd-verify-refs"),
+	}
+	for link, target := range links {
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+
+	res, err := RetireSDDAssets(model.AgentClaudeCode, SDDAssetDirs{Skills: skills, Commands: commands})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(dotfiles, "sdd-init", "SKILL.md"),
+		filepath.Join(dotfiles, "_shared", "sdd-orchestrator-sections.md"),
+		filepath.Join(dotfiles, "sdd-verify-refs", "report-format.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("retirement removed %s through or beside a symlinked directory: %v", path, err)
+		}
+	}
+	if _, err := os.Lstat(owned); !os.IsNotExist(err) {
+		t.Errorf("owned command in a real directory survived: %v", err)
+	}
+	actions := strings.Join(res.ManualActions(), "\n")
+	for link := range links {
+		if !strings.Contains(actions, link) {
+			t.Errorf("symlinked directory %s not reported: %v", link, res.ManualActions())
+		}
+	}
+	if !strings.Contains(actions, "move or delete") {
+		t.Errorf("no action for the symlinked directories: %v", res.ManualActions())
+	}
+
+	// A symlinked root is not entered either.
+	root := filepath.Join(base, "linked-skills")
+	if err := os.Symlink(dotfiles, root); err != nil {
+		t.Fatal(err)
+	}
+	res, err = RetireSDDAssets(model.AgentClaudeCode, SDDAssetDirs{Skills: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Removed) != 0 || !strings.Contains(strings.Join(res.ManualActions(), "\n"), root) {
+		t.Fatalf("symlinked skills root entered or unreported: %+v %v", res, res.ManualActions())
+	}
+	if _, err := os.Stat(filepath.Join(dotfiles, "sdd-init", "SKILL.md")); err != nil {
+		t.Fatalf("retirement removed a file through a symlinked root: %v", err)
+	}
+}

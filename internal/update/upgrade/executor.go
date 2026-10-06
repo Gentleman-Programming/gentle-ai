@@ -234,7 +234,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	if adapter.SupportsSlashCommands() {
-		add(legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir))...)
+		add(presentPaths(legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir)))...)
 		commands, err := skills.AllSkillCommandPaths(homeDir, adapter)
 		if err != nil {
 			writeBackupDiagnostic(diagnostics, "backup: skipping skill commands for %s: %v", adapter.Agent(), err)
@@ -247,13 +247,13 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 			add(filepath.Join(adapter.SubAgentsDir(homeDir), name))
 		}
 		// The upgraded binary's sync retires native SDD agents (#5157).
-		add(legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir))...)
+		add(presentPaths(legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir)))...)
 	}
 
 	if adapter.SupportsSkills() {
 		add(managedSkillBackupPaths(homeDir, adapter, diagnostics)...)
 		// The upgraded binary's sync retires SDD skills (#5157).
-		add(legacyassets.RetiredSDDAssetPaths(adapter.Agent(), legacyassets.SDDAssetDirs{Skills: adapter.SkillsDir(homeDir)})...)
+		add(presentPaths(legacyassets.RetiredSDDAssetPaths(adapter.Agent(), legacyassets.SDDAssetDirs{Skills: adapter.SkillsDir(homeDir)}))...)
 	}
 
 	// The managed plugin install resolves the config directory through the
@@ -282,6 +282,19 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	return paths
+}
+
+// presentPaths keeps the retired inventory paths that exist. Sync only
+// removes what exists, and a restore deletes every path the snapshot recorded
+// as absent, which would remove a file the user later created there.
+func presentPaths(paths []string) []string {
+	var present []string
+	for _, path := range paths {
+		if _, err := os.Lstat(path); err == nil {
+			present = append(present, path)
+		}
+	}
+	return present
 }
 
 func managedGlobalBackupPaths(homeDir string) []string {

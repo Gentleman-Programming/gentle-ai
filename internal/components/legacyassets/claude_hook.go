@@ -20,11 +20,13 @@ const ClaudeSDDPreflightHookCommand = "gentle-ai sdd-preflight-hook --agent " + 
 // releasedClaudeSDDPreflightHook is the hook object every release wrote.
 var releasedClaudeSDDPreflightHook = map[string]any{"type": "command", "command": ClaudeSDDPreflightHookCommand, "timeout": json.Number("30")}
 
-// HookRetireResult reports whether the released hook was removed and whether
-// a differing hook that runs the retired command was kept.
+// HookRetireResult reports whether the released hook was removed, whether a
+// differing hook that runs the retired command was kept, and whether settings
+// that run it were left alone because they cannot be rewritten safely (not a
+// regular file, or not strict JSON).
 type HookRetireResult struct {
-	Path            string
-	Removed, Edited bool
+	Path                          string
+	Removed, Edited, Unrewritable bool
 }
 
 // RetireClaudeSDDPreflightHook removes from hooks.PreToolUse of the Claude
@@ -33,7 +35,9 @@ type HookRetireResult struct {
 // {"matcher": "Agent", "hooks": [...]} shape, then an empty PreToolUse list.
 // Every other key, hook, and group is preserved. A hook that runs the retired
 // command in any other shape is kept and reported. The file is rewritten
-// only when something was removed.
+// only when something was removed. Settings that are a symlink (or another
+// non-regular file) or not strict JSON are never rewritten: when they run the
+// retired command they are reported for manual removal, and the run goes on.
 func RetireClaudeSDDPreflightHook(path string) (HookRetireResult, error) {
 	result := HookRetireResult{Path: path}
 	info, err := os.Lstat(path)
@@ -44,18 +48,23 @@ func RetireClaudeSDDPreflightHook(path string) (HookRetireResult, error) {
 		return result, fmt.Errorf("inspect Claude settings %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
+		// Reading through the link is safe; only report what runs the hook.
+		raw, err := os.ReadFile(path)
+		result.Unrewritable = err == nil && bytes.Contains(raw, []byte(ClaudeSDDPreflightHookCommand))
 		return result, nil
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil || !bytes.Contains(raw, []byte(ClaudeSDDPreflightHookCommand)) {
 		return result, err
 	}
-	if err := filemerge.RejectDuplicateJSONKeys(raw); err != nil {
-		return result, fmt.Errorf("parse Claude settings %s: %w", path, err)
+	if filemerge.RejectDuplicateJSONKeys(raw) != nil {
+		result.Unrewritable = true
+		return result, nil
 	}
 	root, err := filemerge.DecodeStrictJSONObject(raw)
 	if err != nil {
-		return result, fmt.Errorf("parse Claude settings %s: %w", path, err)
+		result.Unrewritable = true
+		return result, nil
 	}
 	hooks, _ := root["hooks"].(map[string]any)
 	for event, value := range hooks {
@@ -121,6 +130,10 @@ func RetireClaudeSDDPreflightHook(path string) (HookRetireResult, error) {
 
 // ManualActions tells the user what to do with a retired hook that was kept.
 func (r HookRetireResult) ManualActions() []string {
+	if r.Unrewritable {
+		hook, _ := json.Marshal(releasedClaudeSDDPreflightHook)
+		return []string{fmt.Sprintf("Claude Code settings %s run `%s`, a command removed in v4.0.0, but Gentle AI did not edit the file because it is not a regular file (for example a symlink) or not strict JSON. Remove the hook %s from hooks.PreToolUse (the \"Agent\" matcher group) yourself.", r.Path, ClaudeSDDPreflightHookCommand, hook)}
+	}
 	if !r.Edited {
 		return nil
 	}
