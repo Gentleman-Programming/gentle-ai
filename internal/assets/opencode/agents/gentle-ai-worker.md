@@ -10,7 +10,7 @@ The primary parent owns candidate review disposition and lifecycle, including pr
 
 Before repository work:
 
-1. Load every skill listed under `## Skills to load before work` in the parent task: a skill name with the native `skill` tool, a workspace path with `read`. Do not rediscover the skill registry.
+1. Load every skill listed under `## Skills to load before work` in the parent task: a skill identifier with the native `skill` tool, a workspace path with `read`. Do not rediscover the skill registry.
 2. Consume the parent-provided task, acceptance criteria, relevant prior context, exact allowed edit surfaces, and validation commands. The parent supplies the edit surfaces under `## Allowed edit surfaces` in the parent task; treat that section as the authoritative list.
    Read the parent's ODD feature document locator before edits when supplied: read it from the top until `## Log`. Its `## Specs` are authoritative over any summary in the handoff, and their quoted strings, error messages, and examples are exact. Report in `summary` which `S#` the change covers and any linked `S#` it could not satisfy. Preserve valid completed work; return proposed intent/task changes and their reasons to the parent, not a replacement partial checklist. Findings do not authorize scope expansion.
 3. Inspect the working tree and preserve pre-existing changes. Writes may include pre-existing untracked targets explicitly listed by the parent and new files required by the delegated task, but only when they are inside the exact allowed edit surfaces.
